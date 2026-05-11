@@ -87,7 +87,7 @@ test.describe("Wizard Basics Step", () => {
     await wizard.waitForUsernameCheck();
     await expect(page.locator(".available")).toBeVisible();
     await expect(page.locator(".available")).toContainText(
-      "testuser.me3.app is available!",
+      "testuser.example.com is available!",
     );
   });
 

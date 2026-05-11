@@ -1,27 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://me3.app/</loc>
+    <loc>https://example.com/</loc>
   </url>
   <url>
-    <loc>https://me3.app/pricing</loc>
+    <loc>https://example.com/pricing</loc>
   </url>
   <url>
-    <loc>https://me3.app/about</loc>
+    <loc>https://example.com/about</loc>
   </url>
   <url>
-    <loc>https://me3.app/support</loc>
+    <loc>https://example.com/support</loc>
   </url>
   <url>
-    <loc>https://me3.app/offer</loc>
+    <loc>https://example.com/offer</loc>
   </url>
   <url>
-    <loc>https://me3.app/privacy</loc>
+    <loc>https://example.com/privacy</loc>
   </url>
   <url>
-    <loc>https://me3.app/terms</loc>
+    <loc>https://example.com/terms</loc>
   </url>
   <url>
-    <loc>https://me3.app/protocol</loc>
+    <loc>https://example.com/protocol</loc>
   </url>
 </urlset>

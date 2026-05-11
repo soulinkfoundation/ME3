@@ -45,7 +45,7 @@ const faqItems = [
   {
     question: "Optionally Manage your domain DNS with Cloudflare",
     answer:
-      "Cloudflare can make DNS setup easier. Steps: 1) Create a Cloudflare account and add your domain. 2) Update your registrar nameservers to the ones Cloudflare provides. 3) In Cloudflare DNS, add a CNAME record: @ → sites.me3.app. 4) Add the TXT record shown in your dashboard for SSL validation.",
+      "Cloudflare can make DNS setup easier. Steps: 1) Create a Cloudflare account and add your domain. 2) Update your registrar nameservers to the ones Cloudflare provides. 3) In Cloudflare DNS, add a CNAME record: @ → sites.example.com. 4) Add the TXT record shown in your dashboard for SSL validation.",
   },
 ];
 
@@ -84,7 +84,7 @@ function toggleFaq(index: number) {
         <div class="contact-card">
           <p class="contact-text">
             Email us anytime at
-            <a href="mailto:hello@me3.app">hello@me3.app</a>.
+            <a href="mailto:support@example.com">support@example.com</a>.
           </p>
         </div>
       </section>

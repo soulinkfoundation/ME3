@@ -221,11 +221,11 @@ function submit() {
           >
             <p>
               <span class="available-line">
-                <strong>{{ username }}.me3.app</strong>
+                <strong>{{ username }}.example.com</strong>
               </span>
               <span class="username-subtitle-follow">
                 will be your site URL.
-                <strong>{{ username }}@me3.app</strong> will be your email
+                <strong>{{ username }}@example.com</strong> will be your email
                 address.
               </span>
             </p>
@@ -234,7 +234,7 @@ function submit() {
             v-else-if="username.length >= 3 && isUsernameAvailable === false"
           >
             <p class="taken-line">
-              <strong>{{ username }}@me3.app</strong> is already taken.
+              <strong>{{ username }}@example.com</strong> is already taken.
             </p>
           </template>
           <template v-else-if="username.length > 0 && username.length < 3">
@@ -245,9 +245,9 @@ function submit() {
           <template v-else>
             <p>
               This will be your first site's URL:
-              <strong>{{ username || "username" }}.me3.app</strong>
+              <strong>{{ username || "username" }}.example.com</strong>
               and this will be your email address:
-              <strong>{{ username || "username" }}@me3.app</strong>
+              <strong>{{ username || "username" }}@example.com</strong>
             </p>
           </template>
         </div>

@@ -63,7 +63,7 @@ definePage({
           >
             <img
               class="hero-avatar"
-              src="https://kieran.me3.app/files/avatar.jpg"
+              src="https://kieran.example.com/files/avatar.jpg"
               alt="Kieran Butler"
             />
           </a>

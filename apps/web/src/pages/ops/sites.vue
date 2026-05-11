@@ -55,7 +55,7 @@ async function createDemoSite() {
   try {
     const response = await ops.createDemoSite(username);
     demoSiteUsername.value = "";
-    demoSiteMessage.value = `${response.site.username}.me3.app is ready.`;
+    demoSiteMessage.value = `${response.site.username}.example.com is ready.`;
   } catch (error: any) {
     demoSiteCreateError.value = error?.message || "Failed to create demo site";
   } finally {

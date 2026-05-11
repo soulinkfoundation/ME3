@@ -8,7 +8,7 @@ import ThemeToggle from "../components/ThemeToggle.vue";
 definePage({
   meta: {
     title: "Terms of Service | ME3",
-    description: "Review the terms of service for using me3.app.",
+    description: "Review the terms of service for using example.com.",
   },
 });
 
@@ -43,7 +43,7 @@ const auth = useAuthStore();
 
         <h2>1. Agreement to Terms</h2>
         <p>
-          By accessing our website at me3.app, you agree to be bound by these
+          By accessing our website at example.com, you agree to be bound by these
           terms of service, all applicable laws and regulations, and agree that
           you are responsible for compliance with any applicable local laws.
         </p>

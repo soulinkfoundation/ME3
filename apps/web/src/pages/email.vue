@@ -1571,7 +1571,7 @@ onBeforeUnmount(() => {
       <div v-if="error === 'pro_required'" class="state-card">
         <p><strong>Assistant email requires a Pro subscription.</strong></p>
         <p class="state-sub">
-          Upgrade to Pro to get a me3.app mailbox, automated drafts, approvals,
+          Upgrade to Pro to get a example.com mailbox, automated drafts, approvals,
           Telegram, and more.
         </p>
       </div>
@@ -1972,7 +1972,7 @@ onBeforeUnmount(() => {
                         Messages sent to {{ mailboxAddress }} will appear here.
                       </p>
                       <p v-else class="empty-state__sub">
-                        Messages sent to your me3.app address will appear here.
+                        Messages sent to your example.com address will appear here.
                       </p>
                     </template>
                     <template v-else-if="activeTab === 'drafts'">

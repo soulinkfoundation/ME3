@@ -521,7 +521,7 @@ export function usePublish() {
       // Ping The Human Soup (fire-and-forget, non-blocking)
       const siteUrl = import.meta.env.DEV
         ? `http://localhost:8787/preview/${username}/`
-        : `https://${username}.me3.app`;
+        : `https://${username}.example.com`;
       pingSoup(siteUrl).catch(() => {});
 
       // Trigger celebration animation if enabled

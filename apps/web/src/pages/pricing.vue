@@ -387,7 +387,7 @@ async function maybeStartCheckoutFromQuery() {
 
       <p class="plans-note">
         Need something custom? Email
-        <a href="mailto:hello@me3.app">hello@me3.app</a>.
+        <a href="mailto:support@example.com">support@example.com</a>.
       </p>
 
       <section class="faq">

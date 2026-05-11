@@ -46,7 +46,7 @@ const ONBOARDING_ROBOT_KEY = "me3_onboarding_robot";
 /**
  * Wizard URL after onboarding. Must stay on the same origin as the app:
  * wizard draft state is in localStorage (key me3_wizard_state), which is not
- * shared across me3.app vs www.me3.app vs other hosts.
+ * shared across example.com vs www.example.com vs other hosts.
  */
 function onboardingReviewSiteUrl(): string {
   if (typeof window === "undefined") {
@@ -634,7 +634,7 @@ function openOnboardingChat(job: OnboardingJobStatus) {
     {
       id: "onboarding-intro",
       role: "assistant",
-      text: `I’m setting up ${username}.me3.app now. I’ll keep you posted here while I publish the site, mailbox, and default jobs.`,
+      text: `I’m setting up ${username}.example.com now. I’ll keep you posted here while I publish the site, mailbox, and default jobs.`,
       meta: "assistant onboarding",
     },
   ]);
@@ -1308,7 +1308,7 @@ async function startTrialAndOpenOnboardingModal() {
                       class="sites-pulse-summary sites-pulse-summary--muted"
                     >
                       Couldn’t load stats for
-                      {{ profileSite.username }}.me3.app.
+                      {{ profileSite.username }}.example.com.
                       <button
                         type="button"
                         class="site-inline-link"
@@ -1326,7 +1326,7 @@ async function startTrialAndOpenOnboardingModal() {
                         ><router-link
                           :to="`/sites/${profileSite.username}`"
                           class="site-inline-link"
-                          >{{ profileSite.username }}.me3.app</router-link
+                          >{{ profileSite.username }}.example.com</router-link
                         ></strong
                       >
                       is
@@ -1389,7 +1389,7 @@ async function startTrialAndOpenOnboardingModal() {
                         class="site-card"
                       >
                         <span class="site-name"
-                          >{{ site.username }}.me3.app</span
+                          >{{ site.username }}.example.com</span
                         >
                         <span class="site-meta">
                           <span class="site-tag site-tag--type">
@@ -1418,7 +1418,7 @@ async function startTrialAndOpenOnboardingModal() {
                       :to="`/sites/${site.username}`"
                       class="site-card"
                     >
-                      <span class="site-name">{{ site.username }}.me3.app</span>
+                      <span class="site-name">{{ site.username }}.example.com</span>
                       <span class="site-meta">
                         <span class="site-tag site-tag--type">
                           {{
@@ -1552,7 +1552,7 @@ async function startTrialAndOpenOnboardingModal() {
         <!-- Success state: show choice -->
         <template v-if="claimedUsername && claimStage === 'done'">
           <div class="success-icon">✓</div>
-          <h2>{{ claimedUsername }}.me3.app is yours!</h2>
+          <h2>{{ claimedUsername }}.example.com is yours!</h2>
 
           <div class="choice-actions">
             <button class="button choice-primary" @click="goToWizard">
@@ -1566,7 +1566,7 @@ async function startTrialAndOpenOnboardingModal() {
           <h2>Claim a username</h2>
           <p class="modal-subtitle">
             This will be your site's URL:
-            <strong>{{ newUsername || "username" }}.me3.app</strong>
+            <strong>{{ newUsername || "username" }}.example.com</strong>
           </p>
 
           <form @submit.prevent="claimUsername" class="modal-form">

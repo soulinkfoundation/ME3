@@ -922,7 +922,7 @@ describe("wizard store", () => {
       expect(me3.intents?.subscribe?.description).toBe("Weekly updates");
       expect((me3 as any).actions?.subscribe).toEqual({
         method: "POST",
-        url: "https://api.me3.app/api/sites/testuser/subscribe",
+        url: "http://localhost:3000/api/sites/testuser/subscribe",
         requires: ["email"],
         description: "Subscribe someone to this site's newsletter.",
       });
@@ -1142,13 +1142,13 @@ describe("wizard store", () => {
       ]);
       expect((me3 as any).actions?.checkAvailability).toEqual({
         method: "GET",
-        url: "https://api.me3.app/api/book/testuser/slots{?date}",
+        url: "http://localhost:3000/api/book/testuser/slots{?date}",
         requires: ["date"],
         description: "Return available booking slots for a given date.",
       });
       expect((me3 as any).actions?.createBooking).toEqual({
         method: "POST",
-        url: "https://api.me3.app/api/book/testuser/confirm",
+        url: "http://localhost:3000/api/book/testuser/confirm",
         requires: ["slotStart", "slotEnd", "guestName", "guestEmail"],
         description: "Create a confirmed booking for a selected slot.",
       });
@@ -1289,7 +1289,7 @@ describe("wizard store", () => {
       ]);
       expect((me3 as any).actions?.createBookingCheckout).toEqual({
         method: "POST",
-        url: "https://api.me3.app/api/book/testuser/checkout-session",
+        url: "http://localhost:3000/api/book/testuser/checkout-session",
         requires: [
           "slotStart",
           "slotEnd",

@@ -355,8 +355,8 @@ export const useSitesStore = defineStore("sites", () => {
       if (guessedHostname) candidate = guessedHostname;
     }
 
-    if (candidate.endsWith(".me3.app")) {
-      candidate = candidate.slice(0, -".me3.app".length);
+    if (candidate.endsWith(".example.com")) {
+      candidate = candidate.slice(0, -".example.com".length);
     }
 
     return candidate;

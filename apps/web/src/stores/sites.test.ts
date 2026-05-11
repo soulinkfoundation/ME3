@@ -213,7 +213,7 @@ describe("sites store", () => {
       vi.mocked(api.post).mockResolvedValue({ site: mockSite });
 
       const store = useSitesStore();
-      const result = await store.claimUsername("business-coach.me3.app");
+      const result = await store.claimUsername("business-coach.example.com");
 
       expect(result).toEqual(mockSite);
       expect(api.post).toHaveBeenCalledWith("/sites", {

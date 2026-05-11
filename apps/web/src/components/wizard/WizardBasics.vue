@@ -102,7 +102,7 @@ const bioLength = 160;
           v-else-if="handle.length >= 3 && wizard.isUsernameAvailable === true"
           class="available"
         >
-          ✓ {{ handle }}.me3.app is available!
+          ✓ {{ handle }}.example.com is available!
         </span>
         <span
           v-else-if="handle.length >= 3 && wizard.isUsernameAvailable === false"

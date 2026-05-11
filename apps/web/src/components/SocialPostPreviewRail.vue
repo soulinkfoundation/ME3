@@ -302,7 +302,7 @@ watch(
         <footer class="preview-link-card li-link-card">
           <div>
             <span class="preview-link-domain">
-              {{ post.type === "social" ? "LinkedIn" : `${profile.handle}.me3.app` }}
+              {{ post.type === "social" ? "LinkedIn" : `${profile.handle}.example.com` }}
             </span>
             <strong>
               {{ post.type === "social" ? post.title || "Social post" : post.title }}
@@ -431,7 +431,7 @@ watch(
               {{
                 post.type === "social"
                   ? activeCard.meta.label
-                  : `${profile.handle}.me3.app`
+                  : `${profile.handle}.example.com`
               }}
             </span>
             <strong>

@@ -15,7 +15,7 @@ describe("buildSocialPreviewContent", () => {
     );
 
     expect(preview.body).toContain("Launch notes");
-    expect(preview.body).toContain("https://kieran.me3.app/blog/launch-notes");
+    expect(preview.body).toContain("https://kieran.example.com/blog/launch-notes");
     expect(preview.characterCount).toBeLessThanOrEqual(280);
   });
 
@@ -34,7 +34,7 @@ describe("buildSocialPreviewContent", () => {
 
     expect(preview.body).toContain("This is a real post with markup.");
     expect(preview.body).not.toContain("<strong>");
-    expect(preview.url).toBe("https://demo.me3.app/blog/rough-draft");
+    expect(preview.url).toBe("https://demo.example.com/blog/rough-draft");
   });
 
   it("uses a custom blog path when provided", () => {
@@ -50,9 +50,9 @@ describe("buildSocialPreviewContent", () => {
       "writing",
     );
 
-    expect(preview.url).toBe("https://kieran.me3.app/writing/spring-reset");
+    expect(preview.url).toBe("https://kieran.example.com/writing/spring-reset");
     expect(preview.body).toContain(
-      "https://kieran.me3.app/writing/spring-reset",
+      "https://kieran.example.com/writing/spring-reset",
     );
   });
 });

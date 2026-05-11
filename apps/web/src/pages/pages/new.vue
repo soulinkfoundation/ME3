@@ -174,7 +174,7 @@ async function createLandingPage() {
             placeholder="retreat-april"
             autocomplete="off"
           />
-          <small>{{ username || "your-page" }}.me3.app</small>
+          <small>{{ username || "your-page" }}.example.com</small>
         </label>
 
         <label class="field field--wide">

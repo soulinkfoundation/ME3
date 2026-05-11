@@ -64,8 +64,8 @@ export function buildSocialPreviewContent(
       : buildPostSummary(post as WizardPost);
   const url =
     postType === "social"
-      ? `https://${siteHandle}.me3.app`
-      : `https://${siteHandle}.me3.app/${blogPath}/${post.slug}`;
+      ? `https://${siteHandle}.example.com`
+      : `https://${siteHandle}.example.com/${blogPath}/${post.slug}`;
 
   if (platform === "x") {
     const xBody = truncate(
@@ -82,7 +82,7 @@ export function buildSocialPreviewContent(
 
   if (platform === "instagram" || platform === "instagram_business") {
     const igBody = truncate(
-      [title, summary, `Link in bio: ${siteHandle}.me3.app`]
+      [title, summary, `Link in bio: ${siteHandle}.example.com`]
         .filter(Boolean)
         .join("\n\n"),
       360,
@@ -90,7 +90,7 @@ export function buildSocialPreviewContent(
     return {
       body: igBody,
       ctaLabel: "View profile",
-      url: `https://${siteHandle}.me3.app`,
+      url: `https://${siteHandle}.example.com`,
       characterCount: igBody.length,
     };
   }
@@ -100,7 +100,7 @@ export function buildSocialPreviewContent(
       [
         title,
         summary,
-        `Catch the full post on ${siteHandle}.me3.app`,
+        `Catch the full post on ${siteHandle}.example.com`,
       ]
         .filter(Boolean)
         .join("\n\n"),
@@ -109,7 +109,7 @@ export function buildSocialPreviewContent(
     return {
       body: youtubeBody,
       ctaLabel: "Open channel",
-      url: `https://${siteHandle}.me3.app/${blogPath}/${post.slug}`,
+      url: `https://${siteHandle}.example.com/${blogPath}/${post.slug}`,
       characterCount: youtubeBody.length,
     };
   }
@@ -118,7 +118,7 @@ export function buildSocialPreviewContent(
     [
       title,
       summary,
-      `Read the full post on ${siteHandle}.me3.app`,
+      `Read the full post on ${siteHandle}.example.com`,
     ]
       .filter(Boolean)
       .join("\n\n"),

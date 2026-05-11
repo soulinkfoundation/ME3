@@ -77,7 +77,7 @@ const shareHandle = computed(() => {
   return handle || "username";
 });
 
-const shareUrl = computed(() => `https://${shareHandle.value}.me3.app`);
+const shareUrl = computed(() => `https://${shareHandle.value}.example.com`);
 const meJsonUrl = computed(() => `${shareUrl.value}/me.json`);
 const qrImageUrl = computed(() => {
   const encoded = encodeURIComponent(shareUrl.value);
@@ -2086,7 +2086,7 @@ const vibeCss = computed(() => {
       <!-- Footer -->
       <footer v-if="showFooter" class="footer">
         <div v-if="footerView.kind === 'default'" class="footer-default">
-          <p>Powered by <a href="https://me3.app">me3</a></p>
+          <p>Powered by <a href="https://example.com">me3</a></p>
           <button
             class="footer-edit-btn"
             @click="$emit('edit-footer')"

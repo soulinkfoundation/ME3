@@ -46,7 +46,7 @@ function canFetchMeJsonFromBrowser(rawUrl: string): boolean {
     const parsed = new URL(rawUrl);
     const host = parsed.hostname.toLowerCase();
     if (parsed.origin === window.location.origin) return true;
-    if (host === "me3.app" || host.endsWith(".me3.app")) return true;
+    if (host === "example.com" || host.endsWith(".example.com")) return true;
     if (import.meta.env.DEV && ["localhost", "127.0.0.1"].includes(host)) {
       return true;
     }
@@ -56,7 +56,7 @@ function canFetchMeJsonFromBrowser(rawUrl: string): boolean {
   }
 }
 
-const GET_STARTED_URL = "https://www.kieranbutler.com/work-with-me";
+const GET_STARTED_URL = "/login";
 
 function getStarted() {
   window.open(GET_STARTED_URL, "_blank", "noopener,noreferrer");

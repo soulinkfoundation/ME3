@@ -52,7 +52,7 @@ const published = computed(() => !!site.value?.published_at);
 const liveUrl = computed(() =>
   import.meta.env.DEV
     ? `http://localhost:8787/preview/${username.value}/`
-    : `https://${username.value}.me3.app`,
+    : `https://${username.value}.example.com`,
 );
 
 function getSectionImage(page: LandingPageDocument | null): string | null {
@@ -110,7 +110,7 @@ function activateBuilderAssistant() {
     {
       id: "landing-builder-intro",
       role: "assistant",
-      text: `I’m in the landing page builder for ${username.value}.me3.app.`,
+      text: `I’m in the landing page builder for ${username.value}.example.com.`,
       detail: `Template: ${templateLabel}. Ask for headline changes, clearer positioning, tighter CTA copy, or a different tone and then click Generate draft or Apply feedback in the builder.`,
       meta: "landing page builder",
     },
@@ -154,8 +154,8 @@ async function regenerate() {
     draft.value = page;
     brief.value = page.brief;
     const updateContext = feedback.value.trim()
-      ? `I updated the draft for ${username.value}.me3.app based on your latest feedback.`
-      : `I generated a fresh ${templateId.value} draft for ${username.value}.me3.app.`;
+      ? `I updated the draft for ${username.value}.example.com based on your latest feedback.`
+      : `I generated a fresh ${templateId.value} draft for ${username.value}.example.com.`;
     feedback.value = "";
     await Promise.all([sites.fetchSites(), refreshPreview()]);
     noteBuilderUpdate(page, updateContext);
@@ -233,7 +233,7 @@ async function uploadAndRegenerate(
     await refreshPreview();
     noteBuilderUpdate(
       page,
-      `I refreshed the ${username.value}.me3.app draft after updating the ${imageType} image.`,
+      `I refreshed the ${username.value}.example.com draft after updating the ${imageType} image.`,
     );
   } finally {
     uploadBusy.value = false;
@@ -263,7 +263,7 @@ onBeforeUnmount(() => {
         ← Site settings
       </router-link>
       <div class="builder-header-copy">
-        <h1>{{ username }}.me3.app</h1>
+        <h1>{{ username }}.example.com</h1>
         <p>Landing page builder</p>
       </div>
       <div class="builder-header-actions">

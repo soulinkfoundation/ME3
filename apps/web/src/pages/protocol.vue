@@ -143,17 +143,17 @@ const auth = useAuthStore();
   "actions": {
     "checkAvailability": {
       "method": "GET",
-      "url": "https://api.me3.app/api/book/kieran/slots{?date}",
+      "url": "/api/book/kieran/slots{?date}",
       "requires": ["date"]
     },
     "createBooking": {
       "method": "POST",
-      "url": "https://api.me3.app/api/book/kieran/confirm",
+      "url": "/api/book/kieran/confirm",
       "requires": ["slotStart", "slotEnd", "guestName", "guestEmail", "paymentIntentId"]
     },
     "subscribe": {
       "method": "POST",
-      "url": "https://api.me3.app/api/sites/kieran/subscribe",
+      "url": "/api/sites/kieran/subscribe",
       "requires": ["email"]
     }
   }
@@ -179,9 +179,9 @@ const auth = useAuthStore();
         <div class="code-block">
           <pre><code>https://yourdomain.com/me.json
 https://yourdomain.com/.well-known/me.json
-https://api.me3.app/api/discovery/resolve?url=https://yourdomain.com
-https://api.me3.app/api/discovery/search?q=your%20name
-https://api.me3.app/api/discovery/search?social=instagram:yourhandle</code></pre>
+/api/discovery/resolve?url=https://yourdomain.com
+/api/discovery/search?q=your%20name
+/api/discovery/search?social=instagram:yourhandle</code></pre>
         </div>
 
         <h2>How agents should look</h2>

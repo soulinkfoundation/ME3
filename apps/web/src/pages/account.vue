@@ -1023,7 +1023,7 @@ onMounted(async () => {
                     autocapitalize="off"
                     spellcheck="false"
                   />
-                  <span class="alias-suffix">@me3.app</span>
+                  <span class="alias-suffix">@example.com</span>
                 </div>
               </label>
               <label class="field">
@@ -1165,7 +1165,7 @@ onMounted(async () => {
 
           <div v-else class="recommended-card">
             <span class="recommended-pill">Pro</span>
-            <h3>Reserve your me3.app mailbox alias</h3>
+            <h3>Reserve your example.com mailbox alias</h3>
             <p class="hint">
               Pro includes an agent-only inbox, inbound forwarding, a trust log,
               and approval-first outbound mail.

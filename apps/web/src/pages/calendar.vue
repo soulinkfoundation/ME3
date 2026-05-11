@@ -450,7 +450,7 @@ function mapBookingToCalendarEvent(
     sourceLabel: "Booking",
     title: booking.guest_name || "Unnamed booking",
     siteKey: booking.username,
-    siteLabel: `${booking.username}.me3.app`,
+    siteLabel: `${booking.username}.example.com`,
     startsAt: booking.starts_at,
     endsAt: booking.ends_at,
     summary: booking.guest_email,
@@ -543,7 +543,7 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
 const siteOptions = computed<CalendarAgendaSiteOption[]>(() => [
   ...sites.sites.map((site) => ({
     value: site.username,
-    label: `${site.username}.me3.app`,
+    label: `${site.username}.example.com`,
   })),
   { value: PERSONAL_EVENTS_KEY, label: "Personal events" },
   { value: BIRTHDAYS_KEY, label: "Birthdays" },
@@ -1923,7 +1923,7 @@ onBeforeUnmount(() => {
                 :key="s.username"
                 :value="s.username"
               >
-                {{ s.username }}.me3.app
+                {{ s.username }}.example.com
               </option>
             </select>
           </label>

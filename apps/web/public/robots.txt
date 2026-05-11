@@ -7,4 +7,4 @@ Disallow: /create
 Disallow: /login
 Disallow: /auth/
 
-Sitemap: https://me3.app/sitemap.xml
+Sitemap: https://example.com/sitemap.xml

@@ -312,7 +312,7 @@ async function downloadZip() {
         const isDev = import.meta.env.DEV;
         const faviconUrl = isDev
           ? `http://localhost:8787/preview/${wizard.profile.handle}/favicon.png`
-          : `https://${wizard.profile.handle}.me3.app/favicon.png`;
+          : `https://${wizard.profile.handle}.example.com/favicon.png`;
         const faviconResult = await fetchImageAsBlob(faviconUrl);
         if (faviconResult) {
           zip.file("favicon.png", faviconResult.blob);
@@ -408,8 +408,8 @@ ${wizard.shopEnabled && wizard.products.length > 0 ? wizard.products.map((p) => 
 
 ## How to publish
 
-### Option 1: me3.app (easiest)
-1. Go to https://me3.app
+### Option 1: example.com (easiest)
+1. Go to https://example.com
 2. Sign in and claim your username
 3. Upload this zip or the extracted folder
 
@@ -588,7 +588,7 @@ function closeFooterModal() {
       <div class="option-card primary-option">
         <div class="option-header">
           <h3>Publish</h3>
-          <span class="badge">{{ wizard.username }}.me3.app</span>
+          <span class="badge">{{ wizard.username }}.example.com</span>
         </div>
         <p class="option-desc">
           Instant publishing with free hosting. Your site will be live

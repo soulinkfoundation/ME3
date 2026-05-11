@@ -5,22 +5,22 @@ import EmblaCarousel, { type EmblaCarouselType } from "embla-carousel";
 const slides = [
   // {
   //   image: "/demo-4.png",
-  //   href: "https://feelthefeelsdemo.me3.app/",
+  //   href: "https://feelthefeelsdemo.example.com/",
   //   title: "Somatic Healing — example me3 site",
   // },
   {
     image: "/demo-6.png",
-    href: "https://tonyrobbinslifecoach.me3.app/",
+    href: "https://tonyrobbinslifecoach.example.com/",
     title: "The Coaches Coach — example me3 site",
   },
   {
     image: "/demo-3.png",
-    href: "https://yinsyogastudio.me3.app/",
+    href: "https://yinsyogastudio.example.com/",
     title: "Yin's Yoga — example me3 site",
   },
   {
     image: "/demo-5.png",
-    href: "https://breathworkbob.me3.app/",
+    href: "https://breathworkbob.example.com/",
     title: "Breathwork Bob — example me3 site",
   },
 ] as const;

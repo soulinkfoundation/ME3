@@ -58,7 +58,7 @@ const isDev = import.meta.env.DEV;
 const siteUrl = computed(() =>
   isDev
     ? `http://localhost:8787/preview/${username.value}/`
-    : `https://${username.value}.me3.app`,
+    : `https://${username.value}.example.com`,
 );
 
 // UI State
@@ -102,7 +102,7 @@ async function loadFavicon() {
   try {
     const baseUrl = isDev
       ? `http://localhost:8787/preview/${username.value}`
-      : `https://${username.value}.me3.app`;
+      : `https://${username.value}.example.com`;
     faviconImageErrored.value = false;
     faviconUrl.value = `${baseUrl}/favicon.png?t=${Date.now()}`;
   } catch (error) {
@@ -742,8 +742,8 @@ ${
 
 ## How to publish
 
-### Option 1: me3.app (easiest)
-1. Go to https://me3.app
+### Option 1: example.com (easiest)
+1. Go to https://example.com
 2. Sign in and claim your username
 3. Upload this zip or the extracted folder
 
@@ -802,17 +802,17 @@ Note: Opening index.html directly (file://) won't work due to browser security.
                 target="_blank"
                 rel="noopener"
                 class="site-link"
-                :title="`${username}.me3.app`"
+                :title="`${username}.example.com`"
               >
-                <span class="site-title-text">{{ username }}.me3.app</span>
+                <span class="site-title-text">{{ username }}.example.com</span>
                 <UiIcon name="Eye" :size="16" class="site-link-icon" />
               </a>
               <span
                 v-else
                 class="site-title-plain"
-                :title="`${username}.me3.app`"
+                :title="`${username}.example.com`"
               >
-                <span class="site-title-text">{{ username }}.me3.app</span>
+                <span class="site-title-text">{{ username }}.example.com</span>
               </span>
             </h1>
             <div class="site-badges">
@@ -1099,7 +1099,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         <h2>Delete site?</h2>
         <p>
           Are you sure you want to delete
-          <strong>{{ username }}.me3.app</strong>? This action cannot be undone.
+          <strong>{{ username }}.example.com</strong>? This action cannot be undone.
         </p>
         <div class="modal-actions">
           <button class="button secondary" @click="showDeleteConfirm = false">
