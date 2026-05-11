@@ -38,27 +38,30 @@ const error = ref("");
 const notice = ref("");
 
 const isSetupMode = computed(() => !ownerAuthConfigured.value);
-const isResetMode = computed(() => ownerAuthConfigured.value && resetMode.value);
-const useBootstrapCodeInput = computed(() => isSetupMode.value || isResetMode.value);
-
-const canSubmit = computed(
-  () => {
-    if (loading.value || configLoading.value) return false;
-    if (email.value.trim().length === 0 || password.value.length === 0) return false;
-
-    if (isResetMode.value) {
-      return bootstrapCode.value.trim().length > 0 && password.value.length >= 8;
-    }
-
-    if (!isSetupMode.value) return true;
-
-    return (
-      bootstrapCode.value.trim().length > 0 &&
-      name.value.trim().length > 0 &&
-      password.value.length >= 8
-    );
-  },
+const isResetMode = computed(
+  () => ownerAuthConfigured.value && resetMode.value,
 );
+const useBootstrapCodeInput = computed(
+  () => isSetupMode.value || isResetMode.value,
+);
+
+const canSubmit = computed(() => {
+  if (loading.value || configLoading.value) return false;
+  if (email.value.trim().length === 0 || password.value.length === 0)
+    return false;
+
+  if (isResetMode.value) {
+    return bootstrapCode.value.trim().length > 0 && password.value.length >= 8;
+  }
+
+  if (!isSetupMode.value) return true;
+
+  return (
+    bootstrapCode.value.trim().length > 0 &&
+    name.value.trim().length > 0 &&
+    password.value.length >= 8
+  );
+});
 
 function deriveUsername() {
   const source = email.value.split("@")[0] || name.value;
@@ -140,7 +143,8 @@ async function submitAuth() {
       password.value = "";
       notice.value = "Password reset. Sign in with your new password.";
     } else {
-      error.value = "Reset failed. Check your email, bootstrap code, and new password.";
+      error.value =
+        "Reset failed. Check your email, bootstrap code, and new password.";
     }
 
     loading.value = false;
@@ -225,7 +229,9 @@ onMounted(loadConfig);
           <input
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
-            :autocomplete="isSetupMode || isResetMode ? 'new-password' : 'current-password'"
+            :autocomplete="
+              isSetupMode || isResetMode ? 'new-password' : 'current-password'
+            "
             class="input password-field__input"
             aria-label="Password"
             :placeholder="isResetMode ? 'New password' : 'Password'"
@@ -256,7 +262,9 @@ onMounted(loadConfig);
           <button
             type="button"
             class="password-field__toggle"
-            :aria-label="showBootstrapCode ? 'Hide bootstrap code' : 'Show bootstrap code'"
+            :aria-label="
+              showBootstrapCode ? 'Hide bootstrap code' : 'Show bootstrap code'
+            "
             :aria-pressed="showBootstrapCode"
             @click="showBootstrapCode = !showBootstrapCode"
           >
@@ -284,7 +292,7 @@ onMounted(loadConfig);
           type="button"
           @click="startResetMode"
         >
-          Reset password with bootstrap code
+          Reset password
         </button>
         <button
           v-if="isResetMode"
