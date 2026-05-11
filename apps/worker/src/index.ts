@@ -23,6 +23,7 @@ export { Me3UserAgent };
 type BootstrapBody = Partial<OwnerProfile> & { bootstrapCode?: string; password?: string };
 type LoginBody = { email?: string; password?: string };
 type ChatBody = { message?: string };
+type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
 type SessionPayload = { sub: string; iat: number; exp: number };
 type OwnerRecord = OwnerProfile & { password_hash: string | null };
 type ContactInput = Partial<{
@@ -224,6 +225,75 @@ app.post("/api/assistant/chat", async (c) => {
     reply: "ME3 Core assistant shell is booted. Model execution will be wired in the first bootable slice.",
     setupRequired: getSetupRequired(c.env),
   });
+});
+
+app.get("/api/account", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const owner = await getOwnerProfile(c.env, ownerId);
+  if (!owner) return c.json({ error: "Account not found" }, 404);
+
+  return c.json({ user: serializeAccountOwner(owner) });
+});
+
+app.put("/api/account", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body = await c.req.json<AccountUpdateBody>().catch((): AccountUpdateBody => ({}));
+  if (body.timezone === undefined && body.locale === undefined) {
+    return c.json({ error: "timezone or locale is required" }, 400);
+  }
+
+  const timezone = body.timezone === undefined ? undefined : normalizeTimeZone(body.timezone);
+  if (body.timezone !== undefined && !timezone) {
+    return c.json({ error: "Invalid timezone" }, 400);
+  }
+
+  const locale = body.locale === undefined ? undefined : normalizeLocale(body.locale);
+  if (body.locale !== undefined && body.locale !== null && body.locale !== "" && !locale) {
+    return c.json({ error: "Invalid locale" }, 400);
+  }
+
+  const updates = ["updated_at = CURRENT_TIMESTAMP"];
+  const values: Array<string | null> = [];
+  if (timezone !== undefined) {
+    updates.push("timezone = ?");
+    values.push(timezone);
+  }
+  if (locale !== undefined) {
+    updates.push("locale = ?");
+    values.push(locale);
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE owner_profile
+     SET ${updates.join(", ")}
+     WHERE id = ?`,
+  )
+    .bind(...values, ownerId)
+    .run();
+
+  const owner = await getOwnerProfile(c.env, ownerId);
+  if (!owner) return c.json({ error: "Account not found" }, 404);
+
+  return c.json({ user: serializeAccountOwner(owner) });
+});
+
+app.post("/api/account/delete", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  await c.env.DB.prepare("DELETE FROM assistant_messages WHERE owner_id = ?")
+    .bind(ownerId)
+    .run();
+  await c.env.DB.prepare("DELETE FROM owner_profile WHERE id = ?")
+    .bind(ownerId)
+    .run();
+  clearOwnerSession(c);
+
+  return c.json({ ok: true });
 });
 
 app.get("/api/sites", async (c) => {
@@ -684,6 +754,56 @@ function normalizeNullableText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeTimeZone(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const timezone = value.trim();
+  if (!timezone) return null;
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+    return timezone;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLocale(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") return null;
+  const locale = value.trim();
+  if (!locale) return null;
+
+  try {
+    Intl.getCanonicalLocales(locale);
+    return locale;
+  } catch {
+    return null;
+  }
+}
+
+function serializeAccountOwner(owner: OwnerRecord) {
+  const timezone = owner.timezone || "UTC";
+  const explicitLocale = owner.locale?.trim() || null;
+
+  return {
+    id: owner.id,
+    email: owner.email,
+    name: owner.name || "ME3 Core Owner",
+    username: owner.username || "owner",
+    timezone,
+    locale: explicitLocale || inferLocaleFromTimeZone(timezone),
+    localeSource: explicitLocale ? "explicit" : "inferred",
+  };
+}
+
+function inferLocaleFromTimeZone(timezone: string): string {
+  if (timezone.startsWith("Europe/Dublin") || timezone.startsWith("Europe/London")) return "en-GB";
+  if (timezone.startsWith("Europe/")) return "en-GB";
+  if (timezone.startsWith("America/")) return "en-US";
+  if (timezone.startsWith("Australia/")) return "en-AU";
+  return "en-US";
 }
 
 function parseCalendarWindow(start: string | null | undefined, end: string | null | undefined) {
@@ -1268,7 +1388,7 @@ function stringRecord(value: unknown): Record<string, string> {
 
 async function getOwnerProfile(env: Env, ownerId: string): Promise<OwnerRecord | null> {
   const result = await env.DB.prepare(
-    "SELECT id, email, name, username, bio, avatar_url, timezone, password_hash FROM owner_profile WHERE id = ?",
+    "SELECT id, email, name, username, bio, avatar_url, timezone, locale, password_hash FROM owner_profile WHERE id = ?",
   )
     .bind(ownerId)
     .first<OwnerRecord>();
@@ -1278,7 +1398,7 @@ async function getOwnerProfile(env: Env, ownerId: string): Promise<OwnerRecord |
 
 async function getOwnerByEmail(env: Env, email: string): Promise<OwnerRecord | null> {
   const result = await env.DB.prepare(
-    "SELECT id, email, name, username, bio, avatar_url, timezone, password_hash FROM owner_profile WHERE lower(email) = ?",
+    "SELECT id, email, name, username, bio, avatar_url, timezone, locale, password_hash FROM owner_profile WHERE lower(email) = ?",
   )
     .bind(email)
     .first<OwnerRecord>();

@@ -32,8 +32,24 @@ function createEnv(): Env & { owner: StoredOwner | null; messages: StoredMessage
                   bio: values[4] as string | null,
                   avatar_url: values[5] as string | null,
                   timezone: values[6] as string | null,
+                  locale: null,
                   password_hash: values[7] as string | null,
                 };
+              }
+
+              if (sql.includes("UPDATE owner_profile") && state.owner) {
+                let valueIndex = 0;
+                if (sql.includes("timezone = ?")) {
+                  state.owner.timezone = values[valueIndex] as string | null;
+                  valueIndex += 1;
+                }
+                if (sql.includes("locale = ?")) {
+                  state.owner.locale = values[valueIndex] as string | null;
+                }
+              }
+
+              if (sql.includes("DELETE FROM owner_profile")) {
+                state.owner = null;
               }
 
               if (sql.includes("INSERT INTO assistant_messages")) {
@@ -283,5 +299,68 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(200);
     expect(env.messages).toMatchObject([{ ownerId: "owner", content: "Hello" }]);
+  });
+
+  it("loads account settings for the signed-in owner", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/account", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      user: { email: string; timezone: string; locale: string; localeSource: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.user.email).toBe("owner@example.com");
+    expect(body.user.timezone).toBe("UTC");
+    expect(body.user.locale).toBe("en-US");
+    expect(body.user.localeSource).toBe("inferred");
+  });
+
+  it("updates account timezone and explicit locale", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/account", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ timezone: "Europe/Dublin", locale: "en-IE" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      user: { timezone: string; locale: string; localeSource: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.user.timezone).toBe("Europe/Dublin");
+    expect(body.user.locale).toBe("en-IE");
+    expect(body.user.localeSource).toBe("explicit");
+  });
+
+  it("deletes the owner account and clears the session cookie", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/account/delete", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(env.owner).toBeNull();
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 });

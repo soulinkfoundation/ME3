@@ -33,6 +33,7 @@ export interface OwnerProfile {
   bio: string | null;
   avatar_url: string | null;
   timezone: string | null;
+  locale?: string | null;
 }
 
 export interface DbSite {
