@@ -132,6 +132,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@me3-core/plugin-social-publishing':
+        specifier: workspace:*
+        version: link:../../packages/social-publishing
       hono:
         specifier: ^4.3.0
         version: 4.12.18
@@ -148,6 +151,12 @@ importers:
       wrangler:
         specifier: ^4.87.0
         version: 4.90.0(@cloudflare/workers-types@4.20260511.1)
+
+  packages/social-publishing:
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
 
 packages:
 

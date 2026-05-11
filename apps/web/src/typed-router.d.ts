@@ -27,5 +27,6 @@ declare module 'vue-router/auto-routes' {
     '/email': RouteRecordInfo<'/email', '/email', Record<never, never>, Record<never, never>>,
     '/sites/[username]': RouteRecordInfo<'/sites/[username]', '/sites/:username', { username: ParamValue<true> }, { username: ParamValue<false> }>,
     '/sites/[username]/build': RouteRecordInfo<'/sites/[username]/build', '/sites/:username/build', { username: ParamValue<true> }, { username: ParamValue<false> }>,
+    '/social': RouteRecordInfo<'/social', '/social', Record<never, never>, Record<never, never>>,
   }
 }

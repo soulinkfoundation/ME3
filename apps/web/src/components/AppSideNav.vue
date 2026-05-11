@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
+import { api } from "../api";
 import ThemeToggle from "./ThemeToggle.vue";
 import UiIcon from "./UiIcon.vue";
 import { useSitesStore } from "../stores/sites";
@@ -20,6 +21,7 @@ const isMobileViewport = ref(false);
 const mobileNavOpen = ref(false);
 const mobileMediaQuery = "(max-width: 959px)";
 const navDrawerId = "app-side-nav-drawer";
+const socialPublishingInstalled = ref(false);
 
 let mobileViewportQuery: MediaQueryList | null = null;
 
@@ -45,6 +47,7 @@ onMounted(async () => {
   if (sites.sites.length === 0) {
     await sites.fetchSites();
   }
+  void loadInstalledPluginNav();
   mobileViewportQuery = window.matchMedia(mobileMediaQuery);
   syncMobileViewport(mobileViewportQuery);
   mobileViewportQuery.addEventListener("change", syncMobileViewport);
@@ -63,6 +66,7 @@ const isSites = computed(
   () => route.path.startsWith("/sites/") || route.path.startsWith("/create"),
 );
 const isAssistant = computed(() => route.path.startsWith("/assistant"));
+const isSocial = computed(() => route.path.startsWith("/social"));
 /** `/account` and `/account/...` only — not `/accounts` (startsWith("/account") is a false positive). */
 const isAccount = computed(() => {
   const p = route.path;
@@ -76,7 +80,7 @@ const showMobileDrawer = computed(
 );
 
 function rowActive(
-  kind: "calendar" | "email" | "sites" | "assistant" | "account",
+  kind: "calendar" | "email" | "sites" | "assistant" | "social" | "account",
 ): boolean {
   switch (kind) {
     case "calendar":
@@ -87,10 +91,28 @@ function rowActive(
       return isSites.value;
     case "assistant":
       return isAssistant.value;
+    case "social":
+      return isSocial.value;
     case "account":
       return isAccount.value;
     default:
       return false;
+  }
+}
+
+async function loadInstalledPluginNav() {
+  try {
+    const response = await api.get<{
+      plugins: Array<{ id: string; status: string; enabled: boolean }>;
+    }>("/plugins");
+    socialPublishingInstalled.value = response.plugins.some(
+      (plugin) =>
+        plugin.id === "me3.social-publishing" &&
+        plugin.enabled &&
+        plugin.status === "installed",
+    );
+  } catch {
+    socialPublishingInstalled.value = false;
   }
 }
 
@@ -224,6 +246,19 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
         >
           <span class="app-side-nav__emoji" aria-hidden="true">🤖</span>
           <span class="sr-only">Assistant</span>
+        </RouterLink>
+
+        <RouterLink
+          v-if="socialPublishingInstalled"
+          to="/social"
+          class="app-side-nav__row"
+          :class="{ 'app-side-nav__row--active': rowActive('social') }"
+          aria-label="Social publishing"
+          title="Social publishing"
+          @click="closeMobileNav"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">📣</span>
+          <span class="sr-only">Social publishing</span>
         </RouterLink>
 
         <RouterLink

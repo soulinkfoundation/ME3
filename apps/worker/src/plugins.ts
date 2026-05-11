@@ -94,45 +94,15 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   ],
   routes: [
     {
-      id: "social.accounts.api",
-      path: "/api/social/accounts",
-      methods: ["GET", "DELETE"],
-      auth: "owner",
-    },
-    {
-      id: "social.oauth.api",
-      path: "/api/social/:platform/authorize",
-      methods: ["POST"],
-      auth: "owner",
-    },
-    {
-      id: "social.oauth.callbacks",
-      path: "/api/social/:platform/callback",
+      id: "social.status.api",
+      path: "/api/social/status",
       methods: ["GET"],
-      auth: "public",
-    },
-    {
-      id: "content.bank.api",
-      path: "/api/content/items",
-      methods: ["GET", "POST", "PUT", "DELETE"],
       auth: "owner",
     },
     {
-      id: "content.queue.api",
-      path: "/api/content/queue",
-      methods: ["POST", "PUT"],
-      auth: "owner",
-    },
-    {
-      id: "content.media.api",
-      path: "/api/content/items/:id/media",
-      methods: ["POST"],
-      auth: "owner",
-    },
-    {
-      id: "content.publish.api",
-      path: "/api/content/items/:id/publish",
-      methods: ["POST"],
+      id: "social.accounts.read.api",
+      path: "/api/social/accounts",
+      methods: ["GET"],
       auth: "owner",
     },
   ],
@@ -186,18 +156,8 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   ],
   migrations: [
     {
-      id: "social.0028",
-      path: "./apps/worker/migrations/0028_social_publishing.sql",
-      destructive: false,
-    },
-    {
-      id: "social.0029",
-      path: "./apps/worker/migrations/0029_social_platform_expansion.sql",
-      destructive: false,
-    },
-    {
-      id: "social.0046",
-      path: "./apps/worker/migrations/0046_content_bank_items.sql",
+      id: "social.0011",
+      path: "./apps/worker/migrations/0011_social_publishing_plugin.sql",
       destructive: false,
     },
   ],
@@ -214,8 +174,9 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   notes: [
-    "Bundled as a Core activation scaffold; provider publishing runtime extraction is still pending.",
-    "External publishing remains approval-first and audit-backed.",
+    "Bundled through @me3-core/plugin-social-publishing as a first-party Core package.",
+    "Current runtime exposes owner-only status and account inventory reads when installed.",
+    "External publishing, OAuth callbacks, queue consumers, and cron dispatch remain approval-first follow-up work.",
   ],
 };
 

@@ -23,6 +23,11 @@ import {
   deactivateCorePlugin,
   listCorePluginRecords,
 } from "./plugins";
+import {
+  SocialPublishingGateError,
+  getSocialPublishingRuntimeStatus,
+  listSocialPublishingAccounts,
+} from "./social-publishing";
 import { getOrCreateInstallEncryptionKey } from "./install-secrets";
 import {
   getLandingPageTemplate,
@@ -122,6 +127,9 @@ type NormalizedMailboxDraftInput = {
   htmlBody: string | null;
   sourceId: string | null;
   threadKey: string;
+  messageIdHeader: string;
+  inReplyTo: string | null;
+  referencesHeader: string | null;
   createdBy: string;
 };
 
@@ -416,6 +424,39 @@ app.post("/api/plugins/:pluginId/deactivate", async (c) => {
   } catch (error) {
     if (error instanceof PluginInstallInputError) {
       return c.json({ error: error.message }, error.status as any);
+    }
+    throw error;
+  }
+});
+
+app.get("/api/social/status", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  return c.json({
+    plugin: await getSocialPublishingRuntimeStatus(c.env),
+  });
+});
+
+app.get("/api/social/accounts", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    return c.json({
+      plugin: await getSocialPublishingRuntimeStatus(c.env),
+      accounts: await listSocialPublishingAccounts(c.env, ownerId),
+    });
+  } catch (error) {
+    if (error instanceof SocialPublishingGateError) {
+      return c.json(
+        {
+          ok: false,
+          error: error.message,
+          plugin: error.gate,
+        },
+        error.status as any,
+      );
     }
     throw error;
   }
@@ -1441,8 +1482,9 @@ app.post("/api/mailbox/drafts/:draftId/approve", async (c) => {
   }
 
   try {
+    const outboundHeaders = getDraftOutboundHeaders(draft);
     const result = await sendEmailWithProvider(c.env, ownerId, {
-      purpose: "draft",
+      purpose: draft.source_id ? "reply" : "draft",
       mailboxId: mailbox.id,
       mailboxMessageId: draft.id,
       fromAddress: draft.from_address || getMailboxAddress(mailbox.alias_local_part),
@@ -1451,6 +1493,9 @@ app.post("/api/mailbox/drafts/:draftId/approve", async (c) => {
       textBody: draft.text_body || "",
       htmlBody: draft.html_body,
       threadKey: draft.thread_key,
+      messageIdHeader: outboundHeaders.messageIdHeader,
+      inReplyTo: outboundHeaders.inReplyTo,
+      referencesHeader: outboundHeaders.referencesHeader,
       metadata: {
         mailbox_message_id: draft.id,
         source_id: draft.source_id,
@@ -2786,6 +2831,10 @@ async function normalizeMailboxDraftInput(
     replyTo?.id ||
     existing?.thread_key ||
     crypto.randomUUID();
+  const existingHeaders = getDraftOutboundHeaders(existing);
+  const replyHeaders = getReplyThreadHeaders(replyTo);
+  const messageIdHeader =
+    existingHeaders.messageIdHeader || createMessageIdHeader(fromAddress);
   const source = normalizeNullableText(body.source);
 
   return {
@@ -2799,6 +2848,9 @@ async function normalizeMailboxDraftInput(
         : normalizeNullableText(body.htmlBody),
     sourceId: replyTo?.id || existing?.source_id || null,
     threadKey,
+    messageIdHeader,
+    inReplyTo: replyHeaders.inReplyTo || existingHeaders.inReplyTo,
+    referencesHeader: replyHeaders.referencesHeader || existingHeaders.referencesHeader,
     createdBy: source === "agent" ? "agent" : "owner",
   };
 }
@@ -2827,7 +2879,7 @@ async function insertMailboxDraft(
       input.subject,
       input.textBody,
       input.htmlBody,
-      JSON.stringify({ approval_required: true }),
+      JSON.stringify(createDraftMetadata(input)),
       input.sourceId,
       input.createdBy,
       now,
@@ -2855,6 +2907,7 @@ async function updateMailboxDraft(
          subject = ?,
          text_body = ?,
          html_body = ?,
+         metadata_json = ?,
          source_id = ?,
          folder = 'drafts',
          created_by = ?,
@@ -2869,6 +2922,7 @@ async function updateMailboxDraft(
       input.subject,
       input.textBody,
       input.htmlBody,
+      JSON.stringify(createDraftMetadata(input)),
       input.sourceId,
       input.createdBy,
       new Date().toISOString(),
@@ -2878,6 +2932,71 @@ async function updateMailboxDraft(
     .run();
 
   return getMailboxMessageById(env, mailboxId, draftId);
+}
+
+function createDraftMetadata(input: NormalizedMailboxDraftInput): Record<string, unknown> {
+  return {
+    approval_required: true,
+    outbound_headers: {
+      message_id: input.messageIdHeader,
+      in_reply_to: input.inReplyTo,
+      references: input.referencesHeader,
+    },
+  };
+}
+
+function createMessageIdHeader(fromAddress: string): string {
+  const domain = fromAddress.split("@")[1] || "me3.local";
+  return `<${crypto.randomUUID()}@${domain}>`;
+}
+
+function getDraftOutboundHeaders(row?: DbMailboxMessage | null): {
+  messageIdHeader: string | null;
+  inReplyTo: string | null;
+  referencesHeader: string | null;
+} {
+  const metadata = parseJsonRecord(row?.metadata_json || null);
+  const outboundHeaders = isPlainObject(metadata.outbound_headers)
+    ? metadata.outbound_headers
+    : {};
+  return {
+    messageIdHeader: normalizeMessageHeader(outboundHeaders.message_id),
+    inReplyTo: normalizeMessageHeader(outboundHeaders.in_reply_to),
+    referencesHeader: normalizeReferencesHeader(outboundHeaders.references),
+  };
+}
+
+function getReplyThreadHeaders(row?: DbMailboxMessage | null): {
+  inReplyTo: string | null;
+  referencesHeader: string | null;
+} {
+  if (!row) return { inReplyTo: null, referencesHeader: null };
+  const rawHeaders = parseJsonRecord(row.raw_headers_json);
+  const messageId = normalizeMessageHeader(
+    rawHeaders["message-id"] ?? rawHeaders["Message-ID"] ?? rawHeaders.messageId,
+  );
+  const previousReferences = normalizeReferencesHeader(
+    rawHeaders.references ?? rawHeaders.References,
+  );
+  return {
+    inReplyTo: messageId,
+    referencesHeader: normalizeReferencesHeader(
+      [previousReferences, messageId].filter(Boolean).join(" "),
+    ),
+  };
+}
+
+function normalizeMessageHeader(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const header = value.trim();
+  return header && header.length <= 998 ? header : null;
+}
+
+function normalizeReferencesHeader(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    return normalizeReferencesHeader(value.filter((item) => typeof item === "string").join(" "));
+  }
+  return normalizeMessageHeader(value);
 }
 
 async function getMailboxMessageById(

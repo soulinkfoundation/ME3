@@ -114,6 +114,9 @@ type EmailProviderSendMessage = {
   subject: string;
   textBody: string;
   htmlBody: string | null;
+  messageIdHeader: string | null;
+  inReplyTo: string | null;
+  referencesHeader: string | null;
   metadata: Record<string, string>;
 };
 
@@ -237,6 +240,9 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
         headers: {
           "X-ME3-Audit-ID": message.auditId,
           "X-ME3-Provider": "cloudflare-email",
+          ...(message.messageIdHeader ? { "Message-ID": message.messageIdHeader } : {}),
+          ...(message.inReplyTo ? { "In-Reply-To": message.inReplyTo } : {}),
+          ...(message.referencesHeader ? { References: message.referencesHeader } : {}),
         },
       });
       return {
@@ -273,6 +279,9 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
           headers: {
             "X-ME3-Audit-ID": message.auditId,
             "X-ME3-Provider": "cloudflare-email",
+            ...(message.messageIdHeader ? { "Message-ID": message.messageIdHeader } : {}),
+            ...(message.inReplyTo ? { "In-Reply-To": message.inReplyTo } : {}),
+            ...(message.referencesHeader ? { References: message.referencesHeader } : {}),
           },
         }),
       },
@@ -355,6 +364,13 @@ const POSTMARK_PROVIDER: EmailProviderAdapter = {
         Headers: [
           { Name: "X-ME3-Audit-ID", Value: message.auditId },
           { Name: "X-ME3-Provider", Value: "postmark" },
+          ...(message.messageIdHeader
+            ? [{ Name: "Message-ID", Value: message.messageIdHeader }]
+            : []),
+          ...(message.inReplyTo ? [{ Name: "In-Reply-To", Value: message.inReplyTo }] : []),
+          ...(message.referencesHeader
+            ? [{ Name: "References", Value: message.referencesHeader }]
+            : []),
         ],
       }),
     });
@@ -555,6 +571,9 @@ export async function sendEmailWithProvider(
     subject,
     textBody: input.textBody,
     htmlBody: input.htmlBody || null,
+    messageIdHeader: input.messageIdHeader || null,
+    inReplyTo: input.inReplyTo || null,
+    referencesHeader: input.referencesHeader || null,
     metadata: stringifyMetadata({
       me3_audit_id: auditId,
       me3_purpose: input.purpose,

@@ -43,6 +43,21 @@ type StoredTelegramConnection = {
   updated_at: string;
 };
 
+type StoredSocialAccount = {
+  id: string;
+  user_id: string;
+  site_id: string;
+  platform: "x" | "linkedin" | "instagram" | "instagram_business";
+  platform_account_id: string;
+  platform_handle: string | null;
+  display_name: string | null;
+  status: "active" | "expired" | "revoked" | "error";
+  scopes_json: string;
+  last_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 function createEnv(): Env & {
   owner: StoredOwner | null;
   messages: StoredMessage[];
@@ -56,6 +71,7 @@ function createEnv(): Env & {
   emailSends: Array<Record<string, unknown>>;
   mailboxMessages: StoredMailboxMessage[];
   telegramConnection: StoredTelegramConnection | null;
+  socialAccounts: StoredSocialAccount[];
 } {
   const state = {
     owner: null as StoredOwner | null,
@@ -70,6 +86,7 @@ function createEnv(): Env & {
     emailSends: [] as Array<Record<string, unknown>>,
     mailboxMessages: [] as StoredMailboxMessage[],
     telegramConnection: null as StoredTelegramConnection | null,
+    socialAccounts: [] as StoredSocialAccount[],
   };
 
   const db = {
@@ -78,6 +95,9 @@ function createEnv(): Env & {
         async all<T>() {
           if (sql.includes("FROM plugin_installations")) {
             return { results: state.pluginInstallations as T[] };
+          }
+          if (sql.includes("FROM social_accounts")) {
+            return { results: state.socialAccounts as T[] };
           }
           return { results: [] as T[] };
         },
@@ -429,7 +449,7 @@ function createEnv(): Env & {
                 sql.includes("status = 'pending_approval'")
               ) {
                 state.mailboxMessages = state.mailboxMessages.map((message) =>
-                  message.id === values[9] && message.mailbox_id === values[10]
+                  message.id === values[10] && message.mailbox_id === values[11]
                     ? {
                         ...message,
                         status: "pending_approval",
@@ -439,11 +459,12 @@ function createEnv(): Env & {
                         subject: values[3] as string,
                         text_body: values[4] as string,
                         html_body: values[5] as string | null,
-                        source_id: values[6] as string | null,
+                        metadata_json: values[6] as string,
+                        source_id: values[7] as string | null,
                         folder: "drafts",
-                        created_by: values[7] as string,
+                        created_by: values[8] as string,
                         error_message: null,
-                        updated_at: values[8] as string,
+                        updated_at: values[9] as string,
                       }
                     : message,
                 );
@@ -614,6 +635,13 @@ function createEnv(): Env & {
               if (sql.includes("FROM agent_channel_events")) {
                 return { results: [] as T[] };
               }
+              if (sql.includes("FROM social_accounts")) {
+                return {
+                  results: state.socialAccounts.filter(
+                    (account) => account.user_id === values[0],
+                  ) as T[],
+                };
+              }
               return { results: [] as T[] };
             },
           };
@@ -667,6 +695,9 @@ function createEnv(): Env & {
     },
     set telegramConnection(value: StoredTelegramConnection | null) {
       state.telegramConnection = value;
+    },
+    get socialAccounts() {
+      return state.socialAccounts;
     },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
@@ -1166,6 +1197,125 @@ describe("ME3 Core Worker auth", () => {
       installed: true,
       enabled: false,
       status: "disabled",
+    });
+  });
+
+  it("exposes Social Publishing runtime status and accounts when installed", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    env.socialAccounts.push({
+      id: "social-account-1",
+      user_id: "owner",
+      site_id: "site-1",
+      platform: "linkedin",
+      platform_account_id: "linkedin-owner",
+      platform_handle: null,
+      display_name: "Owner LinkedIn",
+      status: "active",
+      scopes_json: JSON.stringify(["w_member_social"]),
+      last_verified_at: "2026-05-11T10:00:00Z",
+      created_at: "2026-05-11T09:00:00Z",
+      updated_at: "2026-05-11T10:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/social/accounts", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      plugin: { status: string; ready: boolean };
+      accounts: Array<{ id: string; platform: string; scopes: string[] }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.plugin).toMatchObject({ status: "installed", ready: true });
+    expect(body.accounts).toEqual([
+      expect.objectContaining({
+        id: "social-account-1",
+        platform: "linkedin",
+        scopes: ["w_member_social"],
+      }),
+    ]);
+  });
+
+  it("gates Social Publishing account reads when setup is required", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const now = new Date().toISOString();
+    env.pluginInstallations.push({
+      plugin_id: "me3.social-publishing",
+      version: "0.1.0",
+      enabled: 1,
+      status: "setup_required",
+      granted_permissions_json: "[]",
+      setup_state_json: "{}",
+      installed_at: now,
+      updated_at: now,
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/social/accounts", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      error: string;
+      plugin: { status: string; ready: boolean };
+    };
+
+    expect(response.status).toBe(424);
+    expect(body.error).toBe("Social Publishing setup is required");
+    expect(body.plugin).toMatchObject({ status: "setup_required", ready: false });
+  });
+
+  it("gates Social Publishing account reads when disabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/deactivate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/social/accounts", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      error: string;
+      plugin: { status: string; enabled: boolean; ready: boolean };
+    };
+
+    expect(response.status).toBe(403);
+    expect(body.error).toBe("Social Publishing is disabled");
+    expect(body.plugin).toMatchObject({
+      status: "disabled",
+      enabled: false,
+      ready: false,
     });
   });
 
@@ -1744,6 +1894,144 @@ describe("ME3 Core Worker auth", () => {
         Subject: "Hello",
         MessageStream: "outbound",
       });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("approves mailbox replies with provider thread headers", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify({ ErrorCode: 0, Message: "OK", MessageID: "pm-reply-1" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await app.fetch(
+        new Request("http://localhost/api/email-provider-settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({
+            activeProviderId: "postmark",
+            providers: [
+              {
+                id: "postmark",
+                fromAddress: "hello@example.com",
+                fromName: "ME3 Mail",
+                messageStream: "outbound",
+                serverToken: "postmark-secret-1234",
+              },
+            ],
+          }),
+        }),
+        env,
+      );
+      await app.fetch(
+        new Request("http://localhost/api/mailbox", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({ aliasLocalPart: "owner", forwardingEnabled: false }),
+        }),
+        env,
+      );
+
+      const now = new Date().toISOString();
+      env.mailboxMessages.push({
+        id: "inbound-1",
+        mailbox_id: env.mailbox!.id,
+        direction: "inbound",
+        message_kind: "email",
+        status: "received",
+        thread_key: "thread-1",
+        provider_id: "postmark",
+        provider_message_id: "inbound-provider-1",
+        from_address: "client@example.com",
+        to_address: "owner@me3.local",
+        subject: "Question",
+        text_body: "Can you help?",
+        html_body: null,
+        raw_headers_json: JSON.stringify({
+          "message-id": "<client-message@example.com>",
+          references: "<previous@example.com>",
+        }),
+        raw_message: null,
+        metadata_json: null,
+        source_id: null,
+        folder: "inbox",
+        read_at: null,
+        agent_summary: null,
+        agent_labels_json: null,
+        forwarded_to: null,
+        error_message: null,
+        created_by: "system",
+        approved_by_user_id: null,
+        received_at: now,
+        approved_at: null,
+        sent_at: null,
+        created_at: now,
+        updated_at: now,
+      });
+
+      const draftResponse = await app.fetch(
+        new Request("http://localhost/api/mailbox/drafts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({
+            fromAddress: "hello@example.com",
+            to: "client@example.com",
+            subject: "Re: Question",
+            textBody: "Happy to help.",
+            source: "user",
+            replyToMessageId: "inbound-1",
+          }),
+        }),
+        env,
+      );
+      const draftBody = (await draftResponse.json()) as {
+        draft: { id: string; metadata: Record<string, Record<string, string>> };
+      };
+      expect(draftResponse.status).toBe(201);
+      expect(draftBody.draft.metadata.outbound_headers).toMatchObject({
+        in_reply_to: "<client-message@example.com>",
+        references: "<previous@example.com> <client-message@example.com>",
+      });
+
+      const approveResponse = await app.fetch(
+        new Request(`http://localhost/api/mailbox/drafts/${draftBody.draft.id}/approve`, {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+
+      expect(approveResponse.status).toBe(200);
+      expect(env.emailSendAudit).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            mailbox_message_id: draftBody.draft.id,
+            purpose: "reply",
+            message_id_header: expect.stringMatching(/^<.+@example\.com>$/),
+            in_reply_to: "<client-message@example.com>",
+            references_header: "<previous@example.com> <client-message@example.com>",
+            status: "sent",
+          }),
+        ]),
+      );
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(JSON.parse(String(init?.body)).Headers).toEqual(
+        expect.arrayContaining([
+          { Name: "In-Reply-To", Value: "<client-message@example.com>" },
+          {
+            Name: "References",
+            Value: "<previous@example.com> <client-message@example.com>",
+          },
+        ]),
+      );
     } finally {
       vi.unstubAllGlobals();
     }
