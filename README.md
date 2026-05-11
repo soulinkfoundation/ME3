@@ -48,7 +48,11 @@ Required owner auth secrets:
 
 - `ADMIN_BOOTSTRAP_CODE` unlocks first-run setup and owner credential recovery.
 - `JWT_SECRET` signs the owner session cookie.
-- `TOKEN_ENCRYPTION_KEY` is reserved for encrypted owner/provider tokens.
+
+ME3 Core creates its install encryption key automatically during owner setup when
+`TOKEN_ENCRYPTION_KEY` is not provided. Operators may still set
+`TOKEN_ENCRYPTION_KEY` as an external secret if they want to manage that key
+outside D1.
 
 Local setup:
 
@@ -65,6 +69,24 @@ The web app reads `/api/config` to decide whether owner password auth is configu
 
 Owner-only Worker routes, including `/api/assistant/chat`, require a valid server-verified session. Public install routes such as `/health`, `/api/config`, and `/.well-known/me.json` remain unauthenticated.
 
+## Mailbox Sender Providers
+
+ME3 Core treats outbound email as a provider adapter system. Core owns mailbox UI, message/thread storage, drafts, send audit, agent approvals, and reply workflow. Provider adapters only handle delivery and inbound transport. Provider tokens are encrypted at rest with `TOKEN_ENCRYPTION_KEY` and are never returned to the browser or written to `me.json`.
+
+The account-level sender settings live in Account -> Mailbox settings:
+
+- Recommended: Cloudflare Email Service
+- Bring another sender: Postmark, Mailgun, SMTP
+- Future provider slots: SES, Resend, SendGrid
+
+Cloudflare Email Service is the first/default adapter. Required setup is Workers Paid, a sending domain on Cloudflare DNS, a verified sending address or domain, and either a `send_email` binding named `EMAIL` or REST API account ID/token configured through the owner UI. Its fields are from address, display name, optional reply-to, sending domain, transport (`binding` or `rest`), Cloudflare account ID for REST, and API token for REST.
+
+Postmark is the first stable external adapter. Its fields are server API token, confirmed sender signature or verified sender domain, from address, display name, optional reply-to, and message stream (default `outbound`). Mailgun and SMTP are visible as next sender paths, but their adapter implementations are deferred.
+
+The provider interface normalizes setup requirements, readiness state, test sends, and delivery results. Sent-message audit belongs in `email_send_audit`: provider ID, provider message ID/status, from/to/subject, `thread_key`, `Message-ID`/`In-Reply-To`/`References`, approval/source metadata, failures, and timestamps. `mailbox_messages` keeps provider IDs for threading joins without making any provider the mailbox system of record.
+
+Deferred inbound mailbox work includes Cloudflare Email Service Worker email handlers, Cloudflare routing rules and addresses, Postmark/Mailgun inbound webhook verification, MIME attachment persistence, thread-key derivation from `Message-ID`/`In-Reply-To`/`References`, and mailbox source management for custom domains and external forwards.
+
 ## Web UI
 
 The Core OSS web app is copied from `me3-app` rather than redesigned from scratch. Calendar, email, sites, and settings use the existing ME3 Vue/Vite UI as the base. `/assistant` is intentionally a placeholder for now, with the existing side navigation entry pointing at it.
@@ -80,13 +102,13 @@ The Core OSS web app is copied from `me3-app` rather than redesigned from scratc
 
 It intentionally excludes production `me3.app` routes, production Cloudflare account/zone IDs, plugin queues, hosted subscription billing config, and real provider secrets.
 
-`apps/worker/.dev.vars.example` lists secret names only. The first required generated local values are:
+`apps/worker/.dev.vars.example` lists secret names only. The first generated local values are:
 
 - `JWT_SECRET`
 - `TOKEN_ENCRYPTION_KEY`
 - `ADMIN_BOOTSTRAP_CODE`
 
-Owner-supplied providers such as OpenAI, Anthropic, Postmark, Stripe, OAuth, and search remain blank until an install owner configures them.
+Owner-supplied providers such as OpenAI, Anthropic, outbound email senders, Stripe, OAuth, and search remain blank until an install owner configures them.
 
 ## Cloudflare Deploy Template
 
@@ -102,7 +124,7 @@ The root `wrangler.toml` is the deploy-template config for Cloudflare Workers Bu
 - optional Workers AI binding
 - public origin/model defaults
 
-Cloudflare should provision supported resources from the Wrangler config during template deployment. Required install secrets are described in `package.json` and listed in `apps/worker/.dev.vars.example`.
+Cloudflare should provision supported resources from the Wrangler config during template deployment. Required and optional install secrets are described in `package.json` and listed in `apps/worker/.dev.vars.example`.
 
 ### Recommended Cloudflare Domains
 

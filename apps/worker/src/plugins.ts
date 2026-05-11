@@ -169,11 +169,6 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   ],
   secrets: [
     {
-      name: "TOKEN_ENCRYPTION_KEY",
-      label: "Token encryption key",
-      required: true,
-    },
-    {
       name: "X_CLIENT_SECRET",
       label: "X OAuth client secret",
       required: false,

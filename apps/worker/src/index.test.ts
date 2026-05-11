@@ -41,6 +41,7 @@ function createEnv(): Env & {
   messages: StoredMessage[];
   mailbox: DbMailboxAlias | null;
   pluginInstallations: DbPluginInstallation[];
+  installSecrets: Map<string, string>;
   aiCredentials: DbAiProviderCredential[];
   aiDefaults: DbAiModelDefault[];
   telegramConnection: StoredTelegramConnection | null;
@@ -50,6 +51,7 @@ function createEnv(): Env & {
     messages: [] as StoredMessage[],
     mailbox: null as DbMailboxAlias | null,
     pluginInstallations: [] as DbPluginInstallation[],
+    installSecrets: new Map<string, string>(),
     aiCredentials: [] as DbAiProviderCredential[],
     aiDefaults: [] as DbAiModelDefault[],
     telegramConnection: null as StoredTelegramConnection | null,
@@ -133,6 +135,12 @@ function createEnv(): Env & {
                   state.pluginInstallations[existingIndex] = installation;
                 } else {
                   state.pluginInstallations.push(installation);
+                }
+              }
+
+              if (sql.includes("INSERT INTO install_secrets")) {
+                if (!state.installSecrets.has(values[0] as string)) {
+                  state.installSecrets.set(values[0] as string, values[1] as string);
                 }
               }
 
@@ -311,6 +319,10 @@ function createEnv(): Env & {
                   ) || null
                 ) as T | null;
               }
+              if (sql.includes("FROM install_secrets")) {
+                const value = state.installSecrets.get(values[0] as string);
+                return value ? ({ value } as T) : null;
+              }
               return null;
             },
             async all<T>() {
@@ -357,6 +369,9 @@ function createEnv(): Env & {
     },
     get pluginInstallations() {
       return state.pluginInstallations;
+    },
+    get installSecrets() {
+      return state.installSecrets;
     },
     get aiCredentials() {
       return state.aiCredentials;
@@ -422,6 +437,19 @@ describe("ME3 Core Worker auth", () => {
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
     expect(response.headers.get("set-cookie")).toContain("me3_core_session=");
+  });
+
+  it("generates an install encryption key during bootstrap when no env key is provided", async () => {
+    const env = createEnv();
+    env.TOKEN_ENCRYPTION_KEY = undefined;
+
+    const response = await bootstrap(env);
+    const configResponse = await app.fetch(new Request("http://localhost/api/config"), env);
+    const config = (await configResponse.json()) as { setupRequired: string[] };
+
+    expect(response.status).toBe(200);
+    expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
+    expect(config.setupRequired).not.toContain("TOKEN_ENCRYPTION_KEY");
   });
 
   it("reports whether owner password auth is configured", async () => {
@@ -789,7 +817,7 @@ describe("ME3 Core Worker auth", () => {
     ]);
   });
 
-  it("keeps Social Publishing setup-required when token encryption is missing", async () => {
+  it("activates Social Publishing after generating install encryption during setup", async () => {
     const env = createEnv();
     env.TOKEN_ENCRYPTION_KEY = undefined;
     const session = cookieHeader(await bootstrap(env));
@@ -809,13 +837,12 @@ describe("ME3 Core Worker auth", () => {
     };
 
     expect(response.status).toBe(200);
-    expect(body.plugin.status).toBe("setup_required");
-    expect(body.plugin.setupRequirements).toEqual(
+    expect(body.plugin.status).toBe("installed");
+    expect(body.plugin.setupRequirements).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "secret",
           label: "Token encryption key",
-          configured: false,
         }),
       ]),
     );

@@ -16,6 +16,7 @@ import {
   deactivateCorePlugin,
   listCorePluginRecords,
 } from "./plugins";
+import { getOrCreateInstallEncryptionKey } from "./install-secrets";
 import {
   getLandingPageTemplate,
   type LandingPageDocument,
@@ -230,6 +231,7 @@ app.post("/api/admin/bootstrap", async (c) => {
     .bind(owner.id, owner.email, owner.name, owner.username, owner.bio, owner.avatar_url, owner.timezone, passwordHash)
     .run();
 
+  await getOrCreateInstallEncryptionKey(c.env);
   await setOwnerSession(c, owner.id);
 
   return c.json({ ok: true, owner });
@@ -3222,7 +3224,6 @@ async function getSetupRequired(env: Env, ownerId = "owner"): Promise<string[]> 
   const missing: string[] = [];
 
   if (!env.JWT_SECRET) missing.push("JWT_SECRET");
-  if (!env.TOKEN_ENCRYPTION_KEY) missing.push("TOKEN_ENCRYPTION_KEY");
   if (!(await hasConfiguredAiProvider(env, ownerId))) {
     missing.push("AI_PROVIDER");
   }

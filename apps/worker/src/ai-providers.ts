@@ -1,4 +1,8 @@
 import type { DbAiModelDefault, DbAiProviderCredential, Env } from "./types";
+import {
+  getOrCreateInstallEncryptionKey,
+  hasInstallEncryptionKey,
+} from "./install-secrets";
 
 export const AI_ROUTE_IDS = ["default", "chat", "reasoning", "extraction"] as const;
 
@@ -182,6 +186,7 @@ export class AiSettingsInputError extends Error {
 export async function getAiSettings(env: Env, ownerId: string): Promise<AiSettingsResponse> {
   const credentials = await listAiCredentials(env, ownerId);
   const storedDefaults = await listAiModelDefaults(env, ownerId);
+  const encryptionConfigured = await hasInstallEncryptionKey(env);
   const providers = AI_PROVIDER_ADAPTERS.map((adapter) =>
     serializeProvider(adapter, credentials.get(adapter.id) || null, env),
   );
@@ -193,7 +198,7 @@ export async function getAiSettings(env: Env, ownerId: string): Promise<AiSettin
   ) as Record<AiRouteId, AiModelRouteRecord>;
 
   return {
-    encryptionConfigured: Boolean(env.TOKEN_ENCRYPTION_KEY),
+    encryptionConfigured,
     providers,
     routes: AI_ROUTE_IDS.map((routeId) => defaults[routeId]),
     defaults,
@@ -302,14 +307,8 @@ async function applyProviderUpdate(
   const apiKey = update.apiKey.trim();
   if (!apiKey) return;
 
-  if (!env.TOKEN_ENCRYPTION_KEY) {
-    throw new AiSettingsInputError(
-      "TOKEN_ENCRYPTION_KEY is required before saving provider keys",
-      503,
-    );
-  }
-
-  const encryptedApiKey = await encryptProviderSecret(apiKey, env.TOKEN_ENCRYPTION_KEY);
+  const installKey = await getOrCreateInstallEncryptionKey(env);
+  const encryptedApiKey = await encryptProviderSecret(apiKey, installKey);
   const now = new Date().toISOString();
 
   await env.DB.prepare(

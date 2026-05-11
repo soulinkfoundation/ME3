@@ -44,7 +44,7 @@
         "description": "Generate a random auth signing secret, for example `openssl rand -base64 32`."
       },
       "TOKEN_ENCRYPTION_KEY": {
-        "description": "Generate a 32-byte base64 key for encrypting owner/provider tokens, for example `openssl rand -base64 32`."
+        "description": "Optional operator override for owner/provider token encryption. If omitted, ME3 Core generates a persistent install key in D1 during owner setup."
       },
       "ADMIN_BOOTSTRAP_CODE": {
         "description": "Generate a one-time local owner bootstrap code, for example `openssl rand -hex 16`."

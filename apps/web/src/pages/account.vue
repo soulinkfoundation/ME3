@@ -1187,7 +1187,8 @@ onMounted(async () => {
                 v-if="!aiEncryptionConfigured"
                 class="error"
               >
-                TOKEN_ENCRYPTION_KEY is required before API keys can be saved.
+                Install encryption is created automatically during owner setup.
+                If this remains visible, run the latest migrations and bootstrap again.
               </p>
 
               <div class="ai-provider-list">
