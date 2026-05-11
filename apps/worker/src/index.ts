@@ -559,9 +559,14 @@ app.get("/api/sites/:username/publish-manifest", async (c) => {
   const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
 
-  return c.json({
-    manifest: (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest(),
-  });
+  try {
+    return c.json({
+      manifest: (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest(),
+    });
+  } catch (error) {
+    if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
+    throw error;
+  }
 });
 
 app.get("/api/sites/:username/storage", async (c) => {
@@ -691,51 +696,56 @@ app.post("/api/sites/:username/upload", async (c) => {
   const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
 
-  const form = await c.req.formData();
-  const files = form.getAll("files").filter((entry): entry is File => entry instanceof File);
-  if (files.length === 0) return c.json({ error: "No files uploaded" }, 400);
+  try {
+    const form = await c.req.formData();
+    const files = form.getAll("files").filter((entry): entry is File => entry instanceof File);
+    if (files.length === 0) return c.json({ error: "No files uploaded" }, 400);
 
-  const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
-  const textFiles = new Map<string, string>();
+    const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
+    const textFiles = new Map<string, string>();
 
-  for (const file of files) {
-    if (isSiteMediaFile(file.name, file.type)) {
-      const buffer = await file.arrayBuffer();
-      const relativePath = normalizeSiteMediaPath(file.name);
-      await putSiteMediaFile(c.env, site, `public/${relativePath}`, buffer, file.type || getContentType(file.name));
-      manifest.assetFiles[relativePath] = await sha256Buffer(buffer);
-      continue;
+    for (const file of files) {
+      if (isSiteMediaFile(file.name, file.type)) {
+        const buffer = await file.arrayBuffer();
+        const relativePath = normalizeSiteMediaPath(file.name);
+        await putSiteMediaFile(c.env, site, `public/${relativePath}`, buffer, file.type || getContentType(file.name));
+        manifest.assetFiles[relativePath] = await sha256Buffer(buffer);
+        continue;
+      }
+
+      const content = await file.text();
+      const contentType = file.type || getContentType(file.name);
+      const sourcePath = `src/${normalizeSiteFileName(file.name)}`;
+      await putSiteFile(c.env, site.id, sourcePath, content, contentType);
+      manifest.sourceFiles[file.name] = await sha256Text(content);
+      textFiles.set(file.name, content);
     }
 
-    const content = await file.text();
-    const contentType = file.type || getContentType(file.name);
-    const sourcePath = `src/${normalizeSiteFileName(file.name)}`;
-    await putSiteFile(c.env, site.id, sourcePath, content, contentType);
-    manifest.sourceFiles[file.name] = await sha256Text(content);
-    textFiles.set(file.name, content);
+    const meJson = textFiles.get("me.json") || (await getSiteFileText(c.env, site.id, "src/me.json"));
+    if (meJson) {
+      await putSiteFile(c.env, site.id, "public/me.json", meJson, "application/json");
+      await putSiteFile(c.env, site.id, "public/index.html", renderProfileSiteHtml(meJson, site.username), "text/html");
+    }
+
+    for (const [name, content] of textFiles) {
+      if (name === "me.json") continue;
+      const publicName = name.replace(/\.md$/i, ".html");
+      await putSiteFile(c.env, site.id, `public/${normalizeSiteFileName(publicName)}`, renderMarkdownPageHtml(name, content), "text/html");
+    }
+
+    manifest.updatedAt = new Date().toISOString();
+    await savePublishManifest(c.env, site.id, manifest);
+    await c.env.DB.prepare(
+      "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+    )
+      .bind(site.id)
+      .run();
+
+    return c.json({ ok: true, publishedAt: new Date().toISOString() });
+  } catch (error) {
+    if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
+    throw error;
   }
-
-  const meJson = textFiles.get("me.json") || (await getSiteFileText(c.env, site.id, "src/me.json"));
-  if (meJson) {
-    await putSiteFile(c.env, site.id, "public/me.json", meJson, "application/json");
-    await putSiteFile(c.env, site.id, "public/index.html", renderProfileSiteHtml(meJson, site.username), "text/html");
-  }
-
-  for (const [name, content] of textFiles) {
-    if (name === "me.json") continue;
-    const publicName = name.replace(/\.md$/i, ".html");
-    await putSiteFile(c.env, site.id, `public/${normalizeSiteFileName(publicName)}`, renderMarkdownPageHtml(name, content), "text/html");
-  }
-
-  manifest.updatedAt = new Date().toISOString();
-  await savePublishManifest(c.env, site.id, manifest);
-  await c.env.DB.prepare(
-    "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
-  )
-    .bind(site.id)
-    .run();
-
-  return c.json({ ok: true, publishedAt: new Date().toISOString() });
 });
 
 app.post("/api/sites/:username/upload-image", async (c) => {
@@ -745,33 +755,38 @@ app.post("/api/sites/:username/upload-image", async (c) => {
   const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
 
-  const form = await c.req.formData();
-  const file = form.get("file");
-  const type = String(form.get("type") || "image").replace(/[^a-z0-9_-]/gi, "");
-  if (!(file instanceof File)) return c.json({ error: "Image file is required" }, 400);
-  if (!file.type.startsWith("image/")) return c.json({ error: "Only image uploads are supported" }, 400);
+  try {
+    const form = await c.req.formData();
+    const file = form.get("file");
+    const type = String(form.get("type") || "image").replace(/[^a-z0-9_-]/gi, "");
+    if (!(file instanceof File)) return c.json({ error: "Image file is required" }, 400);
+    if (!file.type.startsWith("image/")) return c.json({ error: "Only image uploads are supported" }, 400);
 
-  const ext = imageExtension(file);
-  const testimonialIndex = String(form.get("index") || "").replace(/[^0-9]/g, "");
-  const baseName = type === "testimonial" && testimonialIndex ? `testimonial-${testimonialIndex}` : type;
-  const filename = `${baseName}.${ext}`;
-  const relativePath = type === "favicon" ? "favicon.png" : `files/${filename}`;
-  const path = `public/${relativePath}`;
-  const buffer = await file.arrayBuffer();
-  const storage = await putSiteMediaFile(c.env, site, path, buffer, file.type);
+    const ext = imageExtension(file);
+    const testimonialIndex = String(form.get("index") || "").replace(/[^0-9]/g, "");
+    const baseName = type === "testimonial" && testimonialIndex ? `testimonial-${testimonialIndex}` : type;
+    const filename = `${baseName}.${ext}`;
+    const relativePath = type === "favicon" ? "favicon.png" : `files/${filename}`;
+    const path = `public/${relativePath}`;
+    const buffer = await file.arrayBuffer();
+    const storage = await putSiteMediaFile(c.env, site, path, buffer, file.type);
 
-  const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
-  manifest.assetFiles[relativePath] = await sha256Buffer(buffer);
-  manifest.updatedAt = new Date().toISOString();
-  await savePublishManifest(c.env, site.id, manifest);
+    const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
+    manifest.assetFiles[relativePath] = await sha256Buffer(buffer);
+    manifest.updatedAt = new Date().toISOString();
+    await savePublishManifest(c.env, site.id, manifest);
 
-  return c.json({
-    ok: true,
-    path: relativePath,
-    url: relativePath,
-    type,
-    storage,
-  });
+    return c.json({
+      ok: true,
+      path: relativePath,
+      url: relativePath,
+      type,
+      storage,
+    });
+  } catch (error) {
+    if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
+    throw error;
+  }
 });
 
 app.post("/api/sites/:username/upload-page-image", async (c) => {
@@ -781,29 +796,34 @@ app.post("/api/sites/:username/upload-page-image", async (c) => {
   const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
 
-  const form = await c.req.formData();
-  const file = form.get("file");
-  if (!(file instanceof File)) return c.json({ error: "Image file is required" }, 400);
-  if (!file.type.startsWith("image/")) return c.json({ error: "Only image uploads are supported" }, 400);
+  try {
+    const form = await c.req.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) return c.json({ error: "Image file is required" }, 400);
+    if (!file.type.startsWith("image/")) return c.json({ error: "Only image uploads are supported" }, 400);
 
-  const pageSlug = String(form.get("pageSlug") || "page").replace(/[^a-z0-9_-]/gi, "");
-  const imageIndex = String(form.get("imageIndex") || "1").replace(/[^0-9]/g, "") || "1";
-  const ext = imageExtension(file);
-  const filename = `${pageSlug}-${imageIndex}.${ext}`;
-  const buffer = await file.arrayBuffer();
-  const storage = await putSiteMediaFile(c.env, site, `public/files/${filename}`, buffer, file.type);
+    const pageSlug = String(form.get("pageSlug") || "page").replace(/[^a-z0-9_-]/gi, "");
+    const imageIndex = String(form.get("imageIndex") || "1").replace(/[^0-9]/g, "") || "1";
+    const ext = imageExtension(file);
+    const filename = `${pageSlug}-${imageIndex}.${ext}`;
+    const buffer = await file.arrayBuffer();
+    const storage = await putSiteMediaFile(c.env, site, `public/files/${filename}`, buffer, file.type);
 
-  const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
-  manifest.assetFiles[`files/${filename}`] = await sha256Buffer(buffer);
-  manifest.updatedAt = new Date().toISOString();
-  await savePublishManifest(c.env, site.id, manifest);
+    const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
+    manifest.assetFiles[`files/${filename}`] = await sha256Buffer(buffer);
+    manifest.updatedAt = new Date().toISOString();
+    await savePublishManifest(c.env, site.id, manifest);
 
-  return c.json({
-    ok: true,
-    path: `files/${filename}`,
-    url: `files/${filename}`,
-    storage,
-  });
+    return c.json({
+      ok: true,
+      path: `files/${filename}`,
+      url: `files/${filename}`,
+      storage,
+    });
+  } catch (error) {
+    if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
+    throw error;
+  }
 });
 
 app.get("/api/sites/:username/content", async (c) => {
@@ -2284,6 +2304,23 @@ async function requireOwner(c: AppContext): Promise<string | null> {
 
 function unauthorized(c: AppContext) {
   return c.json({ ok: false, error: "Authentication required" }, 401);
+}
+
+function siteStorageSetupRequired(c: AppContext) {
+  return c.json(
+    {
+      ok: false,
+      error:
+        "Site publishing storage is not initialized. Run `pnpm --filter @me3-core/worker db:migrate:local` and restart the Worker.",
+      setupRequired: ["site_files"],
+    },
+    503,
+  );
+}
+
+function isMissingSiteFilesTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("site_files") && /no such table|does not exist/i.test(message);
 }
 
 function normalizeUsername(value: unknown): string {
