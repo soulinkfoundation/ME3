@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import app from "./index";
+import type { DbPluginInstallation } from "./plugins";
 import type {
   DbAiModelDefault,
   DbAiProviderCredential,
@@ -39,6 +40,7 @@ function createEnv(): Env & {
   owner: StoredOwner | null;
   messages: StoredMessage[];
   mailbox: DbMailboxAlias | null;
+  pluginInstallations: DbPluginInstallation[];
   aiCredentials: DbAiProviderCredential[];
   aiDefaults: DbAiModelDefault[];
   telegramConnection: StoredTelegramConnection | null;
@@ -47,6 +49,7 @@ function createEnv(): Env & {
     owner: null as StoredOwner | null,
     messages: [] as StoredMessage[],
     mailbox: null as DbMailboxAlias | null,
+    pluginInstallations: [] as DbPluginInstallation[],
     aiCredentials: [] as DbAiProviderCredential[],
     aiDefaults: [] as DbAiModelDefault[],
     telegramConnection: null as StoredTelegramConnection | null,
@@ -57,7 +60,7 @@ function createEnv(): Env & {
       return {
         async all<T>() {
           if (sql.includes("FROM plugin_installations")) {
-            return { results: [] as T[] };
+            return { results: state.pluginInstallations as T[] };
           }
           return { results: [] as T[] };
         },
@@ -104,6 +107,33 @@ function createEnv(): Env & {
                   role: values[2] as string,
                   content: values[3] as string,
                 });
+              }
+
+              if (sql.includes("INSERT INTO plugin_installations")) {
+                const existingIndex = state.pluginInstallations.findIndex(
+                  (installation) => installation.plugin_id === values[0],
+                );
+                const existing =
+                  existingIndex >= 0 ? state.pluginInstallations[existingIndex] : null;
+                const installation: DbPluginInstallation = {
+                  plugin_id: values[0] as string,
+                  version: values[1] as string,
+                  enabled: values[2] as number,
+                  status: values[3] as DbPluginInstallation["status"],
+                  granted_permissions_json:
+                    sql.includes("granted_permissions_json = excluded.granted_permissions_json") ||
+                    !existing
+                      ? (values[4] as string)
+                      : existing.granted_permissions_json,
+                  setup_state_json: values[5] as string,
+                  installed_at: existing?.installed_at || (values[6] as string),
+                  updated_at: values[7] as string,
+                };
+                if (existingIndex >= 0) {
+                  state.pluginInstallations[existingIndex] = installation;
+                } else {
+                  state.pluginInstallations.push(installation);
+                }
               }
 
               if (sql.includes("INSERT INTO ai_provider_credentials")) {
@@ -274,6 +304,13 @@ function createEnv(): Env & {
                   ? (state.telegramConnection as T)
                   : null;
               }
+              if (sql.includes("FROM plugin_installations")) {
+                return (
+                  state.pluginInstallations.find(
+                    (installation) => installation.plugin_id === values[0],
+                  ) || null
+                ) as T | null;
+              }
               return null;
             },
             async all<T>() {
@@ -317,6 +354,9 @@ function createEnv(): Env & {
     },
     set mailbox(value: DbMailboxAlias | null) {
       state.mailbox = value;
+    },
+    get pluginInstallations() {
+      return state.pluginInstallations;
     },
     get aiCredentials() {
       return state.aiCredentials;
@@ -684,6 +724,111 @@ describe("ME3 Core Worker auth", () => {
     const response = await app.fetch(new Request("http://localhost/api/plugins"), env);
 
     expect(response.status).toBe(401);
+  });
+
+  it("activates catalog-only Social Publishing as setup required", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      plugin: {
+        id: string;
+        installed: boolean;
+        enabled: boolean;
+        status: string;
+        grantedPermissions: string[];
+        setupRequirements: Array<{ kind: string; configured: boolean }>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.plugin).toMatchObject({
+      id: "me3.social-publishing",
+      installed: true,
+      enabled: true,
+      status: "setup_required",
+    });
+    expect(body.plugin.grantedPermissions).toEqual([
+      "content.social.publish",
+      "content.social.accounts.manage",
+    ]);
+    expect(body.plugin.setupRequirements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "package", configured: false }),
+        expect.objectContaining({ kind: "queue", configured: false }),
+      ]),
+    );
+
+    const catalogResponse = await app.fetch(
+      new Request("http://localhost/api/plugins", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const catalog = (await catalogResponse.json()) as {
+      plugins: Array<{ id: string; status: string }>;
+    };
+
+    expect(catalog.plugins).toEqual([
+      expect.objectContaining({
+        id: "me3.social-publishing",
+        status: "setup_required",
+      }),
+    ]);
+  });
+
+  it("deactivates an installed Social Publishing plugin", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/deactivate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      plugin: { id: string; installed: boolean; enabled: boolean; status: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.plugin).toMatchObject({
+      id: "me3.social-publishing",
+      installed: true,
+      enabled: false,
+      status: "disabled",
+    });
+  });
+
+  it("rejects activation for plugins outside the catalog", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/plugins/unknown.plugin/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(404);
   });
 
   it("loads AI provider settings for the signed-in owner", async () => {

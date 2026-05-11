@@ -222,6 +222,8 @@ const mailboxError = ref<string | null>(null);
 const pluginsLoading = ref(false);
 const plugins = ref<PluginRecord[]>([]);
 const pluginCatalogVersion = ref("");
+const pluginActionLoading = ref<string | null>(null);
+const pluginMessage = ref<string | null>(null);
 const pluginsError = ref<string | null>(null);
 const aiSettingsLoading = ref(false);
 const aiSettingsSaving = ref(false);
@@ -533,6 +535,7 @@ async function pauseMailbox() {
 async function loadPlugins() {
   pluginsLoading.value = true;
   pluginsError.value = null;
+  pluginMessage.value = null;
 
   try {
     const response = await api.get<PluginsResponse>("/plugins");
@@ -542,6 +545,69 @@ async function loadPlugins() {
     pluginsError.value = e.message || "Failed to load plugins";
   } finally {
     pluginsLoading.value = false;
+  }
+}
+
+function syncPlugin(plugin: PluginRecord) {
+  const index = plugins.value.findIndex((candidate) => candidate.id === plugin.id);
+  if (index >= 0) {
+    plugins.value.splice(index, 1, plugin);
+  } else {
+    plugins.value.push(plugin);
+  }
+}
+
+function pluginActionKey(plugin: PluginRecord, action: "activate" | "deactivate") {
+  return `${plugin.id}:${action}`;
+}
+
+function isPluginActionLoading(
+  plugin: PluginRecord,
+  action: "activate" | "deactivate",
+) {
+  return pluginActionLoading.value === pluginActionKey(plugin, action);
+}
+
+async function activatePlugin(plugin: PluginRecord) {
+  const key = pluginActionKey(plugin, "activate");
+  pluginActionLoading.value = key;
+  pluginsError.value = null;
+  pluginMessage.value = null;
+
+  try {
+    const response = await api.post<{ plugin: PluginRecord }>(
+      `/plugins/${encodeURIComponent(plugin.id)}/activate`,
+      {},
+    );
+    syncPlugin(response.plugin);
+    pluginMessage.value =
+      response.plugin.status === "setup_required"
+        ? `${response.plugin.name} activated. Setup is still required.`
+        : `${response.plugin.name} activated.`;
+  } catch (e: any) {
+    pluginsError.value = e.message || "Failed to activate plugin";
+  } finally {
+    pluginActionLoading.value = null;
+  }
+}
+
+async function deactivatePlugin(plugin: PluginRecord) {
+  const key = pluginActionKey(plugin, "deactivate");
+  pluginActionLoading.value = key;
+  pluginsError.value = null;
+  pluginMessage.value = null;
+
+  try {
+    const response = await api.post<{ plugin: PluginRecord }>(
+      `/plugins/${encodeURIComponent(plugin.id)}/deactivate`,
+      {},
+    );
+    syncPlugin(response.plugin);
+    pluginMessage.value = `${response.plugin.name} disabled.`;
+  } catch (e: any) {
+    pluginsError.value = e.message || "Failed to deactivate plugin";
+  } finally {
+    pluginActionLoading.value = null;
   }
 }
 
@@ -1263,6 +1329,7 @@ onMounted(async () => {
                 migrations, UI slots, and agent tools before they are bundled
                 into Core.
               </p>
+              <p v-if="pluginMessage" class="success">{{ pluginMessage }}</p>
 
               <div v-if="plugins.length" class="plugin-list">
                 <article
@@ -1286,6 +1353,32 @@ onMounted(async () => {
                             : "Catalog only"
                         }}
                       </span>
+                      <button
+                        v-if="plugin.status === 'available' || plugin.status === 'disabled'"
+                        type="button"
+                        class="button primary plugin-action-button"
+                        :disabled="pluginActionLoading !== null"
+                        @click="activatePlugin(plugin)"
+                      >
+                        {{
+                          isPluginActionLoading(plugin, "activate")
+                            ? "Activating..."
+                            : "Activate"
+                        }}
+                      </button>
+                      <button
+                        v-else
+                        type="button"
+                        class="button secondary plugin-action-button"
+                        :disabled="pluginActionLoading !== null"
+                        @click="deactivatePlugin(plugin)"
+                      >
+                        {{
+                          isPluginActionLoading(plugin, "deactivate")
+                            ? "Disabling..."
+                            : "Deactivate"
+                        }}
+                      </button>
                     </div>
                   </div>
 
@@ -1758,6 +1851,13 @@ h1 {
   gap: 8px;
 }
 
+.plugin-action-button {
+  min-height: 28px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.2;
+}
 
 .plugin-meta-grid {
   display: grid;

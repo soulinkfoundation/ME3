@@ -11,6 +11,9 @@ import {
 } from "./ai-providers";
 import {
   CORE_PLUGIN_CATALOG_VERSION,
+  PluginInstallInputError,
+  activateCorePlugin,
+  deactivateCorePlugin,
   listCorePluginRecords,
 } from "./plugins";
 import {
@@ -355,6 +358,38 @@ app.get("/api/plugins", async (c) => {
     catalogVersion: CORE_PLUGIN_CATALOG_VERSION,
     plugins: await listCorePluginRecords(c.env),
   });
+});
+
+app.post("/api/plugins/:pluginId/activate", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    return c.json({
+      plugin: await activateCorePlugin(c.env, c.req.param("pluginId")),
+    });
+  } catch (error) {
+    if (error instanceof PluginInstallInputError) {
+      return c.json({ error: error.message }, error.status as any);
+    }
+    throw error;
+  }
+});
+
+app.post("/api/plugins/:pluginId/deactivate", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    return c.json({
+      plugin: await deactivateCorePlugin(c.env, c.req.param("pluginId")),
+    });
+  } catch (error) {
+    if (error instanceof PluginInstallInputError) {
+      return c.json({ error: error.message }, error.status as any);
+    }
+    throw error;
+  }
 });
 
 app.get("/api/ai-settings", async (c) => {

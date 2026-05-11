@@ -60,6 +60,15 @@ export type CorePluginRecord = CorePluginManifestSummary & {
   updatedAt: string | null;
 };
 
+export class PluginInstallInputError extends Error {
+  constructor(
+    message: string,
+    public readonly status: 400 | 404,
+  ) {
+    super(message);
+  }
+}
+
 const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
   id: "me3.social-publishing",
@@ -223,11 +232,95 @@ export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   SOCIAL_PUBLISHING_PLUGIN,
 ];
 
+export async function activateCorePlugin(
+  env: Env,
+  pluginId: string,
+): Promise<CorePluginRecord> {
+  const plugin = getCorePluginManifest(pluginId);
+  const now = new Date().toISOString();
+  const setupRequirements = getSetupRequirements(env, plugin, null);
+  const setupBlocked = setupRequirements.some(
+    (requirement) => requirement.required && !requirement.configured,
+  );
+  const status = setupBlocked ? "setup_required" : "installed";
+
+  await env.DB.prepare(
+    `INSERT INTO plugin_installations (
+       plugin_id, version, enabled, status, granted_permissions_json,
+       setup_state_json, installed_at, updated_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(plugin_id) DO UPDATE SET
+       version = excluded.version,
+       enabled = excluded.enabled,
+       status = excluded.status,
+       granted_permissions_json = excluded.granted_permissions_json,
+       setup_state_json = excluded.setup_state_json,
+       updated_at = excluded.updated_at`,
+  )
+    .bind(
+      plugin.id,
+      plugin.version,
+      1,
+      status,
+      JSON.stringify(plugin.permissions.map((permission) => permission.id)),
+      JSON.stringify({ activatedFromCatalogVersion: CORE_PLUGIN_CATALOG_VERSION }),
+      now,
+      now,
+    )
+    .run();
+
+  return serializePluginRecord(env, plugin, await getPluginInstallation(env, plugin.id));
+}
+
+export async function deactivateCorePlugin(
+  env: Env,
+  pluginId: string,
+): Promise<CorePluginRecord> {
+  const plugin = getCorePluginManifest(pluginId);
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT INTO plugin_installations (
+       plugin_id, version, enabled, status, granted_permissions_json,
+       setup_state_json, installed_at, updated_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(plugin_id) DO UPDATE SET
+       version = excluded.version,
+       enabled = excluded.enabled,
+       status = excluded.status,
+       setup_state_json = excluded.setup_state_json,
+       updated_at = excluded.updated_at`,
+  )
+    .bind(
+      plugin.id,
+      plugin.version,
+      0,
+      "disabled",
+      JSON.stringify([]),
+      JSON.stringify({ deactivatedAt: now }),
+      now,
+      now,
+    )
+    .run();
+
+  return serializePluginRecord(env, plugin, await getPluginInstallation(env, plugin.id));
+}
+
 export async function listCorePluginRecords(env: Env): Promise<CorePluginRecord[]> {
   const installations = await listPluginInstallations(env);
   return CORE_PLUGIN_CATALOG.map((plugin) =>
     serializePluginRecord(env, plugin, installations.get(plugin.id) || null),
   );
+}
+
+function getCorePluginManifest(pluginId: string): CorePluginManifestSummary {
+  const plugin = CORE_PLUGIN_CATALOG.find((candidate) => candidate.id === pluginId);
+  if (!plugin) {
+    throw new PluginInstallInputError("Plugin is not in the Core catalog", 404);
+  }
+  return plugin;
 }
 
 async function listPluginInstallations(env: Env): Promise<Map<string, DbPluginInstallation>> {
@@ -239,6 +332,20 @@ async function listPluginInstallations(env: Env): Promise<Map<string, DbPluginIn
   ).all<DbPluginInstallation>();
 
   return new Map((rows.results || []).map((row) => [row.plugin_id, row]));
+}
+
+async function getPluginInstallation(
+  env: Env,
+  pluginId: string,
+): Promise<DbPluginInstallation | null> {
+  return env.DB.prepare(
+    `SELECT plugin_id, version, enabled, status, granted_permissions_json,
+            setup_state_json, installed_at, updated_at
+     FROM plugin_installations
+     WHERE plugin_id = ?`,
+  )
+    .bind(pluginId)
+    .first<DbPluginInstallation>();
 }
 
 function serializePluginRecord(
