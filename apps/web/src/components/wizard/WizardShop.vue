@@ -5,7 +5,6 @@ import { useSitesStore } from "../../stores/sites";
 import { useAuthStore } from "../../stores/auth";
 import TiptapEditor from "../TiptapEditor.vue";
 import UiIcon from "../UiIcon.vue";
-import WizardStripeConnectPanel from "./WizardStripeConnectPanel.vue";
 import { api } from "../../api";
 import { useAppToast } from "../../composables/useAppToast";
 import { productSendsPurchaseConfirmation } from "../../../../../shared/product-purchase-confirmation";
@@ -1041,21 +1040,13 @@ defineExpose({
       </div>
     </section>
 
-    <WizardStripeConnectPanel
-      v-if="wizard.shopEnabled"
-      id-prefix="shop-stripe"
-      connected-hint="You're ready to accept payments in your shop."
-      not-connected-hint="Connect Stripe to accept payments for your products."
-    />
-
     <!-- Product list -->
     <p
       v-if="!wizard.shopEnabled && wizard.products.length === 0"
       class="empty-hint"
     >
-      Products and checkout are turned off. Enable
-      <strong>Products & checkout</strong>
-      in Additional Features when you're ready to sell.
+      Products are turned off. Enable <strong>Products</strong> in Additional
+      Features when you are ready to add resources or offerings.
     </p>
     <div
       v-if="wizard.products.length > 0 && selectedProductIndex === null"
@@ -1206,9 +1197,8 @@ defineExpose({
         <div class="confirmation-email-section">
           <h3 class="confirmation-email-title">Purchase confirmation email</h3>
           <p class="confirmation-email-lead">
-            Optional. Stripe still sends the payment receipt when configured.
-            Use this only when you need to give the buyer specific next steps in
-            your own words.
+            Optional. Use this only when you need to give the requester
+            specific next steps in your own words.
           </p>
           <div class="toggle-row">
             <label class="toggle">

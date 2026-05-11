@@ -4,11 +4,6 @@ import { useWizardStore } from "./wizard";
 import { API_BASE, ApiError, api } from "../api";
 import type { Me3Profile } from "me3-protocol";
 import type { SiteUploadFile } from "../utils/siteUpload";
-import type { PaidTier } from "../utils/pricing";
-import type {
-  SubscriptionTier,
-  TierCapabilities,
-} from "../../../../shared/tier-capabilities";
 import type {
   LandingPageDocument,
   LandingPageTemplateId,
@@ -102,33 +97,6 @@ export interface DomainSetupResult {
   error?: string;
 }
 
-export interface BillingStatus {
-  tier: SubscriptionTier;
-  capabilities: TierCapabilities;
-  status?: "active" | "past_due" | "canceled" | "trialing";
-  expires_at?: string;
-  trial_active?: boolean;
-  trial_started_at?: string | null;
-  trial_ends_at?: string | null;
-  trial_end?: string | null;
-  is_pro: boolean;
-  is_paid: boolean;
-}
-
-/** Paid subscription or trial that is still active (not past trial_ends_at). */
-export function billingUnlocksWorkspaceSurfaces(
-  b: BillingStatus | null,
-): boolean {
-  if (!b) return false;
-  if (b.is_paid) return true;
-  const trialEndsAt = b.trial_ends_at ?? b.trial_end ?? null;
-  if (trialEndsAt) {
-    const endMs = Date.parse(trialEndsAt);
-    if (!Number.isNaN(endMs) && endMs <= Date.now()) return false;
-  }
-  return b.status === "trialing" || b.trial_active === true;
-}
-
 export interface OnboardingRequest {
   username: string;
   name?: string;
@@ -159,24 +127,6 @@ export interface OnboardingJobStatus {
     siteUsername?: string;
     url?: string;
   } | null;
-}
-
-export interface BillingUsage {
-  tier: SubscriptionTier;
-  capabilities: TierCapabilities;
-  emailQuota: number;
-  emailsSent: number;
-  emailQuotaRemaining: number;
-}
-
-export interface EmailUsage {
-  month: string;
-  total_sent: number;
-  sites: Array<{
-    site_id: string;
-    emails_sent: number;
-    overage_billed: number;
-  }>;
 }
 
 // DomainSearchResult interface removed - domain search not supported via API
@@ -261,8 +211,8 @@ export interface WebsiteImportDraft {
 export interface SiteQuota {
   current: number;
   limit: number;
-  tier: SubscriptionTier;
-  capabilities: TierCapabilities;
+  tier: string;
+  capabilities: Record<string, unknown>;
   can_create: boolean;
 }
 
@@ -315,22 +265,10 @@ export const useSitesStore = defineStore("sites", () => {
   const sites = ref<Site[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
-  /** Last billing payload from getBillingStatus / startTrial / sync — for global UI gating */
-  const billingStatusSnapshot = ref<BillingStatus | null>(null);
-
-  function setBillingSnapshot(status: BillingStatus | null) {
-    billingStatusSnapshot.value = status;
-  }
-
-  function clearBillingSnapshot() {
-    billingStatusSnapshot.value = null;
-  }
-
   function resetSessionState() {
     sites.value = [];
     loading.value = false;
     error.value = null;
-    clearBillingSnapshot();
   }
 
   function normalizeUsername(raw: string): string {
@@ -735,41 +673,6 @@ export const useSitesStore = defineStore("sites", () => {
     }
   }
 
-  // Billing
-  async function getBillingStatus(): Promise<BillingStatus | null> {
-    try {
-      const status = await api.get<BillingStatus>("/billing/status");
-      setBillingSnapshot(status);
-
-      // Self-heal stale past_due states when Stripe has already recovered payment.
-      if (status?.status === "past_due") {
-        const synced = await syncBillingStatus();
-        if (synced) return synced;
-      }
-
-      return status;
-    } catch {
-      setBillingSnapshot(null);
-      return null;
-    }
-  }
-
-  async function startTrial(): Promise<BillingStatus | null> {
-    loading.value = true;
-    error.value = null;
-
-    try {
-      const status = await api.post<BillingStatus>("/billing/trial/start", {});
-      if (status) setBillingSnapshot(status);
-      return status;
-    } catch (e: any) {
-      error.value = e.message || "Failed to start trial";
-      return null;
-    } finally {
-      loading.value = false;
-    }
-  }
-
   async function startOnboarding(
     payload: OnboardingRequest,
   ): Promise<OnboardingJobStatus | null> {
@@ -793,49 +696,6 @@ export const useSitesStore = defineStore("sites", () => {
       return await api.get<OnboardingJobStatus>(`/agent/onboard/${jobId}/status`);
     } catch (e: any) {
       error.value = e.message || "Failed to load onboarding status";
-      return null;
-    }
-  }
-
-  async function startCheckout(
-    tier: PaidTier = "pro",
-    interval: "month" | "year" = "year",
-  ): Promise<string | null> {
-    try {
-      const result = await api.post<{ url: string }>("/billing/checkout", {
-        tier,
-        interval,
-      });
-      return result.url;
-    } catch (e: any) {
-      error.value = e.message || "Failed to start checkout";
-      return null;
-    }
-  }
-
-  async function getEmailUsage(): Promise<EmailUsage | null> {
-    try {
-      return await api.get<EmailUsage>("/billing/email-usage");
-    } catch {
-      return null;
-    }
-  }
-
-  async function openBillingPortal(): Promise<string | null> {
-    try {
-      const result = await api.post<{ url: string }>("/billing/portal", {});
-      return result.url;
-    } catch {
-      return null;
-    }
-  }
-
-  async function syncBillingStatus(): Promise<BillingStatus | null> {
-    try {
-      const status = await api.post<BillingStatus>("/billing/sync", {});
-      if (status) setBillingSnapshot(status);
-      return status;
-    } catch {
       return null;
     }
   }
@@ -1137,8 +997,6 @@ export const useSitesStore = defineStore("sites", () => {
     sites,
     loading,
     error,
-    billingStatusSnapshot,
-    clearBillingSnapshot,
     resetSessionState,
     fetchSites,
     fetchPublishManifest,
@@ -1156,15 +1014,8 @@ export const useSitesStore = defineStore("sites", () => {
     connectDomain,
     disconnectDomain,
     refreshDomainStatus,
-    // Billing
-    getBillingStatus,
-    startTrial,
     startOnboarding,
     getOnboardingStatus,
-    getEmailUsage,
-    startCheckout,
-    openBillingPortal,
-    syncBillingStatus,
     // Site content
     getSiteContent,
     getLandingPageDraft,

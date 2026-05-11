@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { routes } from "vue-router/auto-routes";
 import { useAuthStore } from "./stores/auth";
-import { useSitesStore, billingUnlocksWorkspaceSurfaces } from "./stores/sites";
+import { useSitesStore } from "./stores/sites";
 import { useWizardStore } from "./stores/wizard";
 import { DEFAULT_APP_PATH } from "./utils/navigation";
 
@@ -107,7 +107,7 @@ router.beforeEach(async (to, _from, next) => {
 
   if (to.path === "/clients" || to.path === "/clients/") {
     next({
-      path: "/contacts",
+      path: "/assistant",
       query: to.query,
       hash: to.hash,
       replace: true,
@@ -177,12 +177,6 @@ router.beforeEach(async (to, _from, next) => {
   if (to.meta.requiresWorkspace) {
     if (!auth.isAuthenticated) {
       next({ path: "/login", query: { redirect: to.fullPath } });
-      return;
-    }
-    const sites = useSitesStore();
-    await sites.getBillingStatus();
-    if (!billingUnlocksWorkspaceSurfaces(sites.billingStatusSnapshot)) {
-      next({ path: DEFAULT_APP_PATH, replace: true });
       return;
     }
   }

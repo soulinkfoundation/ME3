@@ -3,25 +3,4 @@
   <url>
     <loc>https://example.com/</loc>
   </url>
-  <url>
-    <loc>https://example.com/pricing</loc>
-  </url>
-  <url>
-    <loc>https://example.com/about</loc>
-  </url>
-  <url>
-    <loc>https://example.com/support</loc>
-  </url>
-  <url>
-    <loc>https://example.com/offer</loc>
-  </url>
-  <url>
-    <loc>https://example.com/privacy</loc>
-  </url>
-  <url>
-    <loc>https://example.com/terms</loc>
-  </url>
-  <url>
-    <loc>https://example.com/protocol</loc>
-  </url>
 </urlset>

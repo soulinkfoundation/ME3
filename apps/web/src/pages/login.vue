@@ -35,24 +35,7 @@ type OAuthClientBrand = {
   helperText: string;
 };
 
-const oauthClientBrands: Record<string, OAuthClientBrand> = {
-  soulink: {
-    clientId: "soulink",
-    name: "Soulink",
-    logoSrc: "/me3-logo-light.png",
-    logoAlt: "Soulink logo",
-    helperText:
-      "Soulink uses ME3 to sign you in. ME3 is a free, portable profile and website builder you own.",
-  },
-  thehumansoup: {
-    clientId: "thehumansoup",
-    name: "TheHumanSoup",
-    logoSrc: "/me3-logo-light.png",
-    logoAlt: "TheHumanSoup logo",
-    helperText:
-      "TheHumanSoup uses ME3 to sign you in. ME3 is a free, portable profile and website builder you own.",
-  },
-};
+const oauthClientBrands: Record<string, OAuthClientBrand> = {};
 
 // OAuth providers
 type OAuthProvider = "github" | "google" | "linkedin" | "apple" | "twitter";

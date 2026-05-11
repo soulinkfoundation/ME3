@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
 import { computed, onMounted, ref } from "vue";
-import { useRouter, useRoute } from "vue-router";
+import { useRouter } from "vue-router";
 import { useWizardStore } from "../stores/wizard";
-import { useSitesStore } from "../stores/sites";
 import { usePublish } from "../composables/usePublish";
 import ProfilePreview from "../components/ProfilePreview.vue";
 
@@ -32,17 +31,9 @@ definePage({
   },
 });
 
-const router = useRouter();
-const route = useRoute();
 const wizard = useWizardStore();
-const sites = useSitesStore();
+const router = useRouter();
 const { isPublishing: isQuickPublishing, publish } = usePublish();
-const billingStatus = ref<Awaited<
-  ReturnType<typeof sites.getBillingStatus>
-> | null>(sites.billingStatusSnapshot);
-
-// Stripe Connect success message
-const stripeConnectSuccess = ref(false);
 
 // Reference to the current component instance
 const currentComponentRef = ref<
@@ -54,13 +45,6 @@ const currentComponentRef = ref<
 >(null);
 
 // Step components map
-const canUseNewsletter = computed(
-  () => billingStatus.value?.capabilities.newsletterSignup === true,
-);
-const canUseBookings = computed(
-  () => billingStatus.value?.capabilities.bookingsEnabled === true,
-);
-
 const stepComponents = computed(() => {
   const base = [
     WizardBasics,
@@ -73,10 +57,10 @@ const stepComponents = computed(() => {
   ];
 
   // Add conditional steps in order: Newsletter, Bookings, Blog, Offerings, Testimonials
-  if (wizard.newsletterEnabled && canUseNewsletter.value) {
+  if (wizard.newsletterEnabled) {
     base.push(WizardNewsletter);
   }
-  if (wizard.bookingsEnabled && canUseBookings.value) {
+  if (wizard.bookingsEnabled) {
     base.push(WizardBookings);
   }
   if (wizard.blogEnabled) base.push(WizardBlog);
@@ -235,35 +219,11 @@ onMounted(() => {
     // Show continue prompt could go here
   }
 
-  // Check for Stripe Connect success
-  if (route.query.stripe_connect === "success") {
-    stripeConnectSuccess.value = true;
-    // Clear the query param
-    router.replace({ query: {} });
-    // Refresh the status after a short delay to let Stripe update
-    setTimeout(() => {
-      window.location.reload();
-    }, 2000);
-  }
-
-  if (!billingStatus.value) {
-    void sites.getBillingStatus().then((status) => {
-      billingStatus.value = status;
-    });
-  }
 });
 </script>
 
 <template>
   <div class="wizard-page">
-    <!-- Stripe Connect Success Banner -->
-    <div v-if="stripeConnectSuccess" class="stripe-success-banner">
-      <span class="success-icon">✓</span>
-      <span class="success-text"
-        >Stripe connected successfully! Refreshing...</span
-      >
-    </div>
-
     <!-- Header -->
     <header class="wizard-header">
       <div class="header-center">
@@ -791,28 +751,6 @@ onMounted(() => {
 
 .draft-recovery-button:hover {
   background: rgba(59, 130, 246, 0.06);
-}
-
-/* Stripe Connect Success Banner */
-.stripe-success-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  background: #22c55e;
-  color: white;
-  padding: 12px 24px;
-  text-align: center;
-  font-weight: 500;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.success-icon {
-  font-size: 18px;
 }
 
 /* Responsive */

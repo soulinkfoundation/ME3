@@ -2,7 +2,6 @@
 import { computed } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRoute } from "vue-router";
-import LandingGrids from "../components/LandingGrids.vue";
 import BrandLogo from "../components/BrandLogo.vue";
 import ThemeToggle from "../components/ThemeToggle.vue";
 import { useAuthStore } from "../stores/auth";
@@ -24,7 +23,6 @@ const pathLabel = computed(() => route.path);
 
 <template>
   <div class="not-found">
-    <LandingGrids />
     <header class="header">
       <router-link to="/" class="logo" aria-label="me3 home">
         <BrandLogo class="logo-img" alt="me3" />

@@ -7,11 +7,7 @@
         <router-link to="/login">Sign in</router-link>
       </div>
     </div>
-    <p class="footer-attribution">
-      <a href="https://soulink.earth" target="_blank" rel="noopener">
-        Soulink Foundation
-      </a>
-    </p>
+    <p class="footer-attribution">Open source ME3 Core</p>
   </footer>
 </template>
 

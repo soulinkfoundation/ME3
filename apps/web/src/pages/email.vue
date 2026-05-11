@@ -1569,10 +1569,10 @@ onBeforeUnmount(() => {
 
     <main class="agent-main">
       <div v-if="error === 'pro_required'" class="state-card">
-        <p><strong>Assistant email requires a Pro subscription.</strong></p>
+        <p><strong>Assistant email is not enabled in this Core install.</strong></p>
         <p class="state-sub">
-          Upgrade to Pro to get a example.com mailbox, automated drafts, approvals,
-          Telegram, and more.
+          Configure a mailbox provider for this installation, then restart the
+          worker to enable email automation.
         </p>
       </div>
 

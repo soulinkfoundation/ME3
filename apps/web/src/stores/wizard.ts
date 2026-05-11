@@ -227,8 +227,8 @@ export interface WizardPost {
 }
 
 /**
- * Standalone social drafts are edited under /content (`_content-` slugs). Legacy wizard
- * drafts used `_social-`. Neither belongs in the profile-site blog step.
+ * Legacy standalone drafts used `_content-` and `_social-` slugs. Neither
+ * belongs in the profile-site blog step.
  */
 function isStandaloneContentOrLegacyWizardSocialSlug(slug: string): boolean {
   return slug.startsWith("_social-") || slug.startsWith("_content-");
@@ -3308,26 +3308,7 @@ export const useWizardStore = defineStore("wizard", () => {
         description: "Create a confirmed booking for a selected slot.",
       };
 
-      if (hasPaidBookingOffer) {
-        const checkoutRequires = [
-          "slotStart",
-          "slotEnd",
-          "amount",
-          "currency",
-          "guestName",
-          "guestEmail",
-        ];
-        if (requiresOfferId) {
-          checkoutRequires.unshift("offerId");
-        }
-
-        actions.createBookingCheckout = {
-          method: "POST",
-          url: `${publicApiBase}/book/${handle}/checkout-session`,
-          requires: checkoutRequires,
-          description: "Create a Stripe Checkout session for a paid booking.",
-        };
-      }
+      void hasPaidBookingOffer;
     }
 
     if (services.length > 0) {

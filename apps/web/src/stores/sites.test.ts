@@ -45,39 +45,12 @@ describe("sites store", () => {
       ];
       store.loading = true;
       store.error = "boom";
-      store.billingStatusSnapshot = {
-        tier: "starter",
-        capabilities: {
-          maxSites: 1,
-          customDomain: true,
-          footerCustomization: true,
-          emailSendQuota: 0,
-          emailOverageRate: 0,
-          financialLedger: false,
-          mailboxAlias: false,
-          agentInbox: false,
-          approvalFirstOutbound: false,
-          shopEnabled: false,
-          newsletterSignup: true,
-          bookingsEnabled: true,
-          importFromUrl: true,
-          agentEnabled: false,
-          telegramAgentAccess: false,
-          notificationDelivery: true,
-          bookingReminders: true,
-          agentJobs: false,
-          agentJobsLimit: 0,
-        },
-        is_pro: false,
-        is_paid: true,
-      };
 
       store.resetSessionState();
 
       expect(store.sites).toEqual([]);
       expect(store.loading).toBe(false);
       expect(store.error).toBeNull();
-      expect(store.billingStatusSnapshot).toBeNull();
     });
   });
 
@@ -569,112 +542,6 @@ describe("sites store", () => {
 
       expect(result).toBe(true);
       expect(api.post).toHaveBeenCalledWith("/domains/testuser/refresh", {});
-    });
-  });
-
-  describe("billing", () => {
-    it("should get billing status", async () => {
-      const mockStatus = {
-        tier: "free" as const,
-        is_pro: false,
-      };
-      vi.mocked(api.get).mockResolvedValue(mockStatus);
-
-      const store = useSitesStore();
-      const result = await store.getBillingStatus();
-
-      expect(result).toEqual(mockStatus);
-      expect(api.get).toHaveBeenCalledWith("/billing/status");
-    });
-
-    it("should auto-sync billing when status is past_due", async () => {
-      const staleStatus = {
-        tier: "pro" as const,
-        status: "past_due" as const,
-        is_pro: false,
-      };
-      const syncedStatus = {
-        tier: "pro" as const,
-        status: "active" as const,
-        is_pro: true,
-      };
-      vi.mocked(api.get).mockResolvedValue(staleStatus);
-      vi.mocked(api.post).mockResolvedValue(syncedStatus);
-
-      const store = useSitesStore();
-      const result = await store.getBillingStatus();
-
-      expect(result).toEqual(syncedStatus);
-      expect(api.get).toHaveBeenCalledWith("/billing/status");
-      expect(api.post).toHaveBeenCalledWith("/billing/sync", {});
-    });
-
-    it("should fall back to stale status if auto-sync fails", async () => {
-      const staleStatus = {
-        tier: "pro" as const,
-        status: "past_due" as const,
-        is_pro: false,
-      };
-      vi.mocked(api.get).mockResolvedValue(staleStatus);
-      vi.mocked(api.post).mockRejectedValue(new Error("sync failed"));
-
-      const store = useSitesStore();
-      const result = await store.getBillingStatus();
-
-      expect(result).toEqual(staleStatus);
-      expect(api.post).toHaveBeenCalledWith("/billing/sync", {});
-    });
-
-    it("should start checkout with default tier (pro) and interval (year)", async () => {
-      const mockResult = { url: "https://checkout.example.com" };
-      vi.mocked(api.post).mockResolvedValue(mockResult);
-
-      const store = useSitesStore();
-      const result = await store.startCheckout();
-
-      expect(result).toBe("https://checkout.example.com");
-      expect(api.post).toHaveBeenCalledWith("/billing/checkout", {
-        tier: "pro",
-        interval: "year",
-      });
-    });
-
-    it("should start checkout with pro monthly billing", async () => {
-      const mockResult = { url: "https://checkout.pro.com" };
-      vi.mocked(api.post).mockResolvedValue(mockResult);
-
-      const store = useSitesStore();
-      const result = await store.startCheckout("pro", "month");
-
-      expect(result).toBe("https://checkout.pro.com");
-      expect(api.post).toHaveBeenCalledWith("/billing/checkout", {
-        tier: "pro",
-        interval: "month",
-      });
-    });
-
-    it("should open billing portal", async () => {
-      const mockResult = { url: "https://portal.example.com" };
-      vi.mocked(api.post).mockResolvedValue(mockResult);
-
-      const store = useSitesStore();
-      const result = await store.openBillingPortal();
-
-      expect(result).toBe("https://portal.example.com");
-    });
-
-    it("should sync billing status", async () => {
-      const mockStatus = {
-        tier: "pro" as const,
-        status: "active" as const,
-        is_pro: true,
-      };
-      vi.mocked(api.post).mockResolvedValue(mockStatus);
-
-      const store = useSitesStore();
-      const result = await store.syncBillingStatus();
-
-      expect(result).toEqual(mockStatus);
     });
   });
 

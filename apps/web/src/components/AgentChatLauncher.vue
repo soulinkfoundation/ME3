@@ -262,13 +262,6 @@ onMounted(async () => {
               Open messages →
             </a>
             <a
-              v-if="message.rolodexLink"
-              href="/contacts"
-              class="agent-message-inbox-link"
-            >
-              Open rolodex →
-            </a>
-            <a
               v-if="message.reminderLink"
               href="/calendar"
               class="agent-message-inbox-link"
@@ -330,7 +323,7 @@ onMounted(async () => {
             v-model="draft"
             class="agent-input"
             rows="1"
-            placeholder="Ask about bookings, reminders, email, contacts, or your site"
+            placeholder="Ask about bookings, reminders, email, or your site"
             :disabled="sending"
             @keydown="onKeydown"
             @input="autosizeComposer"

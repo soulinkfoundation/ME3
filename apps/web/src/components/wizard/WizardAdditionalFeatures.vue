@@ -1,34 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import { useRouter } from "vue-router";
+import { computed } from "vue";
 import { useWizardStore } from "../../stores/wizard";
-import { useSitesStore, type BillingStatus } from "../../stores/sites";
 import UiIcon from "../UiIcon.vue";
 
-const router = useRouter();
 const wizard = useWizardStore();
-const sites = useSitesStore();
-
-// Billing status for Pro features
-const billingStatus = ref<BillingStatus | null>(null);
-const isDev = import.meta.env.DEV;
-const hasNewsletterAccess = computed(() =>
-  isDev ? true : billingStatus.value?.capabilities.newsletterSignup === true,
-);
-const hasBookingsAccess = computed(() =>
-  isDev ? true : billingStatus.value?.capabilities.bookingsEnabled === true,
-);
-const hasShopAccess = computed(() =>
-  isDev ? true : billingStatus.value?.capabilities.shopEnabled === true,
-);
 
 // Feature toggles
 const newsletterEnabled = computed({
   get: () => wizard.newsletterEnabled,
   set: (val: boolean) => {
-    if (val && !hasNewsletterAccess.value) {
-      return;
-    }
     wizard.newsletterEnabled = val;
   },
 });
@@ -56,9 +36,6 @@ const blogTitle = computed({
 const bookingsEnabled = computed({
   get: () => wizard.bookingsEnabled,
   set: (val: boolean) => {
-    if (val && !hasBookingsAccess.value) {
-      return;
-    }
     wizard.bookingsEnabled = val;
   },
 });
@@ -66,9 +43,6 @@ const bookingsEnabled = computed({
 const shopEnabled = computed({
   get: () => wizard.shopEnabled,
   set: (val: boolean) => {
-    if (val && !hasShopAccess.value) {
-      return;
-    }
     wizard.shopEnabled = val;
   },
 });
@@ -93,17 +67,6 @@ const testimonialsEnabled = computed({
   },
 });
 
-async function loadBillingStatus() {
-  billingStatus.value = await sites.getBillingStatus();
-}
-
-function upgradeToPro() {
-  router.push("/account");
-}
-
-onMounted(async () => {
-  await loadBillingStatus();
-});
 </script>
 
 <template>
@@ -111,7 +74,7 @@ onMounted(async () => {
     <h2>Enable additional features</h2>
     <p class="section-desc">
       Choose which extras you want to enable. Offerings is always part of the
-      wizard; this toggle controls product and checkout tools.
+      wizard; this toggle controls product/resource pages.
     </p>
 
     <div class="feature-cards">
@@ -124,29 +87,16 @@ onMounted(async () => {
           <div class="feature-text">
             <span class="feature-name">
               Newsletter
-              <span v-if="!hasNewsletterAccess" class="feature-pill">
-                Starter
-              </span>
             </span>
             <span class="feature-desc">
               Collect subscribers so people can stay in touch and hear about new
               updates.
             </span>
-            <span v-if="!hasNewsletterAccess" class="feature-hint">
-              Upgrade to Starter to collect subscribers on your site.
-            </span>
           </div>
         </div>
         <label class="feature-toggle">
-          <input
-            type="checkbox"
-            v-model="newsletterEnabled"
-            :disabled="!hasNewsletterAccess"
-          />
-          <span
-            class="feature-toggle-ui"
-            :class="{ disabled: !hasNewsletterAccess }"
-          />
+          <input type="checkbox" v-model="newsletterEnabled" />
+          <span class="feature-toggle-ui" />
         </label>
       </div>
 
@@ -159,29 +109,16 @@ onMounted(async () => {
           <div class="feature-text">
             <span class="feature-name">
               Bookings
-              <span v-if="!hasBookingsAccess" class="feature-pill">
-                Starter
-              </span>
             </span>
             <span class="feature-desc">
               Let people book time with you and keep availability in sync with
               your calendar.
             </span>
-            <span v-if="!hasBookingsAccess" class="feature-hint">
-              Upgrade to Starter to accept bookings from your site.
-            </span>
           </div>
         </div>
         <label class="feature-toggle">
-          <input
-            type="checkbox"
-            v-model="bookingsEnabled"
-            :disabled="!hasBookingsAccess"
-          />
-          <span
-            class="feature-toggle-ui"
-            :class="{ disabled: !hasBookingsAccess }"
-          />
+          <input type="checkbox" v-model="bookingsEnabled" />
+          <span class="feature-toggle-ui" />
         </label>
       </div>
 
@@ -227,14 +164,11 @@ onMounted(async () => {
           </span>
           <div class="feature-text">
             <span class="feature-name">
-              Products & checkout
-              <span v-if="!hasShopAccess" class="feature-pill">Pro</span>
+              Products
             </span>
             <span class="feature-desc">
-              Add products and accept payments via Stripe Connect.
-            </span>
-            <span v-if="!hasShopAccess" class="feature-hint">
-              Upgrade to Pro to enable checkout.
+              Add products or resources to your site. Payment collection belongs
+              in a later plugin layer.
             </span>
             <div v-if="shopEnabled" class="feature-field">
               <label class="feature-field-label" for="shop-menu-title">
@@ -253,15 +187,8 @@ onMounted(async () => {
           </div>
         </div>
         <label class="feature-toggle">
-          <input
-            type="checkbox"
-            v-model="shopEnabled"
-            :disabled="!hasShopAccess"
-          />
-          <span
-            class="feature-toggle-ui"
-            :class="{ disabled: !hasShopAccess }"
-          />
+          <input type="checkbox" v-model="shopEnabled" />
+          <span class="feature-toggle-ui" />
         </label>
       </div>
 
@@ -286,20 +213,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Pro Upgrade Prompt -->
-    <div
-      v-if="!hasNewsletterAccess || !hasBookingsAccess || !hasShopAccess"
-      class="upgrade-prompt"
-    >
-      <p>
-        Starter unlocks bookings, newsletter signup, custom domain, and footer
-        controls. Pro adds products, checkout, email sending, and assistant
-        workflows.
-      </p>
-      <button class="upgrade-btn" type="button" @click="upgradeToPro">
-        View plans
-      </button>
-    </div>
   </div>
 </template>
 

@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { useRouter } from "vue-router";
-import {
-  useSitesStore,
-  type DomainStatus,
-  type BillingStatus,
-} from "../stores/sites";
+import { useSitesStore, type DomainStatus } from "../stores/sites";
 const props = defineProps<{
   username: string;
 }>();
@@ -14,11 +9,9 @@ const emit = defineEmits<{
   domainStatusChanged: [];
 }>();
 
-const router = useRouter();
 const sites = useSitesStore();
 
 const domainStatus = ref<DomainStatus | null>(null);
-const billingStatus = ref<BillingStatus | null>(null);
 const newDomain = ref("");
 const showDomainInput = ref(false);
 const showDisconnectConfirm = ref(false);
@@ -26,32 +19,17 @@ const domainLoading = ref(false);
 const domainError = ref("");
 const copySuccess = ref<string | null>(null);
 
-// In development, treat everyone as paid for testing custom domains
-const isDev = import.meta.env.DEV;
-const hasCustomDomainAccess = computed(() =>
-  isDev ? true : billingStatus.value?.capabilities.customDomain === true,
-);
-const hasBillingIssue = computed(
-  () =>
-    !isDev &&
-    billingStatus.value?.tier !== "free" &&
-    billingStatus.value?.status === "past_due",
-);
 const isConnected = computed(
   () => domainStatus.value?.connected && domainStatus.value?.domain,
 );
 const isDomainActive = computed(() => domainStatus.value?.status === "active");
 onMounted(async () => {
-  await Promise.all([loadDomainStatus(), loadBillingStatus()]);
+  await loadDomainStatus();
 });
 
 async function loadDomainStatus() {
   domainStatus.value = await sites.getDomainStatus(props.username);
   emit("domainStatusChanged");
-}
-
-async function loadBillingStatus() {
-  billingStatus.value = await sites.getBillingStatus();
 }
 
 async function connectDomain() {
@@ -99,24 +77,6 @@ async function refreshStatus() {
   await sites.refreshDomainStatus(props.username);
   await loadDomainStatus();
   domainLoading.value = false;
-}
-
-function upgradeToPro() {
-  router.push("/account");
-}
-
-async function manageBilling() {
-  const url = await sites.openBillingPortal();
-  if (url) {
-    window.location.href = url;
-  }
-}
-
-async function refreshBilling() {
-  const updated = await sites.syncBillingStatus();
-  if (updated) {
-    billingStatus.value = updated;
-  }
 }
 
 function copyToClipboard(text: string, label: string) {
@@ -190,34 +150,7 @@ const domainPreview = computed(() => {
 
 <template>
   <section class="custom-domain-section">
-    <!-- No paid custom-domain access -->
-    <div v-if="!hasCustomDomainAccess" class="upgrade-prompt">
-      <p>
-        Connect your own domain like <strong>www.yourname.com</strong> to your
-        me3 site.
-      </p>
-      <button
-        v-if="hasBillingIssue"
-        class="button primary"
-        @click="manageBilling"
-      >
-        Fix billing to re-enable custom domains
-      </button>
-      <button
-        v-if="hasBillingIssue"
-        class="button secondary"
-        style="margin-left: 8px"
-        @click="refreshBilling"
-      >
-        Refresh status
-      </button>
-      <button v-else class="button primary" @click="upgradeToPro">
-        Review settings
-      </button>
-    </div>
-
-    <!-- Paid user - Show domain management -->
-    <div v-else class="domain-management">
+    <div class="domain-management">
       <!-- Connected domain -->
       <div v-if="isConnected" class="connected-domain">
         <div class="domain-info">

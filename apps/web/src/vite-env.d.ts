@@ -5,7 +5,7 @@ import "vue-router";
 
 declare module "vue-router" {
   interface RouteMeta {
-    /** Paid or active trial; enforced in router (see billingUnlocksWorkspaceSurfaces). */
+    /** Requires an authenticated local Core workspace. */
     requiresWorkspace?: boolean;
   }
 }
@@ -14,7 +14,6 @@ interface ImportMetaEnv {
   readonly VITE_POSTHOG_KEY?: string
   readonly VITE_POSTHOG_HOST?: string
   readonly VITE_POSTHOG_ENABLED?: string
-  readonly VITE_SOUP_CONNECT_URL?: string
   readonly VITEST?: boolean
 }
 

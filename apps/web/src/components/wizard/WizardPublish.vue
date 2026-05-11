@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed } from "vue";
 import JSZip from "jszip";
 import TurndownService from "turndown";
 import {
@@ -10,7 +10,6 @@ import {
   type WizardProduct,
 } from "../../stores/wizard";
 import { useAuthStore } from "../../stores/auth";
-import { useSitesStore } from "../../stores/sites";
 import { usePublish } from "../../composables/usePublish";
 import { useAppToast } from "../../composables/useAppToast";
 import { useRouter } from "vue-router";
@@ -160,7 +159,6 @@ function exportProductToMarkdown(product: WizardProduct) {
 
 const wizard = useWizardStore();
 const auth = useAuthStore();
-const sites = useSitesStore();
 const router = useRouter();
 const { isPublishing, publishProgress, publishError, publish } = usePublish();
 const { toastError } = useAppToast();
@@ -168,13 +166,7 @@ const { toastError } = useAppToast();
 const isDownloading = ref(false);
 
 const isLoggedIn = computed(() => auth.isAuthenticated);
-const billingStatus = ref<
-  Awaited<ReturnType<typeof sites.getBillingStatus>> | undefined
->(undefined);
-const canCustomizeFooter = computed(
-  () => billingStatus.value?.capabilities.footerCustomization === true,
-);
-const isBillingKnown = computed(() => billingStatus.value !== undefined);
+const canCustomizeFooter = computed(() => true);
 
 // Footer customization modal
 const showFooterModal = ref(false);
@@ -197,16 +189,6 @@ function setAccentOverride(color: string) {
 
 function resetAccentOverride() {
   wizard.setAccentOverride(null);
-}
-
-onMounted(async () => {
-  if (!auth.isAuthenticated) return;
-  const [billing] = await Promise.all([sites.getBillingStatus()]);
-  billingStatus.value = billing;
-});
-
-function openPlans() {
-  router.push("/account");
 }
 
 async function downloadZip() {
@@ -660,8 +642,7 @@ function closeFooterModal() {
 
         <div class="modal-content">
           <p class="modal-desc">
-            Starter and Pro users can customize or remove the footer. Free
-            users keep the default.
+            Customize or remove the footer for this Core-published site.
           </p>
 
           <div class="footer-controls" :class="{ disabled: !canCustomizeFooter }">
@@ -754,21 +735,9 @@ function closeFooterModal() {
             </label>
           </div>
 
-          <div v-if="!canCustomizeFooter" class="footer-upgrade">
-            <p v-if="!isLoggedIn">Sign in to manage your paid subscription.</p>
-            <p v-else-if="!isBillingKnown">Checking subscription…</p>
-            <p v-else>Upgrade to Starter or Pro to customize the footer.</p>
-          </div>
         </div>
 
         <div class="modal-footer">
-          <button
-            v-if="isLoggedIn && !canCustomizeFooter && isBillingKnown"
-            class="btn primary"
-            @click="openPlans"
-          >
-            View plans
-          </button>
           <button class="btn secondary" type="button" @click="closeFooterModal">
             Done
           </button>

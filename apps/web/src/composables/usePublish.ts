@@ -26,44 +26,6 @@ turndown.keep((node) => {
   );
 });
 
-const SOUP_API_URL =
-  import.meta.env.VITE_SOUP_API_URL || "https://api.thehumansoup.ai";
-
-/**
- * Ping The Human Soup to notify it of a publish event.
- * Fire-and-forget -- failures are silently ignored so they never block publishing.
- */
-async function pingSoup(siteUrl: string): Promise<void> {
-  const endpoint = `${SOUP_API_URL}/ingest/ping`;
-  const payload = { site_url: siteUrl, event: "publish" };
-
-  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-    try {
-      const body = new Blob([JSON.stringify(payload)], {
-        type: "application/json",
-      });
-      if (navigator.sendBeacon(endpoint, body)) {
-        return;
-      }
-    } catch {
-      // Fall through to fetch fallback.
-    }
-  }
-
-  try {
-    await fetch(endpoint, {
-      method: "POST",
-      // Keep this a simple no-cors request to avoid browser preflight noise.
-      mode: "no-cors",
-      keepalive: true,
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5_000),
-    });
-  } catch {
-    // Silently ignore -- soup ping is best-effort
-  }
-}
-
 function createEmptyPublishManifest(): PublishManifest {
   return {
     version: 1,
@@ -518,11 +480,9 @@ export function usePublish() {
       // Mark as published in wizard store
       wizard.markAsPublished();
 
-      // Ping The Human Soup (fire-and-forget, non-blocking)
       const siteUrl = import.meta.env.DEV
         ? `http://localhost:8787/preview/${username}/`
         : `https://${username}.example.com`;
-      pingSoup(siteUrl).catch(() => {});
 
       // Trigger celebration animation if enabled
       if (celebrate) {

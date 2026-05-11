@@ -7,43 +7,24 @@ import AppSideNav from "./components/AppSideNav.vue";
 import { useCookieConsent } from "./composables/useCookieConsent";
 import { syncPosthogConsent } from "./composables/usePosthog";
 import { useAuthStore } from "./stores/auth";
-import { useSitesStore, billingUnlocksWorkspaceSurfaces } from "./stores/sites";
 
 const route = useRoute();
 const auth = useAuthStore();
-const sites = useSitesStore();
 const { consent, initCookieConsent } = useCookieConsent();
 
 const showAppShell = computed(
   () => auth.isAuthenticated && route.meta.requiresAuth === true,
 );
 
-const showAgentLauncher = computed(() =>
-  billingUnlocksWorkspaceSurfaces(sites.billingStatusSnapshot) &&
-  !route.path.startsWith("/email"),
+const showAgentLauncher = computed(
+  () => auth.isAuthenticated && !route.path.startsWith("/email"),
 );
 
 initCookieConsent();
 
-async function refreshBillingForLauncher() {
-  if (!auth.isAuthenticated) {
-    sites.clearBillingSnapshot();
-    return;
-  }
-  await sites.getBillingStatus();
-}
-
 onMounted(async () => {
   await auth.ensureInitialized();
-  await refreshBillingForLauncher();
 });
-
-watch(
-  () => auth.isAuthenticated,
-  () => {
-    void refreshBillingForLauncher();
-  },
-);
 
 watch(
   () => consent.value?.marketing ?? false,

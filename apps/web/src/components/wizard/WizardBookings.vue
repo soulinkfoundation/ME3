@@ -11,25 +11,17 @@ import {
   type WizardClassOffer,
   type WizardRetreatOffer,
 } from "../../stores/wizard";
-import WizardStripeConnectPanel from "./WizardStripeConnectPanel.vue";
 import BookingOfferDescriptionEditor from "./BookingOfferDescriptionEditor.vue";
 import UiIcon from "../UiIcon.vue";
 
 const wizard = useWizardStore();
 const { profile } = storeToRefs(wizard);
 
-type StripeConnectStatus =
-  | "not_connected"
-  | "pending"
-  | "active"
-  | "restricted";
-
 const activeBookingType = ref<WizardBookingType | null>(null);
 const activeOfferId = ref<string | null>(null);
 const activeClassOfferId = ref<string | null>(null);
 const activeRetreatOfferId = ref<string | null>(null);
 const showAddTypeMenu = ref(false);
-const stripeConnectStatus = ref<StripeConnectStatus>("not_connected");
 
 const enabledBookingTypes = computed(() => {
   const types: Array<{ type: WizardBookingType; label: string }> = [];
@@ -468,43 +460,6 @@ const activeRetreatCapacity = computed({
   },
 });
 
-const hasPaidBookingItems = computed(() =>
-  [
-    ...(profile.value.booking.oneToOneEnabled
-      ? profile.value.booking.offers
-      : []),
-    ...(profile.value.booking.classEnabled
-      ? profile.value.booking.classOffers
-      : []),
-    ...(profile.value.booking.retreatEnabled
-      ? profile.value.booking.retreatOffers
-      : []),
-  ].some((offer) => offer.pricing?.enabled),
-);
-
-const bookingFlexiblePricingEnabled = computed({
-  get: () => {
-    const paidOffers = [
-      ...(profile.value.booking.oneToOneEnabled
-        ? profile.value.booking.offers
-        : []),
-      ...(profile.value.booking.classEnabled
-        ? profile.value.booking.classOffers
-        : []),
-      ...(profile.value.booking.retreatEnabled
-        ? profile.value.booking.retreatOffers
-        : []),
-    ].filter((offer) => offer.pricing?.enabled);
-    if (paidOffers.length === 0) return true;
-    return paidOffers.every(
-      (offer) => offer.pricing?.allowFlexiblePricing !== false,
-    );
-  },
-  set: (val: boolean) => {
-    wizard.setPaidBookingOffersPricing({ allowFlexiblePricing: val });
-  },
-});
-
 const bookingTypeOptions = computed(() => [
   {
     type: "one_to_one" as const,
@@ -707,10 +662,6 @@ function clearAllAvailability() {
   for (const day of days) {
     wizard.setBookingAvailability(day.key, []);
   }
-}
-
-function onStripeConnectStatusUpdate(status: StripeConnectStatus) {
-  stripeConnectStatus.value = status;
 }
 
 onMounted(() => {
@@ -1557,42 +1508,6 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="monetize-section">
-          <label class="section-label">Payments</label>
-          <p class="subsection-desc">
-            Connect Stripe when you want to charge for paid sessions, classes,
-            or retreats.
-            <strong> Keep 100%</strong> (minus Stripe fees).
-          </p>
-
-          <template v-if="stripeConnectStatus === 'active'">
-            <label class="checkbox-row payments-checkbox-row">
-              <input
-                v-model="bookingFlexiblePricingEnabled"
-                type="checkbox"
-                :disabled="!hasPaidBookingItems"
-              />
-              <span class="checkbox-label">Allow flexible pricing</span>
-            </label>
-            <p class="field-hint">
-              <template v-if="hasPaidBookingItems">
-                When enabled, visitors can choose their amount from your base
-                price upward.
-              </template>
-              <template v-else>
-                Set at least one session, class, or retreat to paid to enable
-                payment settings.
-              </template>
-            </p>
-          </template>
-
-          <WizardStripeConnectPanel
-            :bordered="false"
-            id-prefix="bookings-stripe"
-            connected-hint="You're ready to accept payments. Configure pricing above."
-            @update:connect-status="onStripeConnectStatusUpdate"
-          />
-        </div>
       </template>
     </div>
 
