@@ -13,7 +13,7 @@ withDefaults(
 
 const { isDark } = useTheme();
 const logoSrc = computed(() =>
-  isDark.value ? "/logo-dark.png" : "/logo-light-old.png",
+  isDark.value ? "/me3-logo-dark.png" : "/me3-logo-light.png",
 );
 </script>
 
