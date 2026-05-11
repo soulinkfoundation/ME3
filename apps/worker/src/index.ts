@@ -25,8 +25,13 @@ import {
 } from "./plugins";
 import {
   SocialPublishingGateError,
+  SocialPublishingInputError,
+  completeSocialOAuth,
   getSocialPublishingRuntimeStatus,
+  listSocialProviderSettings,
   listSocialPublishingAccounts,
+  startSocialOAuth,
+  updateSocialProviderSettings,
 } from "./social-publishing";
 import { getOrCreateInstallEncryptionKey } from "./install-secrets";
 import {
@@ -457,6 +462,100 @@ app.get("/api/social/accounts", async (c) => {
         },
         error.status as any,
       );
+    }
+    throw error;
+  }
+});
+
+app.get("/api/social/provider-settings", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    return c.json({
+      providers: await listSocialProviderSettings(c.env, ownerId),
+    });
+  } catch (error) {
+    if (error instanceof SocialPublishingGateError) {
+      return c.json({ ok: false, error: error.message, plugin: error.gate }, error.status as any);
+    }
+    throw error;
+  }
+});
+
+app.put("/api/social/provider-settings", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body = await c.req.json<unknown>().catch((): unknown => ({}));
+  try {
+    return c.json({
+      providers: await updateSocialProviderSettings(
+        c.env,
+        ownerId,
+        body as any,
+        await getOrCreateInstallEncryptionKey(c.env),
+      ),
+    });
+  } catch (error) {
+    if (error instanceof SocialPublishingGateError) {
+      return c.json({ ok: false, error: error.message, plugin: error.gate }, error.status as any);
+    }
+    if (error instanceof SocialPublishingInputError) {
+      return c.json({ ok: false, error: error.message }, error.status as any);
+    }
+    throw error;
+  }
+});
+
+app.post("/api/social/:platform/authorize", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body = await c.req.json<unknown>().catch((): unknown => ({}));
+  try {
+    return c.json(
+      await startSocialOAuth(
+        c.env,
+        ownerId,
+        { ...(body && typeof body === "object" ? body : {}), platform: c.req.param("platform") },
+        { apiOrigin: c.env.CORE_API_ORIGIN },
+      ),
+    );
+  } catch (error) {
+    if (error instanceof SocialPublishingGateError) {
+      return c.json({ ok: false, error: error.message, plugin: error.gate }, error.status as any);
+    }
+    if (error instanceof SocialPublishingInputError) {
+      return c.json({ ok: false, error: error.message }, error.status as any);
+    }
+    throw error;
+  }
+});
+
+app.get("/api/social/:platform/callback", async (c) => {
+  try {
+    const redirect = await completeSocialOAuth(
+      c.env,
+      c.req.param("platform"),
+      {
+        code: c.req.query("code"),
+        state: c.req.query("state"),
+        error: c.req.query("error"),
+      },
+      {
+        apiOrigin: c.env.CORE_API_ORIGIN,
+        webOrigin: c.env.CORE_WEB_ORIGIN,
+        fetch,
+        installKey: await getOrCreateInstallEncryptionKey(c.env),
+      },
+    );
+    return c.redirect(redirect);
+  } catch (error) {
+    if (error instanceof SocialPublishingInputError) {
+      const url = new URL("/social", c.env.CORE_WEB_ORIGIN);
+      url.searchParams.set("social_error", error.message);
+      return c.redirect(url.toString());
     }
     throw error;
   }

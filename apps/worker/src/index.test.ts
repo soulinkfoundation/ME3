@@ -51,11 +51,37 @@ type StoredSocialAccount = {
   platform_account_id: string;
   platform_handle: string | null;
   display_name: string | null;
+  access_token_ciphertext?: string;
+  refresh_token_ciphertext?: string | null;
+  token_expires_at?: string | null;
   status: "active" | "expired" | "revoked" | "error";
   scopes_json: string;
+  metadata_json?: string | null;
   last_verified_at: string | null;
   created_at: string;
   updated_at: string;
+};
+type StoredSocialProviderSetting = {
+  user_id: string;
+  provider_id: string;
+  client_id: string;
+  encrypted_client_secret: string | null;
+  secret_hint: string | null;
+  secret_updated_at: string | null;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+};
+type StoredSocialOauthState = {
+  id: string;
+  state: string;
+  user_id: string;
+  site_id: string;
+  platform: "x" | "linkedin" | "instagram" | "instagram_business";
+  return_path: string;
+  code_verifier: string | null;
+  expires_at: string;
+  created_at: string;
 };
 
 function createEnv(): Env & {
@@ -72,6 +98,8 @@ function createEnv(): Env & {
   mailboxMessages: StoredMailboxMessage[];
   telegramConnection: StoredTelegramConnection | null;
   socialAccounts: StoredSocialAccount[];
+  socialProviderSettings: StoredSocialProviderSetting[];
+  socialOauthStates: StoredSocialOauthState[];
 } {
   const state = {
     owner: null as StoredOwner | null,
@@ -87,6 +115,8 @@ function createEnv(): Env & {
     mailboxMessages: [] as StoredMailboxMessage[],
     telegramConnection: null as StoredTelegramConnection | null,
     socialAccounts: [] as StoredSocialAccount[],
+    socialProviderSettings: [] as StoredSocialProviderSetting[],
+    socialOauthStates: [] as StoredSocialOauthState[],
   };
 
   const db = {
@@ -98,6 +128,9 @@ function createEnv(): Env & {
           }
           if (sql.includes("FROM social_accounts")) {
             return { results: state.socialAccounts as T[] };
+          }
+          if (sql.includes("FROM social_provider_settings")) {
+            return { results: state.socialProviderSettings as T[] };
           }
           return { results: [] as T[] };
         },
@@ -170,6 +203,85 @@ function createEnv(): Env & {
                   state.pluginInstallations[existingIndex] = installation;
                 } else {
                   state.pluginInstallations.push(installation);
+                }
+              }
+
+              if (sql.includes("INSERT INTO social_provider_settings")) {
+                const existingIndex = state.socialProviderSettings.findIndex(
+                  (setting) =>
+                    setting.user_id === values[0] && setting.provider_id === values[1],
+                );
+                const existing =
+                  existingIndex >= 0 ? state.socialProviderSettings[existingIndex] : null;
+                const setting: StoredSocialProviderSetting = {
+                  user_id: values[0] as string,
+                  provider_id: values[1] as string,
+                  client_id: values[2] as string,
+                  encrypted_client_secret: values[3] as string | null,
+                  secret_hint: values[4] as string | null,
+                  secret_updated_at: values[5] as string | null,
+                  enabled: values[6] as number,
+                  created_at: existing?.created_at || (values[7] as string),
+                  updated_at: values[8] as string,
+                };
+                if (existingIndex >= 0) {
+                  state.socialProviderSettings[existingIndex] = setting;
+                } else {
+                  state.socialProviderSettings.push(setting);
+                }
+              }
+
+              if (sql.includes("INSERT INTO social_oauth_states")) {
+                state.socialOauthStates.push({
+                  id: values[0] as string,
+                  state: values[1] as string,
+                  user_id: values[2] as string,
+                  site_id: values[3] as string,
+                  platform: values[4] as StoredSocialOauthState["platform"],
+                  return_path: values[5] as string,
+                  code_verifier: values[6] as string | null,
+                  expires_at: values[7] as string,
+                  created_at: "2026-05-11T10:00:00Z",
+                });
+              }
+
+              if (sql.includes("DELETE FROM social_oauth_states")) {
+                state.socialOauthStates = state.socialOauthStates.filter(
+                  (oauthState) => oauthState.id !== values[0],
+                );
+              }
+
+              if (sql.includes("INSERT INTO social_accounts")) {
+                const existingIndex = state.socialAccounts.findIndex(
+                  (account) =>
+                    account.site_id === values[2] &&
+                    account.platform === values[3] &&
+                    account.platform_account_id === values[4],
+                );
+                const existing =
+                  existingIndex >= 0 ? state.socialAccounts[existingIndex] : null;
+                const account: StoredSocialAccount = {
+                  id: existing?.id || (values[0] as string),
+                  user_id: values[1] as string,
+                  site_id: values[2] as string,
+                  platform: values[3] as StoredSocialAccount["platform"],
+                  platform_account_id: values[4] as string,
+                  platform_handle: values[5] as string | null,
+                  display_name: values[6] as string | null,
+                  access_token_ciphertext: values[7] as string,
+                  refresh_token_ciphertext: values[8] as string | null,
+                  token_expires_at: values[9] as string | null,
+                  scopes_json: values[10] as string,
+                  status: "active",
+                  metadata_json: values[11] as string | null,
+                  last_verified_at: values[12] as string | null,
+                  created_at: existing?.created_at || (values[13] as string),
+                  updated_at: values[14] as string,
+                };
+                if (existingIndex >= 0) {
+                  state.socialAccounts[existingIndex] = account;
+                } else {
+                  state.socialAccounts.push(account);
                 }
               }
 
@@ -596,6 +708,27 @@ function createEnv(): Env & {
                   ) || null
                 ) as T | null;
               }
+              if (sql.includes("FROM sites")) {
+                return values[0] === "site-1" && values[1] === "owner"
+                  ? ({ id: "site-1", user_id: "owner" } as T)
+                  : null;
+              }
+              if (sql.includes("FROM social_provider_settings")) {
+                return (
+                  state.socialProviderSettings.find(
+                    (setting) =>
+                      setting.user_id === values[0] && setting.provider_id === values[1],
+                  ) || null
+                ) as T | null;
+              }
+              if (sql.includes("FROM social_oauth_states")) {
+                return (
+                  state.socialOauthStates.find(
+                    (oauthState) =>
+                      oauthState.state === values[0] && oauthState.platform === values[1],
+                  ) || null
+                ) as T | null;
+              }
               if (sql.includes("FROM install_secrets")) {
                 const value = state.installSecrets.get(values[0] as string);
                 return value ? ({ value } as T) : null;
@@ -639,6 +772,13 @@ function createEnv(): Env & {
                 return {
                   results: state.socialAccounts.filter(
                     (account) => account.user_id === values[0],
+                  ) as T[],
+                };
+              }
+              if (sql.includes("FROM social_provider_settings")) {
+                return {
+                  results: state.socialProviderSettings.filter(
+                    (setting) => setting.user_id === values[0],
                   ) as T[],
                 };
               }
@@ -698,6 +838,12 @@ function createEnv(): Env & {
     },
     get socialAccounts() {
       return state.socialAccounts;
+    },
+    get socialProviderSettings() {
+      return state.socialProviderSettings;
+    },
+    get socialOauthStates() {
+      return state.socialOauthStates;
     },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
@@ -1317,6 +1463,258 @@ describe("ME3 Core Worker auth", () => {
       enabled: false,
       ready: false,
     });
+  });
+
+  it("stores Social Publishing provider settings without returning secrets", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/social/provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          providers: [
+            {
+              id: "linkedin",
+              clientId: "linkedin-client",
+              clientSecret: "linkedin-secret-1234",
+              enabled: true,
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      providers: Array<{ providerId: string; configured: boolean; secretHint: string | null }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: "linkedin",
+          configured: true,
+          secretHint: "***1234",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(body)).not.toContain("linkedin-secret-1234");
+    expect(env.socialProviderSettings[0].encrypted_client_secret).toMatch(/^v1\./);
+    expect(env.socialProviderSettings[0].encrypted_client_secret).not.toContain(
+      "linkedin-secret-1234",
+    );
+  });
+
+  it("rejects Social Publishing OAuth start when provider secrets are missing", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/social/linkedin/authorize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ siteId: "site-1" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(424);
+    expect(body.error).toBe("LinkedIn integration is not configured");
+  });
+
+  it("gates Social Publishing OAuth start when disabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/deactivate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/social/linkedin/authorize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ siteId: "site-1" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      error: string;
+      plugin: { status: string; ready: boolean };
+    };
+
+    expect(response.status).toBe(403);
+    expect(body.error).toBe("Social Publishing is disabled");
+    expect(body.plugin).toMatchObject({ status: "disabled", ready: false });
+  });
+
+  it("starts LinkedIn OAuth and connects a social account from callback state", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/social/provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          providers: [
+            {
+              id: "linkedin",
+              clientId: "linkedin-client",
+              clientSecret: "linkedin-secret-1234",
+              enabled: true,
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+
+    const authorizeResponse = await app.fetch(
+      new Request("http://localhost/api/social/linkedin/authorize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ siteId: "site-1", returnPath: "/social" }),
+      }),
+      env,
+    );
+    const authorizeBody = (await authorizeResponse.json()) as { url: string };
+    const authorizeUrl = new URL(authorizeBody.url);
+    const state = authorizeUrl.searchParams.get("state");
+
+    expect(authorizeResponse.status).toBe(200);
+    expect(authorizeUrl.origin).toBe("https://www.linkedin.com");
+    expect(authorizeUrl.searchParams.get("client_id")).toBe("linkedin-client");
+    expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
+      "http://localhost:8787/api/social/linkedin/callback",
+    );
+    expect(state).toBeTruthy();
+    expect(env.socialOauthStates).toHaveLength(1);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("accessToken")) {
+        return new Response(
+          JSON.stringify({
+            access_token: "linkedin-access-token",
+            refresh_token: "linkedin-refresh-token",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          sub: "linkedin-owner",
+          name: "Owner LinkedIn",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const callbackResponse = await app.fetch(
+        new Request(
+          `http://localhost/api/social/linkedin/callback?code=ok-code&state=${encodeURIComponent(
+            state || "",
+          )}`,
+        ),
+        env,
+      );
+
+      expect(callbackResponse.status).toBe(302);
+      expect(callbackResponse.headers.get("location")).toBe(
+        "http://localhost:5174/social?social_connected=linkedin",
+      );
+      expect(env.socialOauthStates).toHaveLength(0);
+      expect(env.socialAccounts).toEqual([
+        expect.objectContaining({
+          platform: "linkedin",
+          platform_account_id: "linkedin-owner",
+          display_name: "Owner LinkedIn",
+          status: "active",
+        }),
+      ]);
+      expect(env.socialAccounts[0].access_token_ciphertext).toMatch(/^v1\./);
+      expect(env.socialAccounts[0].access_token_ciphertext).not.toContain(
+        "linkedin-access-token",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects Social Publishing callback with invalid state", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/api/social/linkedin/callback?code=ok-code&state=missing-state",
+      ),
+      env,
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      "http://localhost:5174/social?social_error=state_expired",
+    );
   });
 
   it("rejects activation for plugins outside the catalog", async () => {

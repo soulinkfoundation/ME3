@@ -190,6 +190,52 @@ type AiSettingsResponse = {
 
 type AiRouteInputs = Record<AiRouteId, { providerId: string; model: string }>;
 
+type AiAgentModelOption = {
+  id: string;
+  label: string;
+  providerId: string;
+  model: string;
+  description: string;
+  runtimeLabel: string;
+  badge?: string;
+};
+
+const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
+  {
+    id: "workers-llama-3-1-8b",
+    label: "ME3 Starter",
+    providerId: "workers-ai",
+    model: "@cf/meta/llama-3.1-8b-instruct",
+    runtimeLabel: "Cloudflare Workers AI",
+    badge: "Default",
+    description: "A low-cost open-source model for the everyday ME3 agent.",
+  },
+  {
+    id: "workers-deepseek-r1",
+    label: "Open-source reasoning",
+    providerId: "workers-ai",
+    model: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    runtimeLabel: "Cloudflare Workers AI",
+    description: "A stronger open-source option for planning-heavy work.",
+  },
+  {
+    id: "openai-gpt-4-1-mini",
+    label: "OpenAI balanced",
+    providerId: "openai",
+    model: "gpt-4.1-mini",
+    runtimeLabel: "OpenAI",
+    description: "A fast paid model for higher-quality everyday agent work.",
+  },
+  {
+    id: "anthropic-haiku",
+    label: "Claude lightweight",
+    providerId: "anthropic",
+    model: "claude-3-5-haiku-latest",
+    runtimeLabel: "Anthropic",
+    description: "A paid Claude option for concise chat and drafting.",
+  },
+];
+
 type EmailProviderId = "cloudflare-email" | "postmark";
 
 type EmailProviderSetupRequirement = {
@@ -298,6 +344,7 @@ const aiRoutes = ref<AiRouteRecord[]>([]);
 const aiEncryptionConfigured = ref(false);
 const aiProviderKeyInputs = ref<Record<string, string>>({});
 const aiRouteInputs = ref<AiRouteInputs>(createEmptyAiRouteInputs());
+const selectedAgentModelOptionId = ref("workers-llama-3-1-8b");
 const aiSettingsMessage = ref<string | null>(null);
 const aiSettingsError = ref<string | null>(null);
 const emailProviderLoading = ref(false);
@@ -427,20 +474,42 @@ const pluginSummaryStatusClass = computed(() => {
   return "available";
 });
 
-const aiConfiguredProviderCount = computed(
-  () => aiProviders.value.filter((provider) => provider.configured).length,
+const aiDefaultRouteInput = computed(
+  () => aiRouteInputs.value.default || { providerId: "", model: "" },
 );
+
+const selectedAgentModelOption = computed(
+  () =>
+    AI_AGENT_MODEL_OPTIONS.find(
+      (option) => option.id === selectedAgentModelOptionId.value,
+    ) || null,
+);
+
+const selectedAgentProvider = computed(() =>
+  aiProviders.value.find(
+    (provider) => provider.id === aiDefaultRouteInput.value.providerId,
+  ),
+);
+
+const aiApiKeyProviders = computed(() =>
+  aiProviders.value.filter((provider) => provider.supportsApiKey),
+);
+
+const aiAgentModelConfigured = computed(() => {
+  const provider = selectedAgentProvider.value;
+  return Boolean(provider?.configured && aiDefaultRouteInput.value.model.trim());
+});
 
 const aiSettingsSummaryLabel = computed(() => {
   if (aiSettingsLoading.value) return "Loading";
-  if (aiConfiguredProviderCount.value > 0) {
-    return `${aiConfiguredProviderCount.value} configured`;
+  if (aiAgentModelConfigured.value) {
+    return "Agent model ready";
   }
   return "Setup required";
 });
 
 const aiSettingsSummaryStatusClass = computed(() =>
-  aiConfiguredProviderCount.value > 0 ? "active" : "setup_required",
+  aiAgentModelConfigured.value ? "active" : "setup_required",
 );
 
 const aiProviderKeyInputCount = computed(
@@ -449,18 +518,17 @@ const aiProviderKeyInputCount = computed(
       .length,
 );
 
-const aiRoutesInvalid = computed(() =>
-  aiRoutes.value.some((route) => {
-    const input = aiRouteInputs.value[route.id];
-    return !input?.providerId || !input.model.trim();
-  }),
+const aiAgentModelInvalid = computed(
+  () =>
+    !aiDefaultRouteInput.value.providerId ||
+    !aiDefaultRouteInput.value.model.trim(),
 );
 
 const aiSettingsSaveDisabled = computed(
   () =>
     aiSettingsSaving.value ||
     aiSettingsLoading.value ||
-    aiRoutesInvalid.value ||
+    aiAgentModelInvalid.value ||
     (aiProviderKeyInputCount.value > 0 && !aiEncryptionConfigured.value),
 );
 
@@ -747,6 +815,26 @@ function createEmptyAiRouteInputs(): AiRouteInputs {
   };
 }
 
+function syncSelectedAgentModelOption() {
+  const current = aiDefaultRouteInput.value;
+  const matchingOption = AI_AGENT_MODEL_OPTIONS.find(
+    (option) =>
+      option.providerId === current.providerId && option.model === current.model,
+  );
+  selectedAgentModelOptionId.value = matchingOption?.id || "custom";
+}
+
+function applyAgentModelOption(optionId: string) {
+  selectedAgentModelOptionId.value = optionId;
+  const option = AI_AGENT_MODEL_OPTIONS.find((candidate) => candidate.id === optionId);
+  if (!option) return;
+
+  aiRouteInputs.value.default = {
+    providerId: option.providerId,
+    model: option.model,
+  };
+}
+
 function syncAiSettings(response: AiSettingsResponse) {
   aiProviders.value = response.providers || [];
   aiRoutes.value = response.routes || [];
@@ -765,6 +853,7 @@ function syncAiSettings(response: AiSettingsResponse) {
     };
   }
   aiRouteInputs.value = nextRouteInputs;
+  syncSelectedAgentModelOption();
 }
 
 async function loadAiSettings() {
@@ -791,13 +880,14 @@ async function saveAiSettings() {
   const providers = Object.entries(aiProviderKeyInputs.value)
     .map(([id, apiKey]) => ({ id, apiKey: apiKey.trim() }))
     .filter((provider) => provider.apiKey);
+  const agentModel = {
+    providerId: aiDefaultRouteInput.value.providerId,
+    model: aiDefaultRouteInput.value.model.trim(),
+  };
   const defaults = Object.fromEntries(
-    aiRoutes.value.map((route) => [
-      route.id,
-      {
-        providerId: aiRouteInputs.value[route.id].providerId,
-        model: aiRouteInputs.value[route.id].model.trim(),
-      },
+    (["default", "chat", "reasoning", "extraction"] as AiRouteId[]).map((routeId) => [
+      routeId,
+      agentModel,
     ]),
   );
 
@@ -1696,12 +1786,12 @@ onMounted(async () => {
             @click="openSection.ai = !openSection.ai"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>AI model providers</h2>
+              <h2>ME3 agent model</h2>
               <span class="status-badge" :class="aiSettingsSummaryStatusClass">
                 {{ aiSettingsSummaryLabel }}
               </span>
               <span class="accordion-header-hint">
-                Chat, extraction, and reasoning defaults
+                One model for the agent
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -1723,9 +1813,8 @@ onMounted(async () => {
               </p>
 
               <p class="hint">
-                Keep owner-supplied provider keys in encrypted Core storage and
-                choose the default model route for each agent workload. Workers
-                AI uses the local Cloudflare binding when it is available.
+                Choose the model ME3 uses to chat, plan, draft, and coordinate
+                tools. Core keeps the internal routing simple by default.
               </p>
 
               <p
@@ -1736,15 +1825,96 @@ onMounted(async () => {
                 If this remains visible, run the latest migrations and bootstrap again.
               </p>
 
+              <div class="ai-routes-panel">
+                <div class="mailbox-panel-head">
+                  <h3>Agent model</h3>
+                  <span v-if="selectedAgentModelOption" class="provider-meta">
+                    Runs on {{ selectedAgentModelOption.runtimeLabel }}
+                  </span>
+                </div>
+
+                <div class="agent-model-options" role="radiogroup">
+                  <button
+                    v-for="option in AI_AGENT_MODEL_OPTIONS"
+                    :key="option.id"
+                    class="agent-model-option"
+                    :class="{
+                      'agent-model-option--active':
+                        selectedAgentModelOptionId === option.id,
+                    }"
+                    type="button"
+                    role="radio"
+                    :aria-checked="selectedAgentModelOptionId === option.id"
+                    @click="applyAgentModelOption(option.id)"
+                  >
+                    <span class="agent-model-option__main">
+                      <strong>{{ option.label }}</strong>
+                      <small>{{ option.description }}</small>
+                      <code>{{ option.model }}</code>
+                    </span>
+                    <span class="agent-model-option__meta">
+                      <span v-if="option.badge" class="status-pill">
+                        {{ option.badge }}
+                      </span>
+                      <span>{{ option.runtimeLabel }}</span>
+                    </span>
+                  </button>
+                </div>
+
+                <button
+                  class="button secondary"
+                  type="button"
+                  @click="selectedAgentModelOptionId = 'custom'"
+                >
+                  Use a custom model
+                </button>
+
+                <div
+                  v-if="selectedAgentModelOptionId === 'custom'"
+                  class="ai-route-fields"
+                >
+                  <label class="field">
+                    <span>Runtime</span>
+                    <select
+                      v-model="aiRouteInputs.default.providerId"
+                      class="input"
+                    >
+                      <option
+                        v-for="provider in aiProviders"
+                        :key="provider.id"
+                        :value="provider.id"
+                      >
+                        {{ provider.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Model</span>
+                    <input
+                      v-model="aiRouteInputs.default.model"
+                      class="input"
+                      type="text"
+                      placeholder="Model name"
+                      spellcheck="false"
+                    />
+                  </label>
+                </div>
+
+                <p class="field-hint">
+                  Advanced routing stays internal for now. Mission Control can
+                  introduce a separate planning model when that workflow needs it.
+                </p>
+              </div>
+
               <div class="ai-provider-list">
                 <article
-                  v-for="provider in aiProviders"
+                  v-for="provider in aiApiKeyProviders"
                   :key="provider.id"
                   class="ai-provider-row"
                 >
                   <div class="ai-provider-row__header">
                     <div class="ai-provider-copy">
-                      <h3>{{ provider.label }}</h3>
+                      <h3>{{ provider.label }} connection</h3>
                       <p>{{ provider.description }}</p>
                     </div>
                     <div class="plugin-row__badges">
@@ -1779,46 +1949,6 @@ onMounted(async () => {
                     </p>
                   </label>
                 </article>
-              </div>
-
-              <div class="ai-routes-panel">
-                <div class="mailbox-panel-head">
-                  <h3>Model defaults</h3>
-                  <span class="provider-meta">
-                    {{ aiRoutes.length }} routes
-                  </span>
-                </div>
-
-                <div class="ai-route-list">
-                  <label
-                    v-for="routeRecord in aiRoutes"
-                    :key="routeRecord.id"
-                    class="field ai-route-row"
-                  >
-                    <span>{{ routeRecord.label }}</span>
-                    <div class="ai-route-fields">
-                      <select
-                        v-model="aiRouteInputs[routeRecord.id].providerId"
-                        class="input"
-                      >
-                        <option
-                          v-for="provider in aiProviders"
-                          :key="provider.id"
-                          :value="provider.id"
-                        >
-                          {{ provider.label }}
-                        </option>
-                      </select>
-                      <input
-                        v-model="aiRouteInputs[routeRecord.id].model"
-                        class="input"
-                        type="text"
-                        placeholder="Model name"
-                        spellcheck="false"
-                      />
-                    </div>
-                  </label>
-                </div>
               </div>
 
               <div class="button-row">
@@ -2601,7 +2731,8 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.ai-provider-list {
+.ai-provider-list,
+.agent-model-options {
   display: grid;
   gap: 14px;
 }
@@ -2651,25 +2782,62 @@ h1 {
   border-radius: var(--ui-radius-md, 12px);
 }
 
-.ai-route-list {
-  display: grid;
-  gap: 12px;
-}
-
-.ai-route-row {
-  padding-top: 12px;
-  border-top: 1px solid var(--ui-border, var(--color-border));
-}
-
-.ai-route-row:first-child {
-  padding-top: 0;
-  border-top: none;
-}
-
 .ai-route-fields {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   gap: 10px;
+}
+
+.agent-model-option {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 12px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-model-option--active {
+  border-color: var(--ui-accent, #2e7d32);
+  background: var(--ui-accent-soft, rgba(76, 175, 80, 0.08));
+}
+
+.agent-model-option__main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.agent-model-option__main strong {
+  font-size: 15px;
+}
+
+.agent-model-option__main small,
+.agent-model-option__meta {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.agent-model-option__main code {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-model-option__meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 150px;
 }
 
 .recommended-card {
@@ -2965,6 +3133,7 @@ h1 {
   .email-row,
   .mailbox-source-row,
   .activity-row,
+  .agent-model-option,
   .ai-provider-row__header,
   .email-provider-option,
   .plugin-row__header {

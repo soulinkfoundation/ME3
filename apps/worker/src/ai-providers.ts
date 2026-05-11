@@ -79,8 +79,8 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     recommendedModels: {
       default: "@cf/meta/llama-3.1-8b-instruct",
       chat: "@cf/meta/llama-3.1-8b-instruct",
-      reasoning: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
-      extraction: "@cf/meta/llama-3.1-8b-instruct-fast",
+      reasoning: "@cf/meta/llama-3.1-8b-instruct",
+      extraction: "@cf/meta/llama-3.1-8b-instruct",
     },
   },
   {
@@ -95,7 +95,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     recommendedModels: {
       default: "gpt-4.1-mini",
       chat: "gpt-4.1-mini",
-      reasoning: "o4-mini",
+      reasoning: "gpt-4.1-mini",
       extraction: "gpt-4.1-mini",
     },
   },
@@ -111,7 +111,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     recommendedModels: {
       default: "claude-3-5-haiku-latest",
       chat: "claude-3-5-haiku-latest",
-      reasoning: "claude-3-7-sonnet-latest",
+      reasoning: "claude-3-5-haiku-latest",
       extraction: "claude-3-5-haiku-latest",
     },
   },
@@ -190,10 +190,18 @@ export async function getAiSettings(env: Env, ownerId: string): Promise<AiSettin
   const providers = AI_PROVIDER_ADAPTERS.map((adapter) =>
     serializeProvider(adapter, credentials.get(adapter.id) || null, env),
   );
+  const defaultRoute = resolveRoute(
+    "default",
+    providers,
+    storedDefaults.get("default") || null,
+    env,
+  );
   const defaults = Object.fromEntries(
     AI_ROUTE_IDS.map((routeId) => [
       routeId,
-      resolveRoute(routeId, providers, storedDefaults.get(routeId) || null, env),
+      routeId === "default"
+        ? defaultRoute
+        : resolveRoute(routeId, providers, storedDefaults.get(routeId) || null, env, defaultRoute),
     ]),
   ) as Record<AiRouteId, AiModelRouteRecord>;
 
@@ -465,6 +473,7 @@ function resolveRoute(
   providers: AiProviderSettingsRecord[],
   storedDefault: DbAiModelDefault | null,
   env: Env,
+  fallbackRoute?: AiModelRouteRecord,
 ): AiModelRouteRecord {
   const envKeys = ROUTE_ENV_KEYS[routeId];
   const storedProviderId = normalizeProviderId(storedDefault?.provider_id);
@@ -473,8 +482,9 @@ function resolveRoute(
   const providerId =
     storedProviderId ||
     envProviderId ||
+    fallbackRoute?.providerId ||
     firstConfiguredProvider ||
-    (routeId === "reasoning" ? "anthropic" : "workers-ai");
+    "workers-ai";
   const adapter = getProviderAdapter(providerId) || getProviderAdapter("workers-ai")!;
   const provider = providers.find((candidate) => candidate.id === adapter.id);
   const source = storedProviderId
@@ -485,6 +495,7 @@ function resolveRoute(
   const model =
     normalizeModel(storedDefault?.model) ||
     normalizeModel(env[envKeys.model]) ||
+    fallbackRoute?.model ||
     adapter.recommendedModels[routeId];
   const configured = Boolean(provider?.configured && model);
 

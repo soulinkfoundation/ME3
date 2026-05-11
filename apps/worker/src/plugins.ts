@@ -105,6 +105,24 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       methods: ["GET"],
       auth: "owner",
     },
+    {
+      id: "social.provider-settings.api",
+      path: "/api/social/provider-settings",
+      methods: ["GET", "PUT"],
+      auth: "owner",
+    },
+    {
+      id: "social.oauth.start.api",
+      path: "/api/social/:platform/authorize",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
+      id: "social.oauth.callback.api",
+      path: "/api/social/:platform/callback",
+      methods: ["GET"],
+      auth: "public",
+    },
   ],
   uiSlots: [
     {
@@ -160,6 +178,11 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       path: "./apps/worker/migrations/0011_social_publishing_plugin.sql",
       destructive: false,
     },
+    {
+      id: "social.0012",
+      path: "./apps/worker/migrations/0012_social_publishing_oauth_setup.sql",
+      destructive: false,
+    },
   ],
   queuesAndCrons: [
     {
@@ -175,8 +198,8 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   ],
   notes: [
     "Bundled through @me3-core/plugin-social-publishing as a first-party Core package.",
-    "Current runtime exposes owner-only status and account inventory reads when installed.",
-    "External publishing, OAuth callbacks, queue consumers, and cron dispatch remain approval-first follow-up work.",
+    "Current runtime exposes owner-only status, provider setup, OAuth account connection, and account inventory reads when installed.",
+    "External publishing, queue consumers, and cron dispatch remain approval-first follow-up work.",
   ],
 };
 
