@@ -92,6 +92,8 @@ export interface DomainStatus {
   domain?: string;
   status?: "pending" | "active" | "failed";
   ssl_status?: string;
+  expected_host?: string | null;
+  admin_host?: string | null;
   verification_records?: Array<{
     type: "cname" | "txt";
     name: string;
@@ -103,6 +105,7 @@ export interface DomainStatus {
     icon: string;
   }>;
   url?: string;
+  instructions?: string[];
   error?: string;
 }
 

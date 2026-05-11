@@ -131,6 +131,8 @@ me3.customdomain.com  -> me3 Worker
 
 If the owner wants the apex domain too, configure Cloudflare to redirect `customdomain.com` to `www.customdomain.com`. Core keeps admin and public-site routing separate by hostname: requests on `ME3_SITE_HOST` serve the published D1-backed site files, while requests on `ME3_ADMIN_HOST` serve the admin SPA and authenticated API.
 
+The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches `ME3_SITE_HOST` and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
+
 ### Optional R2 Media Storage
 
 By default, Core stores published site files in D1. This keeps the install simple, but D1 is best for small pages, manifests, and modest images. Owners with large media-heavy sites can add an R2 bucket and bind it as `SITE_ASSETS`:

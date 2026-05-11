@@ -473,6 +473,88 @@ app.post("/api/sites/:username/storage/migrate-media", async (c) => {
   });
 });
 
+app.get("/api/domains/:username", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  return c.json(buildCoreDomainStatus(c.env, site));
+});
+
+app.post("/api/domains/:username", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const body = await c.req.json<{ domain?: unknown }>().catch((): { domain?: unknown } => ({}));
+  const domain = normalizeDomain(body.domain);
+  if (!domain || !domain.startsWith("www.")) {
+    return c.json({ error: "Use a www subdomain, for example www.yourdomain.com." }, 400);
+  }
+
+  const status = getCoreDomainState(c.env, site, domain);
+  await c.env.DB.prepare(
+    `UPDATE sites
+     SET custom_domain = ?,
+         custom_domain_status = ?,
+         custom_domain_cf_id = NULL,
+         updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(domain, status, site.id)
+    .run();
+
+  return c.json({
+    ok: true,
+    domain,
+    status,
+    instructions: getCoreDomainInstructions(c.env, domain, site.username),
+  });
+});
+
+app.post("/api/domains/:username/refresh", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+  if (!site.custom_domain) return c.json(buildCoreDomainStatus(c.env, site));
+
+  const status = getCoreDomainState(c.env, site, site.custom_domain);
+  await c.env.DB.prepare(
+    "UPDATE sites SET custom_domain_status = ?, updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(status, site.id)
+    .run();
+
+  return c.json(buildCoreDomainStatus(c.env, { ...site, custom_domain_status: status }));
+});
+
+app.delete("/api/domains/:username", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  await c.env.DB.prepare(
+    `UPDATE sites
+     SET custom_domain = NULL,
+         custom_domain_status = NULL,
+         custom_domain_cf_id = NULL,
+         updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(site.id)
+    .run();
+
+  return c.json({ ok: true });
+});
+
 app.post("/api/sites/:username/upload", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -1347,6 +1429,14 @@ function normalizeHost(value: string | null | undefined): string {
   return (value || "").trim().toLowerCase().replace(/:\d+$/, "");
 }
 
+function normalizeDomain(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
+  return normalizeHost(withoutProtocol.split("/")[0]);
+}
+
 function hostnameFromUrl(value: string | null | undefined): string {
   if (!value) return "";
   try {
@@ -1362,6 +1452,100 @@ function isPublicSiteHost(env: Env, requestUrl: string): boolean {
   const requestHost = hostnameFromUrl(requestUrl);
   const adminHost = normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN);
   return requestHost === siteHost && requestHost !== adminHost;
+}
+
+function getCoreDomainState(
+  env: Env,
+  site: Pick<DbSite, "username">,
+  domain: string | null,
+): "pending" | "active" | "failed" {
+  const normalizedDomain = normalizeHost(domain);
+  const siteHost = normalizeHost(env.ME3_SITE_HOST);
+  if (!normalizedDomain) return "pending";
+  if (!siteHost) return "pending";
+  if (normalizedDomain !== siteHost) return "pending";
+
+  const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
+  if (configuredUsername && configuredUsername !== site.username) return "pending";
+
+  return "active";
+}
+
+function buildCoreDomainStatus(env: Env, site: DbSite) {
+  const domain = normalizeHost(site.custom_domain) || normalizeHost(env.ME3_SITE_HOST);
+  const status = domain
+    ? getCoreDomainState(env, site, domain)
+    : undefined;
+
+  return {
+    connected: Boolean(domain),
+    domain: domain || undefined,
+    status,
+    ssl_status: status === "active" ? "active" : undefined,
+    expected_host: env.ME3_SITE_HOST || null,
+    admin_host: env.ME3_ADMIN_HOST || hostnameFromUrl(env.CORE_WEB_ORIGIN) || null,
+    verification_records: getCoreDomainRecords(env, domain),
+    registrar_guides: getRegistrarGuides(),
+    url: status === "active" && domain ? `https://${domain}` : undefined,
+    instructions: domain
+      ? getCoreDomainInstructions(env, domain, site.username)
+      : [
+          "Enter the www domain visitors should use for this ME3 site.",
+          "Set ME3_SITE_HOST to the same hostname in this Worker deployment.",
+          "Attach that hostname to the Worker as a Cloudflare custom domain.",
+        ],
+  };
+}
+
+function getCoreDomainRecords(env: Env, domain: string | null | undefined) {
+  const normalizedDomain = normalizeHost(domain);
+  if (!normalizedDomain) return [];
+  const adminHost = normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN);
+  if (!adminHost) return [];
+  return [
+    {
+      type: "cname" as const,
+      name: normalizedDomain,
+      value: adminHost,
+    },
+  ];
+}
+
+function getCoreDomainInstructions(env: Env, domain: string, username: string): string[] {
+  const siteHost = normalizeHost(env.ME3_SITE_HOST);
+  const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
+  const instructions = [
+    `In Cloudflare, attach ${domain} to this same me3 Worker as a custom domain.`,
+    `Set ME3_SITE_HOST=${domain} in the Worker variables, then redeploy.`,
+  ];
+
+  if (configuredUsername && configuredUsername !== username) {
+    instructions.push(`Set ME3_SITE_USERNAME=${username}, or clear ME3_SITE_USERNAME so the first profile site is served.`);
+  } else if (!configuredUsername) {
+    instructions.push("Optional: set ME3_SITE_USERNAME if this Worker will host more than one site record.");
+  }
+
+  if (siteHost && siteHost !== domain) {
+    instructions.unshift(`Current ME3_SITE_HOST is ${siteHost}, so this domain will stay pending until the variable matches.`);
+  }
+
+  instructions.push("If you want the apex domain too, redirect it to this www domain in Cloudflare.");
+  return instructions;
+}
+
+function getRegistrarGuides() {
+  return [
+    {
+      name: "Cloudflare custom domains",
+      url: "https://developers.cloudflare.com/workers/configuration/routing/custom-domains/",
+      icon: "cloudflare",
+    },
+    {
+      name: "Cloudflare redirects",
+      url: "https://developers.cloudflare.com/rules/url-forwarding/",
+      icon: "cloudflare",
+    },
+  ];
 }
 
 async function servePublicSiteRequest(env: Env, request: Request): Promise<Response> {

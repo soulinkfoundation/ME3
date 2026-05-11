@@ -181,23 +181,24 @@ const domainPreview = computed(() => {
         <div v-if="domainStatus?.status === 'pending'" class="dns-instructions">
           <h4>DNS Configuration Required</h4>
           <p class="dns-hint">
-            1. Click 'Check Status', see a TXT record appear below. <br />
-            2. Add the CNAME and TXT record to your DNS provider. (ensure you
-            remove any existing CNAME record for www.) <br />
-            3. Wait 10-15 minutes, then click 'Check Status' again, you should
-            see the status change to 'Active'. <br />
-            4. If you want your domain.com to work without www? Set up domain
-            forwarding at your registrar to https://www.DOMAIN.com
-            (recommended). <br />
-            5. Refresh this page and if you don't see the status change to
-            'Active' after 1 hour, please
-            <router-link to="/account" target="_blank" rel="noopener noreferrer"
-              >check settings</router-link
-            >.
+            Complete the Cloudflare setup for this Core install, then click
+            Check Status.
           </p>
 
+          <ol
+            v-if="domainStatus?.instructions?.length"
+            class="domain-instructions"
+          >
+            <li
+              v-for="instruction in domainStatus.instructions"
+              :key="instruction"
+            >
+              {{ instruction }}
+            </li>
+          </ol>
+
           <div
-            v-for="record in domainStatus?.verification_records"
+            v-for="record in domainStatus?.verification_records || []"
             :key="record.name"
             class="dns-record"
           >
@@ -493,6 +494,16 @@ const domainPreview = computed(() => {
   font-size: 13px;
   color: var(--color-text-muted);
   margin-bottom: 16px;
+}
+
+.domain-instructions {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px 18px;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .dns-tip {
