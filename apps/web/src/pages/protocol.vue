@@ -68,7 +68,7 @@ const auth = useAuthStore();
             NPM Package
           </a>
           <a
-            href="https://github.com/soulink8/me3"
+            href="https://github.com/Soulink-Foundation/me3"
             target="_blank"
             rel="noopener noreferrer"
             class="cta secondary"
