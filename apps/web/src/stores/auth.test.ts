@@ -80,44 +80,6 @@ describe("auth store", () => {
     });
   });
 
-  describe("handleOAuthCallback", () => {
-    it("should refresh session and return true when cookie session exists", async () => {
-      vi.mocked(api.get).mockResolvedValue({
-        user: {
-          id: "user123",
-          email: "test@example.com",
-          timezone: null,
-          locale: "en-US",
-          localeSource: "inferred",
-        },
-      });
-
-      const store = useAuthStore();
-      const result = await store.handleOAuthCallback();
-
-      expect(result).toBe(true);
-      expect(store.user).toEqual({
-        id: "user123",
-        email: "test@example.com",
-        timezone: null,
-        locale: "en-US",
-        localeSource: "inferred",
-      });
-      expect(store.initialized).toBe(true);
-    });
-
-    it("should return false when callback session hydration fails", async () => {
-      vi.mocked(api.get).mockRejectedValue(new Error("Unauthorized"));
-
-      const store = useAuthStore();
-      const result = await store.handleOAuthCallback();
-
-      expect(result).toBe(false);
-      expect(store.user).toBeNull();
-      expect(store.initialized).toBe(true);
-    });
-  });
-
   describe("logout", () => {
     it("should call logout endpoint and clear user", async () => {
       vi.mocked(api.post).mockResolvedValue({ ok: true });

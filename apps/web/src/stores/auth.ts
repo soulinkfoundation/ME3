@@ -88,20 +88,6 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  /**
-   * Handle OAuth callback by hydrating session from cookie.
-   */
-  async function handleOAuthCallback(): Promise<boolean> {
-    try {
-      const success = await refreshSession();
-      initialized.value = true;
-      return success;
-    } catch (error) {
-      console.error("OAuth callback error:", error);
-      return false;
-    }
-  }
-
   return {
     user,
     initialized,
@@ -111,7 +97,6 @@ export const useAuthStore = defineStore("auth", () => {
     requestCode,
     verifyCode,
     logout,
-    handleOAuthCallback,
     setSession,
   };
 });
