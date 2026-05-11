@@ -91,7 +91,7 @@ type PublishManifest = {
 type SiteFileRecord = {
   site_id: string;
   path: string;
-  content: ArrayBuffer;
+  content: ArrayBuffer | Uint8Array | number[] | Record<string, number>;
   content_type: string;
   size: number;
   sha256: string | null;
@@ -660,7 +660,7 @@ app.post("/api/sites/:username/storage/migrate-media", async (c) => {
   let migrated = 0;
 
   for (const file of files) {
-    await putR2SiteFile(c.env, site, file.path, file.content, file.content_type);
+    await putR2SiteFile(c.env, site, file.path, siteFileContentToBytes(file.content), file.content_type);
     await deleteSiteFile(c.env, site.id, file.path);
     migrated += 1;
   }
@@ -1973,7 +1973,7 @@ async function serveSiteFileResponse(
     });
   }
 
-  return new Response(file.content, {
+  return new Response(siteFileContentToArrayBuffer(file.content), {
     headers: {
       "Content-Type": file.content_type,
       "Cache-Control": file.content_type.startsWith("image/")
@@ -2066,7 +2066,7 @@ async function putR2SiteFile(
   env: Env,
   site: DbSite,
   path: string,
-  content: ArrayBuffer,
+  content: ArrayBuffer | Uint8Array,
   contentType: string,
 ): Promise<void> {
   if (!env.SITE_ASSETS) {
@@ -2208,8 +2208,28 @@ async function savePublishManifest(env: Env, siteId: string, manifest: PublishMa
   await putSiteFile(env, siteId, "publish-manifest.json", JSON.stringify(manifest, null, 2), "application/json");
 }
 
-async function arrayBufferToText(buffer: ArrayBuffer): Promise<string> {
-  return new TextDecoder().decode(buffer);
+async function arrayBufferToText(content: SiteFileRecord["content"]): Promise<string> {
+  return new TextDecoder().decode(siteFileContentToBytes(content));
+}
+
+function siteFileContentToBytes(content: SiteFileRecord["content"]): Uint8Array {
+  if (content instanceof Uint8Array) return content;
+  if (content instanceof ArrayBuffer) return new Uint8Array(content);
+  if (Array.isArray(content)) return new Uint8Array(content);
+
+  const values = Object.values(content);
+  if (values.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)) {
+    return new Uint8Array(values);
+  }
+
+  throw new TypeError("Unsupported site file content format");
+}
+
+function siteFileContentToArrayBuffer(content: SiteFileRecord["content"]): ArrayBuffer {
+  const bytes = siteFileContentToBytes(content);
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
 }
 
 async function sha256Text(value: string): Promise<string> {
