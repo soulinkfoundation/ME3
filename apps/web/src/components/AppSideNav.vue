@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { RouterLink, useRoute } from "vue-router";
 import ThemeToggle from "./ThemeToggle.vue";
 import UiIcon from "./UiIcon.vue";
-import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 
 const route = useRoute();
-const router = useRouter();
-const auth = useAuthStore();
 const sites = useSitesStore();
 
 /** ME3 profile site (single canonical site for workspace Sites). */
@@ -93,12 +90,6 @@ function rowActive(
     default:
       return false;
   }
-}
-
-async function signOut() {
-  closeMobileNav();
-  await auth.logout();
-  await router.push("/");
 }
 
 watch(
@@ -245,25 +236,11 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           <span class="app-side-nav__emoji" aria-hidden="true">⚙️</span>
           <span class="sr-only">Settings</span>
         </RouterLink>
-      </nav>
-
-      <div class="app-side-nav__footer">
         <div class="app-side-nav__row app-side-nav__row--theme">
           <ThemeToggle />
           <span class="sr-only">Theme</span>
         </div>
-
-        <button
-          type="button"
-          class="app-side-nav__row app-side-nav__row--button"
-          aria-label="Sign out"
-          title="Sign out"
-          @click="signOut"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">🚪</span>
-          <span class="sr-only">Sign out</span>
-        </button>
-      </div>
+      </nav>
     </aside>
   </div>
 </template>
@@ -318,15 +295,6 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
   flex: 1;
   min-height: 0;
   padding: 0 8px;
-}
-
-.app-side-nav__footer {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 8px 0;
-  border-top: 1px solid var(--color-border);
-  margin-top: auto;
 }
 
 .app-side-nav__row {
@@ -507,9 +475,5 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
     padding-top: 4px;
   }
 
-  .app-side-nav__footer {
-    padding-bottom: 16px;
-    border-top: 1px solid var(--color-border);
-  }
 }
 </style>
