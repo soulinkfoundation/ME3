@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
 
 export const CORE_PLUGIN_CATALOG_VERSION = "2026-05-11.v1";
 
@@ -79,7 +80,7 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
-  implementationStatus: "catalog_only",
+  implementationStatus: SOCIAL_PUBLISHING_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["content.social_assistant"],
   permissions: [
     {
@@ -223,7 +224,7 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   notes: [
-    "Catalog-only in Core until the Social Publishing workspace package is extracted and bundled.",
+    "Bundled as a Core activation scaffold; provider publishing runtime extraction is still pending.",
     "External publishing remains approval-first and audit-backed.",
   ],
 };
@@ -238,7 +239,16 @@ export async function activateCorePlugin(
 ): Promise<CorePluginRecord> {
   const plugin = getCorePluginManifest(pluginId);
   const now = new Date().toISOString();
-  const setupRequirements = getSetupRequirements(env, plugin, null);
+  const setupRequirements = getSetupRequirements(env, plugin, {
+    plugin_id: plugin.id,
+    version: plugin.version,
+    enabled: 1,
+    status: "installed",
+    granted_permissions_json: "[]",
+    setup_state_json: "{}",
+    installed_at: now,
+    updated_at: now,
+  });
   const setupBlocked = setupRequirements.some(
     (requirement) => requirement.required && !requirement.configured,
   );
@@ -416,9 +426,12 @@ function getSetupRequirements(
       id: `${plugin.id}.${item.kind}.${item.id}`,
       label: item.kind === "queue" ? item.binding || item.id : `Cron ${item.schedule}`,
       kind: item.kind,
-      required: item.kind === "queue",
+      required: false,
       configured: item.kind === "queue" ? Boolean(item.binding && envRecord[item.binding]) : true,
-      note: item.kind === "queue" ? "Cloudflare queue binding." : "Declared schedule.",
+      note:
+        item.kind === "queue"
+          ? "Optional until the publishing worker is extracted."
+          : "Declared schedule.",
     });
   }
 

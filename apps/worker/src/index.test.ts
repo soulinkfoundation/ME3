@@ -687,7 +687,7 @@ describe("ME3 Core Worker auth", () => {
         status: string;
         implementationStatus: string;
         agentTools: Array<{ id: string; approvalMode: string }>;
-        setupRequirements: Array<{ kind: string; configured: boolean }>;
+        setupRequirements: Array<{ kind: string; configured: boolean; required: boolean }>;
       }>;
     };
 
@@ -697,7 +697,7 @@ describe("ME3 Core Worker auth", () => {
       expect.objectContaining({
         id: "me3.social-publishing",
         status: "available",
-        implementationStatus: "catalog_only",
+        implementationStatus: "bundled",
       }),
     ]);
     expect(body.plugins[0].agentTools).toEqual(
@@ -712,7 +712,12 @@ describe("ME3 Core Worker auth", () => {
       expect.arrayContaining([
         expect.objectContaining({
           kind: "package",
+          configured: true,
+        }),
+        expect.objectContaining({
+          kind: "queue",
           configured: false,
+          required: false,
         }),
       ]),
     );
@@ -726,7 +731,7 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(401);
   });
 
-  it("activates catalog-only Social Publishing as setup required", async () => {
+  it("activates bundled Social Publishing when Core prerequisites are configured", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
 
@@ -744,7 +749,7 @@ describe("ME3 Core Worker auth", () => {
         enabled: boolean;
         status: string;
         grantedPermissions: string[];
-        setupRequirements: Array<{ kind: string; configured: boolean }>;
+        setupRequirements: Array<{ kind: string; configured: boolean; required: boolean }>;
       };
     };
 
@@ -753,7 +758,7 @@ describe("ME3 Core Worker auth", () => {
       id: "me3.social-publishing",
       installed: true,
       enabled: true,
-      status: "setup_required",
+      status: "installed",
     });
     expect(body.plugin.grantedPermissions).toEqual([
       "content.social.publish",
@@ -761,8 +766,8 @@ describe("ME3 Core Worker auth", () => {
     ]);
     expect(body.plugin.setupRequirements).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "package", configured: false }),
-        expect.objectContaining({ kind: "queue", configured: false }),
+        expect.objectContaining({ kind: "package", configured: true }),
+        expect.objectContaining({ kind: "queue", configured: false, required: false }),
       ]),
     );
 
@@ -779,9 +784,41 @@ describe("ME3 Core Worker auth", () => {
     expect(catalog.plugins).toEqual([
       expect.objectContaining({
         id: "me3.social-publishing",
-        status: "setup_required",
+        status: "installed",
       }),
     ]);
+  });
+
+  it("keeps Social Publishing setup-required when token encryption is missing", async () => {
+    const env = createEnv();
+    env.TOKEN_ENCRYPTION_KEY = undefined;
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      plugin: {
+        status: string;
+        setupRequirements: Array<{ kind: string; label: string; configured: boolean }>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.plugin.status).toBe("setup_required");
+    expect(body.plugin.setupRequirements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "secret",
+          label: "Token encryption key",
+          configured: false,
+        }),
+      ]),
+    );
   });
 
   it("deactivates an installed Social Publishing plugin", async () => {
