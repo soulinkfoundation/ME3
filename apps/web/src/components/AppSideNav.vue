@@ -77,12 +77,7 @@ const showMobileDrawer = computed(
 );
 
 function rowActive(
-  kind:
-    | "calendar"
-    | "email"
-    | "sites"
-    | "assistant"
-    | "account",
+  kind: "calendar" | "email" | "sites" | "assistant" | "account",
 ): boolean {
   switch (kind) {
     case "calendar":
@@ -149,7 +144,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
         @click="closeMobileNav"
       >
         <img
-          src="/me3_logo.png"
+          src="/me3-logo-light.png"
           class="app-side-nav-mobile-bar__logo-img"
           alt="me3"
         />
@@ -158,7 +153,6 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
       <div class="app-side-nav-mobile-bar__theme">
         <ThemeToggle />
       </div>
-
     </header>
 
     <button
@@ -183,7 +177,11 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
         aria-label="Calendar"
         @click="closeMobileNav"
       >
-        <img src="/me3_logo.png" class="app-side-nav__logo-img" alt="me3" />
+        <img
+          src="/me3-logo-light.png"
+          class="app-side-nav__logo-img"
+          alt="me3"
+        />
       </RouterLink>
 
       <nav class="app-side-nav__links" aria-label="Primary">
@@ -247,7 +245,6 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           <span class="app-side-nav__emoji" aria-hidden="true">⚙️</span>
           <span class="sr-only">Settings</span>
         </RouterLink>
-
       </nav>
 
       <div class="app-side-nav__footer">
