@@ -1,0 +1,21 @@
+{
+  "name": "me3-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Installable ME3 Core assistant scaffold",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @me3-core/worker --filter @me3-core/web dev",
+    "dev:worker": "pnpm --filter @me3-core/worker dev",
+    "dev:web": "pnpm --filter @me3-core/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
