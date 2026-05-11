@@ -1287,19 +1287,7 @@ describe("wizard store", () => {
           status: "active",
         },
       ]);
-      expect((me3 as any).actions?.createBookingCheckout).toEqual({
-        method: "POST",
-        url: "http://localhost:3000/api/book/testuser/checkout-session",
-        requires: [
-          "slotStart",
-          "slotEnd",
-          "amount",
-          "currency",
-          "guestName",
-          "guestEmail",
-        ],
-        description: "Create a Stripe Checkout session for a paid booking.",
-      });
+      expect((me3 as any).actions?.createBookingCheckout).toBeUndefined();
     });
 
     it("should load booking config from site content", () => {

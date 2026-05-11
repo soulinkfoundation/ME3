@@ -1,16 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted } from "vue";
 import { RouterView, useRoute } from "vue-router";
 import { Toaster } from "vue-sonner";
 import AgentChatLauncher from "./components/AgentChatLauncher.vue";
 import AppSideNav from "./components/AppSideNav.vue";
-import { useCookieConsent } from "./composables/useCookieConsent";
-import { syncPosthogConsent } from "./composables/usePosthog";
 import { useAuthStore } from "./stores/auth";
 
 const route = useRoute();
 const auth = useAuthStore();
-const { consent, initCookieConsent } = useCookieConsent();
 
 const showAppShell = computed(
   () => auth.isAuthenticated && route.meta.requiresAuth === true,
@@ -20,19 +17,9 @@ const showAgentLauncher = computed(
   () => auth.isAuthenticated && !route.path.startsWith("/email"),
 );
 
-initCookieConsent();
-
 onMounted(async () => {
   await auth.ensureInitialized();
 });
-
-watch(
-  () => consent.value?.marketing ?? false,
-  (marketingEnabled) => {
-    syncPosthogConsent(marketingEnabled);
-  },
-  { immediate: true },
-);
 </script>
 
 <template>

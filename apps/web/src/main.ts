@@ -4,8 +4,6 @@ import router from './router'
 import App from './App.vue'
 import './styles/main.css'
 import 'vue-sonner/style.css'
-import { initPosthog } from './composables/usePosthog'
-import { useCookieConsent } from './composables/useCookieConsent'
 import { useTheme } from './composables/useTheme'
 import { registerServiceWorker } from './registerServiceWorker'
 
@@ -19,10 +17,8 @@ declare global {
 
 const app = createApp(App)
 const { initTheme } = useTheme()
-const { initCookieConsent } = useCookieConsent()
 
 initTheme()
-initCookieConsent()
 
 const pinia = createPinia()
 app.use(pinia)
@@ -52,7 +48,6 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
 
 app.use(router)
 
-initPosthog(router)
 registerServiceWorker()
 
 app.mount('#app')
