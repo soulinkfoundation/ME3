@@ -1,0 +1,39 @@
+name = "me3"
+main = "apps/worker/src/index.ts"
+compatibility_date = "2024-04-01"
+
+[[durable_objects.bindings]]
+name = "ME3_USER_AGENT"
+class_name = "Me3UserAgent"
+
+[[migrations]]
+tag = "2026-05-11-me3-core-user-agent"
+new_sqlite_classes = ["Me3UserAgent"]
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "me3-core-db"
+database_id = "replace-with-generated-d1-id"
+migrations_dir = "apps/worker/migrations"
+
+[assets]
+directory = "apps/web/dist"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/health", "/.well-known/*"]
+not_found_handling = "single-page-application"
+
+[vars]
+ENVIRONMENT = "production"
+CORE_WEB_ORIGIN = "https://your-me3-worker.your-subdomain.workers.dev"
+CORE_API_ORIGIN = "https://your-me3-worker.your-subdomain.workers.dev"
+ME3_AI_DEFAULT_PROVIDER = "workers-ai"
+ME3_AI_DEFAULT_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+ME3_AI_CHAT_PROVIDER = "workers-ai"
+ME3_AI_CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+ME3_AI_REASONING_PROVIDER = "workers-ai"
+ME3_AI_REASONING_MODEL = "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"
+ME3_AI_EXTRACTION_PROVIDER = "workers-ai"
+ME3_AI_EXTRACTION_MODEL = "@cf/meta/llama-3.1-8b-instruct"

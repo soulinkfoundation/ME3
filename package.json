@@ -11,13 +11,44 @@
     "setup:dev-vars": "node scripts/create-dev-vars.mjs",
     "verify:local-boot": "node scripts/verify-local-boot.mjs",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
+    "deploy": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
   },
   "devDependencies": {
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "wrangler": "^4.87.0"
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "D1 database for ME3 Core owner profile, assistant messages, and install metadata. Cloudflare should provision this during template deploy."
+      },
+      "ME3_USER_AGENT": {
+        "description": "Durable Object namespace for the future per-owner ME3 agent runtime."
+      },
+      "AI": {
+        "description": "Optional Workers AI binding. If you do not use Workers AI, configure OpenAI or Anthropic keys after install."
+      },
+      "JWT_SECRET": {
+        "description": "Generate a random auth signing secret, for example `openssl rand -base64 32`."
+      },
+      "TOKEN_ENCRYPTION_KEY": {
+        "description": "Generate a 32-byte base64 key for encrypting owner/provider tokens, for example `openssl rand -base64 32`."
+      },
+      "ADMIN_BOOTSTRAP_CODE": {
+        "description": "Generate a one-time local owner bootstrap code, for example `openssl rand -hex 16`."
+      },
+      "OPENAI_API_KEY": {
+        "description": "Optional owner-supplied OpenAI API key for chat/model providers."
+      },
+      "ANTHROPIC_API_KEY": {
+        "description": "Optional owner-supplied Anthropic API key for Claude/model providers."
+      }
+    }
   }
 }

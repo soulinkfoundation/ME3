@@ -2,6 +2,10 @@
 
 Private extraction scaffold for the installable ME3 Core personal/business AI assistant.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Soulink-Foundation/me3)
+
+The deploy button works after this repository is public. While the repo is private, use the local flow below.
+
 This repository is intentionally small at first. It is not a raw split of `me3-app`; it is the curated first slice that will become a bootable Cloudflare install template.
 
 ## First Slice
@@ -57,3 +61,30 @@ It intentionally excludes production `me3.app` routes, production Cloudflare acc
 - `ADMIN_BOOTSTRAP_CODE`
 
 Owner-supplied providers such as OpenAI, Anthropic, Postmark, Stripe, OAuth, and search remain blank until an install owner configures them.
+
+## Cloudflare Deploy Template
+
+The root `wrangler.toml` is the deploy-template config for Cloudflare Workers Builds and the Deploy to Cloudflare button. It defines:
+
+- Worker entrypoint: `apps/worker/src/index.ts`
+- Static web assets: `apps/web/dist`
+- SPA fallback for copied Vue routes
+- Worker-first routes for `/api/*`, `/health`, and `/.well-known/*`
+- D1 binding and migration directory
+- `ME3_USER_AGENT` Durable Object namespace
+- optional Workers AI binding
+- public origin/model defaults
+
+Cloudflare should provision supported resources from the Wrangler config during template deployment. Required install secrets are described in `package.json` and listed in `apps/worker/.dev.vars.example`.
+
+Manual deploy shape:
+
+```bash
+pnpm install
+pnpm setup:dev-vars
+pnpm build
+wrangler d1 migrations apply DB --remote --config wrangler.toml
+wrangler deploy --config wrangler.toml
+```
+
+The `pnpm deploy` script runs the build, remote D1 migration, and Worker deploy in sequence. Use it only after authenticating Wrangler and confirming the generated Cloudflare resource names/IDs.
