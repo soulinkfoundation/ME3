@@ -90,6 +90,7 @@ const storageLoading = ref(false);
 const storageMigrating = ref(false);
 const storageError = ref("");
 const storageMessage = ref("");
+const storageExpanded = ref(false);
 
 const storageModeLabel = computed(() =>
   storageStatus.value?.activeMediaStorage === "r2"
@@ -966,78 +967,111 @@ Note: Opening index.html directly (file://) won't work due to browser security.
       />
 
       <section class="storage-section" aria-labelledby="site-storage-title">
-        <div class="storage-header">
-          <div>
+        <button
+          class="storage-header"
+          type="button"
+          :aria-expanded="storageExpanded"
+          aria-controls="site-storage-panel"
+          @click="storageExpanded = !storageExpanded"
+        >
+          <div class="storage-title">
             <h2 id="site-storage-title">Storage</h2>
-            <p>
-              Media uploads use {{ storageModeLabel }}. Add R2 when this site
-              grows beyond small images and lightweight pages.
-            </p>
+            <p>{{ storageModeLabel }} for this site's uploads and files.</p>
           </div>
-          <span
-            class="storage-badge"
-            :class="{ 'storage-badge--r2': r2Enabled }"
-          >
-            {{ r2Enabled ? "R2 ready" : "D1 default" }}
+          <span class="storage-header-actions">
+            <span
+              class="storage-badge"
+              :class="{ 'storage-badge--r2': r2Enabled }"
+            >
+              {{ r2Enabled ? "Large-site storage on" : "Default storage" }}
+            </span>
+            <UiIcon
+              name="ChevronDown"
+              :size="18"
+              class="storage-chevron"
+              :class="{ 'storage-chevron--open': storageExpanded }"
+            />
           </span>
-        </div>
+        </button>
 
-        <div v-if="storageLoading" class="storage-loading">
-          Loading storage status...
-        </div>
-        <template v-else>
-          <div class="storage-grid">
-            <div class="storage-stat">
-              <span>D1 files</span>
-              <strong>{{ storageStatus?.d1.files || 0 }}</strong>
-              <p>{{ formatBytes(storageStatus?.d1.bytes) }}</p>
-            </div>
-            <div class="storage-stat">
-              <span>D1 media</span>
-              <strong>{{ storageStatus?.d1.mediaFiles || 0 }}</strong>
-              <p>{{ formatBytes(storageStatus?.d1.mediaBytes) }}</p>
-            </div>
-            <div class="storage-stat">
-              <span>R2 media</span>
-              <strong>{{ storageStatus?.r2.files || 0 }}</strong>
-              <p>{{ formatBytes(storageStatus?.r2.bytes) }}</p>
-            </div>
+        <div
+          v-show="storageExpanded"
+          id="site-storage-panel"
+          class="storage-panel"
+        >
+          <div v-if="storageLoading" class="storage-loading">
+            Loading storage status...
           </div>
+          <template v-else>
+            <div class="storage-grid">
+              <div class="storage-stat">
+                <span>D1 files</span>
+                <strong>{{ storageStatus?.d1.files || 0 }}</strong>
+                <p>{{ formatBytes(storageStatus?.d1.bytes) }}</p>
+              </div>
+              <div class="storage-stat">
+                <span>D1 media</span>
+                <strong>{{ storageStatus?.d1.mediaFiles || 0 }}</strong>
+                <p>{{ formatBytes(storageStatus?.d1.mediaBytes) }}</p>
+              </div>
+              <div class="storage-stat">
+                <span>R2 media</span>
+                <strong>{{ storageStatus?.r2.files || 0 }}</strong>
+                <p>{{ formatBytes(storageStatus?.r2.bytes) }}</p>
+              </div>
+            </div>
 
-          <div v-if="!r2Enabled" class="storage-config">
-            <p>
-              To enable large-site storage, create an R2 bucket and bind it to
-              this Worker as <code>SITE_ASSETS</code>.
-            </p>
-            <pre><code>[[r2_buckets]]
+            <div v-if="!r2Enabled" class="storage-config">
+              <p>
+                For sites with lots of images or large files, add extra storage:
+              </p>
+              <ol class="storage-steps">
+                <li>
+                  Open
+                  <a
+                    href="https://dash.cloudflare.com/?to=/:account/r2"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    R2 in Cloudflare
+                  </a>
+                  and create a bucket.
+                </li>
+                <li>
+                  In this Worker's settings, add an R2 bucket binding named
+                  <code>SITE_ASSETS</code>.
+                </li>
+                <li>Redeploy ME3 Core, then come back here to check it.</li>
+              </ol>
+              <pre><code>[[r2_buckets]]
 binding = "SITE_ASSETS"
 bucket_name = "me3-site-assets"</code></pre>
-          </div>
+            </div>
 
-          <div v-else class="storage-actions">
-            <button
-              type="button"
-              class="button secondary"
-              :disabled="storageMigrating || !hasD1MediaToMigrate"
-              @click="migrateMediaToR2"
-            >
-              {{
-                storageMigrating
-                  ? "Moving media..."
-                  : hasD1MediaToMigrate
-                    ? "Move D1 media to R2"
-                    : "Media already on R2"
-              }}
-            </button>
-            <p>
-              New media uploads will use R2 automatically while page metadata
-              and manifests stay in D1.
-            </p>
-          </div>
-        </template>
+            <div v-else class="storage-actions">
+              <button
+                type="button"
+                class="button secondary"
+                :disabled="storageMigrating || !hasD1MediaToMigrate"
+                @click="migrateMediaToR2"
+              >
+                {{
+                  storageMigrating
+                    ? "Moving media..."
+                    : hasD1MediaToMigrate
+                      ? "Move existing media"
+                      : "Existing media is ready"
+                }}
+              </button>
+              <p>
+                New uploads now use large-site storage automatically.
+              </p>
+            </div>
+          </template>
 
-        <p v-if="storageError" class="error">{{ storageError }}</p>
-        <p v-if="storageMessage" class="success">{{ storageMessage }}</p>
+          <p v-if="storageError" class="error">{{ storageError }}</p>
+          <p v-if="storageMessage" class="success">{{ storageMessage }}</p>
+        </div>
       </section>
 
       <!-- Newsletter Subscribers -->
@@ -1485,17 +1519,27 @@ bucket_name = "me3-site-assets"</code></pre>
 
 .storage-section {
   margin-bottom: 32px;
-  padding: 20px;
   background: var(--color-border);
   border-radius: 12px;
+  overflow: hidden;
 }
 
 .storage-header {
+  width: 100%;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  padding: 20px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.storage-title {
+  min-width: 0;
 }
 
 .storage-header h2 {
@@ -1513,6 +1557,13 @@ bucket_name = "me3-site-assets"</code></pre>
   line-height: 1.45;
 }
 
+.storage-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .storage-badge {
   flex-shrink: 0;
   padding: 4px 10px;
@@ -1526,6 +1577,19 @@ bucket_name = "me3-site-assets"</code></pre>
 .storage-badge--r2 {
   background: #e8f5e9;
   color: #2e7d32;
+}
+
+.storage-chevron {
+  color: var(--color-text-muted);
+  transition: transform 0.16s ease;
+}
+
+.storage-chevron--open {
+  transform: rotate(180deg);
+}
+
+.storage-panel {
+  padding: 0 20px 20px;
 }
 
 .storage-grid {
@@ -1564,6 +1628,26 @@ bucket_name = "me3-site-assets"</code></pre>
 .storage-actions {
   display: grid;
   gap: 12px;
+}
+
+.storage-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.storage-steps a {
+  color: var(--color-accent, var(--color-text));
+  font-weight: 700;
+}
+
+.storage-steps code {
+  color: var(--color-text);
+  font-size: 0.95em;
 }
 
 .storage-config pre {
@@ -1854,6 +1938,11 @@ bucket_name = "me3-site-assets"</code></pre>
 
   .storage-header {
     flex-direction: column;
+  }
+
+  .storage-header-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .storage-grid {
