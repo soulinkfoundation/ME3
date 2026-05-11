@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import app from "./index";
-import type { Env, OwnerProfile } from "./types";
+import type { DbMailboxAlias, Env, OwnerProfile } from "./types";
 
 type StoredMessage = {
   id: string;
@@ -10,11 +10,36 @@ type StoredMessage = {
 };
 
 type StoredOwner = OwnerProfile & { password_hash: string | null };
+type StoredTelegramConnection = {
+  id: string;
+  user_id: string;
+  channel: "telegram";
+  status: "pending" | "active" | "disconnected";
+  setup_token: string;
+  telegram_user_id: string | null;
+  telegram_chat_id: string | null;
+  telegram_username: string | null;
+  telegram_first_name: string | null;
+  telegram_last_name: string | null;
+  connected_at: string | null;
+  disconnected_at: string | null;
+  last_inbound_at: string | null;
+  last_outbound_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
-function createEnv(): Env & { owner: StoredOwner | null; messages: StoredMessage[] } {
+function createEnv(): Env & {
+  owner: StoredOwner | null;
+  messages: StoredMessage[];
+  mailbox: DbMailboxAlias | null;
+  telegramConnection: StoredTelegramConnection | null;
+} {
   const state = {
     owner: null as StoredOwner | null,
     messages: [] as StoredMessage[],
+    mailbox: null as DbMailboxAlias | null,
+    telegramConnection: null as StoredTelegramConnection | null,
   };
 
   const db = {
@@ -61,6 +86,83 @@ function createEnv(): Env & { owner: StoredOwner | null; messages: StoredMessage
                 });
               }
 
+              if (sql.includes("INSERT INTO mailbox_aliases")) {
+                state.mailbox = {
+                  id: values[0] as string,
+                  user_id: values[1] as string,
+                  alias_local_part: values[2] as string,
+                  forwarding_email: values[3] as string,
+                  forwarding_status: values[4] as DbMailboxAlias["forwarding_status"],
+                  forwarding_enabled: values[5] as number,
+                  forwarding_mode: values[6] as DbMailboxAlias["forwarding_mode"],
+                  status: "pending_setup",
+                  approval_policy: "all",
+                  daily_inbound_limit: 25,
+                  daily_outbound_limit: 25,
+                  activated_at: null,
+                  cf_destination_id: null,
+                  cf_destination_verified_at: null,
+                  cf_rule_id: null,
+                  cf_last_synced_at: null,
+                  cf_last_error: null,
+                  created_at: values[7] as string,
+                  updated_at: values[8] as string,
+                };
+              }
+
+              if (sql.includes("UPDATE mailbox_aliases") && state.mailbox) {
+                if (sql.includes("alias_local_part = ?")) {
+                  state.mailbox.alias_local_part = values[0] as string;
+                  state.mailbox.forwarding_email = values[1] as string;
+                  state.mailbox.forwarding_status = values[2] as DbMailboxAlias["forwarding_status"];
+                  state.mailbox.forwarding_enabled = values[3] as number;
+                  state.mailbox.forwarding_mode = values[4] as DbMailboxAlias["forwarding_mode"];
+                  state.mailbox.updated_at = values[5] as string;
+                } else if (sql.includes("status = 'active'")) {
+                  state.mailbox.status = "active";
+                  state.mailbox.activated_at = state.mailbox.activated_at || (values[0] as string);
+                  state.mailbox.updated_at = values[1] as string;
+                } else if (sql.includes("status = 'paused'")) {
+                  state.mailbox.status = "paused";
+                  state.mailbox.updated_at = values[0] as string;
+                }
+              }
+
+              if (sql.includes("INSERT INTO agent_channel_connections")) {
+                state.telegramConnection = {
+                  id: (state.telegramConnection?.id || values[0]) as string,
+                  user_id: values[1] as string,
+                  channel: "telegram",
+                  status: "pending",
+                  setup_token: values[2] as string,
+                  telegram_user_id: null,
+                  telegram_chat_id: null,
+                  telegram_username: null,
+                  telegram_first_name: null,
+                  telegram_last_name: null,
+                  connected_at: null,
+                  disconnected_at: null,
+                  last_inbound_at: null,
+                  last_outbound_at: null,
+                  created_at: "2026-05-11T10:00:00Z",
+                  updated_at: "2026-05-11T10:00:00Z",
+                };
+              }
+
+              if (sql.includes("UPDATE agent_channel_connections") && state.telegramConnection) {
+                state.telegramConnection = {
+                  ...state.telegramConnection,
+                  status: "disconnected",
+                  telegram_user_id: null,
+                  telegram_chat_id: null,
+                  telegram_username: null,
+                  telegram_first_name: null,
+                  telegram_last_name: null,
+                  disconnected_at: "2026-05-11T10:05:00Z",
+                  updated_at: "2026-05-11T10:05:00Z",
+                };
+              }
+
               return { success: true };
             },
             async first<T>() {
@@ -75,7 +177,23 @@ function createEnv(): Env & { owner: StoredOwner | null; messages: StoredMessage
               if (sql.includes("FROM owner_profile") && values[0] === state.owner?.id) {
                 return state.owner as T;
               }
+              if (sql.includes("FROM mailbox_aliases")) {
+                return state.mailbox && values[0] === state.mailbox.user_id
+                  ? (state.mailbox as T)
+                  : null;
+              }
+              if (sql.includes("FROM agent_channel_connections")) {
+                return state.telegramConnection && values[0] === state.telegramConnection.user_id
+                  ? (state.telegramConnection as T)
+                  : null;
+              }
               return null;
+            },
+            async all<T>() {
+              if (sql.includes("FROM agent_channel_events")) {
+                return { results: [] as T[] };
+              }
+              return { results: [] as T[] };
             },
           };
         },
@@ -84,7 +202,27 @@ function createEnv(): Env & { owner: StoredOwner | null; messages: StoredMessage
   };
 
   return {
-    ...state,
+    get owner() {
+      return state.owner;
+    },
+    set owner(value: StoredOwner | null) {
+      state.owner = value;
+    },
+    get messages() {
+      return state.messages;
+    },
+    get mailbox() {
+      return state.mailbox;
+    },
+    set mailbox(value: DbMailboxAlias | null) {
+      state.mailbox = value;
+    },
+    get telegramConnection() {
+      return state.telegramConnection;
+    },
+    set telegramConnection(value: StoredTelegramConnection | null) {
+      state.telegramConnection = value;
+    },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
     CORE_WEB_ORIGIN: "http://localhost:5174",
@@ -92,6 +230,7 @@ function createEnv(): Env & { owner: StoredOwner | null; messages: StoredMessage
     JWT_SECRET: "test-secret-at-least-long-enough",
     TOKEN_ENCRYPTION_KEY: "test-encryption-key",
     ADMIN_BOOTSTRAP_CODE: "owner-code",
+    TELEGRAM_BOT_USERNAME: "me3_core_test_bot",
   };
 }
 
@@ -347,6 +486,46 @@ describe("ME3 Core Worker auth", () => {
     expect(body.user.localeSource).toBe("explicit");
   });
 
+  it("creates and updates Core mailbox settings", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const createResponse = await app.fetch(
+      new Request("http://localhost/api/mailbox", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          aliasLocalPart: "Owner.Mail",
+          forwardingEnabled: true,
+          forwardingEmail: "inbox@example.com",
+        }),
+      }),
+      env,
+    );
+    const createBody = (await createResponse.json()) as {
+      mailbox: { aliasAddress: string; forwardingEnabled: boolean };
+      sources: { address: string }[];
+    };
+
+    expect(createResponse.status).toBe(200);
+    expect(createBody.mailbox.aliasAddress).toBe("owner.mail@me3.local");
+    expect(createBody.mailbox.forwardingEnabled).toBe(true);
+    expect(createBody.sources).toMatchObject([{ address: "owner.mail@me3.local" }]);
+
+    const activateResponse = await app.fetch(
+      new Request("http://localhost/api/mailbox/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    expect(activateResponse.status).toBe(200);
+    expect(env.mailbox?.status).toBe("active");
+  });
+
   it("deletes the owner account and clears the session cookie", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
@@ -362,5 +541,86 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(200);
     expect(env.owner).toBeNull();
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+
+  it("prepares a Core Telegram setup connection", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/telegram/setup", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      configured: boolean;
+      startUrl: string;
+      connection: { status: string; telegramUsername: string | null };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.configured).toBe(true);
+    expect(body.startUrl).toContain("https://t.me/me3_core_test_bot?start=");
+    expect(body.connection.status).toBe("pending");
+    expect(body.connection.telegramUsername).toBeNull();
+  });
+
+  it("reports unavailable Telegram setup when the Core bot username is not configured", async () => {
+    const env = createEnv();
+    env.TELEGRAM_BOT_USERNAME = undefined;
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/telegram/setup", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: "Telegram bot username is not configured",
+    });
+  });
+
+  it("disconnects an active Telegram account-level connection", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/telegram/setup", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    env.telegramConnection = {
+      ...env.telegramConnection!,
+      status: "active",
+      telegram_user_id: "123",
+      telegram_chat_id: "456",
+      telegram_username: "owner",
+      connected_at: "2026-05-11T10:01:00Z",
+    };
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/telegram/disconnect", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      disconnected: boolean;
+      connection: { status: string; telegramUsername: string | null };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.disconnected).toBe(true);
+    expect(body.connection.status).toBe("disconnected");
+    expect(body.connection.telegramUsername).toBeNull();
   });
 });

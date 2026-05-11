@@ -2,11 +2,6 @@
 import { definePage } from "unplugin-vue-router/runtime";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import {
-  AGENT_LOCALE_OPTIONS,
-  getAgentLocaleDisplayLabel,
-  inferLocaleFromTimeZone,
-} from "../../../../shared/agent-locales";
 import { api } from "../api";
 import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
 import { useAuthStore } from "../stores/auth";
@@ -42,6 +37,71 @@ type AccountResponse = {
   };
 };
 
+type MailboxRecord = {
+  id: string;
+  aliasLocalPart: string;
+  aliasAddress: string;
+  forwardingEmail: string;
+  forwardingStatus: "pending" | "verified";
+  forwardingEnabled: boolean;
+  forwardingMode: "me3_only" | "forward";
+  status: "pending_setup" | "active" | "paused";
+  approvalPolicy: "all";
+  dailyInboundLimit: number;
+  dailyOutboundLimit: number;
+  activatedAt: string | null;
+  forwardingVerifiedAt: string | null;
+  cloudflareDestinationId: string | null;
+  cloudflareRuleId: string | null;
+  cloudflareLastSyncedAt: string | null;
+  cloudflareLastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type MailboxActivity = {
+  id: string;
+  direction: "inbound" | "outbound";
+  kind: "email" | "draft" | "system";
+  status:
+    | "received"
+    | "forwarded"
+    | "pending_approval"
+    | "approved"
+    | "rejected"
+    | "sent"
+    | "failed"
+    | "dropped";
+  subject: string;
+  preview: string;
+  forwardedTo: string | null;
+  errorMessage: string | null;
+  receivedAt: string | null;
+  approvedAt: string | null;
+  sentAt: string | null;
+  createdAt: string;
+};
+
+type MailboxSource = {
+  id: string;
+  type: "me3_alias" | "custom_domain" | "external_forward";
+  address: string;
+  status: "pending" | "active" | "paused" | "failed";
+  inboundEnabled: boolean;
+  outboundEnabled: boolean;
+};
+
+type MailboxResponse = {
+  tier: "core";
+  available: boolean;
+  approvalRequired: boolean;
+  cloudflareManaged: boolean;
+  suggestedAliasLocalPart: string;
+  mailbox: MailboxRecord | null;
+  sources: MailboxSource[];
+  recentActivity: MailboxActivity[];
+};
+
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
@@ -50,8 +110,6 @@ const loading = ref(false);
 const saving = ref(false);
 const timezoneInput = ref("");
 const savedTimezoneInput = ref("");
-const localeInput = ref("");
-const savedLocaleInput = ref("");
 const message = ref<string | null>(null);
 const error = ref<string | null>(null);
 const showDeleteModal = ref(false);
@@ -59,6 +117,20 @@ const deleteConfirmInput = ref("");
 const deleteLoading = ref(false);
 const deleteError = ref<string | null>(null);
 const supportedTimeZones = listSupportedTimeZones();
+const mailboxLoading = ref(false);
+const mailboxSaving = ref(false);
+const mailboxActivating = ref(false);
+const mailboxPausing = ref(false);
+const mailboxAvailable = ref(false);
+const mailboxCloudflareManaged = ref(false);
+const mailbox = ref<MailboxRecord | null>(null);
+const mailboxAliasInput = ref("");
+const mailboxForwardingEmail = ref("");
+const mailboxForwardingEnabled = ref(false);
+const mailboxSources = ref<MailboxSource[]>([]);
+const mailboxRecentActivity = ref<MailboxActivity[]>([]);
+const mailboxMessage = ref<string | null>(null);
+const mailboxError = ref<string | null>(null);
 
 const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
   null,
@@ -69,31 +141,6 @@ const openSection = ref({
   regional: false,
   mailbox: false,
   telegram: false,
-});
-
-const effectiveLocaleValue = computed(
-  () => localeInput.value || inferLocaleFromTimeZone(timezoneInput.value),
-);
-
-const effectiveLocaleLabel = computed(() =>
-  getAgentLocaleDisplayLabel(effectiveLocaleValue.value),
-);
-
-const localeOptions = computed(() => {
-  const currentValue = localeInput.value || auth.user?.locale || "";
-  if (
-    !currentValue ||
-    AGENT_LOCALE_OPTIONS.some((option) => option.value === currentValue)
-  ) {
-    return AGENT_LOCALE_OPTIONS;
-  }
-  return [
-    {
-      value: currentValue,
-      label: getAgentLocaleDisplayLabel(currentValue),
-    },
-    ...AGENT_LOCALE_OPTIONS,
-  ];
 });
 
 const timezoneDisplay = computed(() => {
@@ -107,8 +154,53 @@ const saveDisabled = computed(
     saving.value ||
     !timezoneInput.value ||
     !isValidTimeZone(timezoneInput.value) ||
-    (timezoneInput.value === savedTimezoneInput.value &&
-      localeInput.value === savedLocaleInput.value),
+    timezoneInput.value === savedTimezoneInput.value,
+);
+
+const mailboxConfigured = computed(() => mailbox.value !== null);
+
+const mailboxAliasDomain = computed(() => {
+  const address = mailbox.value?.aliasAddress || "";
+  const atIndex = address.indexOf("@");
+  return atIndex >= 0 ? address.slice(atIndex) : "@me3.local";
+});
+
+const mailboxStatusLabel = computed(() => {
+  if (!mailbox.value) return "Not configured";
+
+  switch (mailbox.value.status) {
+    case "active":
+      return "Active";
+    case "paused":
+      return "Paused";
+    default:
+      return "Needs activation";
+  }
+});
+
+const mailboxStatusHint = computed(() => {
+  if (!mailbox.value) {
+    return "Reserve a local Core alias for inbound capture and approval-first outbound drafts.";
+  }
+
+  if (mailbox.value.status === "active") {
+    return mailbox.value.forwardingEnabled
+      ? `Mail stays in ME3 Core and forwards a copy to ${mailbox.value.forwardingEmail}.`
+      : "Mail is kept in ME3 Core without forwarding a copy.";
+  }
+
+  if (mailbox.value.status === "paused") {
+    return "Mailbox capture is paused. Resume it when you want inbound mail handling again.";
+  }
+
+  return "Alias saved. Activate it when this Core install is ready to handle mailbox traffic.";
+});
+
+const mailboxSaveDisabled = computed(
+  () =>
+    mailboxSaving.value ||
+    !mailboxAliasInput.value.trim() ||
+    (mailboxForwardingEnabled.value && !mailboxForwardingEmail.value.trim()),
 );
 
 const telegramStatusLabel = computed(() => {
@@ -135,9 +227,6 @@ function syncAccount(response: AccountResponse) {
   });
   timezoneInput.value = response.user.timezone || "";
   savedTimezoneInput.value = timezoneInput.value;
-  localeInput.value =
-    response.user.localeSource === "explicit" ? response.user.locale : "";
-  savedLocaleInput.value = localeInput.value;
 }
 
 async function loadAccount() {
@@ -172,7 +261,7 @@ async function saveSettings() {
   try {
     const response = await api.put<AccountResponse>("/account", {
       timezone: timezoneInput.value,
-      locale: localeInput.value || null,
+      locale: null,
     });
     syncAccount(response);
     message.value = "Regional settings updated.";
@@ -181,6 +270,110 @@ async function saveSettings() {
   } finally {
     saving.value = false;
   }
+}
+
+function syncMailboxInputs(response: MailboxResponse) {
+  mailboxAvailable.value = response.available;
+  mailboxCloudflareManaged.value = response.cloudflareManaged;
+  mailbox.value = response.mailbox;
+  mailboxAliasInput.value =
+    response.mailbox?.aliasLocalPart || response.suggestedAliasLocalPart || "";
+  mailboxForwardingEnabled.value = Boolean(response.mailbox?.forwardingEnabled);
+  mailboxForwardingEmail.value =
+    response.mailbox?.forwardingEmail || auth.user?.email || "";
+  mailboxSources.value = response.sources || [];
+  mailboxRecentActivity.value = response.recentActivity || [];
+}
+
+async function loadMailbox() {
+  mailboxLoading.value = true;
+  mailboxError.value = null;
+
+  try {
+    const response = await api.get<MailboxResponse>("/mailbox");
+    syncMailboxInputs(response);
+  } catch (e: any) {
+    mailboxError.value = e.message || "Failed to load mailbox";
+  } finally {
+    mailboxLoading.value = false;
+  }
+}
+
+async function refreshMailbox() {
+  const response = await api.get<MailboxResponse>("/mailbox");
+  syncMailboxInputs(response);
+}
+
+async function saveMailbox() {
+  if (mailboxSaveDisabled.value) return;
+
+  mailboxSaving.value = true;
+  mailboxMessage.value = null;
+  mailboxError.value = null;
+
+  try {
+    await api.put("/mailbox", {
+      aliasLocalPart: mailboxAliasInput.value,
+      forwardingEmail: mailboxForwardingEnabled.value
+        ? mailboxForwardingEmail.value
+        : null,
+      forwardingEnabled: mailboxForwardingEnabled.value,
+    });
+    await refreshMailbox();
+    mailboxMessage.value = mailboxForwardingEnabled.value
+      ? "Mailbox settings saved. Core will keep mail and forward a copy."
+      : "Mailbox settings saved. New mail will stay in ME3 Core.";
+  } catch (e: any) {
+    mailboxError.value = e.message || "Failed to save mailbox";
+  } finally {
+    mailboxSaving.value = false;
+  }
+}
+
+async function activateMailbox() {
+  if (mailboxActivating.value || !mailboxConfigured.value) return;
+
+  mailboxActivating.value = true;
+  mailboxMessage.value = null;
+  mailboxError.value = null;
+
+  try {
+    await api.post("/mailbox/activate", {});
+    await refreshMailbox();
+    mailboxMessage.value = "Mailbox activated.";
+  } catch (e: any) {
+    mailboxError.value = e.message || "Failed to activate mailbox";
+  } finally {
+    mailboxActivating.value = false;
+  }
+}
+
+async function pauseMailbox() {
+  if (mailboxPausing.value) return;
+
+  mailboxPausing.value = true;
+  mailboxMessage.value = null;
+  mailboxError.value = null;
+
+  try {
+    await api.post("/mailbox/pause", {});
+    await refreshMailbox();
+    mailboxMessage.value = "Mailbox paused.";
+  } catch (e: any) {
+    mailboxError.value = e.message || "Failed to pause mailbox";
+  } finally {
+    mailboxPausing.value = false;
+  }
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) return "Not yet";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 async function logout() {
@@ -220,6 +413,7 @@ async function deleteAccount() {
 
 onMounted(async () => {
   await loadAccount();
+  void loadMailbox();
   if (route.query.section === "telegram") {
     openSection.value.telegram = true;
   }
@@ -288,7 +482,7 @@ onMounted(async () => {
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Regional settings</h2>
               <span class="accordion-header-hint">
-                {{ effectiveLocaleLabel }}
+                {{ timezoneDisplay }}
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -325,36 +519,6 @@ onMounted(async () => {
                   </option>
                 </datalist>
               </label>
-
-              <label class="field">
-                <span>Agent locale</span>
-                <select v-model="localeInput" class="input">
-                  <option value="">
-                    Use timezone default ({{ effectiveLocaleLabel }})
-                  </option>
-                  <option
-                    v-for="option in localeOptions"
-                    :key="option.value"
-                    :value="option.value"
-                  >
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-
-              <div class="timezone-summary">
-                <span class="timezone-summary-label">Current timezone</span>
-                <strong>{{ timezoneDisplay }}</strong>
-                <span class="timezone-summary-label">Agent locale</span>
-                <strong>{{ effectiveLocaleLabel }}</strong>
-                <span class="timezone-summary-label">
-                  {{
-                    localeInput
-                      ? "Saved explicitly."
-                      : `Defaulting from ${timezoneInput || "UTC"}.`
-                  }}
-                </span>
-              </div>
             </div>
 
             <div class="button-row">
@@ -391,10 +555,24 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Mailbox settings</h2>
-              <span class="status-badge active">Core</span>
-              <span class="accordion-header-hint">
-                Account-level mailbox configuration is being tracked for Core.
-              </span>
+              <template v-if="mailboxAvailable">
+                <span
+                  class="status-badge"
+                  :class="mailbox?.status || 'pending_setup'"
+                >
+                  {{ mailboxStatusLabel }}
+                </span>
+                <span v-if="mailbox" class="status-pill">
+                  {{
+                    mailbox.forwardingStatus === "verified"
+                      ? "Verified"
+                      : "Local"
+                  }}
+                </span>
+                <span class="accordion-header-hint">
+                  {{ mailboxStatusHint }}
+                </span>
+              </template>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -405,18 +583,180 @@ onMounted(async () => {
             aria-labelledby="account-trigger-mailbox"
             :hidden="!openSection.mailbox"
           >
-            <div class="recommended-card">
-              <span class="recommended-pill">Core follow-up</span>
-              <h3>Mailbox configuration belongs in ME3 Core</h3>
+            <div v-if="mailboxLoading" class="status-row">Loading mailbox...</div>
+
+            <template v-else-if="mailboxAvailable">
               <p class="hint">
-                The account surface should expose alias, source, forwarding,
-                and mailbox health controls without hosted-only billing or
-                production Cloudflare routing assumptions.
+                Configure the Core-owned mailbox alias and delivery behavior for
+                this install. Hosted billing and production Cloudflare routing
+                stay outside the scaffold.
               </p>
-              <router-link class="button secondary link-button-inline" to="/email">
-                Open mailbox
-              </router-link>
-            </div>
+
+              <div class="mailbox-grid">
+                <label class="field">
+                  <span>Alias</span>
+                  <div class="alias-field">
+                    <input
+                      v-model="mailboxAliasInput"
+                      class="input"
+                      type="text"
+                      placeholder="owner"
+                      autocapitalize="off"
+                      spellcheck="false"
+                    />
+                    <span class="alias-suffix">{{ mailboxAliasDomain }}</span>
+                  </div>
+                </label>
+
+                <label class="field">
+                  <span>Delivery</span>
+                  <label class="mailbox-toggle">
+                    <input v-model="mailboxForwardingEnabled" type="checkbox" />
+                    <span>Forward a copy to another inbox</span>
+                  </label>
+                  <input
+                    v-if="mailboxForwardingEnabled"
+                    v-model="mailboxForwardingEmail"
+                    class="input"
+                    type="email"
+                    placeholder="you@example.com"
+                  />
+                  <p v-else class="field-hint">
+                    Keep incoming mail in ME3 Core only.
+                  </p>
+                </label>
+              </div>
+
+              <div class="button-row">
+                <button
+                  class="button secondary"
+                  type="button"
+                  :disabled="mailboxSaveDisabled"
+                  @click="saveMailbox"
+                >
+                  {{ mailboxSaving ? "Saving..." : "Save mailbox settings" }}
+                </button>
+                <button
+                  v-if="mailbox?.status !== 'active'"
+                  class="button primary"
+                  type="button"
+                  :disabled="mailboxActivating || !mailboxConfigured"
+                  @click="activateMailbox"
+                >
+                  {{
+                    mailboxActivating
+                      ? "Activating..."
+                      : mailbox?.status === "paused"
+                        ? "Resume mailbox"
+                        : "Activate mailbox"
+                  }}
+                </button>
+                <button
+                  v-else
+                  class="button secondary"
+                  type="button"
+                  :disabled="mailboxPausing"
+                  @click="pauseMailbox"
+                >
+                  {{ mailboxPausing ? "Pausing..." : "Pause mailbox" }}
+                </button>
+              </div>
+
+              <div v-if="mailbox" class="mailbox-panel">
+                <div class="mailbox-panel-head">
+                  <h3>Mailbox health</h3>
+                  <span class="provider-meta">
+                    {{ mailboxCloudflareManaged ? "Cloudflare managed" : "Core local" }}
+                  </span>
+                </div>
+                <dl class="mailbox-health-list">
+                  <div>
+                    <dt>Alias address</dt>
+                    <dd>{{ mailbox.aliasAddress }}</dd>
+                  </div>
+                  <div>
+                    <dt>Inbound limit</dt>
+                    <dd>{{ mailbox.dailyInboundLimit }} per day</dd>
+                  </div>
+                  <div>
+                    <dt>Outbound limit</dt>
+                    <dd>{{ mailbox.dailyOutboundLimit }} per day</dd>
+                  </div>
+                  <div>
+                    <dt>Activated</dt>
+                    <dd>{{ formatDateTime(mailbox.activatedAt) }}</dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div v-if="mailbox" class="mailbox-panel">
+                <div class="mailbox-panel-head">
+                  <h3>Connected addresses</h3>
+                  <span class="provider-meta">
+                    {{ mailboxSources.length }} address{{
+                      mailboxSources.length === 1 ? "" : "es"
+                    }}
+                  </span>
+                </div>
+                <div v-if="mailboxSources.length" class="mailbox-source-list">
+                  <div
+                    v-for="source in mailboxSources"
+                    :key="source.id"
+                    class="mailbox-source-row"
+                  >
+                    <div class="mailbox-source-main">
+                      <strong>{{ source.address }}</strong>
+                      <span class="provider-meta">
+                        {{ source.type === "me3_alias" ? "ME3 alias" : source.type }}
+                        · {{ source.status }}
+                      </span>
+                    </div>
+                    <span
+                      class="status-badge compact"
+                      :class="source.status"
+                    >
+                      {{ source.outboundEnabled ? "Send enabled" : "Inbound" }}
+                    </span>
+                  </div>
+                </div>
+                <p v-else class="field-hint">
+                  Custom source addresses are not configured in this Core
+                  install yet. The default alias is available after mailbox
+                  settings are saved.
+                </p>
+              </div>
+
+              <div v-if="mailboxRecentActivity.length" class="mailbox-panel">
+                <div class="mailbox-panel-head">
+                  <h3>Recent activity</h3>
+                  <router-link class="provider-meta" to="/email">
+                    Open mailbox
+                  </router-link>
+                </div>
+                <div class="activity-list">
+                  <article
+                    v-for="activity in mailboxRecentActivity.slice(0, 3)"
+                    :key="activity.id"
+                    class="activity-row"
+                  >
+                    <div class="activity-copy">
+                      <strong>{{ activity.subject || "(No subject)" }}</strong>
+                      <p>{{ activity.preview || activity.status }}</p>
+                    </div>
+                    <span class="status-badge compact" :class="activity.status">
+                      {{ activity.status.replace(/_/g, " ") }}
+                    </span>
+                  </article>
+                </div>
+              </div>
+
+              <p v-if="mailboxMessage" class="success">{{ mailboxMessage }}</p>
+              <p v-if="mailboxError" class="error">{{ mailboxError }}</p>
+            </template>
+
+            <p v-else class="error">
+              Mailbox configuration is not available in this Core install.
+            </p>
           </div>
         </section>
 
@@ -663,16 +1003,135 @@ h1 {
   gap: 16px;
 }
 
-.timezone-summary {
+.mailbox-grid {
   display: grid;
-  gap: 4px;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  background: var(--color-bg-subtle);
+  gap: 16px;
 }
 
-.timezone-summary-label {
+.alias-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.alias-field .input {
+  flex: 1;
+}
+
+.alias-suffix {
+  color: var(--color-text-muted);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.mailbox-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mailbox-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-text);
+}
+
+.field-hint {
+  margin: 6px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.mailbox-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+}
+
+.mailbox-panel h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.mailbox-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-meta {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.mailbox-health-list {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.mailbox-health-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+}
+
+.mailbox-health-list dt,
+.mailbox-health-list dd {
+  margin: 0;
+}
+
+.mailbox-health-list dt {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.mailbox-health-list dd {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.mailbox-source-list,
+.activity-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.mailbox-source-row,
+.activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.mailbox-source-main,
+.activity-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mailbox-source-main strong,
+.activity-copy strong {
+  overflow-wrap: anywhere;
+}
+
+.activity-copy p {
+  margin: 0;
   color: var(--color-text-muted);
   font-size: 12px;
 }
@@ -794,16 +1253,45 @@ h1 {
   color: #2e7d32;
 }
 
+.status-badge.forwarded,
+.status-badge.sent,
+.status-badge.approved,
+.status-badge.received {
+  background: rgba(76, 175, 80, 0.14);
+  color: #2e7d32;
+}
+
 .status-badge.pending_setup,
-.status-badge.pending {
+.status-badge.pending,
+.status-badge.pending_approval {
   background: rgba(255, 179, 0, 0.16);
   color: #9a6700;
 }
 
 .status-badge.paused,
-.status-badge.disconnected {
+.status-badge.disconnected,
+.status-badge.rejected,
+.status-badge.failed,
+.status-badge.dropped {
   background: rgba(229, 57, 53, 0.14);
   color: #c62828;
+}
+
+.status-badge.compact {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--color-text);
+  color: var(--color-bg);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .success {
@@ -932,9 +1420,24 @@ h1 {
   }
 
   .danger-card,
-  .email-row {
+  .email-row,
+  .mailbox-source-row,
+  .activity-row {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .alias-field {
+    flex-wrap: wrap;
+  }
+
+  .mailbox-health-list div {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .mailbox-health-list dd {
+    text-align: left;
   }
 
   .email-row .button,

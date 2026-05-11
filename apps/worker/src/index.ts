@@ -2,6 +2,12 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { Me3UserAgent } from "./user-agent";
+import {
+  getLandingPageTemplate,
+  type LandingPageDocument,
+  type LandingPageSection,
+  type LandingPageTemplateId,
+} from "../../../shared/landing-pages";
 import type {
   DbAgentChannelConnection,
   DbAgentChannelEvent,
@@ -24,8 +30,36 @@ type BootstrapBody = Partial<OwnerProfile> & { bootstrapCode?: string; password?
 type LoginBody = { email?: string; password?: string };
 type ChatBody = { message?: string };
 type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
+type MailboxUpdateBody = {
+  aliasLocalPart?: unknown;
+  forwardingEmail?: unknown;
+  forwardingEnabled?: unknown;
+};
+type LandingPageGenerateBody = {
+  username?: string;
+  brief?: string;
+  templateId?: string;
+  heroImage?: string | null;
+  sectionImage?: string | null;
+  feedback?: string | null;
+};
 type SessionPayload = { sub: string; iat: number; exp: number };
 type OwnerRecord = OwnerProfile & { password_hash: string | null };
+type PublishManifest = {
+  version: 1;
+  sourceFiles: Record<string, string>;
+  assetFiles: Record<string, string>;
+  updatedAt: string;
+};
+type SiteFileRecord = {
+  site_id: string;
+  path: string;
+  content: ArrayBuffer;
+  content_type: string;
+  size: number;
+  sha256: string | null;
+  updated_at: string;
+};
 type ContactInput = Partial<{
   name: string;
   email: string | null;
@@ -49,6 +83,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
 const PASSWORD_HASH_ITERATIONS = 210_000;
 const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
+const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
 const CONTACT_SOURCES = new Set(["booking", "manual", "agent", "import", "outreach", "soulink"]);
 const CONTACT_RELATIONSHIPS = new Set(["client", "prospect", "contact"]);
@@ -63,6 +98,7 @@ const OUTREACH_STATUSES = new Set([
   "not_interested",
   "no_response",
 ]);
+const LANDING_PAGE_TEMPLATES = new Set<LandingPageTemplateId>(["event", "service", "waitlist"]);
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -373,6 +409,300 @@ app.post("/api/sites", async (c) => {
   }
 });
 
+app.get("/api/sites/:username/publish-manifest", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  return c.json({
+    manifest: (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest(),
+  });
+});
+
+app.post("/api/sites/:username/upload", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const form = await c.req.formData();
+  const files = form.getAll("files").filter((entry): entry is File => entry instanceof File);
+  if (files.length === 0) return c.json({ error: "No files uploaded" }, 400);
+
+  const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
+  const textFiles = new Map<string, string>();
+
+  for (const file of files) {
+    const content = await file.text();
+    const contentType = file.type || getContentType(file.name);
+    const sourcePath = `src/${normalizeSiteFileName(file.name)}`;
+    await putSiteFile(c.env, site.id, sourcePath, content, contentType);
+    manifest.sourceFiles[file.name] = await sha256Text(content);
+    textFiles.set(file.name, content);
+  }
+
+  const meJson = textFiles.get("me.json") || (await getSiteFileText(c.env, site.id, "src/me.json"));
+  if (meJson) {
+    await putSiteFile(c.env, site.id, "public/me.json", meJson, "application/json");
+    await putSiteFile(c.env, site.id, "public/index.html", renderProfileSiteHtml(meJson, site.username), "text/html");
+  }
+
+  for (const [name, content] of textFiles) {
+    if (name === "me.json") continue;
+    const publicName = name.replace(/\.md$/i, ".html");
+    await putSiteFile(c.env, site.id, `public/${normalizeSiteFileName(publicName)}`, renderMarkdownPageHtml(name, content), "text/html");
+  }
+
+  manifest.updatedAt = new Date().toISOString();
+  await savePublishManifest(c.env, site.id, manifest);
+  await c.env.DB.prepare(
+    "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(site.id)
+    .run();
+
+  return c.json({ ok: true, publishedAt: new Date().toISOString() });
+});
+
+app.post("/api/sites/:username/upload-image", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const form = await c.req.formData();
+  const file = form.get("file");
+  const type = String(form.get("type") || "image").replace(/[^a-z0-9_-]/gi, "");
+  if (!(file instanceof File)) return c.json({ error: "Image file is required" }, 400);
+  if (!file.type.startsWith("image/")) return c.json({ error: "Only image uploads are supported" }, 400);
+
+  const ext = imageExtension(file);
+  const testimonialIndex = String(form.get("index") || "").replace(/[^0-9]/g, "");
+  const baseName = type === "testimonial" && testimonialIndex ? `testimonial-${testimonialIndex}` : type;
+  const filename = `${baseName}.${ext}`;
+  const path = `public/files/${filename}`;
+  const buffer = await file.arrayBuffer();
+  await putSiteFile(c.env, site.id, path, buffer, file.type);
+
+  const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
+  manifest.assetFiles[filename] = await sha256Buffer(buffer);
+  manifest.updatedAt = new Date().toISOString();
+  await savePublishManifest(c.env, site.id, manifest);
+
+  return c.json({
+    ok: true,
+    path: `/preview/${site.username}/files/${filename}`,
+    url: `/preview/${site.username}/files/${filename}`,
+  });
+});
+
+app.post("/api/sites/:username/upload-page-image", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const form = await c.req.formData();
+  const file = form.get("file");
+  if (!(file instanceof File)) return c.json({ error: "Image file is required" }, 400);
+  if (!file.type.startsWith("image/")) return c.json({ error: "Only image uploads are supported" }, 400);
+
+  const pageSlug = String(form.get("pageSlug") || "page").replace(/[^a-z0-9_-]/gi, "");
+  const imageIndex = String(form.get("imageIndex") || "1").replace(/[^0-9]/g, "") || "1";
+  const ext = imageExtension(file);
+  const filename = `${pageSlug}-${imageIndex}.${ext}`;
+  const buffer = await file.arrayBuffer();
+  await putSiteFile(c.env, site.id, `public/files/${filename}`, buffer, file.type);
+
+  const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
+  manifest.assetFiles[filename] = await sha256Buffer(buffer);
+  manifest.updatedAt = new Date().toISOString();
+  await savePublishManifest(c.env, site.id, manifest);
+
+  return c.json({
+    ok: true,
+    path: `/preview/${site.username}/files/${filename}`,
+    url: `/preview/${site.username}/files/${filename}`,
+  });
+});
+
+app.get("/api/sites/:username/content", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const meJson = await getSiteFileText(c.env, site.id, "src/me.json");
+  if (!meJson) {
+    return c.json({
+      ok: true,
+      profile: null,
+      pages: [],
+      posts: [],
+      products: [],
+    });
+  }
+
+  const sourceFiles = await listSiteFiles(c.env, site.id, "src/");
+  const pages: Array<{ slug: string; title: string; content: string }> = [];
+  const posts: Array<{ slug: string; title: string; content: string }> = [];
+  const products: Array<{ slug: string; title: string; content: string }> = [];
+
+  for (const file of sourceFiles) {
+    if (!file.path.endsWith(".md")) continue;
+    const slug = file.path.slice("src/".length, -".md".length);
+    const item = {
+      slug: slug.split("/").pop() || slug,
+      title: titleFromSlug(slug),
+      content: await arrayBufferToText(file.content),
+    };
+    if (slug.startsWith("blog/")) posts.push(item);
+    else if (slug.startsWith("shop/")) products.push(item);
+    else pages.push(item);
+  }
+
+  return c.json({
+    ok: true,
+    profile: JSON.parse(meJson),
+    pages,
+    posts,
+    products,
+  });
+});
+
+app.get("/api/sites/:username/preview-html", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const html =
+    (await getSiteFileText(c.env, site.id, "landing/index.html")) ||
+    (await getSiteFileText(c.env, site.id, "public/index.html"));
+  if (!html) return c.body(null, 204);
+
+  return c.html(injectBaseHref(html, `/preview/${site.username}/`));
+});
+
+app.get("/api/sites/:username/landing-page", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const page = await loadLandingPage(c.env, site.id);
+  const owner = await getOwnerProfile(c.env, ownerId);
+  return c.json({
+    site: {
+      id: site.id,
+      username: site.username,
+      templateId: normalizeLandingTemplate(site.template_id),
+      publishedAt: site.published_at,
+    },
+    profile: {
+      name: owner?.name || site.username,
+      bio: owner?.bio || null,
+      avatar: owner?.avatar_url || null,
+    },
+    page,
+  });
+});
+
+app.put("/api/sites/:username/landing-page", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const body = await c.req.json<{ page?: unknown }>().catch((): { page?: unknown } => ({}));
+  const page = normalizeLandingPageDocument(body.page);
+  if (!page) return c.json({ error: "Valid landing page is required" }, 400);
+
+  await saveLandingPage(c.env, site, page);
+  return c.json({ ok: true, page });
+});
+
+app.post("/api/agent/landing-pages/generate", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body: LandingPageGenerateBody = await c.req
+    .json<LandingPageGenerateBody>()
+    .catch((): LandingPageGenerateBody => ({}));
+  const username = normalizeUsername(body.username);
+  const site = await getSiteForOwner(c.env, ownerId, username);
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const brief = body.brief?.trim();
+  if (!brief) return c.json({ error: "Brief is required" }, 400);
+
+  const owner = await getOwnerProfile(c.env, ownerId);
+  const page = buildLandingPageDocument({
+    username: site.username,
+    brief,
+    template: normalizeLandingTemplate(body.templateId) || "service",
+    heroImage: body.heroImage || null,
+    sectionImage: body.sectionImage || null,
+    feedback: body.feedback || null,
+    profile: {
+      name: owner?.name || site.username,
+      bio: owner?.bio || null,
+      avatar: owner?.avatar_url || null,
+      profileUrl: `${c.env.CORE_WEB_ORIGIN}/sites/${site.username}`,
+    },
+  });
+
+  await saveLandingPage(c.env, site, page);
+  return c.json({
+    ok: true,
+    jobId: crypto.randomUUID(),
+    jobType: "landing_page_builder",
+    page,
+  });
+});
+
+app.post("/api/sites/:username/publish", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+  const html =
+    (await getSiteFileText(c.env, site.id, "landing/index.html")) ||
+    (await getSiteFileText(c.env, site.id, "public/index.html"));
+  if (!html) return c.json({ error: "Generate or upload the site before publishing." }, 400);
+
+  await c.env.DB.prepare(
+    "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(site.id)
+    .run();
+  return c.json({ ok: true, publishedAt: new Date().toISOString() });
+});
+
+app.post("/api/sites/:username/unpublish", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+  await c.env.DB.prepare(
+    "UPDATE sites SET published_at = NULL, updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(site.id)
+    .run();
+  return c.json({ ok: true });
+});
+
 app.delete("/api/sites/:username", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -495,9 +825,143 @@ app.get("/api/mailbox", async (c) => {
     cloudflareManaged: false,
     suggestedAliasLocalPart,
     mailbox: mailbox ? serializeMailbox(mailbox) : null,
-    sources: [],
+    sources: mailbox ? [serializeMailboxDefaultSource(mailbox)] : [],
     recentActivity: mailbox ? await getMailboxActivity(c.env, mailbox.id, 25, 0) : [],
   });
+});
+
+app.put("/api/mailbox", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body = await c.req.json<MailboxUpdateBody>().catch((): MailboxUpdateBody => ({}));
+  const owner = await getOwnerProfile(c.env, ownerId);
+  const existing = await getMailboxRow(c.env, ownerId);
+  const aliasLocalPart = normalizeMailboxAlias(
+    typeof body.aliasLocalPart === "string" ? body.aliasLocalPart : "",
+  );
+  const forwardingEnabled = body.forwardingEnabled === true;
+  const forwardingEmail =
+    typeof body.forwardingEmail === "string" ? body.forwardingEmail.trim() : "";
+
+  if (!aliasLocalPart || !MAILBOX_ALIAS_REGEX.test(aliasLocalPart)) {
+    return c.json(
+      {
+        error:
+          "Mailbox alias must start and end with a letter or number and may contain dots, underscores, or hyphens.",
+      },
+      400,
+    );
+  }
+
+  if (forwardingEnabled && !isValidEmail(forwardingEmail)) {
+    return c.json({ error: "Enter a valid forwarding email address." }, 400);
+  }
+
+  const savedForwardingEmail =
+    forwardingEnabled ? forwardingEmail : existing?.forwarding_email || owner?.email || "";
+  const forwardingStatus =
+    forwardingEnabled && savedForwardingEmail !== existing?.forwarding_email
+      ? "pending"
+      : existing?.forwarding_status || "pending";
+  const forwardingMode = forwardingEnabled ? "forward" : "me3_only";
+  const now = new Date().toISOString();
+
+  try {
+    if (existing) {
+      await c.env.DB.prepare(
+        `UPDATE mailbox_aliases
+         SET alias_local_part = ?,
+             forwarding_email = ?,
+             forwarding_status = ?,
+             forwarding_enabled = ?,
+             forwarding_mode = ?,
+             updated_at = ?
+         WHERE user_id = ?`,
+      )
+        .bind(
+          aliasLocalPart,
+          savedForwardingEmail,
+          forwardingStatus,
+          forwardingEnabled ? 1 : 0,
+          forwardingMode,
+          now,
+          ownerId,
+        )
+        .run();
+    } else {
+      await c.env.DB.prepare(
+        `INSERT INTO mailbox_aliases (
+           id, user_id, alias_local_part, forwarding_email, forwarding_status,
+           forwarding_enabled, forwarding_mode, status, approval_policy,
+           daily_inbound_limit, daily_outbound_limit, created_at, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_setup', 'all', 25, 25, ?, ?)`,
+      )
+        .bind(
+          crypto.randomUUID(),
+          ownerId,
+          aliasLocalPart,
+          savedForwardingEmail,
+          forwardingStatus,
+          forwardingEnabled ? 1 : 0,
+          forwardingMode,
+          now,
+          now,
+        )
+        .run();
+    }
+  } catch {
+    return c.json({ error: "Mailbox alias is already in use." }, 409);
+  }
+
+  const mailbox = await getMailboxRow(c.env, ownerId);
+  return c.json({
+    mailbox: mailbox ? serializeMailbox(mailbox) : null,
+    sources: mailbox ? [serializeMailboxDefaultSource(mailbox)] : [],
+  });
+});
+
+app.post("/api/mailbox/activate", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const mailbox = await getMailboxRow(c.env, ownerId);
+  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
+
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `UPDATE mailbox_aliases
+     SET status = 'active',
+         activated_at = COALESCE(activated_at, ?),
+         updated_at = ?
+     WHERE user_id = ?`,
+  )
+    .bind(now, now, ownerId)
+    .run();
+
+  const updated = await getMailboxRow(c.env, ownerId);
+  return c.json({ mailbox: updated ? serializeMailbox(updated) : null });
+});
+
+app.post("/api/mailbox/pause", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const mailbox = await getMailboxRow(c.env, ownerId);
+  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
+
+  await c.env.DB.prepare(
+    `UPDATE mailbox_aliases
+     SET status = 'paused',
+         updated_at = ?
+     WHERE user_id = ?`,
+  )
+    .bind(new Date().toISOString(), ownerId)
+    .run();
+
+  const updated = await getMailboxRow(c.env, ownerId);
+  return c.json({ mailbox: updated ? serializeMailbox(updated) : null });
 });
 
 app.get("/api/mailbox/messages", async (c) => {
@@ -609,15 +1073,7 @@ app.get("/api/telegram/status", async (c) => {
   if (!ownerId) return unauthorized(c);
 
   const botUsername = c.env.TELEGRAM_BOT_USERNAME?.trim() || null;
-  const connection = await c.env.DB.prepare(
-    `SELECT id, user_id, channel, status, setup_token, telegram_user_id, telegram_chat_id,
-            telegram_username, telegram_first_name, telegram_last_name, connected_at,
-            disconnected_at, last_inbound_at, last_outbound_at, created_at, updated_at
-     FROM agent_channel_connections
-     WHERE user_id = ? AND channel = 'telegram'`,
-  )
-    .bind(ownerId)
-    .first<DbAgentChannelConnection>();
+  const connection = await getTelegramConnection(c.env, ownerId);
   const events = connection
     ? await c.env.DB.prepare(
         `SELECT id, connection_id, channel, direction, event_type, status,
@@ -643,6 +1099,63 @@ app.get("/api/telegram/status", async (c) => {
         : null,
     connection: connection ? serializeTelegramConnection(connection, botUsername) : null,
     recentEvents: (events.results || []).map(serializeTelegramEvent),
+  });
+});
+
+app.post("/api/telegram/setup", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const botUsername = c.env.TELEGRAM_BOT_USERNAME?.trim() || null;
+  if (!botUsername) {
+    return c.json({ error: "Telegram bot username is not configured" }, 503);
+  }
+
+  const connection = await upsertPendingTelegramConnection(c.env, ownerId);
+  return c.json({
+    ok: true,
+    available: true,
+    configured: true,
+    botUsername,
+    startUrl: `https://t.me/${botUsername.replace(/^@/, "")}?start=${encodeURIComponent(connection.setup_token)}`,
+    connection: serializeTelegramConnection(connection, botUsername),
+  });
+});
+
+app.post("/api/telegram/disconnect", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const existing = await getTelegramConnection(c.env, ownerId);
+  if (!existing) {
+    return c.json({ ok: true, disconnected: false });
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE agent_channel_connections
+     SET status = 'disconnected',
+         telegram_user_id = NULL,
+         telegram_chat_id = NULL,
+         telegram_username = NULL,
+         telegram_first_name = NULL,
+         telegram_last_name = NULL,
+         disconnected_at = datetime('now'),
+         updated_at = datetime('now')
+     WHERE user_id = ? AND channel = 'telegram'`,
+  )
+    .bind(ownerId)
+    .run();
+
+  const botUsername = c.env.TELEGRAM_BOT_USERNAME?.trim() || null;
+  const connection = await getTelegramConnection(c.env, ownerId);
+  return c.json({
+    ok: true,
+    disconnected: true,
+    available: true,
+    configured: Boolean(botUsername),
+    botUsername,
+    startUrl: null,
+    connection: connection ? serializeTelegramConnection(connection, botUsername) : null,
   });
 });
 
@@ -722,6 +1235,28 @@ app.post("/api/contacts/:id/convert", async (c) => {
   return c.json({ ok: true, contact });
 });
 
+app.get("/preview/:username/*", async (c) => {
+  const username = normalizeUsername(c.req.param("username"));
+  const site = await getSiteByUsername(c.env, username);
+  if (!site) return c.html(renderNotFoundPage("Site not found"), 404);
+
+  const requestedPath = c.req.path.replace(`/preview/${username}/`, "") || "index.html";
+  const publicPath = `public/${requestedPath.endsWith("/") ? `${requestedPath}index.html` : requestedPath}`;
+  const file =
+    (await getSiteFile(c.env, site.id, publicPath)) ||
+    (requestedPath === "index.html" ? await getSiteFile(c.env, site.id, "landing/index.html") : null);
+  if (!file) return c.html(renderNotFoundPage("Page not found"), 404);
+
+  return new Response(file.content, {
+    headers: {
+      "Content-Type": file.content_type,
+      "Cache-Control": file.content_type.startsWith("image/")
+        ? "public, max-age=31536000, immutable"
+        : "no-store",
+    },
+  });
+});
+
 app.get("/.well-known/me.json", async (c) => {
   const owner = await getOwnerProfile(c.env, "owner");
 
@@ -737,6 +1272,399 @@ app.get("/.well-known/me.json", async (c) => {
     },
   });
 });
+
+function createEmptyPublishManifest(): PublishManifest {
+  return {
+    version: 1,
+    sourceFiles: {},
+    assetFiles: {},
+    updatedAt: "",
+  };
+}
+
+async function getSiteForOwner(env: Env, ownerId: string, rawUsername: string): Promise<DbSite | null> {
+  const username = normalizeUsername(rawUsername);
+  if (!username) return null;
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+              custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
+       FROM sites
+       WHERE user_id = ? AND username = ?`,
+    )
+      .bind(ownerId, username)
+      .first<DbSite>()) || null
+  );
+}
+
+async function getSiteByUsername(env: Env, rawUsername: string): Promise<DbSite | null> {
+  const username = normalizeUsername(rawUsername);
+  if (!username) return null;
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+              custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
+       FROM sites
+       WHERE username = ?`,
+    )
+      .bind(username)
+      .first<DbSite>()) || null
+  );
+}
+
+function normalizeSiteFileName(name: string): string {
+  return name
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/");
+}
+
+async function putSiteFile(
+  env: Env,
+  siteId: string,
+  path: string,
+  content: string | ArrayBuffer,
+  contentType: string,
+): Promise<void> {
+  const buffer =
+    typeof content === "string" ? new TextEncoder().encode(content).buffer : content;
+  await env.DB.prepare(
+    `INSERT INTO site_files (site_id, path, content, content_type, size, sha256, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(site_id, path) DO UPDATE SET
+       content = excluded.content,
+       content_type = excluded.content_type,
+       size = excluded.size,
+       sha256 = excluded.sha256,
+       updated_at = datetime('now')`,
+  )
+    .bind(siteId, path, buffer, contentType, buffer.byteLength, await sha256Buffer(buffer))
+    .run();
+}
+
+async function getSiteFile(env: Env, siteId: string, path: string): Promise<SiteFileRecord | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT site_id, path, content, content_type, size, sha256, updated_at
+       FROM site_files
+       WHERE site_id = ? AND path = ?`,
+    )
+      .bind(siteId, path)
+      .first<SiteFileRecord>()) || null
+  );
+}
+
+async function getSiteFileText(env: Env, siteId: string, path: string): Promise<string | null> {
+  const file = await getSiteFile(env, siteId, path);
+  return file ? arrayBufferToText(file.content) : null;
+}
+
+async function listSiteFiles(env: Env, siteId: string, prefix: string): Promise<SiteFileRecord[]> {
+  const rows = await env.DB.prepare(
+    `SELECT site_id, path, content, content_type, size, sha256, updated_at
+     FROM site_files
+     WHERE site_id = ? AND path LIKE ?
+     ORDER BY path ASC`,
+  )
+    .bind(siteId, `${prefix}%`)
+    .all<SiteFileRecord>();
+  return rows.results || [];
+}
+
+async function loadPublishManifest(env: Env, siteId: string): Promise<PublishManifest | null> {
+  const text = await getSiteFileText(env, siteId, "publish-manifest.json");
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as Partial<PublishManifest>;
+    return {
+      version: 1,
+      sourceFiles: parsed.sourceFiles || {},
+      assetFiles: parsed.assetFiles || {},
+      updatedAt: parsed.updatedAt || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function savePublishManifest(env: Env, siteId: string, manifest: PublishManifest): Promise<void> {
+  await putSiteFile(env, siteId, "publish-manifest.json", JSON.stringify(manifest, null, 2), "application/json");
+}
+
+async function arrayBufferToText(buffer: ArrayBuffer): Promise<string> {
+  return new TextDecoder().decode(buffer);
+}
+
+async function sha256Text(value: string): Promise<string> {
+  return sha256Buffer(new TextEncoder().encode(value).buffer);
+}
+
+async function sha256Buffer(buffer: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function imageExtension(file: File): string {
+  if (file.type === "image/png") return "png";
+  if (file.type === "image/webp") return "webp";
+  if (file.type === "image/gif") return "gif";
+  if (file.name.toLowerCase().endsWith(".png")) return "png";
+  if (file.name.toLowerCase().endsWith(".webp")) return "webp";
+  if (file.name.toLowerCase().endsWith(".gif")) return "gif";
+  return "jpg";
+}
+
+function getContentType(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".html")) return "text/html";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".md")) return "text/markdown";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  return "application/octet-stream";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function titleFromSlug(slug: string): string {
+  const leaf = slug.split("/").pop() || slug;
+  return leaf
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function renderProfileSiteHtml(meJsonText: string, username: string): string {
+  let profile: Record<string, any> = {};
+  try {
+    profile = JSON.parse(meJsonText) as Record<string, any>;
+  } catch {
+    profile = {};
+  }
+  const name = String(profile.name || profile.profile?.name || username);
+  const bio = String(profile.bio || profile.profile?.bio || "A ME3 Core site.");
+  const links = profile.links && typeof profile.links === "object" ? profile.links : {};
+  const linkHtml = Object.entries(links)
+    .filter(([key, value]) => !key.startsWith("_") && typeof value === "string")
+    .map(([key, value]) => `<a href="${escapeHtml(String(value))}" rel="noreferrer">${escapeHtml(titleFromSlug(key))}</a>`)
+    .join("");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(name)}</title><meta name="description" content="${escapeHtml(bio)}"><style>${coreSiteCss()}</style></head><body><main class="shell"><section class="hero"><p class="badge">${escapeHtml(username)}.me3.core</p><h1>${escapeHtml(name)}</h1><p>${escapeHtml(bio)}</p><nav>${linkHtml}</nav></section></main></body></html>`;
+}
+
+function renderMarkdownPageHtml(filename: string, markdown: string): string {
+  const title = titleFromSlug(filename.replace(/\.md$/i, ""));
+  const body = markdown
+    .split(/\n{2,}/)
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>${coreSiteCss()}</style></head><body><main class="shell"><article class="page"><h1>${escapeHtml(title)}</h1>${body}</article></main></body></html>`;
+}
+
+function coreSiteCss(): string {
+  return `:root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17201d;background:#f7faf8}body{margin:0}.shell{width:min(920px,calc(100vw - 32px));margin:0 auto;padding:48px 0}.hero,.page{border:1px solid rgba(23,32,29,.12);border-radius:18px;background:rgba(255,255,255,.86);padding:32px;box-shadow:0 18px 48px rgba(16,24,20,.08)}.badge{display:inline-flex;margin:0 0 18px;padding:6px 10px;border-radius:999px;background:#d9fbe8;color:#14543a;font-size:13px}h1{font-size:clamp(2.25rem,6vw,4.75rem);line-height:1;margin:0 0 16px}p{color:#496057;font-size:1.05rem;line-height:1.65}nav{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}a{color:#14543a;font-weight:700}@media (prefers-color-scheme:dark){:root{color:#ecf5ef;background:#0f1713}.hero,.page{background:rgba(22,31,26,.9);border-color:rgba(236,245,239,.14)}p{color:#adbbb3}.badge{background:#183c2a;color:#a7f3c4}a{color:#86efac}}`;
+}
+
+function renderNotFoundPage(message: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(message)}</title><style>${coreSiteCss()}</style></head><body><main class="shell"><section class="hero"><h1>${escapeHtml(message)}</h1><p>This ME3 Core preview does not have published content for that path yet.</p></section></main></body></html>`;
+}
+
+function injectBaseHref(html: string, baseHref: string): string {
+  if (/<base\s/i.test(html)) return html;
+  return html.replace(/<head(\s[^>]*)?>/i, `<head$1><base href="${escapeHtml(baseHref)}">`);
+}
+
+function normalizeLandingTemplate(value: string | null | undefined): LandingPageTemplateId | null {
+  return LANDING_PAGE_TEMPLATES.has(value as LandingPageTemplateId)
+    ? (value as LandingPageTemplateId)
+    : null;
+}
+
+function normalizeLandingPageDocument(value: unknown): LandingPageDocument | null {
+  if (!value || typeof value !== "object") return null;
+  const page = value as Partial<LandingPageDocument>;
+  if (
+    page.version !== 1 ||
+    !normalizeLandingTemplate(page.template) ||
+    typeof page.title !== "string" ||
+    typeof page.brief !== "string" ||
+    !page.hero ||
+    !Array.isArray(page.sections)
+  ) {
+    return null;
+  }
+  return page as LandingPageDocument;
+}
+
+async function loadLandingPage(env: Env, siteId: string): Promise<LandingPageDocument | null> {
+  const text = await getSiteFileText(env, siteId, "landing/page.json");
+  if (!text) return null;
+  try {
+    return normalizeLandingPageDocument(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+async function saveLandingPage(env: Env, site: DbSite, page: LandingPageDocument): Promise<void> {
+  await putSiteFile(env, site.id, "landing/page.json", JSON.stringify(page, null, 2), "application/json");
+  await putSiteFile(env, site.id, "landing/index.html", renderLandingPageHtml(page, site.username), "text/html");
+  await env.DB.prepare("UPDATE sites SET template_id = ?, updated_at = datetime('now') WHERE id = ?")
+    .bind(page.template, site.id)
+    .run();
+}
+
+function buildLandingPageDocument(input: {
+  username: string;
+  brief: string;
+  template: LandingPageTemplateId;
+  heroImage?: string | null;
+  sectionImage?: string | null;
+  feedback?: string | null;
+  profile: { name: string | null; bio: string | null; avatar: string | null; profileUrl: string | null };
+}): LandingPageDocument {
+  const template = getLandingPageTemplate(input.template);
+  const combined = [input.brief, input.feedback || ""].filter(Boolean).join("\n\n");
+  const title = extractLandingTitle(combined, input.template);
+  const description = firstSentence(combined) || "A focused landing page built with ME3 Core.";
+  const ctaLabel = extractCta(input.feedback) || template.defaultCta;
+  const sections: LandingPageSection[] = [
+    {
+      type: "text",
+      heading: input.template === "event" ? "Why This Matters" : input.template === "waitlist" ? "What's Coming" : "The Offer",
+      body: description,
+    },
+    {
+      type: "list",
+      heading: input.template === "service" ? "What's Included" : "Highlights",
+      items: deriveLandingItems(combined),
+    },
+    ...(input.sectionImage
+      ? [
+          {
+            type: "image",
+            heading: "Preview",
+            image: input.sectionImage,
+            caption: description,
+          } satisfies LandingPageSection,
+        ]
+      : []),
+    {
+      type: input.template === "waitlist" ? "signup" : "profile",
+      ...(input.template === "waitlist"
+        ? {
+            heading: "Join the List",
+            body: "Leave your email and you'll hear first when there is news.",
+            buttonLabel: ctaLabel,
+            placeholder: "you@example.com",
+          }
+        : {
+            heading: "About",
+            body: input.profile.bio || `${input.profile.name || input.username} is the host behind this page.`,
+            profileName: input.profile.name || input.username,
+            profileImage: input.profile.avatar,
+            profileLink: input.profile.profileUrl,
+          }),
+    } as LandingPageSection,
+  ];
+
+  return {
+    version: 1,
+    template: input.template,
+    title,
+    brief: input.brief.trim(),
+    meta: { description, ogImage: input.heroImage || null },
+    hero: {
+      eyebrow: template.shortName,
+      headline: title,
+      subheadline: description,
+      image: input.heroImage || null,
+      cta: { label: ctaLabel, href: input.template === "waitlist" ? "#signup" : "#contact" },
+    },
+    sections,
+    footer: {
+      cta: { label: ctaLabel, href: input.template === "waitlist" ? "#signup" : "#contact" },
+      note: "Built with ME3 Core.",
+      profileLink: input.profile.profileUrl,
+    },
+    style: {
+      vibe: input.template === "event" ? "warm" : input.template === "waitlist" ? "tech" : "minimal",
+      accentColor: input.template === "waitlist" ? "#2d4cff" : "#0f766e",
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function extractLandingTitle(text: string, template: LandingPageTemplateId): string {
+  const firstLine = text.split(/\n+/).map((line) => line.trim()).find((line) => line.length > 8);
+  if (firstLine) return firstLine.slice(0, 90);
+  if (template === "event") return "A focused event page";
+  if (template === "waitlist") return "A clear waitlist page";
+  return "A focused offer page";
+}
+
+function firstSentence(text: string): string {
+  return text.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) || "";
+}
+
+function deriveLandingItems(text: string): string[] {
+  const lines = text
+    .split(/\n+/)
+    .map((line) => line.replace(/^[-*]\s*/, "").trim())
+    .filter((line) => line.length > 0 && line.length < 96)
+    .slice(1, 4);
+  return lines.length > 0
+    ? lines
+    : ["A clear promise", "A simple next step", "A page connected to your ME3 profile"];
+}
+
+function extractCta(feedback: string | null | undefined): string | null {
+  const match = feedback?.match(/cta\s+(?:to|as)\s+["']?([^"'\n.]+)/i);
+  return match?.[1]?.trim() || null;
+}
+
+function renderLandingPageHtml(page: LandingPageDocument, username: string): string {
+  const accent = page.style.accentColor || "#0f766e";
+  const sections = page.sections.map((section) => renderLandingSection(section, username)).join("");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.title)}</title><meta name="description" content="${escapeHtml(page.meta.description)}"><style>:root{--accent:${escapeHtml(accent)};font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#151c19;background:#fbfcfb}body{margin:0}.shell{width:min(1080px,calc(100vw - 32px));margin:0 auto}.top{border-bottom:1px solid rgba(21,28,25,.12);padding:16px 0}.hero{padding:56px 0;display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:24px;align-items:center}.hero-copy,.media,.card{border:1px solid rgba(21,28,25,.12);border-radius:22px;background:#fff;padding:28px;box-shadow:0 18px 48px rgba(16,24,20,.06)}h1{font-size:clamp(2.4rem,6vw,5rem);line-height:1;margin:0 0 18px}.eyebrow{color:var(--accent);font-weight:800;text-transform:uppercase;font-size:12px;letter-spacing:.12em}p,li{color:#52615b;line-height:1.65}.button,button{display:inline-flex;border:0;border-radius:999px;background:var(--accent);color:white;padding:12px 18px;text-decoration:none;font-weight:800}.section{padding:28px 0}.media{min-height:280px;display:grid;place-items:center;overflow:hidden}.media img{width:100%;height:100%;object-fit:cover}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}input{padding:12px 14px;border:1px solid rgba(21,28,25,.18);border-radius:12px}@media(max-width:760px){.hero{grid-template-columns:1fr}}</style></head><body><header class="top"><div class="shell"><strong>${escapeHtml(username)}</strong></div></header><main><section class="shell hero"><div class="hero-copy"><p class="eyebrow">${escapeHtml(page.hero.eyebrow || "")}</p><h1>${escapeHtml(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><a class="button" href="${escapeHtml(page.hero.cta.href)}">${escapeHtml(page.hero.cta.label)}</a></div><div class="media">${page.hero.image ? `<img src="${escapeHtml(page.hero.image)}" alt="">` : `<span class="eyebrow">ME3 Core</span>`}</div></section>${sections}</main></body></html>`;
+}
+
+function renderLandingSection(section: LandingPageSection, username: string): string {
+  if (section.type === "text") {
+    return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p></div></section>`;
+  }
+  if (section.type === "list" || section.type === "steps") {
+    return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><ul>${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div></section>`;
+  }
+  if (section.type === "image") {
+    return `<section class="shell section"><div class="media"><img src="${escapeHtml(section.image)}" alt="${escapeHtml(section.heading)}"></div></section>`;
+  }
+  if (section.type === "signup") {
+    return `<section id="signup" class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p><form><input type="email" placeholder="${escapeHtml(section.placeholder || "Email")}"> <button type="button">${escapeHtml(section.buttonLabel)}</button></form></div></section>`;
+  }
+  if (section.type === "profile") {
+    return `<section id="contact" class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p>${section.profileLink ? `<a href="${escapeHtml(section.profileLink)}">Visit profile</a>` : ""}</div></section>`;
+  }
+  if (section.type === "pricing") {
+    return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><div class="grid">${section.tiers.map((tier) => `<article><strong>${escapeHtml(tier.name)}</strong><p>${escapeHtml(tier.price)}</p></article>`).join("")}</div></div></section>`;
+  }
+  if (section.type === "faq") {
+    return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><div class="grid">${section.items.map((item) => `<article><strong>${escapeHtml(item.question)}</strong><p>${escapeHtml(item.answer)}</p></article>`).join("")}</div></div></section>`;
+  }
+  return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2></div></section>`;
+}
 
 async function requireOwner(c: AppContext): Promise<string | null> {
   return getSessionOwnerId(c);
@@ -941,6 +1869,18 @@ function suggestMailboxAlias(value: string): string {
   return base || "owner";
 }
 
+function normalizeMailboxAlias(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "")
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
 function getMailboxAddress(localPart: string): string {
   return `${localPart}@me3.local`;
 }
@@ -966,6 +1906,17 @@ function serializeMailbox(row: DbMailboxAlias) {
     cloudflareLastError: row.cf_last_error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function serializeMailboxDefaultSource(row: DbMailboxAlias) {
+  return {
+    id: row.id,
+    type: "me3_alias",
+    address: getMailboxAddress(row.alias_local_part),
+    status: row.status === "active" ? "active" : row.status === "paused" ? "paused" : "pending",
+    inboundEnabled: row.status === "active",
+    outboundEnabled: true,
   };
 }
 
@@ -1172,6 +2123,52 @@ async function listContacts(env: Env, ownerId: string) {
 
   const contacts = (rows.results || []).map(serializeContact);
   return { contacts, summary: summarizeContacts(contacts) };
+}
+
+async function getTelegramConnection(env: Env, ownerId: string) {
+  return env.DB.prepare(
+    `SELECT id, user_id, channel, status, setup_token, telegram_user_id, telegram_chat_id,
+            telegram_username, telegram_first_name, telegram_last_name, connected_at,
+            disconnected_at, last_inbound_at, last_outbound_at, created_at, updated_at
+     FROM agent_channel_connections
+     WHERE user_id = ? AND channel = 'telegram'`,
+  )
+    .bind(ownerId)
+    .first<DbAgentChannelConnection>();
+}
+
+async function upsertPendingTelegramConnection(env: Env, ownerId: string) {
+  const existing = await getTelegramConnection(env, ownerId);
+  const connectionId = existing?.id || crypto.randomUUID();
+  const setupToken = crypto.randomUUID();
+
+  await env.DB.prepare(
+    `INSERT INTO agent_channel_connections
+     (id, user_id, channel, status, setup_token, telegram_user_id,
+      telegram_chat_id, telegram_username, telegram_first_name,
+      telegram_last_name, connected_at, disconnected_at, last_inbound_at,
+      last_outbound_at)
+     VALUES (?, ?, 'telegram', 'pending', ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+     ON CONFLICT(user_id, channel) DO UPDATE SET
+       status = 'pending',
+       setup_token = excluded.setup_token,
+       telegram_user_id = NULL,
+       telegram_chat_id = NULL,
+       telegram_username = NULL,
+       telegram_first_name = NULL,
+       telegram_last_name = NULL,
+       connected_at = NULL,
+       disconnected_at = NULL,
+       last_inbound_at = NULL,
+       last_outbound_at = NULL,
+       updated_at = datetime('now')`,
+  )
+    .bind(connectionId, ownerId, setupToken)
+    .run();
+
+  const row = await getTelegramConnection(env, ownerId);
+  if (!row) throw new Error("Failed to create Telegram connection");
+  return row;
 }
 
 async function insertContact(env: Env, ownerId: string, input: ContactInput) {

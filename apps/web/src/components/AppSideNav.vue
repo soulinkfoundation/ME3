@@ -14,7 +14,7 @@ const profileSite = computed(() =>
 );
 
 const sitesPath = computed(() =>
-  profileSite.value?.username ? `/sites/${profileSite.value.username}` : null,
+  profileSite.value?.username ? `/sites/${profileSite.value.username}` : "/create",
 );
 const isMobileViewport = ref(false);
 const mobileNavOpen = ref(false);
@@ -59,7 +59,9 @@ onBeforeUnmount(() => {
 
 const isCalendar = computed(() => route.path.startsWith("/calendar"));
 const isEmail = computed(() => route.path.startsWith("/email"));
-const isSites = computed(() => route.path.startsWith("/sites/"));
+const isSites = computed(
+  () => route.path.startsWith("/sites/") || route.path.startsWith("/create"),
+);
 const isAssistant = computed(() => route.path.startsWith("/assistant"));
 /** `/account` and `/account/...` only — not `/accounts` (startsWith("/account") is a false positive). */
 const isAccount = computed(() => {
@@ -201,16 +203,15 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
         </RouterLink>
 
         <RouterLink
-          v-if="sitesPath"
           :to="sitesPath"
           class="app-side-nav__row"
           :class="{ 'app-side-nav__row--active': rowActive('sites') }"
-          aria-label="Sites"
-          title="Sites"
+          aria-label="Site builder"
+          title="Site builder"
           @click="closeMobileNav"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">🌐</span>
-          <span class="sr-only">Sites</span>
+          <span class="sr-only">Site builder</span>
         </RouterLink>
 
         <RouterLink

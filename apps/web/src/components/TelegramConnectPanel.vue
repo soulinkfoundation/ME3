@@ -57,6 +57,7 @@ const qrCanvas = ref<HTMLCanvasElement | null>(null);
 
 const loading = ref(false);
 const setupLoading = ref(false);
+const disconnectLoading = ref(false);
 const available = ref(false);
 const configured = ref(false);
 const botUsername = ref<string | null>(null);
@@ -108,6 +109,41 @@ const refreshButtonTooltip = computed(() => {
 
 const refreshAriaLabel = computed(() => refreshButtonTooltip.value);
 
+const connectionDetails = computed(() => {
+  const current = connection.value;
+  if (!current) return [];
+
+  const details: Array<{ label: string; value: string }> = [];
+  for (const [label, value] of [
+    ["Status", current.status],
+    ["Telegram user", formatTelegramUser(current)],
+    ["Connected", formatDateTime(current.connectedAt)],
+    ["Last inbound", formatDateTime(current.lastInboundAt)],
+    ["Last outbound", formatDateTime(current.lastOutboundAt)],
+  ] as const) {
+    if (value) details.push({ label, value });
+  }
+  return details;
+});
+
+function formatTelegramUser(current: TelegramConnectionRecord) {
+  if (current.telegramUsername) return `@${current.telegramUsername}`;
+  const name = [current.telegramFirstName, current.telegramLastName]
+    .filter(Boolean)
+    .join(" ");
+  return name || current.telegramUserId || null;
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
 function syncStatus(response: TelegramStatusResponse) {
   available.value = response.available;
   configured.value = response.configured;
@@ -151,6 +187,30 @@ async function setupTelegram() {
       err instanceof Error ? err.message : "Failed to prepare Telegram setup";
   } finally {
     setupLoading.value = false;
+  }
+}
+
+async function disconnectTelegram() {
+  if (disconnectLoading.value || connection.value?.status !== "active") return;
+  const confirmed = window.confirm(
+    "Disconnect Telegram from this ME3 Core account?",
+  );
+  if (!confirmed) return;
+
+  disconnectLoading.value = true;
+  error.value = null;
+
+  try {
+    const response = await api.post<TelegramStatusResponse>(
+      "/telegram/disconnect",
+      {},
+    );
+    syncStatus(response);
+  } catch (err: unknown) {
+    error.value =
+      err instanceof Error ? err.message : "Failed to disconnect Telegram";
+  } finally {
+    disconnectLoading.value = false;
   }
 }
 
@@ -236,6 +296,21 @@ defineExpose({
       </p>
 
       <div v-if="configured" class="telegram-qr-section">
+        <dl
+          v-if="connectionDetails.length"
+          class="telegram-health"
+          aria-label="Telegram connection health"
+        >
+          <div
+            v-for="detail in connectionDetails"
+            :key="detail.label"
+            class="telegram-health__row"
+          >
+            <dt>{{ detail.label }}</dt>
+            <dd>{{ detail.value }}</dd>
+          </div>
+        </dl>
+
         <div class="telegram-qr-section__body">
           <template v-if="startUrl">
             <p class="hint">
@@ -266,6 +341,21 @@ defineExpose({
             <template #icon>
               <UiIcon name="RefreshCw" :size="18" aria-hidden="true" />
             </template>
+          </Button>
+          <Button
+            v-if="connection?.status === 'active'"
+            variant="outline"
+            size="small"
+            class="telegram-disconnect-btn"
+            type="button"
+            :disabled="disconnectLoading"
+            title="Disconnect Telegram from this account"
+            @click="disconnectTelegram"
+          >
+            <template #icon>
+              <UiIcon name="Unplug" :size="18" aria-hidden="true" />
+            </template>
+            {{ disconnectLoading ? "Disconnecting..." : "Disconnect" }}
           </Button>
         </div>
       </div>
@@ -324,6 +414,10 @@ defineExpose({
   margin: 0;
 }
 
+.telegram-disconnect-btn {
+  color: var(--color-error, #c62828);
+}
+
 .telegram-compact-hint {
   margin: 0 0 12px;
   font-size: 14px;
@@ -340,6 +434,30 @@ defineExpose({
   border-radius: 12px;
 }
 
+.telegram-health {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.telegram-health__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.telegram-health dt {
+  color: var(--color-text-muted);
+}
+
+.telegram-health dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 600;
+}
+
 .telegram-qr-section__body {
   display: flex;
   flex-direction: column;
@@ -350,6 +468,8 @@ defineExpose({
 
 .telegram-qr-section__footer {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: center;
   margin-top: 12px;
   padding-top: 4px;
