@@ -137,6 +137,24 @@ The site settings page can record a site's desired custom domain. In Core, this 
 
 By default, Core stores published site files in D1. This keeps the install simple, but D1 is best for small pages, manifests, and modest images. Owners with large media-heavy sites can add an R2 bucket and bind it as `SITE_ASSETS`:
 
+```bash
+pnpm storage:r2:provision --yes
+```
+
+This creates the default `me3-site-assets` bucket with Wrangler and updates `wrangler.toml` with the `SITE_ASSETS` binding. To choose a name:
+
+```bash
+pnpm storage:r2:provision -- --bucket your-me3-assets
+```
+
+If the bucket already exists, skip creation and only update the Worker config:
+
+```bash
+pnpm storage:r2:provision -- --bucket your-me3-assets --skip-create
+```
+
+The resulting binding looks like this:
+
 ```toml
 [[r2_buckets]]
 binding = "SITE_ASSETS"
@@ -156,6 +174,12 @@ wrangler deploy --config wrangler.toml
 ```
 
 The `pnpm deploy` script runs the build, remote D1 migration, and Worker deploy in sequence. Use it only after authenticating Wrangler and confirming the generated Cloudflare resource names/IDs.
+
+To deploy with the default R2 bucket in one command:
+
+```bash
+pnpm deploy:with-r2
+```
 
 ## Public Distribution
 

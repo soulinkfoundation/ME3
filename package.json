@@ -10,11 +10,13 @@
     "dev:worker": "pnpm --filter @me3-core/worker dev",
     "dev:web": "pnpm --filter @me3/web dev",
     "setup:dev-vars": "node scripts/create-dev-vars.mjs",
+    "storage:r2:provision": "node scripts/provision-r2.mjs",
     "verify:local-boot": "node scripts/verify-local-boot.mjs",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
-    "deploy": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
+    "deploy": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
+    "deploy:with-r2": "pnpm storage:r2:provision --yes && pnpm deploy"
   },
   "devDependencies": {
     "typescript": "^5.3.3",
