@@ -4,7 +4,6 @@ import { useRouter } from "vue-router";
 import { useWizardStore } from "../../stores/wizard";
 import { useSitesStore, type BillingStatus } from "../../stores/sites";
 import UiIcon from "../UiIcon.vue";
-import ProBadge from "../ProBadge.vue";
 
 const router = useRouter();
 const wizard = useWizardStore();
@@ -99,7 +98,7 @@ async function loadBillingStatus() {
 }
 
 function upgradeToPro() {
-  router.push("/pricing");
+  router.push("/account");
 }
 
 onMounted(async () => {
@@ -125,7 +124,9 @@ onMounted(async () => {
           <div class="feature-text">
             <span class="feature-name">
               Newsletter
-              <ProBadge v-if="!hasNewsletterAccess" text="Starter" />
+              <span v-if="!hasNewsletterAccess" class="feature-pill">
+                Starter
+              </span>
             </span>
             <span class="feature-desc">
               Collect subscribers so people can stay in touch and hear about new
@@ -158,7 +159,9 @@ onMounted(async () => {
           <div class="feature-text">
             <span class="feature-name">
               Bookings
-              <ProBadge v-if="!hasBookingsAccess" text="Starter" />
+              <span v-if="!hasBookingsAccess" class="feature-pill">
+                Starter
+              </span>
             </span>
             <span class="feature-desc">
               Let people book time with you and keep availability in sync with
@@ -225,7 +228,7 @@ onMounted(async () => {
           <div class="feature-text">
             <span class="feature-name">
               Products & checkout
-              <ProBadge v-if="!hasShopAccess" />
+              <span v-if="!hasShopAccess" class="feature-pill">Pro</span>
             </span>
             <span class="feature-desc">
               Add products and accept payments via Stripe Connect.
@@ -395,6 +398,18 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.feature-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .feature-desc {

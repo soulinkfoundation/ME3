@@ -77,7 +77,7 @@ router.beforeEach(async (to, _from, next) => {
 
   if (to.path === "/socials" || to.path === "/socials/") {
     next({
-      path: "/content",
+      path: "/assistant",
       query: to.query,
       hash: to.hash,
       replace: true,
@@ -87,7 +87,7 @@ router.beforeEach(async (to, _from, next) => {
 
   if (to.path === "/socials/relationship-builder") {
     next({
-      path: "/content/relationship-builder",
+      path: "/assistant",
       query: to.query,
       hash: to.hash,
       replace: true,
@@ -120,7 +120,7 @@ router.beforeEach(async (to, _from, next) => {
     to.path.startsWith("/agent/relationships/")
   ) {
     next({
-      path: "/content/relationship-builder",
+      path: "/assistant",
       query: to.query,
       hash: to.hash,
       replace: true,
@@ -198,7 +198,7 @@ router.afterEach((to) => {
   const robots = (to.meta?.robots as string) || "index,follow";
   const ogTitle = (to.meta?.ogTitle as string) || title;
   const ogDescription = (to.meta?.ogDescription as string) || description;
-  const rawOgImage = (to.meta?.ogImage as string) || "/me3.png";
+  const rawOgImage = (to.meta?.ogImage as string) || "/me3protocol.jpg";
 
   document.title = title;
   updateMetaTag("description", description);

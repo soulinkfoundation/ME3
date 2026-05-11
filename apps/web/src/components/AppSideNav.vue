@@ -4,13 +4,11 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import ThemeToggle from "./ThemeToggle.vue";
 import UiIcon from "./UiIcon.vue";
 import { useAuthStore } from "../stores/auth";
-import { useOpsStore } from "../stores/ops";
 import { useSitesStore } from "../stores/sites";
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
-const ops = useOpsStore();
 const sites = useSitesStore();
 
 /** ME3 profile site (single canonical site for workspace Sites). */
@@ -47,7 +45,6 @@ function handleWindowKeydown(event: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  void ops.fetchAccess();
   if (sites.sites.length === 0) {
     await sites.fetchSites();
   }
@@ -65,9 +62,6 @@ onBeforeUnmount(() => {
 
 const isCalendar = computed(() => route.path.startsWith("/calendar"));
 const isEmail = computed(() => route.path.startsWith("/email"));
-const isContacts = computed(() => route.path.startsWith("/contacts"));
-const isContent = computed(() => route.path.startsWith("/content"));
-const isAccounts = computed(() => route.path.startsWith("/accounts"));
 const isSites = computed(() => route.path.startsWith("/sites/"));
 const isAssistant = computed(() => route.path.startsWith("/assistant"));
 /** `/account` and `/account/...` only — not `/accounts` (startsWith("/account") is a false positive). */
@@ -75,7 +69,6 @@ const isAccount = computed(() => {
   const p = route.path;
   return p === "/account" || p === "/account/" || p.startsWith("/account/");
 });
-const isOpsSection = computed(() => route.path.startsWith("/ops/"));
 const mobileMenuLabel = computed(() =>
   mobileNavOpen.value ? "Close navigation" : "Open navigation",
 );
@@ -87,33 +80,21 @@ function rowActive(
   kind:
     | "calendar"
     | "email"
-    | "contacts"
-    | "content"
-    | "accounts"
     | "sites"
     | "assistant"
-    | "account"
-    | "ops",
+    | "account",
 ): boolean {
   switch (kind) {
     case "calendar":
       return isCalendar.value;
     case "email":
       return isEmail.value;
-    case "contacts":
-      return isContacts.value;
-    case "content":
-      return isContent.value;
-    case "accounts":
-      return isAccounts.value;
     case "sites":
       return isSites.value;
     case "assistant":
       return isAssistant.value;
     case "account":
       return isAccount.value;
-    case "ops":
-      return isOpsSection.value;
     default:
       return false;
   }
@@ -231,42 +212,6 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
         </RouterLink>
 
         <RouterLink
-          to="/contacts"
-          class="app-side-nav__row"
-          :class="{ 'app-side-nav__row--active': rowActive('contacts') }"
-          aria-label="Contacts"
-          title="Contacts"
-          @click="closeMobileNav"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">📇</span>
-          <span class="sr-only">Contacts</span>
-        </RouterLink>
-
-        <RouterLink
-          to="/content"
-          class="app-side-nav__row"
-          :class="{ 'app-side-nav__row--active': rowActive('content') }"
-          aria-label="Content"
-          title="Content"
-          @click="closeMobileNav"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">✍️</span>
-          <span class="sr-only">Content</span>
-        </RouterLink>
-
-        <RouterLink
-          to="/accounts"
-          class="app-side-nav__row"
-          :class="{ 'app-side-nav__row--active': rowActive('accounts') }"
-          aria-label="Accounts"
-          title="Accounts"
-          @click="closeMobileNav"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">💰</span>
-          <span class="sr-only">Accounts</span>
-        </RouterLink>
-
-        <RouterLink
           v-if="sitesPath"
           :to="sitesPath"
           class="app-side-nav__row"
@@ -303,18 +248,6 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           <span class="sr-only">Settings</span>
         </RouterLink>
 
-        <RouterLink
-          v-if="ops.accessAllowed"
-          to="/ops/customers"
-          class="app-side-nav__row"
-          :class="{ 'app-side-nav__row--active': rowActive('ops') }"
-          aria-label="Ops customers"
-          title="Ops customers"
-          @click="closeMobileNav"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">👥</span>
-          <span class="sr-only">ME3 ops</span>
-        </RouterLink>
       </nav>
 
       <div class="app-side-nav__footer">

@@ -1,26 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from "vue";
 import { useWizardStore, type WizardPost } from "../../stores/wizard";
-import { useSitesStore, type BillingStatus } from "../../stores/sites";
+import { useSitesStore } from "../../stores/sites";
 import { usePublish } from "../../composables/usePublish";
 import TiptapEditor from "../TiptapEditor.vue";
-import ProBadge from "../ProBadge.vue";
 import UiIcon from "../UiIcon.vue";
-import BroadcastModal from "../BroadcastModal.vue";
-import BroadcastStatsModal from "../BroadcastStatsModal.vue";
 
 const wizard = useWizardStore();
 const sites = useSitesStore();
 const { publish, isPublishing } = usePublish();
-
-const billingStatus = ref<BillingStatus | null>(null);
-const canSendEmails = computed(
-  () => (billingStatus.value?.capabilities.emailSendQuota || 0) > 0,
-);
-
-async function loadBillingStatus() {
-  billingStatus.value = await sites.getBillingStatus();
-}
 
 // Publish function for broadcasting
 async function publishSite(): Promise<void> {
@@ -54,63 +42,6 @@ async function handlePublishClick() {
   } catch (error) {
     console.error(error);
   }
-}
-
-// Broadcast modal state
-const showBroadcastModal = ref(false);
-const broadcastingPost = ref<{
-  title: string;
-  slug: string;
-  emailedAt?: string;
-} | null>(null);
-
-const showStatsModal = ref(false);
-const statsPost = ref<{
-  title: string;
-  slug: string;
-  emailedAt?: string;
-} | null>(null);
-
-function openBroadcastModal(post: {
-  title: string;
-  slug: string;
-  emailedAt?: string;
-}) {
-  broadcastingPost.value = post;
-  showBroadcastModal.value = true;
-}
-
-function closeBroadcastModal() {
-  showBroadcastModal.value = false;
-  broadcastingPost.value = null;
-}
-
-function openStatsModal(post: {
-  title: string;
-  slug: string;
-  emailedAt?: string;
-}) {
-  statsPost.value = post;
-  showStatsModal.value = true;
-}
-
-function closeStatsModal() {
-  showStatsModal.value = false;
-  statsPost.value = null;
-}
-
-function handleBroadcastSent(broadcastId: string) {
-  console.log("Broadcast sent:", broadcastId);
-  // Update the post's emailedAt field
-  if (broadcastingPost.value) {
-    const postIndex = wizard.posts.findIndex(
-      (p) => p.slug === broadcastingPost.value?.slug,
-    );
-    if (postIndex >= 0) {
-      wizard.updatePost(postIndex, { emailedAt: new Date().toISOString() });
-    }
-  }
-  closeBroadcastModal();
 }
 
 // Currently selected post index for editing
@@ -451,7 +382,6 @@ defineExpose({
 });
 
 onMounted(() => {
-  loadBillingStatus();
   void sites.fetchSites();
 });
 </script>
@@ -475,20 +405,9 @@ onMounted(() => {
           <span v-if="post.publishedAt" class="post-date">
             {{ new Date(post.publishedAt).toLocaleDateString() }}
           </span>
-          <div v-if="post.emailedAt" class="sent-row">
-            <span class="sent-badge">
-              Sent {{ new Date(post.emailedAt).toLocaleDateString() }}
-            </span>
-            <button
-              class="stats-btn"
-              type="button"
-              title="View email stats"
-              @click="openStatsModal(post)"
-            >
-              <UiIcon name="Eye" :size="14" />
-              <span>Stats</span>
-            </button>
-          </div>
+          <span v-if="post.emailedAt" class="sent-badge">
+            Sent {{ new Date(post.emailedAt).toLocaleDateString() }}
+          </span>
         </div>
         <div class="post-actions">
           <button
@@ -562,28 +481,6 @@ onMounted(() => {
           ← Back to posts
         </button>
         <div class="editor-actions">
-          <button
-            class="editor-action send"
-            type="button"
-            :disabled="
-              !canSendEmails || !selectedPost.publishedAt || selectedPost.draft
-            "
-            :title="
-              !canSendEmails
-                ? 'Pro feature — upgrade to send emails'
-                : selectedPost.draft
-                  ? 'Publish the post to send as email'
-                  : !selectedPost.publishedAt
-                    ? 'Set a published date to send'
-                    : selectedPost.emailedAt
-                      ? 'Send again to subscribers'
-                      : 'Send to subscribers'
-            "
-            @click="openBroadcastModal(selectedPost)"
-          >
-            <span>Send as email</span>
-            <ProBadge :show="!canSendEmails" />
-          </button>
           <button
             class="editor-action publish"
             type="button"
@@ -685,26 +582,6 @@ onMounted(() => {
       />
     </div>
 
-    <!-- Broadcast Modal -->
-    <BroadcastModal
-      v-if="showBroadcastModal && broadcastingPost"
-      :username="wizard.profile.handle"
-      :post-title="broadcastingPost.title"
-      :post-slug="broadcastingPost.slug"
-      :already-sent="!!broadcastingPost.emailedAt"
-      :needs-publish="wizard.needsPublish"
-      :on-publish="publishSite"
-      @close="closeBroadcastModal"
-      @sent="handleBroadcastSent"
-    />
-
-    <BroadcastStatsModal
-      v-if="showStatsModal && statsPost"
-      :username="wizard.profile.handle"
-      :post-title="statsPost.title"
-      :post-slug="statsPost.slug"
-      @close="closeStatsModal"
-    />
   </div>
 </template>
 

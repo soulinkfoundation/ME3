@@ -102,7 +102,7 @@ async function refreshStatus() {
 }
 
 function upgradeToPro() {
-  router.push("/pricing");
+  router.push("/account");
 }
 
 async function manageBilling() {
@@ -190,11 +190,6 @@ const domainPreview = computed(() => {
 
 <template>
   <section class="custom-domain-section">
-    <!-- <div class="section-header">
-      <h3>Custom domain</h3>
-      <ProBadge :show="!hasCustomDomainAccess" text="Starter" />
-    </div> -->
-
     <!-- No paid custom-domain access -->
     <div v-if="!hasCustomDomainAccess" class="upgrade-prompt">
       <p>
@@ -217,7 +212,7 @@ const domainPreview = computed(() => {
         Refresh status
       </button>
       <button v-else class="button primary" @click="upgradeToPro">
-        View plans
+        Review settings
       </button>
     </div>
 
@@ -263,8 +258,8 @@ const domainPreview = computed(() => {
             (recommended). <br />
             5. Refresh this page and if you don't see the status change to
             'Active' after 1 hour, please
-            <router-link to="/support" target="_blank" rel="noopener noreferrer"
-              >contact support</router-link
+            <router-link to="/account" target="_blank" rel="noopener noreferrer"
+              >check settings</router-link
             >.
           </p>
 
@@ -328,11 +323,11 @@ const domainPreview = computed(() => {
 
           <div class="support-link">
             <router-link
-              to="/support"
+              to="/account"
               target="_blank"
               rel="noopener noreferrer"
             >
-              Contact support
+              Settings
             </router-link>
           </div>
 

@@ -698,7 +698,7 @@ async function deleteAccount() {
 }
 
 function goToPricing() {
-  router.push("/pricing");
+  router.push("/account");
 }
 
 async function loadBillingStatus() {
@@ -1172,9 +1172,9 @@ onMounted(async () => {
             </p>
             <router-link
               class="button primary link-button-inline"
-              to="/pricing"
+              to="/account"
             >
-              View Pro
+              Review settings
             </router-link>
           </div>
         </div>

@@ -4,7 +4,6 @@ import { RouterView, useRoute } from "vue-router";
 import { Toaster } from "vue-sonner";
 import AgentChatLauncher from "./components/AgentChatLauncher.vue";
 import AppSideNav from "./components/AppSideNav.vue";
-import CookieConsentBanner from "./components/CookieConsentBanner.vue";
 import { useCookieConsent } from "./composables/useCookieConsent";
 import { syncPosthogConsent } from "./composables/usePosthog";
 import { useAuthStore } from "./stores/auth";
@@ -74,7 +73,6 @@ watch(
     :rich-colors="false"
     :duration="5000"
   />
-  <CookieConsentBanner />
   <AgentChatLauncher v-if="showAgentLauncher" />
 </template>
 

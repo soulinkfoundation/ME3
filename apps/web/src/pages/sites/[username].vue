@@ -2,16 +2,13 @@
 import { definePage } from "unplugin-vue-router/runtime";
 import { ref, computed, onMounted, watch } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
-import { api } from "../../api";
 import { useSitesStore, type DomainStatus } from "../../stores/sites";
 import { useWizardStore } from "../../stores/wizard";
 import CustomDomain from "../../components/CustomDomain.vue";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
-import SiteAnalyticsCard from "../../components/dashboard/SiteAnalyticsCard.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import JSZip from "jszip";
 import TurndownService from "turndown";
-import type { SiteAnalyticsSummary } from "../../types/analytics";
 import {
   defaultVibe,
   getVibeCss,
@@ -74,13 +71,6 @@ const uploadError = ref("");
 const uploadNotice = ref("");
 const uploadSuccess = ref(false);
 const selectedFiles = ref<SiteUploadFile[]>([]);
-const siteAnalyticsSummary = ref<SiteAnalyticsSummary | null>(null);
-const siteAnalyticsLoading = ref(false);
-const siteAnalyticsError = ref("");
-
-/** Temporary: hide Site performance card on /sites/:username (set true to restore). */
-const SHOW_SITE_ANALYTICS_CARD = false;
-
 // Custom domain active → show favicon control in header (mirrors CustomDomain card)
 const headerDomainStatus = ref<DomainStatus | null>(null);
 const isCustomDomainActive = computed(
@@ -200,7 +190,7 @@ onMounted(async () => {
   }
 
   if (!site.value) {
-    router.push("/home");
+    router.push("/calendar");
     return;
   }
 
@@ -209,53 +199,6 @@ onMounted(async () => {
     showAdvancedUpload.value = true;
   }
 });
-
-watch(
-  [username, () => site.value?.published_at || null],
-  ([nextUsername, publishedAt]) => {
-    if (!SHOW_SITE_ANALYTICS_CARD) {
-      siteAnalyticsSummary.value = null;
-      siteAnalyticsError.value = "";
-      siteAnalyticsLoading.value = false;
-      return;
-    }
-    if (!publishedAt) {
-      siteAnalyticsSummary.value = null;
-      siteAnalyticsError.value = "";
-      siteAnalyticsLoading.value = false;
-      return;
-    }
-
-    void loadSiteAnalytics(nextUsername);
-  },
-  { immediate: true },
-);
-
-async function loadSiteAnalytics(targetUsername: string | null) {
-  if (!SHOW_SITE_ANALYTICS_CARD) return;
-  if (!targetUsername) {
-    siteAnalyticsSummary.value = null;
-    siteAnalyticsError.value = "";
-    return;
-  }
-
-  siteAnalyticsLoading.value = true;
-  siteAnalyticsError.value = "";
-
-  try {
-    const response = await api.get<{
-      ok: boolean;
-      summary: SiteAnalyticsSummary | null;
-    }>(`/sites/${targetUsername}/analytics/summary?period=7d`);
-    siteAnalyticsSummary.value = response.summary;
-  } catch (error) {
-    siteAnalyticsSummary.value = null;
-    siteAnalyticsError.value =
-      error instanceof Error ? error.message : "Failed to load site analytics";
-  } finally {
-    siteAnalyticsLoading.value = false;
-  }
-}
 
 async function loadWizardContent(): Promise<void> {
   try {
@@ -428,7 +371,7 @@ async function deleteSite() {
   try {
     const success = await sites.deleteSite(username.value);
     if (success) {
-      router.push("/home");
+      router.push("/calendar");
     }
   } finally {
     isDeleting.value = false;
@@ -860,17 +803,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           </div>
         </div>
       </div>
-
-      <section
-        v-if="SHOW_SITE_ANALYTICS_CARD && site?.published_at"
-        class="analytics-section"
-      >
-        <SiteAnalyticsCard
-          :summary="siteAnalyticsSummary"
-          :loading="siteAnalyticsLoading"
-          :error="siteAnalyticsError"
-        />
-      </section>
 
       <!-- Quick Actions -->
       <section class="actions-section">

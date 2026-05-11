@@ -206,7 +206,7 @@ onMounted(async () => {
 });
 
 function openPlans() {
-  router.push("/pricing");
+  router.push("/account");
 }
 
 async function downloadZip() {
@@ -473,7 +473,7 @@ async function publishToMe3() {
     if (siteName) {
       router.push(`/sites/${encodeURIComponent(siteName)}`);
     } else {
-      router.push("/home");
+      router.push("/calendar");
     }
   }
 }

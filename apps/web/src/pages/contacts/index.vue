@@ -1712,7 +1712,7 @@ watch(
 
       <div v-else-if="contacts.length === 0" class="empty-state">
         <img
-          src="/rolodex-card.svg"
+          src="/robot.png"
           alt="Your CEO Rolodex — every relationship that matters"
           class="empty-icon"
         />

@@ -213,7 +213,7 @@ function exitWizardDestination(): string {
     .trim()
     .toLowerCase();
   if (site.length >= 3) return `/sites/${site}`;
-  return "/home";
+  return "/calendar";
 }
 
 function handleExit() {
@@ -226,7 +226,7 @@ async function handleQuickPublish() {
 
 function clearImportedDraft() {
   wizard.reset();
-  router.push("/home");
+  router.push("/calendar");
 }
 
 onMounted(() => {

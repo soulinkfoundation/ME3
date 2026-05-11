@@ -133,7 +133,7 @@ async function sendMessage() {
       reminderLink:
         result.reminderAction?.kind === "created" ||
         result.reminderAction?.kind === "updated",
-      actionHref: result.contentAction?.kind === "saved" ? "/content" : null,
+      actionHref: result.contentAction?.kind === "saved" ? "/assistant" : null,
       actionLabel:
         result.contentAction?.kind === "saved" ? "Open content bank" : null,
     });

@@ -176,7 +176,7 @@ watch(startUrl, (url) => {
 
 async function handlePrimaryAction() {
   if (!available.value) {
-    router.push("/pricing");
+    router.push("/account");
     return;
   }
 
@@ -278,8 +278,8 @@ defineExpose({
         Pro unlocks the Telegram channel MVP, which records message events and
         prepares the account for Cloudflare agent routing.
       </p>
-      <router-link class="button primary link-button-inline" to="/pricing">
-        View Pro
+      <router-link class="button primary link-button-inline" to="/account">
+        Review settings
       </router-link>
     </div>
 

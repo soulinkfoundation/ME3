@@ -32,7 +32,7 @@ const pathLabel = computed(() => route.path);
       <nav class="nav">
         <router-link
           v-if="auth.isAuthenticated"
-          to="/home"
+          to="/calendar"
           class="nav-link"
         >
           Home
@@ -54,10 +54,10 @@ const pathLabel = computed(() => route.path);
             <router-link to="/" class="cta"> Home </router-link>
             <router-link
               v-if="auth.isAuthenticated"
-              to="/home"
+              to="/calendar"
               class="cta secondary"
             >
-              Home
+              Calendar
             </router-link>
             <router-link v-else to="/login" class="cta secondary">
               Sign in

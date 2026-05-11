@@ -3,11 +3,8 @@
     <div class="footer-left">
       <p class="copyright">&copy; 2026 ME3</p>
       <div class="footer-links">
-        <router-link to="/about">About</router-link>
-        <router-link to="/protocol">Protocol</router-link>
-        <router-link to="/pricing">Pricing</router-link>
-        <router-link to="/privacy">Privacy</router-link>
-        <router-link to="/survey">Feedback</router-link>
+        <router-link to="/">Home</router-link>
+        <router-link to="/login">Sign in</router-link>
       </div>
     </div>
     <p class="footer-attribution">
