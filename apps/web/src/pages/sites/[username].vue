@@ -2,7 +2,11 @@
 import { definePage } from "unplugin-vue-router/runtime";
 import { ref, computed, onMounted, watch } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
-import { useSitesStore, type DomainStatus } from "../../stores/sites";
+import {
+  useSitesStore,
+  type DomainStatus,
+  type SiteStorageStatus,
+} from "../../stores/sites";
 import { useWizardStore } from "../../stores/wizard";
 import CustomDomain from "../../components/CustomDomain.vue";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
@@ -81,11 +85,71 @@ const faviconLoading = ref(false);
 const faviconUrl = ref<string | null>(null);
 const faviconFileInput = ref<HTMLInputElement | null>(null);
 const faviconImageErrored = ref(false);
+const storageStatus = ref<SiteStorageStatus | null>(null);
+const storageLoading = ref(false);
+const storageMigrating = ref(false);
+const storageError = ref("");
+const storageMessage = ref("");
+
+const storageModeLabel = computed(() =>
+  storageStatus.value?.activeMediaStorage === "r2"
+    ? "R2 media storage"
+    : "Core D1 storage",
+);
+const r2Enabled = computed(() => storageStatus.value?.r2.available === true);
+const hasD1MediaToMigrate = computed(
+  () => (storageStatus.value?.d1.mediaFiles || 0) > 0 && r2Enabled.value,
+);
+
+function formatBytes(value: number | undefined): string {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let current = bytes / 1024;
+  let unitIndex = 0;
+  while (current >= 1024 && unitIndex < units.length - 1) {
+    current /= 1024;
+    unitIndex += 1;
+  }
+  return `${current >= 10 ? current.toFixed(0) : current.toFixed(1)} ${units[unitIndex]}`;
+}
 
 async function syncHeaderDomainStatus() {
   const u = username.value;
   if (!u) return;
   headerDomainStatus.value = await sites.getDomainStatus(u);
+}
+
+async function loadStorageStatus() {
+  if (!username.value) return;
+  storageLoading.value = true;
+  storageError.value = "";
+  try {
+    storageStatus.value = await sites.getSiteStorageStatus(username.value);
+    if (!storageStatus.value) {
+      storageError.value = sites.error || "Failed to load storage status";
+    }
+  } finally {
+    storageLoading.value = false;
+  }
+}
+
+async function migrateMediaToR2() {
+  if (storageMigrating.value || !username.value) return;
+  storageMigrating.value = true;
+  storageError.value = "";
+  storageMessage.value = "";
+  try {
+    const result = await sites.migrateSiteMediaToR2(username.value);
+    if (!result) {
+      storageError.value = sites.error || "Failed to migrate media";
+      return;
+    }
+    storageStatus.value = result.storage;
+    storageMessage.value = `Moved ${result.migrated} media file${result.migrated === 1 ? "" : "s"} to R2.`;
+  } finally {
+    storageMigrating.value = false;
+  }
 }
 
 async function loadFavicon() {
@@ -156,6 +220,7 @@ async function handleFaviconUpload(event: Event) {
 }
 
 watch(username, () => void syncHeaderDomainStatus(), { immediate: true });
+watch(username, () => void loadStorageStatus());
 
 watch(
   isCustomDomainActive,
@@ -198,6 +263,8 @@ onMounted(async () => {
   if (route.query.upload === "true") {
     showAdvancedUpload.value = true;
   }
+
+  await loadStorageStatus();
 });
 
 async function loadWizardContent(): Promise<void> {
@@ -898,6 +965,81 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         @domain-status-changed="() => void syncHeaderDomainStatus()"
       />
 
+      <section class="storage-section" aria-labelledby="site-storage-title">
+        <div class="storage-header">
+          <div>
+            <h2 id="site-storage-title">Storage</h2>
+            <p>
+              Media uploads use {{ storageModeLabel }}. Add R2 when this site
+              grows beyond small images and lightweight pages.
+            </p>
+          </div>
+          <span
+            class="storage-badge"
+            :class="{ 'storage-badge--r2': r2Enabled }"
+          >
+            {{ r2Enabled ? "R2 ready" : "D1 default" }}
+          </span>
+        </div>
+
+        <div v-if="storageLoading" class="storage-loading">
+          Loading storage status...
+        </div>
+        <template v-else>
+          <div class="storage-grid">
+            <div class="storage-stat">
+              <span>D1 files</span>
+              <strong>{{ storageStatus?.d1.files || 0 }}</strong>
+              <p>{{ formatBytes(storageStatus?.d1.bytes) }}</p>
+            </div>
+            <div class="storage-stat">
+              <span>D1 media</span>
+              <strong>{{ storageStatus?.d1.mediaFiles || 0 }}</strong>
+              <p>{{ formatBytes(storageStatus?.d1.mediaBytes) }}</p>
+            </div>
+            <div class="storage-stat">
+              <span>R2 media</span>
+              <strong>{{ storageStatus?.r2.files || 0 }}</strong>
+              <p>{{ formatBytes(storageStatus?.r2.bytes) }}</p>
+            </div>
+          </div>
+
+          <div v-if="!r2Enabled" class="storage-config">
+            <p>
+              To enable large-site storage, create an R2 bucket and bind it to
+              this Worker as <code>SITE_ASSETS</code>.
+            </p>
+            <pre><code>[[r2_buckets]]
+binding = "SITE_ASSETS"
+bucket_name = "me3-site-assets"</code></pre>
+          </div>
+
+          <div v-else class="storage-actions">
+            <button
+              type="button"
+              class="button secondary"
+              :disabled="storageMigrating || !hasD1MediaToMigrate"
+              @click="migrateMediaToR2"
+            >
+              {{
+                storageMigrating
+                  ? "Moving media..."
+                  : hasD1MediaToMigrate
+                    ? "Move D1 media to R2"
+                    : "Media already on R2"
+              }}
+            </button>
+            <p>
+              New media uploads will use R2 automatically while page metadata
+              and manifests stay in D1.
+            </p>
+          </div>
+        </template>
+
+        <p v-if="storageError" class="error">{{ storageError }}</p>
+        <p v-if="storageMessage" class="success">{{ storageMessage }}</p>
+      </section>
+
       <!-- Newsletter Subscribers -->
       <section
         v-if="site?.published_at && isProfileSite"
@@ -1341,6 +1483,98 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   margin: 0;
 }
 
+.storage-section {
+  margin-bottom: 32px;
+  padding: 20px;
+  background: var(--color-border);
+  border-radius: 12px;
+}
+
+.storage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.storage-header h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.storage-header p,
+.storage-actions p,
+.storage-config p,
+.storage-loading {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.storage-badge {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.storage-badge--r2 {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.storage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.storage-stat {
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(128, 128, 128, 0.12);
+}
+
+.storage-stat span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.storage-stat strong {
+  display: block;
+  font-size: 20px;
+  line-height: 1.1;
+}
+
+.storage-stat p {
+  margin: 4px 0 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.storage-config,
+.storage-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.storage-config pre {
+  overflow-x: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+}
+
 /* Advanced Section */
 .advanced-section {
   margin-bottom: 32px;
@@ -1615,6 +1849,14 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 @media (max-width: 500px) {
   .actions-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .storage-header {
+    flex-direction: column;
+  }
+
+  .storage-grid {
     grid-template-columns: 1fr;
   }
 }

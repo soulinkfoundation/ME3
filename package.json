@@ -35,6 +35,9 @@
       "AI": {
         "description": "Optional Workers AI binding. If you do not use Workers AI, configure OpenAI or Anthropic keys after install."
       },
+      "SITE_ASSETS": {
+        "description": "Optional R2 bucket binding for large public site media. D1 remains the default for small Core installs."
+      },
       "JWT_SECRET": {
         "description": "Generate a random auth signing secret, for example `openssl rand -base64 32`."
       },

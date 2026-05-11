@@ -97,6 +97,7 @@ The root `wrangler.toml` is the deploy-template config for Cloudflare Workers Bu
 - SPA fallback for copied Vue routes
 - Worker-first routing for all paths, so one Worker can route by hostname
 - D1 binding and migration directory
+- optional `SITE_ASSETS` R2 binding for large public site media
 - `ME3_USER_AGENT` Durable Object namespace
 - optional Workers AI binding
 - public origin/model defaults
@@ -129,6 +130,18 @@ me3.customdomain.com  -> me3 Worker
 ```
 
 If the owner wants the apex domain too, configure Cloudflare to redirect `customdomain.com` to `www.customdomain.com`. Core keeps admin and public-site routing separate by hostname: requests on `ME3_SITE_HOST` serve the published D1-backed site files, while requests on `ME3_ADMIN_HOST` serve the admin SPA and authenticated API.
+
+### Optional R2 Media Storage
+
+By default, Core stores published site files in D1. This keeps the install simple, but D1 is best for small pages, manifests, and modest images. Owners with large media-heavy sites can add an R2 bucket and bind it as `SITE_ASSETS`:
+
+```toml
+[[r2_buckets]]
+binding = "SITE_ASSETS"
+bucket_name = "me3-site-assets"
+```
+
+When `SITE_ASSETS` is present, new media uploads under `/files/*` are stored in R2 automatically while page metadata, publish manifests, and generated HTML stay in D1. The site settings page shows whether R2 is active and can move existing D1 media into R2.
 
 Manual deploy shape:
 

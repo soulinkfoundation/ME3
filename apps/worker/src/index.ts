@@ -88,6 +88,7 @@ const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"])
 const CONTACT_SOURCES = new Set(["booking", "manual", "agent", "import", "outreach", "soulink"]);
 const CONTACT_RELATIONSHIPS = new Set(["client", "prospect", "contact"]);
 const CONTACT_STATUSES = new Set(["active", "archived", "dormant"]);
+const D1_SITE_FILE_MAX_BYTES = 1_900_000;
 const OUTREACH_STATUSES = new Set([
   "new",
   "drafted",
@@ -434,6 +435,44 @@ app.get("/api/sites/:username/publish-manifest", async (c) => {
   });
 });
 
+app.get("/api/sites/:username/storage", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  return c.json(await getSiteStorageStatus(c.env, site));
+});
+
+app.post("/api/sites/:username/storage/migrate-media", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+  if (!c.env.SITE_ASSETS) {
+    return c.json({ error: "SITE_ASSETS R2 binding is not configured" }, 400);
+  }
+
+  const mediaFiles = await listSiteFiles(c.env, site.id, "public/files/");
+  const favicon = await getSiteFile(c.env, site.id, "public/favicon.png");
+  const files = favicon ? [favicon, ...mediaFiles] : mediaFiles;
+  let migrated = 0;
+
+  for (const file of files) {
+    await putR2SiteFile(c.env, site, file.path, file.content, file.content_type);
+    await deleteSiteFile(c.env, site.id, file.path);
+    migrated += 1;
+  }
+
+  return c.json({
+    ok: true,
+    migrated,
+    storage: await getSiteStorageStatus(c.env, site),
+  });
+});
+
 app.post("/api/sites/:username/upload", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -449,6 +488,14 @@ app.post("/api/sites/:username/upload", async (c) => {
   const textFiles = new Map<string, string>();
 
   for (const file of files) {
+    if (isSiteMediaFile(file.name, file.type)) {
+      const buffer = await file.arrayBuffer();
+      const relativePath = normalizeSiteMediaPath(file.name);
+      await putSiteMediaFile(c.env, site, `public/${relativePath}`, buffer, file.type || getContentType(file.name));
+      manifest.assetFiles[relativePath] = await sha256Buffer(buffer);
+      continue;
+    }
+
     const content = await file.text();
     const contentType = file.type || getContentType(file.name);
     const sourcePath = `src/${normalizeSiteFileName(file.name)}`;
@@ -497,19 +544,22 @@ app.post("/api/sites/:username/upload-image", async (c) => {
   const testimonialIndex = String(form.get("index") || "").replace(/[^0-9]/g, "");
   const baseName = type === "testimonial" && testimonialIndex ? `testimonial-${testimonialIndex}` : type;
   const filename = `${baseName}.${ext}`;
-  const path = `public/files/${filename}`;
+  const relativePath = type === "favicon" ? "favicon.png" : `files/${filename}`;
+  const path = `public/${relativePath}`;
   const buffer = await file.arrayBuffer();
-  await putSiteFile(c.env, site.id, path, buffer, file.type);
+  const storage = await putSiteMediaFile(c.env, site, path, buffer, file.type);
 
   const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
-  manifest.assetFiles[filename] = await sha256Buffer(buffer);
+  manifest.assetFiles[relativePath] = await sha256Buffer(buffer);
   manifest.updatedAt = new Date().toISOString();
   await savePublishManifest(c.env, site.id, manifest);
 
   return c.json({
     ok: true,
-    path: `files/${filename}`,
-    url: `files/${filename}`,
+    path: relativePath,
+    url: relativePath,
+    type,
+    storage,
   });
 });
 
@@ -530,10 +580,10 @@ app.post("/api/sites/:username/upload-page-image", async (c) => {
   const ext = imageExtension(file);
   const filename = `${pageSlug}-${imageIndex}.${ext}`;
   const buffer = await file.arrayBuffer();
-  await putSiteFile(c.env, site.id, `public/files/${filename}`, buffer, file.type);
+  const storage = await putSiteMediaFile(c.env, site, `public/files/${filename}`, buffer, file.type);
 
   const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
-  manifest.assetFiles[filename] = await sha256Buffer(buffer);
+  manifest.assetFiles[`files/${filename}`] = await sha256Buffer(buffer);
   manifest.updatedAt = new Date().toISOString();
   await savePublishManifest(c.env, site.id, manifest);
 
@@ -541,6 +591,7 @@ app.post("/api/sites/:username/upload-page-image", async (c) => {
     ok: true,
     path: `files/${filename}`,
     url: `files/${filename}`,
+    storage,
   });
 });
 
@@ -1372,7 +1423,10 @@ async function serveSiteFileResponse(
 
   const requestedPath = normalizeSiteFileName(rawPath) || "index.html";
   const publicPath = `public/${requestedPath.endsWith("/") ? `${requestedPath}index.html` : requestedPath}`;
+  const isMediaPath = publicPath.startsWith("public/files/") || publicPath === "public/favicon.png";
+  const r2File = isMediaPath ? await getR2SiteFile(env, site, publicPath) : null;
   const file =
+    r2File ||
     (await getSiteFile(env, site.id, publicPath)) ||
     (requestedPath === "index.html" ? await getSiteFile(env, site.id, "landing/index.html") : null);
   if (!file) {
@@ -1439,6 +1493,9 @@ async function putSiteFile(
 ): Promise<void> {
   const buffer =
     typeof content === "string" ? new TextEncoder().encode(content).buffer : content;
+  if (buffer.byteLength > D1_SITE_FILE_MAX_BYTES) {
+    throw new Error("File is too large for Core D1 storage. Add the SITE_ASSETS R2 binding for larger media.");
+  }
   await env.DB.prepare(
     `INSERT INTO site_files (site_id, path, content, content_type, size, sha256, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
@@ -1453,6 +1510,36 @@ async function putSiteFile(
     .run();
 }
 
+async function putSiteMediaFile(
+  env: Env,
+  site: DbSite,
+  path: string,
+  content: ArrayBuffer,
+  contentType: string,
+): Promise<"d1" | "r2"> {
+  if (env.SITE_ASSETS) {
+    await putR2SiteFile(env, site, path, content, contentType);
+    return "r2";
+  }
+  await putSiteFile(env, site.id, path, content, contentType);
+  return "d1";
+}
+
+async function putR2SiteFile(
+  env: Env,
+  site: DbSite,
+  path: string,
+  content: ArrayBuffer,
+  contentType: string,
+): Promise<void> {
+  if (!env.SITE_ASSETS) {
+    throw new Error("SITE_ASSETS R2 binding is not configured");
+  }
+  await env.SITE_ASSETS.put(getR2SiteFileKey(site, path), content, {
+    httpMetadata: { contentType },
+  });
+}
+
 async function getSiteFile(env: Env, siteId: string, path: string): Promise<SiteFileRecord | null> {
   return (
     (await env.DB.prepare(
@@ -1463,6 +1550,32 @@ async function getSiteFile(env: Env, siteId: string, path: string): Promise<Site
       .bind(siteId, path)
       .first<SiteFileRecord>()) || null
   );
+}
+
+async function deleteSiteFile(env: Env, siteId: string, path: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM site_files WHERE site_id = ? AND path = ?")
+    .bind(siteId, path)
+    .run();
+}
+
+async function getR2SiteFile(env: Env, site: DbSite, path: string): Promise<SiteFileRecord | null> {
+  if (!env.SITE_ASSETS) return null;
+  const object = await env.SITE_ASSETS.get(getR2SiteFileKey(site, path));
+  if (!object) return null;
+  const content = await object.arrayBuffer();
+  return {
+    site_id: site.id,
+    path,
+    content,
+    content_type: object.httpMetadata?.contentType || getContentType(path),
+    size: object.size,
+    sha256: null,
+    updated_at: object.uploaded.toISOString(),
+  };
+}
+
+function getR2SiteFileKey(site: DbSite, path: string): string {
+  return `sites/${site.username}/${normalizeSiteFileName(path)}`;
 }
 
 async function getSiteFileText(env: Env, siteId: string, path: string): Promise<string | null> {
@@ -1480,6 +1593,62 @@ async function listSiteFiles(env: Env, siteId: string, prefix: string): Promise<
     .bind(siteId, `${prefix}%`)
     .all<SiteFileRecord>();
   return rows.results || [];
+}
+
+async function getSiteStorageStatus(env: Env, site: DbSite) {
+  const d1Stats = await env.DB.prepare(
+    `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes
+     FROM site_files
+     WHERE site_id = ?`,
+  )
+    .bind(site.id)
+    .first<{ files: number | string | null; bytes: number | string | null }>();
+  const d1MediaStats = await env.DB.prepare(
+    `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes
+     FROM site_files
+     WHERE site_id = ? AND (path LIKE 'public/files/%' OR path = 'public/favicon.png')`,
+  )
+    .bind(site.id)
+    .first<{ files: number | string | null; bytes: number | string | null }>();
+
+  const r2 = await getR2StorageStats(env, site);
+
+  return {
+    ok: true,
+    activeMediaStorage: env.SITE_ASSETS ? "r2" : "d1",
+    d1: {
+      files: Number(d1Stats?.files || 0),
+      bytes: Number(d1Stats?.bytes || 0),
+      mediaFiles: Number(d1MediaStats?.files || 0),
+      mediaBytes: Number(d1MediaStats?.bytes || 0),
+      maxFileBytes: D1_SITE_FILE_MAX_BYTES,
+    },
+    r2: {
+      available: Boolean(env.SITE_ASSETS),
+      binding: "SITE_ASSETS",
+      files: r2.files,
+      bytes: r2.bytes,
+    },
+  };
+}
+
+async function getR2StorageStats(env: Env, site: DbSite): Promise<{ files: number; bytes: number }> {
+  if (!env.SITE_ASSETS) return { files: 0, bytes: 0 };
+  let cursor: string | undefined;
+  let files = 0;
+  let bytes = 0;
+  const prefix = `sites/${site.username}/public/`;
+
+  do {
+    const listing = await env.SITE_ASSETS.list(cursor ? { prefix, cursor } : { prefix });
+    for (const object of listing.objects) {
+      files += 1;
+      bytes += object.size;
+    }
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+
+  return { files, bytes };
 }
 
 async function loadPublishManifest(env: Env, siteId: string): Promise<PublishManifest | null> {
@@ -1525,6 +1694,26 @@ function imageExtension(file: File): string {
   if (file.name.toLowerCase().endsWith(".webp")) return "webp";
   if (file.name.toLowerCase().endsWith(".gif")) return "gif";
   return "jpg";
+}
+
+function isSiteMediaFile(filename: string, contentType: string): boolean {
+  const lower = filename.toLowerCase();
+  return (
+    contentType.startsWith("image/") ||
+    lower.endsWith(".jpg") ||
+    lower.endsWith(".jpeg") ||
+    lower.endsWith(".png") ||
+    lower.endsWith(".gif") ||
+    lower.endsWith(".webp") ||
+    lower.endsWith(".svg")
+  );
+}
+
+function normalizeSiteMediaPath(filename: string): string {
+  const safe = normalizeSiteFileName(filename);
+  if (safe === "favicon.png") return safe;
+  if (safe.startsWith("files/")) return safe;
+  return `files/${safe.split("/").pop() || "asset"}`;
 }
 
 function getContentType(filename: string): string {

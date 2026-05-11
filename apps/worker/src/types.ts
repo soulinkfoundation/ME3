@@ -3,6 +3,7 @@ export interface Env {
   ME3_USER_AGENT?: DurableObjectNamespace;
   AI?: Ai;
   ASSETS?: Fetcher;
+  SITE_ASSETS?: R2Bucket;
 
   ENVIRONMENT: string;
   CORE_WEB_ORIGIN: string;

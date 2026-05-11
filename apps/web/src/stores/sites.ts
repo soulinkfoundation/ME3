@@ -27,6 +27,7 @@ export interface UploadImageResult {
   ok: boolean;
   path: string;
   url: string;
+  storage?: "d1" | "r2";
   type: "avatar" | "banner" | "favicon" | "hero" | "section" | "testimonial";
 }
 
@@ -34,8 +35,33 @@ export interface UploadPageImageResult {
   ok: boolean;
   path: string;
   url: string;
+  storage?: "d1" | "r2";
   pageSlug: string;
   imageIndex: number;
+}
+
+export interface SiteStorageStatus {
+  ok: boolean;
+  activeMediaStorage: "d1" | "r2";
+  d1: {
+    files: number;
+    bytes: number;
+    mediaFiles: number;
+    mediaBytes: number;
+    maxFileBytes: number;
+  };
+  r2: {
+    available: boolean;
+    binding: "SITE_ASSETS";
+    files: number;
+    bytes: number;
+  };
+}
+
+export interface SiteStorageMigrationResult {
+  ok: boolean;
+  migrated: number;
+  storage: SiteStorageStatus;
 }
 
 export interface PublishManifest {
@@ -673,6 +699,36 @@ export const useSitesStore = defineStore("sites", () => {
     }
   }
 
+  async function getSiteStorageStatus(
+    username: string,
+  ): Promise<SiteStorageStatus | null> {
+    try {
+      return await api.get<SiteStorageStatus>(`/sites/${username}/storage`);
+    } catch (e: any) {
+      error.value = e.message || "Failed to load storage status";
+      return null;
+    }
+  }
+
+  async function migrateSiteMediaToR2(
+    username: string,
+  ): Promise<SiteStorageMigrationResult | null> {
+    loading.value = true;
+    error.value = null;
+
+    try {
+      return await api.post<SiteStorageMigrationResult>(
+        `/sites/${username}/storage/migrate-media`,
+        {},
+      );
+    } catch (e: any) {
+      error.value = e.message || "Failed to migrate media to R2";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   async function startOnboarding(
     payload: OnboardingRequest,
   ): Promise<OnboardingJobStatus | null> {
@@ -1014,6 +1070,8 @@ export const useSitesStore = defineStore("sites", () => {
     connectDomain,
     disconnectDomain,
     refreshDomainStatus,
+    getSiteStorageStatus,
+    migrateSiteMediaToR2,
     startOnboarding,
     getOnboardingStatus,
     // Site content
