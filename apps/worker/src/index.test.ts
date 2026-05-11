@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./index";
 import type { DbPluginInstallation } from "./plugins";
 import type {
   DbAiModelDefault,
   DbAiProviderCredential,
+  DbEmailProviderSetting,
+  DbEmailSendAudit,
   DbMailboxAlias,
+  DbMailboxMessage,
   Env,
   OwnerProfile,
 } from "./types";
@@ -17,6 +20,10 @@ type StoredMessage = {
 };
 
 type StoredOwner = OwnerProfile & { password_hash: string | null };
+type StoredMailboxMessage = DbMailboxMessage & {
+  mailbox_id: string;
+  updated_at: string;
+};
 type StoredTelegramConnection = {
   id: string;
   user_id: string;
@@ -44,6 +51,10 @@ function createEnv(): Env & {
   installSecrets: Map<string, string>;
   aiCredentials: DbAiProviderCredential[];
   aiDefaults: DbAiModelDefault[];
+  emailProviderSettings: DbEmailProviderSetting[];
+  emailSendAudit: DbEmailSendAudit[];
+  emailSends: Array<Record<string, unknown>>;
+  mailboxMessages: StoredMailboxMessage[];
   telegramConnection: StoredTelegramConnection | null;
 } {
   const state = {
@@ -54,6 +65,10 @@ function createEnv(): Env & {
     installSecrets: new Map<string, string>(),
     aiCredentials: [] as DbAiProviderCredential[],
     aiDefaults: [] as DbAiModelDefault[],
+    emailProviderSettings: [] as DbEmailProviderSetting[],
+    emailSendAudit: [] as DbEmailSendAudit[],
+    emailSends: [] as Array<Record<string, unknown>>,
+    mailboxMessages: [] as StoredMailboxMessage[],
     telegramConnection: null as StoredTelegramConnection | null,
   };
 
@@ -211,6 +226,139 @@ function createEnv(): Env & {
                 );
               }
 
+              if (sql.includes("INSERT INTO email_provider_settings")) {
+                const existingIndex = state.emailProviderSettings.findIndex(
+                  (setting) =>
+                    setting.user_id === values[0] &&
+                    setting.provider_id === values[1],
+                );
+                const existing =
+                  existingIndex >= 0 ? state.emailProviderSettings[existingIndex] : null;
+                const setting: DbEmailProviderSetting = {
+                  user_id: values[0] as string,
+                  provider_id: values[1] as string,
+                  is_active: values[2] as number,
+                  encrypted_secret: values[3] as string | null,
+                  secret_hint: values[4] as string | null,
+                  secret_updated_at: values[5] as string | null,
+                  config_json: values[6] as string | null,
+                  last_status: existing?.last_status || null,
+                  last_status_checked_at: existing?.last_status_checked_at || null,
+                  last_test_sent_at: existing?.last_test_sent_at || null,
+                  last_test_error: existing?.last_test_error || null,
+                  created_at: existing?.created_at || (values[7] as string),
+                  updated_at: values[8] as string,
+                };
+                if (existingIndex >= 0) {
+                  state.emailProviderSettings[existingIndex] = setting;
+                } else {
+                  state.emailProviderSettings.push(setting);
+                }
+              }
+
+              if (
+                sql.includes("UPDATE email_provider_settings") &&
+                sql.includes("SET is_active = 0")
+              ) {
+                state.emailProviderSettings = state.emailProviderSettings.map((setting) =>
+                  setting.user_id === values[0] ? { ...setting, is_active: 0 } : setting,
+                );
+              }
+
+              if (
+                sql.includes("UPDATE email_provider_settings") &&
+                sql.includes("SET is_active = 1")
+              ) {
+                state.emailProviderSettings = state.emailProviderSettings.map((setting) =>
+                  setting.user_id === values[1] && setting.provider_id === values[2]
+                    ? { ...setting, is_active: 1, updated_at: values[0] as string }
+                    : setting,
+                );
+              }
+
+              if (
+                sql.includes("UPDATE email_provider_settings") &&
+                sql.includes("last_status = ?")
+              ) {
+                state.emailProviderSettings = state.emailProviderSettings.map((setting) =>
+                  setting.user_id === values[5] && setting.provider_id === values[6]
+                    ? {
+                        ...setting,
+                        last_status: values[0] as DbEmailProviderSetting["last_status"],
+                        last_status_checked_at: values[1] as string,
+                        last_test_sent_at:
+                          (values[2] as string | null) || setting.last_test_sent_at,
+                        last_test_error: values[3] as string | null,
+                        updated_at: values[4] as string,
+                      }
+                    : setting,
+                );
+              }
+
+              if (sql.includes("INSERT INTO email_send_audit")) {
+                state.emailSendAudit.push({
+                  id: values[0] as string,
+                  user_id: values[1] as string,
+                  mailbox_id: values[2] as string | null,
+                  mailbox_message_id: values[3] as string | null,
+                  provider_id: values[4] as string,
+                  provider_message_id: values[5] as string | null,
+                  provider_status: values[6] as string | null,
+                  status: values[7] as DbEmailSendAudit["status"],
+                  purpose: values[8] as DbEmailSendAudit["purpose"],
+                  from_address: values[9] as string,
+                  to_address: values[10] as string,
+                  subject: values[11] as string,
+                  thread_key: values[12] as string | null,
+                  message_id_header: values[13] as string | null,
+                  in_reply_to: values[14] as string | null,
+                  references_header: values[15] as string | null,
+                  metadata_json: values[16] as string,
+                  error_message: values[17] as string | null,
+                  created_by: values[18] as string,
+                  approved_by_user_id: values[19] as string | null,
+                  requested_at: values[20] as string,
+                  sent_at: values[21] as string | null,
+                  created_at: values[22] as string,
+                  updated_at: values[23] as string,
+                });
+              }
+
+              if (sql.includes("INSERT INTO mailbox_messages")) {
+                state.mailboxMessages.push({
+                  id: values[0] as string,
+                  mailbox_id: values[1] as string,
+                  direction: "outbound",
+                  message_kind: "draft",
+                  status: "pending_approval",
+                  thread_key: values[2] as string,
+                  provider_id: null,
+                  provider_message_id: null,
+                  from_address: values[3] as string,
+                  to_address: values[4] as string,
+                  subject: values[5] as string,
+                  text_body: values[6] as string,
+                  html_body: values[7] as string | null,
+                  raw_headers_json: null,
+                  raw_message: null,
+                  metadata_json: values[8] as string,
+                  source_id: values[9] as string | null,
+                  folder: "drafts",
+                  read_at: null,
+                  agent_summary: null,
+                  agent_labels_json: null,
+                  forwarded_to: null,
+                  error_message: null,
+                  created_by: values[10] as string,
+                  approved_by_user_id: null,
+                  received_at: null,
+                  approved_at: null,
+                  sent_at: null,
+                  created_at: values[11] as string,
+                  updated_at: values[12] as string,
+                });
+              }
+
               if (sql.includes("INSERT INTO mailbox_aliases")) {
                 state.mailbox = {
                   id: values[0] as string,
@@ -253,6 +401,88 @@ function createEnv(): Env & {
                 }
               }
 
+              if (
+                sql.includes("UPDATE mailbox_messages") &&
+                sql.includes("message_kind = 'email'")
+              ) {
+                state.mailboxMessages = state.mailboxMessages.map((message) =>
+                  message.id === values[6] && message.mailbox_id === values[7]
+                    ? {
+                        ...message,
+                        message_kind: "email",
+                        status: "sent",
+                        folder: "sent",
+                        provider_id: values[0] as string,
+                        provider_message_id: values[1] as string | null,
+                        error_message: null,
+                        approved_by_user_id: values[2] as string,
+                        approved_at: values[3] as string,
+                        sent_at: values[4] as string,
+                        updated_at: values[5] as string,
+                      }
+                    : message,
+                );
+              }
+
+              if (
+                sql.includes("UPDATE mailbox_messages") &&
+                sql.includes("status = 'pending_approval'")
+              ) {
+                state.mailboxMessages = state.mailboxMessages.map((message) =>
+                  message.id === values[9] && message.mailbox_id === values[10]
+                    ? {
+                        ...message,
+                        status: "pending_approval",
+                        thread_key: values[0] as string,
+                        from_address: values[1] as string,
+                        to_address: values[2] as string,
+                        subject: values[3] as string,
+                        text_body: values[4] as string,
+                        html_body: values[5] as string | null,
+                        source_id: values[6] as string | null,
+                        folder: "drafts",
+                        created_by: values[7] as string,
+                        error_message: null,
+                        updated_at: values[8] as string,
+                      }
+                    : message,
+                );
+              }
+
+              if (
+                sql.includes("UPDATE mailbox_messages") &&
+                sql.includes("status = 'failed'")
+              ) {
+                state.mailboxMessages = state.mailboxMessages.map((message) =>
+                  message.id === values[2] && message.mailbox_id === values[3]
+                    ? {
+                        ...message,
+                        status: "failed",
+                        error_message: values[0] as string,
+                        updated_at: values[1] as string,
+                      }
+                    : message,
+                );
+              }
+
+              if (
+                sql.includes("UPDATE mailbox_messages") &&
+                sql.includes("status = 'rejected'")
+              ) {
+                state.mailboxMessages = state.mailboxMessages.map((message) =>
+                  message.id === values[3] && message.mailbox_id === values[4]
+                    ? {
+                        ...message,
+                        status: "rejected",
+                        folder: "trash",
+                        approved_by_user_id: values[0] as string,
+                        approved_at: values[1] as string,
+                        updated_at: values[2] as string,
+                      }
+                    : message,
+                );
+              }
+
               if (sql.includes("INSERT INTO agent_channel_connections")) {
                 state.telegramConnection = {
                   id: (state.telegramConnection?.id || values[0]) as string,
@@ -291,6 +521,15 @@ function createEnv(): Env & {
               return { success: true };
             },
             async first<T>() {
+              if (sql.includes("COUNT(*) AS count") && sql.includes("FROM mailbox_messages")) {
+                const mailboxId = values[0] as string;
+                return {
+                  count: state.mailboxMessages.filter(
+                    (message) => message.mailbox_id === mailboxId,
+                  ).length,
+                } as T;
+              }
+
               if (sql.includes("SELECT password_hash FROM owner_profile")) {
                 return state.owner ? ({ password_hash: state.owner.password_hash } as T) : null;
               }
@@ -306,6 +545,23 @@ function createEnv(): Env & {
                 return state.mailbox && values[0] === state.mailbox.user_id
                   ? (state.mailbox as T)
                   : null;
+              }
+              if (sql.includes("FROM email_provider_settings")) {
+                return (
+                  state.emailProviderSettings.find(
+                    (setting) =>
+                      setting.user_id === values[0] &&
+                      setting.provider_id === "postmark",
+                  ) || null
+                ) as T | null;
+              }
+              if (sql.includes("FROM mailbox_messages")) {
+                return (
+                  state.mailboxMessages.find(
+                    (message) =>
+                      message.id === values[0] && message.mailbox_id === values[1],
+                  ) || null
+                ) as T | null;
               }
               if (sql.includes("FROM agent_channel_connections")) {
                 return state.telegramConnection && values[0] === state.telegramConnection.user_id
@@ -337,6 +593,21 @@ function createEnv(): Env & {
                 return {
                   results: state.aiDefaults.filter(
                     (defaultRow) => defaultRow.user_id === values[0],
+                  ) as T[],
+                };
+              }
+              if (sql.includes("FROM email_provider_settings")) {
+                return {
+                  results: state.emailProviderSettings.filter(
+                    (setting) => setting.user_id === values[0],
+                  ) as T[],
+                };
+              }
+              if (sql.includes("FROM mailbox_messages")) {
+                const mailboxId = values[0] as string;
+                return {
+                  results: state.mailboxMessages.filter(
+                    (message) => message.mailbox_id === mailboxId,
                   ) as T[],
                 };
               }
@@ -379,6 +650,18 @@ function createEnv(): Env & {
     get aiDefaults() {
       return state.aiDefaults;
     },
+    get emailProviderSettings() {
+      return state.emailProviderSettings;
+    },
+    get emailSendAudit() {
+      return state.emailSendAudit;
+    },
+    get emailSends() {
+      return state.emailSends;
+    },
+    get mailboxMessages() {
+      return state.mailboxMessages;
+    },
     get telegramConnection() {
       return state.telegramConnection;
     },
@@ -393,6 +676,12 @@ function createEnv(): Env & {
     TOKEN_ENCRYPTION_KEY: "test-encryption-key",
     ADMIN_BOOTSTRAP_CODE: "owner-code",
     TELEGRAM_BOT_USERNAME: "me3_core_test_bot",
+    EMAIL: {
+      async send(message) {
+        state.emailSends.push(message as Record<string, unknown>);
+        return { messageId: `cf-${state.emailSends.length}` };
+      },
+    },
   };
 }
 
@@ -1002,6 +1291,278 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(401);
   });
 
+  it("loads Cloudflare-first email provider settings for the signed-in owner", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      encryptionConfigured: boolean;
+      activeProviderId: string;
+      providers: Array<{
+        id: string;
+        recommended: boolean;
+        setupRequirements: Array<{ id: string; label: string }>;
+      }>;
+      futureProviders: Array<{ id: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.encryptionConfigured).toBe(true);
+    expect(body.activeProviderId).toBe("cloudflare-email");
+    expect(body.providers[0]).toMatchObject({
+      id: "cloudflare-email",
+      recommended: true,
+    });
+    expect(body.providers[0].setupRequirements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "workers-paid",
+          label: "Workers Paid plan",
+        }),
+        expect.objectContaining({
+          id: "binding-or-api",
+        }),
+      ]),
+    );
+    expect(body.providers[1]).toMatchObject({
+      id: "postmark",
+      recommended: false,
+    });
+    expect(body.futureProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "mailgun" }),
+        expect.objectContaining({ id: "smtp" }),
+      ]),
+    );
+  });
+
+  it("saves encrypted Postmark sender settings without returning the token", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          activeProviderId: "postmark",
+          providers: [
+            {
+              id: "postmark",
+              fromAddress: "hello@example.com",
+              fromName: "ME3 Mail",
+              replyToAddress: "reply@example.com",
+              messageStream: "outbound",
+              serverToken: "postmark-secret-1234",
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      activeProviderId: string;
+      providers: Array<{
+        id: string;
+        configured: boolean;
+        source: string;
+        keyHint: string | null;
+        config: { fromAddress: string; fromName: string };
+      }>;
+    };
+    const postmark = body.providers.find((provider) => provider.id === "postmark");
+
+    expect(response.status).toBe(200);
+    expect(body.activeProviderId).toBe("postmark");
+    expect(postmark).toMatchObject({
+      configured: true,
+      source: "stored",
+      keyHint: "***1234",
+      config: {
+        fromAddress: "hello@example.com",
+        fromName: "ME3 Mail",
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("postmark-secret-1234");
+    expect(env.emailProviderSettings[0].encrypted_secret).toMatch(/^v1\./);
+    expect(env.emailProviderSettings[0].encrypted_secret).not.toContain(
+      "postmark-secret-1234",
+    );
+  });
+
+  it("sends a Cloudflare Email Service test message through the binding adapter", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          activeProviderId: "cloudflare-email",
+          providers: [
+            {
+              id: "cloudflare-email",
+              transport: "binding",
+              fromAddress: "owner@example.com",
+              fromName: "ME3 Owner",
+              sendingDomain: "example.com",
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          providerId: "cloudflare-email",
+          to: "owner@example.com",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      ok: boolean;
+      providerId: string;
+      providerMessageId: string;
+      sentTo: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      providerId: "cloudflare-email",
+      providerMessageId: "cf-1",
+      sentTo: "owner@example.com",
+    });
+    expect(env.emailSends[0]).toMatchObject({
+      from: { email: "owner@example.com", name: "ME3 Owner" },
+      to: "owner@example.com",
+      subject: "ME3 Core test email",
+    });
+    expect(env.emailSendAudit).toEqual([
+      expect.objectContaining({
+        provider_id: "cloudflare-email",
+        provider_message_id: "cf-1",
+        status: "sent",
+        purpose: "test",
+      }),
+    ]);
+  });
+
+  it("sends a Postmark test message through the provider adapter", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            ErrorCode: 0,
+            Message: "OK",
+            MessageID: "pm-test-1",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await app.fetch(
+        new Request("http://localhost/api/email-provider-settings", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: session,
+          },
+          body: JSON.stringify({
+            activeProviderId: "postmark",
+            providers: [
+              {
+                id: "postmark",
+                fromAddress: "owner@example.com",
+                fromName: "ME3 Owner",
+                messageStream: "outbound",
+                serverToken: "postmark-secret-1234",
+              },
+            ],
+          }),
+        }),
+        env,
+      );
+
+      const response = await app.fetch(
+        new Request("http://localhost/api/email-provider-settings/test", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: session,
+          },
+          body: JSON.stringify({ to: "owner@example.com" }),
+        }),
+        env,
+      );
+      const body = (await response.json()) as {
+        ok: boolean;
+        providerId: string;
+        providerMessageId: string;
+        sentTo: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({
+        ok: true,
+        providerId: "postmark",
+        providerMessageId: "pm-test-1",
+        sentTo: "owner@example.com",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(env.emailSendAudit).toEqual([
+        expect.objectContaining({
+          provider_id: "postmark",
+          provider_message_id: "pm-test-1",
+          status: "sent",
+          purpose: "test",
+        }),
+      ]);
+      expect(env.emailProviderSettings[0]).toMatchObject({
+        provider_id: "postmark",
+        last_status: "ready",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("requires owner auth for email provider settings", async () => {
+    const env = createEnv();
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings"),
+      env,
+    );
+
+    expect(response.status).toBe(401);
+  });
+
   it("updates account timezone and explicit locale", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
@@ -1065,6 +1626,127 @@ describe("ME3 Core Worker auth", () => {
     );
     expect(activateResponse.status).toBe(200);
     expect(env.mailbox?.status).toBe("active");
+  });
+
+  it("approves mailbox drafts through the active Postmark provider", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            ErrorCode: 0,
+            Message: "OK",
+            MessageID: "pm-draft-1",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await app.fetch(
+        new Request("http://localhost/api/email-provider-settings", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: session,
+          },
+          body: JSON.stringify({
+            activeProviderId: "postmark",
+            providers: [
+              {
+                id: "postmark",
+                fromAddress: "hello@example.com",
+                fromName: "ME3 Mail",
+                messageStream: "outbound",
+                serverToken: "postmark-secret-1234",
+              },
+            ],
+          }),
+        }),
+        env,
+      );
+      await app.fetch(
+        new Request("http://localhost/api/mailbox", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: session,
+          },
+          body: JSON.stringify({
+            aliasLocalPart: "owner",
+            forwardingEnabled: false,
+          }),
+        }),
+        env,
+      );
+
+      const draftResponse = await app.fetch(
+        new Request("http://localhost/api/mailbox/drafts", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: session,
+          },
+          body: JSON.stringify({
+            fromAddress: "hello@example.com",
+            to: "client@example.com",
+            subject: "Hello",
+            textBody: "Approved send body",
+            source: "user",
+          }),
+        }),
+        env,
+      );
+      const draftBody = (await draftResponse.json()) as {
+        draft: { id: string; status: string };
+      };
+      expect(draftResponse.status).toBe(201);
+      expect(draftBody.draft.status).toBe("pending_approval");
+
+      const approveResponse = await app.fetch(
+        new Request(`http://localhost/api/mailbox/drafts/${draftBody.draft.id}/approve`, {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const approveBody = (await approveResponse.json()) as {
+        draft: { status: string; providerId: string; providerMessageId: string };
+      };
+
+      expect(approveResponse.status).toBe(200);
+      expect(approveBody.draft).toMatchObject({
+        status: "sent",
+        providerId: "postmark",
+        providerMessageId: "pm-draft-1",
+      });
+      expect(env.mailboxMessages[0]).toMatchObject({
+        status: "sent",
+        provider_id: "postmark",
+        provider_message_id: "pm-draft-1",
+      });
+      expect(env.emailSendAudit).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            mailbox_message_id: draftBody.draft.id,
+            provider_id: "postmark",
+            provider_message_id: "pm-draft-1",
+            purpose: "draft",
+            status: "sent",
+          }),
+        ]),
+      );
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        To: "client@example.com",
+        Subject: "Hello",
+        MessageStream: "outbound",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("deletes the owner account and clears the session cookie", async () => {

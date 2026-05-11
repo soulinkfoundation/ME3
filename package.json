@@ -40,6 +40,9 @@
       "SITE_ASSETS": {
         "description": "R2 bucket binding for ME3 Core file storage, including site media and future plugin-owned files."
       },
+      "EMAIL": {
+        "description": "Reserved future Cloudflare Email Service send_email binding. The current Core outbound sender is the Postmark adapter."
+      },
       "JWT_SECRET": {
         "description": "Generate a random auth signing secret, for example `openssl rand -base64 32`."
       },

@@ -24,7 +24,12 @@ export interface Env {
   ME3_AI_REASONING_MODEL?: string;
   ME3_AI_EXTRACTION_PROVIDER?: string;
   ME3_AI_EXTRACTION_MODEL?: string;
+  ME3_EMAIL_DEFAULT_PROVIDER?: string;
   TELEGRAM_BOT_USERNAME?: string;
+
+  EMAIL?: {
+    send(message: Record<string, unknown>): Promise<{ messageId?: string | null }>;
+  };
 
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
@@ -204,6 +209,8 @@ export interface DbMailboxMessage {
     | "failed"
     | "dropped";
   thread_key: string | null;
+  provider_id: string | null;
+  provider_message_id: string | null;
   from_address: string | null;
   to_address: string | null;
   subject: string | null;
@@ -225,6 +232,49 @@ export interface DbMailboxMessage {
   approved_at: string | null;
   sent_at: string | null;
   created_at: string;
+}
+
+export interface DbEmailProviderSetting {
+  user_id: string;
+  provider_id: string;
+  is_active: number;
+  encrypted_secret: string | null;
+  secret_hint: string | null;
+  secret_updated_at: string | null;
+  config_json: string | null;
+  last_status: "not_configured" | "ready" | "failed" | null;
+  last_status_checked_at: string | null;
+  last_test_sent_at: string | null;
+  last_test_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbEmailSendAudit {
+  id: string;
+  user_id: string;
+  mailbox_id: string | null;
+  mailbox_message_id: string | null;
+  provider_id: string;
+  provider_message_id: string | null;
+  provider_status: string | null;
+  status: "pending" | "sent" | "failed";
+  purpose: "test" | "draft" | "reply" | "workflow";
+  from_address: string | null;
+  to_address: string | null;
+  subject: string | null;
+  thread_key: string | null;
+  message_id_header: string | null;
+  in_reply_to: string | null;
+  references_header: string | null;
+  metadata_json: string | null;
+  error_message: string | null;
+  created_by: string;
+  approved_by_user_id: string | null;
+  requested_at: string;
+  sent_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DbAiProviderCredential {

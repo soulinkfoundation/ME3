@@ -190,6 +190,72 @@ type AiSettingsResponse = {
 
 type AiRouteInputs = Record<AiRouteId, { providerId: string; model: string }>;
 
+type EmailProviderId = "cloudflare-email" | "postmark";
+
+type EmailProviderSetupRequirement = {
+  id: string;
+  label: string;
+  required: boolean;
+  configured: boolean;
+  note?: string;
+};
+
+type EmailProviderInputs = {
+  transport: "binding" | "rest";
+  fromAddress: string;
+  fromName: string;
+  replyToAddress: string;
+  sendingDomain: string;
+  accountId: string;
+  messageStream: string;
+  apiToken: string;
+};
+
+type EmailProviderRecord = {
+  id: EmailProviderId;
+  label: string;
+  description: string;
+  recommended: boolean;
+  stable: boolean;
+  configured: boolean;
+  setupRequired: boolean;
+  statusLabel: string;
+  source: "binding" | "stored" | "manual" | "not_configured";
+  secretLabel: string | null;
+  keyHint: string | null;
+  keyUpdatedAt: string | null;
+  lastStatus: "not_configured" | "ready" | "failed" | null;
+  lastStatusCheckedAt: string | null;
+  lastTestSentAt: string | null;
+  lastTestError: string | null;
+  setupRequirements: EmailProviderSetupRequirement[];
+  config: EmailProviderInputs;
+};
+
+type FutureEmailProviderRecord = {
+  id: "mailgun" | "smtp" | "ses" | "resend" | "sendgrid";
+  label: string;
+  description: string;
+};
+
+type EmailProviderSettingsResponse = {
+  encryptionConfigured: boolean;
+  activeProviderId: EmailProviderId;
+  providers: EmailProviderRecord[];
+  futureProviders: FutureEmailProviderRecord[];
+};
+
+type EmailProviderTestResponse = {
+  ok: true;
+  auditId: string;
+  providerId: EmailProviderId;
+  providerLabel: string;
+  providerMessageId: string | null;
+  providerStatus: string | null;
+  sentTo: string;
+  sentAt: string;
+};
+
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
@@ -234,6 +300,19 @@ const aiProviderKeyInputs = ref<Record<string, string>>({});
 const aiRouteInputs = ref<AiRouteInputs>(createEmptyAiRouteInputs());
 const aiSettingsMessage = ref<string | null>(null);
 const aiSettingsError = ref<string | null>(null);
+const emailProviderLoading = ref(false);
+const emailProviderSaving = ref(false);
+const emailProviderTesting = ref(false);
+const emailProviderEncryptionConfigured = ref(false);
+const emailProviders = ref<EmailProviderRecord[]>([]);
+const futureEmailProviders = ref<FutureEmailProviderRecord[]>([]);
+const selectedEmailProviderId = ref<EmailProviderId>("cloudflare-email");
+const emailProviderInputs = ref<Record<EmailProviderId, EmailProviderInputs>>(
+  createEmptyEmailProviderInputs(),
+);
+const emailProviderTestTo = ref("");
+const emailProviderMessage = ref<string | null>(null);
+const emailProviderError = ref<string | null>(null);
 
 const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
   null,
@@ -383,6 +462,54 @@ const aiSettingsSaveDisabled = computed(
     aiSettingsLoading.value ||
     aiRoutesInvalid.value ||
     (aiProviderKeyInputCount.value > 0 && !aiEncryptionConfigured.value),
+);
+
+const activeEmailProvider = computed(
+  () =>
+    emailProviders.value.find(
+      (provider) => provider.id === selectedEmailProviderId.value,
+    ) || null,
+);
+
+const activeEmailProviderInput = computed(
+  () => emailProviderInputs.value[selectedEmailProviderId.value],
+);
+
+const emailProviderSummaryLabel = computed(() => {
+  if (emailProviderLoading.value) return "Loading";
+  const active = activeEmailProvider.value;
+  if (active?.configured) return active.label;
+  return "Setup required";
+});
+
+const emailProviderSummaryStatusClass = computed(() =>
+  activeEmailProvider.value?.configured ? "active" : "setup_required",
+);
+
+const emailProviderApiTokenCount = computed(
+  () =>
+    Object.values(emailProviderInputs.value).filter((value) =>
+      value.apiToken.trim(),
+    ).length,
+);
+
+const emailProviderSaveDisabled = computed(() => {
+  const input = activeEmailProviderInput.value;
+  return (
+    emailProviderSaving.value ||
+    emailProviderLoading.value ||
+    !input.fromAddress.trim() ||
+    (emailProviderApiTokenCount.value > 0 &&
+      !emailProviderEncryptionConfigured.value)
+  );
+});
+
+const emailProviderTestDisabled = computed(
+  () =>
+    emailProviderTesting.value ||
+    emailProviderLoading.value ||
+    !activeEmailProvider.value?.configured ||
+    !emailProviderTestTo.value.trim(),
 );
 
 function syncAccount(response: AccountResponse) {
@@ -701,6 +828,141 @@ function aiProviderSourceLabel(provider: AiProviderRecord): string {
   }
 }
 
+function createDefaultEmailProviderInput(
+  id: EmailProviderId,
+): EmailProviderInputs {
+  return {
+    transport: id === "cloudflare-email" ? "binding" : "rest",
+    fromAddress: "",
+    fromName: "ME3 Core",
+    replyToAddress: "",
+    sendingDomain: "",
+    accountId: "",
+    messageStream: id === "postmark" ? "outbound" : "",
+    apiToken: "",
+  };
+}
+
+function createEmptyEmailProviderInputs(): Record<
+  EmailProviderId,
+  EmailProviderInputs
+> {
+  return {
+    "cloudflare-email": createDefaultEmailProviderInput("cloudflare-email"),
+    postmark: createDefaultEmailProviderInput("postmark"),
+  };
+}
+
+function syncEmailProviderSettings(response: EmailProviderSettingsResponse) {
+  emailProviderEncryptionConfigured.value = response.encryptionConfigured;
+  emailProviders.value = response.providers || [];
+  futureEmailProviders.value = response.futureProviders || [];
+  selectedEmailProviderId.value = response.activeProviderId || "cloudflare-email";
+  emailProviderInputs.value = createEmptyEmailProviderInputs();
+
+  for (const provider of emailProviders.value) {
+    emailProviderInputs.value[provider.id] = {
+      ...createDefaultEmailProviderInput(provider.id),
+      ...provider.config,
+      apiToken: "",
+    };
+  }
+
+  emailProviderTestTo.value = auth.user?.email || "";
+}
+
+async function loadEmailProviderSettings() {
+  emailProviderLoading.value = true;
+  emailProviderError.value = null;
+
+  try {
+    const response = await api.get<EmailProviderSettingsResponse>(
+      "/email-provider-settings",
+    );
+    syncEmailProviderSettings(response);
+  } catch (e: any) {
+    emailProviderError.value = e.message || "Failed to load email sender settings";
+  } finally {
+    emailProviderLoading.value = false;
+  }
+}
+
+async function saveEmailProviderSettings() {
+  if (emailProviderSaveDisabled.value) return;
+
+  emailProviderSaving.value = true;
+  emailProviderMessage.value = null;
+  emailProviderError.value = null;
+
+  const input = activeEmailProviderInput.value;
+  try {
+    const response = await api.put<EmailProviderSettingsResponse>(
+      "/email-provider-settings",
+      {
+        activeProviderId: selectedEmailProviderId.value,
+        providers: [
+          {
+            id: selectedEmailProviderId.value,
+            transport: input.transport,
+            fromAddress: input.fromAddress,
+            fromName: input.fromName,
+            replyToAddress: input.replyToAddress || "",
+            sendingDomain: input.sendingDomain || "",
+            accountId: input.accountId || "",
+            messageStream: input.messageStream || "outbound",
+            apiToken: input.apiToken.trim() || undefined,
+          },
+        ],
+      },
+    );
+    syncEmailProviderSettings(response);
+    emailProviderMessage.value = "Email sender settings saved.";
+  } catch (e: any) {
+    emailProviderError.value = e.message || "Failed to save email sender settings";
+  } finally {
+    emailProviderSaving.value = false;
+  }
+}
+
+async function sendEmailProviderTestMessage() {
+  if (emailProviderTestDisabled.value) return;
+
+  emailProviderTesting.value = true;
+  emailProviderMessage.value = null;
+  emailProviderError.value = null;
+
+  try {
+    const response = await api.post<EmailProviderTestResponse>(
+      "/email-provider-settings/test",
+      {
+        providerId: selectedEmailProviderId.value,
+        to: emailProviderTestTo.value,
+      },
+    );
+    await loadEmailProviderSettings();
+    emailProviderMessage.value = response.providerMessageId
+      ? `Test email sent to ${response.sentTo}. Provider message ${response.providerMessageId}.`
+      : `Test email accepted for ${response.sentTo}.`;
+  } catch (e: any) {
+    emailProviderError.value = e.message || "Failed to send test email";
+  } finally {
+    emailProviderTesting.value = false;
+  }
+}
+
+function emailProviderSourceLabel(provider: EmailProviderRecord): string {
+  switch (provider.source) {
+    case "binding":
+      return "Workers binding";
+    case "stored":
+      return provider.keyHint ? `Stored ${provider.keyHint}` : "Stored token";
+    case "manual":
+      return "Manual setup";
+    default:
+      return provider.secretLabel || "Not configured";
+  }
+}
+
 function formatDateTime(value: string | null): string {
   if (!value) return "Not yet";
   const date = new Date(value);
@@ -750,6 +1012,7 @@ onMounted(async () => {
   await loadAccount();
   void loadMailbox();
   void loadAiSettings();
+  void loadEmailProviderSettings();
   void loadPlugins();
   if (route.query.section === "telegram") {
     openSection.value.telegram = true;
@@ -915,6 +1178,12 @@ onMounted(async () => {
                 <span class="accordion-header-hint">
                   {{ mailboxStatusHint }}
                 </span>
+                <span
+                  class="status-badge compact"
+                  :class="emailProviderSummaryStatusClass"
+                >
+                  Sender: {{ emailProviderSummaryLabel }}
+                </span>
               </template>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -1030,6 +1299,282 @@ onMounted(async () => {
                     <dd>{{ formatDateTime(mailbox.activatedAt) }}</dd>
                   </div>
                 </dl>
+              </div>
+
+              <div class="mailbox-panel outbound-sender-panel">
+                <div class="mailbox-panel-head">
+                  <h3>Outbound sender</h3>
+                  <span
+                    class="status-badge compact"
+                    :class="emailProviderSummaryStatusClass"
+                  >
+                    {{ emailProviderSummaryLabel }}
+                  </span>
+                </div>
+
+                <div v-if="emailProviderLoading" class="status-row">
+                  Loading email sender settings...
+                </div>
+
+                <template v-else>
+                  <p class="provider-recommendation">
+                    Recommended: Cloudflare Email Service
+                  </p>
+                  <p class="hint">
+                    ME3 Core owns mailbox UI, message storage, drafts, send
+                    audit, approvals, and reply workflow. Providers only handle
+                    outbound delivery; inbound transport stays separate.
+                  </p>
+                  <p class="field-hint">
+                    Bring another sender: Postmark, Mailgun, SMTP.
+                  </p>
+
+                  <p v-if="!emailProviderEncryptionConfigured" class="error">
+                    Install encryption is required before provider tokens can be
+                    saved.
+                  </p>
+
+                  <div class="email-provider-selector" role="radiogroup">
+                    <button
+                      v-for="provider in emailProviders"
+                      :key="provider.id"
+                      type="button"
+                      class="email-provider-option"
+                      :class="{
+                        'email-provider-option--active':
+                          selectedEmailProviderId === provider.id,
+                      }"
+                      role="radio"
+                      :aria-checked="selectedEmailProviderId === provider.id"
+                      @click="selectedEmailProviderId = provider.id"
+                    >
+                      <span>
+                        <strong>{{ provider.label }}</strong>
+                        <small>{{ provider.description }}</small>
+                      </span>
+                      <span class="plugin-row__badges">
+                        <span v-if="provider.recommended" class="status-pill">
+                          Recommended
+                        </span>
+                        <span
+                          class="status-badge compact"
+                          :class="provider.configured ? 'active' : 'setup_required'"
+                        >
+                          {{ provider.statusLabel }}
+                        </span>
+                      </span>
+                    </button>
+                  </div>
+
+                  <p class="field-hint">
+                    Future adapters:
+                    <span v-if="futureEmailProviders.length">
+                      {{
+                        futureEmailProviders
+                          .map((provider) => provider.label)
+                          .join(", ")
+                      }}
+                    </span>
+                  </p>
+
+                  <div v-if="activeEmailProvider" class="email-provider-config">
+                    <div class="mailbox-panel-head">
+                      <h4>{{ activeEmailProvider.label }} setup</h4>
+                      <span class="provider-meta">
+                        {{ emailProviderSourceLabel(activeEmailProvider) }}
+                      </span>
+                    </div>
+
+                    <ul class="plugin-setup-list email-provider-setup-list">
+                      <li
+                        v-for="requirement in activeEmailProvider.setupRequirements"
+                        :key="requirement.id"
+                      >
+                        <span
+                          class="setup-dot"
+                          :class="{ configured: requirement.configured }"
+                          aria-hidden="true"
+                        />
+                        <span>
+                          {{ requirement.label }}
+                          <small v-if="requirement.note">
+                            {{ requirement.note }}
+                          </small>
+                        </span>
+                      </li>
+                    </ul>
+
+                    <div class="email-provider-fields">
+                      <label class="field">
+                        <span>From address</span>
+                        <input
+                          v-model="emailProviderInputs[selectedEmailProviderId].fromAddress"
+                          class="input"
+                          type="email"
+                          placeholder="hello@example.com"
+                        />
+                      </label>
+
+                      <label class="field">
+                        <span>Display name</span>
+                        <input
+                          v-model="emailProviderInputs[selectedEmailProviderId].fromName"
+                          class="input"
+                          type="text"
+                          placeholder="ME3 Core"
+                        />
+                      </label>
+
+                      <label class="field">
+                        <span>Reply-to address</span>
+                        <input
+                          v-model="emailProviderInputs[selectedEmailProviderId].replyToAddress"
+                          class="input"
+                          type="email"
+                          placeholder="Optional"
+                        />
+                      </label>
+
+                      <label
+                        v-if="selectedEmailProviderId === 'cloudflare-email'"
+                        class="field"
+                      >
+                        <span>Sending domain</span>
+                        <input
+                          v-model="emailProviderInputs[selectedEmailProviderId].sendingDomain"
+                          class="input"
+                          type="text"
+                          placeholder="example.com"
+                        />
+                      </label>
+
+                      <label
+                        v-if="selectedEmailProviderId === 'cloudflare-email'"
+                        class="field"
+                      >
+                        <span>Cloudflare transport</span>
+                        <select
+                          v-model="emailProviderInputs[selectedEmailProviderId].transport"
+                          class="input"
+                        >
+                          <option value="binding">Workers binding</option>
+                          <option value="rest">REST API</option>
+                        </select>
+                      </label>
+
+                      <label
+                        v-if="
+                          selectedEmailProviderId === 'cloudflare-email' &&
+                          emailProviderInputs[selectedEmailProviderId].transport ===
+                            'rest'
+                        "
+                        class="field"
+                      >
+                        <span>Cloudflare account ID</span>
+                        <input
+                          v-model="emailProviderInputs[selectedEmailProviderId].accountId"
+                          class="input"
+                          type="text"
+                          autocomplete="off"
+                          spellcheck="false"
+                        />
+                      </label>
+
+                      <label
+                        v-if="selectedEmailProviderId === 'postmark'"
+                        class="field"
+                      >
+                        <span>Message stream</span>
+                        <input
+                          v-model="emailProviderInputs[selectedEmailProviderId].messageStream"
+                          class="input"
+                          type="text"
+                          placeholder="outbound"
+                          spellcheck="false"
+                        />
+                      </label>
+
+                      <label
+                        v-if="
+                          activeEmailProvider.secretLabel &&
+                          (selectedEmailProviderId === 'postmark' ||
+                            emailProviderInputs[selectedEmailProviderId].transport ===
+                              'rest')
+                        "
+                        class="field"
+                      >
+                        <span>{{ activeEmailProvider.secretLabel }}</span>
+                        <input
+                          v-model="emailProviderInputs[selectedEmailProviderId].apiToken"
+                          class="input"
+                          type="password"
+                          autocomplete="off"
+                          spellcheck="false"
+                          :placeholder="
+                            activeEmailProvider.keyHint
+                              ? 'Paste a new token to replace stored value'
+                              : 'Paste provider token'
+                          "
+                        />
+                        <p class="field-hint">
+                          Existing tokens are encrypted at rest and never
+                          returned to the browser.
+                        </p>
+                      </label>
+                    </div>
+
+                    <div class="email-provider-test-row">
+                      <label class="field">
+                        <span>Test recipient</span>
+                        <input
+                          v-model="emailProviderTestTo"
+                          class="input"
+                          type="email"
+                          placeholder="you@example.com"
+                        />
+                      </label>
+                    </div>
+
+                    <div class="button-row">
+                      <button
+                        class="button primary"
+                        type="button"
+                        :disabled="emailProviderSaveDisabled"
+                        @click="saveEmailProviderSettings"
+                      >
+                        {{
+                          emailProviderSaving
+                            ? "Saving..."
+                            : "Save sender settings"
+                        }}
+                      </button>
+                      <button
+                        class="button secondary"
+                        type="button"
+                        :disabled="emailProviderTestDisabled"
+                        @click="sendEmailProviderTestMessage"
+                      >
+                        {{
+                          emailProviderTesting
+                            ? "Sending..."
+                            : "Send test email"
+                        }}
+                      </button>
+                    </div>
+
+                    <p v-if="activeEmailProvider.lastTestError" class="error">
+                      Last test failed:
+                      {{ activeEmailProvider.lastTestError }}
+                    </p>
+                  </div>
+
+                  <p v-if="emailProviderMessage" class="success">
+                    {{ emailProviderMessage }}
+                  </p>
+                  <p v-if="emailProviderError" class="error">
+                    {{ emailProviderError }}
+                  </p>
+                </template>
               </div>
 
               <div v-if="mailbox" class="mailbox-panel">
@@ -1725,6 +2270,11 @@ h1 {
   font-size: 16px;
 }
 
+.mailbox-panel h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
 .mailbox-panel-head {
   display: flex;
   align-items: flex-start;
@@ -1801,6 +2351,84 @@ h1 {
   margin: 0;
   color: var(--color-text-muted);
   font-size: 12px;
+}
+
+.outbound-sender-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.provider-recommendation {
+  margin: 0;
+  color: var(--ui-accent-strong, var(--color-text));
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.email-provider-selector {
+  display: grid;
+  gap: 10px;
+}
+
+.email-provider-option {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 12px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.email-provider-option--active {
+  border-color: var(--ui-accent, var(--color-text));
+  background: var(--ui-accent-soft, var(--color-bg-subtle));
+}
+
+.email-provider-option span:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.email-provider-option strong {
+  font-size: 14px;
+}
+
+.email-provider-option small {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.email-provider-config {
+  display: grid;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ui-border, var(--color-border));
+}
+
+.email-provider-setup-list {
+  padding: 12px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 12px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.email-provider-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.email-provider-test-row {
+  max-width: 360px;
 }
 
 .plugin-list {
@@ -2338,6 +2966,7 @@ h1 {
   .mailbox-source-row,
   .activity-row,
   .ai-provider-row__header,
+  .email-provider-option,
   .plugin-row__header {
     flex-direction: column;
     align-items: flex-start;
@@ -2348,7 +2977,8 @@ h1 {
   }
 
   .plugin-meta-grid,
-  .plugin-detail-grid {
+  .plugin-detail-grid,
+  .email-provider-fields {
     grid-template-columns: 1fr;
   }
 

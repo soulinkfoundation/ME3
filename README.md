@@ -71,7 +71,7 @@ Owner-only Worker routes, including `/api/assistant/chat`, require a valid serve
 
 ## Mailbox Sender Providers
 
-ME3 Core treats outbound email as a provider adapter system. Core owns mailbox UI, message/thread storage, drafts, send audit, agent approvals, and reply workflow. Provider adapters only handle delivery and inbound transport. Provider tokens are encrypted at rest with `TOKEN_ENCRYPTION_KEY` and are never returned to the browser or written to `me.json`.
+ME3 Core treats outbound email as a provider adapter system. Core owns mailbox UI, message/thread storage, drafts, send audit, agent approvals, and reply workflow. Provider adapters only handle delivery and inbound transport. Provider tokens are encrypted at rest with the install encryption key and are never returned to the browser or written to `me.json`. Core creates that install key automatically during owner setup when `TOKEN_ENCRYPTION_KEY` is not supplied as an operator-managed override.
 
 The account-level sender settings live in Account -> Mailbox settings:
 
