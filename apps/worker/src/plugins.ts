@@ -183,11 +183,6 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       label: "Instagram app secret",
       required: false,
     },
-    {
-      name: "GOOGLE_CLIENT_SECRET",
-      label: "Google OAuth client secret for YouTube publishing",
-      required: false,
-    },
   ],
   migrations: [
     {
