@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRouter, useRoute } from "vue-router";
 import BrandLogo from "../components/BrandLogo.vue";
+import UiIcon from "../components/UiIcon.vue";
 import { api } from "../api";
 import { useAuthStore } from "../stores/auth";
 import { DEFAULT_APP_PATH } from "../utils/navigation";
@@ -27,6 +28,8 @@ const email = ref("");
 const name = ref("");
 const bootstrapCode = ref("");
 const password = ref("");
+const showBootstrapCode = ref(false);
+const showPassword = ref(false);
 const loading = ref(false);
 const configLoading = ref(true);
 const ownerAuthConfigured = ref(false);
@@ -149,17 +152,27 @@ onMounted(loadConfig);
       <BrandLogo class="login__logo" alt="me3" />
 
       <form class="login-form" @submit.prevent="submitAuth">
-        <input
-          v-if="isSetupMode"
-          v-model="bootstrapCode"
-          type="password"
-          autocomplete="one-time-code"
-          class="input"
-          aria-label="Bootstrap code"
-          placeholder="Bootstrap code"
-          required
-          autofocus
-        />
+        <div v-if="isSetupMode" class="password-field">
+          <input
+            v-model="bootstrapCode"
+            :type="showBootstrapCode ? 'text' : 'password'"
+            autocomplete="one-time-code"
+            class="input password-field__input"
+            aria-label="Bootstrap code"
+            placeholder="Bootstrap code"
+            required
+            autofocus
+          />
+          <button
+            type="button"
+            class="password-field__toggle"
+            :aria-label="showBootstrapCode ? 'Hide bootstrap code' : 'Show bootstrap code'"
+            :aria-pressed="showBootstrapCode"
+            @click="showBootstrapCode = !showBootstrapCode"
+          >
+            <UiIcon :name="showBootstrapCode ? 'EyeOff' : 'Eye'" :size="18" />
+          </button>
+        </div>
 
         <input
           v-if="isSetupMode"
@@ -182,15 +195,26 @@ onMounted(loadConfig);
           required
         />
 
-        <input
-          v-model="password"
-          type="password"
-          :autocomplete="isSetupMode ? 'new-password' : 'current-password'"
-          class="input"
-          aria-label="Password"
-          placeholder="Password"
-          required
-        />
+        <div class="password-field">
+          <input
+            v-model="password"
+            :type="showPassword ? 'text' : 'password'"
+            :autocomplete="isSetupMode ? 'new-password' : 'current-password'"
+            class="input password-field__input"
+            aria-label="Password"
+            placeholder="Password"
+            required
+          />
+          <button
+            type="button"
+            class="password-field__toggle"
+            :aria-label="showPassword ? 'Hide password' : 'Show password'"
+            :aria-pressed="showPassword"
+            @click="showPassword = !showPassword"
+          >
+            <UiIcon :name="showPassword ? 'EyeOff' : 'Eye'" :size="18" />
+          </button>
+        </div>
 
         <button type="submit" class="button" :disabled="!canSubmit">
           {{ loading ? "Opening..." : isSetupMode ? "Create account" : "Sign in" }}
@@ -254,6 +278,42 @@ onMounted(loadConfig);
 
 .input:focus {
   border-color: var(--ui-text, var(--color-text));
+}
+
+.password-field {
+  position: relative;
+  width: 100%;
+}
+
+.password-field__input {
+  padding-right: 44px;
+}
+
+.password-field__toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ui-radius-sm, 8px);
+  background: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.password-field__toggle:hover,
+.password-field__toggle:focus-visible {
+  color: var(--ui-text, var(--color-text));
+}
+
+.password-field__toggle:focus-visible {
+  outline: 2px solid var(--ui-text, var(--color-text));
+  outline-offset: 2px;
 }
 
 .button {
