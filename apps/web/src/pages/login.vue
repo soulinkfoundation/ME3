@@ -152,28 +152,6 @@ onMounted(loadConfig);
       <BrandLogo class="login__logo" alt="me3" />
 
       <form class="login-form" @submit.prevent="submitAuth">
-        <div v-if="isSetupMode" class="password-field">
-          <input
-            v-model="bootstrapCode"
-            :type="showBootstrapCode ? 'text' : 'password'"
-            autocomplete="one-time-code"
-            class="input password-field__input"
-            aria-label="Bootstrap code"
-            placeholder="Bootstrap code"
-            required
-            autofocus
-          />
-          <button
-            type="button"
-            class="password-field__toggle"
-            :aria-label="showBootstrapCode ? 'Hide bootstrap code' : 'Show bootstrap code'"
-            :aria-pressed="showBootstrapCode"
-            @click="showBootstrapCode = !showBootstrapCode"
-          >
-            <UiIcon :name="showBootstrapCode ? 'EyeOff' : 'Eye'" :size="18" />
-          </button>
-        </div>
-
         <input
           v-if="isSetupMode"
           v-model="name"
@@ -213,6 +191,28 @@ onMounted(loadConfig);
             @click="showPassword = !showPassword"
           >
             <UiIcon :name="showPassword ? 'EyeOff' : 'Eye'" :size="18" />
+          </button>
+        </div>
+
+        <div v-if="isSetupMode" class="password-field">
+          <input
+            v-model="bootstrapCode"
+            :type="showBootstrapCode ? 'text' : 'password'"
+            autocomplete="one-time-code"
+            class="input password-field__input"
+            aria-label="Bootstrap code"
+            placeholder="Bootstrap code"
+            required
+            autofocus
+          />
+          <button
+            type="button"
+            class="password-field__toggle"
+            :aria-label="showBootstrapCode ? 'Hide bootstrap code' : 'Show bootstrap code'"
+            :aria-pressed="showBootstrapCode"
+            @click="showBootstrapCode = !showBootstrapCode"
+          >
+            <UiIcon :name="showBootstrapCode ? 'EyeOff' : 'Eye'" :size="18" />
           </button>
         </div>
 
