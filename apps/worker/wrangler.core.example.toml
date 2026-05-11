@@ -19,10 +19,10 @@ binding = "DB"
 database_name = "me3-core-db"
 database_id = "replace-with-generated-d1-id"
 
-# Optional large-site media storage. Uncomment after creating the bucket.
-# [[r2_buckets]]
-# binding = "SITE_ASSETS"
-# bucket_name = "me3-site-assets"
+# Core file storage for site media and future plugin-owned files.
+[[r2_buckets]]
+binding = "SITE_ASSETS"
+bucket_name = "me3-site-assets"
 
 [vars]
 ENVIRONMENT = "local"

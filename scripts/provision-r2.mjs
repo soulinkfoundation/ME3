@@ -10,9 +10,17 @@ const BINDING = "SITE_ASSETS";
 
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
+
+if (!existsSync(configPath)) {
+  fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
+}
+
+const before = readFileSync(configPath, "utf8");
+const existingBucketName = getExistingR2BucketName(before);
 const bucketName =
   args.bucket ||
   process.env.ME3_R2_BUCKET_NAME ||
+  existingBucketName ||
   (args.yes ? DEFAULT_BUCKET : await promptBucketName());
 
 if (!isValidBucketName(bucketName)) {
@@ -21,15 +29,10 @@ if (!isValidBucketName(bucketName)) {
   );
 }
 
-if (!existsSync(configPath)) {
-  fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
-}
-
 if (!args.skipCreate) {
   runWrangler(["r2", "bucket", "create", bucketName]);
 }
 
-const before = readFileSync(configPath, "utf8");
 const after = ensureR2Binding(before, bucketName);
 
 if (after === before) {
@@ -142,6 +145,14 @@ function ensureR2Binding(config, bucketName) {
   }
 
   return `${config.trimEnd()}\n\n${activeBlock}`;
+}
+
+function getExistingR2BucketName(config) {
+  const blockMatch = config.match(
+    /\n\[\[r2_buckets\]\]\n(?:(?!\n\[)[\s\S])*?binding\s*=\s*"SITE_ASSETS"(?:(?!\n\[)[\s\S])*/,
+  );
+  if (!blockMatch) return "";
+  return blockMatch[0].match(/bucket_name\s*=\s*"([^"]+)"/)?.[1] || "";
 }
 
 function isValidBucketName(value) {

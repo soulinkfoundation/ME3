@@ -15,8 +15,8 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
-    "deploy": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
-    "deploy:with-r2": "pnpm storage:r2:provision --yes && pnpm deploy"
+    "deploy": "pnpm storage:r2:provision --yes && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
+    "deploy:d1-only": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
   },
   "devDependencies": {
     "typescript": "^5.3.3",
@@ -38,7 +38,7 @@
         "description": "Optional Workers AI binding. If you do not use Workers AI, configure OpenAI or Anthropic keys after install."
       },
       "SITE_ASSETS": {
-        "description": "Optional R2 bucket binding for large public site media. D1 remains the default for small Core installs."
+        "description": "R2 bucket binding for ME3 Core file storage, including site media and future plugin-owned files."
       },
       "JWT_SECRET": {
         "description": "Generate a random auth signing secret, for example `openssl rand -base64 32`."

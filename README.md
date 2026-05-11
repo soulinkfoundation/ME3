@@ -97,7 +97,7 @@ The root `wrangler.toml` is the deploy-template config for Cloudflare Workers Bu
 - SPA fallback for copied Vue routes
 - Worker-first routing for all paths, so one Worker can route by hostname
 - D1 binding and migration directory
-- optional `SITE_ASSETS` R2 binding for large public site media
+- `SITE_ASSETS` R2 binding for Core file storage
 - `ME3_USER_AGENT` Durable Object namespace
 - optional Workers AI binding
 - public origin/model defaults
@@ -133,27 +133,29 @@ If the owner wants the apex domain too, configure Cloudflare to redirect `custom
 
 The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches `ME3_SITE_HOST` and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
 
-### Optional R2 Media Storage
+### Core File Storage
 
-By default, Core stores published site files in D1. This keeps the install simple, but D1 is best for small pages, manifests, and modest images. Owners with large media-heavy sites can add an R2 bucket and bind it as `SITE_ASSETS`:
+ME3 Core uses D1 for structured data and R2 for files. The default deploy command creates the `me3-site-assets` R2 bucket, binds it to the Worker as `SITE_ASSETS`, and deploys Core:
 
 ```bash
-pnpm storage:r2:provision --yes
+pnpm deploy
 ```
 
-This creates the default `me3-site-assets` bucket with Wrangler and updates `wrangler.toml` with the `SITE_ASSETS` binding. To choose a name:
+Use a custom bucket name when you need one:
 
 ```bash
 pnpm storage:r2:provision -- --bucket your-me3-assets
+pnpm deploy
 ```
 
-If the bucket already exists, skip creation and only update the Worker config:
+If the bucket already exists, skip creation and only update the Worker config before deploying:
 
 ```bash
 pnpm storage:r2:provision -- --bucket your-me3-assets --skip-create
+pnpm deploy
 ```
 
-The resulting binding looks like this:
+The Worker binding is:
 
 ```toml
 [[r2_buckets]]
@@ -161,25 +163,20 @@ binding = "SITE_ASSETS"
 bucket_name = "me3-site-assets"
 ```
 
-When `SITE_ASSETS` is present, new media uploads under `/files/*` are stored in R2 automatically while page metadata, publish manifests, and generated HTML stay in D1. The site settings page shows whether R2 is active and can move existing D1 media into R2.
+When `SITE_ASSETS` is present, media uploads and other Core/plugin files go to R2 automatically. Page metadata, publish manifests, generated HTML, and account data stay in D1.
 
 Manual deploy shape:
 
 ```bash
 pnpm install
 pnpm setup:dev-vars
+pnpm storage:r2:provision --yes
 pnpm build
 wrangler d1 migrations apply DB --remote --config wrangler.toml
 wrangler deploy --config wrangler.toml
 ```
 
-The `pnpm deploy` script runs the build, remote D1 migration, and Worker deploy in sequence. Use it only after authenticating Wrangler and confirming the generated Cloudflare resource names/IDs.
-
-To deploy with the default R2 bucket in one command:
-
-```bash
-pnpm deploy:with-r2
-```
+The `pnpm deploy` script runs R2 provisioning, the build, remote D1 migration, and Worker deploy in sequence. Use it only after authenticating Wrangler and confirming the generated Cloudflare resource names/IDs. `pnpm deploy:d1-only` is available for local experiments or constrained installs, but production Core installs should use the default R2-backed deploy path.
 
 ## Public Distribution
 
