@@ -77,10 +77,10 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     secretLabel: null,
     bindingEnv: "AI",
     recommendedModels: {
-      default: "@cf/moonshotai/kimi-k2.6",
-      chat: "@cf/moonshotai/kimi-k2.6",
-      reasoning: "@cf/moonshotai/kimi-k2.6",
-      extraction: "@cf/moonshotai/kimi-k2.6",
+      default: "@cf/qwen/qwen3-30b-a3b-fp8",
+      chat: "@cf/qwen/qwen3-30b-a3b-fp8",
+      reasoning: "@cf/qwen/qwen3-30b-a3b-fp8",
+      extraction: "@cf/qwen/qwen3-30b-a3b-fp8",
     },
   },
   {
@@ -476,8 +476,9 @@ function resolveRoute(
   fallbackRoute?: AiModelRouteRecord,
 ): AiModelRouteRecord {
   const envKeys = ROUTE_ENV_KEYS[routeId];
+  const envModel = normalizeModel(env[envKeys.model]) || normalizeModel(env.ME3_AI_MODEL);
   const storedProviderId = normalizeProviderId(storedDefault?.provider_id);
-  const envProviderId = normalizeProviderId(env[envKeys.provider]);
+  const envProviderId = normalizeProviderId(env[envKeys.provider]) || (envModel ? "workers-ai" : null);
   const firstConfiguredProvider = providers.find((provider) => provider.configured)?.id;
   const providerId =
     storedProviderId ||
@@ -489,12 +490,12 @@ function resolveRoute(
   const provider = providers.find((candidate) => candidate.id === adapter.id);
   const source = storedProviderId
     ? "stored"
-    : envProviderId || env[envKeys.model]
+    : envProviderId || envModel
       ? "environment"
       : "recommended";
   const model =
     normalizeModel(storedDefault?.model) ||
-    normalizeModel(env[envKeys.model]) ||
+    envModel ||
     fallbackRoute?.model ||
     adapter.recommendedModels[routeId];
   const configured = Boolean(provider?.configured && model);

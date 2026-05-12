@@ -122,7 +122,8 @@ The root `wrangler.toml` is the deploy-template config for the Deploy to Cloudfl
 - `SITE_ASSETS` R2 binding for Core file storage
 - `ME3_USER_AGENT` Durable Object namespace
 - optional Workers AI binding
-- public origin/model defaults
+- optional root custom domain
+- one default Workers AI model
 - root `.dev.vars.example` secret prompts for button-based deploys
 
 Cloudflare should provision supported resources from the Wrangler config during button/template deployment. Required and optional install secrets are described in `package.json`; root `.dev.vars.example` lists the secrets that the deploy button should prompt for.
@@ -172,32 +173,43 @@ The `pnpm deploy` script runs the build, remote D1 migrations, R2 provisioning c
 
 ### Recommended Cloudflare Domains
 
-ME3 Core is designed to run one Worker on two custom domains:
+ME3 Core can boot on the generated `workers.dev` URL without a custom domain. Leave `ME3_CUSTOM_DOMAIN` blank during the Cloudflare button deploy if you just want to test the install.
 
+When an owner is ready to use their own domain, set one root domain:
+
+```toml
+ME3_CUSTOM_DOMAIN = "customdomain.com"
+```
+
+Core infers the hostnames from that one value:
+
+- `me3.customdomain.com` serves the private admin app and login.
+- `api.customdomain.com` serves API URLs and `me.json` action links.
 - `www.customdomain.com` serves the public ME3 site.
-- `me3.customdomain.com` serves the private admin app, login, and `/api/*`.
 
-Set these vars in `wrangler.toml` or in the Cloudflare dashboard:
+Attach all three hostnames to the same Worker as Cloudflare Worker custom domains:
+
+```text
+me3.customdomain.com  -> me3 Worker
+api.customdomain.com  -> me3 Worker
+www.customdomain.com  -> me3 Worker
+```
+
+Advanced installs may still override the inferred values if needed:
 
 ```toml
 CORE_WEB_ORIGIN = "https://me3.customdomain.com"
-CORE_API_ORIGIN = "https://me3.customdomain.com"
+CORE_API_ORIGIN = "https://api.customdomain.com"
 ME3_ADMIN_HOST = "me3.customdomain.com"
+ME3_API_HOST = "api.customdomain.com"
 ME3_SITE_HOST = "www.customdomain.com"
 # Optional: force the public host to serve a specific claimed site username.
 # ME3_SITE_USERNAME = "owner"
 ```
 
-Then attach both hostnames to the same Worker as Cloudflare Worker custom domains:
+If the owner wants the apex domain too, configure Cloudflare to redirect `customdomain.com` to `www.customdomain.com`. Core keeps admin, API, and public-site routing separate by hostname.
 
-```text
-www.customdomain.com  -> me3 Worker
-me3.customdomain.com  -> me3 Worker
-```
-
-If the owner wants the apex domain too, configure Cloudflare to redirect `customdomain.com` to `www.customdomain.com`. Core keeps admin and public-site routing separate by hostname: requests on `ME3_SITE_HOST` serve the published D1-backed site files, while requests on `ME3_ADMIN_HOST` serve the admin SPA and authenticated API.
-
-The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches `ME3_SITE_HOST` and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
+The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches the inferred or explicit public site host and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
 
 ### Core File Storage
 

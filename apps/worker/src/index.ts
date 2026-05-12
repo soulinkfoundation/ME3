@@ -178,7 +178,7 @@ type AppContext = Context<{ Bindings: Env }>;
 app.use(
   "*",
   cors({
-    origin: (origin, c) => origin || c.env.CORE_WEB_ORIGIN,
+    origin: (origin, c) => getCorsOrigin(c.env, c.req.url, origin),
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -203,8 +203,9 @@ app.get("/health", async (c) => {
       workersAi: Boolean(c.env.AI),
     },
     hosts: {
-      admin: c.env.ME3_ADMIN_HOST || new URL(c.env.CORE_WEB_ORIGIN).hostname,
-      site: c.env.ME3_SITE_HOST || null,
+      admin: getAdminHost(c.env, c.req.url),
+      api: getApiHost(c.env, c.req.url),
+      site: getSiteHost(c.env) || null,
     },
     setupRequired: await getSetupRequired(c.env),
   });
@@ -215,10 +216,10 @@ app.get("/api/config", async (c) => {
   const aiRoutes = await getAiRoutingSummary(c.env, "owner");
 
   return c.json({
-    apiOrigin: c.env.CORE_API_ORIGIN,
-    webOrigin: c.env.CORE_WEB_ORIGIN,
-    adminHost: c.env.ME3_ADMIN_HOST || null,
-    siteHost: c.env.ME3_SITE_HOST || null,
+    apiOrigin: getCoreApiOrigin(c.env, c.req.url),
+    webOrigin: getCoreWebOrigin(c.env, c.req.url),
+    adminHost: getAdminHost(c.env, c.req.url) || null,
+    siteHost: getSiteHost(c.env) || null,
     ai: {
       defaultProvider: aiRoutes.default.providerId,
       defaultModel: aiRoutes.default.model,
@@ -531,7 +532,7 @@ app.post("/api/social/:platform/authorize", async (c) => {
         ownerId,
         { ...(body && typeof body === "object" ? body : {}), platform: c.req.param("platform") },
         {
-          apiOrigin: c.env.CORE_API_ORIGIN,
+          apiOrigin: getCoreApiOrigin(c.env, c.req.url),
           hostedOAuthOrigin: c.env.ME3_SOCIAL_OAUTH_ORIGIN || null,
         },
       ),
@@ -559,8 +560,8 @@ app.get("/api/social/:platform/callback", async (c) => {
         handoff: c.req.query("handoff"),
       },
       {
-        apiOrigin: c.env.CORE_API_ORIGIN,
-        webOrigin: c.env.CORE_WEB_ORIGIN,
+        apiOrigin: getCoreApiOrigin(c.env, c.req.url),
+        webOrigin: getCoreWebOrigin(c.env, c.req.url),
         fetch,
         installKey: await getOrCreateInstallEncryptionKey(c.env),
         hostedOAuthOrigin: c.env.ME3_SOCIAL_OAUTH_ORIGIN || null,
@@ -569,7 +570,7 @@ app.get("/api/social/:platform/callback", async (c) => {
     return c.redirect(redirect);
   } catch (error) {
     if (error instanceof SocialPublishingInputError) {
-      const url = new URL("/social", c.env.CORE_WEB_ORIGIN);
+      const url = new URL("/social", getCoreWebOrigin(c.env, c.req.url));
       url.searchParams.set("social_error", error.message);
       return c.redirect(url.toString());
     }
@@ -1353,7 +1354,7 @@ app.post("/api/agent/landing-pages/generate", async (c) => {
       name: owner?.name || site.username,
       bio: owner?.bio || null,
       avatar: owner?.avatar_url || null,
-      profileUrl: `${c.env.CORE_WEB_ORIGIN}/sites/${site.username}`,
+      profileUrl: `${getCoreWebOrigin(c.env, c.req.url)}/sites/${site.username}`,
     },
   });
 
@@ -2095,16 +2096,18 @@ app.notFound((c) => {
 
 app.get("/.well-known/me.json", async (c) => {
   const owner = await getOwnerProfile(c.env, "owner");
+  const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
+  const webOrigin = getCoreWebOrigin(c.env, c.req.url);
 
   return c.json({
-    id: c.env.CORE_API_ORIGIN,
+    id: apiOrigin,
     type: "Person",
     name: owner?.name ?? "ME3 Core Owner",
     username: owner?.username ?? "owner",
     bio: owner?.bio ?? "Personal AI assistant powered by ME3 Core.",
-    url: c.env.CORE_WEB_ORIGIN,
+    url: webOrigin,
     intents: {
-      chat: `${c.env.CORE_API_ORIGIN}/api/assistant/chat`,
+      chat: `${apiOrigin}/api/assistant/chat`,
     },
   });
 });
@@ -2139,12 +2142,90 @@ function hostnameFromUrl(value: string | null | undefined): string {
   }
 }
 
+function originFromUrl(value: string | null | undefined): string {
+  if (!value) return "";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
+}
+
+function getRootCustomDomain(env: Env): string {
+  return normalizeDomain(env.ME3_CUSTOM_DOMAIN);
+}
+
+function prefixedHost(prefix: string, domain: string): string {
+  if (!domain) return "";
+  if (domain.startsWith(`${prefix}.`)) return domain;
+  return `${prefix}.${domain}`;
+}
+
+function getAdminHost(env: Env, requestUrl?: string): string {
+  return (
+    normalizeHost(env.ME3_ADMIN_HOST) ||
+    hostnameFromUrl(env.CORE_WEB_ORIGIN) ||
+    prefixedHost("me3", getRootCustomDomain(env)) ||
+    hostnameFromUrl(requestUrl)
+  );
+}
+
+function getApiHost(env: Env, requestUrl?: string): string {
+  return (
+    normalizeHost(env.ME3_API_HOST) ||
+    hostnameFromUrl(env.CORE_API_ORIGIN) ||
+    prefixedHost("api", getRootCustomDomain(env)) ||
+    getAdminHost(env, requestUrl)
+  );
+}
+
+function getSiteHost(env: Env): string {
+  return normalizeHost(env.ME3_SITE_HOST) || prefixedHost("www", getRootCustomDomain(env));
+}
+
+function getCoreWebOrigin(env: Env, requestUrl?: string): string {
+  const configured = originFromUrl(env.CORE_WEB_ORIGIN);
+  if (configured) return configured;
+
+  const adminHost = getAdminHost(env, requestUrl);
+  if (adminHost) {
+    return adminHost === hostnameFromUrl(requestUrl) ? originFromUrl(requestUrl) : `https://${adminHost}`;
+  }
+
+  return originFromUrl(requestUrl);
+}
+
+function getCoreApiOrigin(env: Env, requestUrl?: string): string {
+  const configured = originFromUrl(env.CORE_API_ORIGIN);
+  if (configured) return configured;
+
+  const apiHost = getApiHost(env, requestUrl);
+  if (apiHost) {
+    return apiHost === hostnameFromUrl(requestUrl) ? originFromUrl(requestUrl) : `https://${apiHost}`;
+  }
+
+  return getCoreWebOrigin(env, requestUrl);
+}
+
+function getCorsOrigin(env: Env, requestUrl: string, origin: string | undefined): string {
+  if (!origin) return getCoreWebOrigin(env, requestUrl);
+
+  const allowedOrigins = new Set([
+    getCoreWebOrigin(env, requestUrl),
+    getCoreApiOrigin(env, requestUrl),
+    originFromUrl(requestUrl),
+  ]);
+
+  return allowedOrigins.has(origin) ? origin : getCoreWebOrigin(env, requestUrl);
+}
+
 function isPublicSiteHost(env: Env, requestUrl: string): boolean {
-  const siteHost = normalizeHost(env.ME3_SITE_HOST);
+  const siteHost = getSiteHost(env);
   if (!siteHost) return false;
   const requestHost = hostnameFromUrl(requestUrl);
-  const adminHost = normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN);
-  return requestHost === siteHost && requestHost !== adminHost;
+  const adminHost = getAdminHost(env, requestUrl);
+  const apiHost = getApiHost(env, requestUrl);
+  return requestHost === siteHost && requestHost !== adminHost && requestHost !== apiHost;
 }
 
 function getCoreDomainState(
@@ -2153,7 +2234,7 @@ function getCoreDomainState(
   domain: string | null,
 ): "pending" | "active" | "failed" {
   const normalizedDomain = normalizeHost(domain);
-  const siteHost = normalizeHost(env.ME3_SITE_HOST);
+  const siteHost = getSiteHost(env);
   if (!normalizedDomain) return "pending";
   if (!siteHost) return "pending";
   if (normalizedDomain !== siteHost) return "pending";
@@ -2165,7 +2246,7 @@ function getCoreDomainState(
 }
 
 function buildCoreDomainStatus(env: Env, site: DbSite) {
-  const domain = normalizeHost(site.custom_domain) || normalizeHost(env.ME3_SITE_HOST);
+  const domain = normalizeHost(site.custom_domain) || getSiteHost(env);
   const status = domain
     ? getCoreDomainState(env, site, domain)
     : undefined;
@@ -2175,8 +2256,8 @@ function buildCoreDomainStatus(env: Env, site: DbSite) {
     domain: domain || undefined,
     status,
     ssl_status: status === "active" ? "active" : undefined,
-    expected_host: env.ME3_SITE_HOST || null,
-    admin_host: env.ME3_ADMIN_HOST || hostnameFromUrl(env.CORE_WEB_ORIGIN) || null,
+    expected_host: getSiteHost(env) || null,
+    admin_host: getAdminHost(env) || null,
     verification_records: getCoreDomainRecords(env, domain),
     registrar_guides: getRegistrarGuides(),
     url: status === "active" && domain ? `https://${domain}` : undefined,
@@ -2184,7 +2265,7 @@ function buildCoreDomainStatus(env: Env, site: DbSite) {
       ? getCoreDomainInstructions(env, domain, site.username)
       : [
           "Enter the www domain visitors should use for this ME3 site.",
-          "Set ME3_SITE_HOST to the same hostname in this Worker deployment.",
+          "Set ME3_CUSTOM_DOMAIN to the root domain in this Worker deployment.",
           "Attach that hostname to the Worker as a Cloudflare custom domain.",
         ],
   };
@@ -2193,7 +2274,7 @@ function buildCoreDomainStatus(env: Env, site: DbSite) {
 function getCoreDomainRecords(env: Env, domain: string | null | undefined) {
   const normalizedDomain = normalizeHost(domain);
   if (!normalizedDomain) return [];
-  const adminHost = normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN);
+  const adminHost = getAdminHost(env);
   if (!adminHost) return [];
   return [
     {
@@ -2205,11 +2286,14 @@ function getCoreDomainRecords(env: Env, domain: string | null | undefined) {
 }
 
 function getCoreDomainInstructions(env: Env, domain: string, username: string): string[] {
-  const siteHost = normalizeHost(env.ME3_SITE_HOST);
+  const siteHost = getSiteHost(env);
+  const rootDomain = getRootCustomDomain(env);
   const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
   const instructions = [
     `In Cloudflare, attach ${domain} to this same me3 Worker as a custom domain.`,
-    `Set ME3_SITE_HOST=${domain} in the Worker variables, then redeploy.`,
+    rootDomain
+      ? `ME3_CUSTOM_DOMAIN is ${rootDomain}, so Core expects the public site on ${siteHost}.`
+      : "Set ME3_CUSTOM_DOMAIN to the root domain, then redeploy.",
   ];
 
   if (configuredUsername && configuredUsername !== username) {
@@ -4043,7 +4127,7 @@ function currentUnixTime(): number {
 }
 
 function shouldUseSecureCookie(env: Env): boolean {
-  return env.ENVIRONMENT !== "local" && env.CORE_API_ORIGIN.startsWith("https://");
+  return env.ENVIRONMENT !== "local";
 }
 
 async function getSetupRequired(env: Env, ownerId = "owner"): Promise<string[]> {

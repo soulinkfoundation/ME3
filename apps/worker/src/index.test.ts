@@ -2043,7 +2043,7 @@ describe("ME3 Core Worker auth", () => {
         expect.objectContaining({
           id: "chat",
           providerId: "workers-ai",
-          model: "@cf/moonshotai/kimi-k2.6",
+          model: "@cf/qwen/qwen3-30b-a3b-fp8",
         }),
       ]),
     );

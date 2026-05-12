@@ -208,9 +208,8 @@ const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     providerId: "workers-ai",
     model: "@cf/moonshotai/kimi-k2.6",
     runtimeLabel: "Cloudflare Workers AI",
-    costLabel: "Free",
-    badge: "Default",
-    description: "Best default for ME3: strong, free, open-source, and good at tool use.",
+    costLabel: "Paid",
+    description: "Stronger frontier-scale Workers AI model for agentic work and tool use.",
   },
   {
     id: "workers-qwen3-30b",
@@ -218,8 +217,9 @@ const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     providerId: "workers-ai",
     model: "@cf/qwen/qwen3-30b-a3b-fp8",
     runtimeLabel: "Cloudflare Workers AI",
-    costLabel: "Free",
-    description: "Fast free model for everyday chat, writing, and light planning.",
+    costLabel: "Low cost",
+    badge: "Default",
+    description: "Friendly first-install default for everyday chat, writing, and light planning.",
   },
   {
     id: "workers-qwq-32b",

@@ -35,24 +35,16 @@ bucket_name = "me3-site-assets"
 directory = "apps/web/dist"
 binding = "ASSETS"
 # The Worker must see every request so it can route by hostname:
-# ME3_SITE_HOST serves the public site, ME3_ADMIN_HOST serves the admin SPA/API.
+# inferred ME3_SITE_HOST serves the public site; admin/API hosts serve the SPA/API.
 run_worker_first = ["/*"]
 not_found_handling = "single-page-application"
 
 [vars]
 ENVIRONMENT = "production"
-CORE_WEB_ORIGIN = "https://me3.customdomain.com"
-CORE_API_ORIGIN = "https://me3.customdomain.com"
-ME3_ADMIN_HOST = "me3.customdomain.com"
-ME3_SITE_HOST = "www.customdomain.com"
-# Optional. Set this if you want the public host to serve a specific claimed site.
-# If omitted, Core serves the first profile site, or a site whose custom_domain matches ME3_SITE_HOST.
-# ME3_SITE_USERNAME = "owner"
-ME3_AI_DEFAULT_PROVIDER = "workers-ai"
-ME3_AI_DEFAULT_MODEL = "@cf/meta/llama-3.1-8b-instruct"
-ME3_AI_CHAT_PROVIDER = "workers-ai"
-ME3_AI_CHAT_MODEL = "@cf/meta/llama-3.1-8b-instruct"
-ME3_AI_REASONING_PROVIDER = "workers-ai"
-ME3_AI_REASONING_MODEL = "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"
-ME3_AI_EXTRACTION_PROVIDER = "workers-ai"
-ME3_AI_EXTRACTION_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+# Optional. Leave blank for the generated workers.dev URL.
+# If set to example.com, Core infers:
+# - admin: me3.example.com
+# - API: api.example.com
+# - public site: www.example.com
+ME3_CUSTOM_DOMAIN = ""
+ME3_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"

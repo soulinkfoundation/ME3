@@ -6,9 +6,11 @@ export interface Env {
   SITE_ASSETS?: R2Bucket;
 
   ENVIRONMENT: string;
-  CORE_WEB_ORIGIN: string;
-  CORE_API_ORIGIN: string;
+  CORE_WEB_ORIGIN?: string;
+  CORE_API_ORIGIN?: string;
+  ME3_CUSTOM_DOMAIN?: string;
   ME3_ADMIN_HOST?: string;
+  ME3_API_HOST?: string;
   ME3_SITE_HOST?: string;
   ME3_SITE_USERNAME?: string;
   ME3_SOCIAL_OAUTH_ORIGIN?: string;
@@ -17,6 +19,7 @@ export interface Env {
   TOKEN_ENCRYPTION_KEY?: string;
   ADMIN_BOOTSTRAP_CODE?: string;
 
+  ME3_AI_MODEL?: string;
   ME3_AI_DEFAULT_PROVIDER?: string;
   ME3_AI_DEFAULT_MODEL?: string;
   ME3_AI_CHAT_PROVIDER?: string;
