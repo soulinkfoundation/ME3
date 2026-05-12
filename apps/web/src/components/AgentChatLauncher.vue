@@ -203,9 +203,12 @@ onMounted(async () => {
         :aria-expanded="false"
         @click="toggleChat"
       >
-        <span class="agent-launcher-icon" aria-hidden="true">
-          <span class="agent-launcher-dot" />
-        </span>
+        <img
+          src="/robot.png"
+          alt=""
+          class="agent-launcher-icon"
+          aria-hidden="true"
+        />
       </button>
 
       <div
@@ -354,41 +357,11 @@ onMounted(async () => {
 }
 
 .agent-launcher-icon {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border: 2px solid var(--color-text);
-  border-radius: 999px;
+  display: block;
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
   animation: agent-launcher-float 2.4s ease-in-out infinite;
-}
-
-.agent-launcher-icon::before,
-.agent-launcher-icon::after {
-  content: "";
-  position: absolute;
-  top: 13px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--color-text);
-}
-
-.agent-launcher-icon::before {
-  left: 10px;
-}
-
-.agent-launcher-icon::after {
-  right: 10px;
-}
-
-.agent-launcher-dot {
-  width: 12px;
-  height: 2px;
-  margin-top: 16px;
-  border-radius: 999px;
-  background: var(--color-text);
 }
 
 .agent-launcher:hover {
