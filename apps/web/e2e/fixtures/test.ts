@@ -2,34 +2,6 @@ import { test as base, expect } from "@playwright/test";
 
 export const test = base.extend({
   page: async ({ page }, use) => {
-    await page.route("**/api/billing/status", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          tier: "free",
-          capabilities: {
-            maxSites: 3,
-            customDomain: false,
-            footerCustomization: false,
-            emailSendQuota: 0,
-            emailOverageRate: 0,
-            mailboxAlias: false,
-            agentInbox: false,
-            approvalFirstOutbound: false,
-            shopEnabled: false,
-            importFromUrl: true,
-            agentEnabled: false,
-            telegramAgentAccess: false,
-            notificationDelivery: true,
-            bookingReminders: true,
-          },
-          is_pro: false,
-          is_paid: false,
-        }),
-      });
-    });
-
     await page.route("**/api/sites/quota", async (route) => {
       await route.fulfill({
         status: 200,
