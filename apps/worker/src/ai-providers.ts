@@ -77,10 +77,10 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     secretLabel: null,
     bindingEnv: "AI",
     recommendedModels: {
-      default: "@cf/meta/llama-3.1-8b-instruct",
-      chat: "@cf/meta/llama-3.1-8b-instruct",
-      reasoning: "@cf/meta/llama-3.1-8b-instruct",
-      extraction: "@cf/meta/llama-3.1-8b-instruct",
+      default: "@cf/moonshotai/kimi-k2.6",
+      chat: "@cf/moonshotai/kimi-k2.6",
+      reasoning: "@cf/moonshotai/kimi-k2.6",
+      extraction: "@cf/moonshotai/kimi-k2.6",
     },
   },
   {

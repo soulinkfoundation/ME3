@@ -1769,7 +1769,7 @@ describe("ME3 Core Worker auth", () => {
         expect.objectContaining({
           id: "chat",
           providerId: "workers-ai",
-          model: "@cf/meta/llama-3.1-8b-instruct",
+          model: "@cf/moonshotai/kimi-k2.6",
         }),
       ]),
     );
