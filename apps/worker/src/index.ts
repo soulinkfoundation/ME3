@@ -40,6 +40,7 @@ import {
   type LandingPageSection,
   type LandingPageTemplateId,
 } from "../../../shared/landing-pages";
+import { generateSiteHtml, type Me3SiteProfile } from "./site-generator";
 import type {
   DbAgentChannelConnection,
   DbAgentChannelEvent,
@@ -907,7 +908,6 @@ app.post("/api/sites/:username/upload", async (c) => {
     if (files.length === 0) return c.json({ error: "No files uploaded" }, 400);
 
     const manifest = (await loadPublishManifest(c.env, site.id)) || createEmptyPublishManifest();
-    const textFiles = new Map<string, string>();
 
     for (const file of files) {
       if (isSiteMediaFile(file.name, file.type)) {
@@ -923,19 +923,25 @@ app.post("/api/sites/:username/upload", async (c) => {
       const sourcePath = `src/${normalizeSiteFileName(file.name)}`;
       await putSiteFile(c.env, site.id, sourcePath, content, contentType);
       manifest.sourceFiles[file.name] = await sha256Text(content);
-      textFiles.set(file.name, content);
     }
 
-    const meJson = textFiles.get("me.json") || (await getSiteFileText(c.env, site.id, "src/me.json"));
+    const sourceFiles = await loadSiteSourceFiles(c.env, site.id);
+    const meJson = sourceFiles.get("me.json");
     if (meJson) {
-      await putSiteFile(c.env, site.id, "public/me.json", meJson, "application/json");
-      await putSiteFile(c.env, site.id, "public/index.html", renderProfileSiteHtml(meJson, site.username), "text/html");
-    }
-
-    for (const [name, content] of textFiles) {
-      if (name === "me.json") continue;
-      const publicName = name.replace(/\.md$/i, ".html");
-      await putSiteFile(c.env, site.id, `public/${normalizeSiteFileName(publicName)}`, renderMarkdownPageHtml(name, content), "text/html");
+      const profile = parseSiteProfile(meJson, site.username);
+      const generatedFiles = await generateSiteHtml(
+        profile,
+        Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
+      );
+      for (const [name, content] of Object.entries(generatedFiles)) {
+        await putSiteFile(
+          c.env,
+          site.id,
+          `public/${normalizeSiteFileName(name)}`,
+          content,
+          getGeneratedSiteContentType(name),
+        );
+      }
     }
 
     manifest.updatedAt = new Date().toISOString();
@@ -2104,11 +2110,16 @@ async function serveSiteFileResponse(
 
   const requestedPath = normalizeSiteFileName(rawPath) || "index.html";
   const publicPath = `public/${requestedPath.endsWith("/") ? `${requestedPath}index.html` : requestedPath}`;
+  const htmlPath =
+    requestedPath && !requestedPath.endsWith("/") && !requestedPath.split("/").pop()?.includes(".")
+      ? `public/${requestedPath}.html`
+      : null;
   const isMediaPath = publicPath.startsWith("public/files/") || publicPath === "public/favicon.png";
   const r2File = isMediaPath ? await getR2SiteFile(env, site, publicPath) : null;
   const file =
     r2File ||
     (await getSiteFile(env, site.id, publicPath)) ||
+    (htmlPath ? await getSiteFile(env, site.id, htmlPath) : null) ||
     (requestedPath === "index.html" ? await getSiteFile(env, site.id, "landing/index.html") : null);
   if (!file) {
     return new Response(renderNotFoundPage("Page not found"), {
@@ -2274,6 +2285,32 @@ async function listSiteFiles(env: Env, siteId: string, prefix: string): Promise<
     .bind(siteId, `${prefix}%`)
     .all<SiteFileRecord>();
   return rows.results || [];
+}
+
+async function loadSiteSourceFiles(env: Env, siteId: string): Promise<Map<string, string>> {
+  const files = await listSiteFiles(env, siteId, "src/");
+  const sourceFiles = new Map<string, string>();
+  for (const file of files) {
+    sourceFiles.set(file.path.replace(/^src\//, ""), await arrayBufferToText(file.content));
+  }
+  return sourceFiles;
+}
+
+function parseSiteProfile(meJson: string, username: string): Me3SiteProfile {
+  try {
+    const parsed = JSON.parse(meJson) as Me3SiteProfile;
+    return {
+      ...parsed,
+      handle: parsed.handle || username,
+      name: parsed.name || username,
+    };
+  } catch {
+    return { version: "0.1", handle: username, name: username };
+  }
+}
+
+function getGeneratedSiteContentType(path: string): string {
+  return path.endsWith(".json") ? "application/json" : "text/html; charset=utf-8";
 }
 
 async function getSiteStorageStatus(env: Env, site: DbSite) {
@@ -2445,32 +2482,6 @@ function titleFromSlug(slug: string): string {
     .filter(Boolean)
     .map((word) => word[0]?.toUpperCase() + word.slice(1))
     .join(" ");
-}
-
-function renderProfileSiteHtml(meJsonText: string, username: string): string {
-  let profile: Record<string, any> = {};
-  try {
-    profile = JSON.parse(meJsonText) as Record<string, any>;
-  } catch {
-    profile = {};
-  }
-  const name = String(profile.name || profile.profile?.name || username);
-  const bio = String(profile.bio || profile.profile?.bio || "A ME3 Core site.");
-  const links = profile.links && typeof profile.links === "object" ? profile.links : {};
-  const linkHtml = Object.entries(links)
-    .filter(([key, value]) => !key.startsWith("_") && typeof value === "string")
-    .map(([key, value]) => `<a href="${escapeHtml(String(value))}" rel="noreferrer">${escapeHtml(titleFromSlug(key))}</a>`)
-    .join("");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(name)}</title><meta name="description" content="${escapeHtml(bio)}"><style>${coreSiteCss()}</style></head><body><main class="shell"><section class="hero"><p class="badge">${escapeHtml(username)}.me3.core</p><h1>${escapeHtml(name)}</h1><p>${escapeHtml(bio)}</p><nav>${linkHtml}</nav></section></main></body></html>`;
-}
-
-function renderMarkdownPageHtml(filename: string, markdown: string): string {
-  const title = titleFromSlug(filename.replace(/\.md$/i, ""));
-  const body = markdown
-    .split(/\n{2,}/)
-    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`)
-    .join("");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>${coreSiteCss()}</style></head><body><main class="shell"><article class="page"><h1>${escapeHtml(title)}</h1>${body}</article></main></body></html>`;
 }
 
 function coreSiteCss(): string {
