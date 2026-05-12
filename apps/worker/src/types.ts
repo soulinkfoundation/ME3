@@ -68,6 +68,18 @@ export interface DbSite {
   published_at: string | null;
 }
 
+export interface DbSubscriber {
+  id: number;
+  site_id: string;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  source: string;
+  subscribed_at: string;
+  unsubscribed_at: string | null;
+  ip_hash: string | null;
+}
+
 export interface DbBooking {
   id: string;
   site_id: string;

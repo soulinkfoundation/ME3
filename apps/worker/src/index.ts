@@ -80,6 +80,7 @@ import type {
   DbMailboxAlias,
   DbMailboxMessage,
   DbSite,
+  DbSubscriber,
   DbUserCalendarEvent,
   DbUserReminder,
   Env,
@@ -202,6 +203,7 @@ const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
 const PASSWORD_HASH_ITERATIONS = 100_000;
 const ME3_CLOUD_OWNER_SECRET_NAME = "ME3_CLOUD_OWNER_ID";
 const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
 const CONTACT_SOURCES = new Set(["booking", "manual", "agent", "import", "outreach", "soulink"]);
@@ -1127,6 +1129,328 @@ app.get("/api/sites/quota", async (c) => {
     },
     can_create: Number(count?.count || 0) < 4,
   });
+});
+
+app.post("/api/sites/:username/subscribe", async (c) => {
+  const site = await getSiteByUsername(c.env, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  try {
+    const { email, firstName, lastName, honeypot } = await parseSubscriberBody(c);
+    if (honeypot) return c.json({ ok: true, message: "Subscribed successfully" });
+    if (!email) return c.json({ error: "Email is required" }, 400);
+
+    const normalizedEmail = email.toLowerCase().trim();
+    if (!EMAIL_REGEX.test(normalizedEmail)) return c.json({ error: "Invalid email address" }, 400);
+
+    const clientIp = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for");
+    const ipHash = clientIp ? await hashSubscriberIdentifier(clientIp) : null;
+    const existing = await c.env.DB.prepare(
+      "SELECT id, unsubscribed_at FROM subscribers WHERE site_id = ? AND email = ?",
+    )
+      .bind(site.id, normalizedEmail)
+      .first<{ id: number; unsubscribed_at: string | null }>();
+
+    if (existing) {
+      if (existing.unsubscribed_at) {
+        await c.env.DB.prepare(
+          "UPDATE subscribers SET unsubscribed_at = NULL, subscribed_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+          .bind(existing.id)
+          .run();
+        return c.json({ ok: true, message: "Welcome back! You've been re-subscribed." });
+      }
+      return c.json({ ok: true, message: "You're already subscribed!" });
+    }
+
+    await c.env.DB.prepare(
+      `INSERT INTO subscribers (site_id, email, first_name, last_name, source, ip_hash)
+       VALUES (?, ?, ?, ?, 'me3', ?)`,
+    )
+      .bind(site.id, normalizedEmail, normalizeNullableText(firstName), normalizeNullableText(lastName), ipHash)
+      .run();
+
+    return c.json({ ok: true, message: "Subscribed successfully!" });
+  } catch (error) {
+    if (isMissingSubscribersTableError(error)) return subscribersSetupRequired(c);
+    console.error("Subscribe error:", error);
+    return c.json({ error: "Failed to subscribe" }, 500);
+  }
+});
+
+app.get("/api/sites/:username/unsubscribe", async (c) => {
+  const email = c.req.query("email");
+  const token = c.req.query("token");
+  const username = normalizeUsername(c.req.param("username"));
+  if (!email || !token || !username) return unsubscribeHtml("Invalid unsubscribe link", "This link appears to be invalid or expired.");
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const expectedToken = await generateUnsubscribeToken(normalizedEmail, username);
+  if (token !== expectedToken) return unsubscribeHtml("Invalid unsubscribe link", "This link appears to be invalid or expired.");
+
+  const site = await getSiteByUsername(c.env, username);
+  if (!site) return unsubscribeHtml("Site not found");
+
+  try {
+    await c.env.DB.prepare(
+      "UPDATE subscribers SET unsubscribed_at = CURRENT_TIMESTAMP WHERE site_id = ? AND email = ?",
+    )
+      .bind(site.id, normalizedEmail)
+      .run();
+
+    return unsubscribeHtml(
+      "You've been unsubscribed",
+      "You will no longer receive emails from this newsletter.",
+      "Changed your mind? Visit the site to subscribe again.",
+    );
+  } catch (error) {
+    console.error("Unsubscribe error:", error);
+    return unsubscribeHtml("Something went wrong", "Please try again later.");
+  }
+});
+
+app.get("/api/sites/:username/subscribers/count", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found or unauthorized" }, 404);
+
+  try {
+    const result = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM subscribers WHERE site_id = ? AND unsubscribed_at IS NULL",
+    )
+      .bind(site.id)
+      .first<{ count: number | string | null }>();
+    return c.json({ count: Number(result?.count || 0) });
+  } catch (error) {
+    if (isMissingSubscribersTableError(error)) return subscribersSetupRequired(c);
+    console.error("Get subscriber count error:", error);
+    return c.json({ error: "Failed to get subscriber count" }, 500);
+  }
+});
+
+app.get("/api/sites/:username/subscribers/export", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found or unauthorized" }, 404);
+
+  try {
+    const result = await c.env.DB.prepare(
+      `SELECT email, first_name, last_name, source, subscribed_at
+       FROM subscribers
+       WHERE site_id = ? AND unsubscribed_at IS NULL
+       ORDER BY subscribed_at DESC`,
+    )
+      .bind(site.id)
+      .all<DbSubscriber>();
+    const rows = [["email", "first_name", "last_name", "source", "subscribed_at"].join(",")];
+    for (const subscriber of result.results || []) {
+      rows.push(
+        [
+          escapeCsv(subscriber.email),
+          escapeCsv(subscriber.first_name || ""),
+          escapeCsv(subscriber.last_name || ""),
+          escapeCsv(subscriber.source),
+          escapeCsv(subscriber.subscribed_at),
+        ].join(","),
+      );
+    }
+
+    const filename = `${site.username}-audience-${new Date().toISOString().split("T")[0]}.csv`;
+    return new Response(rows.join("\n"), {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+    });
+  } catch (error) {
+    if (isMissingSubscribersTableError(error)) return subscribersSetupRequired(c);
+    console.error("Export subscribers error:", error);
+    return c.json({ error: "Failed to export subscribers" }, 500);
+  }
+});
+
+app.get("/api/sites/:username/subscribers", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found or unauthorized" }, 404);
+
+  try {
+    const page = Math.max(1, Number.parseInt(c.req.query("page") || "1", 10));
+    const limit = Math.min(100, Math.max(1, Number.parseInt(c.req.query("limit") || "50", 10)));
+    const offset = (page - 1) * limit;
+    const countResult = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM subscribers WHERE site_id = ? AND unsubscribed_at IS NULL",
+    )
+      .bind(site.id)
+      .first<{ count: number | string | null }>();
+    const total = Number(countResult?.count || 0);
+    const result = await c.env.DB.prepare(
+      `SELECT id, email, first_name, last_name, source, subscribed_at
+       FROM subscribers
+       WHERE site_id = ? AND unsubscribed_at IS NULL
+       ORDER BY subscribed_at DESC
+       LIMIT ? OFFSET ?`,
+    )
+      .bind(site.id, limit, offset)
+      .all<DbSubscriber>();
+
+    return c.json({
+      subscribers: result.results || [],
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    });
+  } catch (error) {
+    if (isMissingSubscribersTableError(error)) return subscribersSetupRequired(c);
+    console.error("List subscribers error:", error);
+    return c.json({ error: "Failed to list subscribers" }, 500);
+  }
+});
+
+app.post("/api/sites/:username/subscribers", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found or unauthorized" }, 404);
+
+  try {
+    const body = await c.req
+      .json<{ email?: unknown; firstName?: unknown; lastName?: unknown }>()
+      .catch((): { email?: unknown; firstName?: unknown; lastName?: unknown } => ({}));
+    if (typeof body.email !== "string") return c.json({ error: "Email is required" }, 400);
+    const email = body.email.toLowerCase().trim();
+    if (!EMAIL_REGEX.test(email)) return c.json({ error: "Invalid email address" }, 400);
+
+    const existing = await c.env.DB.prepare(
+      "SELECT id, unsubscribed_at FROM subscribers WHERE site_id = ? AND email = ?",
+    )
+      .bind(site.id, email)
+      .first<{ id: number; unsubscribed_at: string | null }>();
+
+    if (existing) {
+      if (existing.unsubscribed_at) {
+        await c.env.DB.prepare(
+          "UPDATE subscribers SET unsubscribed_at = NULL, subscribed_at = CURRENT_TIMESTAMP, source = 'manual' WHERE id = ?",
+        )
+          .bind(existing.id)
+          .run();
+        return c.json({ ok: true, resubscribed: true });
+      }
+      return c.json({ error: "Email is already subscribed" }, 409);
+    }
+
+    await c.env.DB.prepare(
+      `INSERT INTO subscribers (site_id, email, first_name, last_name, source)
+       VALUES (?, ?, ?, ?, 'manual')`,
+    )
+      .bind(site.id, email, normalizeNullableText(body.firstName), normalizeNullableText(body.lastName))
+      .run();
+
+    return c.json({ ok: true, resubscribed: false });
+  } catch (error) {
+    if (isMissingSubscribersTableError(error)) return subscribersSetupRequired(c);
+    console.error("Add subscriber error:", error);
+    return c.json({ error: "Failed to add subscriber" }, 500);
+  }
+});
+
+app.delete("/api/sites/:username/subscribers/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found or unauthorized" }, 404);
+
+  try {
+    const result = await c.env.DB.prepare("DELETE FROM subscribers WHERE id = ? AND site_id = ?")
+      .bind(c.req.param("id"), site.id)
+      .run();
+    const changes = Number(result.meta.changes || 0);
+    if (changes === 0) return c.json({ error: "Subscriber not found" }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    if (isMissingSubscribersTableError(error)) return subscribersSetupRequired(c);
+    console.error("Delete subscriber error:", error);
+    return c.json({ error: "Failed to delete subscriber" }, 500);
+  }
+});
+
+app.post("/api/sites/:username/subscribers/import", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found or unauthorized" }, 404);
+
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get("file");
+    if (!(file instanceof File)) return c.json({ error: "CSV file is required" }, 400);
+
+    const lines = (await file.text()).split(/\r?\n/).filter((line) => line.trim());
+    if (lines.length < 2) {
+      return c.json({ error: "CSV must have a header row and at least one data row" }, 400);
+    }
+
+    const header = parseCsvLine(lines[0]).map((value) => value.toLowerCase().trim());
+    const emailIndex = findHeaderIndex(header, ["email", "email address", "email_address", "emailaddress"]);
+    if (emailIndex === -1) return c.json({ error: "CSV must have an 'email' column" }, 400);
+
+    const firstNameIndex = findHeaderIndex(header, ["first_name", "firstname", "first name", "fname"]);
+    const lastNameIndex = findHeaderIndex(header, ["last_name", "lastname", "last name", "lname"]);
+    const fullNameIndex = findHeaderIndex(header, ["name", "full_name", "full name"]);
+    const subscribedAtIndex = findHeaderIndex(header, [
+      "subscribed_at",
+      "subscribed at",
+      "start date",
+      "start_date",
+      "created_at",
+      "created at",
+    ]);
+    const source = header.includes("start date") && header.includes("revenue") ? "substack_import" : "import";
+    const seen = new Set<string>();
+    let imported = 0;
+    let skipped = 0;
+
+    for (const line of lines.slice(1)) {
+      const values = parseCsvLine(line);
+      const email = values[emailIndex]?.toLowerCase().trim();
+      if (!email || !EMAIL_REGEX.test(email) || seen.has(email)) {
+        skipped++;
+        continue;
+      }
+      seen.add(email);
+
+      const name = fullNameIndex >= 0 ? splitImportedName(values[fullNameIndex]) : { firstName: null, lastName: null };
+      const subscribedAt = subscribedAtIndex >= 0 ? normalizeImportedTimestamp(values[subscribedAtIndex]) : null;
+      const result = await c.env.DB.prepare(
+        `INSERT OR IGNORE INTO subscribers (site_id, email, first_name, last_name, source, subscribed_at)
+         VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))`,
+      )
+        .bind(
+          site.id,
+          email,
+          firstNameIndex >= 0 ? normalizeNullableText(values[firstNameIndex]) : name.firstName,
+          lastNameIndex >= 0 ? normalizeNullableText(values[lastNameIndex]) : name.lastName,
+          source,
+          subscribedAt,
+        )
+        .run();
+      if (Number(result.meta.changes || 0) > 0) imported++;
+      else skipped++;
+    }
+
+    return c.json({ ok: true, imported, skipped, total: lines.length - 1 });
+  } catch (error) {
+    if (isMissingSubscribersTableError(error)) return subscribersSetupRequired(c);
+    console.error("Import subscribers error:", error);
+    return c.json({ error: "Failed to import subscribers" }, 500);
+  }
 });
 
 app.post("/api/sites", async (c) => {
@@ -3350,6 +3674,102 @@ function renderLandingSection(section: LandingPageSection, username: string): st
   return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2></div></section>`;
 }
 
+async function parseSubscriberBody(c: AppContext): Promise<{
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  honeypot?: string;
+}> {
+  const contentType = c.req.header("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const body = await c.req
+      .json<{ email?: unknown; firstName?: unknown; lastName?: unknown }>()
+      .catch((): { email?: unknown; firstName?: unknown; lastName?: unknown } => ({}));
+    return {
+      email: typeof body.email === "string" ? body.email : undefined,
+      firstName: typeof body.firstName === "string" ? body.firstName : undefined,
+      lastName: typeof body.lastName === "string" ? body.lastName : undefined,
+    };
+  }
+
+  if (contentType.includes("form")) {
+    const form = await c.req.formData();
+    return {
+      email: form.get("email")?.toString(),
+      firstName: form.get("firstName")?.toString(),
+      lastName: form.get("lastName")?.toString(),
+      honeypot: form.get("website")?.toString(),
+    };
+  }
+
+  return {};
+}
+
+function escapeCsv(value: string): string {
+  if (!/[",\n\r]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function parseCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    const next = line[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"';
+      index++;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      values.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  values.push(current);
+  return values;
+}
+
+function findHeaderIndex(header: string[], aliases: string[]): number {
+  return header.findIndex((value) => aliases.includes(value));
+}
+
+function splitImportedName(value: string | undefined): { firstName: string | null; lastName: string | null } {
+  const normalized = value?.trim().replace(/\s+/g, " ") || "";
+  if (!normalized) return { firstName: null, lastName: null };
+  const parts = normalized.split(" ");
+  if (parts.length === 1) return { firstName: parts[0], lastName: null };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
+function normalizeImportedTimestamp(value: string | undefined): string | null {
+  const normalized = value?.trim() || "";
+  if (!normalized) return null;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+async function generateUnsubscribeToken(email: string, username: string): Promise<string> {
+  const hash = await hashSubscriberIdentifier(`${email.toLowerCase()}${username.toLowerCase()}`);
+  return hash.slice(0, 32);
+}
+
+async function hashSubscriberIdentifier(value: string): Promise<string> {
+  return sha256Text(`me3:${value.toLowerCase()}`);
+}
+
+function unsubscribeHtml(title: string, body?: string, note?: string): Response {
+  return new Response(
+    `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body style="font-family: system-ui; padding: 40px; text-align: center;"><h1>${escapeHtml(title)}</h1>${body ? `<p>${escapeHtml(body)}</p>` : ""}${note ? `<p style="color: #666; margin-top: 20px;">${escapeHtml(note)}</p>` : ""}</body></html>`,
+    { headers: { "Content-Type": "text/html; charset=utf-8" } },
+  );
+}
+
 async function requireOwner(c: AppContext): Promise<string | null> {
   return getSessionOwnerId(c);
 }
@@ -3380,9 +3800,26 @@ function siteStorageSetupRequired(c: AppContext) {
   );
 }
 
+function subscribersSetupRequired(c: AppContext) {
+  return c.json(
+    {
+      ok: false,
+      error:
+        "Subscriber storage is not initialized. Run `pnpm --filter @me3-core/worker db:migrate:local` and restart the Worker.",
+      setupRequired: ["subscribers"],
+    },
+    503,
+  );
+}
+
 function isMissingSiteFilesTableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("site_files") && /no such table|does not exist/i.test(message);
+}
+
+function isMissingSubscribersTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("subscribers") && /no such table|does not exist/i.test(message);
 }
 
 function normalizeUsername(value: unknown): string {
