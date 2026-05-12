@@ -22,6 +22,7 @@ const mobileNavOpen = ref(false);
 const mobileMediaQuery = "(max-width: 959px)";
 const navDrawerId = "app-side-nav-drawer";
 const socialPublishingInstalled = ref(false);
+const pluginChangedEvent = "me3:plugins-changed";
 
 let mobileViewportQuery: MediaQueryList | null = null;
 
@@ -52,11 +53,13 @@ onMounted(async () => {
   syncMobileViewport(mobileViewportQuery);
   mobileViewportQuery.addEventListener("change", syncMobileViewport);
   window.addEventListener("keydown", handleWindowKeydown);
+  window.addEventListener(pluginChangedEvent, loadInstalledPluginNav);
 });
 
 onBeforeUnmount(() => {
   mobileViewportQuery?.removeEventListener("change", syncMobileViewport);
   window.removeEventListener("keydown", handleWindowKeydown);
+  window.removeEventListener(pluginChangedEvent, loadInstalledPluginNav);
   document.body.style.overflow = "";
 });
 
