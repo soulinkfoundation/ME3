@@ -4,6 +4,7 @@ import VueRouter from 'unplugin-vue-router/vite'
 import { resolve } from 'path'
 
 const disableProxy = process.env.VITE_DISABLE_PROXY === '1'
+const devHost = process.env.VITE_HOST || 'localhost'
 const devPort = Number(process.env.VITE_PORT || 4000)
 
 export default defineConfig({
@@ -20,9 +21,13 @@ export default defineConfig({
     },
   },
   server: {
-    host: process.env.VITE_HOST || '127.0.0.1',
+    host: devHost,
     port: devPort,
     strictPort: true,
+    hmr: {
+      host: process.env.VITE_HMR_HOST || devHost,
+      clientPort: devPort,
+    },
     proxy: disableProxy
       ? undefined
       : {
