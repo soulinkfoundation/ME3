@@ -9,6 +9,7 @@
     "dev": "pnpm --parallel --filter @me3-core/worker --filter @me3/web dev",
     "dev:worker": "pnpm --filter @me3-core/worker dev",
     "dev:web": "pnpm --filter @me3/web dev",
+    "init:cloudflare": "node scripts/init-cloudflare.mjs",
     "setup:dev-vars": "node scripts/create-dev-vars.mjs",
     "storage:r2:provision": "node scripts/provision-r2.mjs",
     "verify:local-boot": "node scripts/verify-local-boot.mjs",

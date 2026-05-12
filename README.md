@@ -4,7 +4,7 @@ Installable ME3 Core personal/business AI assistant scaffold.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Soulink-Foundation/me3)
 
-The deploy button works when this repository is publicly reachable. For local development, use the flow below.
+Fastest path: use the deploy button, sign in to Cloudflare, let Cloudflare fork the repo and provision the Worker bindings, then enter the prompted install secrets. For local development or a manual CLI deploy, use the flows below.
 
 This repository is intentionally small at first. It is not a raw split of `me3-app`; it is the curated first slice that will become a bootable Cloudflare install template.
 
@@ -110,9 +110,9 @@ It intentionally excludes production `me3.app` routes, production Cloudflare acc
 
 Owner-supplied providers such as OpenAI, Anthropic, outbound email senders, Stripe, OAuth, and search remain blank until an install owner configures them.
 
-## Cloudflare Deploy Template
+## Cloudflare Deploy
 
-The root `wrangler.toml` is the deploy-template config for Cloudflare Workers Builds and the Deploy to Cloudflare button. It defines:
+The root `wrangler.toml` is the deploy-template config for the Deploy to Cloudflare button, Cloudflare Workers Builds, and manual Wrangler deploys. It defines:
 
 - Worker entrypoint: `apps/worker/src/index.ts`
 - Static web assets: `apps/web/dist`
@@ -123,8 +123,52 @@ The root `wrangler.toml` is the deploy-template config for Cloudflare Workers Bu
 - `ME3_USER_AGENT` Durable Object namespace
 - optional Workers AI binding
 - public origin/model defaults
+- root `.dev.vars.example` secret prompts for button-based deploys
 
-Cloudflare should provision supported resources from the Wrangler config during template deployment. Required and optional install secrets are described in `package.json` and listed in `apps/worker/.dev.vars.example`.
+Cloudflare should provision supported resources from the Wrangler config during button/template deployment. Required and optional install secrets are described in `package.json`; root `.dev.vars.example` lists the secrets that the deploy button should prompt for.
+
+### Deploy Button
+
+Use the button at the top of this README when you want Cloudflare to handle the GitHub fork, Worker build, and supported resource provisioning.
+
+Required install secrets:
+
+- `JWT_SECRET`: random session signing secret
+- `ADMIN_BOOTSTRAP_CODE`: one-time owner setup code
+
+Optional install secrets:
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+
+`TOKEN_ENCRYPTION_KEY` is intentionally optional. If it is omitted, ME3 Core creates a persistent install encryption key in D1 during owner setup.
+
+After the first deploy, open the admin URL, enter `ADMIN_BOOTSTRAP_CODE`, and create the owner account.
+
+### Manual CLI Deploy
+
+Use this when testing from a local checkout with your own Cloudflare account:
+
+```bash
+pnpm install
+pnpm exec wrangler login
+pnpm init:cloudflare
+pnpm deploy
+```
+
+`pnpm init:cloudflare` creates or reuses the D1 database and R2 bucket, writes the generated D1 database ID into `wrangler.toml`, and sets the required Worker secrets. It prints the generated `ADMIN_BOOTSTRAP_CODE` once; keep it private for first owner setup.
+
+Common options:
+
+```bash
+pnpm init:cloudflare -- --yes
+pnpm init:cloudflare -- --db-name your-me3-db --bucket your-me3-assets
+pnpm init:cloudflare -- --db-id existing-d1-uuid
+pnpm init:cloudflare -- --skip-secrets
+pnpm init:cloudflare -- --skip-r2
+```
+
+The `pnpm deploy` script runs the build, remote D1 migrations, R2 provisioning check, and Worker deploy. `pnpm deploy:d1-only` is available for constrained experiments, but production Core installs should use the default R2-backed deploy path.
 
 ### Recommended Cloudflare Domains
 
@@ -157,27 +201,7 @@ The site settings page can record a site's desired custom domain. In Core, this 
 
 ### Core File Storage
 
-ME3 Core uses D1 for structured data and R2 for files. The default deploy command creates the `me3-site-assets` R2 bucket, binds it to the Worker as `SITE_ASSETS`, and deploys Core:
-
-```bash
-pnpm deploy
-```
-
-Use a custom bucket name when you need one:
-
-```bash
-pnpm storage:r2:provision -- --bucket your-me3-assets
-pnpm deploy
-```
-
-If the bucket already exists, skip creation and only update the Worker config before deploying:
-
-```bash
-pnpm storage:r2:provision -- --bucket your-me3-assets --skip-create
-pnpm deploy
-```
-
-The Worker binding is:
+ME3 Core uses D1 for structured data and R2 for files. The Worker binding is:
 
 ```toml
 [[r2_buckets]]
@@ -186,19 +210,6 @@ bucket_name = "me3-site-assets"
 ```
 
 When `SITE_ASSETS` is present, media uploads and other Core/plugin files go to R2 automatically. Page metadata, publish manifests, generated HTML, and account data stay in D1.
-
-Manual deploy shape:
-
-```bash
-pnpm install
-pnpm setup:dev-vars
-pnpm storage:r2:provision --yes
-pnpm build
-wrangler d1 migrations apply DB --remote --config wrangler.toml
-wrangler deploy --config wrangler.toml
-```
-
-The `pnpm deploy` script runs R2 provisioning, the build, remote D1 migration, and Worker deploy in sequence. Use it only after authenticating Wrangler and confirming the generated Cloudflare resource names/IDs. `pnpm deploy:d1-only` is available for local experiments or constrained installs, but production Core installs should use the default R2-backed deploy path.
 
 ## Public Distribution
 
