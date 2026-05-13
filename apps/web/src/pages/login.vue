@@ -248,10 +248,8 @@ onMounted(loadConfig);
       <BrandLogo class="login__logo" alt="me3" />
 
       <section v-if="isSetupMode && !showAdvancedSetup" class="cloud-claim">
-        <h1 class="cloud-claim__title">Claim this ME3 node</h1>
         <p class="cloud-claim__copy">
-          Sign in with ME3 to connect this Core install to the ME3 identity
-          network for Soulink and future apps.
+          For simple authentication sign in via ME3.app
         </p>
         <button
           type="button"
@@ -266,7 +264,7 @@ onMounted(loadConfig);
           class="text-button"
           @click="showAdvancedSetup = true"
         >
-          Advanced standalone setup
+          Advanced setup for custom authentication
         </button>
         <p v-if="error" class="error">{{ error }}</p>
       </section>
@@ -277,17 +275,19 @@ onMounted(loadConfig);
           class="setup-note"
           aria-live="polite"
         >
-          <h1 class="setup-note__title">Finish Cloudflare setup</h1>
-          <p v-if="missingBootstrapCode">
-            Standalone setup needs a private Worker secret named
-            <code>ADMIN_BOOTSTRAP_CODE</code>. Generate one with
-            <code>openssl rand -hex 16</code>, save it in Cloudflare, redeploy,
-            then enter it here.
-          </p>
-          <p>
-            Cloudflare Dashboard -> Workers & Pages -> me3 -> Settings ->
-            Variables and Secrets.
-          </p>
+          <h1 class="setup-note__title">Configure</h1>
+          <ol v-if="missingBootstrapCode" class="setup-note__steps">
+            <li>
+              Generate a secret key in the terminal using
+              <code>openssl rand -hex 16</code>.
+            </li>
+            <li>
+              Create a variable here: Cloudflare Dashboard -> Workers & Pages
+              -> me3 -> Settings -> Variables and Secrets called
+              <code>ADMIN_BOOTSTRAP_CODE</code> using the key you just
+              generated.
+            </li>
+          </ol>
         </section>
 
         <p v-if="showBootstrapSetup && isResetMode" class="login-form__hint">
@@ -455,13 +455,6 @@ onMounted(loadConfig);
   text-align: center;
 }
 
-.cloud-claim__title {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 1.15rem;
-  line-height: 1.2;
-}
-
 .cloud-claim__copy {
   margin: 0;
   color: var(--ui-text-muted, var(--color-text-muted));
@@ -496,8 +489,17 @@ onMounted(loadConfig);
   line-height: 1.2;
 }
 
-.setup-note p {
+.setup-note p,
+.setup-note__steps {
   margin: 0;
+}
+
+.setup-note__steps {
+  padding-left: 20px;
+}
+
+.setup-note__steps li + li {
+  margin-top: 6px;
 }
 
 .setup-note code {
