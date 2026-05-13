@@ -1,25 +1,69 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterView, useRoute } from "vue-router";
 import { Toaster } from "vue-sonner";
+import { api } from "./api";
 import AgentChatLauncher from "./components/AgentChatLauncher.vue";
 import AppSideNav from "./components/AppSideNav.vue";
 import { useAuthStore } from "./stores/auth";
 
 const route = useRoute();
 const auth = useAuthStore();
+const agentChatInstalled = ref(false);
+const pluginChangedEvent = "me3:plugins-changed";
 
 const showAppShell = computed(
   () => auth.isAuthenticated && route.meta.requiresAuth === true,
 );
 
 const showAgentLauncher = computed(
-  () => auth.isAuthenticated && !route.path.startsWith("/email"),
+  () =>
+    auth.isAuthenticated &&
+    agentChatInstalled.value &&
+    !route.path.startsWith("/email"),
 );
+
+async function loadAgentChatPluginState() {
+  if (!auth.isAuthenticated) {
+    agentChatInstalled.value = false;
+    return;
+  }
+
+  try {
+    const response = await api.get<{
+      plugins: Array<{ id: string; status: string; enabled: boolean }>;
+    }>("/plugins");
+    agentChatInstalled.value = response.plugins.some(
+      (plugin) =>
+        plugin.id === "me3.agent-chat" &&
+        plugin.enabled &&
+        plugin.status === "installed",
+    );
+  } catch {
+    agentChatInstalled.value = false;
+  }
+}
+
+function handlePluginChanged() {
+  void loadAgentChatPluginState();
+}
 
 onMounted(async () => {
   await auth.ensureInitialized();
+  await loadAgentChatPluginState();
+  window.addEventListener(pluginChangedEvent, handlePluginChanged);
 });
+
+onBeforeUnmount(() => {
+  window.removeEventListener(pluginChangedEvent, handlePluginChanged);
+});
+
+watch(
+  () => auth.isAuthenticated,
+  () => {
+    void loadAgentChatPluginState();
+  },
+);
 </script>
 
 <template>

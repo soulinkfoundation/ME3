@@ -1730,6 +1730,39 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  it("blocks sandbox chat turns when the Agent Chat plugin is disabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.agent-chat/deactivate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/agent/sandbox", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ messageText: "Hello agent" }),
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(payload).toMatchObject({
+      ok: false,
+      error: "Agent Chat plugin is disabled",
+    });
+    expect(env.agentEvents).toHaveLength(0);
+  });
+
   it("creates owner reminders through the agent chat package surface", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
@@ -1855,6 +1888,8 @@ describe("ME3 Core Worker auth", () => {
       plugins: Array<{
         id: string;
         status: string;
+        installed: boolean;
+        enabled: boolean;
         implementationStatus: string;
         agentTools: Array<{ id: string; approvalMode: string }>;
         setupRequirements: Array<{ kind: string; configured: boolean; required: boolean }>;
@@ -1865,6 +1900,11 @@ describe("ME3 Core Worker auth", () => {
     expect(body.catalogVersion).toMatch(/^\d{4}-\d{2}-\d{2}\.v\d+$/);
     expect(body.plugins).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          id: "me3.agent-chat",
+          status: "installed",
+          implementationStatus: "bundled",
+        }),
         expect.objectContaining({
           id: "me3.calendar",
           status: "available",
@@ -1880,7 +1920,22 @@ describe("ME3 Core Worker auth", () => {
     const socialPlugin = body.plugins.find(
       (plugin) => plugin.id === "me3.social-publishing",
     );
+    const agentChatPlugin = body.plugins.find((plugin) => plugin.id === "me3.agent-chat");
     const calendarPlugin = body.plugins.find((plugin) => plugin.id === "me3.calendar");
+    expect(agentChatPlugin).toMatchObject({
+      status: "installed",
+      installed: true,
+      enabled: true,
+    });
+    expect(agentChatPlugin?.setupRequirements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "migration",
+          configured: true,
+          required: true,
+        }),
+      ]),
+    );
     expect(calendarPlugin?.agentTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

@@ -29,6 +29,7 @@ export type CorePluginManifestSummary = {
   trustTier: "first_party" | "third_party";
   distribution: "workspace_package" | "npm_package" | "remote_bundle";
   installMode: "enabled_by_owner_config";
+  defaultEnabled?: boolean;
   implementationStatus: "catalog_only" | "bundled";
   capabilityIds: string[];
   permissions: { id: string; label: string }[];
@@ -325,6 +326,7 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
+  defaultEnabled: true,
   implementationStatus: AGENT_CHAT_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["chat.core_reply"],
   permissions: [
@@ -486,6 +488,19 @@ export async function listCorePluginRecords(env: Env): Promise<CorePluginRecord[
   );
 }
 
+export async function isCorePluginEnabled(
+  env: Env,
+  pluginId: string,
+): Promise<boolean> {
+  const plugin = getCorePluginManifest(pluginId);
+  const record = serializePluginRecord(
+    env,
+    plugin,
+    await getPluginInstallation(env, plugin.id),
+  );
+  return record.enabled && record.status === "installed";
+}
+
 function getCorePluginManifest(pluginId: string): CorePluginManifestSummary {
   const plugin = CORE_PLUGIN_CATALOG.find((candidate) => candidate.id === pluginId);
   if (!plugin) {
@@ -525,8 +540,12 @@ function serializePluginRecord(
   installation: DbPluginInstallation | null,
 ): CorePluginRecord {
   const setupRequirements = getSetupRequirements(env, plugin, installation);
-  const installed = Boolean(installation);
-  const enabled = installed && installation?.enabled !== 0 && installation?.status !== "disabled";
+  const defaultInstalled = !installation && plugin.defaultEnabled === true;
+  const installed = Boolean(installation) || defaultInstalled;
+  const enabled =
+    installed &&
+    (defaultInstalled || installation?.enabled !== 0) &&
+    installation?.status !== "disabled";
   const setupBlocked = setupRequirements.some(
     (requirement) => requirement.required && !requirement.configured,
   );
@@ -544,7 +563,11 @@ function serializePluginRecord(
     statusLabel: statusToLabel(status),
     installed,
     enabled,
-    grantedPermissions: parseJsonStringArray(installation?.granted_permissions_json || null),
+    grantedPermissions: installation
+      ? parseJsonStringArray(installation.granted_permissions_json || null)
+      : defaultInstalled
+        ? plugin.permissions.map((permission) => permission.id)
+        : [],
     setupRequirements,
     installedAt: installation?.installed_at || null,
     updatedAt: installation?.updated_at || null,
@@ -601,8 +624,13 @@ function getSetupRequirements(
     label: `${plugin.migrations.length} plugin migration${plugin.migrations.length === 1 ? "" : "s"}`,
     kind: "migration",
     required: true,
-    configured: Boolean(installation),
-    note: installation ? "Tracked by install state." : "Pending until install.",
+    configured: Boolean(installation) || plugin.defaultEnabled === true,
+    note:
+      installation
+        ? "Tracked by install state."
+        : plugin.defaultEnabled === true
+          ? "Enabled by default in this Core build."
+        : "Pending until install.",
   });
 
   return requirements;

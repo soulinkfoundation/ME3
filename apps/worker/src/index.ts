@@ -29,6 +29,7 @@ import {
   PluginInstallInputError,
   activateCorePlugin,
   deactivateCorePlugin,
+  isCorePluginEnabled,
   listCorePluginRecords,
 } from "./plugins";
 import {
@@ -529,6 +530,13 @@ app.post("/api/assistant/chat", async (c) => {
 app.post("/api/agent/sandbox", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
+
+  if (!(await isCorePluginEnabled(c.env, "me3.agent-chat"))) {
+    return c.json(
+      { ok: false, error: "Agent Chat plugin is disabled" },
+      403,
+    );
+  }
 
   const body = await c.req.json<AgentSandboxBody>().catch((): AgentSandboxBody => ({}));
   const messageText = typeof body.messageText === "string" ? body.messageText.trim() : "";
