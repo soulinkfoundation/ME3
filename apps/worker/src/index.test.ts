@@ -989,7 +989,7 @@ function createEnv(): Env & {
     CORE_API_ORIGIN: "http://localhost:8787",
     JWT_SECRET: "test-secret-at-least-long-enough",
     TOKEN_ENCRYPTION_KEY: "test-encryption-key",
-    ADMIN_BOOTSTRAP_CODE: "owner-code",
+    SETUP_PASSWORD: "owner-code",
     TELEGRAM_BOT_USERNAME: "me3_core_test_bot",
     EMAIL: {
       async send(message) {
@@ -1041,6 +1041,30 @@ describe("ME3 Core Worker auth", () => {
     expect(env.owner?.password_hash?.split("$")[1]).toBe("100000");
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
+    expect(response.headers.get("set-cookie")).toContain("me3_core_session=");
+  });
+
+  it("keeps the legacy ADMIN_BOOTSTRAP_CODE secret working", async () => {
+    const env = createEnv();
+    env.ADMIN_BOOTSTRAP_CODE = "legacy-owner-code";
+    env.SETUP_PASSWORD = undefined;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/admin/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://localhost:4000" },
+        body: JSON.stringify({
+          bootstrapCode: "legacy-owner-code",
+          email: "owner@example.com",
+          name: "ME3 Core Owner",
+          username: "owner",
+          password: "correct-horse-battery",
+        }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
     expect(response.headers.get("set-cookie")).toContain("me3_core_session=");
   });
 

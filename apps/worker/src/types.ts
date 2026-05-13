@@ -18,7 +18,9 @@ export interface Env {
 
   JWT_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;
+  /** Legacy name kept so existing private installs keep working. */
   ADMIN_BOOTSTRAP_CODE?: string;
+  SETUP_PASSWORD?: string;
 
   ME3_AI_MODEL?: string;
   ME3_AI_DEFAULT_PROVIDER?: string;

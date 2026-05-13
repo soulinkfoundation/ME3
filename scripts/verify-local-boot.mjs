@@ -56,7 +56,7 @@ async function main() {
   const config = await fetchJson(`${workerOrigin}/api/config`);
   assert(typeof config.apiOrigin === "string", "Core API origin missing");
 
-  const bootstrapCode = readDevVar("ADMIN_BOOTSTRAP_CODE");
+  const bootstrapCode = readDevVar("SETUP_PASSWORD");
   const ownerPassword = "local-boot-password";
   const bootstrapResponse = await postJson(`${workerOrigin}/api/admin/bootstrap`, {
     bootstrapCode,

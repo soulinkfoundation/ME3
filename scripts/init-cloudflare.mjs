@@ -86,14 +86,14 @@ if (config !== originalConfig) {
 }
 
 if (!args.skipSecrets) {
-  const bootstrapCode = args.bootstrapCode || randomBytes(16).toString("hex");
+  const setupPassword = args.setupPassword || randomBytes(16).toString("hex");
 
-  putSecret("ADMIN_BOOTSTRAP_CODE", bootstrapCode);
+  putSecret("SETUP_PASSWORD", setupPassword);
 
   console.log("");
-  console.log("Remote standalone bootstrap secret is set.");
-  console.log(`ADMIN_BOOTSTRAP_CODE=${bootstrapCode}`);
-  console.log("Save that bootstrap code somewhere private; it is needed only for advanced standalone setup or recovery.");
+  console.log("Remote standalone setup password secret is set.");
+  console.log(`SETUP_PASSWORD=${setupPassword}`);
+  console.log("Save that setup password somewhere private; it is needed only for advanced standalone setup or recovery.");
 }
 
 console.log("");
@@ -103,7 +103,7 @@ console.log("  pnpm exec wrangler deployments status --config wrangler.toml");
 
 function parseArgs(values) {
   const parsed = {
-    bootstrapCode: "",
+    setupPassword: "",
     bucket: "",
     config: "",
     dbId: "",
@@ -123,11 +123,11 @@ function parseArgs(values) {
       parsed.skipR2 = true;
     } else if (value === "--skip-secrets") {
       parsed.skipSecrets = true;
-    } else if (value === "--bootstrap-code") {
-      parsed.bootstrapCode = values[index + 1] || "";
+    } else if (value === "--setup-password") {
+      parsed.setupPassword = values[index + 1] || "";
       index += 1;
-    } else if (value.startsWith("--bootstrap-code=")) {
-      parsed.bootstrapCode = value.slice("--bootstrap-code=".length);
+    } else if (value.startsWith("--setup-password=")) {
+      parsed.setupPassword = value.slice("--setup-password=".length);
     } else if (value === "--bucket") {
       parsed.bucket = values[index + 1] || "";
       index += 1;

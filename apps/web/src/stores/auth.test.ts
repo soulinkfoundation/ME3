@@ -228,7 +228,7 @@ describe("auth store", () => {
   });
 
   describe("resetOwnerPassword", () => {
-    it("posts bootstrap-code password reset details", async () => {
+    it("posts setup-password password reset details", async () => {
       vi.mocked(api.post).mockResolvedValue({ ok: true });
 
       const store = useAuthStore();
@@ -247,7 +247,7 @@ describe("auth store", () => {
       });
     });
 
-    it("returns false when bootstrap-code password reset fails", async () => {
+    it("returns false when setup-password password reset fails", async () => {
       vi.mocked(api.post).mockRejectedValue(new Error("Invalid code"));
 
       const store = useAuthStore();

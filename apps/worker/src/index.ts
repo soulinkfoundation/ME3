@@ -307,7 +307,7 @@ app.get("/api/auth/me3/callback", (c) => {
     {
       ok: false,
       error:
-        "ME3 Cloud install claim callback is not implemented in this Core scaffold yet. Use advanced bootstrap setup for now.",
+        "ME3 Cloud install claim callback is not implemented in this Core scaffold yet. Use advanced standalone setup for now.",
     },
     501,
   );
@@ -315,13 +315,14 @@ app.get("/api/auth/me3/callback", (c) => {
 
 app.post("/api/admin/bootstrap", async (c) => {
   const body = await c.req.json<BootstrapBody>().catch((): BootstrapBody => ({}));
+  const setupPassword = getSetupPassword(c.env);
 
-  if (!c.env.ADMIN_BOOTSTRAP_CODE) {
+  if (!setupPassword) {
     return c.json({ ok: false, error: "Owner auth is not configured" }, 503);
   }
 
-  if (body.bootstrapCode !== c.env.ADMIN_BOOTSTRAP_CODE) {
-    return c.json({ ok: false, error: "Invalid bootstrap code" }, 401);
+  if (body.bootstrapCode !== setupPassword) {
+    return c.json({ ok: false, error: "Invalid setup password" }, 401);
   }
 
   const password = body.password?.trim();
@@ -392,13 +393,14 @@ app.post("/api/auth/password-reset/bootstrap", async (c) => {
     .catch((): BootstrapPasswordResetBody => ({}));
   const email = body.email?.trim().toLowerCase();
   const password = body.password?.trim();
+  const setupPassword = getSetupPassword(c.env);
 
-  if (!c.env.ADMIN_BOOTSTRAP_CODE) {
+  if (!setupPassword) {
     return c.json({ ok: false, error: "Owner recovery is not configured" }, 503);
   }
 
-  if (body.bootstrapCode !== c.env.ADMIN_BOOTSTRAP_CODE) {
-    return c.json({ ok: false, error: "Invalid bootstrap code" }, 401);
+  if (body.bootstrapCode !== setupPassword) {
+    return c.json({ ok: false, error: "Invalid setup password" }, 401);
   }
 
   if (!email) {
@@ -4561,7 +4563,7 @@ function shouldUseSecureCookie(env: Env): boolean {
 async function getSetupRequired(env: Env, ownerId = "owner"): Promise<string[]> {
   const missing: string[] = [];
 
-  if (!env.ADMIN_BOOTSTRAP_CODE) missing.push("ADMIN_BOOTSTRAP_CODE");
+  if (!getSetupPassword(env)) missing.push("SETUP_PASSWORD");
   if (!(await hasConfiguredAiProvider(env, ownerId))) {
     missing.push("AI_PROVIDER");
   }

@@ -4,17 +4,17 @@ Installable ME3 Core personal/business AI assistant scaffold.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Soulink-Foundation/me3)
 
-Fastest path: use the deploy button, sign in to Cloudflare, let Cloudflare fork the repo and provision the Worker bindings. First-run setup starts with **Sign in with ME3**; local-only bootstrap is an advanced fallback.
+Fastest path: use the deploy button, sign in to Cloudflare, let Cloudflare fork the repo and provision the Worker bindings. First-run setup starts with **Sign in with ME3**; local-only setup is an advanced fallback.
 
 This repository is intentionally small at first. It is not a raw split of `me3-app`; it is the curated first slice that will become a bootable Cloudflare install template.
 
 ## First Slice
 
-- Cloudflare Worker shell with health, admin bootstrap, assistant chat placeholder, and public profile/me.json endpoints.
-- Vue web shell for local admin/bootstrap and setup-required states.
+- Cloudflare Worker shell with health, owner setup, assistant chat placeholder, and public profile/me.json endpoints.
+- Vue web shell for local owner setup and setup-required states.
 - Minimal D1 schema for install metadata, owner profile, and assistant messages.
 - Example install config with no ME3 Cloud production domains, IDs, routes, or secrets.
-- Simple provider-free owner auth: bootstrap code claims the install, password login opens the workspace, and httpOnly signed session cookies keep the owner signed in.
+- Simple provider-free owner auth: a setup password unlocks advanced standalone setup, password login opens the workspace, and httpOnly signed session cookies keep the owner signed in.
 
 ## Boundaries
 
@@ -36,7 +36,7 @@ pnpm --filter @me3-core/worker dev
 pnpm --filter @me3/web dev
 ```
 
-`pnpm setup:dev-vars` creates `apps/worker/.dev.vars` with generated local-only bootstrap values. Never commit real secrets.
+`pnpm setup:dev-vars` creates `apps/worker/.dev.vars` with generated local-only setup password values. Never commit real secrets.
 
 `pnpm verify:local-boot` is the extraction acceptance gate for the first slice. It applies the local D1 migration, starts the Worker and web shell, checks `/health`, `/api/config`, `/api/admin/bootstrap`, `/api/assistant/chat`, `/.well-known/me.json`, and verifies that the web shell responds.
 
@@ -46,7 +46,7 @@ ME3 Core's default first-run path is ME3 Cloud claim: sign in with a `me3.app` a
 
 Advanced standalone setup remains available for operators who want a local-only install or who are testing before the hosted claim flow is ready. Standalone setup uses one owner auth secret:
 
-- `ADMIN_BOOTSTRAP_CODE` unlocks first-run setup and owner credential recovery.
+- `SETUP_PASSWORD` unlocks first-run setup and owner credential recovery.
 
 ME3 Core creates its session signing secret and install encryption key automatically in D1 when `JWT_SECRET` and `TOKEN_ENCRYPTION_KEY` are not provided. Operators may still set those as external secrets if they want to manage keys outside D1.
 
@@ -59,7 +59,7 @@ pnpm --filter @me3-core/worker dev
 pnpm --filter @me3/web dev
 ```
 
-Open the web app and choose **Sign in with ME3** to start the network claim flow. Use **Advanced standalone setup** to enter the generated `ADMIN_BOOTSTRAP_CODE` and create a local owner profile with an email and password. A successful bootstrap stores a password hash in D1 and sets an httpOnly `me3_core_session` cookie. Returning owners sign in with email and password through `/api/auth/login`; the bootstrap code is kept for install-claim and recovery, not everyday login.
+Open the web app and choose **Sign in with ME3** to start the network claim flow. Use **Advanced standalone setup** to enter the generated `SETUP_PASSWORD` and create a local owner profile with an email and password. A successful setup stores a password hash in D1 and sets an httpOnly `me3_core_session` cookie. Returning owners sign in with email and password through `/api/auth/login`; the setup password is kept for setup and recovery, not everyday login.
 
 The web app reads `/api/config` to decide whether owner password auth is configured, hydrates refreshes from `/api/auth/me`, and logs out through `/api/auth/logout`; it does not trust localStorage for authentication.
 
@@ -102,7 +102,7 @@ It intentionally excludes production `me3.app` routes, production Cloudflare acc
 
 - `JWT_SECRET`
 - `TOKEN_ENCRYPTION_KEY`
-- `ADMIN_BOOTSTRAP_CODE`
+- `SETUP_PASSWORD`
 
 Owner-supplied providers such as OpenAI, Anthropic, outbound email senders, Stripe, OAuth, and search remain blank until an install owner configures them.
 
@@ -119,7 +119,7 @@ The root `wrangler.toml` is the deploy-template config for the Deploy to Cloudfl
 - `ME3_USER_AGENT` Durable Object namespace
 - optional Workers AI binding
 
-Cloudflare should provision supported resources from the Wrangler config during button/template deployment. The deploy button should not ask for owner API keys, custom domains, `ENVIRONMENT`, `ME3_AI_MODEL`, `JWT_SECRET`, or `ADMIN_BOOTSTRAP_CODE`; those are configured later only if the owner needs them.
+Cloudflare should provision supported resources from the Wrangler config during button/template deployment. The deploy button should not ask for owner API keys, custom domains, `ENVIRONMENT`, `ME3_AI_MODEL`, `JWT_SECRET`, or `SETUP_PASSWORD`; those are configured later only if the owner needs them.
 
 Cloudflare may still show its own resource and command fields, such as D1 database name/location, R2 bucket name, build command, and deploy command. Keep the defaults unless you have a reason to customize them. The build command creates the web assets, and the deploy command applies D1 migrations before publishing the Worker.
 
@@ -129,17 +129,17 @@ Use the button at the top of this README when you want Cloudflare to handle the 
 
 Default setup is **Sign in with ME3**. This connects the Core install to `me3.app` as the coordination layer for identity and future cross-app login.
 
-Standalone fallback setup uses one install secret: `ADMIN_BOOTSTRAP_CODE`. `JWT_SECRET` and `TOKEN_ENCRYPTION_KEY` are generated and stored in D1 if omitted.
+Standalone fallback setup uses one install secret: `SETUP_PASSWORD`. `JWT_SECRET` and `TOKEN_ENCRYPTION_KEY` are generated and stored in D1 if omitted.
 
 OpenAI, Anthropic, email providers, Stripe, OAuth providers, and custom domains are optional owner settings. Configure them later inside the app instead of during the Cloudflare deploy-button flow.
 
-After the first deploy, open the admin URL and choose **Sign in with ME3**. If you need a local-only install, choose **Advanced standalone setup**, enter `ADMIN_BOOTSTRAP_CODE`, and create the owner account.
+After the first deploy, open the admin URL and choose **Sign in with ME3**. If you need a local-only install, choose **Advanced standalone setup**, enter `SETUP_PASSWORD`, and create the owner account.
 
-If the setup screen asks for a bootstrap code and you do not have one yet, create it as a Worker secret:
+If the setup screen asks for a setup password and you do not have one yet, create it as a Worker secret:
 
 1. Open Cloudflare Dashboard -> Workers & Pages -> `me3` -> Settings -> Variables and Secrets.
-2. Add a secret named `ADMIN_BOOTSTRAP_CODE` with a private random value.
-3. Save, redeploy the Worker, then enter `ADMIN_BOOTSTRAP_CODE` on the setup screen.
+2. Add a secret named `SETUP_PASSWORD` with a private random value.
+3. Save, redeploy the Worker, then enter `SETUP_PASSWORD` on the setup screen.
 
 ### Manual CLI Deploy
 
@@ -152,7 +152,7 @@ pnpm init:cloudflare
 pnpm deploy
 ```
 
-`pnpm init:cloudflare` creates or reuses the D1 database and R2 bucket, writes the generated D1 database ID into `wrangler.toml`, and sets a standalone `ADMIN_BOOTSTRAP_CODE` secret. It prints that code once; keep it private if you plan to use advanced standalone setup.
+`pnpm init:cloudflare` creates or reuses the D1 database and R2 bucket, writes the generated D1 database ID into `wrangler.toml`, and sets a standalone `SETUP_PASSWORD` secret. It prints that setup password once; keep it private if you plan to use advanced standalone setup.
 
 Common options:
 

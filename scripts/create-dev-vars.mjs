@@ -22,7 +22,7 @@ const keys = readFileSync(example, "utf8")
 const generated = new Map([
   ["JWT_SECRET", randomBytes(32).toString("base64url")],
   ["TOKEN_ENCRYPTION_KEY", randomBytes(32).toString("base64")],
-  ["ADMIN_BOOTSTRAP_CODE", randomBytes(16).toString("hex")],
+  ["SETUP_PASSWORD", randomBytes(16).toString("hex")],
 ]);
 
 const body = [
@@ -32,4 +32,4 @@ const body = [
 ].join("\n");
 
 writeFileSync(target, body, { mode: 0o600 });
-console.log("Created apps/worker/.dev.vars with local generated bootstrap values.");
+console.log("Created apps/worker/.dev.vars with local generated setup password values.");

@@ -49,7 +49,7 @@ const useBootstrapCodeInput = computed(
   () => isSetupMode.value || isResetMode.value,
 );
 const missingBootstrapCode = computed(
-  () => isSetupMode.value && setupRequired.value.includes("ADMIN_BOOTSTRAP_CODE"),
+  () => isSetupMode.value && setupRequired.value.includes("SETUP_PASSWORD"),
 );
 const missingOwnerSecrets = computed(
   () => missingBootstrapCode.value,
@@ -178,7 +178,7 @@ async function submitAuth() {
       notice.value = "Password reset. Sign in with your new password.";
     } else {
       error.value =
-        "Reset failed. Check your email, bootstrap code, and new password.";
+        "Reset failed. Check your email, setup password, and new password.";
     }
 
     loading.value = false;
@@ -203,7 +203,7 @@ async function submitAuth() {
     navigateAfterLogin(redirect);
   } else {
     error.value = isSetupMode.value
-      ? "Setup failed. Check your bootstrap code and password."
+      ? "Setup failed. Check your setup password and account password."
       : "Sign in failed. Check your email and password.";
   }
 
@@ -299,14 +299,14 @@ onMounted(loadConfig);
             <li>
               Create a variable here: Cloudflare Dashboard -> Workers & Pages
               -> me3 -> Settings -> Variables and Secrets called
-              <code>ADMIN_BOOTSTRAP_CODE</code> using the key you just
+              <code>SETUP_PASSWORD</code> using the key you just
               generated.
             </li>
           </ol>
         </section>
 
         <p v-if="showBootstrapSetup && isResetMode" class="login-form__hint">
-          Reset owner access with this install's bootstrap code.
+          Reset owner access with this install's setup password.
         </p>
 
         <input
@@ -374,8 +374,8 @@ onMounted(loadConfig);
             :type="showBootstrapCode ? 'text' : 'password'"
             autocomplete="one-time-code"
             class="input password-field__input"
-            aria-label="Bootstrap code"
-            placeholder="Bootstrap code"
+            aria-label="Setup password"
+            placeholder="Setup password"
             required
             autofocus
           />
@@ -383,7 +383,7 @@ onMounted(loadConfig);
             type="button"
             class="password-field__toggle"
             :aria-label="
-              showBootstrapCode ? 'Hide bootstrap code' : 'Show bootstrap code'
+              showBootstrapCode ? 'Hide setup password' : 'Show setup password'
             "
             :aria-pressed="showBootstrapCode"
             @click="showBootstrapCode = !showBootstrapCode"
