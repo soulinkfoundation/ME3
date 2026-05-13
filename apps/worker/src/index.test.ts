@@ -985,7 +985,7 @@ function createEnv(): Env & {
     },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
-    CORE_WEB_ORIGIN: "http://localhost:5174",
+    CORE_WEB_ORIGIN: "http://localhost:4000",
     CORE_API_ORIGIN: "http://localhost:8787",
     JWT_SECRET: "test-secret-at-least-long-enough",
     TOKEN_ENCRYPTION_KEY: "test-encryption-key",
@@ -1004,7 +1004,7 @@ async function bootstrap(env: Env) {
   return app.fetch(
     new Request("http://localhost/api/admin/bootstrap", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: "http://localhost:5174" },
+      headers: { "Content-Type": "application/json", Origin: "http://localhost:4000" },
       body: JSON.stringify({
         bootstrapCode: "owner-code",
         email: "owner@example.com",
@@ -1947,7 +1947,7 @@ describe("ME3 Core Worker auth", () => {
 
       expect(callbackResponse.status).toBe(302);
       expect(callbackResponse.headers.get("location")).toBe(
-        "http://localhost:5174/social?social_connected=linkedin",
+        "http://localhost:4000/social?social_connected=linkedin",
       );
       expect(env.socialOauthStates).toHaveLength(0);
       expect(env.socialAccounts).toEqual([
@@ -1987,7 +1987,7 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe(
-      "http://localhost:5174/social?social_error=state_expired",
+      "http://localhost:4000/social?social_error=state_expired",
     );
   });
 

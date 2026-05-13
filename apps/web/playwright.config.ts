@@ -8,13 +8,13 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: "html",
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: "http://127.0.0.1:4000",
     trace: "on-first-retry",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "VITE_DISABLE_PROXY=1 pnpm dev -- --host 127.0.0.1 --port 5173",
-    url: "http://127.0.0.1:5173",
+    command: "VITE_DISABLE_PROXY=1 pnpm dev -- --host 127.0.0.1 --port 4000",
+    url: "http://127.0.0.1:4000",
     reuseExistingServer: !process.env.CI,
   },
 });

@@ -33,7 +33,7 @@ bucket_name = "me3-site-assets"
 
 [vars]
 ENVIRONMENT = "local"
-CORE_WEB_ORIGIN = "http://localhost:5174"
+CORE_WEB_ORIGIN = "http://localhost:4000"
 CORE_API_ORIGIN = "http://localhost:8787"
 # Production two-host setup:
 # ME3_CUSTOM_DOMAIN = "customdomain.com"

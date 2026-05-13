@@ -1,4 +1,4 @@
-name = "me3"
+name = "me3-core-worker"
 main = "apps/worker/src/index.ts"
 compatibility_date = "2024-04-01"
 

@@ -4,7 +4,7 @@ import VueRouter from 'unplugin-vue-router/vite'
 import { resolve } from 'path'
 
 const disableProxy = process.env.VITE_DISABLE_PROXY === '1'
-const devPort = Number(process.env.VITE_PORT || 5174)
+const devPort = Number(process.env.VITE_PORT || 4000)
 
 export default defineConfig({
   plugins: [
