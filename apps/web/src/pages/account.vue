@@ -3,8 +3,10 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
+import CustomDomain from "../components/CustomDomain.vue";
 import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
 import { useAuthStore } from "../stores/auth";
+import { useSitesStore } from "../stores/sites";
 import {
   detectBrowserTimeZone,
   getTimeZoneDisplayLabel,
@@ -326,6 +328,7 @@ type EmailProviderTestResponse = {
 };
 
 const auth = useAuthStore();
+const sites = useSitesStore();
 const route = useRoute();
 const router = useRouter();
 
@@ -379,10 +382,37 @@ const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
 const openSection = ref({
   email: true,
   regional: false,
+  domain: false,
   mailbox: false,
   telegram: false,
   ai: false,
   plugins: false,
+});
+
+const customDomainSiteUsername = computed(() => {
+  const accountUsername = auth.user?.username || "";
+  const accountSite = sites.sites.find((site) => site.username === accountUsername);
+  const profileSite = sites.sites.find((site) => (site.site_type || "profile") === "profile");
+  return accountSite?.username || profileSite?.username || sites.sites[0]?.username || accountUsername;
+});
+
+const customDomainSite = computed(() =>
+  sites.sites.find((site) => site.username === customDomainSiteUsername.value),
+);
+
+const customDomainStatusLabel = computed(() => {
+  const status = customDomainSite.value?.custom_domain_status;
+  if (status === "active") return "Active";
+  if (status === "pending") return "Pending";
+  if (status === "failed") return "Failed";
+  return "Not configured";
+});
+
+const customDomainStatusClass = computed(() => {
+  const status = customDomainSite.value?.custom_domain_status;
+  if (status === "active") return "active";
+  if (status === "failed") return "failed";
+  return "pending_setup";
 });
 
 const timezoneDisplay = computed(() => {
@@ -414,18 +444,18 @@ const mailboxStatusLabel = computed(() => {
 
 const mailboxStatusHint = computed(() => {
   if (!mailbox.value) {
-    return "Receiving email requires a custom domain.";
+    return "Set up domain routing for inbound mail.";
   }
 
   if (mailbox.value.status === "active") {
-    return "Receiving email requires a custom domain.";
+    return "Domain routing handles inbound mail.";
   }
 
   if (mailbox.value.status === "paused") {
     return "Mailbox paused.";
   }
 
-  return "Custom domain setup required.";
+  return "Domain routing setup required.";
 });
 
 const telegramStatusLabel = computed(() => {
@@ -1045,6 +1075,7 @@ async function deleteAccount() {
 
 onMounted(async () => {
   await loadAccount();
+  void sites.fetchSites();
   void loadMailbox();
   void loadAiSettings();
   void loadEmailProviderSettings();
@@ -1054,6 +1085,9 @@ onMounted(async () => {
   }
   if (route.query.section === "mailbox") {
     openSection.value.mailbox = true;
+  }
+  if (route.query.section === "domain" || route.query.section === "custom-domain") {
+    openSection.value.domain = true;
   }
   if (route.query.section === "plugins") {
     openSection.value.plugins = true;
@@ -1187,6 +1221,55 @@ onMounted(async () => {
 
         <section class="card accordion-card">
           <button
+            id="account-trigger-domain"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.domain"
+            aria-controls="account-panel-domain"
+            @click="openSection.domain = !openSection.domain"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Custom domain</h2>
+              <span class="status-badge" :class="customDomainStatusClass">
+                {{ customDomainStatusLabel }}
+              </span>
+              <span class="accordion-header-hint">
+                Site and mailbox domain setup
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-domain"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-domain"
+            :hidden="!openSection.domain"
+          >
+            <p class="hint">
+              Connect the Cloudflare-managed domain people should use for your
+              public ME3 site. The same domain can also be used for mailbox
+              addresses after Email Routing is enabled.
+            </p>
+
+            <div v-if="sites.loading" class="status-row">
+              Loading site domain settings...
+            </div>
+            <template v-else-if="customDomainSiteUsername">
+              <CustomDomain
+                :username="customDomainSiteUsername"
+                :show-settings-link="false"
+                @domain-status-changed="() => void sites.fetchSites()"
+              />
+            </template>
+            <p v-else class="error">
+              Create a ME3 site before connecting a custom domain.
+            </p>
+          </div>
+        </section>
+
+        <section class="card accordion-card">
+          <button
             id="account-trigger-mailbox"
             class="accordion-trigger"
             type="button"
@@ -1234,21 +1317,22 @@ onMounted(async () => {
 
             <template v-else-if="mailboxAvailable">
               <p class="hint">
-                Receiving email requires a custom domain. Configure one here,
-                then ME3 can receive mail at your domain and keep replies in the
-                mailbox.
+                Use the custom domain section to connect your domain, then
+                enable Cloudflare Email Routing for the mailbox addresses you
+                want ME3 to receive.
               </p>
 
               <div class="mailbox-panel compact-mailbox-panel">
                 <div class="mailbox-panel-head">
                   <h3>Mailbox address</h3>
                   <span class="status-badge compact setup_required">
-                    Custom domain required
+                    Domain routing required
                   </span>
                 </div>
                 <p class="field-hint">
-                  ME3 needs a real domain on Cloudflare before inbound mail can
-                  be delivered. The custom domain setup flow will live here.
+                  Inbound mail uses Cloudflare Email Routing for an address on
+                  your domain, routed to this Worker. The domain itself is
+                  managed from Account.
                 </p>
               </div>
 

@@ -7,7 +7,6 @@ import {
   type DomainStatus,
 } from "../../stores/sites";
 import { useWizardStore } from "../../stores/wizard";
-import CustomDomain from "../../components/CustomDomain.vue";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import JSZip from "jszip";
@@ -895,12 +894,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         </div>
         <p v-if="publishError" class="error">{{ publishError }}</p>
       </section>
-
-      <!-- Custom Domain -->
-      <CustomDomain
-        :username="username"
-        @domain-status-changed="() => void syncHeaderDomainStatus()"
-      />
 
       <!-- Newsletter Subscribers -->
       <section

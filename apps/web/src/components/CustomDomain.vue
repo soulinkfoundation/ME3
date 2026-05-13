@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from "vue";
 import { useSitesStore, type DomainStatus } from "../stores/sites";
 const props = defineProps<{
   username: string;
+  showSettingsLink?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -255,7 +256,7 @@ const domainPreview = computed(() => {
             </a>
           </div>
 
-          <div class="support-link">
+          <div v-if="props.showSettingsLink !== false" class="support-link">
             <router-link
               to="/account"
               target="_blank"
