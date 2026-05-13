@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import app from "./index";
+import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
 import type { DbPluginInstallation } from "./plugins";
 import type {
   DbAiModelDefault,
@@ -1566,6 +1566,42 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(200);
     expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBeUndefined();
+  });
+
+  it("does not check ME3 Cloud username conflicts before the install is linked", async () => {
+    const env = createEnv();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await expect(getMe3CloudUsernamePublishBlockReason(env, "owner")).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fetchMock.mockRestore();
+  });
+
+  it("blocks Core publishing when ME3 Cloud reports the username is taken", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ available: false }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(getMe3CloudUsernamePublishBlockReason(env, "owner")).resolves.toBe(
+      "This username is already taken on ME3 Cloud. Choose another handle before publishing.",
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.me3.example/api/usernames/owner/available",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-ME3-Core-Owner-ID": "user123",
+        }),
+      }),
+    );
+
+    fetchMock.mockRestore();
   });
 
   it("rejects invalid bootstrap codes without issuing a session", async () => {

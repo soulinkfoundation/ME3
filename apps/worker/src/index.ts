@@ -191,6 +191,8 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
 const PASSWORD_HASH_ITERATIONS = 100_000;
 const ME3_CLOUD_OWNER_SECRET_NAME = "ME3_CLOUD_OWNER_ID";
+const ME3_CLOUD_USERNAME_CONFLICT_MESSAGE =
+  "This username is already taken on ME3 Cloud. Choose another handle before publishing.";
 const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
@@ -1467,6 +1469,9 @@ app.post("/api/sites", async (c) => {
     return c.json({ error: "Username must be 3-30 characters and use letters, numbers, underscores, or hyphens" }, 400);
   }
 
+  const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(c.env, username);
+  if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
+
   const siteType = body.siteType === "landing_page" ? "landing_page" : "profile";
   const id = crypto.randomUUID();
 
@@ -1636,6 +1641,9 @@ app.post("/api/sites/:username/upload", async (c) => {
 
   const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(c.env, site.username);
+  if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
 
   try {
     const form = await c.req.formData();
@@ -1917,6 +1925,8 @@ app.post("/api/sites/:username/publish", async (c) => {
 
   const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
+  const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(c.env, site.username);
+  if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
   const html =
     (await getSiteFileText(c.env, site.id, "landing/index.html")) ||
     (await getSiteFileText(c.env, site.id, "public/index.html"));
@@ -2922,6 +2932,62 @@ function getMe3CloudApiOrigin(env: Env): string {
   }
 
   return cloudOrigin;
+}
+
+function buildApiUrl(origin: string, path: string): string {
+  return `${origin.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+async function readResponseJson(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function getMe3CloudUsernamePublishBlockReason(
+  env: Env,
+  usernameInput: unknown,
+): Promise<string | null> {
+  const cloudOwnerId = await getStoredMe3CloudOwnerId(env);
+  if (!cloudOwnerId) return null;
+
+  const username = normalizeUsername(usernameInput);
+  if (!username || !USERNAME_REGEX.test(username)) return null;
+
+  const url = buildApiUrl(
+    getMe3CloudApiOrigin(env),
+    `/api/usernames/${encodeURIComponent(username)}/available`,
+  );
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-ME3-Core-Owner-ID": cloudOwnerId,
+      },
+    });
+    const body = await readResponseJson(response);
+
+    if (!response.ok) {
+      console.warn(
+        `ME3 Cloud username availability check failed (${response.status}) for ${username}`,
+      );
+      return null;
+    }
+
+    return body.available === false ? ME3_CLOUD_USERNAME_CONFLICT_MESSAGE : null;
+  } catch (error) {
+    console.warn("ME3 Cloud username availability check failed:", error);
+    return null;
+  }
 }
 
 function normalizeClaimRedirect(value: unknown): string {
