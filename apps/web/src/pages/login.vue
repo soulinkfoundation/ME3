@@ -14,7 +14,7 @@ definePage({
   meta: {
     title: "Set up ME3 Core | Personal AI assistant",
     description:
-      "Set up your installable ME3 Core personal AI assistant with an owner bootstrap code.",
+      "Claim your installable ME3 Core personal AI assistant with a ME3 account.",
     robots: "noindex,follow",
     ogImage: "/icons/icon-512.png",
   },
@@ -31,10 +31,12 @@ const password = ref("");
 const showBootstrapCode = ref(false);
 const showPassword = ref(false);
 const loading = ref(false);
+const me3SignInLoading = ref(false);
 const configLoading = ref(true);
 const ownerAuthConfigured = ref(false);
 const setupRequired = ref<string[]>([]);
 const resetMode = ref(false);
+const showAdvancedSetup = ref(false);
 const error = ref("");
 const notice = ref("");
 
@@ -53,6 +55,9 @@ const missingJwtSecret = computed(
 );
 const missingOwnerSecrets = computed(
   () => missingBootstrapCode.value || missingJwtSecret.value,
+);
+const showBootstrapSetup = computed(
+  () => !isSetupMode.value || isResetMode.value || showAdvancedSetup.value,
 );
 
 const canSubmit = computed(() => {
@@ -193,8 +198,37 @@ async function submitAuth() {
   loading.value = false;
 }
 
+async function startMe3SignIn() {
+  if (me3SignInLoading.value || configLoading.value) return;
+
+  me3SignInLoading.value = true;
+  error.value = "";
+  notice.value = "";
+
+  try {
+    const response = await api.post<{ ok: boolean; url?: string }>(
+      "/auth/me3/start",
+      { redirect: resolvePostLoginRedirect(route.query.redirect) },
+    );
+
+    if (response.ok && response.url) {
+      window.location.href = response.url;
+      return;
+    }
+
+    error.value = "ME3 sign-in is not ready for this install yet.";
+  } catch (startError) {
+    console.error("ME3 sign-in start error:", startError);
+    error.value =
+      "ME3 sign-in is not ready yet. Use advanced setup to claim this install manually.";
+  } finally {
+    me3SignInLoading.value = false;
+  }
+}
+
 function startResetMode() {
   resetMode.value = true;
+  showAdvancedSetup.value = true;
   bootstrapCode.value = "";
   password.value = "";
   error.value = "";
@@ -216,8 +250,36 @@ onMounted(loadConfig);
     <main class="login__main">
       <BrandLogo class="login__logo" alt="me3" />
 
+      <section v-if="isSetupMode && !showAdvancedSetup" class="cloud-claim">
+        <h1 class="cloud-claim__title">Claim this ME3 node</h1>
+        <p class="cloud-claim__copy">
+          Sign in with ME3 to connect this Core install to the ME3 identity
+          network for Soulink and future apps.
+        </p>
+        <button
+          type="button"
+          class="button"
+          :disabled="me3SignInLoading || configLoading"
+          @click="startMe3SignIn"
+        >
+          {{ me3SignInLoading ? "Opening ME3..." : "Sign in with ME3" }}
+        </button>
+        <button
+          type="button"
+          class="text-button"
+          @click="showAdvancedSetup = true"
+        >
+          Advanced standalone setup
+        </button>
+        <p v-if="error" class="error">{{ error }}</p>
+      </section>
+
       <form class="login-form" @submit.prevent="submitAuth">
-        <section v-if="missingOwnerSecrets" class="setup-note" aria-live="polite">
+        <section
+          v-if="showBootstrapSetup && missingOwnerSecrets"
+          class="setup-note"
+          aria-live="polite"
+        >
           <h1 class="setup-note__title">Finish Cloudflare setup</h1>
           <p v-if="missingBootstrapCode">
             Add a Worker secret named <code>ADMIN_BOOTSTRAP_CODE</code>, then enter
@@ -233,12 +295,12 @@ onMounted(loadConfig);
           </p>
         </section>
 
-        <p v-if="isResetMode" class="login-form__hint">
+        <p v-if="showBootstrapSetup && isResetMode" class="login-form__hint">
           Reset owner access with this install's bootstrap code.
         </p>
 
         <input
-          v-if="isSetupMode"
+          v-if="showBootstrapSetup && isSetupMode"
           v-model="name"
           type="text"
           autocomplete="name"
@@ -249,6 +311,7 @@ onMounted(loadConfig);
         />
 
         <input
+          v-if="showBootstrapSetup || !isSetupMode"
           v-model="email"
           type="email"
           autocomplete="email"
@@ -258,7 +321,7 @@ onMounted(loadConfig);
           required
         />
 
-        <div class="password-field">
+        <div v-if="showBootstrapSetup || !isSetupMode" class="password-field">
           <input
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
@@ -281,7 +344,7 @@ onMounted(loadConfig);
           </button>
         </div>
 
-        <div v-if="useBootstrapCodeInput" class="password-field">
+        <div v-if="showBootstrapSetup && useBootstrapCodeInput" class="password-field">
           <input
             v-model="bootstrapCode"
             :type="showBootstrapCode ? 'text' : 'password'"
@@ -305,7 +368,12 @@ onMounted(loadConfig);
           </button>
         </div>
 
-        <button type="submit" class="button" :disabled="!canSubmit">
+        <button
+          v-if="showBootstrapSetup || !isSetupMode"
+          type="submit"
+          class="button"
+          :disabled="!canSubmit"
+        >
           {{
             loading
               ? isResetMode
@@ -335,9 +403,17 @@ onMounted(loadConfig);
         >
           Back to sign in
         </button>
+        <button
+          v-if="isSetupMode && showAdvancedSetup"
+          class="text-button"
+          type="button"
+          @click="showAdvancedSetup = false"
+        >
+          Back to ME3 sign in
+        </button>
 
         <p v-if="notice" class="notice">{{ notice }}</p>
-        <p v-if="error" class="error">{{ error }}</p>
+        <p v-if="showBootstrapSetup && error" class="error">{{ error }}</p>
       </form>
     </main>
   </div>
@@ -374,6 +450,28 @@ onMounted(loadConfig);
   flex-direction: column;
   gap: 12px;
   width: 100%;
+}
+
+.cloud-claim {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  text-align: center;
+}
+
+.cloud-claim__title {
+  margin: 0;
+  color: var(--ui-text, var(--color-text));
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+
+.cloud-claim__copy {
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 0.92rem;
+  line-height: 1.45;
 }
 
 .login-form__hint {

@@ -42,9 +42,9 @@ pnpm --filter @me3/web dev
 
 ## Owner Auth
 
-ME3 Core uses a local-first owner bootstrap flow so an install can come up without Postmark, OAuth, hosted billing, or ME3 Cloud.
+ME3 Core's default first-run path is ME3 Cloud claim: sign in with a `me3.app` account to connect this Core install to the ME3 identity network for Soulink and future apps.
 
-Required owner auth secrets:
+Advanced standalone setup remains available for operators who want a local-only install or who are testing before the hosted claim flow is ready. Standalone setup uses these owner auth secrets:
 
 - `ADMIN_BOOTSTRAP_CODE` unlocks first-run setup and owner credential recovery.
 - `JWT_SECRET` signs the owner session cookie.
@@ -63,7 +63,7 @@ pnpm --filter @me3-core/worker dev
 pnpm --filter @me3/web dev
 ```
 
-Open the web app, enter the generated `ADMIN_BOOTSTRAP_CODE`, and create the owner profile with an email and password. A successful bootstrap stores a password hash in D1 and sets an httpOnly `me3_core_session` cookie. Returning owners sign in with email and password through `/api/auth/login`; the bootstrap code is kept for install-claim and recovery, not everyday login.
+Open the web app and choose **Sign in with ME3** to start the network claim flow. Use **Advanced standalone setup** to enter the generated `ADMIN_BOOTSTRAP_CODE` and create a local owner profile with an email and password. A successful bootstrap stores a password hash in D1 and sets an httpOnly `me3_core_session` cookie. Returning owners sign in with email and password through `/api/auth/login`; the bootstrap code is kept for install-claim and recovery, not everyday login.
 
 The web app reads `/api/config` to decide whether owner password auth is configured, hydrates refreshes from `/api/auth/me`, and logs out through `/api/auth/logout`; it does not trust localStorage for authentication.
 
@@ -132,7 +132,9 @@ Cloudflare should provision supported resources from the Wrangler config during 
 
 Use the button at the top of this README when you want Cloudflare to handle the GitHub fork, Worker build, and supported resource provisioning.
 
-Required install secrets:
+Default setup is **Sign in with ME3**. This connects the Core install to `me3.app` as the coordination layer for identity and future cross-app login.
+
+Standalone fallback setup uses these install secrets:
 
 - `JWT_SECRET`: random session signing secret
 - `ADMIN_BOOTSTRAP_CODE`: one-time owner setup code
@@ -144,7 +146,7 @@ Optional install secrets:
 
 `TOKEN_ENCRYPTION_KEY` is intentionally optional. If it is omitted, ME3 Core creates a persistent install encryption key in D1 during owner setup.
 
-After the first deploy, open the admin URL, enter `ADMIN_BOOTSTRAP_CODE`, and create the owner account.
+After the first deploy, open the admin URL and choose **Sign in with ME3**. If you need a local-only install, choose **Advanced standalone setup**, enter `ADMIN_BOOTSTRAP_CODE`, and create the owner account.
 
 If the setup screen asks for a bootstrap code and you do not have one yet, create it as a Worker secret:
 

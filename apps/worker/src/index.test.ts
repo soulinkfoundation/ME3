@@ -1072,6 +1072,33 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  it("starts ME3 Cloud install claim for unclaimed installs", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+
+    const response = await app.fetch(
+      new Request("https://core.example/api/auth/me3/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirect: "/account" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; url: string; state: string };
+    const claimUrl = new URL(body.url);
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.state).toMatch(/[0-9a-f-]{36}/);
+    expect(claimUrl.origin).toBe("https://me3.example");
+    expect(claimUrl.pathname).toBe("/core/claim");
+    expect(claimUrl.searchParams.get("core_origin")).toBe("http://localhost:4000");
+    expect(claimUrl.searchParams.get("callback_url")).toBe(
+      "http://localhost:8787/api/auth/me3/callback",
+    );
+    expect(claimUrl.searchParams.get("redirect")).toBe("/account");
+  });
+
   it("rejects invalid bootstrap codes without issuing a session", async () => {
     const env = createEnv();
 

@@ -76,6 +76,9 @@ type BootstrapPasswordResetBody = {
   bootstrapCode?: string;
   password?: string;
 };
+type Me3ClaimStartBody = {
+  redirect?: string;
+};
 type ChatBody = { message?: string };
 type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
 type MailboxUpdateBody = {
@@ -214,6 +217,7 @@ app.get("/health", async (c) => {
 app.get("/api/config", async (c) => {
   const authConfigured = await getOwnerAuthConfigured(c.env);
   const aiRoutes = await getAiRoutingSummary(c.env, "owner");
+  const cloudOrigin = getMe3CloudOrigin(c.env);
 
   return c.json({
     apiOrigin: getCoreApiOrigin(c.env, c.req.url),
@@ -230,9 +234,51 @@ app.get("/api/config", async (c) => {
       extractionProvider: aiRoutes.extraction.providerId,
       extractionModel: aiRoutes.extraction.model,
     },
+    me3Cloud: {
+      origin: cloudOrigin,
+      claimUrl: `${cloudOrigin}/core/claim`,
+    },
     setupRequired: await getSetupRequired(c.env),
     ownerAuthConfigured: authConfigured,
   });
+});
+
+app.post("/api/auth/me3/start", async (c) => {
+  if (await getOwnerAuthConfigured(c.env)) {
+    return c.json({ ok: false, error: "This install is already claimed" }, 409);
+  }
+
+  const body = await c.req.json<Me3ClaimStartBody>().catch((): Me3ClaimStartBody => ({}));
+  const webOrigin = getCoreWebOrigin(c.env, c.req.url);
+  const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
+  const state = crypto.randomUUID();
+  const claimUrl = new URL("/core/claim", getMe3CloudOrigin(c.env));
+
+  claimUrl.searchParams.set("core_origin", webOrigin);
+  claimUrl.searchParams.set("callback_url", `${apiOrigin}/api/auth/me3/callback`);
+  claimUrl.searchParams.set("state", state);
+
+  const redirect = normalizeClaimRedirect(body.redirect);
+  if (redirect) {
+    claimUrl.searchParams.set("redirect", redirect);
+  }
+
+  return c.json({
+    ok: true,
+    url: claimUrl.toString(),
+    state,
+  });
+});
+
+app.get("/api/auth/me3/callback", (c) => {
+  return c.json(
+    {
+      ok: false,
+      error:
+        "ME3 Cloud install claim callback is not implemented in this Core scaffold yet. Use advanced bootstrap setup for now.",
+    },
+    501,
+  );
 });
 
 app.post("/api/admin/bootstrap", async (c) => {
@@ -2217,6 +2263,18 @@ function getCorsOrigin(env: Env, requestUrl: string, origin: string | undefined)
   ]);
 
   return allowedOrigins.has(origin) ? origin : getCoreWebOrigin(env, requestUrl);
+}
+
+function getMe3CloudOrigin(env: Env): string {
+  return originFromUrl(env.ME3_CLOUD_ORIGIN) || "https://me3.app";
+}
+
+function normalizeClaimRedirect(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const redirect = value.trim();
+  if (!redirect || redirect.length > 500) return "";
+  if (redirect.startsWith("/") && !redirect.startsWith("//")) return redirect;
+  return "";
 }
 
 function isPublicSiteHost(env: Env, requestUrl: string): boolean {
