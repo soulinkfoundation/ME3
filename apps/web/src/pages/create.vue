@@ -34,6 +34,8 @@ definePage({
 const wizard = useWizardStore();
 const router = useRouter();
 const { isPublishing: isQuickPublishing, publish } = usePublish();
+const INTRO_SEEN_STORAGE_KEY = "me3:create-intro-seen";
+const showIntroScreen = ref(false);
 
 // Reference to the current component instance
 const currentComponentRef = ref<
@@ -114,7 +116,7 @@ const importedDraftHost = computed(() => {
 });
 
 const showImportedDraftRecovery = computed(
-  () => !!importedDraftHost.value && !wizard.lastPublishedAt,
+  () => !!importedDraftHost.value && !wizard.lastPublishedAt && !showIntroScreen.value,
 );
 
 // Progress percentage
@@ -149,7 +151,9 @@ const progressSteps = computed(() =>
 );
 
 // Show preview on larger screens
-const showPreview = computed(() => wizard.currentStep < wizard.totalSteps);
+const showPreview = computed(
+  () => !showIntroScreen.value && wizard.currentStep < wizard.totalSteps,
+);
 
 // Check if WizardPages/Blog/Offerings/Bookings is in editing mode
 const isEditingPage = computed(() => {
@@ -204,6 +208,11 @@ function handleExit() {
   router.push(exitWizardDestination());
 }
 
+function handleIntroGetStarted() {
+  localStorage.setItem(INTRO_SEEN_STORAGE_KEY, "true");
+  showIntroScreen.value = false;
+}
+
 async function handleQuickPublish() {
   await publish({ openSite: false });
 }
@@ -214,6 +223,9 @@ function clearImportedDraft() {
 }
 
 onMounted(() => {
+  showIntroScreen.value =
+    !wizard.lastPublishedAt && localStorage.getItem(INTRO_SEEN_STORAGE_KEY) !== "true";
+
   // Check for saved progress
   if (wizard.profile.name && wizard.currentStep > 1) {
     // Show continue prompt could go here
@@ -226,7 +238,7 @@ onMounted(() => {
   <div class="wizard-page">
     <!-- Header -->
     <header class="wizard-header">
-      <div class="header-center">
+      <div v-if="!showIntroScreen" class="header-center">
         <div class="step-indicator">
           <span class="step-current">{{ wizard.currentStep }}</span>
           <span class="step-divider">/</span>
@@ -251,7 +263,12 @@ onMounted(() => {
     </header>
 
     <!-- Progress bar -->
-    <div class="progress-bar" role="navigation" aria-label="Wizard progress">
+    <div
+      v-if="!showIntroScreen"
+      class="progress-bar"
+      role="navigation"
+      aria-label="Wizard progress"
+    >
       <div class="progress-track" aria-hidden="true">
         <div class="progress-fill" :style="{ width: `${progress}%` }" />
       </div>
@@ -310,8 +327,33 @@ onMounted(() => {
       </div>
     </div>
 
+    <main v-if="showIntroScreen" class="wizard-intro">
+      <section class="intro-panel" aria-labelledby="intro-title">
+        <img
+          class="intro-image"
+          src="/me3protocol.jpg"
+          alt="ME3 protocol profile preview"
+        />
+        <div class="intro-copy">
+          <h1 id="intro-title">Build Your ME3 Site In Minutes</h1>
+          <p>
+            Your ME3 site is a simple profile that includes everything you need
+            for a simple, effective website. Take bookings, sell products, start
+            a blog and more. It also doubles as important context for your ME3
+            agent.
+            <a href="https://me3.app/protocol" target="_blank" rel="noreferrer">
+              Learn more about that here
+            </a>.
+          </p>
+          <button class="intro-button" type="button" @click="handleIntroGetStarted">
+            Get started
+          </button>
+        </div>
+      </section>
+    </main>
+
     <!-- Main content -->
-    <main class="wizard-main">
+    <main v-else class="wizard-main">
       <!-- Step content -->
       <div
         class="step-content"
@@ -618,6 +660,80 @@ onMounted(() => {
 }
 
 /* Main */
+.wizard-intro {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  padding: 40px 24px;
+}
+
+.intro-panel {
+  width: min(100%, 720px);
+  display: grid;
+  justify-items: center;
+  gap: 28px;
+  text-align: center;
+}
+
+.intro-image {
+  display: block;
+  width: min(100%, 520px);
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 24px;
+  box-shadow: 0 22px 70px rgba(15, 23, 42, 0.14);
+}
+
+.intro-copy {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+}
+
+.intro-copy h1 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: clamp(36px, 5vw, 58px);
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+
+.intro-copy p {
+  max-width: 640px;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.intro-copy a {
+  color: var(--color-text);
+  font-weight: 700;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+
+.intro-button {
+  min-width: 150px;
+  padding: 14px 24px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--color-text);
+  color: var(--color-bg);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.intro-button:hover {
+  transform: translateY(-1px);
+  opacity: 0.92;
+}
+
 .wizard-main {
   flex: 1;
   display: flex;
@@ -804,6 +920,26 @@ onMounted(() => {
 
   .progress-step-tooltip {
     display: none;
+  }
+
+  .wizard-intro {
+    padding: 28px 18px;
+  }
+
+  .intro-panel {
+    gap: 22px;
+  }
+
+  .intro-image {
+    border-radius: 18px;
+  }
+
+  .intro-copy h1 {
+    font-size: 36px;
+  }
+
+  .intro-copy p {
+    font-size: 16px;
   }
 }
 </style>
