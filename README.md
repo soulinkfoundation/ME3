@@ -118,9 +118,10 @@ The root `wrangler.toml` is the deploy-template config for the Deploy to Cloudfl
 - `SITE_ASSETS` R2 binding for Core file storage
 - `ME3_USER_AGENT` Durable Object namespace
 - optional Workers AI binding
-- one default Workers AI model
 
-Cloudflare should provision supported resources from the Wrangler config during button/template deployment. The deploy button should not ask for owner API keys, custom domains, `JWT_SECRET`, or `ADMIN_BOOTSTRAP_CODE`; those are configured later only if the owner needs them.
+Cloudflare should provision supported resources from the Wrangler config during button/template deployment. The deploy button should not ask for owner API keys, custom domains, `ENVIRONMENT`, `ME3_AI_MODEL`, `JWT_SECRET`, or `ADMIN_BOOTSTRAP_CODE`; those are configured later only if the owner needs them.
+
+Cloudflare may still show its own resource and command fields, such as D1 database name/location, R2 bucket name, build command, and deploy command. Keep the defaults unless you have a reason to customize them. The build command creates the web assets, and the deploy command applies D1 migrations before publishing the Worker.
 
 ### Deploy Button
 

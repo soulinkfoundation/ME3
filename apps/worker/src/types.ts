@@ -5,7 +5,7 @@ export interface Env {
   ASSETS?: Fetcher;
   SITE_ASSETS?: R2Bucket;
 
-  ENVIRONMENT: string;
+  ENVIRONMENT?: string;
   CORE_WEB_ORIGIN?: string;
   CORE_API_ORIGIN?: string;
   ME3_CUSTOM_DOMAIN?: string;

@@ -231,7 +231,7 @@ app.get("/health", async (c) => {
   return c.json({
     ok: true,
     service: "me3-core",
-    environment: c.env.ENVIRONMENT,
+    environment: getEnvironment(c.env),
     bindings: {
       db: Boolean(c.env.DB),
       userAgent: Boolean(c.env.ME3_USER_AGENT),
@@ -4555,7 +4555,7 @@ function currentUnixTime(): number {
 }
 
 function shouldUseSecureCookie(env: Env): boolean {
-  return env.ENVIRONMENT !== "local";
+  return getEnvironment(env) !== "local";
 }
 
 async function getSetupRequired(env: Env, ownerId = "owner"): Promise<string[]> {
@@ -4567,6 +4567,10 @@ async function getSetupRequired(env: Env, ownerId = "owner"): Promise<string[]> 
   }
 
   return missing;
+}
+
+function getEnvironment(env: Env): string {
+  return env.ENVIRONMENT || "production";
 }
 
 export default app;

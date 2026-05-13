@@ -26,24 +26,5 @@
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=20.0.0"
-  },
-  "cloudflare": {
-    "bindings": {
-      "DB": {
-        "description": "D1 database for ME3 Core owner profile, assistant messages, and install metadata. Cloudflare should provision this during template deploy."
-      },
-      "ME3_USER_AGENT": {
-        "description": "Durable Object namespace for the future per-owner ME3 agent runtime."
-      },
-      "AI": {
-        "description": "Optional Workers AI binding. If you do not use Workers AI, configure OpenAI or Anthropic keys after install."
-      },
-      "SITE_ASSETS": {
-        "description": "R2 bucket binding for ME3 Core file storage, including site media and future plugin-owned files."
-      },
-      "EMAIL": {
-        "description": "Reserved future Cloudflare Email Service send_email binding. The current Core outbound sender is the Postmark adapter."
-      }
-    }
   }
 }

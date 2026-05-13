@@ -38,7 +38,3 @@ binding = "ASSETS"
 # inferred ME3_SITE_HOST serves the public site; admin/API hosts serve the SPA/API.
 run_worker_first = ["/*"]
 not_found_handling = "single-page-application"
-
-[vars]
-ENVIRONMENT = "production"
-ME3_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
