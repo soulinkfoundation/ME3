@@ -39,6 +39,7 @@ const resetMode = ref(false);
 const showAdvancedSetup = ref(false);
 const error = ref("");
 const notice = ref("");
+const passwordMinLength = 8;
 
 const isSetupMode = computed(() => !ownerAuthConfigured.value);
 const isResetMode = computed(
@@ -56,6 +57,20 @@ const missingOwnerSecrets = computed(
 const showBootstrapSetup = computed(
   () => !isSetupMode.value || isResetMode.value || showAdvancedSetup.value,
 );
+const needsNewPassword = computed(
+  () => showBootstrapSetup.value && (isSetupMode.value || isResetMode.value),
+);
+const showPasswordRequirement = computed(
+  () => needsNewPassword.value && password.value.length < passwordMinLength,
+);
+const passwordRequirementText = computed(() => {
+  const remaining = passwordMinLength - password.value.length;
+  if (remaining <= 0) return "Password meets the length requirement.";
+
+  return remaining === passwordMinLength
+    ? `Password must be at least ${passwordMinLength} characters.`
+    : `Add ${remaining} more character${remaining === 1 ? "" : "s"}. Passwords must be at least ${passwordMinLength} characters.`;
+});
 
 const canSubmit = computed(() => {
   if (loading.value || configLoading.value) return false;
@@ -325,6 +340,11 @@ onMounted(loadConfig);
             "
             class="input password-field__input"
             aria-label="Password"
+            :aria-describedby="
+              needsNewPassword ? 'password-requirement' : undefined
+            "
+            :aria-invalid="showPasswordRequirement ? 'true' : undefined"
+            :minlength="needsNewPassword ? passwordMinLength : undefined"
             :placeholder="isResetMode ? 'New password' : 'Password'"
             required
           />
@@ -338,6 +358,15 @@ onMounted(loadConfig);
             <UiIcon :name="showPassword ? 'EyeOff' : 'Eye'" :size="18" />
           </button>
         </div>
+        <p
+          v-if="needsNewPassword"
+          id="password-requirement"
+          class="password-requirement"
+          :class="{ 'password-requirement--error': showPasswordRequirement }"
+          aria-live="polite"
+        >
+          {{ passwordRequirementText }}
+        </p>
 
         <div v-if="showBootstrapSetup && useBootstrapCodeInput" class="password-field">
           <input
@@ -563,6 +592,17 @@ onMounted(loadConfig);
 .password-field__toggle:focus-visible {
   outline: 2px solid var(--ui-text, var(--color-text));
   outline-offset: 2px;
+}
+
+.password-requirement {
+  margin: -4px 0 2px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.password-requirement--error {
+  color: #c62828;
 }
 
 .button {
