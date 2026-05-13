@@ -74,6 +74,22 @@ type D1Like = {
   };
 };
 
+type AgentSandboxConnection = {
+  id: string;
+};
+
+type AgentSandboxSourceEvent = {
+  id: string;
+};
+
+export type AgentSandboxTurnRecord = {
+  connection: AgentSandboxConnection;
+  sourceEvent: AgentSandboxSourceEvent;
+  turnId: string;
+  messageText: string;
+  replyToMessageId: string | number | null;
+};
+
 type StorageLike = {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T = unknown>(key: string, value: T): Promise<void>;
@@ -128,6 +144,38 @@ export function isAgentSandboxDispatchInput(
   );
 }
 
+export async function createAgentSandboxTurnRecord(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  input: {
+    userId: string;
+    messageText: string;
+    replyToMessageId?: string | number | null;
+  },
+): Promise<AgentSandboxTurnRecord> {
+  const messageText = input.messageText.trim();
+  const replyToMessageId =
+    typeof input.replyToMessageId === "string" ||
+    typeof input.replyToMessageId === "number"
+      ? input.replyToMessageId
+      : null;
+  const connection = await upsertSandboxConnection(env, input.userId);
+  const turnId = crypto.randomUUID();
+  const sourceEvent = await insertSandboxEvent(env, {
+    connectionId: connection.id,
+    turnId,
+    messageText,
+    replyToMessageId,
+  });
+
+  return {
+    connection,
+    sourceEvent,
+    turnId,
+    messageText,
+    replyToMessageId,
+  };
+}
+
 export async function dispatchAgentSandboxTurn(
   env: CoreAgentChatEnv,
   storage: StorageLike,
@@ -176,6 +224,71 @@ export async function dispatchAgentSandboxTurn(
 
   await storage.put(resultKey, response);
   return response;
+}
+
+async function upsertSandboxConnection(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<AgentSandboxConnection> {
+  const existing = await env.DB.prepare(
+    `SELECT id
+     FROM agent_channel_connections
+     WHERE user_id = ? AND channel = 'sandbox'
+     LIMIT 1`,
+  )
+    .bind(ownerId)
+    .first<AgentSandboxConnection>();
+
+  if (existing?.id) {
+    await env.DB.prepare(
+      `UPDATE agent_channel_connections
+       SET status = 'active', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+      .bind(existing.id)
+      .run();
+    return existing;
+  }
+
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO agent_channel_connections
+       (id, user_id, channel, status, setup_token, connected_at, created_at, updated_at)
+     VALUES (?, ?, 'sandbox', 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  )
+    .bind(id, ownerId, crypto.randomUUID())
+    .run();
+
+  return { id };
+}
+
+async function insertSandboxEvent(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  input: {
+    connectionId: string;
+    turnId: string;
+    messageText: string;
+    replyToMessageId: string | number | null;
+  },
+): Promise<AgentSandboxSourceEvent> {
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO agent_channel_events
+       (id, connection_id, channel, direction, event_type, status,
+        reply_to_message_id, text_body, raw_json, created_at, updated_at)
+     VALUES (?, ?, 'sandbox', 'inbound', 'message', 'received',
+        ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      id,
+      input.connectionId,
+      input.replyToMessageId === null ? null : String(input.replyToMessageId),
+      input.messageText,
+      JSON.stringify({ runtime: "sandbox", turnId: input.turnId }),
+    )
+    .run();
+
+  return { id };
 }
 
 async function runModelTurn(

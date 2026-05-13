@@ -61,6 +61,7 @@ import {
   type LandingPageSection,
   type LandingPageTemplateId,
 } from "../../../shared/landing-pages";
+import { createAgentSandboxTurnRecord } from "./agent-chat";
 import { generateSiteHtml, type Me3SiteProfile } from "./site-generator";
 import type {
   DbAgentChannelConnection,
@@ -563,11 +564,8 @@ app.post("/api/agent/sandbox", async (c) => {
     typeof body.replyToMessageId === "number"
       ? body.replyToMessageId
       : null;
-  const connection = await upsertSandboxConnection(c.env, ownerId);
-  const turnId = crypto.randomUUID();
-  const sourceEvent = await insertSandboxEvent(c.env, {
-    connectionId: connection.id,
-    turnId,
+  const turn = await createAgentSandboxTurnRecord(c.env, {
+    userId: ownerId,
     messageText,
     replyToMessageId,
   });
@@ -579,11 +577,11 @@ app.post("/api/agent/sandbox", async (c) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       userId: ownerId,
-      connectionId: connection.id,
-      sourceEventId: sourceEvent.id,
-      turnId,
-      messageText,
-      replyToMessageId,
+      connectionId: turn.connection.id,
+      sourceEventId: turn.sourceEvent.id,
+      turnId: turn.turnId,
+      messageText: turn.messageText,
+      replyToMessageId: turn.replyToMessageId,
     }),
   });
 
@@ -3397,71 +3395,6 @@ function renderLandingSection(section: LandingPageSection, username: string): st
     return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><div class="grid">${section.items.map((item) => `<article><strong>${escapeHtml(item.question)}</strong><p>${escapeHtml(item.answer)}</p></article>`).join("")}</div></div></section>`;
   }
   return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2></div></section>`;
-}
-
-async function upsertSandboxConnection(
-  env: Env,
-  ownerId: string,
-): Promise<Pick<DbAgentChannelConnection, "id">> {
-  const existing = await env.DB.prepare(
-    `SELECT id
-     FROM agent_channel_connections
-     WHERE user_id = ? AND channel = 'sandbox'
-     LIMIT 1`,
-  )
-    .bind(ownerId)
-    .first<Pick<DbAgentChannelConnection, "id">>();
-
-  if (existing?.id) {
-    await env.DB.prepare(
-      `UPDATE agent_channel_connections
-       SET status = 'active', updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-    )
-      .bind(existing.id)
-      .run();
-    return existing;
-  }
-
-  const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT INTO agent_channel_connections
-       (id, user_id, channel, status, setup_token, connected_at, created_at, updated_at)
-     VALUES (?, ?, 'sandbox', 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-  )
-    .bind(id, ownerId, crypto.randomUUID())
-    .run();
-
-  return { id };
-}
-
-async function insertSandboxEvent(
-  env: Env,
-  input: {
-    connectionId: string;
-    turnId: string;
-    messageText: string;
-    replyToMessageId: string | number | null;
-  },
-): Promise<Pick<DbAgentChannelEvent, "id">> {
-  const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT INTO agent_channel_events
-       (id, connection_id, channel, direction, event_type, status,
-        reply_to_message_id, text_body, raw_json, created_at, updated_at)
-     VALUES (?, ?, 'sandbox', 'inbound', 'message', 'received',
-        ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-  )
-    .bind(
-      id,
-      input.connectionId,
-      input.replyToMessageId === null ? null : String(input.replyToMessageId),
-      input.messageText,
-      JSON.stringify({ runtime: "sandbox", turnId: input.turnId }),
-    )
-    .run();
-
-  return { id };
 }
 
 async function requireOwner(c: AppContext): Promise<string | null> {
