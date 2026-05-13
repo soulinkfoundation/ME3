@@ -1278,30 +1278,6 @@ describe("ME3 Core Worker auth", () => {
     expect(response.headers.get("set-cookie")).toContain("me3_core_session=");
   });
 
-  it("keeps the legacy ADMIN_BOOTSTRAP_CODE secret working", async () => {
-    const env = createEnv();
-    env.ADMIN_BOOTSTRAP_CODE = "legacy-owner-code";
-    env.SETUP_PASSWORD = undefined;
-
-    const response = await app.fetch(
-      new Request("http://localhost/api/admin/bootstrap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Origin: "http://localhost:4000" },
-        body: JSON.stringify({
-          bootstrapCode: "legacy-owner-code",
-          email: "owner@example.com",
-          name: "ME3 Core Owner",
-          username: "owner",
-          password: "correct-horse-battery",
-        }),
-      }),
-      env,
-    );
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("set-cookie")).toContain("me3_core_session=");
-  });
-
   it("generates an install encryption key during bootstrap when no env key is provided", async () => {
     const env = createEnv();
     env.TOKEN_ENCRYPTION_KEY = undefined;

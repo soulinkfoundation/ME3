@@ -4915,7 +4915,7 @@ function getEnvironment(env: Env): string {
 }
 
 function getSetupPassword(env: Env): string | undefined {
-  return env.SETUP_PASSWORD || env.ADMIN_BOOTSTRAP_CODE;
+  return env.SETUP_PASSWORD;
 }
 
 export default app;
