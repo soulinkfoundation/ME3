@@ -4,6 +4,8 @@
 
 // Use relative /api by default so OSS installs do not point at ME3 Cloud.
 export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+export const USERNAME_AVAILABILITY_API_BASE =
+  import.meta.env.VITE_USERNAME_AVAILABILITY_API_BASE || 'https://api.me3.app/api'
 
 function sanitizeErrorMessage(raw: unknown, fallback: string): string {
   if (typeof raw !== 'string') return fallback
@@ -73,6 +75,43 @@ async function request<T>(
   }
 
   return data as T
+}
+
+function apiUrl(base: string, endpoint: string): string {
+  return `${base.replace(/\/+$/, '')}/${endpoint.replace(/^\/+/, '')}`
+}
+
+export async function getUsernameAvailability(username: string): Promise<boolean> {
+  const response = await fetch(
+    apiUrl(
+      USERNAME_AVAILABILITY_API_BASE,
+      `/usernames/${encodeURIComponent(username)}/available`
+    ),
+    {
+      method: 'GET',
+      credentials: 'include',
+    }
+  )
+
+  const text = await response.text()
+  const data = text
+    ? (() => {
+        try {
+          return JSON.parse(text)
+        } catch {
+          return { error: text }
+        }
+      })()
+    : {}
+
+  if (!response.ok) {
+    throw new ApiError(
+      sanitizeErrorMessage(data.error, 'Username availability check failed'),
+      response.status
+    )
+  }
+
+  return data.available === true
 }
 
 export const api = {

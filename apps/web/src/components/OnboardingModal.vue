@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { api } from "../api";
+import { getUsernameAvailability } from "../api";
 import Button from "./Button.vue";
 import type { OnboardingRequest } from "../stores/sites";
 
@@ -77,10 +77,7 @@ function clearUsernameCheckTimeout() {
 
 async function requestUsernameAvailability(value: string): Promise<boolean> {
   try {
-    const response = await api.get<{ available: boolean }>(
-      `/usernames/${value}/available`,
-    );
-    return response.available;
+    return await getUsernameAvailability(value);
   } catch {
     return true;
   }

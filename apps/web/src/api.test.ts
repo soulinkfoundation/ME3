@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { api, ApiError } from './api'
+import { api, ApiError, getUsernameAvailability } from './api'
 
 // Mock fetch globally
 global.fetch = vi.fn()
@@ -151,6 +151,33 @@ describe('api client', () => {
         expect.objectContaining({
           method: 'DELETE',
         })
+      )
+    })
+  })
+
+  describe('username availability', () => {
+    it('should check hosted ME3 Cloud username availability', async () => {
+      vi.mocked(fetch).mockResolvedValue(mockJsonResponse({ available: true }))
+
+      await expect(getUsernameAvailability('testuser')).resolves.toBe(true)
+
+      expect(fetch).toHaveBeenCalledWith(
+        'https://api.me3.app/api/usernames/testuser/available',
+        expect.objectContaining({
+          method: 'GET',
+          credentials: 'include',
+        })
+      )
+    })
+
+    it('should encode usernames in the availability URL', async () => {
+      vi.mocked(fetch).mockResolvedValue(mockJsonResponse({ available: false }))
+
+      await expect(getUsernameAvailability('test user')).resolves.toBe(false)
+
+      expect(fetch).toHaveBeenCalledWith(
+        'https://api.me3.app/api/usernames/test%20user/available',
+        expect.any(Object)
       )
     })
   })

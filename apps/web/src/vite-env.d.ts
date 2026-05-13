@@ -14,6 +14,8 @@ declare module "vue-router" {
 
 interface ImportMetaEnv {
   readonly VITEST?: boolean
+  readonly VITE_API_BASE?: string
+  readonly VITE_USERNAME_AVAILABILITY_API_BASE?: string
 }
 
 interface ImportMeta {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { useWizardStore } from "../../stores/wizard";
-import { api } from "../../api";
+import { getUsernameAvailability } from "../../api";
 
 const wizard = useWizardStore();
 
@@ -50,10 +50,7 @@ watch(handle, async (val) => {
   wizard.isCheckingUsername = true;
   checkTimeout = setTimeout(async () => {
     try {
-      const response = await api.get<{ available: boolean }>(
-        `/usernames/${cleanHandle}/available`,
-      );
-      wizard.isUsernameAvailable = response.available;
+      wizard.isUsernameAvailable = await getUsernameAvailability(cleanHandle);
     } catch {
       // If endpoint doesn't exist yet, assume available
       wizard.isUsernameAvailable = true;
