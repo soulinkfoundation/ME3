@@ -1483,7 +1483,8 @@ onMounted(async () => {
                 class="error"
               >
                 Install encryption is created automatically during owner setup.
-                If this remains visible, run the latest migrations and bootstrap again.
+                If this remains visible, run the latest migrations and sign in
+                or bootstrap again.
               </p>
 
               <div class="ai-routes-panel compact-ai-model-panel">

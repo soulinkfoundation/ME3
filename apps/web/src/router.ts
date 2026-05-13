@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { routes } from "vue-router/auto-routes";
+import { api } from "./api";
 import { useAuthStore } from "./stores/auth";
 import { useSitesStore } from "./stores/sites";
 import { useWizardStore } from "./stores/wizard";
@@ -11,6 +12,18 @@ const router = createRouter({
 });
 
 let syncedSessionUserId: string | null | undefined;
+
+async function isPluginEnabled(pluginId: string): Promise<boolean> {
+  const response = await api.get<{
+    plugins: Array<{ id: string; status: string; enabled: boolean }>;
+  }>("/plugins");
+  return response.plugins.some(
+    (plugin) =>
+      plugin.id === pluginId &&
+      plugin.enabled &&
+      plugin.status === "installed",
+  );
+}
 
 function updateMetaTag(name: string, content: string | undefined) {
   if (!content) return;
@@ -177,6 +190,26 @@ router.beforeEach(async (to, _from, next) => {
   if (to.meta.requiresWorkspace) {
     if (!auth.isAuthenticated) {
       next({ path: "/login", query: { redirect: to.fullPath } });
+      return;
+    }
+  }
+
+  if (to.meta.requiresPlugin) {
+    try {
+      if (!(await isPluginEnabled(to.meta.requiresPlugin))) {
+        next({
+          path: "/account",
+          query: { section: "plugins", blocked: to.meta.requiresPlugin },
+          replace: true,
+        });
+        return;
+      }
+    } catch {
+      next({
+        path: "/account",
+        query: { section: "plugins", blocked: to.meta.requiresPlugin },
+        replace: true,
+      });
       return;
     }
   }

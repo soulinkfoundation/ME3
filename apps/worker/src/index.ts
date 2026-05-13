@@ -356,6 +356,7 @@ app.get("/api/auth/me3/callback", async (c) => {
   }
 
   await upsertMe3ClaimedOwner(c.env, payload);
+  await getOrCreateInstallEncryptionKey(c.env);
   await deleteMe3ClaimState(c.env, state);
   await setOwnerSession(c, "owner");
 

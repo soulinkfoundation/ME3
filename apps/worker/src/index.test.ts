@@ -1409,6 +1409,7 @@ describe("ME3 Core Worker auth", () => {
 
   it("accepts a verified ME3 Cloud install claim callback", async () => {
     const env = createEnv();
+    env.TOKEN_ENCRYPTION_KEY = undefined;
     env.ME3_CLOUD_ORIGIN = "https://me3.example";
     env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
 
@@ -1453,6 +1454,7 @@ describe("ME3 Core Worker auth", () => {
       password_hash: null,
     });
     expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBe("user123");
+    expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
     expect(env.me3ClaimStates).toHaveLength(0);
 
     fetchMock.mockRestore();

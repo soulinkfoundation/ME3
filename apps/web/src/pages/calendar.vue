@@ -19,6 +19,7 @@ definePage({
   meta: {
     requiresAuth: true,
     requiresWorkspace: true,
+    requiresPlugin: "me3.calendar",
     title: "Calendar | ME3",
     description:
       "View upcoming bookings, reminders, events, and imported calendars across your ME3 workspace.",

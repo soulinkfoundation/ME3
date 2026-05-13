@@ -21,6 +21,7 @@ const isMobileViewport = ref(false);
 const mobileNavOpen = ref(false);
 const mobileMediaQuery = "(max-width: 959px)";
 const navDrawerId = "app-side-nav-drawer";
+const calendarInstalled = ref(false);
 const socialPublishingInstalled = ref(false);
 const pluginChangedEvent = "me3:plugins-changed";
 
@@ -108,6 +109,12 @@ async function loadInstalledPluginNav() {
     const response = await api.get<{
       plugins: Array<{ id: string; status: string; enabled: boolean }>;
     }>("/plugins");
+    calendarInstalled.value = response.plugins.some(
+      (plugin) =>
+        plugin.id === "me3.calendar" &&
+        plugin.enabled &&
+        plugin.status === "installed",
+    );
     socialPublishingInstalled.value = response.plugins.some(
       (plugin) =>
         plugin.id === "me3.social-publishing" &&
@@ -115,6 +122,7 @@ async function loadInstalledPluginNav() {
         plugin.status === "installed",
     );
   } catch {
+    calendarInstalled.value = false;
     socialPublishingInstalled.value = false;
   }
 }
@@ -156,9 +164,9 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
       </button>
 
       <RouterLink
-        to="/calendar"
+        :to="calendarInstalled ? '/calendar' : '/assistant'"
         class="app-side-nav-mobile-bar__logo"
-        aria-label="Calendar"
+        aria-label="ME3"
         @click="closeMobileNav"
       >
         <img
@@ -190,9 +198,9 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
       aria-label="App navigation"
     >
       <RouterLink
-        to="/calendar"
+        :to="calendarInstalled ? '/calendar' : '/assistant'"
         class="app-side-nav__logo"
-        aria-label="Calendar"
+        aria-label="ME3"
         @click="closeMobileNav"
       >
         <img
@@ -204,6 +212,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
 
       <nav class="app-side-nav__links" aria-label="Primary">
         <RouterLink
+          v-if="calendarInstalled"
           to="/calendar"
           class="app-side-nav__row"
           :class="{ 'app-side-nav__row--active': rowActive('calendar') }"
