@@ -6,6 +6,7 @@ import UiIcon from "../components/UiIcon.vue";
 import { API_BASE, api } from "../api";
 import { useAppToast } from "../composables/useAppToast";
 import { useInboxDraftCount } from "../composables/useInboxDraftCount";
+import { useAuthStore } from "../stores/auth";
 import { useContactsStore, type Contact } from "../stores/contacts";
 
 definePage({
@@ -204,6 +205,7 @@ const {
 } =
   useInboxDraftCount();
 const { toastSuccess } = useAppToast();
+const auth = useAuthStore();
 const contactsStore = useContactsStore();
 const { contacts } = storeToRefs(contactsStore);
 
@@ -331,7 +333,7 @@ const telegramNeedsSetupHint = computed(() => {
 const telegramConversation = computed((): TelegramChatBubble[] => {
   const items: TelegramChatBubble[] = [];
   const sorted = [...turns.value].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    (a, b) => parseApiDate(a.createdAt).getTime() - parseApiDate(b.createdAt).getTime(),
   );
   for (const turn of sorted) {
     if (turn.inputText?.trim()) {
@@ -419,6 +421,48 @@ const selectedThreadMessages = computed(() => {
     (message) => message.threadKey === selected.threadKey,
   );
 });
+
+function parseApiDate(value: string): Date {
+  const trimmed = value.trim();
+  const sqliteUtcPattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
+  const normalized = sqliteUtcPattern.test(trimmed)
+    ? `${trimmed.replace(" ", "T")}Z`
+    : trimmed;
+  return new Date(normalized);
+}
+
+function formatDateTimePart(
+  date: Date,
+  options: Intl.DateTimeFormatOptions,
+): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, options).format(date);
+  } catch {
+    const { timeZone: _timeZone, ...fallbackOptions } = options;
+    return new Intl.DateTimeFormat(undefined, fallbackOptions).format(date);
+  }
+}
+
+function getDateOrdinal(date: Date, timeZone?: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone,
+  }).formatToParts(date);
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+  return Math.floor(Date.UTC(year, month - 1, day) / 86400000);
+}
+
+function getCalendarDayDiff(date: Date, now: Date, timeZone?: string): number {
+  try {
+    return getDateOrdinal(now, timeZone) - getDateOrdinal(date, timeZone);
+  } catch {
+    return getDateOrdinal(now) - getDateOrdinal(date);
+  }
+}
 const selectedThreadIsUnread = computed(() =>
   selectedThreadMessages.value.some((message) => message.unread),
 );
@@ -1443,33 +1487,35 @@ function resizeEmailFrame(event: Event, messageId: string) {
 }
 
 function formatRelativeDate(value: string): string {
-  const date = new Date(value);
+  const date = parseApiDate(value);
   if (Number.isNaN(date.getTime())) return value;
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / 86400000);
+  const timeZone = auth.user?.timezone || undefined;
+  const diffDays = getCalendarDayDiff(date, new Date(), timeZone);
   if (diffDays === 0) {
-    return new Intl.DateTimeFormat(undefined, {
+    return formatDateTimePart(date, {
       hour: "numeric",
       minute: "2-digit",
-    }).format(date);
+      timeZone,
+    });
   }
   if (diffDays < 7) {
-    return new Intl.DateTimeFormat(undefined, {
+    return formatDateTimePart(date, {
       month: "short",
       day: "numeric",
-    }).format(date);
+      timeZone,
+    });
   }
-  return new Intl.DateTimeFormat(undefined, {
+  return formatDateTimePart(date, {
     month: "short",
     day: "numeric",
     year: "numeric",
-  }).format(date);
+    timeZone,
+  });
 }
 
 /** Short relative labels for Telegram bubbles */
 function formatChatRelativeTime(value: string): string {
-  const date = new Date(value);
+  const date = parseApiDate(value);
   if (Number.isNaN(date.getTime())) return value;
   const diffMs = Date.now() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
@@ -1479,13 +1525,14 @@ function formatChatRelativeTime(value: string): string {
   if (diffHours < 24) return `${diffHours}h ago`;
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays < 7) return `${diffDays}d ago`;
-  return new Intl.DateTimeFormat(undefined, {
+  return formatDateTimePart(date, {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(date);
+    timeZone: auth.user?.timezone || undefined,
+  });
 }
 
 const totalPages = computed(() => Math.ceil(total.value / limit) || 1);
