@@ -393,7 +393,7 @@ const customDomainSiteUsername = computed(() => {
   const accountUsername = auth.user?.username || "";
   const accountSite = sites.sites.find((site) => site.username === accountUsername);
   const profileSite = sites.sites.find((site) => (site.site_type || "profile") === "profile");
-  return accountSite?.username || profileSite?.username || sites.sites[0]?.username || accountUsername;
+  return accountSite?.username || profileSite?.username || sites.sites[0]?.username || "";
 });
 
 const customDomainSite = computed(() =>
@@ -1255,9 +1255,9 @@ onMounted(async () => {
             <div v-if="sites.loading" class="status-row">
               Loading site domain settings...
             </div>
-            <template v-else-if="customDomainSiteUsername">
+            <template v-else-if="customDomainSite">
               <CustomDomain
-                :username="customDomainSiteUsername"
+                :username="customDomainSite.username"
                 :show-settings-link="false"
                 @domain-status-changed="() => void sites.fetchSites()"
               />

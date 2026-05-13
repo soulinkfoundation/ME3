@@ -28,9 +28,9 @@ onMounted(async () => {
   await loadDomainStatus();
 });
 
-async function loadDomainStatus() {
+async function loadDomainStatus(emitChange = false) {
   domainStatus.value = await sites.getDomainStatus(props.username);
-  emit("domainStatusChanged");
+  if (emitChange) emit("domainStatusChanged");
 }
 
 async function connectDomain() {
@@ -49,7 +49,7 @@ async function connectDomain() {
   const result = await sites.connectDomain(props.username, domainToConnect);
 
   if (result?.ok) {
-    await loadDomainStatus();
+    await loadDomainStatus(true);
     newDomain.value = "";
     showDomainInput.value = false;
   } else {
@@ -66,7 +66,7 @@ async function disconnectDomain() {
   const success = await sites.disconnectDomain(props.username);
 
   if (success) {
-    await loadDomainStatus();
+    await loadDomainStatus(true);
     showDisconnectConfirm.value = false;
   }
 
@@ -76,7 +76,7 @@ async function disconnectDomain() {
 async function refreshStatus() {
   domainLoading.value = true;
   await sites.refreshDomainStatus(props.username);
-  await loadDomainStatus();
+  await loadDomainStatus(true);
   domainLoading.value = false;
 }
 
