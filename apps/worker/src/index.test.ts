@@ -1038,6 +1038,7 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.owner.email).toBe("owner@example.com");
+    expect(env.owner?.password_hash?.split("$")[1]).toBe("100000");
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
     expect(response.headers.get("set-cookie")).toContain("me3_core_session=");

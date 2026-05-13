@@ -163,7 +163,7 @@ type NormalizedMailboxDraftInput = {
 const SESSION_COOKIE_NAME = "me3_core_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
-const PASSWORD_HASH_ITERATIONS = 210_000;
+const PASSWORD_HASH_ITERATIONS = 100_000;
 const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
 const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
@@ -185,6 +185,27 @@ const LANDING_PAGE_TEMPLATES = new Set<LandingPageTemplateId>(["event", "service
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
+
+app.onError((error, c) => {
+  console.error(error);
+
+  if (new URL(c.req.url).pathname.startsWith("/api/")) {
+    return c.json(
+      {
+        ok: false,
+        error:
+          c.env.ENVIRONMENT === "production"
+            ? "Internal server error"
+            : error instanceof Error
+              ? error.message
+              : "Internal server error",
+      },
+      500,
+    );
+  }
+
+  return c.text("Internal Server Error", 500);
+});
 
 app.use(
   "*",
