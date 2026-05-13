@@ -34,6 +34,7 @@ const loading = ref(false);
 const me3SignInLoading = ref(false);
 const configLoading = ref(true);
 const ownerAuthConfigured = ref(false);
+const ownerPasswordAuthConfigured = ref(false);
 const ownerMe3AuthConfigured = ref(false);
 const setupRequired = ref<string[]>([]);
 const resetMode = ref(false);
@@ -46,20 +47,46 @@ const isSetupMode = computed(() => !ownerAuthConfigured.value);
 const isResetMode = computed(
   () => ownerAuthConfigured.value && resetMode.value,
 );
+const isCustomPasswordSetupMode = computed(
+  () =>
+    ownerAuthConfigured.value &&
+    ownerMe3AuthConfigured.value &&
+    !ownerPasswordAuthConfigured.value &&
+    showAdvancedSetup.value &&
+    !isResetMode.value,
+);
+const showAuthChoice = computed(
+  () =>
+    !showAdvancedSetup.value &&
+    !isResetMode.value &&
+    (!ownerAuthConfigured.value ||
+      (ownerMe3AuthConfigured.value && !ownerPasswordAuthConfigured.value)),
+);
 const useBootstrapCodeInput = computed(
-  () => isSetupMode.value || isResetMode.value,
+  () =>
+    isSetupMode.value ||
+    isResetMode.value ||
+    isCustomPasswordSetupMode.value,
 );
 const missingBootstrapCode = computed(
-  () => isSetupMode.value && setupRequired.value.includes("SETUP_PASSWORD"),
+  () =>
+    (isSetupMode.value ||
+      isResetMode.value ||
+      isCustomPasswordSetupMode.value) &&
+    setupRequired.value.includes("SETUP_PASSWORD"),
 );
 const missingOwnerSecrets = computed(
   () => missingBootstrapCode.value,
 );
 const showBootstrapSetup = computed(
-  () => !isSetupMode.value || isResetMode.value || showAdvancedSetup.value,
+  () =>
+    !showAuthChoice.value &&
+    (!isSetupMode.value || isResetMode.value || showAdvancedSetup.value),
 );
 const needsNewPassword = computed(
-  () => showBootstrapSetup.value && (isSetupMode.value || isResetMode.value),
+  () =>
+    showBootstrapSetup.value &&
+    (isSetupMode.value || isResetMode.value || isCustomPasswordSetupMode.value),
 );
 const showPasswordRequirement = computed(
   () => needsNewPassword.value && password.value.length < passwordMinLength,
@@ -80,6 +107,10 @@ const canSubmit = computed(() => {
     return false;
 
   if (isResetMode.value) {
+    return bootstrapCode.value.trim().length > 0 && password.value.length >= 8;
+  }
+
+  if (isCustomPasswordSetupMode.value) {
     return bootstrapCode.value.trim().length > 0 && password.value.length >= 8;
   }
 
@@ -144,10 +175,14 @@ async function loadConfig() {
   try {
     const config = await api.get<{
       ownerAuthConfigured?: boolean;
+      ownerPasswordAuthConfigured?: boolean;
       ownerMe3AuthConfigured?: boolean;
       setupRequired?: string[];
     }>("/config");
     ownerAuthConfigured.value = Boolean(config.ownerAuthConfigured);
+    ownerPasswordAuthConfigured.value = Boolean(
+      config.ownerPasswordAuthConfigured,
+    );
     ownerMe3AuthConfigured.value = Boolean(config.ownerMe3AuthConfigured);
     setupRequired.value = Array.isArray(config.setupRequired)
       ? config.setupRequired
@@ -167,7 +202,8 @@ async function submitAuth() {
   error.value = "";
   notice.value = "";
 
-  if (isResetMode.value) {
+  if (isResetMode.value || isCustomPasswordSetupMode.value) {
+    const wasCustomPasswordSetup = isCustomPasswordSetupMode.value;
     const success = await auth.resetOwnerPassword({
       email: email.value,
       bootstrapCode: bootstrapCode.value,
@@ -176,12 +212,17 @@ async function submitAuth() {
 
     if (success) {
       resetMode.value = false;
+      ownerPasswordAuthConfigured.value = true;
       bootstrapCode.value = "";
       password.value = "";
-      notice.value = "Password reset. Sign in with your new password.";
+      notice.value = wasCustomPasswordSetup
+        ? "Custom authentication enabled. Sign in with your new password."
+        : "Password reset. Sign in with your new password.";
     } else {
       error.value =
-        "Reset failed. Check your email, setup password, and new password.";
+        wasCustomPasswordSetup
+          ? "Custom authentication setup failed. Check your ME3 account email, setup password, and new password."
+          : "Reset failed. Check your email, setup password, and new password.";
     }
 
     loading.value = false;
@@ -250,6 +291,12 @@ function startResetMode() {
   notice.value = "";
 }
 
+function startAdvancedSetup() {
+  showAdvancedSetup.value = true;
+  error.value = "";
+  notice.value = "";
+}
+
 function cancelResetMode() {
   resetMode.value = false;
   bootstrapCode.value = "";
@@ -265,7 +312,7 @@ onMounted(loadConfig);
     <main class="login__main">
       <BrandLogo class="login__logo" alt="me3" />
 
-      <section v-if="isSetupMode && !showAdvancedSetup" class="cloud-claim">
+      <section v-if="showAuthChoice" class="cloud-claim">
         <p class="cloud-claim__copy">
           For simple authentication sign in via ME3.app
         </p>
@@ -275,19 +322,19 @@ onMounted(loadConfig);
           :disabled="me3SignInLoading || configLoading"
           @click="startMe3SignIn"
         >
-          {{ me3SignInLoading ? "Opening ME3..." : "Sign in with ME3" }}
+          {{ me3SignInLoading ? "Opening ME3..." : "Sign in with ME3.app" }}
         </button>
         <button
           type="button"
           class="text-button"
-          @click="showAdvancedSetup = true"
+          @click="startAdvancedSetup"
         >
           Advanced setup for custom authentication
         </button>
         <p v-if="error" class="error">{{ error }}</p>
       </section>
 
-      <form class="login-form" @submit.prevent="submitAuth">
+      <form v-if="!showAuthChoice" class="login-form" @submit.prevent="submitAuth">
         <section
           v-if="showBootstrapSetup && missingOwnerSecrets"
           class="setup-note"
@@ -309,7 +356,13 @@ onMounted(loadConfig);
         </section>
 
         <button
-          v-if="!isSetupMode && ownerMe3AuthConfigured && !isResetMode"
+          v-if="
+            !isSetupMode &&
+            ownerMe3AuthConfigured &&
+            !ownerPasswordAuthConfigured &&
+            !isResetMode &&
+            !isCustomPasswordSetupMode
+          "
           type="button"
           class="button"
           :disabled="me3SignInLoading || configLoading"
@@ -320,6 +373,12 @@ onMounted(loadConfig);
 
         <p v-if="showBootstrapSetup && isResetMode" class="login-form__hint">
           Reset owner access with this install's setup password.
+        </p>
+        <p
+          v-if="showBootstrapSetup && isCustomPasswordSetupMode"
+          class="login-form__hint"
+        >
+          Enable custom authentication with this install's setup password.
         </p>
 
         <input
@@ -358,7 +417,11 @@ onMounted(loadConfig);
             "
             :aria-invalid="showPasswordRequirement ? 'true' : undefined"
             :minlength="needsNewPassword ? passwordMinLength : undefined"
-            :placeholder="isResetMode ? 'New password' : 'Password'"
+            :placeholder="
+              isResetMode || isCustomPasswordSetupMode
+                ? 'New password'
+                : 'Password'
+            "
             required
           />
           <button
@@ -415,17 +478,21 @@ onMounted(loadConfig);
             loading
               ? isResetMode
                 ? "Resetting..."
+                : isCustomPasswordSetupMode
+                  ? "Enabling..."
                 : "Opening..."
               : isSetupMode
                 ? "Create account"
                 : isResetMode
                   ? "Reset password"
+                  : isCustomPasswordSetupMode
+                    ? "Enable custom authentication"
                   : "Sign in"
           }}
         </button>
 
         <button
-          v-if="ownerAuthConfigured && !isResetMode"
+          v-if="ownerPasswordAuthConfigured && !isResetMode"
           class="text-button"
           type="button"
           @click="startResetMode"
@@ -441,7 +508,7 @@ onMounted(loadConfig);
           Back to sign in
         </button>
         <button
-          v-if="isSetupMode && showAdvancedSetup"
+          v-if="(isSetupMode || isCustomPasswordSetupMode) && showAdvancedSetup"
           class="text-button"
           type="button"
           @click="showAdvancedSetup = false"
