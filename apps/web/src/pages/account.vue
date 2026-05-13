@@ -327,6 +327,14 @@ type EmailProviderTestResponse = {
   sentAt: string;
 };
 
+type AppConnectionsResponse = {
+  me3: {
+    connected: boolean;
+    origin: string;
+    disconnectAvailable: boolean;
+  };
+};
+
 const auth = useAuthStore();
 const sites = useSitesStore();
 const route = useRoute();
@@ -374,6 +382,11 @@ const emailProviderInputs = ref<Record<EmailProviderId, EmailProviderInputs>>(
 const emailProviderTestTo = ref("");
 const emailProviderMessage = ref<string | null>(null);
 const emailProviderError = ref<string | null>(null);
+const appConnectionsLoading = ref(false);
+const appConnectionsSaving = ref(false);
+const me3Connection = ref<AppConnectionsResponse["me3"] | null>(null);
+const appConnectionsMessage = ref<string | null>(null);
+const appConnectionsError = ref<string | null>(null);
 
 const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
   null,
@@ -381,6 +394,7 @@ const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
 
 const openSection = ref({
   email: true,
+  connections: false,
   regional: false,
   domain: false,
   mailbox: false,
@@ -641,6 +655,15 @@ const emailProviderTestDisabled = computed(
     emailProviderLoading.value ||
     !activeEmailProvider.value?.configured ||
     !emailProviderTestTo.value.trim(),
+);
+
+const me3ConnectionStatusLabel = computed(() => {
+  if (appConnectionsLoading.value) return "Loading";
+  return me3Connection.value?.connected ? "Connected" : "Not connected";
+});
+
+const me3ConnectionStatusClass = computed(() =>
+  me3Connection.value?.connected ? "active" : "pending_setup",
 );
 
 function syncAccount(response: AccountResponse) {
@@ -1038,6 +1061,64 @@ async function sendEmailProviderTestMessage() {
   }
 }
 
+async function loadAppConnections() {
+  appConnectionsLoading.value = true;
+  appConnectionsError.value = null;
+
+  try {
+    const response = await api.get<AppConnectionsResponse>(
+      "/account/app-connections",
+    );
+    me3Connection.value = response.me3;
+  } catch (e: any) {
+    appConnectionsError.value = e.message || "Failed to load app connections";
+  } finally {
+    appConnectionsLoading.value = false;
+  }
+}
+
+async function connectMe3App() {
+  if (appConnectionsSaving.value) return;
+
+  appConnectionsSaving.value = true;
+  appConnectionsMessage.value = null;
+  appConnectionsError.value = null;
+
+  try {
+    const response = await api.post<{ ok: boolean; url?: string }>(
+      "/account/app-connections/me3/start",
+      { redirect: "/account?section=connections" },
+    );
+    if (response.ok && response.url) {
+      window.location.href = response.url;
+      return;
+    }
+    appConnectionsError.value = "ME3.app connection is not ready yet.";
+  } catch (e: any) {
+    appConnectionsError.value = e.message || "Failed to start ME3.app connection";
+  } finally {
+    appConnectionsSaving.value = false;
+  }
+}
+
+async function disconnectMe3App() {
+  if (appConnectionsSaving.value) return;
+
+  appConnectionsSaving.value = true;
+  appConnectionsMessage.value = null;
+  appConnectionsError.value = null;
+
+  try {
+    await api.delete("/account/app-connections/me3");
+    await loadAppConnections();
+    appConnectionsMessage.value = "ME3.app disconnected.";
+  } catch (e: any) {
+    appConnectionsError.value = e.message || "Failed to disconnect ME3.app";
+  } finally {
+    appConnectionsSaving.value = false;
+  }
+}
+
 async function logout() {
   await auth.logout();
   router.push("/");
@@ -1080,6 +1161,14 @@ onMounted(async () => {
   void loadAiSettings();
   void loadEmailProviderSettings();
   void loadPlugins();
+  void loadAppConnections();
+  if (route.query.section === "connections") {
+    openSection.value.connections = true;
+  }
+  if (typeof route.query.me3_claim_error === "string") {
+    openSection.value.connections = true;
+    appConnectionsError.value = "ME3.app connection failed. Please try again.";
+  }
   if (route.query.section === "telegram") {
     openSection.value.telegram = true;
   }
@@ -1142,6 +1231,104 @@ onMounted(async () => {
                 Sign out
               </button>
             </div>
+          </div>
+        </section>
+
+        <section class="card accordion-card">
+          <button
+            id="account-trigger-connections"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.connections"
+            aria-controls="account-panel-connections"
+            @click="openSection.connections = !openSection.connections"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>App connections</h2>
+              <span class="status-badge" :class="me3ConnectionStatusClass">
+                {{ me3ConnectionStatusLabel }}
+              </span>
+              <span class="accordion-header-hint">
+                Connect this Core install to ME3.app sign-in
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-connections"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-connections"
+            :hidden="!openSection.connections"
+          >
+            <div v-if="appConnectionsLoading" class="status-row">
+              Loading app connections...
+            </div>
+
+            <template v-else>
+              <div
+                class="connection-row"
+                :class="{ 'connection-row--connected': me3Connection?.connected }"
+              >
+                <div class="connection-row__body">
+                  <span
+                    class="status-badge compact"
+                    :class="me3ConnectionStatusClass"
+                  >
+                    {{ me3ConnectionStatusLabel }}
+                  </span>
+                  <div>
+                    <h3>ME3.app</h3>
+                    <p>
+                      {{
+                        me3Connection?.connected
+                          ? "ME3.app can be used to sign in to this Core install."
+                          : "Link your ME3 account before ME3.app appears on the sign-in screen."
+                      }}
+                    </p>
+                    <p v-if="me3Connection?.origin" class="field-hint">
+                      Identity provider: {{ me3Connection.origin }}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  v-if="me3Connection?.connected"
+                  class="button secondary connection-row__action"
+                  type="button"
+                  :disabled="
+                    appConnectionsSaving || !me3Connection.disconnectAvailable
+                  "
+                  @click="disconnectMe3App"
+                >
+                  {{ appConnectionsSaving ? "Disconnecting..." : "Disconnect" }}
+                </button>
+                <button
+                  v-else
+                  class="button primary connection-row__action"
+                  type="button"
+                  :disabled="appConnectionsSaving"
+                  @click="connectMe3App"
+                >
+                  {{ appConnectionsSaving ? "Opening..." : "Connect" }}
+                </button>
+              </div>
+
+              <p
+                v-if="
+                  me3Connection?.connected && !me3Connection.disconnectAvailable
+                "
+                class="field-hint"
+              >
+                Add password authentication before disconnecting ME3.app.
+              </p>
+              <p v-if="appConnectionsMessage" class="success">
+                {{ appConnectionsMessage }}
+              </p>
+              <p v-if="appConnectionsError" class="error">
+                {{ appConnectionsError }}
+              </p>
+            </template>
           </div>
         </section>
 
@@ -2008,6 +2195,54 @@ h1 {
   gap: 12px;
 }
 
+.connection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 12px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.connection-row--connected {
+  border-color: color-mix(
+    in oklab,
+    var(--ui-accent, #4caf50) 34%,
+    var(--ui-border, var(--color-border))
+  );
+  background: color-mix(
+    in oklab,
+    var(--ui-accent, #4caf50) 12%,
+    var(--ui-surface, var(--color-bg))
+  );
+}
+
+.connection-row__body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.connection-row h3 {
+  margin: 0;
+  color: var(--ui-text, var(--color-text));
+  font-size: 16px;
+}
+
+.connection-row p {
+  margin: 4px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.connection-row__action {
+  flex: 0 0 auto;
+}
+
 .outbound-sender-panel {
   display: grid;
   gap: 14px;
@@ -2559,6 +2794,8 @@ h1 {
 
   .danger-card,
   .email-row,
+  .connection-row,
+  .connection-row__body,
   .plugin-row__header {
     flex-direction: column;
     align-items: flex-start;
@@ -2579,6 +2816,7 @@ h1 {
   }
 
   .email-row .button,
+  .connection-row__action,
   .danger-card .button {
     width: 100%;
   }

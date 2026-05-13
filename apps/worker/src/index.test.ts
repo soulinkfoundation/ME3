@@ -193,17 +193,36 @@ function createEnv(): Env & {
           return {
             async run() {
               if (sql.includes("INSERT INTO owner_profile")) {
-                state.owner = {
-                  id: values[0] as string,
-                  email: values[1] as string | null,
-                  name: values[2] as string | null,
-                  username: values[3] as string | null,
-                  bio: values[4] as string | null,
-                  avatar_url: values[5] as string | null,
-                  timezone: values[6] as string | null,
-                  locale: null,
-                  password_hash: values[7] as string | null,
-                };
+                const existingOwner = state.owner;
+                if (
+                  existingOwner !== null &&
+                  existingOwner.id === values[0] &&
+                  sql.includes("username = COALESCE(owner_profile.username")
+                ) {
+                  state.owner = {
+                    id: existingOwner.id,
+                    email: values[1] as string | null,
+                    name: values[2] as string | null,
+                    username: existingOwner.username || (values[3] as string | null),
+                    bio: existingOwner.bio,
+                    avatar_url: existingOwner.avatar_url,
+                    timezone: existingOwner.timezone,
+                    locale: existingOwner.locale,
+                    password_hash: existingOwner.password_hash,
+                  };
+                } else {
+                  state.owner = {
+                    id: values[0] as string,
+                    email: values[1] as string | null,
+                    name: values[2] as string | null,
+                    username: values[3] as string | null,
+                    bio: values[4] as string | null,
+                    avatar_url: values[5] as string | null,
+                    timezone: values[6] as string | null,
+                    locale: null,
+                    password_hash: values[7] as string | null,
+                  };
+                }
               }
 
               if (sql.includes("UPDATE owner_profile") && state.owner) {
@@ -223,6 +242,10 @@ function createEnv(): Env & {
 
               if (sql.includes("DELETE FROM owner_profile")) {
                 state.owner = null;
+              }
+
+              if (sql.includes("DELETE FROM install_secrets")) {
+                state.installSecrets.delete(values[0] as string);
               }
 
               if (sql.includes("INSERT INTO assistant_messages")) {
@@ -1434,6 +1457,115 @@ describe("ME3 Core Worker auth", () => {
     expect(env.me3ClaimStates).toHaveLength(0);
 
     fetchMock.mockRestore();
+  });
+
+  it("lets a password owner start a protected ME3 app connection link", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    const session = cookieHeader(await bootstrap(env));
+
+    const publicStartResponse = await app.fetch(
+      new Request("https://core.example/api/auth/me3/start", {
+        method: "POST",
+      }),
+      env,
+    );
+    expect(publicStartResponse.status).toBe(409);
+
+    const response = await app.fetch(
+      new Request("https://core.example/api/account/app-connections/me3/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ redirect: "/account?section=connections" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; url: string; state: string };
+    const claimUrl = new URL(body.url);
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(claimUrl.origin).toBe("https://me3.example");
+    expect(claimUrl.searchParams.get("redirect")).toBe("/account?section=connections");
+    expect(env.me3ClaimStates).toHaveLength(1);
+  });
+
+  it("links ME3 app auth without removing the existing password login", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    const session = cookieHeader(await bootstrap(env));
+    const passwordHash = env.owner?.password_hash;
+
+    const startResponse = await app.fetch(
+      new Request("https://core.example/api/account/app-connections/me3/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ redirect: "/account?section=connections" }),
+      }),
+      env,
+    );
+    const startBody = (await startResponse.json()) as { state: string };
+    const signedClaim = await createSignedMe3ClaimToken({
+      issuer: "https://api.me3.example",
+      state: startBody.state,
+      coreOrigin: "http://localhost:4000",
+      callbackUrl: "http://localhost:8787/api/auth/me3/callback",
+      email: "owner@example.com",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ keys: [signedClaim.publicJwk] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const callbackResponse = await app.fetch(
+      new Request(
+        `http://localhost:8787/api/auth/me3/callback?state=${encodeURIComponent(
+          startBody.state,
+        )}&claim_token=${encodeURIComponent(signedClaim.token)}`,
+      ),
+      env,
+    );
+    const configResponse = await app.fetch(new Request("http://localhost/api/config"), env);
+    const config = (await configResponse.json()) as {
+      ownerPasswordAuthConfigured: boolean;
+      ownerMe3AuthConfigured: boolean;
+    };
+
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("location")).toBe("/account?section=connections");
+    expect(env.owner?.password_hash).toBe(passwordHash);
+    expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBe("user123");
+    expect(config).toMatchObject({
+      ownerPasswordAuthConfigured: true,
+      ownerMe3AuthConfigured: true,
+    });
+
+    fetchMock.mockRestore();
+  });
+
+  it("disconnects ME3 app auth only when password login remains available", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/account/app-connections/me3", {
+        method: "DELETE",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBeUndefined();
   });
 
   it("rejects invalid bootstrap codes without issuing a session", async () => {

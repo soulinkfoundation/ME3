@@ -291,32 +291,12 @@ app.get("/api/config", async (c) => {
 
 app.post("/api/auth/me3/start", async (c) => {
   const authState = await getOwnerAuthState(c.env);
-  if (authState.passwordConfigured) {
-    return c.json({ ok: false, error: "This install uses custom authentication" }, 409);
+  if (authState.passwordConfigured && !authState.me3Configured) {
+    return c.json({ ok: false, error: "Connect a ME3 account from Account settings first" }, 409);
   }
 
   const body = await c.req.json<Me3ClaimStartBody>().catch((): Me3ClaimStartBody => ({}));
-  const webOrigin = getCoreWebOrigin(c.env, c.req.url);
-  const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
-  const state = crypto.randomUUID();
-  const claimUrl = new URL("/core/claim", getMe3CloudOrigin(c.env));
-  const redirect = normalizeClaimRedirect(body.redirect);
-
-  await storeMe3ClaimState(c.env, state, redirect);
-
-  claimUrl.searchParams.set("core_origin", webOrigin);
-  claimUrl.searchParams.set("callback_url", `${apiOrigin}/api/auth/me3/callback`);
-  claimUrl.searchParams.set("state", state);
-
-  if (redirect) {
-    claimUrl.searchParams.set("redirect", redirect);
-  }
-
-  return c.json({
-    ok: true,
-    url: claimUrl.toString(),
-    state,
-  });
+  return createMe3ClaimStartResponse(c, body.redirect);
 });
 
 app.get("/api/auth/me3/callback", async (c) => {
@@ -606,6 +586,44 @@ app.get("/api/account", async (c) => {
   if (!owner) return c.json({ error: "Account not found" }, 404);
 
   return c.json({ user: serializeAccountOwner(owner) });
+});
+
+app.get("/api/account/app-connections", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const authState = await getOwnerAuthState(c.env);
+  return c.json({
+    me3: {
+      connected: authState.me3Configured,
+      origin: getMe3CloudOrigin(c.env),
+      disconnectAvailable: authState.passwordConfigured,
+    },
+  });
+});
+
+app.post("/api/account/app-connections/me3/start", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body = await c.req.json<Me3ClaimStartBody>().catch((): Me3ClaimStartBody => ({}));
+  return createMe3ClaimStartResponse(c, body.redirect || "/account?section=connections");
+});
+
+app.delete("/api/account/app-connections/me3", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const authState = await getOwnerAuthState(c.env);
+  if (!authState.passwordConfigured) {
+    return c.json(
+      { ok: false, error: "Add password authentication before disconnecting ME3.app" },
+      409,
+    );
+  }
+
+  await deleteStoredMe3CloudOwnerId(c.env);
+  return c.json({ ok: true });
 });
 
 app.get("/api/plugins", async (c) => {
@@ -4547,6 +4565,30 @@ async function getOwnerByEmail(env: Env, email: string): Promise<OwnerRecord | n
   return result ?? null;
 }
 
+async function createMe3ClaimStartResponse(c: AppContext, rawRedirect?: unknown): Promise<Response> {
+  const webOrigin = getCoreWebOrigin(c.env, c.req.url);
+  const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
+  const state = crypto.randomUUID();
+  const claimUrl = new URL("/core/claim", getMe3CloudOrigin(c.env));
+  const redirect = normalizeClaimRedirect(rawRedirect);
+
+  await storeMe3ClaimState(c.env, state, redirect);
+
+  claimUrl.searchParams.set("core_origin", webOrigin);
+  claimUrl.searchParams.set("callback_url", `${apiOrigin}/api/auth/me3/callback`);
+  claimUrl.searchParams.set("state", state);
+
+  if (redirect) {
+    claimUrl.searchParams.set("redirect", redirect);
+  }
+
+  return c.json({
+    ok: true,
+    url: claimUrl.toString(),
+    state,
+  });
+}
+
 async function getOwnerAuthState(env: Env): Promise<OwnerAuthState> {
   const result = await env.DB.prepare(
     "SELECT id, password_hash FROM owner_profile WHERE id = ?",
@@ -4667,6 +4709,12 @@ async function setStoredMe3CloudOwnerId(env: Env, ownerId: string): Promise<void
        updated_at = CURRENT_TIMESTAMP`,
   )
     .bind(ME3_CLOUD_OWNER_SECRET_NAME, ownerId)
+    .run();
+}
+
+async function deleteStoredMe3CloudOwnerId(env: Env): Promise<void> {
+  await env.DB.prepare("DELETE FROM install_secrets WHERE name = ?")
+    .bind(ME3_CLOUD_OWNER_SECRET_NAME)
     .run();
 }
 
