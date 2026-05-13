@@ -34,6 +34,7 @@ const loading = ref(false);
 const me3SignInLoading = ref(false);
 const configLoading = ref(true);
 const ownerAuthConfigured = ref(false);
+const ownerMe3AuthConfigured = ref(false);
 const setupRequired = ref<string[]>([]);
 const resetMode = ref(false);
 const showAdvancedSetup = ref(false);
@@ -143,9 +144,11 @@ async function loadConfig() {
   try {
     const config = await api.get<{
       ownerAuthConfigured?: boolean;
+      ownerMe3AuthConfigured?: boolean;
       setupRequired?: string[];
     }>("/config");
     ownerAuthConfigured.value = Boolean(config.ownerAuthConfigured);
+    ownerMe3AuthConfigured.value = Boolean(config.ownerMe3AuthConfigured);
     setupRequired.value = Array.isArray(config.setupRequired)
       ? config.setupRequired
       : [];
@@ -304,6 +307,16 @@ onMounted(loadConfig);
             </li>
           </ol>
         </section>
+
+        <button
+          v-if="!isSetupMode && ownerMe3AuthConfigured && !isResetMode"
+          type="button"
+          class="button"
+          :disabled="me3SignInLoading || configLoading"
+          @click="startMe3SignIn"
+        >
+          {{ me3SignInLoading ? "Opening ME3..." : "Sign in with ME3.app" }}
+        </button>
 
         <p v-if="showBootstrapSetup && isResetMode" class="login-form__hint">
           Reset owner access with this install's setup password.

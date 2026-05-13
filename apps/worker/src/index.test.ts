@@ -83,6 +83,11 @@ type StoredSocialOauthState = {
   expires_at: string;
   created_at: string;
 };
+type StoredMe3ClaimState = {
+  state: string;
+  redirect_path: string | null;
+  expires_at: string;
+};
 type StoredContentItem = {
   id: string;
   site_id: string;
@@ -125,6 +130,7 @@ function createEnv(): Env & {
   socialAccounts: StoredSocialAccount[];
   socialProviderSettings: StoredSocialProviderSetting[];
   socialOauthStates: StoredSocialOauthState[];
+  me3ClaimStates: StoredMe3ClaimState[];
   contentItems: StoredContentItem[];
 } {
   const state = {
@@ -143,6 +149,7 @@ function createEnv(): Env & {
     socialAccounts: [] as StoredSocialAccount[],
     socialProviderSettings: [] as StoredSocialProviderSetting[],
     socialOauthStates: [] as StoredSocialOauthState[],
+    me3ClaimStates: [] as StoredMe3ClaimState[],
     contentItems: [] as StoredContentItem[],
   };
 
@@ -275,6 +282,28 @@ function createEnv(): Env & {
               if (sql.includes("DELETE FROM social_oauth_states")) {
                 state.socialOauthStates = state.socialOauthStates.filter(
                   (oauthState) => oauthState.id !== values[0],
+                );
+              }
+
+              if (sql.includes("INSERT INTO me3_install_claim_states")) {
+                const existingIndex = state.me3ClaimStates.findIndex(
+                  (entry) => entry.state === values[0],
+                );
+                const entry: StoredMe3ClaimState = {
+                  state: values[0] as string,
+                  redirect_path: values[1] as string | null,
+                  expires_at: values[2] as string,
+                };
+                if (existingIndex >= 0) {
+                  state.me3ClaimStates[existingIndex] = entry;
+                } else {
+                  state.me3ClaimStates.push(entry);
+                }
+              }
+
+              if (sql.includes("DELETE FROM me3_install_claim_states")) {
+                state.me3ClaimStates = state.me3ClaimStates.filter(
+                  (entry) => entry.state !== values[0],
                 );
               }
 
@@ -836,6 +865,11 @@ function createEnv(): Env & {
                   ) || null
                 ) as T | null;
               }
+              if (sql.includes("FROM me3_install_claim_states")) {
+                return (
+                  state.me3ClaimStates.find((entry) => entry.state === values[0]) || null
+                ) as T | null;
+              }
               if (sql.includes("FROM install_secrets")) {
                 const value = state.installSecrets.get(values[0] as string);
                 return value ? ({ value } as T) : null;
@@ -980,6 +1014,9 @@ function createEnv(): Env & {
     get socialOauthStates() {
       return state.socialOauthStates;
     },
+    get me3ClaimStates() {
+      return state.me3ClaimStates;
+    },
     get contentItems() {
       return state.contentItems;
     },
@@ -1026,6 +1063,70 @@ function cookieHeader(response: Response): string {
 function responseCookieCleared(response: Response): boolean {
   const setCookie = response.headers.get("set-cookie") || "";
   return setCookie.includes("me3_core_session=") && setCookie.includes("Max-Age=0");
+}
+
+async function createSignedMe3ClaimToken(input: {
+  issuer: string;
+  state: string;
+  coreOrigin: string;
+  callbackUrl: string;
+  email: string;
+}): Promise<{ token: string; publicJwk: JsonWebKey & { kid?: string; alg?: string; use?: string } }> {
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"],
+  );
+  const publicJwk = (await crypto.subtle.exportKey("jwk", keyPair.publicKey)) as JsonWebKey & {
+    kid?: string;
+    alg?: string;
+    use?: string;
+  };
+  publicJwk.kid = "test-key";
+  publicJwk.alg = "RS256";
+  publicJwk.use = "sig";
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT", kid: "test-key" };
+  const payload = {
+    iss: input.issuer,
+    sub: "user123",
+    aud: "me3-core-install-claim",
+    email: input.email,
+    core_origin: input.coreOrigin,
+    callback_url: input.callbackUrl,
+    state: input.state,
+    redirect_path: "/account",
+    claim_id: "claim-123",
+    iat: now,
+    exp: now + 600,
+  };
+  const signingInput = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    keyPair.privateKey,
+    new TextEncoder().encode(signingInput),
+  );
+
+  return {
+    token: `${signingInput}.${base64UrlBytes(new Uint8Array(signature))}`,
+    publicJwk,
+  };
+}
+
+function base64UrlJson(value: unknown): string {
+  return base64UrlBytes(new TextEncoder().encode(JSON.stringify(value)));
+}
+
+function base64UrlBytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 describe("ME3 Core Worker auth", () => {
@@ -1143,6 +1244,56 @@ describe("ME3 Core Worker auth", () => {
       "http://localhost:8787/api/auth/me3/callback",
     );
     expect(claimUrl.searchParams.get("redirect")).toBe("/account");
+  });
+
+  it("accepts a verified ME3 Cloud install claim callback", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+
+    const startResponse = await app.fetch(
+      new Request("https://core.example/api/auth/me3/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirect: "/account" }),
+      }),
+      env,
+    );
+    const startBody = (await startResponse.json()) as { state: string };
+    const signedClaim = await createSignedMe3ClaimToken({
+      issuer: "https://api.me3.example",
+      state: startBody.state,
+      coreOrigin: "http://localhost:4000",
+      callbackUrl: "http://localhost:8787/api/auth/me3/callback",
+      email: "owner@example.com",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ keys: [signedClaim.publicJwk] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const callbackResponse = await app.fetch(
+      new Request(
+        `http://localhost:8787/api/auth/me3/callback?state=${encodeURIComponent(
+          startBody.state,
+        )}&claim_token=${encodeURIComponent(signedClaim.token)}`,
+      ),
+      env,
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("location")).toBe("/account");
+    expect(cookieHeader(callbackResponse)).toMatch(/^me3_core_session=/);
+    expect(env.owner).toMatchObject({
+      id: "owner",
+      email: "owner@example.com",
+      username: "owner",
+      password_hash: null,
+    });
+    expect(env.me3ClaimStates).toHaveLength(0);
+
+    fetchMock.mockRestore();
   });
 
   it("rejects invalid bootstrap codes without issuing a session", async () => {

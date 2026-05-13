@@ -90,6 +90,29 @@ type BootstrapPasswordResetBody = {
 type Me3ClaimStartBody = {
   redirect?: string;
 };
+type Me3ClaimTokenPayload = {
+  iss?: unknown;
+  sub?: unknown;
+  aud?: unknown;
+  email?: unknown;
+  core_origin?: unknown;
+  callback_url?: unknown;
+  state?: unknown;
+  redirect_path?: unknown;
+  claim_id?: unknown;
+  iat?: unknown;
+  exp?: unknown;
+};
+type Me3ClaimStateRecord = {
+  state: string;
+  redirect_path: string | null;
+  expires_at: string;
+};
+type OwnerAuthState = {
+  configured: boolean;
+  passwordConfigured: boolean;
+  me3Configured: boolean;
+};
 type ChatBody = { message?: string };
 type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
 type MailboxUpdateBody = {
@@ -117,6 +140,7 @@ type LandingPageGenerateBody = {
 };
 type SessionPayload = { sub: string; iat: number; exp: number };
 type OwnerRecord = OwnerProfile & { password_hash: string | null };
+type JwtHeader = { alg?: unknown; kid?: unknown; typ?: unknown };
 type PublishManifest = {
   version: 1;
   sourceFiles: Record<string, string>;
@@ -247,7 +271,7 @@ app.get("/health", async (c) => {
 });
 
 app.get("/api/config", async (c) => {
-  const authConfigured = await getOwnerAuthConfigured(c.env);
+  const authState = await getOwnerAuthState(c.env);
   const aiRoutes = await getAiRoutingSummary(c.env, "owner");
   const cloudOrigin = getMe3CloudOrigin(c.env);
 
@@ -271,13 +295,16 @@ app.get("/api/config", async (c) => {
       claimUrl: `${cloudOrigin}/core/claim`,
     },
     setupRequired: await getSetupRequired(c.env),
-    ownerAuthConfigured: authConfigured,
+    ownerAuthConfigured: authState.configured,
+    ownerPasswordAuthConfigured: authState.passwordConfigured,
+    ownerMe3AuthConfigured: authState.me3Configured,
   });
 });
 
 app.post("/api/auth/me3/start", async (c) => {
-  if (await getOwnerAuthConfigured(c.env)) {
-    return c.json({ ok: false, error: "This install is already claimed" }, 409);
+  const authState = await getOwnerAuthState(c.env);
+  if (authState.passwordConfigured) {
+    return c.json({ ok: false, error: "This install uses custom authentication" }, 409);
   }
 
   const body = await c.req.json<Me3ClaimStartBody>().catch((): Me3ClaimStartBody => ({}));
@@ -285,12 +312,14 @@ app.post("/api/auth/me3/start", async (c) => {
   const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
   const state = crypto.randomUUID();
   const claimUrl = new URL("/core/claim", getMe3CloudOrigin(c.env));
+  const redirect = normalizeClaimRedirect(body.redirect);
+
+  await storeMe3ClaimState(c.env, state, redirect);
 
   claimUrl.searchParams.set("core_origin", webOrigin);
   claimUrl.searchParams.set("callback_url", `${apiOrigin}/api/auth/me3/callback`);
   claimUrl.searchParams.set("state", state);
 
-  const redirect = normalizeClaimRedirect(body.redirect);
   if (redirect) {
     claimUrl.searchParams.set("redirect", redirect);
   }
@@ -302,14 +331,49 @@ app.post("/api/auth/me3/start", async (c) => {
   });
 });
 
-app.get("/api/auth/me3/callback", (c) => {
-  return c.json(
-    {
-      ok: false,
-      error:
-        "ME3 Cloud install claim callback is not implemented in this Core scaffold yet. Use advanced standalone setup for now.",
-    },
-    501,
+app.get("/api/auth/me3/callback", async (c) => {
+  const state = c.req.query("state")?.trim() || "";
+  const claimToken = c.req.query("claim_token")?.trim() || "";
+
+  if (!state || !claimToken) {
+    return redirectMe3ClaimError(c, "missing_claim");
+  }
+
+  const pending = await getMe3ClaimState(c.env, state);
+  if (!pending || new Date(pending.expires_at).getTime() <= Date.now()) {
+    return redirectMe3ClaimError(c, "claim_expired");
+  }
+
+  let payload: Me3ClaimTokenPayload;
+  try {
+    payload = await verifyMe3ClaimToken(c.env, claimToken);
+  } catch (error) {
+    console.error("ME3 Cloud claim verification failed:", error);
+    return redirectMe3ClaimError(c, "invalid_claim", pending.redirect_path);
+  }
+
+  const webOrigin = getCoreWebOrigin(c.env, c.req.url);
+  const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
+  const callbackUrl = `${apiOrigin}/api/auth/me3/callback`;
+
+  if (
+    payload.state !== state ||
+    payload.aud !== "me3-core-install-claim" ||
+    payload.core_origin !== webOrigin ||
+    payload.callback_url !== callbackUrl ||
+    typeof payload.sub !== "string" ||
+    typeof payload.email !== "string" ||
+    !payload.email.trim()
+  ) {
+    return redirectMe3ClaimError(c, "claim_mismatch", pending.redirect_path);
+  }
+
+  await upsertMe3ClaimedOwner(c.env, payload);
+  await deleteMe3ClaimState(c.env, state);
+  await setOwnerSession(c, "owner");
+
+  return c.redirect(
+    normalizeClaimRedirect(c.req.query("redirect")) || pending.redirect_path || "/account",
   );
 });
 
@@ -2513,6 +2577,19 @@ function getMe3CloudOrigin(env: Env): string {
   return originFromUrl(env.ME3_CLOUD_ORIGIN) || "https://me3.app";
 }
 
+function getMe3CloudApiOrigin(env: Env): string {
+  const configured = originFromUrl(env.ME3_CLOUD_API_ORIGIN);
+  if (configured) return configured;
+
+  const cloudOrigin = getMe3CloudOrigin(env);
+  const cloudUrl = new URL(cloudOrigin);
+  if (cloudUrl.hostname === "me3.app" || cloudUrl.hostname === "www.me3.app") {
+    return "https://api.me3.app";
+  }
+
+  return cloudOrigin;
+}
+
 function normalizeClaimRedirect(value: unknown): string {
   if (typeof value !== "string") return "";
   const redirect = value.trim();
@@ -4354,14 +4431,24 @@ async function getOwnerByEmail(env: Env, email: string): Promise<OwnerRecord | n
   return result ?? null;
 }
 
-async function getOwnerAuthConfigured(env: Env): Promise<boolean> {
+async function getOwnerAuthState(env: Env): Promise<OwnerAuthState> {
   const result = await env.DB.prepare(
-    "SELECT password_hash FROM owner_profile WHERE id = ?",
+    "SELECT id, password_hash FROM owner_profile WHERE id = ?",
   )
     .bind("owner")
-    .first<{ password_hash: string | null }>();
+    .first<{ id: string; password_hash: string | null }>();
+  const passwordConfigured = Boolean(result?.password_hash);
+  const configured = Boolean(result?.id || passwordConfigured);
 
-  return Boolean(result?.password_hash);
+  return {
+    configured,
+    passwordConfigured,
+    me3Configured: configured && !passwordConfigured,
+  };
+}
+
+async function getOwnerAuthConfigured(env: Env): Promise<boolean> {
+  return (await getOwnerAuthState(env)).configured;
 }
 
 function toPublicOwner(owner: OwnerRecord): OwnerProfile {
@@ -4374,6 +4461,72 @@ function toPublicOwner(owner: OwnerRecord): OwnerProfile {
     avatar_url: owner.avatar_url,
     timezone: owner.timezone,
   };
+}
+
+async function storeMe3ClaimState(
+  env: Env,
+  state: string,
+  redirectPath: string,
+): Promise<void> {
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  await env.DB.prepare(
+    `INSERT INTO me3_install_claim_states (state, redirect_path, expires_at, created_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(state) DO UPDATE SET
+       redirect_path = excluded.redirect_path,
+       expires_at = excluded.expires_at`,
+  )
+    .bind(state, redirectPath || null, expiresAt)
+    .run();
+}
+
+async function getMe3ClaimState(
+  env: Env,
+  state: string,
+): Promise<Me3ClaimStateRecord | null> {
+  const result = await env.DB.prepare(
+    "SELECT state, redirect_path, expires_at FROM me3_install_claim_states WHERE state = ?",
+  )
+    .bind(state)
+    .first<Me3ClaimStateRecord>();
+
+  return result ?? null;
+}
+
+async function deleteMe3ClaimState(env: Env, state: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM me3_install_claim_states WHERE state = ?")
+    .bind(state)
+    .run();
+}
+
+function redirectMe3ClaimError(
+  c: AppContext,
+  code: string,
+  redirectPath?: string | null,
+): Response {
+  const target = new URL(normalizeClaimRedirect(redirectPath) || "/", getCoreWebOrigin(c.env, c.req.url));
+  target.searchParams.set("me3_claim_error", code);
+  return c.redirect(target.toString());
+}
+
+async function upsertMe3ClaimedOwner(
+  env: Env,
+  payload: Me3ClaimTokenPayload,
+): Promise<void> {
+  const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+  const name = email ? email.split("@")[0] || "ME3 Core Owner" : "ME3 Core Owner";
+
+  await env.DB.prepare(
+    `INSERT INTO owner_profile (id, email, name, username, bio, avatar_url, timezone, password_hash, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(id) DO UPDATE SET
+       email = excluded.email,
+       name = excluded.name,
+       username = COALESCE(owner_profile.username, excluded.username),
+       updated_at = CURRENT_TIMESTAMP`,
+  )
+    .bind("owner", email, name, "owner", null, null, null, null)
+    .run();
 }
 
 async function setOwnerSession(c: AppContext, ownerId: string) {
@@ -4449,6 +4602,51 @@ async function verifySessionToken(token: string, secret: string): Promise<Sessio
   } catch {
     return null;
   }
+}
+
+async function verifyMe3ClaimToken(env: Env, token: string): Promise<Me3ClaimTokenPayload> {
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error("Claim token must be a JWT");
+
+  const [encodedHeader, encodedPayload, encodedSignature] = parts;
+  const header = JSON.parse(decodeBase64Url(encodedHeader)) as JwtHeader;
+  if (header.alg !== "RS256" || typeof header.kid !== "string") {
+    throw new Error("Claim token uses an unsupported signature");
+  }
+
+  const payload = JSON.parse(decodeBase64Url(encodedPayload)) as Me3ClaimTokenPayload;
+  const issuer = getMe3CloudApiOrigin(env);
+  if (payload.iss !== issuer) throw new Error("Claim token issuer is invalid");
+  if (typeof payload.exp !== "number" || payload.exp <= currentUnixTime()) {
+    throw new Error("Claim token is expired");
+  }
+
+  const jwksResponse = await fetch(new URL("/.well-known/jwks.json", issuer).toString());
+  if (!jwksResponse.ok) throw new Error("Could not fetch ME3 Cloud signing keys");
+
+  const jwks = (await jwksResponse.json()) as { keys?: Array<JsonWebKey & { kid?: string }> };
+  const jwk = jwks.keys?.find((key) => key.kid === header.kid);
+  if (!jwk) throw new Error("Claim token signing key was not found");
+
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    { ...jwk, alg: "RS256", ext: true },
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  const signatureBytes = decodeBase64UrlBytes(encodedSignature);
+  const signature = new ArrayBuffer(signatureBytes.byteLength);
+  new Uint8Array(signature).set(signatureBytes);
+  const valid = await crypto.subtle.verify(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    signature,
+    new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
+  );
+  if (!valid) throw new Error("Claim token signature is invalid");
+
+  return payload;
 }
 
 async function hmacSha256(data: string, secret: string): Promise<ArrayBuffer> {
@@ -4573,6 +4771,10 @@ async function getSetupRequired(env: Env, ownerId = "owner"): Promise<string[]> 
 
 function getEnvironment(env: Env): string {
   return env.ENVIRONMENT || "production";
+}
+
+function getSetupPassword(env: Env): string | undefined {
+  return env.SETUP_PASSWORD || env.ADMIN_BOOTSTRAP_CODE;
 }
 
 export default app;
