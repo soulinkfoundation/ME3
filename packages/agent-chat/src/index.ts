@@ -2,21 +2,22 @@ import {
   getUtcMsForLocalTime,
   normalizeTimeZone,
 } from "@me3-core/plugin-calendar";
-import {
-  createContentItem,
-  deleteContentItem,
-  getContentStats,
-  listContentItems,
-  markContentItemPublishing,
-  queueContentItem,
-  reorderContentQueue,
-  unqueueContentItem,
-  updateContentItem,
-  type ContentItem,
-  type ContentStats,
-  type CreateContentItemInput,
-  type UpdateContentItemInput,
-} from "@me3-core/plugin-social-publishing";
+
+export {
+  createAgentContentItem,
+  deleteAgentContentItem,
+  getAgentContentStats,
+  listAgentContentItems,
+  markAgentContentItemPublishing,
+  queueAgentContentItem,
+  reorderAgentContentQueue,
+  unqueueAgentContentItem,
+  updateAgentContentItem,
+  type AgentContentCreateInput,
+  type AgentContentItem,
+  type AgentContentStats,
+  type AgentContentUpdateInput,
+} from "./content";
 
 export const AGENT_CHAT_PLUGIN_ID = "me3.agent-chat";
 
@@ -178,11 +179,6 @@ export type AgentContactsSummary = {
   needsFollowUp: number;
   outreach: Record<Exclude<AgentContactOutreachStatus, null>, number>;
 };
-
-export type AgentContentItem = ContentItem;
-export type AgentContentStats = ContentStats;
-export type AgentContentCreateInput = CreateContentItemInput;
-export type AgentContentUpdateInput = UpdateContentItemInput;
 
 export type AgentMailboxUpdateInput = {
   aliasLocalPart?: unknown;
@@ -736,81 +732,6 @@ export async function convertAgentContactToClient(
 
   const contact = await getAgentContact(env, userId, contactId);
   return contact || { error: "Contact not found", status: 404 };
-}
-
-export async function listAgentContentItems(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  siteId: unknown,
-  status?: unknown,
-): Promise<AgentContentItem[]> {
-  return listContentItems(env, userId, siteId, status);
-}
-
-export async function getAgentContentStats(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  siteId: unknown,
-): Promise<AgentContentStats | null> {
-  return getContentStats(env, userId, siteId);
-}
-
-export async function createAgentContentItem(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  input: AgentContentCreateInput,
-): Promise<AgentContentItem> {
-  return createContentItem(env, userId, input);
-}
-
-export async function updateAgentContentItem(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  id: unknown,
-  input: AgentContentUpdateInput,
-): Promise<AgentContentItem | null> {
-  return updateContentItem(env, userId, id, input);
-}
-
-export async function deleteAgentContentItem(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  id: unknown,
-): Promise<boolean> {
-  return deleteContentItem(env, userId, id);
-}
-
-export async function queueAgentContentItem(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  id: unknown,
-): Promise<AgentContentItem | null> {
-  return queueContentItem(env, userId, id);
-}
-
-export async function unqueueAgentContentItem(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  id: unknown,
-): Promise<AgentContentItem | null> {
-  return unqueueContentItem(env, userId, id);
-}
-
-export async function reorderAgentContentQueue(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  siteId: unknown,
-  itemIds: unknown,
-): Promise<AgentContentItem[]> {
-  return reorderContentQueue(env, userId, siteId, itemIds);
-}
-
-export async function markAgentContentItemPublishing(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  id: unknown,
-): Promise<AgentContentItem | null> {
-  return markContentItemPublishing(env, userId, id);
 }
 
 export async function getAgentMailboxOverview(
