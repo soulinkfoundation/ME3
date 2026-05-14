@@ -7,6 +7,35 @@ export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 export const USERNAME_AVAILABILITY_API_BASE =
   import.meta.env.VITE_USERNAME_AVAILABILITY_API_BASE || 'https://api.me3.app/api'
 
+export type LocationPrecision =
+  | 'locality'
+  | 'city'
+  | 'district'
+  | 'county'
+  | 'region'
+  | 'country'
+  | 'unknown'
+
+export interface LocationSearchResult {
+  id: string
+  label: string
+  latitude: number
+  longitude: number
+  precision: LocationPrecision
+  locality?: string
+  region?: string
+  country?: string
+  countryCode?: string
+  source: {
+    provider: string
+    id?: string
+    osmType?: string
+    osmId?: string | number
+    osmKey?: string
+    osmValue?: string
+  }
+}
+
 function sanitizeErrorMessage(raw: unknown, fallback: string): string {
   if (typeof raw !== 'string') return fallback
   const trimmed = raw.trim()
@@ -112,6 +141,45 @@ export async function getUsernameAvailability(username: string): Promise<boolean
   }
 
   return data.available === true
+}
+
+export async function searchLocations(
+  query: string,
+  options: { limit?: number; signal?: AbortSignal } = {}
+): Promise<LocationSearchResult[]> {
+  const trimmed = query.trim()
+  if (trimmed.length < 2) return []
+
+  const params = new URLSearchParams({
+    q: trimmed,
+    limit: String(options.limit ?? 6),
+  })
+
+  const response = await fetch(`${API_BASE}/locations/search?${params.toString()}`, {
+    method: 'GET',
+    credentials: 'include',
+    signal: options.signal,
+  })
+
+  const text = await response.text()
+  const data = text
+    ? (() => {
+        try {
+          return JSON.parse(text)
+        } catch {
+          return { error: text }
+        }
+      })()
+    : {}
+
+  if (!response.ok) {
+    throw new ApiError(
+      sanitizeErrorMessage(data.error, 'Location lookup failed'),
+      response.status
+    )
+  }
+
+  return Array.isArray(data.locations) ? data.locations : []
 }
 
 export const api = {

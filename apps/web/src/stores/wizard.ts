@@ -24,6 +24,7 @@ export interface WizardProfile {
   name: string;
   handle: string;
   location: string;
+  locationData: WizardLocationData | null;
   bio: string;
   avatar: string | null; // URL or data URL
   banner: string | null; // URL or data URL
@@ -41,6 +42,34 @@ export interface WizardProfile {
   booking: WizardBookingConfig;
   gift: WizardGiftConfig;
   business: WizardBusinessConfig;
+}
+
+export type WizardLocationPrecision =
+  | "locality"
+  | "city"
+  | "district"
+  | "county"
+  | "region"
+  | "country"
+  | "unknown";
+
+export interface WizardLocationData {
+  label: string;
+  latitude: number;
+  longitude: number;
+  precision: WizardLocationPrecision;
+  locality?: string;
+  region?: string;
+  country?: string;
+  countryCode?: string;
+  source?: {
+    provider: string;
+    id?: string;
+    osmType?: string;
+    osmId?: string | number;
+    osmKey?: string;
+    osmValue?: string;
+  };
 }
 
 export interface WizardNewsletterConfig {
@@ -313,6 +342,7 @@ export interface WizardTestimonial {
 }
 
 type ExtendedMe3Profile = Omit<Me3Profile, "testimonialDisplay"> & {
+  locationData?: WizardLocationData;
   blogTitle?: string;
   shopTitle?: string;
   testimonialDisplay?: TestimonialPlacement;
@@ -1000,10 +1030,89 @@ function normalizeBusinessConfig(input: unknown): WizardBusinessConfig {
   };
 }
 
+const LOCATION_PRECISIONS = new Set<WizardLocationPrecision>([
+  "locality",
+  "city",
+  "district",
+  "county",
+  "region",
+  "country",
+  "unknown",
+]);
+
+function normalizeLocationText(value: unknown, maxLength = 100): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  return trimmed.length > 0 ? trimmed.slice(0, maxLength) : undefined;
+}
+
+function normalizeLocationCoordinate(
+  value: unknown,
+  min: number,
+  max: number,
+): number | null {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric < min || numeric > max) return null;
+  return Number(numeric.toFixed(5));
+}
+
+function normalizeLocationData(input: unknown): WizardLocationData | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+
+  const record = input as Record<string, unknown>;
+  const label = normalizeLocationText(record.label);
+  const latitude = normalizeLocationCoordinate(record.latitude, -90, 90);
+  const longitude = normalizeLocationCoordinate(record.longitude, -180, 180);
+  if (!label || latitude === null || longitude === null) return null;
+
+  const precision = LOCATION_PRECISIONS.has(record.precision as WizardLocationPrecision)
+    ? (record.precision as WizardLocationPrecision)
+    : "unknown";
+  const countryCode = normalizeLocationText(record.countryCode, 2)?.toUpperCase();
+  const source =
+    record.source && typeof record.source === "object" && !Array.isArray(record.source)
+      ? (record.source as Record<string, unknown>)
+      : null;
+  const locality = normalizeLocationText(record.locality);
+  const region = normalizeLocationText(record.region);
+  const country = normalizeLocationText(record.country);
+  const sourceProvider = normalizeLocationText(source?.provider, 80);
+  const sourceId = normalizeLocationText(source?.id, 80);
+  const osmType = normalizeLocationText(source?.osmType, 80);
+  const osmKey = normalizeLocationText(source?.osmKey, 80);
+  const osmValue = normalizeLocationText(source?.osmValue, 80);
+
+  return {
+    label,
+    latitude,
+    longitude,
+    precision,
+    ...(locality ? { locality } : {}),
+    ...(region ? { region } : {}),
+    ...(country ? { country } : {}),
+    ...(countryCode && /^[A-Z]{2}$/.test(countryCode) ? { countryCode } : {}),
+    ...(sourceProvider
+      ? {
+          source: {
+            provider: sourceProvider,
+            ...(sourceId ? { id: sourceId } : {}),
+            ...(osmType ? { osmType } : {}),
+            ...(typeof source?.osmId === "string" || typeof source?.osmId === "number"
+              ? { osmId: source.osmId }
+              : {}),
+            ...(osmKey ? { osmKey } : {}),
+            ...(osmValue ? { osmValue } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 const defaultProfile: WizardProfile = {
   name: "",
   handle: "",
   location: "",
+  locationData: null,
   bio: "",
   avatar: null,
   banner: null,
@@ -1283,7 +1392,17 @@ export const useWizardStore = defineStore("wizard", () => {
 
   // Update profile
   function updateProfile(updates: Partial<WizardProfile>) {
-    profile.value = { ...profile.value, ...updates };
+    const nextProfile = { ...profile.value, ...updates };
+    if ("location" in updates && !("locationData" in updates)) {
+      const locationLabel = nextProfile.location.trim();
+      nextProfile.locationData =
+        nextProfile.locationData?.label.trim() === locationLabel
+          ? nextProfile.locationData
+          : null;
+    } else if ("locationData" in updates) {
+      nextProfile.locationData = normalizeLocationData(updates.locationData);
+    }
+    profile.value = nextProfile;
     markAsEdited();
     saveToStorage();
   }
@@ -2657,6 +2776,11 @@ export const useWizardStore = defineStore("wizard", () => {
       me3.location = profile.value.location.trim();
     }
 
+    const locationData = normalizeLocationData(profile.value.locationData);
+    if (locationData) {
+      me3.locationData = locationData;
+    }
+
     if (profile.value.bio) {
       me3.bio = profile.value.bio.trim();
     }
@@ -3395,6 +3519,7 @@ export const useWizardStore = defineStore("wizard", () => {
         profile.value = {
           ...defaultProfile,
           ...storedProfile,
+          locationData: normalizeLocationData(storedProfile.locationData),
           business: normalizeBusinessConfig(storedProfile.business),
           booking: normalizeWizardBookingConfig(storedBooking),
           newsletter: {
@@ -3998,6 +4123,7 @@ export const useWizardStore = defineStore("wizard", () => {
       name: siteProfile.name || "",
       handle: siteProfile.handle || siteUsername,
       location: (siteProfile as any).location || "",
+      locationData: normalizeLocationData((siteProfile as any).locationData),
       bio: siteProfile.bio || "",
       avatar: siteProfile.avatar || null,
       banner: siteProfile.banner || null,

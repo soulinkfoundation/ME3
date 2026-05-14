@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { onBeforeUnmount, ref, watch } from "vue";
 import { useWizardStore } from "../../stores/wizard";
-import { getUsernameAvailability } from "../../api";
+import { getUsernameAvailability, searchLocations, type LocationSearchResult } from "../../api";
 
 const wizard = useWizardStore();
 
@@ -9,9 +9,16 @@ const name = ref(wizard.profile.name);
 const handle = ref(wizard.profile.handle || wizard.username);
 const location = ref(wizard.profile.location);
 const bio = ref(wizard.profile.bio);
+const locationResults = ref<LocationSearchResult[]>([]);
+const isSearchingLocations = ref(false);
+const locationSearchError = ref("");
+const showLocationResults = ref(false);
+const activeLocationIndex = ref(-1);
 
 // Debounced username check
 let checkTimeout: ReturnType<typeof setTimeout> | null = null;
+let locationSearchTimeout: ReturnType<typeof setTimeout> | null = null;
+let locationSearchController: AbortController | null = null;
 
 watch(name, (val) => {
   wizard.updateProfile({ name: val });
@@ -21,8 +28,125 @@ watch(bio, (val) => {
   wizard.updateProfile({ bio: val });
 });
 
+function clearLocationSearch() {
+  if (locationSearchTimeout) {
+    clearTimeout(locationSearchTimeout);
+    locationSearchTimeout = null;
+  }
+  if (locationSearchController) {
+    locationSearchController.abort();
+    locationSearchController = null;
+  }
+}
+
+function scheduleLocationSearch(query: string) {
+  clearLocationSearch();
+  const trimmed = query.trim();
+  locationSearchError.value = "";
+  activeLocationIndex.value = -1;
+
+  if (trimmed.length < 2) {
+    locationResults.value = [];
+    isSearchingLocations.value = false;
+    showLocationResults.value = false;
+    return;
+  }
+
+  isSearchingLocations.value = true;
+  showLocationResults.value = true;
+  locationSearchTimeout = setTimeout(async () => {
+    locationSearchController = new AbortController();
+    try {
+      locationResults.value = await searchLocations(trimmed, {
+        signal: locationSearchController.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      locationResults.value = [];
+      locationSearchError.value = "Location lookup is temporarily unavailable.";
+    } finally {
+      isSearchingLocations.value = false;
+      locationSearchController = null;
+    }
+  }, 350);
+}
+
+function selectLocation(result: LocationSearchResult) {
+  location.value = result.label;
+  locationResults.value = [];
+  showLocationResults.value = false;
+  activeLocationIndex.value = -1;
+  wizard.updateProfile({
+    location: result.label,
+    locationData: {
+      label: result.label,
+      latitude: result.latitude,
+      longitude: result.longitude,
+      precision: result.precision,
+      locality: result.locality,
+      region: result.region,
+      country: result.country,
+      countryCode: result.countryCode,
+      source: result.source,
+    },
+  });
+}
+
+function handleLocationKeydown(event: KeyboardEvent) {
+  if (!showLocationResults.value || locationResults.value.length === 0) {
+    return;
+  }
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    activeLocationIndex.value =
+      (activeLocationIndex.value + 1) % locationResults.value.length;
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    activeLocationIndex.value =
+      activeLocationIndex.value <= 0
+        ? locationResults.value.length - 1
+        : activeLocationIndex.value - 1;
+  } else if (event.key === "Enter" && activeLocationIndex.value >= 0) {
+    event.preventDefault();
+    selectLocation(locationResults.value[activeLocationIndex.value]);
+  } else if (event.key === "Escape") {
+    showLocationResults.value = false;
+    activeLocationIndex.value = -1;
+  }
+}
+
+function handleLocationFocus() {
+  if (wizard.profile.locationData?.label.trim() === location.value.trim()) {
+    return;
+  }
+  scheduleLocationSearch(location.value);
+}
+
+function handleLocationBlur() {
+  window.setTimeout(() => {
+    showLocationResults.value = false;
+    activeLocationIndex.value = -1;
+  }, 120);
+}
+
 watch(location, (val) => {
-  wizard.updateProfile({ location: val });
+  const matchingLocation =
+    wizard.profile.locationData?.label.trim() === val.trim()
+      ? wizard.profile.locationData
+      : null;
+  wizard.updateProfile({ location: val, locationData: matchingLocation });
+  if (matchingLocation) {
+    clearLocationSearch();
+    locationResults.value = [];
+    showLocationResults.value = false;
+  } else {
+    scheduleLocationSearch(val);
+  }
+});
+
+onBeforeUnmount(() => {
+  clearLocationSearch();
 });
 
 watch(handle, async (val) => {
@@ -133,13 +257,66 @@ const bioLength = 160;
         Location
         <span class="optional">(optional)</span>
       </label>
-      <input
-        id="location"
-        v-model="location"
-        type="text"
-        placeholder='e.g. "Remote" or "Berlin, Germany"'
-        maxlength="100"
-      />
+      <div class="location-combobox" @focusout="handleLocationBlur">
+        <input
+          id="location"
+          v-model="location"
+          type="text"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="location-results"
+          :aria-expanded="showLocationResults"
+          :aria-activedescendant="
+            activeLocationIndex >= 0
+              ? `location-option-${activeLocationIndex}`
+              : undefined
+          "
+          placeholder="Search town or city"
+          maxlength="100"
+          autocomplete="off"
+          @focus="handleLocationFocus"
+          @keydown="handleLocationKeydown"
+        />
+        <div
+          v-if="showLocationResults"
+          id="location-results"
+          class="location-results"
+          role="listbox"
+        >
+          <div v-if="isSearchingLocations" class="location-state">
+            Searching...
+          </div>
+          <div v-else-if="locationSearchError" class="location-state">
+            {{ locationSearchError }}
+          </div>
+          <template v-else-if="locationResults.length > 0">
+            <button
+              v-for="(result, index) in locationResults"
+              :id="`location-option-${index}`"
+              :key="result.id"
+              type="button"
+              class="location-option"
+              :class="{ 'is-active': activeLocationIndex === index }"
+              role="option"
+              :aria-selected="activeLocationIndex === index"
+              @mousedown.prevent
+              @mouseenter="activeLocationIndex = index"
+              @click="selectLocation(result)"
+            >
+              <span>{{ result.label }}</span>
+              <small v-if="result.precision !== 'unknown'">
+                {{ result.precision }}
+              </small>
+            </button>
+          </template>
+          <div v-else-if="location.trim().length >= 2" class="location-state">
+            No matching towns or cities found.
+          </div>
+        </div>
+      </div>
+      <p v-if="wizard.profile.locationData" class="location-confirmed">
+        Saved as {{ wizard.profile.locationData.label }}
+      </p>
     </div>
   </div>
 </template>
@@ -222,6 +399,67 @@ const bioLength = 160;
   margin-top: 8px;
   font-size: 13px;
   min-height: 20px;
+}
+
+.location-combobox {
+  position: relative;
+}
+
+.location-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface, var(--color-bg));
+  box-shadow: var(--ui-shadow-md, var(--shadow-soft));
+}
+
+.location-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--ui-border, var(--color-border));
+  background: transparent;
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.location-option:last-child {
+  border-bottom: 0;
+}
+
+.location-option:hover,
+.location-option.is-active {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.location-option small {
+  flex: 0 0 auto;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.location-state {
+  padding: 12px 14px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 14px;
+}
+
+.location-confirmed {
+  margin-top: 8px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
 }
 
 .checking {

@@ -93,6 +93,7 @@ import {
   type AgentMailboxUpdateInput,
   type AgentReminderInput,
 } from "./agent-chat";
+import { searchLocationQuery } from "./location-search";
 import { generateSiteHtml, type Me3SiteProfile } from "./site-generator";
 import type {
   DbAgentChannelConnection,
@@ -2491,6 +2492,21 @@ app.delete("/api/contacts/:id", async (c) => {
 
   const result = await deleteAgentContact(c.env, ownerId, c.req.param("id"));
   if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
+});
+
+app.get("/api/locations/search", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const result = await searchLocationQuery(
+    c.env,
+    c.req.query("q"),
+    c.req.query("limit"),
+  );
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, result.status as any);
+  }
   return c.json(result);
 });
 

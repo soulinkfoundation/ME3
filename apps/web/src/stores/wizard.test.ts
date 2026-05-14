@@ -503,6 +503,71 @@ describe("wizard store", () => {
       expect(me3.handle).toBe("testuser");
     });
 
+    it("should include structured public location data", () => {
+      const store = useWizardStore();
+      store.profile.name = "Test User";
+      store.updateProfile({
+        location: "Cork, County Cork, Ireland",
+        locationData: {
+          label: "Cork, County Cork, Ireland",
+          latitude: 51.89797,
+          longitude: -8.47061,
+          precision: "city",
+          locality: "Cork",
+          region: "County Cork",
+          country: "Ireland",
+          countryCode: "IE",
+          source: {
+            provider: "photon",
+            id: "N:123",
+            osmType: "N",
+            osmId: 123,
+            osmKey: "place",
+            osmValue: "city",
+          },
+        },
+      });
+
+      const me3 = store.generateMe3Json() as any;
+
+      expect(me3.location).toBe("Cork, County Cork, Ireland");
+      expect(me3.locationData).toEqual({
+        label: "Cork, County Cork, Ireland",
+        latitude: 51.89797,
+        longitude: -8.47061,
+        precision: "city",
+        locality: "Cork",
+        region: "County Cork",
+        country: "Ireland",
+        countryCode: "IE",
+        source: {
+          provider: "photon",
+          id: "N:123",
+          osmType: "N",
+          osmId: 123,
+          osmKey: "place",
+          osmValue: "city",
+        },
+      });
+    });
+
+    it("should clear structured location data when the display location changes", () => {
+      const store = useWizardStore();
+      store.updateProfile({
+        location: "Cork, County Cork, Ireland",
+        locationData: {
+          label: "Cork, County Cork, Ireland",
+          latitude: 51.89797,
+          longitude: -8.47061,
+          precision: "city",
+        },
+      });
+
+      store.updateProfile({ location: "Remote" });
+
+      expect(store.profile.locationData).toBeNull();
+    });
+
     it("should include links", () => {
       const store = useWizardStore();
       store.profile.name = "Test User";
