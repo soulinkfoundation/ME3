@@ -6,6 +6,7 @@ import BrandLogo from "../components/BrandLogo.vue";
 import UiIcon from "../components/UiIcon.vue";
 import { api } from "../api";
 import { useAuthStore } from "../stores/auth";
+import { useSitesStore } from "../stores/sites";
 import { DEFAULT_APP_PATH } from "../utils/navigation";
 
 definePage({
@@ -23,6 +24,7 @@ definePage({
 const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
+const sites = useSitesStore();
 
 const email = ref("");
 const name = ref("");
@@ -134,10 +136,21 @@ function deriveUsername() {
   return username || "owner";
 }
 
-function resolvePostLoginRedirect(raw: unknown): string {
-  if (typeof raw !== "string") return DEFAULT_APP_PATH;
+async function resolveDefaultPostLoginRedirect(): Promise<string> {
+  try {
+    await sites.fetchSites();
+    return sites.sites.some((site) => !!site.published_at)
+      ? DEFAULT_APP_PATH
+      : "/create";
+  } catch {
+    return DEFAULT_APP_PATH;
+  }
+}
+
+async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
+  if (typeof raw !== "string") return resolveDefaultPostLoginRedirect();
   const redirect = raw.trim();
-  if (!redirect) return DEFAULT_APP_PATH;
+  if (!redirect) return resolveDefaultPostLoginRedirect();
 
   if (redirect.startsWith("/") && !redirect.startsWith("//")) {
     return redirect;
@@ -160,7 +173,7 @@ function resolvePostLoginRedirect(raw: unknown): string {
     // Fall through to default.
   }
 
-  return DEFAULT_APP_PATH;
+  return resolveDefaultPostLoginRedirect();
 }
 
 function navigateAfterLogin(target: string) {
@@ -243,7 +256,7 @@ async function submitAuth() {
       });
 
   if (success) {
-    const redirect = resolvePostLoginRedirect(route.query.redirect);
+    const redirect = await resolvePostLoginRedirect(route.query.redirect);
     navigateAfterLogin(redirect);
   } else {
     error.value = isSetupMode.value
@@ -264,7 +277,7 @@ async function startMe3SignIn() {
   try {
     const response = await api.post<{ ok: boolean; url?: string }>(
       "/auth/me3/start",
-      { redirect: resolvePostLoginRedirect(route.query.redirect) },
+      { redirect: await resolvePostLoginRedirect(route.query.redirect) },
     );
 
     if (response.ok && response.url) {

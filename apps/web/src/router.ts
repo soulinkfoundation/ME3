@@ -58,6 +58,18 @@ function updateLinkTag(rel: string, href: string | undefined) {
   element.setAttribute("href", href);
 }
 
+async function resolveDefaultAppPathForSession(): Promise<string> {
+  const sites = useSitesStore();
+  try {
+    await sites.fetchSites();
+    return sites.sites.some((site) => !!site.published_at)
+      ? DEFAULT_APP_PATH
+      : "/create";
+  } catch {
+    return DEFAULT_APP_PATH;
+  }
+}
+
 // Navigation guard
 router.beforeEach(async (to, _from, next) => {
   const auth = useAuthStore();
@@ -74,7 +86,7 @@ router.beforeEach(async (to, _from, next) => {
 
   // Redirect logged-in users from public setup routes to the app landing path.
   if ((to.path === "/" || to.path === "/login") && auth.isAuthenticated) {
-    next({ path: DEFAULT_APP_PATH });
+    next({ path: await resolveDefaultAppPathForSession() });
     return;
   }
 

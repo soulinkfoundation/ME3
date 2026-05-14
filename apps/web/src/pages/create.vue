@@ -237,8 +237,8 @@ onMounted(() => {
 <template>
   <div class="wizard-page">
     <!-- Header -->
-    <header class="wizard-header">
-      <div v-if="!showIntroScreen" class="header-center">
+    <header v-if="!showIntroScreen" class="wizard-header">
+      <div class="header-center">
         <div class="step-indicator">
           <span class="step-current">{{ wizard.currentStep }}</span>
           <span class="step-divider">/</span>
@@ -678,11 +678,11 @@ onMounted(() => {
 
 .intro-image {
   display: block;
-  width: min(100%, 520px);
-  aspect-ratio: 16 / 9;
+  width: min(72vw, 320px);
+  height: min(72vw, 320px);
   object-fit: cover;
-  border-radius: 24px;
-  box-shadow: 0 22px 70px rgba(15, 23, 42, 0.14);
+  border-radius: 50%;
+  box-shadow: var(--ui-shadow-md, 0 22px 70px rgba(15, 23, 42, 0.14));
 }
 
 .intro-copy {
@@ -693,7 +693,7 @@ onMounted(() => {
 
 .intro-copy h1 {
   margin: 0;
-  color: var(--color-text);
+  color: var(--ui-text, var(--color-text));
   font-size: clamp(36px, 5vw, 58px);
   line-height: 0.98;
   letter-spacing: 0;
@@ -702,13 +702,13 @@ onMounted(() => {
 .intro-copy p {
   max-width: 640px;
   margin: 0;
-  color: var(--color-text-muted);
+  color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 18px;
   line-height: 1.6;
 }
 
 .intro-copy a {
-  color: var(--color-text);
+  color: var(--ui-text, var(--color-text));
   font-weight: 700;
   text-decoration-thickness: 1px;
   text-underline-offset: 4px;
@@ -718,9 +718,9 @@ onMounted(() => {
   min-width: 150px;
   padding: 14px 24px;
   border: 0;
-  border-radius: 10px;
-  background: var(--color-text);
-  color: var(--color-bg);
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-text, var(--color-text));
+  color: var(--ui-bg, var(--color-bg));
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
@@ -931,7 +931,8 @@ onMounted(() => {
   }
 
   .intro-image {
-    border-radius: 18px;
+    width: min(72vw, 260px);
+    height: min(72vw, 260px);
   }
 
   .intro-copy h1 {
