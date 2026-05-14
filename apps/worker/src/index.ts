@@ -54,26 +54,43 @@ import {
   type LandingPageTemplateId,
 } from "../../../shared/landing-pages";
 import {
+  activateAgentMailbox,
   cancelAgentReminder,
   convertAgentContactToClient,
   createAgentContentItem,
+  createAgentMailboxDraft,
   createAgentSandboxTurnRecord,
   createAgentContact,
   createAgentReminder,
   deleteAgentContentItem,
   deleteAgentContact,
   getAgentContentStats,
+  getAgentMailboxDraftForApproval,
+  getAgentMailboxOutboundHeaders,
+  getAgentMailboxOverview,
   listAgentContentItems,
+  listAgentMailboxMessages,
   listAgentContacts,
+  markAgentMailboxDraftFailed,
+  markAgentMailboxDraftSent,
   markAgentContentItemPublishing,
+  moveAgentMailboxMessage,
+  pauseAgentMailbox,
   queueAgentContentItem,
+  rejectAgentMailboxDraft,
   reorderAgentContentQueue,
   serializeAgentReminder,
+  setAgentMailboxMessageReadState,
+  trashAgentMailboxMessage,
   unqueueAgentContentItem,
+  updateAgentMailboxDraft,
   updateAgentContentItem,
   updateAgentContact,
   updateAgentContactOutreachStatus,
   updateAgentReminder,
+  upsertAgentMailbox,
+  type AgentMailboxDraftInput,
+  type AgentMailboxUpdateInput,
   type AgentReminderInput,
 } from "./agent-chat";
 import { generateSiteHtml, type Me3SiteProfile } from "./site-generator";
@@ -83,8 +100,6 @@ import type {
   DbBooking,
   DbCalendarSource,
   DbCalendarSourceEvent,
-  DbMailboxAlias,
-  DbMailboxMessage,
   DbSite,
   DbSubscriber,
   DbUserCalendarEvent,
@@ -131,21 +146,6 @@ type OwnerAuthState = {
 type ChatBody = { message?: string };
 type AgentSandboxBody = { messageText?: unknown; replyToMessageId?: unknown };
 type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
-type MailboxUpdateBody = {
-  aliasLocalPart?: unknown;
-  forwardingEmail?: unknown;
-  forwardingEnabled?: unknown;
-};
-type MailboxDraftBody = {
-  fromAddress?: unknown;
-  to?: unknown;
-  toAddress?: unknown;
-  subject?: unknown;
-  textBody?: unknown;
-  htmlBody?: unknown;
-  source?: unknown;
-  replyToMessageId?: unknown;
-};
 type LandingPageGenerateBody = {
   username?: string;
   brief?: string;
@@ -172,20 +172,6 @@ type SiteFileRecord = {
   sha256: string | null;
   updated_at: string;
 };
-type NormalizedMailboxDraftInput = {
-  fromAddress: string;
-  toAddress: string;
-  subject: string;
-  textBody: string;
-  htmlBody: string | null;
-  sourceId: string | null;
-  threadKey: string;
-  messageIdHeader: string;
-  inReplyTo: string | null;
-  referencesHeader: string | null;
-  createdBy: string;
-};
-
 const SESSION_COOKIE_NAME = "me3_core_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
@@ -195,8 +181,6 @@ const ME3_CLOUD_USERNAME_CONFLICT_MESSAGE =
   "This username is already taken on ME3 Cloud. Choose another handle before publishing.";
 const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
-const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
 const D1_SITE_FILE_MAX_BYTES = 1_900_000;
 const LANDING_PAGE_TEMPLATES = new Set<LandingPageTemplateId>(["event", "service", "waitlist"]);
 
@@ -2222,333 +2206,125 @@ app.get("/api/mailbox", async (c) => {
   if (!ownerId) return unauthorized(c);
 
   const owner = await getOwnerProfile(c.env, ownerId);
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  const suggestedAliasLocalPart = mailbox?.alias_local_part || suggestMailboxAlias(owner?.username || owner?.email || "owner");
-
-  return c.json({
-    tier: "core",
-    available: true,
-    approvalRequired: true,
-    cloudflareManaged: false,
-    suggestedAliasLocalPart,
-    mailbox: mailbox ? serializeMailbox(mailbox) : null,
-    sources: mailbox ? [serializeMailboxDefaultSource(mailbox)] : [],
-    recentActivity: mailbox ? await getMailboxActivity(c.env, mailbox.id, 25, 0) : [],
-  });
+  return c.json(await getAgentMailboxOverview(c.env, ownerId, owner || undefined));
 });
 
 app.put("/api/mailbox", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const body = await c.req.json<MailboxUpdateBody>().catch((): MailboxUpdateBody => ({}));
+  const body = await c.req.json<AgentMailboxUpdateInput>().catch((): AgentMailboxUpdateInput => ({}));
   const owner = await getOwnerProfile(c.env, ownerId);
-  const existing = await getMailboxRow(c.env, ownerId);
-  const aliasLocalPart = normalizeMailboxAlias(
-    typeof body.aliasLocalPart === "string" ? body.aliasLocalPart : "",
-  );
-  const forwardingEnabled = body.forwardingEnabled === true;
-  const forwardingEmail =
-    typeof body.forwardingEmail === "string" ? body.forwardingEmail.trim() : "";
-
-  if (!aliasLocalPart || !MAILBOX_ALIAS_REGEX.test(aliasLocalPart)) {
-    return c.json(
-      {
-        error:
-          "Mailbox alias must start and end with a letter or number and may contain dots, underscores, or hyphens.",
-      },
-      400,
-    );
-  }
-
-  if (forwardingEnabled && !isValidEmail(forwardingEmail)) {
-    return c.json({ error: "Enter a valid forwarding email address." }, 400);
-  }
-
-  const savedForwardingEmail =
-    forwardingEnabled ? forwardingEmail : existing?.forwarding_email || owner?.email || "";
-  const forwardingStatus =
-    forwardingEnabled && savedForwardingEmail !== existing?.forwarding_email
-      ? "pending"
-      : existing?.forwarding_status || "pending";
-  const forwardingMode = forwardingEnabled ? "forward" : "me3_only";
-  const now = new Date().toISOString();
-
-  try {
-    if (existing) {
-      await c.env.DB.prepare(
-        `UPDATE mailbox_aliases
-         SET alias_local_part = ?,
-             forwarding_email = ?,
-             forwarding_status = ?,
-             forwarding_enabled = ?,
-             forwarding_mode = ?,
-             updated_at = ?
-         WHERE user_id = ?`,
-      )
-        .bind(
-          aliasLocalPart,
-          savedForwardingEmail,
-          forwardingStatus,
-          forwardingEnabled ? 1 : 0,
-          forwardingMode,
-          now,
-          ownerId,
-        )
-        .run();
-    } else {
-      await c.env.DB.prepare(
-        `INSERT INTO mailbox_aliases (
-           id, user_id, alias_local_part, forwarding_email, forwarding_status,
-           forwarding_enabled, forwarding_mode, status, approval_policy,
-           daily_inbound_limit, daily_outbound_limit, created_at, updated_at
-         )
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_setup', 'all', 25, 25, ?, ?)`,
-      )
-        .bind(
-          crypto.randomUUID(),
-          ownerId,
-          aliasLocalPart,
-          savedForwardingEmail,
-          forwardingStatus,
-          forwardingEnabled ? 1 : 0,
-          forwardingMode,
-          now,
-          now,
-        )
-        .run();
-    }
-  } catch {
-    return c.json({ error: "Mailbox alias is already in use." }, 409);
-  }
-
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  return c.json({
-    mailbox: mailbox ? serializeMailbox(mailbox) : null,
-    sources: mailbox ? [serializeMailboxDefaultSource(mailbox)] : [],
-  });
+  const result = await upsertAgentMailbox(c.env, ownerId, body, owner || undefined);
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 });
 
 app.post("/api/mailbox/activate", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    `UPDATE mailbox_aliases
-     SET status = 'active',
-         activated_at = COALESCE(activated_at, ?),
-         updated_at = ?
-     WHERE user_id = ?`,
-  )
-    .bind(now, now, ownerId)
-    .run();
-
-  const updated = await getMailboxRow(c.env, ownerId);
-  return c.json({ mailbox: updated ? serializeMailbox(updated) : null });
+  const result = await activateAgentMailbox(c.env, ownerId);
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 });
 
 app.post("/api/mailbox/pause", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
-  await c.env.DB.prepare(
-    `UPDATE mailbox_aliases
-     SET status = 'paused',
-         updated_at = ?
-     WHERE user_id = ?`,
-  )
-    .bind(new Date().toISOString(), ownerId)
-    .run();
-
-  const updated = await getMailboxRow(c.env, ownerId);
-  return c.json({ mailbox: updated ? serializeMailbox(updated) : null });
+  const result = await pauseAgentMailbox(c.env, ownerId);
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 });
 
 app.get("/api/mailbox/messages", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  const limit = clampNumber(c.req.query("limit"), 50, 0, 100);
-  const offset = clampNumber(c.req.query("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
-  if (!mailbox) return c.json({ messages: [], total: 0, limit, offset });
-
-  const { where, bindings } = buildMailboxMessageFilters(mailbox.id, {
+  return c.json(await listAgentMailboxMessages(c.env, ownerId, {
+    limit: c.req.query("limit"),
+    offset: c.req.query("offset"),
     status: c.req.query("status") || "",
     createdBy: c.req.query("created_by") || "",
     direction: c.req.query("direction") || "outbound",
     folder: c.req.query("folder") || "",
     query: c.req.query("q") || "",
     unread: c.req.query("unread") || "",
-  });
-
-  const count = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM mailbox_messages WHERE ${where}`)
-    .bind(...bindings)
-    .first<{ count: number | string | null }>();
-  const total = Number(count?.count || 0);
-
-  if (limit === 0) return c.json({ messages: [], total, limit, offset });
-
-  const rows = await c.env.DB.prepare(
-    `${mailboxMessageSelectSql()} WHERE ${where}
-     ORDER BY COALESCE(sent_at, received_at, approved_at, created_at) DESC
-     LIMIT ? OFFSET ?`,
-  )
-    .bind(...bindings, limit, offset)
-    .all<DbMailboxMessage>();
-
-  return c.json({
-    messages: (rows.results || []).map(serializeMailboxMessage),
-    total,
-    limit,
-    offset,
-  });
+  }));
 });
 
 app.post("/api/mailbox/drafts", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
-  const body = await c.req.json<MailboxDraftBody>().catch((): MailboxDraftBody => ({}));
-  const input = await normalizeMailboxDraftInput(c.env, mailbox, body);
-  if ("error" in input) return c.json({ error: input.error }, input.status as any);
-
-  const draft = await insertMailboxDraft(c.env, mailbox, input);
-  return c.json({ draft: serializeMailboxMessage(draft) }, 201);
+  const body = await c.req.json<AgentMailboxDraftInput>().catch((): AgentMailboxDraftInput => ({}));
+  const result = await createAgentMailboxDraft(c.env, ownerId, body);
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result, 201);
 });
 
 app.put("/api/mailbox/drafts/:draftId", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
-  const existing = await getMailboxMessageById(c.env, mailbox.id, c.req.param("draftId"));
-  if (!existing || existing.message_kind !== "draft") {
-    return c.json({ error: "Draft not found" }, 404);
-  }
-
-  const body = await c.req.json<MailboxDraftBody>().catch((): MailboxDraftBody => ({}));
-  const input = await normalizeMailboxDraftInput(c.env, mailbox, body, existing);
-  if ("error" in input) return c.json({ error: input.error }, input.status as any);
-
-  const draft = await updateMailboxDraft(c.env, mailbox.id, existing.id, input);
-  return c.json({ draft: draft ? serializeMailboxMessage(draft) : null });
+  const body = await c.req.json<AgentMailboxDraftInput>().catch((): AgentMailboxDraftInput => ({}));
+  const result = await updateAgentMailboxDraft(c.env, ownerId, c.req.param("draftId"), body);
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 });
 
 app.post("/api/mailbox/drafts/:draftId/reject", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    `UPDATE mailbox_messages
-     SET status = 'rejected',
-         folder = 'trash',
-         approved_by_user_id = ?,
-         approved_at = ?,
-         updated_at = ?
-     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'`,
-  )
-    .bind(ownerId, now, now, c.req.param("draftId"), mailbox.id)
-    .run();
-
-  const draft = await getMailboxMessageById(c.env, mailbox.id, c.req.param("draftId"));
-  if (!draft) return c.json({ error: "Draft not found" }, 404);
-  return c.json({ draft: serializeMailboxMessage(draft) });
+  const result = await rejectAgentMailboxDraft(c.env, ownerId, c.req.param("draftId"));
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 });
 
 app.post("/api/mailbox/drafts/:draftId/approve", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
-  const draft = await getMailboxMessageById(c.env, mailbox.id, c.req.param("draftId"));
-  if (!draft || draft.message_kind !== "draft") {
-    return c.json({ error: "Draft not found" }, 404);
-  }
-  if (!draft.to_address || !isValidEmail(draft.to_address)) {
-    return c.json({ error: "Draft recipient is required" }, 400);
-  }
+  const draftId = c.req.param("draftId");
+  const approval = await getAgentMailboxDraftForApproval(c.env, ownerId, draftId);
+  if ("error" in approval) return c.json({ error: approval.error }, approval.status as any);
 
   try {
-    const outboundHeaders = getDraftOutboundHeaders(draft);
+    const { mailbox, draft } = approval;
+    const outboundHeaders = getAgentMailboxOutboundHeaders(draft);
     const result = await sendEmailWithProvider(c.env, ownerId, {
-      purpose: draft.source_id ? "reply" : "draft",
+      purpose: draft.sourceId ? "reply" : "draft",
       mailboxId: mailbox.id,
       mailboxMessageId: draft.id,
-      fromAddress: draft.from_address || getMailboxAddress(mailbox.alias_local_part),
-      toAddress: draft.to_address,
+      fromAddress: draft.fromAddress || mailbox.aliasAddress,
+      toAddress: draft.toAddress || "",
       subject: draft.subject || "(no subject)",
-      textBody: draft.text_body || "",
-      htmlBody: draft.html_body,
-      threadKey: draft.thread_key,
+      textBody: draft.body || "",
+      htmlBody: draft.htmlBody,
+      threadKey: draft.threadKey,
       messageIdHeader: outboundHeaders.messageIdHeader,
       inReplyTo: outboundHeaders.inReplyTo,
       referencesHeader: outboundHeaders.referencesHeader,
       metadata: {
         mailbox_message_id: draft.id,
-        source_id: draft.source_id,
+        source_id: draft.sourceId,
       },
-      createdBy: draft.created_by,
+      createdBy: draft.createdBy,
       approvedByUserId: ownerId,
     });
-    const now = result.sentAt;
-    await c.env.DB.prepare(
-      `UPDATE mailbox_messages
-       SET message_kind = 'email',
-           status = 'sent',
-           folder = 'sent',
-           provider_id = ?,
-           provider_message_id = ?,
-           error_message = NULL,
-           approved_by_user_id = ?,
-           approved_at = ?,
-           sent_at = ?,
-           updated_at = ?
-       WHERE id = ? AND mailbox_id = ?`,
-    )
-      .bind(
-        result.providerId,
-        result.providerMessageId,
-        ownerId,
-        now,
-        now,
-        now,
-        draft.id,
-        mailbox.id,
-      )
-      .run();
-
-    const sent = await getMailboxMessageById(c.env, mailbox.id, draft.id);
-    return c.json({ draft: sent ? serializeMailboxMessage(sent) : null });
+    const sent = await markAgentMailboxDraftSent(c.env, ownerId, draft.id, {
+      providerId: result.providerId,
+      providerMessageId: result.providerMessageId,
+      sentAt: result.sentAt,
+      approvedByUserId: ownerId,
+    });
+    if ("error" in sent) return c.json({ error: sent.error }, sent.status as any);
+    return c.json(sent);
   } catch (error) {
     if (error instanceof EmailProviderInputError) {
-      await c.env.DB.prepare(
-        `UPDATE mailbox_messages
-         SET status = 'failed',
-             error_message = ?,
-             updated_at = ?
-         WHERE id = ? AND mailbox_id = ?`,
-      )
-        .bind(error.message, new Date().toISOString(), draft.id, mailbox.id)
-        .run();
+      await markAgentMailboxDraftFailed(c.env, ownerId, draftId, { errorMessage: error.message });
       return c.json({ error: error.message }, error.status as any);
     }
     throw error;
@@ -2559,63 +2335,34 @@ app.post("/api/mailbox/messages/:messageId/read", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
   const body = await c.req.json<{ read?: boolean }>().catch(() => ({ read: true }));
-  const result = await c.env.DB.prepare(
-    `UPDATE mailbox_messages
-     SET read_at = CASE WHEN ? THEN COALESCE(read_at, CURRENT_TIMESTAMP) ELSE NULL END,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND mailbox_id = ?`,
-  )
-    .bind(body.read !== false, c.req.param("messageId"), mailbox.id)
-    .run();
-
-  if ((result.meta?.changes || 0) === 0) return c.json({ error: "Message not found" }, 404);
-  return c.json({ ok: true });
+  const result = await setAgentMailboxMessageReadState(
+    c.env,
+    ownerId,
+    c.req.param("messageId"),
+    body.read !== false,
+  );
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 });
 
 app.post("/api/mailbox/messages/:messageId/move", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
   const body = await c.req.json<{ folder?: string }>().catch((): { folder?: string } => ({}));
-  const folder = normalizeFolder(body.folder);
-  if (!folder) return c.json({ error: "Invalid folder" }, 400);
-
-  const result = await c.env.DB.prepare(
-    `UPDATE mailbox_messages
-     SET folder = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND mailbox_id = ?`,
-  )
-    .bind(folder, c.req.param("messageId"), mailbox.id)
-    .run();
-
-  if ((result.meta?.changes || 0) === 0) return c.json({ error: "Message not found" }, 404);
-  return c.json({ ok: true, id: c.req.param("messageId"), folder });
+  const result = await moveAgentMailboxMessage(c.env, ownerId, c.req.param("messageId"), body.folder);
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 });
 
 app.delete("/api/mailbox/messages/:messageId", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const mailbox = await getMailboxRow(c.env, ownerId);
-  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
-
-  const result = await c.env.DB.prepare(
-    `UPDATE mailbox_messages
-     SET folder = 'trash', updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND mailbox_id = ?`,
-  )
-    .bind(c.req.param("messageId"), mailbox.id)
-    .run();
-
-  if ((result.meta?.changes || 0) === 0) return c.json({ error: "Message not found" }, 404);
-  return c.json({ ok: true });
+  const result = await trashAgentMailboxMessage(c.env, ownerId, c.req.param("messageId"));
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json(result);
 });
 
 app.get("/api/telegram/status", async (c) => {
@@ -4086,403 +3833,6 @@ function serializeImportedCalendarEvent(event: DbCalendarSourceEvent & { source_
     sourceName: event.source_name,
     sourceKind: "imported",
     createdAt: event.created_at,
-  };
-}
-
-async function getMailboxRow(env: Env, ownerId: string): Promise<DbMailboxAlias | null> {
-  return env.DB.prepare(
-    `SELECT id, user_id, alias_local_part, forwarding_email, forwarding_status,
-            forwarding_enabled, forwarding_mode, status, approval_policy,
-            daily_inbound_limit, daily_outbound_limit, activated_at,
-            cf_destination_id, cf_destination_verified_at, cf_rule_id,
-            cf_last_synced_at, cf_last_error, created_at, updated_at
-     FROM mailbox_aliases
-     WHERE user_id = ?`,
-  )
-    .bind(ownerId)
-    .first<DbMailboxAlias>();
-}
-
-function suggestMailboxAlias(value: string): string {
-  const base = value
-    .split("@")[0]
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]/g, "")
-    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
-  return base || "owner";
-}
-
-function normalizeMailboxAlias(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]/g, "")
-    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
-}
-
-function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function normalizeEmailText(value: unknown): string | null {
-  return normalizeNullableText(value)?.toLowerCase() || null;
-}
-
-function getMailboxAddress(localPart: string): string {
-  return `${localPart}@me3.local`;
-}
-
-async function normalizeMailboxDraftInput(
-  env: Env,
-  mailbox: DbMailboxAlias,
-  body: MailboxDraftBody,
-  existing?: DbMailboxMessage,
-): Promise<NormalizedMailboxDraftInput | { error: string; status: number }> {
-  const fromAddress = normalizeEmailText(body.fromAddress) || existing?.from_address || getMailboxAddress(mailbox.alias_local_part);
-  const toAddress = normalizeEmailText(body.toAddress ?? body.to) || existing?.to_address || "";
-  if (!isValidEmail(fromAddress)) {
-    return { error: "Draft sender is invalid", status: 400 };
-  }
-  if (!isValidEmail(toAddress)) {
-    return { error: "Draft recipient is required", status: 400 };
-  }
-
-  const replyToMessageId = normalizeNullableText(body.replyToMessageId);
-  const replyTo = replyToMessageId
-    ? await getMailboxMessageById(env, mailbox.id, replyToMessageId)
-    : null;
-  const threadKey =
-    replyTo?.thread_key ||
-    replyTo?.id ||
-    existing?.thread_key ||
-    crypto.randomUUID();
-  const existingHeaders = getDraftOutboundHeaders(existing);
-  const replyHeaders = getReplyThreadHeaders(replyTo);
-  const messageIdHeader =
-    existingHeaders.messageIdHeader || createMessageIdHeader(fromAddress);
-  const source = normalizeNullableText(body.source);
-
-  return {
-    fromAddress,
-    toAddress,
-    subject: normalizeNullableText(body.subject) || existing?.subject || "",
-    textBody: normalizeNullableText(body.textBody) || existing?.text_body || "",
-    htmlBody:
-      body.htmlBody === undefined
-        ? existing?.html_body || null
-        : normalizeNullableText(body.htmlBody),
-    sourceId: replyTo?.id || existing?.source_id || null,
-    threadKey,
-    messageIdHeader,
-    inReplyTo: replyHeaders.inReplyTo || existingHeaders.inReplyTo,
-    referencesHeader: replyHeaders.referencesHeader || existingHeaders.referencesHeader,
-    createdBy: source === "agent" ? "agent" : "owner",
-  };
-}
-
-async function insertMailboxDraft(
-  env: Env,
-  mailbox: DbMailboxAlias,
-  input: NormalizedMailboxDraftInput,
-): Promise<DbMailboxMessage> {
-  const id = crypto.randomUUID();
-  const now = new Date().toISOString();
-  await env.DB.prepare(
-    `INSERT INTO mailbox_messages (
-       id, mailbox_id, direction, message_kind, status, thread_key,
-       from_address, to_address, subject, text_body, html_body,
-       metadata_json, source_id, folder, created_by, created_at, updated_at
-     )
-     VALUES (?, ?, 'outbound', 'draft', 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, 'drafts', ?, ?, ?)`,
-  )
-    .bind(
-      id,
-      mailbox.id,
-      input.threadKey,
-      input.fromAddress,
-      input.toAddress,
-      input.subject,
-      input.textBody,
-      input.htmlBody,
-      JSON.stringify(createDraftMetadata(input)),
-      input.sourceId,
-      input.createdBy,
-      now,
-      now,
-    )
-    .run();
-
-  const draft = await getMailboxMessageById(env, mailbox.id, id);
-  if (!draft) throw new Error("Inserted draft could not be loaded");
-  return draft;
-}
-
-async function updateMailboxDraft(
-  env: Env,
-  mailboxId: string,
-  draftId: string,
-  input: NormalizedMailboxDraftInput,
-): Promise<DbMailboxMessage | null> {
-  await env.DB.prepare(
-    `UPDATE mailbox_messages
-     SET status = 'pending_approval',
-         thread_key = ?,
-         from_address = ?,
-         to_address = ?,
-         subject = ?,
-         text_body = ?,
-         html_body = ?,
-         metadata_json = ?,
-         source_id = ?,
-         folder = 'drafts',
-         created_by = ?,
-         error_message = NULL,
-         updated_at = ?
-     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'`,
-  )
-    .bind(
-      input.threadKey,
-      input.fromAddress,
-      input.toAddress,
-      input.subject,
-      input.textBody,
-      input.htmlBody,
-      JSON.stringify(createDraftMetadata(input)),
-      input.sourceId,
-      input.createdBy,
-      new Date().toISOString(),
-      draftId,
-      mailboxId,
-    )
-    .run();
-
-  return getMailboxMessageById(env, mailboxId, draftId);
-}
-
-function createDraftMetadata(input: NormalizedMailboxDraftInput): Record<string, unknown> {
-  return {
-    approval_required: true,
-    outbound_headers: {
-      message_id: input.messageIdHeader,
-      in_reply_to: input.inReplyTo,
-      references: input.referencesHeader,
-    },
-  };
-}
-
-function createMessageIdHeader(fromAddress: string): string {
-  const domain = fromAddress.split("@")[1] || "me3.local";
-  return `<${crypto.randomUUID()}@${domain}>`;
-}
-
-function getDraftOutboundHeaders(row?: DbMailboxMessage | null): {
-  messageIdHeader: string | null;
-  inReplyTo: string | null;
-  referencesHeader: string | null;
-} {
-  const metadata = parseJsonRecord(row?.metadata_json || null);
-  const outboundHeaders = isPlainObject(metadata.outbound_headers)
-    ? metadata.outbound_headers
-    : {};
-  return {
-    messageIdHeader: normalizeMessageHeader(outboundHeaders.message_id),
-    inReplyTo: normalizeMessageHeader(outboundHeaders.in_reply_to),
-    referencesHeader: normalizeReferencesHeader(outboundHeaders.references),
-  };
-}
-
-function getReplyThreadHeaders(row?: DbMailboxMessage | null): {
-  inReplyTo: string | null;
-  referencesHeader: string | null;
-} {
-  if (!row) return { inReplyTo: null, referencesHeader: null };
-  const rawHeaders = parseJsonRecord(row.raw_headers_json);
-  const messageId = normalizeMessageHeader(
-    rawHeaders["message-id"] ?? rawHeaders["Message-ID"] ?? rawHeaders.messageId,
-  );
-  const previousReferences = normalizeReferencesHeader(
-    rawHeaders.references ?? rawHeaders.References,
-  );
-  return {
-    inReplyTo: messageId,
-    referencesHeader: normalizeReferencesHeader(
-      [previousReferences, messageId].filter(Boolean).join(" "),
-    ),
-  };
-}
-
-function normalizeMessageHeader(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const header = value.trim();
-  return header && header.length <= 998 ? header : null;
-}
-
-function normalizeReferencesHeader(value: unknown): string | null {
-  if (Array.isArray(value)) {
-    return normalizeReferencesHeader(value.filter((item) => typeof item === "string").join(" "));
-  }
-  return normalizeMessageHeader(value);
-}
-
-async function getMailboxMessageById(
-  env: Env,
-  mailboxId: string,
-  messageId: string,
-): Promise<DbMailboxMessage | null> {
-  return (
-    (await env.DB.prepare(`${mailboxMessageSelectSql()} WHERE id = ? AND mailbox_id = ?`)
-      .bind(messageId, mailboxId)
-      .first<DbMailboxMessage>()) || null
-  );
-}
-
-function serializeMailbox(row: DbMailboxAlias) {
-  return {
-    id: row.id,
-    aliasLocalPart: row.alias_local_part,
-    aliasAddress: getMailboxAddress(row.alias_local_part),
-    forwardingEmail: row.forwarding_email,
-    forwardingStatus: row.forwarding_status,
-    forwardingEnabled: Boolean(row.forwarding_enabled),
-    forwardingMode: row.forwarding_mode,
-    status: row.status,
-    approvalPolicy: row.approval_policy,
-    dailyInboundLimit: row.daily_inbound_limit,
-    dailyOutboundLimit: row.daily_outbound_limit,
-    activatedAt: row.activated_at,
-    forwardingVerifiedAt: row.cf_destination_verified_at,
-    cloudflareDestinationId: row.cf_destination_id,
-    cloudflareRuleId: row.cf_rule_id,
-    cloudflareLastSyncedAt: row.cf_last_synced_at,
-    cloudflareLastError: row.cf_last_error,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function serializeMailboxDefaultSource(row: DbMailboxAlias) {
-  return {
-    id: row.id,
-    type: "me3_alias",
-    address: getMailboxAddress(row.alias_local_part),
-    status: row.status === "active" ? "active" : row.status === "paused" ? "paused" : "pending",
-    inboundEnabled: row.status === "active",
-    outboundEnabled: true,
-  };
-}
-
-function mailboxMessageSelectSql(): string {
-  return `SELECT id, direction, message_kind, status, thread_key, from_address,
-                 provider_id, provider_message_id, to_address, subject, text_body,
-                 html_body, raw_headers_json, raw_message, metadata_json, source_id, folder, read_at,
-                 agent_summary, agent_labels_json, forwarded_to, error_message,
-                 created_by, approved_by_user_id, received_at, approved_at,
-                 sent_at, created_at
-          FROM mailbox_messages`;
-}
-
-async function getMailboxActivity(env: Env, mailboxId: string, limit: number, offset: number) {
-  const rows = await env.DB.prepare(
-    `${mailboxMessageSelectSql()}
-     WHERE mailbox_id = ?
-     ORDER BY COALESCE(sent_at, received_at, approved_at, created_at) DESC
-     LIMIT ? OFFSET ?`,
-  )
-    .bind(mailboxId, limit, offset)
-    .all<DbMailboxMessage>();
-
-  return (rows.results || []).map(serializeMailboxMessage);
-}
-
-function buildMailboxMessageFilters(
-  mailboxId: string,
-  options: {
-    status: string;
-    createdBy: string;
-    direction: string;
-    folder: string;
-    query: string;
-    unread: string;
-  },
-) {
-  const conditions = ["mailbox_id = ?"];
-  const bindings: (string | number)[] = [mailboxId];
-  const folder = normalizeFolder(options.folder);
-  if (folder) {
-    conditions.push("folder = ?");
-    bindings.push(folder);
-  }
-  if (options.status) {
-    const statuses = options.status.split(",").map((status) => status.trim()).filter(Boolean);
-    if (statuses.length === 1) {
-      conditions.push("status = ?");
-      bindings.push(statuses[0]);
-    } else if (statuses.length > 1) {
-      conditions.push(`status IN (${statuses.map(() => "?").join(",")})`);
-      bindings.push(...statuses);
-    }
-  }
-  if (options.createdBy) {
-    conditions.push("created_by = ?");
-    bindings.push(options.createdBy);
-  }
-  if (options.direction && options.direction !== "all") {
-    conditions.push("direction = ?");
-    bindings.push(options.direction);
-  }
-  if (["1", "true", "yes"].includes(options.unread.toLowerCase())) {
-    conditions.push("direction = 'inbound'");
-    conditions.push("read_at IS NULL");
-  }
-  if (options.query.trim()) {
-    conditions.push(
-      `(LOWER(COALESCE(subject, '')) LIKE ? OR LOWER(COALESCE(text_body, '')) LIKE ? OR LOWER(COALESCE(from_address, '')) LIKE ? OR LOWER(COALESCE(to_address, '')) LIKE ?)`,
-    );
-    const like = `%${options.query.trim().toLowerCase()}%`;
-    bindings.push(like, like, like, like);
-  }
-
-  return { where: conditions.join(" AND "), bindings };
-}
-
-function normalizeFolder(value: unknown): string | null {
-  const folder = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return MAILBOX_FOLDERS.has(folder) ? folder : null;
-}
-
-function serializeMailboxMessage(row: DbMailboxMessage) {
-  const metadata = parseJsonRecord(row.metadata_json);
-  const agentLabels = parseJsonArray(row.agent_labels_json);
-  return {
-    id: row.id,
-    direction: row.direction,
-    kind: row.message_kind,
-    status: row.status,
-    threadKey: row.thread_key,
-    providerId: row.provider_id,
-    providerMessageId: row.provider_message_id,
-    fromAddress: row.from_address,
-    fromName: null,
-    toAddress: row.to_address,
-    subject: row.subject || "(no subject)",
-    body: row.text_body || "",
-    htmlBody: row.html_body || null,
-    preview: (row.text_body || "").slice(0, 280),
-    metadata,
-    sourceId: row.source_id,
-    folder: row.folder,
-    readAt: row.read_at,
-    unread: row.direction === "inbound" && !row.read_at,
-    agentSummary: row.agent_summary,
-    agentLabels,
-    forwardedTo: row.forwarded_to,
-    errorMessage: row.error_message,
-    createdBy: row.created_by,
-    approvedByUserId: row.approved_by_user_id,
-    receivedAt: row.received_at,
-    approvedAt: row.approved_at,
-    sentAt: row.sent_at,
-    createdAt: row.created_at,
   };
 }
 

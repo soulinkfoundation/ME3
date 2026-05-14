@@ -184,6 +184,60 @@ export type AgentContentStats = ContentStats;
 export type AgentContentCreateInput = CreateContentItemInput;
 export type AgentContentUpdateInput = UpdateContentItemInput;
 
+export type AgentMailboxUpdateInput = {
+  aliasLocalPart?: unknown;
+  forwardingEmail?: unknown;
+  forwardingEnabled?: unknown;
+};
+
+export type AgentMailboxDraftInput = {
+  fromAddress?: unknown;
+  to?: unknown;
+  toAddress?: unknown;
+  subject?: unknown;
+  textBody?: unknown;
+  htmlBody?: unknown;
+  source?: unknown;
+  replyToMessageId?: unknown;
+};
+
+export type AgentMailboxMessageListOptions = {
+  limit?: unknown;
+  offset?: unknown;
+  status?: unknown;
+  createdBy?: unknown;
+  direction?: unknown;
+  folder?: unknown;
+  query?: unknown;
+  unread?: unknown;
+};
+
+export type AgentMailbox = ReturnType<typeof serializeAgentMailbox>;
+export type AgentMailboxSource = ReturnType<typeof serializeAgentMailboxDefaultSource>;
+export type AgentMailboxMessage = ReturnType<typeof serializeAgentMailboxMessage>;
+
+export type AgentMailboxOverview = {
+  tier: "core";
+  available: true;
+  approvalRequired: true;
+  cloudflareManaged: false;
+  suggestedAliasLocalPart: string;
+  mailbox: AgentMailbox | null;
+  sources: AgentMailboxSource[];
+  recentActivity: AgentMailboxMessage[];
+};
+
+export type AgentMailboxDraftSendInput = {
+  providerId: string;
+  providerMessageId: string | null;
+  sentAt: string;
+  approvedByUserId: string;
+};
+
+export type AgentMailboxDraftFailureInput = {
+  errorMessage: string;
+};
+
 type CoreAgentChatEnv = {
   DB: D1Like;
   AI?: {
@@ -204,7 +258,7 @@ type D1Like = {
     bind(...values: unknown[]): {
       first<T = unknown>(): Promise<T | null>;
       all<T = unknown>(): Promise<{ results?: T[] }>;
-      run(): Promise<unknown>;
+      run(): Promise<{ meta?: { changes?: number } }>;
     };
     first<T = unknown>(): Promise<T | null>;
   };
@@ -290,6 +344,81 @@ type DbContactRow = {
   last_booking_at?: string | null;
 };
 
+type DbMailboxAliasRow = {
+  id: string;
+  user_id: string;
+  alias_local_part: string;
+  forwarding_email: string;
+  forwarding_status: "pending" | "verified";
+  forwarding_enabled: number;
+  forwarding_mode: "me3_only" | "forward";
+  status: "pending_setup" | "active" | "paused";
+  approval_policy: "all";
+  daily_inbound_limit: number;
+  daily_outbound_limit: number;
+  activated_at: string | null;
+  cf_destination_id: string | null;
+  cf_destination_verified_at: string | null;
+  cf_rule_id: string | null;
+  cf_last_synced_at: string | null;
+  cf_last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type DbMailboxMessageRow = {
+  id: string;
+  direction: "inbound" | "outbound";
+  message_kind: "email" | "draft" | "system";
+  status:
+    | "received"
+    | "forwarded"
+    | "pending_approval"
+    | "approved"
+    | "rejected"
+    | "sent"
+    | "failed"
+    | "dropped";
+  thread_key: string | null;
+  provider_id: string | null;
+  provider_message_id: string | null;
+  from_address: string | null;
+  to_address: string | null;
+  subject: string | null;
+  text_body: string | null;
+  html_body: string | null;
+  raw_headers_json: string | null;
+  raw_message: string | null;
+  metadata_json: string | null;
+  source_id: string | null;
+  folder: "inbox" | "drafts" | "sent" | "archive" | "trash";
+  read_at: string | null;
+  agent_summary: string | null;
+  agent_labels_json: string | null;
+  forwarded_to: string | null;
+  error_message: string | null;
+  created_by: string;
+  approved_by_user_id: string | null;
+  received_at: string | null;
+  approved_at: string | null;
+  sent_at: string | null;
+  created_at: string;
+};
+
+type NormalizedMailboxDraftInput = {
+  fromAddress: string;
+  toAddress: string;
+  subject: string;
+  textBody: string;
+  htmlBody: string | null;
+  sourceId: string | null;
+  threadKey: string;
+  messageIdHeader: string;
+  inReplyTo: string | null;
+  referencesHeader: string | null;
+  createdBy: string;
+};
+
 type D1RunResultLike = {
   meta?: {
     changes?: number;
@@ -338,6 +467,8 @@ const OUTREACH_STATUSES = new Set<Exclude<AgentContactOutreachStatus, null>>([
   "not_interested",
   "no_response",
 ]);
+const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
+const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
 
 export function isAgentSandboxDispatchInput(
   value: unknown,
@@ -682,6 +813,426 @@ export async function markAgentContentItemPublishing(
   return markContentItemPublishing(env, userId, id);
 }
 
+export async function getAgentMailboxOverview(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  ownerHint?: { username?: string | null; email?: string | null },
+): Promise<AgentMailboxOverview> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  const suggestedAliasLocalPart =
+    mailbox?.alias_local_part ||
+    suggestAgentMailboxAlias(ownerHint?.username || ownerHint?.email || "owner");
+
+  return {
+    tier: "core",
+    available: true,
+    approvalRequired: true,
+    cloudflareManaged: false,
+    suggestedAliasLocalPart,
+    mailbox: mailbox ? serializeAgentMailbox(mailbox) : null,
+    sources: mailbox ? [serializeAgentMailboxDefaultSource(mailbox)] : [],
+    recentActivity: mailbox ? await getAgentMailboxActivity(env, mailbox.id, 25, 0) : [],
+  };
+}
+
+export async function upsertAgentMailbox(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  input: AgentMailboxUpdateInput,
+  ownerHint?: { email?: string | null },
+): Promise<{ mailbox: AgentMailbox | null; sources: AgentMailboxSource[] } | { error: string; status: number }> {
+  const existing = await getAgentMailboxRow(env, userId);
+  const aliasLocalPart = normalizeAgentMailboxAlias(
+    typeof input.aliasLocalPart === "string" ? input.aliasLocalPart : "",
+  );
+  const forwardingEnabled = input.forwardingEnabled === true;
+  const forwardingEmail =
+    typeof input.forwardingEmail === "string" ? input.forwardingEmail.trim() : "";
+
+  if (!aliasLocalPart || !MAILBOX_ALIAS_REGEX.test(aliasLocalPart)) {
+    return {
+      error:
+        "Mailbox alias must start and end with a letter or number and may contain dots, underscores, or hyphens.",
+      status: 400,
+    };
+  }
+
+  if (forwardingEnabled && !isValidEmail(forwardingEmail)) {
+    return { error: "Enter a valid forwarding email address.", status: 400 };
+  }
+
+  const savedForwardingEmail =
+    forwardingEnabled ? forwardingEmail : existing?.forwarding_email || ownerHint?.email || "";
+  const forwardingStatus =
+    forwardingEnabled && savedForwardingEmail !== existing?.forwarding_email
+      ? "pending"
+      : existing?.forwarding_status || "pending";
+  const forwardingMode = forwardingEnabled ? "forward" : "me3_only";
+  const now = new Date().toISOString();
+
+  try {
+    if (existing) {
+      await env.DB.prepare(
+        `UPDATE mailbox_aliases
+         SET alias_local_part = ?,
+             forwarding_email = ?,
+             forwarding_status = ?,
+             forwarding_enabled = ?,
+             forwarding_mode = ?,
+             updated_at = ?
+         WHERE user_id = ?`,
+      )
+        .bind(
+          aliasLocalPart,
+          savedForwardingEmail,
+          forwardingStatus,
+          forwardingEnabled ? 1 : 0,
+          forwardingMode,
+          now,
+          userId,
+        )
+        .run();
+    } else {
+      await env.DB.prepare(
+        `INSERT INTO mailbox_aliases (
+           id, user_id, alias_local_part, forwarding_email, forwarding_status,
+           forwarding_enabled, forwarding_mode, status, approval_policy,
+           daily_inbound_limit, daily_outbound_limit, created_at, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_setup', 'all', 25, 25, ?, ?)`,
+      )
+        .bind(
+          crypto.randomUUID(),
+          userId,
+          aliasLocalPart,
+          savedForwardingEmail,
+          forwardingStatus,
+          forwardingEnabled ? 1 : 0,
+          forwardingMode,
+          now,
+          now,
+        )
+        .run();
+    }
+  } catch {
+    return { error: "Mailbox alias is already in use.", status: 409 };
+  }
+
+  const mailbox = await getAgentMailboxRow(env, userId);
+  return {
+    mailbox: mailbox ? serializeAgentMailbox(mailbox) : null,
+    sources: mailbox ? [serializeAgentMailboxDefaultSource(mailbox)] : [],
+  };
+}
+
+export async function activateAgentMailbox(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+): Promise<{ mailbox: AgentMailbox | null } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE mailbox_aliases
+     SET status = 'active',
+         activated_at = COALESCE(activated_at, ?),
+         updated_at = ?
+     WHERE user_id = ?`,
+  )
+    .bind(now, now, userId)
+    .run();
+
+  const updated = await getAgentMailboxRow(env, userId);
+  return { mailbox: updated ? serializeAgentMailbox(updated) : null };
+}
+
+export async function pauseAgentMailbox(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+): Promise<{ mailbox: AgentMailbox | null } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  await env.DB.prepare(
+    `UPDATE mailbox_aliases
+     SET status = 'paused',
+         updated_at = ?
+     WHERE user_id = ?`,
+  )
+    .bind(new Date().toISOString(), userId)
+    .run();
+
+  const updated = await getAgentMailboxRow(env, userId);
+  return { mailbox: updated ? serializeAgentMailbox(updated) : null };
+}
+
+export async function listAgentMailboxMessages(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  options: AgentMailboxMessageListOptions,
+): Promise<{ messages: AgentMailboxMessage[]; total: number; limit: number; offset: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  const limit = clampNumber(options.limit, 50, 0, 100);
+  const offset = clampNumber(options.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  if (!mailbox) return { messages: [], total: 0, limit, offset };
+
+  const { where, bindings } = buildAgentMailboxMessageFilters(mailbox.id, {
+    status: normalizeNullableText(options.status) || "",
+    createdBy: normalizeNullableText(options.createdBy) || "",
+    direction: normalizeNullableText(options.direction) || "outbound",
+    folder: normalizeNullableText(options.folder) || "",
+    query: normalizeNullableText(options.query) || "",
+    unread: normalizeNullableText(options.unread) || "",
+  });
+
+  const count = await env.DB.prepare(`SELECT COUNT(*) AS count FROM mailbox_messages WHERE ${where}`)
+    .bind(...bindings)
+    .first<{ count: number | string | null }>();
+  const total = Number(count?.count || 0);
+
+  if (limit === 0) return { messages: [], total, limit, offset };
+
+  const rows = await env.DB.prepare(
+    `${agentMailboxMessageSelectSql()} WHERE ${where}
+     ORDER BY COALESCE(sent_at, received_at, approved_at, created_at) DESC
+     LIMIT ? OFFSET ?`,
+  )
+    .bind(...bindings, limit, offset)
+    .all<DbMailboxMessageRow>();
+
+  return {
+    messages: (rows.results || []).map(serializeAgentMailboxMessage),
+    total,
+    limit,
+    offset,
+  };
+}
+
+export async function createAgentMailboxDraft(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  input: AgentMailboxDraftInput,
+): Promise<{ draft: AgentMailboxMessage } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const normalized = await normalizeAgentMailboxDraftInput(env, mailbox, input);
+  if ("error" in normalized) return normalized;
+
+  const draft = await insertAgentMailboxDraft(env, mailbox, normalized);
+  return { draft: serializeAgentMailboxMessage(draft) };
+}
+
+export async function updateAgentMailboxDraft(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  draftId: string,
+  input: AgentMailboxDraftInput,
+): Promise<{ draft: AgentMailboxMessage | null } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const existing = await getAgentMailboxMessageById(env, mailbox.id, draftId);
+  if (!existing || existing.message_kind !== "draft") {
+    return { error: "Draft not found", status: 404 };
+  }
+
+  const normalized = await normalizeAgentMailboxDraftInput(env, mailbox, input, existing);
+  if ("error" in normalized) return normalized;
+
+  const draft = await updateAgentMailboxDraftRow(env, mailbox.id, existing.id, normalized);
+  return { draft: draft ? serializeAgentMailboxMessage(draft) : null };
+}
+
+export async function rejectAgentMailboxDraft(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  draftId: string,
+): Promise<{ draft: AgentMailboxMessage } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET status = 'rejected',
+         folder = 'trash',
+         approved_by_user_id = ?,
+         approved_at = ?,
+         updated_at = ?
+     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'`,
+  )
+    .bind(userId, now, now, draftId, mailbox.id)
+    .run();
+
+  const draft = await getAgentMailboxMessageById(env, mailbox.id, draftId);
+  if (!draft) return { error: "Draft not found", status: 404 };
+  return { draft: serializeAgentMailboxMessage(draft) };
+}
+
+export async function getAgentMailboxDraftForApproval(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  draftId: string,
+): Promise<{ mailbox: AgentMailbox; draft: AgentMailboxMessage } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const draft = await getAgentMailboxMessageById(env, mailbox.id, draftId);
+  if (!draft || draft.message_kind !== "draft") {
+    return { error: "Draft not found", status: 404 };
+  }
+  if (!draft.to_address || !isValidEmail(draft.to_address)) {
+    return { error: "Draft recipient is required", status: 400 };
+  }
+
+  return {
+    mailbox: serializeAgentMailbox(mailbox),
+    draft: serializeAgentMailboxMessage(draft),
+  };
+}
+
+export function getAgentMailboxOutboundHeaders(message: AgentMailboxMessage): {
+  messageIdHeader: string | null;
+  inReplyTo: string | null;
+  referencesHeader: string | null;
+} {
+  const outboundHeaders = isPlainObject(message.metadata.outbound_headers)
+    ? message.metadata.outbound_headers
+    : {};
+  return {
+    messageIdHeader: normalizeMessageHeader(outboundHeaders.message_id),
+    inReplyTo: normalizeMessageHeader(outboundHeaders.in_reply_to),
+    referencesHeader: normalizeReferencesHeader(outboundHeaders.references),
+  };
+}
+
+export async function markAgentMailboxDraftSent(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  draftId: string,
+  input: AgentMailboxDraftSendInput,
+): Promise<{ draft: AgentMailboxMessage | null } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET message_kind = 'email',
+         status = 'sent',
+         folder = 'sent',
+         provider_id = ?,
+         provider_message_id = ?,
+         error_message = NULL,
+         approved_by_user_id = ?,
+         approved_at = ?,
+         sent_at = ?,
+         updated_at = ?
+     WHERE id = ? AND mailbox_id = ?`,
+  )
+    .bind(
+      input.providerId,
+      input.providerMessageId,
+      input.approvedByUserId,
+      input.sentAt,
+      input.sentAt,
+      input.sentAt,
+      draftId,
+      mailbox.id,
+    )
+    .run();
+
+  const sent = await getAgentMailboxMessageById(env, mailbox.id, draftId);
+  return { draft: sent ? serializeAgentMailboxMessage(sent) : null };
+}
+
+export async function markAgentMailboxDraftFailed(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  draftId: string,
+  input: AgentMailboxDraftFailureInput,
+): Promise<void> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return;
+
+  await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET status = 'failed',
+         error_message = ?,
+         updated_at = ?
+     WHERE id = ? AND mailbox_id = ?`,
+  )
+    .bind(input.errorMessage, new Date().toISOString(), draftId, mailbox.id)
+    .run();
+}
+
+export async function setAgentMailboxMessageReadState(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageId: string,
+  read: boolean,
+): Promise<{ ok: true } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const result = await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET read_at = CASE WHEN ? THEN COALESCE(read_at, CURRENT_TIMESTAMP) ELSE NULL END,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND mailbox_id = ?`,
+  )
+    .bind(read, messageId, mailbox.id)
+    .run();
+
+  if ((result.meta?.changes || 0) === 0) return { error: "Message not found", status: 404 };
+  return { ok: true };
+}
+
+export async function moveAgentMailboxMessage(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageId: string,
+  folderInput: unknown,
+): Promise<{ ok: true; id: string; folder: string } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const folder = normalizeFolder(folderInput);
+  if (!folder) return { error: "Invalid folder", status: 400 };
+
+  const result = await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET folder = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND mailbox_id = ?`,
+  )
+    .bind(folder, messageId, mailbox.id)
+    .run();
+
+  if ((result.meta?.changes || 0) === 0) return { error: "Message not found", status: 404 };
+  return { ok: true, id: messageId, folder };
+}
+
+export async function trashAgentMailboxMessage(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageId: string,
+): Promise<{ ok: true } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const result = await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET folder = 'trash', updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND mailbox_id = ?`,
+  )
+    .bind(messageId, mailbox.id)
+    .run();
+
+  if ((result.meta?.changes || 0) === 0) return { error: "Message not found", status: 404 };
+  return { ok: true };
+}
+
 export async function createAgentReminder(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
@@ -987,6 +1538,411 @@ function summarizeAgentContacts(contacts: AgentContact[]): AgentContactsSummary 
   };
 }
 
+async function getAgentMailboxRow(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+): Promise<DbMailboxAliasRow | null> {
+  return env.DB.prepare(
+    `SELECT id, user_id, alias_local_part, forwarding_email, forwarding_status,
+            forwarding_enabled, forwarding_mode, status, approval_policy,
+            daily_inbound_limit, daily_outbound_limit, activated_at,
+            cf_destination_id, cf_destination_verified_at, cf_rule_id,
+            cf_last_synced_at, cf_last_error, created_at, updated_at
+     FROM mailbox_aliases
+     WHERE user_id = ?`,
+  )
+    .bind(userId)
+    .first<DbMailboxAliasRow>();
+}
+
+function suggestAgentMailboxAlias(value: string): string {
+  const base = value
+    .split("@")[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "")
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+  return base || "owner";
+}
+
+function normalizeAgentMailboxAlias(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "")
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function normalizeEmailText(value: unknown): string | null {
+  return normalizeNullableText(value)?.toLowerCase() || null;
+}
+
+function getAgentMailboxAddress(localPart: string): string {
+  return `${localPart}@me3.local`;
+}
+
+function serializeAgentMailbox(row: DbMailboxAliasRow) {
+  return {
+    id: row.id,
+    aliasLocalPart: row.alias_local_part,
+    aliasAddress: getAgentMailboxAddress(row.alias_local_part),
+    forwardingEmail: row.forwarding_email,
+    forwardingStatus: row.forwarding_status,
+    forwardingEnabled: Boolean(row.forwarding_enabled),
+    forwardingMode: row.forwarding_mode,
+    status: row.status,
+    approvalPolicy: row.approval_policy,
+    dailyInboundLimit: row.daily_inbound_limit,
+    dailyOutboundLimit: row.daily_outbound_limit,
+    activatedAt: row.activated_at,
+    forwardingVerifiedAt: row.cf_destination_verified_at,
+    cloudflareDestinationId: row.cf_destination_id,
+    cloudflareRuleId: row.cf_rule_id,
+    cloudflareLastSyncedAt: row.cf_last_synced_at,
+    cloudflareLastError: row.cf_last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function serializeAgentMailboxDefaultSource(row: DbMailboxAliasRow) {
+  return {
+    id: row.id,
+    type: "me3_alias",
+    address: getAgentMailboxAddress(row.alias_local_part),
+    status: row.status === "active" ? "active" : row.status === "paused" ? "paused" : "pending",
+    inboundEnabled: row.status === "active",
+    outboundEnabled: true,
+  };
+}
+
+function agentMailboxMessageSelectSql(): string {
+  return `SELECT id, direction, message_kind, status, thread_key, from_address,
+                 provider_id, provider_message_id, to_address, subject, text_body,
+                 html_body, raw_headers_json, raw_message, metadata_json, source_id, folder, read_at,
+                 agent_summary, agent_labels_json, forwarded_to, error_message,
+                 created_by, approved_by_user_id, received_at, approved_at,
+                 sent_at, created_at
+          FROM mailbox_messages`;
+}
+
+async function getAgentMailboxActivity(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  mailboxId: string,
+  limit: number,
+  offset: number,
+): Promise<AgentMailboxMessage[]> {
+  const rows = await env.DB.prepare(
+    `${agentMailboxMessageSelectSql()}
+     WHERE mailbox_id = ?
+     ORDER BY COALESCE(sent_at, received_at, approved_at, created_at) DESC
+     LIMIT ? OFFSET ?`,
+  )
+    .bind(mailboxId, limit, offset)
+    .all<DbMailboxMessageRow>();
+
+  return (rows.results || []).map(serializeAgentMailboxMessage);
+}
+
+function buildAgentMailboxMessageFilters(
+  mailboxId: string,
+  options: {
+    status: string;
+    createdBy: string;
+    direction: string;
+    folder: string;
+    query: string;
+    unread: string;
+  },
+) {
+  const conditions = ["mailbox_id = ?"];
+  const bindings: (string | number)[] = [mailboxId];
+  const folder = normalizeFolder(options.folder);
+  if (folder) {
+    conditions.push("folder = ?");
+    bindings.push(folder);
+  }
+  if (options.status) {
+    const statuses = options.status.split(",").map((status) => status.trim()).filter(Boolean);
+    if (statuses.length === 1) {
+      conditions.push("status = ?");
+      bindings.push(statuses[0]);
+    } else if (statuses.length > 1) {
+      conditions.push(`status IN (${statuses.map(() => "?").join(",")})`);
+      bindings.push(...statuses);
+    }
+  }
+  if (options.createdBy) {
+    conditions.push("created_by = ?");
+    bindings.push(options.createdBy);
+  }
+  if (options.direction && options.direction !== "all") {
+    conditions.push("direction = ?");
+    bindings.push(options.direction);
+  }
+  if (["1", "true", "yes"].includes(options.unread.toLowerCase())) {
+    conditions.push("direction = 'inbound'");
+    conditions.push("read_at IS NULL");
+  }
+  if (options.query.trim()) {
+    conditions.push(
+      `(LOWER(COALESCE(subject, '')) LIKE ? OR LOWER(COALESCE(text_body, '')) LIKE ? OR LOWER(COALESCE(from_address, '')) LIKE ? OR LOWER(COALESCE(to_address, '')) LIKE ?)`,
+    );
+    const like = `%${options.query.trim().toLowerCase()}%`;
+    bindings.push(like, like, like, like);
+  }
+
+  return { where: conditions.join(" AND "), bindings };
+}
+
+function normalizeFolder(value: unknown): string | null {
+  const folder = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return MAILBOX_FOLDERS.has(folder) ? folder : null;
+}
+
+function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
+  const metadata = parseJsonRecord(row.metadata_json);
+  const agentLabels = parseJsonArray(row.agent_labels_json);
+  return {
+    id: row.id,
+    direction: row.direction,
+    kind: row.message_kind,
+    status: row.status,
+    threadKey: row.thread_key,
+    providerId: row.provider_id,
+    providerMessageId: row.provider_message_id,
+    fromAddress: row.from_address,
+    fromName: null,
+    toAddress: row.to_address,
+    subject: row.subject || "(no subject)",
+    body: row.text_body || "",
+    htmlBody: row.html_body || null,
+    preview: (row.text_body || "").slice(0, 280),
+    metadata,
+    sourceId: row.source_id,
+    folder: row.folder,
+    readAt: row.read_at,
+    unread: row.direction === "inbound" && !row.read_at,
+    agentSummary: row.agent_summary,
+    agentLabels,
+    forwardedTo: row.forwarded_to,
+    errorMessage: row.error_message,
+    createdBy: row.created_by,
+    approvedByUserId: row.approved_by_user_id,
+    receivedAt: row.received_at,
+    approvedAt: row.approved_at,
+    sentAt: row.sent_at,
+    createdAt: row.created_at,
+  };
+}
+
+async function normalizeAgentMailboxDraftInput(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  mailbox: DbMailboxAliasRow,
+  body: AgentMailboxDraftInput,
+  existing?: DbMailboxMessageRow,
+): Promise<NormalizedMailboxDraftInput | { error: string; status: number }> {
+  const fromAddress = normalizeEmailText(body.fromAddress) || existing?.from_address || getAgentMailboxAddress(mailbox.alias_local_part);
+  const toAddress = normalizeEmailText(body.toAddress ?? body.to) || existing?.to_address || "";
+  if (!isValidEmail(fromAddress)) {
+    return { error: "Draft sender is invalid", status: 400 };
+  }
+  if (!isValidEmail(toAddress)) {
+    return { error: "Draft recipient is required", status: 400 };
+  }
+
+  const replyToMessageId = normalizeNullableText(body.replyToMessageId);
+  const replyTo = replyToMessageId
+    ? await getAgentMailboxMessageById(env, mailbox.id, replyToMessageId)
+    : null;
+  const threadKey =
+    replyTo?.thread_key ||
+    replyTo?.id ||
+    existing?.thread_key ||
+    crypto.randomUUID();
+  const existingHeaders = getDraftOutboundHeaders(existing);
+  const replyHeaders = getReplyThreadHeaders(replyTo);
+  const messageIdHeader =
+    existingHeaders.messageIdHeader || createMessageIdHeader(fromAddress);
+  const source = normalizeNullableText(body.source);
+
+  return {
+    fromAddress,
+    toAddress,
+    subject: normalizeNullableText(body.subject) || existing?.subject || "",
+    textBody: normalizeNullableText(body.textBody) || existing?.text_body || "",
+    htmlBody:
+      body.htmlBody === undefined
+        ? existing?.html_body || null
+        : normalizeNullableText(body.htmlBody),
+    sourceId: replyTo?.id || existing?.source_id || null,
+    threadKey,
+    messageIdHeader,
+    inReplyTo: replyHeaders.inReplyTo || existingHeaders.inReplyTo,
+    referencesHeader: replyHeaders.referencesHeader || existingHeaders.referencesHeader,
+    createdBy: source === "agent" ? "agent" : "owner",
+  };
+}
+
+async function insertAgentMailboxDraft(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  mailbox: DbMailboxAliasRow,
+  input: NormalizedMailboxDraftInput,
+): Promise<DbMailboxMessageRow> {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO mailbox_messages (
+       id, mailbox_id, direction, message_kind, status, thread_key,
+       from_address, to_address, subject, text_body, html_body,
+       metadata_json, source_id, folder, created_by, created_at, updated_at
+     )
+     VALUES (?, ?, 'outbound', 'draft', 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, 'drafts', ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      mailbox.id,
+      input.threadKey,
+      input.fromAddress,
+      input.toAddress,
+      input.subject,
+      input.textBody,
+      input.htmlBody,
+      JSON.stringify(createDraftMetadata(input)),
+      input.sourceId,
+      input.createdBy,
+      now,
+      now,
+    )
+    .run();
+
+  const draft = await getAgentMailboxMessageById(env, mailbox.id, id);
+  if (!draft) throw new Error("Inserted draft could not be loaded");
+  return draft;
+}
+
+async function updateAgentMailboxDraftRow(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  mailboxId: string,
+  draftId: string,
+  input: NormalizedMailboxDraftInput,
+): Promise<DbMailboxMessageRow | null> {
+  await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET status = 'pending_approval',
+         thread_key = ?,
+         from_address = ?,
+         to_address = ?,
+         subject = ?,
+         text_body = ?,
+         html_body = ?,
+         metadata_json = ?,
+         source_id = ?,
+         folder = 'drafts',
+         created_by = ?,
+         error_message = NULL,
+         updated_at = ?
+     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'`,
+  )
+    .bind(
+      input.threadKey,
+      input.fromAddress,
+      input.toAddress,
+      input.subject,
+      input.textBody,
+      input.htmlBody,
+      JSON.stringify(createDraftMetadata(input)),
+      input.sourceId,
+      input.createdBy,
+      new Date().toISOString(),
+      draftId,
+      mailboxId,
+    )
+    .run();
+
+  return getAgentMailboxMessageById(env, mailboxId, draftId);
+}
+
+function createDraftMetadata(input: NormalizedMailboxDraftInput): Record<string, unknown> {
+  return {
+    approval_required: true,
+    outbound_headers: {
+      message_id: input.messageIdHeader,
+      in_reply_to: input.inReplyTo,
+      references: input.referencesHeader,
+    },
+  };
+}
+
+function createMessageIdHeader(fromAddress: string): string {
+  const domain = fromAddress.split("@")[1] || "me3.local";
+  return `<${crypto.randomUUID()}@${domain}>`;
+}
+
+function getDraftOutboundHeaders(row?: DbMailboxMessageRow | null): {
+  messageIdHeader: string | null;
+  inReplyTo: string | null;
+  referencesHeader: string | null;
+} {
+  const metadata = parseJsonRecord(row?.metadata_json || null);
+  const outboundHeaders = isPlainObject(metadata.outbound_headers)
+    ? metadata.outbound_headers
+    : {};
+  return {
+    messageIdHeader: normalizeMessageHeader(outboundHeaders.message_id),
+    inReplyTo: normalizeMessageHeader(outboundHeaders.in_reply_to),
+    referencesHeader: normalizeReferencesHeader(outboundHeaders.references),
+  };
+}
+
+function getReplyThreadHeaders(row?: DbMailboxMessageRow | null): {
+  inReplyTo: string | null;
+  referencesHeader: string | null;
+} {
+  if (!row) return { inReplyTo: null, referencesHeader: null };
+  const rawHeaders = parseJsonRecord(row.raw_headers_json);
+  const messageId = normalizeMessageHeader(
+    rawHeaders["message-id"] ?? rawHeaders["Message-ID"] ?? rawHeaders.messageId,
+  );
+  const previousReferences = normalizeReferencesHeader(
+    rawHeaders.references ?? rawHeaders.References,
+  );
+  return {
+    inReplyTo: messageId,
+    referencesHeader: normalizeReferencesHeader(
+      [previousReferences, messageId].filter(Boolean).join(" "),
+    ),
+  };
+}
+
+function normalizeMessageHeader(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const header = value.trim();
+  return header && header.length <= 998 ? header : null;
+}
+
+function normalizeReferencesHeader(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    return normalizeReferencesHeader(value.filter((item) => typeof item === "string").join(" "));
+  }
+  return normalizeMessageHeader(value);
+}
+
+async function getAgentMailboxMessageById(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  mailboxId: string,
+  messageId: string,
+): Promise<DbMailboxMessageRow | null> {
+  return (
+    (await env.DB.prepare(`${agentMailboxMessageSelectSql()} WHERE id = ? AND mailbox_id = ?`)
+      .bind(messageId, mailboxId)
+      .first<DbMailboxMessageRow>()) || null
+  );
+}
+
 function normalizeContactMetadata(
   input: AgentContactInput,
 ): Record<string, unknown> | null {
@@ -1012,6 +1968,12 @@ function normalizeNullableText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
   return normalized || null;
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(parsed)));
 }
 
 function parseJsonRecord(value: string | null): Record<string, unknown> {
