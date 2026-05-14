@@ -115,7 +115,10 @@ const importedDraftHost = computed(() => {
 });
 
 const showImportedDraftRecovery = computed(
-  () => !!importedDraftHost.value && !wizard.lastPublishedAt && !showIntroScreen.value,
+  () =>
+    !!importedDraftHost.value &&
+    !wizard.lastPublishedAt &&
+    !showIntroScreen.value,
 );
 
 // Progress percentage
@@ -227,7 +230,6 @@ onMounted(() => {
   if (wizard.profile.name && wizard.currentStep > 1) {
     // Show continue prompt could go here
   }
-
 });
 </script>
 
@@ -332,17 +334,20 @@ onMounted(() => {
           alt="ME3 protocol profile preview"
         />
         <div class="intro-copy">
-          <h1 id="intro-title">Build Your ME3 Site In Minutes</h1>
+          <h1 id="intro-title">Create Your ME3 Site</h1>
           <p>
             Your ME3 site is a simple profile that includes everything you need
-            for a simple, effective website. Take bookings, sell products, start
-            a blog and more. It also doubles as important context for your ME3
-            agent.
+            for an effective website. It also doubles as important context for
+            your ME3 agent.
             <a href="https://me3.app/protocol" target="_blank" rel="noreferrer">
-              Learn more about that here
-            </a>.
+              Learn more about that here </a
+            >.
           </p>
-          <button class="intro-button" type="button" @click="handleIntroGetStarted">
+          <button
+            class="intro-button"
+            type="button"
+            @click="handleIntroGetStarted"
+          >
             Get started
           </button>
         </div>
