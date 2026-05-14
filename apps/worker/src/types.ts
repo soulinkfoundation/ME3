@@ -37,6 +37,10 @@ export interface Env {
   EMAIL?: {
     send(message: Record<string, unknown>): Promise<{ messageId?: string | null }>;
   };
+  SMTP_CONNECT?: (
+    address: SocketAddress,
+    options?: SocketOptions,
+  ) => Socket;
 
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;

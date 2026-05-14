@@ -71,13 +71,15 @@ ME3 Core treats outbound email as a provider adapter system. Core owns mailbox U
 
 The account-level sender settings live in Account -> Mailbox settings:
 
-- Recommended: Cloudflare Email Service
-- Bring another sender: Postmark, Mailgun, SMTP
+- Recommended/default: SMTP
+- Bring another sender: Postmark, Cloudflare Email Service, Mailgun
 - Future provider slots: SES, Resend, SendGrid
 
-Cloudflare Email Service is the first/default adapter. Required setup is Workers Paid, a sending domain on Cloudflare DNS, a verified sending address or domain, and either a `send_email` binding named `EMAIL` or REST API account ID/token configured through the owner UI. Its fields are from address, display name, optional reply-to, sending domain, transport (`binding` or `rest`), Cloudflare account ID for REST, and API token for REST.
+SMTP is the default Core outbound adapter. It uses authenticated SMTP submission over port `587` with STARTTLS by default, or port `465` with TLS when selected. Cloudflare Workers cannot send to SMTP port `25`, so Core rejects that port in sender settings. Its fields are host, port, security mode, username, encrypted password, from address, display name, and optional reply-to.
 
-Postmark is the first stable external adapter. Its fields are server API token, confirmed sender signature or verified sender domain, from address, display name, optional reply-to, and message stream (default `outbound`). Mailgun and SMTP are visible as next sender paths, but their adapter implementations are deferred.
+Postmark is also available as a stable external adapter. Its fields are server API token, confirmed sender signature or verified sender domain, from address, display name, optional reply-to, and message stream (default `outbound`). Mailgun is visible as the next sender path, but its adapter implementation is deferred.
+
+Cloudflare Email Service remains available as a Workers-native optional adapter. Required setup is Workers Paid, a sending domain on Cloudflare DNS, a verified sending address or domain, and either a `send_email` binding named `EMAIL` or REST API account ID/token configured through the owner UI. Its fields are from address, display name, optional reply-to, sending domain, transport (`binding` or `rest`), Cloudflare account ID for REST, and API token for REST.
 
 The provider interface normalizes setup requirements, readiness state, test sends, and delivery results. Sent-message audit belongs in `email_send_audit`: provider ID, provider message ID/status, from/to/subject, `thread_key`, `Message-ID`/`In-Reply-To`/`References`, approval/source metadata, failures, and timestamps. `mailbox_messages` keeps provider IDs for threading joins without making any provider the mailbox system of record.
 

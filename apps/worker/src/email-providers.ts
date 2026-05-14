@@ -4,21 +4,28 @@ import {
 } from "./install-secrets";
 import type { DbEmailProviderSetting, Env } from "./types";
 
-export const EMAIL_PROVIDER_IDS = ["cloudflare-email", "postmark"] as const;
+export const EMAIL_PROVIDER_IDS = ["cloudflare-email", "smtp", "postmark"] as const;
 export type EmailProviderId = (typeof EMAIL_PROVIDER_IDS)[number];
 export type EmailSendPurpose = "test" | "draft" | "reply" | "workflow";
 
+const DEFAULT_EMAIL_PROVIDER_ID: EmailProviderId = "smtp";
+
 type EmailProviderSource = "binding" | "stored" | "manual" | "not_configured";
 type EmailProviderStatus = "not_configured" | "ready" | "failed";
+type SmtpSecurity = "starttls" | "tls" | "none";
 
 type EmailProviderConfig = {
-  transport: "binding" | "rest";
+  transport: "binding" | "rest" | "smtp";
   fromAddress: string;
   fromName: string;
   replyToAddress: string;
   sendingDomain: string;
   accountId: string;
   messageStream: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecurity: SmtpSecurity;
+  smtpUsername: string;
 };
 
 export type EmailProviderSettingsRecord = {
@@ -49,7 +56,7 @@ export type EmailProviderSettingsRecord = {
 };
 
 export type FutureEmailProviderRecord = {
-  id: "mailgun" | "smtp" | "ses" | "resend" | "sendgrid";
+  id: "mailgun" | "ses" | "resend" | "sendgrid";
   label: string;
   description: string;
 };
@@ -100,6 +107,10 @@ type EmailProviderUpdate = {
   sendingDomain?: unknown;
   accountId?: unknown;
   messageStream?: unknown;
+  smtpHost?: unknown;
+  smtpPort?: unknown;
+  smtpSecurity?: unknown;
+  smtpUsername?: unknown;
   apiToken?: unknown;
   serverToken?: unknown;
   clearSecret?: unknown;
@@ -170,8 +181,8 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
   id: "cloudflare-email",
   label: "Cloudflare Email Service",
   description:
-    "Recommended Workers-native sender using an Email Service binding first, with REST API credentials as a fallback.",
-  recommended: true,
+    "Optional Workers-native sender using an Email Service binding first, with REST API credentials as a fallback.",
+  recommended: false,
   stable: false,
   secretLabel: "Cloudflare API token",
   defaultConfig: createDefaultConfig("binding", ""),
@@ -393,18 +404,83 @@ const POSTMARK_PROVIDER: EmailProviderAdapter = {
   },
 };
 
-const EMAIL_PROVIDER_ADAPTERS = [CLOUDFLARE_EMAIL_PROVIDER, POSTMARK_PROVIDER] as const;
+const SMTP_PROVIDER: EmailProviderAdapter = {
+  id: "smtp",
+  label: "SMTP",
+  description:
+    "Generic authenticated SMTP sender for submission relays that support TLS or STARTTLS.",
+  recommended: true,
+  stable: true,
+  secretLabel: "SMTP password",
+  defaultConfig: createDefaultConfig("smtp", ""),
+  isConfigured(row, config) {
+    return Boolean(
+      row?.encrypted_secret &&
+        config.fromAddress &&
+        config.smtpHost &&
+        config.smtpPort > 0 &&
+        config.smtpPort !== 25 &&
+        config.smtpUsername,
+    );
+  },
+  source(row, config) {
+    if (row?.encrypted_secret && config.smtpHost) return "stored";
+    if (config.fromAddress || config.smtpHost || config.smtpUsername) return "manual";
+    return "not_configured";
+  },
+  setupRequirements(row, config) {
+    return [
+      {
+        id: "smtp-host",
+        label: "SMTP host",
+        required: true,
+        configured: Boolean(config.smtpHost),
+        note: "Use the authenticated submission host from your email provider.",
+      },
+      {
+        id: "submission-port",
+        label: "SMTP submission port",
+        required: true,
+        configured: config.smtpPort > 0 && config.smtpPort !== 25,
+        note: "Cloudflare Workers cannot connect to SMTP port 25. Use 587, 465, or 2525.",
+      },
+      {
+        id: "smtp-auth",
+        label: "SMTP username and password",
+        required: true,
+        configured: Boolean(config.smtpUsername && row?.encrypted_secret),
+        note: "The password is encrypted in Core and never returned to the browser.",
+      },
+      {
+        id: "verified-sender",
+        label: "Verified sender address",
+        required: true,
+        configured: Boolean(config.fromAddress),
+        note: "Most SMTP providers only allow mail from verified addresses or domains.",
+      },
+    ];
+  },
+  async send(env, config, secret, message) {
+    return sendSmtpMessage(env, config, secret, message);
+  },
+};
+
+const EMAIL_PROVIDER_ADAPTERS = [
+  SMTP_PROVIDER,
+  POSTMARK_PROVIDER,
+  CLOUDFLARE_EMAIL_PROVIDER,
+] as const;
 const PROVIDER_ALIASES: Record<string, EmailProviderId> = {
   cloudflare: "cloudflare-email",
   "cloudflare-email": "cloudflare-email",
   "cloudflare-email-service": "cloudflare-email",
   "email-service": "cloudflare-email",
+  smtp: "smtp",
   postmark: "postmark",
 };
 
 const FUTURE_EMAIL_PROVIDERS: readonly FutureEmailProviderRecord[] = [
   { id: "mailgun", label: "Mailgun", description: "Future domain-based sender." },
-  { id: "smtp", label: "SMTP", description: "Future generic SMTP sender." },
   { id: "ses", label: "Amazon SES", description: "Future AWS sender." },
   { id: "resend", label: "Resend", description: "Future API sender." },
   { id: "sendgrid", label: "SendGrid", description: "Future transactional sender." },
@@ -440,7 +516,7 @@ export async function getEmailProviderSettings(
   const activeProviderId =
     getActiveProviderId(settings) ||
     normalizeEmailProviderId(env.ME3_EMAIL_DEFAULT_PROVIDER) ||
-    "cloudflare-email";
+    DEFAULT_EMAIL_PROVIDER_ID;
 
   return {
     encryptionConfigured: await hasInstallEncryptionKey(env),
@@ -464,7 +540,7 @@ export async function updateEmailProviderSettings(
   const activeProviderId =
     normalizeEmailProviderId(input.activeProviderId) ||
     getActiveProviderId(existing) ||
-    "cloudflare-email";
+    DEFAULT_EMAIL_PROVIDER_ID;
   let changed = false;
 
   if (input.providers !== undefined) {
@@ -757,7 +833,7 @@ async function resolveReadyProvider(
     requestedProviderId ||
     getActiveProviderId(settings) ||
     normalizeEmailProviderId(env.ME3_EMAIL_DEFAULT_PROVIDER) ||
-    "cloudflare-email";
+    DEFAULT_EMAIL_PROVIDER_ID;
   const adapter = getProviderAdapter(providerId);
   const row = settings.get(providerId) || null;
   const config = normalizeProviderConfig(row, adapter);
@@ -937,6 +1013,317 @@ async function updateProviderTestStatus(
     .run();
 }
 
+type SmtpReply = {
+  code: number;
+  lines: string[];
+  message: string;
+};
+
+type SmtpConnect = NonNullable<Env["SMTP_CONNECT"]>;
+
+class SmtpSession {
+  private reader: ReadableStreamDefaultReader<Uint8Array>;
+  private writer: WritableStreamDefaultWriter<Uint8Array>;
+  private readonly decoder = new TextDecoder();
+  private readonly encoder = new TextEncoder();
+  private buffer = "";
+
+  constructor(private socket: Socket) {
+    this.reader = socket.readable.getReader();
+    this.writer = socket.writable.getWriter();
+  }
+
+  async command(command: string, expectedCodes: number[], label: string): Promise<SmtpReply> {
+    await this.writer.write(this.encoder.encode(`${command}\r\n`));
+    return this.readResponse(expectedCodes, label);
+  }
+
+  async data(data: string, expectedCodes: number[], label: string): Promise<SmtpReply> {
+    await this.writer.write(this.encoder.encode(`${dotStuffSmtpData(data)}\r\n.\r\n`));
+    return this.readResponse(expectedCodes, label);
+  }
+
+  async readResponse(expectedCodes: number[], label: string): Promise<SmtpReply> {
+    const lines: string[] = [];
+    while (true) {
+      const line = await this.readLine(label);
+      lines.push(line);
+      const match = line.match(/^(\d{3})([\s-]?)(.*)$/);
+      if (!match) continue;
+      if (match[2] === "-") continue;
+
+      const code = Number(match[1]);
+      const reply = {
+        code,
+        lines,
+        message: match[3]?.trim() || lines.join(" "),
+      };
+      if (!expectedCodes.includes(code)) {
+        throw new EmailProviderSendError(
+          `${label} failed: ${reply.message || line}`,
+          smtpHttpStatus(code),
+          String(code),
+          reply,
+        );
+      }
+      return reply;
+    }
+  }
+
+  upgradeTls(expectedServerHostname: string) {
+    this.reader.releaseLock();
+    this.writer.releaseLock();
+    this.socket = this.socket.startTls({ expectedServerHostname });
+    this.reader = this.socket.readable.getReader();
+    this.writer = this.socket.writable.getWriter();
+    this.buffer = "";
+  }
+
+  async close() {
+    try {
+      await this.socket.close();
+    } catch {
+      // The connection may already be closed by the provider.
+    }
+  }
+
+  private async readLine(label: string): Promise<string> {
+    while (true) {
+      const newlineIndex = this.buffer.indexOf("\n");
+      if (newlineIndex >= 0) {
+        const line = this.buffer.slice(0, newlineIndex).replace(/\r$/, "");
+        this.buffer = this.buffer.slice(newlineIndex + 1);
+        return line;
+      }
+
+      const chunk = await this.reader.read();
+      if (chunk.done) {
+        throw new EmailProviderSendError(
+          `${label} failed: SMTP server closed the connection`,
+          502,
+          "CONNECTION_CLOSED",
+          { lines: this.buffer ? [this.buffer] : [] },
+        );
+      }
+      this.buffer += this.decoder.decode(chunk.value, { stream: true });
+    }
+  }
+}
+
+async function sendSmtpMessage(
+  env: Env,
+  config: EmailProviderConfig,
+  secret: string | null,
+  message: EmailProviderSendMessage,
+): Promise<EmailProviderSendResult> {
+  if (!config.smtpHost) {
+    throw new EmailProviderInputError("SMTP host is required.", 503);
+  }
+  if (!config.smtpPort) {
+    throw new EmailProviderInputError("SMTP port is required.", 503);
+  }
+  if (config.smtpPort === 25) {
+    throw new EmailProviderInputError(
+      "SMTP port 25 is not supported on Cloudflare Workers. Use port 587, 465, or 2525.",
+      503,
+    );
+  }
+  if (!config.smtpUsername || !secret) {
+    throw new EmailProviderInputError("SMTP username and password are required.", 503);
+  }
+
+  const connect = await getSmtpConnect(env);
+  const secureTransport =
+    config.smtpSecurity === "tls"
+      ? "on"
+      : config.smtpSecurity === "starttls"
+        ? "starttls"
+        : "off";
+  const socket = connect(
+    { hostname: config.smtpHost, port: config.smtpPort },
+    { secureTransport, allowHalfOpen: false },
+  );
+  const session = new SmtpSession(socket);
+
+  try {
+    await session.readResponse([220], "SMTP greeting");
+    let ehloReply = await session.command(smtpEhloCommand(config, message), [250], "EHLO");
+
+    if (config.smtpSecurity === "starttls") {
+      if (!smtpHasCapability(ehloReply, "STARTTLS")) {
+        throw new EmailProviderSendError(
+          "SMTP server did not advertise STARTTLS.",
+          502,
+          "STARTTLS_NOT_SUPPORTED",
+          { lines: ehloReply.lines },
+        );
+      }
+      await session.command("STARTTLS", [220], "STARTTLS");
+      session.upgradeTls(config.smtpHost);
+      ehloReply = await session.command(smtpEhloCommand(config, message), [250], "EHLO");
+    }
+
+    await authenticateSmtp(session, ehloReply, config.smtpUsername, secret);
+    await session.command(`MAIL FROM:<${message.fromAddress}>`, [250], "MAIL FROM");
+    await session.command(`RCPT TO:<${message.toAddress}>`, [250, 251], "RCPT TO");
+    await session.command("DATA", [354], "DATA");
+    const accepted = await session.data(buildSmtpMessage(config, message), [250], "SMTP send");
+    await session.command("QUIT", [221], "QUIT").catch(() => undefined);
+
+    return {
+      providerMessageId: extractSmtpProviderMessageId(accepted),
+      providerStatus: `${accepted.code} ${accepted.message}`.trim(),
+      raw: { response: accepted.lines },
+    };
+  } finally {
+    await session.close();
+  }
+}
+
+async function getSmtpConnect(env: Env): Promise<SmtpConnect> {
+  if (env.SMTP_CONNECT) return env.SMTP_CONNECT;
+  const sockets = await import("cloudflare:sockets");
+  return sockets.connect;
+}
+
+async function authenticateSmtp(
+  session: SmtpSession,
+  ehloReply: SmtpReply,
+  username: string,
+  password: string,
+) {
+  const mechanisms = smtpAuthMechanisms(ehloReply);
+  if (mechanisms.length === 0 || mechanisms.includes("PLAIN")) {
+    await session.command(
+      `AUTH PLAIN ${encodeBase64Utf8(`\u0000${username}\u0000${password}`)}`,
+      [235],
+      "SMTP authentication",
+    );
+    return;
+  }
+  if (mechanisms.includes("LOGIN")) {
+    await session.command("AUTH LOGIN", [334], "SMTP authentication");
+    await session.command(encodeBase64Utf8(username), [334], "SMTP username");
+    await session.command(encodeBase64Utf8(password), [235], "SMTP password");
+    return;
+  }
+  throw new EmailProviderSendError(
+    "SMTP server did not advertise AUTH PLAIN or LOGIN.",
+    502,
+    "AUTH_NOT_SUPPORTED",
+    { mechanisms },
+  );
+}
+
+function smtpEhloCommand(config: EmailProviderConfig, message: EmailProviderSendMessage): string {
+  return `EHLO ${domainFromEmail(message.fromAddress) || config.smtpHost}`;
+}
+
+function smtpHasCapability(reply: SmtpReply, capability: string): boolean {
+  const needle = capability.toUpperCase();
+  return reply.lines.some((line) => smtpCapabilityText(line).split(/\s+/).includes(needle));
+}
+
+function smtpAuthMechanisms(reply: SmtpReply): string[] {
+  const mechanisms = new Set<string>();
+  for (const line of reply.lines) {
+    const text = smtpCapabilityText(line);
+    if (!text.toUpperCase().startsWith("AUTH")) continue;
+    for (const part of text.split(/\s+/).slice(1)) {
+      if (part) mechanisms.add(part.toUpperCase());
+    }
+  }
+  return [...mechanisms];
+}
+
+function smtpCapabilityText(line: string): string {
+  return line.replace(/^\d{3}[-\s]?/, "").trim().toUpperCase();
+}
+
+function buildSmtpMessage(
+  config: EmailProviderConfig,
+  message: EmailProviderSendMessage,
+): string {
+  const headers = [
+    headerLine("From", formatAddress(message.fromAddress, message.fromName)),
+    headerLine("To", message.toAddress),
+    headerLine("Subject", encodeMimeHeader(message.subject)),
+    headerLine("Date", new Date().toUTCString()),
+    headerLine(
+      "Message-ID",
+      message.messageIdHeader || `<${message.auditId}@${domainFromEmail(message.fromAddress) || config.smtpHost}>`,
+    ),
+    message.replyToAddress ? headerLine("Reply-To", message.replyToAddress) : null,
+    message.inReplyTo ? headerLine("In-Reply-To", message.inReplyTo) : null,
+    message.referencesHeader ? headerLine("References", message.referencesHeader) : null,
+    headerLine("X-ME3-Audit-ID", message.auditId),
+    headerLine("X-ME3-Provider", "smtp"),
+    "MIME-Version: 1.0",
+  ].filter((header): header is string => Boolean(header));
+
+  if (!message.htmlBody) {
+    return [
+      ...headers,
+      'Content-Type: text/plain; charset="UTF-8"',
+      "Content-Transfer-Encoding: 8bit",
+      "",
+      normalizeSmtpBody(message.textBody),
+    ].join("\r\n");
+  }
+
+  const boundary = `me3-${message.auditId}`;
+  return [
+    ...headers,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    normalizeSmtpBody(message.textBody),
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    normalizeSmtpBody(message.htmlBody),
+    `--${boundary}--`,
+  ].join("\r\n");
+}
+
+function headerLine(name: string, value: string): string {
+  return `${name}: ${sanitizeHeaderValue(value)}`;
+}
+
+function encodeMimeHeader(value: string): string {
+  const clean = sanitizeHeaderValue(value);
+  return /^[\x20-\x7e]*$/.test(clean) ? clean : `=?UTF-8?B?${encodeBase64Utf8(clean)}?=`;
+}
+
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function normalizeSmtpBody(value: string): string {
+  return value.replace(/\r?\n/g, "\r\n");
+}
+
+function dotStuffSmtpData(value: string): string {
+  return normalizeSmtpBody(value)
+    .split("\r\n")
+    .map((line) => (line.startsWith(".") ? `.${line}` : line))
+    .join("\r\n");
+}
+
+function extractSmtpProviderMessageId(reply: SmtpReply): string | null {
+  const text = reply.lines.join(" ");
+  const match = text.match(/(?:queued as|id=)\s*<?([a-z0-9._=-]+)>?/i);
+  return match?.[1] || null;
+}
+
+function smtpHttpStatus(code: number): number {
+  return code >= 400 && code < 500 ? 503 : 502;
+}
+
 function serializeProvider(
   adapter: EmailProviderAdapter,
   row: DbEmailProviderSetting | null,
@@ -986,6 +1373,12 @@ function normalizeProviderConfig(
   }
   if (adapter.id === "postmark" && !config.messageStream) config.messageStream = "outbound";
   if (adapter.id === "cloudflare-email") config.messageStream = "";
+  if (adapter.id === "smtp") {
+    config.transport = "smtp";
+    config.messageStream = "";
+    if (!config.smtpPort) config.smtpPort = 587;
+    if (!config.smtpSecurity) config.smtpSecurity = "starttls";
+  }
   if (!config.sendingDomain && config.fromAddress) {
     config.sendingDomain = domainFromEmail(config.fromAddress);
   }
@@ -999,7 +1392,8 @@ function normalizeProviderConfigUpdate(
 ): EmailProviderConfig {
   const next: EmailProviderConfig = { ...current };
   if (typeof input.transport === "string") {
-    next.transport = input.transport === "rest" ? "rest" : "binding";
+    if (providerId === "smtp") next.transport = "smtp";
+    else next.transport = input.transport === "rest" ? "rest" : "binding";
   }
   if (typeof input.fromAddress === "string") {
     next.fromAddress = input.fromAddress.trim().toLowerCase();
@@ -1015,15 +1409,40 @@ function normalizeProviderConfigUpdate(
   if (typeof input.messageStream === "string") {
     next.messageStream = input.messageStream.trim().slice(0, 80);
   }
+  if (providerId === "smtp") {
+    if (typeof input.smtpHost === "string") {
+      next.smtpHost = normalizeSmtpHost(input.smtpHost);
+    }
+    if (typeof input.smtpPort === "string" || typeof input.smtpPort === "number") {
+      next.smtpPort = normalizeSmtpPort(input.smtpPort);
+    }
+    if (typeof input.smtpSecurity === "string") {
+      next.smtpSecurity = normalizeSmtpSecurity(input.smtpSecurity);
+    }
+    if (typeof input.smtpUsername === "string") {
+      next.smtpUsername = input.smtpUsername.trim().slice(0, 254);
+    }
+  }
   if (!next.fromName) next.fromName = "ME3 Core";
   if (providerId === "postmark" && !next.messageStream) next.messageStream = "outbound";
   if (providerId === "cloudflare-email") next.messageStream = "";
+  if (providerId === "smtp") {
+    next.transport = "smtp";
+    next.accountId = "";
+    next.messageStream = "";
+    if (!next.smtpPort) next.smtpPort = next.smtpSecurity === "tls" ? 465 : 587;
+  }
   if (!next.sendingDomain && next.fromAddress) next.sendingDomain = domainFromEmail(next.fromAddress);
   if (next.fromAddress && !isValidEmail(next.fromAddress)) {
     throw new EmailProviderInputError("Enter a valid sender email address");
   }
   if (next.replyToAddress && !isValidEmail(next.replyToAddress)) {
     throw new EmailProviderInputError("Enter a valid reply-to email address");
+  }
+  if (providerId === "smtp" && next.smtpPort === 25) {
+    throw new EmailProviderInputError(
+      "SMTP port 25 is not supported on Cloudflare Workers. Use port 587, 465, or 2525.",
+    );
   }
   return next;
 }
@@ -1040,6 +1459,10 @@ function createDefaultConfig(
     sendingDomain: "",
     accountId: "",
     messageStream,
+    smtpHost: "",
+    smtpPort: transport === "smtp" ? 587 : 0,
+    smtpSecurity: transport === "smtp" ? "starttls" : "none",
+    smtpUsername: "",
   };
 }
 
@@ -1079,8 +1502,9 @@ function formatAddress(email: string, name: string): string {
 }
 
 function quoteAddressName(name: string): string {
-  if (/^[a-z0-9 ._-]+$/i.test(name)) return name;
-  return `"${name.replace(/"/g, '\\"')}"`;
+  const clean = sanitizeHeaderValue(name);
+  if (/^[a-z0-9 ._-]+$/i.test(clean)) return clean;
+  return `"${clean.replace(/"/g, '\\"')}"`;
 }
 
 function domainFromEmail(email: string): string {
@@ -1095,6 +1519,31 @@ function normalizeDomain(value: string): string {
     .replace(/^https?:\/\//, "")
     .replace(/^@/, "")
     .replace(/\/.*$/, "");
+}
+
+function normalizeSmtpHost(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^smtp:\/\//, "")
+    .replace(/^smtps:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\d+$/, "");
+}
+
+function normalizeSmtpPort(value: string | number): number {
+  const port = typeof value === "number" ? value : Number(value.trim());
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new EmailProviderInputError("Enter a valid SMTP port");
+  }
+  return port;
+}
+
+function normalizeSmtpSecurity(value: string): SmtpSecurity {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "tls" || normalized === "ssl") return "tls";
+  if (normalized === "none" || normalized === "off") return "none";
+  return "starttls";
 }
 
 function isValidEmail(value: string): boolean {
@@ -1156,6 +1605,12 @@ function encodeBase64Url(value: ArrayBuffer | Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function encodeBase64Utf8(value: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(value)) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function decodeBase64Url(value: string): ArrayBuffer {

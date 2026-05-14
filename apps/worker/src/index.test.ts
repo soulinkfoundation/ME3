@@ -1221,6 +1221,121 @@ function responseCookieCleared(response: Response): boolean {
   return setCookie.includes("me3_core_session=") && setCookie.includes("Max-Age=0");
 }
 
+function createFakeSmtpConnect(): {
+  connect: NonNullable<Env["SMTP_CONNECT"]>;
+  commands: string[];
+  messages: string[];
+} {
+  const commands: string[] = [];
+  const messages: string[] = [];
+  return {
+    commands,
+    messages,
+    connect: () => new FakeSmtpSocket(commands, messages, true),
+  };
+}
+
+class FakeSmtpSocket implements Socket {
+  readonly opened = Promise.resolve({});
+  readonly closed = Promise.resolve();
+  readonly upgraded = false;
+  readonly secureTransport = "starttls";
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
+  private controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  private buffer = "";
+  private dataMode = false;
+
+  constructor(
+    private readonly commands: string[],
+    private readonly messages: string[],
+    greet: boolean,
+  ) {
+    this.readable = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        this.controller = controller;
+        if (greet) this.enqueue("220 smtp.test ESMTP\r\n");
+      },
+    });
+    this.writable = new WritableStream<Uint8Array>({
+      write: (chunk) => {
+        this.handleWrite(new TextDecoder().decode(chunk));
+      },
+    });
+  }
+
+  async close(): Promise<void> {
+    try {
+      this.controller?.close();
+    } catch {
+      // Already closed.
+    }
+  }
+
+  startTls(): Socket {
+    return new FakeSmtpSocket(this.commands, this.messages, false);
+  }
+
+  private handleWrite(text: string) {
+    this.buffer += text;
+    if (this.dataMode) {
+      const terminatorIndex = this.buffer.indexOf("\r\n.\r\n");
+      if (terminatorIndex < 0) return;
+      this.messages.push(this.buffer.slice(0, terminatorIndex));
+      this.commands.push("[DATA]");
+      this.buffer = this.buffer.slice(terminatorIndex + 5);
+      this.dataMode = false;
+      this.enqueue("250 2.0.0 Ok: queued as smtp-test-1\r\n");
+    }
+
+    while (!this.dataMode) {
+      const newlineIndex = this.buffer.indexOf("\r\n");
+      if (newlineIndex < 0) return;
+      const line = this.buffer.slice(0, newlineIndex);
+      this.buffer = this.buffer.slice(newlineIndex + 2);
+      this.handleCommand(line);
+    }
+  }
+
+  private handleCommand(line: string) {
+    this.commands.push(line);
+    if (line.startsWith("EHLO ")) {
+      this.enqueue("250-smtp.test\r\n250-STARTTLS\r\n250-AUTH PLAIN LOGIN\r\n250 OK\r\n");
+      return;
+    }
+    if (line === "STARTTLS") {
+      this.enqueue("220 2.0.0 Ready to start TLS\r\n");
+      return;
+    }
+    if (line.startsWith("AUTH PLAIN ")) {
+      this.enqueue("235 2.7.0 Authentication successful\r\n");
+      return;
+    }
+    if (line.startsWith("MAIL FROM:")) {
+      this.enqueue("250 2.1.0 Sender OK\r\n");
+      return;
+    }
+    if (line.startsWith("RCPT TO:")) {
+      this.enqueue("250 2.1.5 Recipient OK\r\n");
+      return;
+    }
+    if (line === "DATA") {
+      this.dataMode = true;
+      this.enqueue("354 End data with <CR><LF>.<CR><LF>\r\n");
+      return;
+    }
+    if (line === "QUIT") {
+      this.enqueue("221 2.0.0 Bye\r\n");
+      return;
+    }
+    this.enqueue("250 OK\r\n");
+  }
+
+  private enqueue(value: string) {
+    this.controller?.enqueue(new TextEncoder().encode(value));
+  }
+}
+
 async function createSignedMe3ClaimToken(input: {
   issuer: string;
   state: string;
@@ -2871,7 +2986,7 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(401);
   });
 
-  it("loads Cloudflare-first email provider settings for the signed-in owner", async () => {
+  it("loads SMTP-first email provider settings for the signed-in owner", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
 
@@ -2894,30 +3009,35 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(200);
     expect(body.encryptionConfigured).toBe(true);
-    expect(body.activeProviderId).toBe("cloudflare-email");
+    expect(body.activeProviderId).toBe("smtp");
     expect(body.providers[0]).toMatchObject({
-      id: "cloudflare-email",
+      id: "smtp",
       recommended: true,
+      stable: true,
     });
     expect(body.providers[0].setupRequirements).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "workers-paid",
-          label: "Workers Paid plan",
+          id: "smtp-host",
+          label: "SMTP host",
         }),
         expect.objectContaining({
-          id: "binding-or-api",
+          id: "submission-port",
         }),
       ]),
     );
     expect(body.providers[1]).toMatchObject({
       id: "postmark",
       recommended: false,
+      stable: true,
+    });
+    expect(body.providers[2]).toMatchObject({
+      id: "cloudflare-email",
+      recommended: false,
     });
     expect(body.futureProviders).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "mailgun" }),
-        expect.objectContaining({ id: "smtp" }),
       ]),
     );
   });
@@ -2976,6 +3096,66 @@ describe("ME3 Core Worker auth", () => {
     expect(env.emailProviderSettings[0].encrypted_secret).toMatch(/^v1\./);
     expect(env.emailProviderSettings[0].encrypted_secret).not.toContain(
       "postmark-secret-1234",
+    );
+  });
+
+  it("saves encrypted SMTP sender settings without returning the password", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          activeProviderId: "smtp",
+          providers: [
+            {
+              id: "smtp",
+              fromAddress: "hello@example.com",
+              fromName: "ME3 Mail",
+              smtpHost: "smtp.example.com",
+              smtpPort: 587,
+              smtpSecurity: "starttls",
+              smtpUsername: "smtp-user",
+              apiToken: "smtp-password-1234",
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      activeProviderId: string;
+      providers: Array<{
+        id: string;
+        configured: boolean;
+        source: string;
+        keyHint: string | null;
+        config: { smtpHost: string; smtpPort: number; smtpSecurity: string };
+      }>;
+    };
+    const smtp = body.providers.find((provider) => provider.id === "smtp");
+
+    expect(response.status).toBe(200);
+    expect(body.activeProviderId).toBe("smtp");
+    expect(smtp).toMatchObject({
+      configured: true,
+      source: "stored",
+      keyHint: "***1234",
+      config: {
+        smtpHost: "smtp.example.com",
+        smtpPort: 587,
+        smtpSecurity: "starttls",
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("smtp-password-1234");
+    expect(env.emailProviderSettings[0].encrypted_secret).toMatch(/^v1\./);
+    expect(env.emailProviderSettings[0].encrypted_secret).not.toContain(
+      "smtp-password-1234",
     );
   });
 
@@ -3130,6 +3310,125 @@ describe("ME3 Core Worker auth", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("sends an SMTP test message through the socket adapter", async () => {
+    const env = createEnv();
+    const smtp = createFakeSmtpConnect();
+    env.SMTP_CONNECT = smtp.connect;
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          activeProviderId: "smtp",
+          providers: [
+            {
+              id: "smtp",
+              fromAddress: "owner@example.com",
+              fromName: "ME3 Owner",
+              smtpHost: "smtp.example.com",
+              smtpPort: 587,
+              smtpSecurity: "starttls",
+              smtpUsername: "smtp-user",
+              apiToken: "smtp-password-1234",
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ providerId: "smtp", to: "owner@example.com" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      ok: boolean;
+      providerId: string;
+      providerMessageId: string;
+      sentTo: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      providerId: "smtp",
+      providerMessageId: "smtp-test-1",
+      sentTo: "owner@example.com",
+    });
+    expect(smtp.commands).toEqual(
+      expect.arrayContaining([
+        "EHLO example.com",
+        "STARTTLS",
+        "AUTH PLAIN AHNtdHAtdXNlcgBzbXRwLXBhc3N3b3JkLTEyMzQ=",
+        "MAIL FROM:<owner@example.com>",
+        "RCPT TO:<owner@example.com>",
+        "DATA",
+        "[DATA]",
+        "QUIT",
+      ]),
+    );
+    expect(smtp.messages[0]).toContain("Subject: ME3 Core test email");
+    expect(smtp.messages[0]).toContain("X-ME3-Provider: smtp");
+    expect(env.emailSendAudit).toEqual([
+      expect.objectContaining({
+        provider_id: "smtp",
+        provider_message_id: "smtp-test-1",
+        status: "sent",
+        purpose: "test",
+      }),
+    ]);
+    expect(env.emailProviderSettings[0]).toMatchObject({
+      provider_id: "smtp",
+      last_status: "ready",
+    });
+  });
+
+  it("rejects SMTP port 25 because Workers cannot use it for outbound SMTP", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          activeProviderId: "smtp",
+          providers: [
+            {
+              id: "smtp",
+              fromAddress: "owner@example.com",
+              smtpHost: "smtp.example.com",
+              smtpPort: 25,
+              smtpSecurity: "starttls",
+              smtpUsername: "smtp-user",
+              apiToken: "smtp-password-1234",
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toContain("SMTP port 25 is not supported");
   });
 
   it("requires owner auth for email provider settings", async () => {

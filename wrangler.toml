@@ -24,9 +24,8 @@ migrations_dir = "apps/worker/migrations"
 binding = "SITE_ASSETS"
 bucket_name = "me3-site-assets"
 
-# Reserved for a future Cloudflare Email Service sender adapter. ME3 Core's
-# current outbound sender is Postmark, configured in Account -> Mailbox settings
-# or with local/dev POSTMARK_* vars.
+# Optional Cloudflare Email Service sender binding. ME3 Core can also send with
+# owner-configured SMTP or Postmark settings from Account -> Mailbox settings.
 # [[send_email]]
 # name = "EMAIL"
 # allowed_sender_addresses = ["hello@example.com"]

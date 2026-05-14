@@ -261,7 +261,7 @@ const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
   },
 ];
 
-type EmailProviderId = "cloudflare-email" | "postmark";
+type EmailProviderId = "cloudflare-email" | "smtp" | "postmark";
 
 type EmailProviderSetupRequirement = {
   id: string;
@@ -272,13 +272,17 @@ type EmailProviderSetupRequirement = {
 };
 
 type EmailProviderInputs = {
-  transport: "binding" | "rest";
+  transport: "binding" | "rest" | "smtp";
   fromAddress: string;
   fromName: string;
   replyToAddress: string;
   sendingDomain: string;
   accountId: string;
   messageStream: string;
+  smtpHost: string;
+  smtpPort: number | string;
+  smtpSecurity: "starttls" | "tls" | "none";
+  smtpUsername: string;
   apiToken: string;
 };
 
@@ -304,7 +308,7 @@ type EmailProviderRecord = {
 };
 
 type FutureEmailProviderRecord = {
-  id: "mailgun" | "smtp" | "ses" | "resend" | "sendgrid";
+  id: "mailgun" | "ses" | "resend" | "sendgrid";
   label: string;
   description: string;
 };
@@ -375,7 +379,7 @@ const emailProviderSaving = ref(false);
 const emailProviderTesting = ref(false);
 const emailProviderEncryptionConfigured = ref(false);
 const emailProviders = ref<EmailProviderRecord[]>([]);
-const selectedEmailProviderId = ref<EmailProviderId>("cloudflare-email");
+const selectedEmailProviderId = ref<EmailProviderId>("smtp");
 const emailProviderInputs = ref<Record<EmailProviderId, EmailProviderInputs>>(
   createEmptyEmailProviderInputs(),
 );
@@ -630,6 +634,28 @@ const emailProviderSummaryLabel = computed(() => {
 const emailProviderSummaryStatusClass = computed(() =>
   activeEmailProvider.value?.configured ? "active" : "setup_required",
 );
+
+const emailProviderHelpText = computed(() => {
+  if (selectedEmailProviderId.value === "smtp") {
+    return "Send through an authenticated SMTP relay on port 587, 465, or 2525. Port 25 is blocked in the Worker runtime.";
+  }
+  if (selectedEmailProviderId.value === "postmark") {
+    return "Send through Postmark with a Server API token and a confirmed sender signature or verified domain.";
+  }
+  return "Send with Cloudflare Email Service using a verified sending address or domain.";
+});
+
+const emailProviderSecretPlaceholder = computed(() => {
+  const hasStoredSecret = Boolean(activeEmailProvider.value?.keyHint);
+  if (selectedEmailProviderId.value === "smtp") {
+    return hasStoredSecret
+      ? "Paste a new password to replace stored value"
+      : "Paste SMTP password";
+  }
+  return hasStoredSecret
+    ? "Paste a new token to replace stored value"
+    : "Paste provider token";
+});
 
 const emailProviderApiTokenCount = computed(
   () =>
@@ -944,13 +970,18 @@ function createDefaultEmailProviderInput(
   id: EmailProviderId,
 ): EmailProviderInputs {
   return {
-    transport: id === "cloudflare-email" ? "binding" : "rest",
+    transport:
+      id === "cloudflare-email" ? "binding" : id === "smtp" ? "smtp" : "rest",
     fromAddress: "",
     fromName: "ME3 Core",
     replyToAddress: "",
     sendingDomain: "",
     accountId: "",
     messageStream: id === "postmark" ? "outbound" : "",
+    smtpHost: "",
+    smtpPort: id === "smtp" ? 587 : "",
+    smtpSecurity: id === "smtp" ? "starttls" : "none",
+    smtpUsername: "",
     apiToken: "",
   };
 }
@@ -961,6 +992,7 @@ function createEmptyEmailProviderInputs(): Record<
 > {
   return {
     "cloudflare-email": createDefaultEmailProviderInput("cloudflare-email"),
+    smtp: createDefaultEmailProviderInput("smtp"),
     postmark: createDefaultEmailProviderInput("postmark"),
   };
 }
@@ -968,7 +1000,7 @@ function createEmptyEmailProviderInputs(): Record<
 function syncEmailProviderSettings(response: EmailProviderSettingsResponse) {
   emailProviderEncryptionConfigured.value = response.encryptionConfigured;
   emailProviders.value = response.providers || [];
-  selectedEmailProviderId.value = response.activeProviderId || "cloudflare-email";
+  selectedEmailProviderId.value = response.activeProviderId || "smtp";
   emailProviderInputs.value = createEmptyEmailProviderInputs();
 
   for (const provider of emailProviders.value) {
@@ -1021,6 +1053,10 @@ async function saveEmailProviderSettings() {
             sendingDomain: input.sendingDomain || "",
             accountId: input.accountId || "",
             messageStream: input.messageStream || "outbound",
+            smtpHost: input.smtpHost || "",
+            smtpPort: input.smtpPort || "",
+            smtpSecurity: input.smtpSecurity || "starttls",
+            smtpUsername: input.smtpUsername || "",
             apiToken: input.apiToken.trim() || undefined,
           },
         ],
@@ -1540,9 +1576,9 @@ onMounted(async () => {
 
                 <template v-else>
                   <p class="hint">
-                    Send approved replies with Cloudflare Email Service. Requires
-                    a verified sending address in Cloudflare.
+                    {{ emailProviderHelpText }}
                     <a
+                      v-if="selectedEmailProviderId === 'cloudflare-email'"
                       href="https://developers.cloudflare.com/email-service/api/send-emails/workers-api/"
                       target="_blank"
                       rel="noreferrer"
@@ -1591,10 +1627,60 @@ onMounted(async () => {
                         />
                       </label>
 
+                      <template v-if="selectedEmailProviderId === 'smtp'">
+                        <label class="field">
+                          <span>SMTP host</span>
+                          <input
+                            v-model="emailProviderInputs[selectedEmailProviderId].smtpHost"
+                            class="input"
+                            type="text"
+                            placeholder="smtp.example.com"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <label class="field">
+                          <span>Port</span>
+                          <input
+                            v-model.number="emailProviderInputs[selectedEmailProviderId].smtpPort"
+                            class="input"
+                            type="number"
+                            inputmode="numeric"
+                            min="1"
+                            max="65535"
+                            placeholder="587"
+                          />
+                        </label>
+
+                        <label class="field">
+                          <span>Security</span>
+                          <select
+                            v-model="emailProviderInputs[selectedEmailProviderId].smtpSecurity"
+                            class="input"
+                          >
+                            <option value="starttls">STARTTLS</option>
+                            <option value="tls">TLS</option>
+                            <option value="none">None</option>
+                          </select>
+                        </label>
+
+                        <label class="field">
+                          <span>Username</span>
+                          <input
+                            v-model="emailProviderInputs[selectedEmailProviderId].smtpUsername"
+                            class="input"
+                            type="text"
+                            autocomplete="username"
+                            placeholder="smtp-user"
+                            spellcheck="false"
+                          />
+                        </label>
+                      </template>
+
                       <label
                         v-if="
                           activeEmailProvider.secretLabel &&
-                          selectedEmailProviderId === 'postmark'
+                          selectedEmailProviderId !== 'cloudflare-email'
                         "
                         class="field"
                       >
@@ -1605,14 +1691,10 @@ onMounted(async () => {
                           type="password"
                           autocomplete="off"
                           spellcheck="false"
-                          :placeholder="
-                            activeEmailProvider.keyHint
-                              ? 'Paste a new token to replace stored value'
-                              : 'Paste provider token'
-                          "
+                          :placeholder="emailProviderSecretPlaceholder"
                         />
                         <p class="field-hint">
-                          Existing tokens are encrypted at rest and never
+                          Existing secrets are encrypted at rest and never
                           returned to the browser.
                         </p>
                       </label>
