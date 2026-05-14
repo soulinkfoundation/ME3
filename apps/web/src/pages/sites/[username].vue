@@ -6,6 +6,7 @@ import {
   useSitesStore,
   type DomainStatus,
 } from "../../stores/sites";
+import { LANDING_PAGE_TEMPLATES } from "@me3-core/plugin-landing-pages";
 import { useWizardStore } from "../../stores/wizard";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
 import UiIcon from "../../components/UiIcon.vue";
@@ -39,9 +40,11 @@ const sites = useSitesStore();
 const wizard = useWizardStore();
 const { toastError, toastSuccess } = useAppToast();
 
-/** Nested child `sites/[username]/build.vue` — parent must render RouterView or the builder never appears. */
-const isNestedLandingBuilder = computed(
-  () => route.path.startsWith("/sites/") && route.path.endsWith("/build"),
+/** Nested children need the parent RouterView or their pages never appear. */
+const isNestedSitesTool = computed(
+  () =>
+    route.path.startsWith("/sites/") &&
+    (route.path.endsWith("/build") || route.path.includes("/landing-pages/")),
 );
 
 const username = computed(() => route.params.username as string);
@@ -51,6 +54,12 @@ const site = computed(() =>
 const siteType = computed(() => site.value?.site_type || "profile");
 const isLandingPage = computed(() => siteType.value === "landing_page");
 const isProfileSite = computed(() => siteType.value === "profile");
+const newLandingPageRoute = computed(
+  () => `/sites/${username.value}/landing-pages/new`,
+);
+const landingPageSites = computed(() =>
+  sites.sites.filter((entry) => (entry.site_type || "profile") === "landing_page"),
+);
 
 // Use local preview URL in development
 const isDev = import.meta.env.DEV;
@@ -242,6 +251,13 @@ async function editInWizard() {
 
 function openBuilder() {
   router.push(`/sites/${username.value}/build`);
+}
+
+function landingTemplateLabel(templateId: string | null | undefined): string {
+  return (
+    LANDING_PAGE_TEMPLATES.find((template) => template.id === templateId)
+      ?.shortName || "Landing page"
+  );
 }
 
 async function writePost() {
@@ -734,7 +750,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 </script>
 
 <template>
-  <RouterView v-if="isNestedLandingBuilder" />
+  <RouterView v-if="isNestedSitesTool" />
   <div v-else class="site-page">
     <main class="main">
       <!-- Site Header -->
@@ -807,6 +823,14 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         </div>
       </div>
 
+      <nav v-if="isProfileSite" class="site-tabs" aria-label="Site tools">
+        <span class="site-tab active">ME3 site</span>
+        <a class="site-tab" href="#landing-pages">Landing pages</a>
+        <router-link class="site-tab" :to="newLandingPageRoute">
+          Add Landing Page
+        </router-link>
+      </nav>
+
       <!-- Quick Actions -->
       <section class="actions-section">
         <div class="actions-grid">
@@ -833,6 +857,20 @@ Note: Opening index.html directly (file://) won't work due to browser security.
               <p>Jump to the blog editor</p>
             </div>
           </button>
+
+          <router-link
+            v-if="isProfileSite"
+            class="action-card"
+            :to="newLandingPageRoute"
+          >
+            <span class="action-icon">
+              <UiIcon name="Sparkles" :size="24" />
+            </span>
+            <div class="action-content">
+              <strong>Add Landing Page</strong>
+              <p>Create an event or waitlist page</p>
+            </div>
+          </router-link>
 
           <button
             v-if="isLandingPage"
@@ -893,6 +931,49 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           </button>
         </div>
         <p v-if="publishError" class="error">{{ publishError }}</p>
+      </section>
+
+      <section
+        v-if="isProfileSite"
+        id="landing-pages"
+        class="landing-pages-section"
+      >
+        <div class="landing-pages-head">
+          <div>
+            <h2>Landing pages</h2>
+            <p>{{ landingPageSites.length }} page{{ landingPageSites.length === 1 ? "" : "s" }}</p>
+          </div>
+          <router-link class="button secondary" :to="newLandingPageRoute">
+            Add
+          </router-link>
+        </div>
+
+        <div v-if="landingPageSites.length > 0" class="landing-page-list">
+          <router-link
+            v-for="landing in landingPageSites"
+            :key="landing.id"
+            class="landing-page-row"
+            :to="`/sites/${landing.username}/build`"
+          >
+            <span>
+              <strong>{{ landing.username }}.example.com</strong>
+              <small>{{ landingTemplateLabel(landing.template_id) }}</small>
+            </span>
+            <span
+              class="status"
+              :class="landing.published_at ? 'published' : 'draft'"
+            >
+              {{ landing.published_at ? "Published" : "Draft" }}
+            </span>
+          </router-link>
+        </div>
+
+        <div v-else class="landing-empty">
+          <p>No landing pages yet.</p>
+          <router-link class="button" :to="newLandingPageRoute">
+            Create one
+          </router-link>
+        </div>
       </section>
 
       <!-- Newsletter Subscribers -->
@@ -1060,6 +1141,32 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 .site-header {
   margin-bottom: 32px;
+}
+
+.site-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -12px 0 28px;
+}
+
+.site-tab {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: 999px;
+  padding: 0 12px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.site-tab.active {
+  background: var(--ui-accent-soft, rgba(16, 185, 129, 0.12));
+  border-color: var(--ui-accent, var(--color-accent));
+  color: var(--ui-text, var(--color-text));
 }
 
 .analytics-section {
@@ -1518,6 +1625,75 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 .success a {
   color: #4caf50;
+}
+
+.landing-pages-section {
+  margin-bottom: 32px;
+  padding: 18px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 8px);
+  background: var(--ui-surface, var(--color-bg));
+}
+
+.landing-pages-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.landing-pages-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.landing-pages-head p,
+.landing-empty p {
+  margin: 4px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+}
+
+.landing-page-list {
+  display: grid;
+  gap: 8px;
+}
+
+.landing-page-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 8px);
+  color: inherit;
+  text-decoration: none;
+}
+
+.landing-page-row:hover {
+  border-color: var(--ui-border-strong, var(--color-text-muted));
+}
+
+.landing-page-row strong,
+.landing-page-row small {
+  display: block;
+}
+
+.landing-page-row small {
+  margin-top: 2px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.landing-empty {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px dashed var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 8px);
 }
 
 /* Site badges row */

@@ -9,10 +9,15 @@ import {
 import { useAgentChat } from "../../../composables/useAgentChat";
 import type {
   LandingPageDocument,
-  LandingPageSection,
   LandingPageTemplateId,
 } from "@me3-core/plugin-landing-pages";
-import { LANDING_PAGE_TEMPLATES } from "@me3-core/plugin-landing-pages";
+import {
+  LANDING_PAGE_TEMPLATES,
+  getLandingPageBrief,
+  getLandingPageHero,
+  getLandingPageSectionImage,
+  getLandingPageTemplateId,
+} from "@me3-core/plugin-landing-pages";
 
 definePage({
   meta: {
@@ -56,11 +61,7 @@ const liveUrl = computed(() =>
 );
 
 function getSectionImage(page: LandingPageDocument | null): string | null {
-  const imageSection = page?.sections.find(
-    (section): section is Extract<LandingPageSection, { type: "image" }> =>
-      section.type === "image",
-  );
-  return imageSection?.image || null;
+  return getLandingPageSectionImage(page);
 }
 
 async function refreshPreview() {
@@ -92,8 +93,8 @@ async function loadBuilder() {
     profile.value = response.profile;
     draft.value = response.page;
     templateId.value =
-      response.page?.template || response.site.templateId || "service";
-    brief.value = response.page?.brief || "";
+      response.page ? getLandingPageTemplateId(response.page) : response.site.templateId || "service";
+    brief.value = response.page ? getLandingPageBrief(response.page) : "";
 
     await refreshPreview();
   } finally {
@@ -119,10 +120,11 @@ function activateBuilderAssistant() {
 }
 
 function noteBuilderUpdate(page: LandingPageDocument, context: string) {
+  const hero = getLandingPageHero(page);
   agentChat.appendMessage({
     role: "assistant",
     text: context,
-    detail: `Headline: ${page.hero.headline}`,
+    detail: `Headline: ${hero.headline}`,
     meta: "landing page builder",
   });
   agentChat.openChat();
@@ -141,7 +143,7 @@ async function regenerate() {
     const page = await sites.generateLandingPage(username.value, {
       brief: brief.value,
       templateId: templateId.value,
-      heroImage: draft.value?.hero.image || null,
+      heroImage: draft.value ? getLandingPageHero(draft.value).image || null : null,
       sectionImage: getSectionImage(draft.value),
       feedback: feedback.value || null,
     });
@@ -213,7 +215,11 @@ async function uploadAndRegenerate(
     }
 
     const nextHero =
-      imageType === "hero" ? uploaded.path : draft.value?.hero.image || null;
+      imageType === "hero"
+        ? uploaded.path
+        : draft.value
+          ? getLandingPageHero(draft.value).image || null
+          : null;
     const nextSection =
       imageType === "section" ? uploaded.path : getSectionImage(draft.value);
 

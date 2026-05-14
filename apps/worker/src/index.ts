@@ -49,6 +49,7 @@ import {
 } from "./install-secrets";
 import {
   buildLandingPageDocument,
+  getLandingPageTemplateId,
   normalizeLandingPageDocument,
   normalizeLandingTemplate,
   renderLandingPageHtml,
@@ -3327,7 +3328,7 @@ async function saveLandingPage(env: Env, site: DbSite, page: LandingPageDocument
   await putSiteFile(env, site.id, "landing/page.json", JSON.stringify(page, null, 2), "application/json");
   await putSiteFile(env, site.id, "landing/index.html", renderLandingPageHtml(page, site.username), "text/html");
   await env.DB.prepare("UPDATE sites SET template_id = ?, updated_at = datetime('now') WHERE id = ?")
-    .bind(page.template, site.id)
+    .bind(getLandingPageTemplateId(page), site.id)
     .run();
 }
 
