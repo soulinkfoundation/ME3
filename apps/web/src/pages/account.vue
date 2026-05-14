@@ -261,7 +261,7 @@ const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
   },
 ];
 
-type EmailProviderId = "cloudflare-email" | "smtp" | "postmark";
+type EmailProviderId = "cloudflare-email" | "smtp" | "mailgun" | "postmark";
 
 type EmailProviderSetupRequirement = {
   id: string;
@@ -283,6 +283,7 @@ type EmailProviderInputs = {
   smtpPort: number | string;
   smtpSecurity: "starttls" | "tls" | "none";
   smtpUsername: string;
+  mailgunRegion: "us" | "eu";
   apiToken: string;
 };
 
@@ -308,7 +309,7 @@ type EmailProviderRecord = {
 };
 
 type FutureEmailProviderRecord = {
-  id: "mailgun" | "ses" | "resend" | "sendgrid";
+  id: "ses" | "resend" | "sendgrid";
   label: string;
   description: string;
 };
@@ -639,6 +640,9 @@ const emailProviderHelpText = computed(() => {
   if (selectedEmailProviderId.value === "smtp") {
     return "Send through an authenticated SMTP relay on port 587, 465, or 2525. Port 25 is blocked in the Worker runtime.";
   }
+  if (selectedEmailProviderId.value === "mailgun") {
+    return "Send through Mailgun's HTTP API with a verified sending domain and owner-supplied API key.";
+  }
   if (selectedEmailProviderId.value === "postmark") {
     return "Send through Postmark with a Server API token and a confirmed sender signature or verified domain.";
   }
@@ -651,6 +655,11 @@ const emailProviderSecretPlaceholder = computed(() => {
     return hasStoredSecret
       ? "Paste a new password to replace stored value"
       : "Paste SMTP password";
+  }
+  if (selectedEmailProviderId.value === "mailgun") {
+    return hasStoredSecret
+      ? "Paste a new API key to replace stored value"
+      : "Paste Mailgun API key";
   }
   return hasStoredSecret
     ? "Paste a new token to replace stored value"
@@ -982,6 +991,7 @@ function createDefaultEmailProviderInput(
     smtpPort: id === "smtp" ? 587 : "",
     smtpSecurity: id === "smtp" ? "starttls" : "none",
     smtpUsername: "",
+    mailgunRegion: "us",
     apiToken: "",
   };
 }
@@ -993,6 +1003,7 @@ function createEmptyEmailProviderInputs(): Record<
   return {
     "cloudflare-email": createDefaultEmailProviderInput("cloudflare-email"),
     smtp: createDefaultEmailProviderInput("smtp"),
+    mailgun: createDefaultEmailProviderInput("mailgun"),
     postmark: createDefaultEmailProviderInput("postmark"),
   };
 }
@@ -1057,6 +1068,7 @@ async function saveEmailProviderSettings() {
             smtpPort: input.smtpPort || "",
             smtpSecurity: input.smtpSecurity || "starttls",
             smtpUsername: input.smtpUsername || "",
+            mailgunRegion: input.mailgunRegion || "us",
             apiToken: input.apiToken.trim() || undefined,
           },
         ],
@@ -1627,6 +1639,16 @@ onMounted(async () => {
                         />
                       </label>
 
+                      <label class="field">
+                        <span>Reply-to address</span>
+                        <input
+                          v-model="emailProviderInputs[selectedEmailProviderId].replyToAddress"
+                          class="input"
+                          type="email"
+                          placeholder="reply@example.com"
+                        />
+                      </label>
+
                       <template v-if="selectedEmailProviderId === 'smtp'">
                         <label class="field">
                           <span>SMTP host</span>
@@ -1674,6 +1696,30 @@ onMounted(async () => {
                             placeholder="smtp-user"
                             spellcheck="false"
                           />
+                        </label>
+                      </template>
+
+                      <template v-if="selectedEmailProviderId === 'mailgun'">
+                        <label class="field">
+                          <span>Mailgun domain</span>
+                          <input
+                            v-model="emailProviderInputs[selectedEmailProviderId].sendingDomain"
+                            class="input"
+                            type="text"
+                            placeholder="mg.example.com"
+                            spellcheck="false"
+                          />
+                        </label>
+
+                        <label class="field">
+                          <span>Region</span>
+                          <select
+                            v-model="emailProviderInputs[selectedEmailProviderId].mailgunRegion"
+                            class="input"
+                          >
+                            <option value="us">US</option>
+                            <option value="eu">EU</option>
+                          </select>
                         </label>
                       </template>
 

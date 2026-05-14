@@ -4,7 +4,7 @@ import {
 } from "./install-secrets";
 import type { DbEmailProviderSetting, Env } from "./types";
 
-export const EMAIL_PROVIDER_IDS = ["cloudflare-email", "smtp", "postmark"] as const;
+export const EMAIL_PROVIDER_IDS = ["cloudflare-email", "smtp", "mailgun", "postmark"] as const;
 export type EmailProviderId = (typeof EMAIL_PROVIDER_IDS)[number];
 export type EmailSendPurpose = "test" | "draft" | "reply" | "workflow";
 
@@ -13,6 +13,7 @@ const DEFAULT_EMAIL_PROVIDER_ID: EmailProviderId = "smtp";
 type EmailProviderSource = "binding" | "stored" | "manual" | "not_configured";
 type EmailProviderStatus = "not_configured" | "ready" | "failed";
 type SmtpSecurity = "starttls" | "tls" | "none";
+type MailgunRegion = "us" | "eu";
 
 type EmailProviderConfig = {
   transport: "binding" | "rest" | "smtp";
@@ -26,6 +27,7 @@ type EmailProviderConfig = {
   smtpPort: number;
   smtpSecurity: SmtpSecurity;
   smtpUsername: string;
+  mailgunRegion: MailgunRegion;
 };
 
 export type EmailProviderSettingsRecord = {
@@ -56,7 +58,7 @@ export type EmailProviderSettingsRecord = {
 };
 
 export type FutureEmailProviderRecord = {
-  id: "mailgun" | "ses" | "resend" | "sendgrid";
+  id: "ses" | "resend" | "sendgrid";
   label: string;
   description: string;
 };
@@ -111,6 +113,7 @@ type EmailProviderUpdate = {
   smtpPort?: unknown;
   smtpSecurity?: unknown;
   smtpUsername?: unknown;
+  mailgunRegion?: unknown;
   apiToken?: unknown;
   serverToken?: unknown;
   clearSecret?: unknown;
@@ -465,8 +468,105 @@ const SMTP_PROVIDER: EmailProviderAdapter = {
   },
 };
 
+const MAILGUN_PROVIDER: EmailProviderAdapter = {
+  id: "mailgun",
+  label: "Mailgun",
+  description:
+    "Optional Mailgun REST API sender using an owner-supplied sending domain and API key.",
+  recommended: false,
+  stable: true,
+  secretLabel: "Mailgun API key",
+  defaultConfig: createDefaultConfig("rest", ""),
+  isConfigured(row, config) {
+    return Boolean(row?.encrypted_secret && config.fromAddress && config.sendingDomain);
+  },
+  source(row, config) {
+    if (row?.encrypted_secret && config.sendingDomain) return "stored";
+    if (config.fromAddress || config.sendingDomain) return "manual";
+    return "not_configured";
+  },
+  setupRequirements(row, config) {
+    return [
+      {
+        id: "api-key",
+        label: "Mailgun API key",
+        required: true,
+        configured: Boolean(row?.encrypted_secret),
+        note: "Owner-supplied API keys are encrypted in Core and never returned to the browser.",
+      },
+      {
+        id: "sending-domain",
+        label: "Mailgun sending domain",
+        required: true,
+        configured: Boolean(config.sendingDomain),
+        note: "Use the domain name from Mailgun, such as mg.example.com.",
+      },
+      {
+        id: "verified-sender",
+        label: "Verified sender address",
+        required: true,
+        configured: Boolean(config.fromAddress),
+        note: "Mailgun requires a verified domain before production sending.",
+      },
+    ];
+  },
+  async send(_env, config, secret, message) {
+    if (!secret) {
+      throw new EmailProviderInputError("Mailgun API key is required.", 503);
+    }
+    if (!config.sendingDomain) {
+      throw new EmailProviderInputError("Mailgun sending domain is required.", 503);
+    }
+
+    const form = new FormData();
+    form.append("from", formatAddress(message.fromAddress, message.fromName));
+    form.append("to", message.toAddress);
+    form.append("subject", message.subject);
+    form.append("text", message.textBody);
+    if (message.htmlBody) form.append("html", message.htmlBody);
+    if (message.replyToAddress) form.append("h:Reply-To", message.replyToAddress);
+    form.append("h:X-ME3-Audit-ID", message.auditId);
+    form.append("h:X-ME3-Provider", "mailgun");
+    if (message.messageIdHeader) form.append("h:Message-ID", message.messageIdHeader);
+    if (message.inReplyTo) form.append("h:In-Reply-To", message.inReplyTo);
+    if (message.referencesHeader) form.append("h:References", message.referencesHeader);
+    for (const [key, value] of Object.entries(message.metadata)) {
+      const variableName = normalizeMailgunVariableName(key);
+      if (variableName) form.append(`v:${variableName}`, value);
+    }
+
+    const response = await fetch(
+      `${mailgunBaseUrl(config)}/v3/${encodeURIComponent(config.sendingDomain)}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${encodeBase64Utf8(`api:${secret}`)}`,
+        },
+        body: form,
+      },
+    );
+    const body = await safeJson(response);
+    if (!response.ok || !isMailgunSuccess(body)) {
+      throw new EmailProviderSendError(
+        mailgunErrorMessage(body, response.statusText),
+        response.status || 500,
+        mailgunErrorCode(body),
+        body,
+      );
+    }
+    return {
+      providerMessageId:
+        isRecord(body) && typeof body.id === "string" ? body.id : null,
+      providerStatus:
+        isRecord(body) && typeof body.message === "string" ? body.message : "Queued",
+      raw: body,
+    };
+  },
+};
+
 const EMAIL_PROVIDER_ADAPTERS = [
   SMTP_PROVIDER,
+  MAILGUN_PROVIDER,
   POSTMARK_PROVIDER,
   CLOUDFLARE_EMAIL_PROVIDER,
 ] as const;
@@ -476,11 +576,11 @@ const PROVIDER_ALIASES: Record<string, EmailProviderId> = {
   "cloudflare-email-service": "cloudflare-email",
   "email-service": "cloudflare-email",
   smtp: "smtp",
+  mailgun: "mailgun",
   postmark: "postmark",
 };
 
 const FUTURE_EMAIL_PROVIDERS: readonly FutureEmailProviderRecord[] = [
-  { id: "mailgun", label: "Mailgun", description: "Future domain-based sender." },
   { id: "ses", label: "Amazon SES", description: "Future AWS sender." },
   { id: "resend", label: "Resend", description: "Future API sender." },
   { id: "sendgrid", label: "SendGrid", description: "Future transactional sender." },
@@ -1373,6 +1473,12 @@ function normalizeProviderConfig(
   }
   if (adapter.id === "postmark" && !config.messageStream) config.messageStream = "outbound";
   if (adapter.id === "cloudflare-email") config.messageStream = "";
+  if (adapter.id === "mailgun") {
+    config.transport = "rest";
+    config.accountId = "";
+    config.messageStream = "";
+    if (!config.mailgunRegion) config.mailgunRegion = "us";
+  }
   if (adapter.id === "smtp") {
     config.transport = "smtp";
     config.messageStream = "";
@@ -1409,6 +1515,9 @@ function normalizeProviderConfigUpdate(
   if (typeof input.messageStream === "string") {
     next.messageStream = input.messageStream.trim().slice(0, 80);
   }
+  if (providerId === "mailgun" && typeof input.mailgunRegion === "string") {
+    next.mailgunRegion = normalizeMailgunRegion(input.mailgunRegion);
+  }
   if (providerId === "smtp") {
     if (typeof input.smtpHost === "string") {
       next.smtpHost = normalizeSmtpHost(input.smtpHost);
@@ -1426,6 +1535,12 @@ function normalizeProviderConfigUpdate(
   if (!next.fromName) next.fromName = "ME3 Core";
   if (providerId === "postmark" && !next.messageStream) next.messageStream = "outbound";
   if (providerId === "cloudflare-email") next.messageStream = "";
+  if (providerId === "mailgun") {
+    next.transport = "rest";
+    next.accountId = "";
+    next.messageStream = "";
+    if (!next.mailgunRegion) next.mailgunRegion = "us";
+  }
   if (providerId === "smtp") {
     next.transport = "smtp";
     next.accountId = "";
@@ -1463,6 +1578,7 @@ function createDefaultConfig(
     smtpPort: transport === "smtp" ? 587 : 0,
     smtpSecurity: transport === "smtp" ? "starttls" : "none",
     smtpUsername: "",
+    mailgunRegion: "us",
   };
 }
 
@@ -1544,6 +1660,25 @@ function normalizeSmtpSecurity(value: string): SmtpSecurity {
   if (normalized === "tls" || normalized === "ssl") return "tls";
   if (normalized === "none" || normalized === "off") return "none";
   return "starttls";
+}
+
+function normalizeMailgunRegion(value: string): MailgunRegion {
+  return value.trim().toLowerCase() === "eu" ? "eu" : "us";
+}
+
+function mailgunBaseUrl(config: EmailProviderConfig): string {
+  return config.mailgunRegion === "eu"
+    ? "https://api.eu.mailgun.net"
+    : "https://api.mailgun.net";
+}
+
+function normalizeMailgunVariableName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
 }
 
 function isValidEmail(value: string): boolean {
@@ -1659,6 +1794,20 @@ function cloudflareErrorCode(body: unknown): string | null {
 
 function isPostmarkSuccess(body: unknown): boolean {
   return isRecord(body) && body.ErrorCode === 0;
+}
+
+function isMailgunSuccess(body: unknown): boolean {
+  return isRecord(body) && typeof body.id === "string";
+}
+
+function mailgunErrorMessage(body: unknown, fallback: string): string {
+  if (isRecord(body) && typeof body.message === "string") return body.message;
+  return fallback || "Mailgun send failed";
+}
+
+function mailgunErrorCode(body: unknown): string | null {
+  if (isRecord(body) && typeof body.message === "string") return body.message;
+  return null;
 }
 
 function postmarkErrorMessage(body: unknown, fallback: string): string {

@@ -3027,19 +3027,20 @@ describe("ME3 Core Worker auth", () => {
       ]),
     );
     expect(body.providers[1]).toMatchObject({
-      id: "postmark",
+      id: "mailgun",
       recommended: false,
       stable: true,
     });
     expect(body.providers[2]).toMatchObject({
+      id: "postmark",
+      recommended: false,
+      stable: true,
+    });
+    expect(body.providers[3]).toMatchObject({
       id: "cloudflare-email",
       recommended: false,
     });
-    expect(body.futureProviders).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "mailgun" }),
-      ]),
-    );
+    expect(body.futureProviders.map((provider) => provider.id)).not.toContain("mailgun");
   });
 
   it("saves encrypted Postmark sender settings without returning the token", async () => {
@@ -3156,6 +3157,71 @@ describe("ME3 Core Worker auth", () => {
     expect(env.emailProviderSettings[0].encrypted_secret).toMatch(/^v1\./);
     expect(env.emailProviderSettings[0].encrypted_secret).not.toContain(
       "smtp-password-1234",
+    );
+  });
+
+  it("saves encrypted Mailgun sender settings without returning the API key", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          activeProviderId: "mailgun",
+          providers: [
+            {
+              id: "mailgun",
+              fromAddress: "hello@example.com",
+              fromName: "ME3 Mail",
+              replyToAddress: "reply@example.com",
+              sendingDomain: "mg.example.com",
+              mailgunRegion: "eu",
+              apiToken: "mailgun-secret-1234",
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      activeProviderId: string;
+      providers: Array<{
+        id: string;
+        configured: boolean;
+        source: string;
+        keyHint: string | null;
+        config: {
+          fromAddress: string;
+          replyToAddress: string;
+          sendingDomain: string;
+          mailgunRegion: string;
+        };
+      }>;
+    };
+    const mailgun = body.providers.find((provider) => provider.id === "mailgun");
+
+    expect(response.status).toBe(200);
+    expect(body.activeProviderId).toBe("mailgun");
+    expect(mailgun).toMatchObject({
+      configured: true,
+      source: "stored",
+      keyHint: "***1234",
+      config: {
+        fromAddress: "hello@example.com",
+        replyToAddress: "reply@example.com",
+        sendingDomain: "mg.example.com",
+        mailgunRegion: "eu",
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("mailgun-secret-1234");
+    expect(env.emailProviderSettings[0].encrypted_secret).toMatch(/^v1\./);
+    expect(env.emailProviderSettings[0].encrypted_secret).not.toContain(
+      "mailgun-secret-1234",
     );
   });
 
@@ -3305,6 +3371,109 @@ describe("ME3 Core Worker auth", () => {
       ]);
       expect(env.emailProviderSettings[0]).toMatchObject({
         provider_id: "postmark",
+        last_status: "ready",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sends a Mailgun test message through the provider adapter", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            id: "<mg-test-1@mg.example.com>",
+            message: "Queued. Thank you.",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await app.fetch(
+        new Request("http://localhost/api/email-provider-settings", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: session,
+          },
+          body: JSON.stringify({
+            activeProviderId: "mailgun",
+            providers: [
+              {
+                id: "mailgun",
+                fromAddress: "owner@example.com",
+                fromName: "ME3 Owner",
+                replyToAddress: "reply@example.com",
+                sendingDomain: "mg.example.com",
+                mailgunRegion: "eu",
+                apiToken: "mailgun-secret-1234",
+              },
+            ],
+          }),
+        }),
+        env,
+      );
+
+      const response = await app.fetch(
+        new Request("http://localhost/api/email-provider-settings/test", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: session,
+          },
+          body: JSON.stringify({ to: "owner@example.com" }),
+        }),
+        env,
+      );
+      const body = (await response.json()) as {
+        ok: boolean;
+        providerId: string;
+        providerMessageId: string;
+        sentTo: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({
+        ok: true,
+        providerId: "mailgun",
+        providerMessageId: "<mg-test-1@mg.example.com>",
+        sentTo: "owner@example.com",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+        "https://api.eu.mailgun.net/v3/mg.example.com/messages",
+      );
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(init.headers).toMatchObject({
+        Authorization: `Basic ${btoa("api:mailgun-secret-1234")}`,
+      });
+      const form = init.body as FormData;
+      expect(form.get("from")).toBe("ME3 Owner <owner@example.com>");
+      expect(form.get("to")).toBe("owner@example.com");
+      expect(form.get("subject")).toBe("ME3 Core test email");
+      expect(form.get("text")).toBe(
+        "This is a test email from your ME3 Core outbound sender settings.",
+      );
+      expect(form.get("html")).toBe(
+        "<p>This is a test email from your ME3 Core outbound sender settings.</p>",
+      );
+      expect(form.get("h:Reply-To")).toBe("reply@example.com");
+      expect(form.get("h:X-ME3-Provider")).toBe("mailgun");
+      expect(env.emailSendAudit).toEqual([
+        expect.objectContaining({
+          provider_id: "mailgun",
+          provider_message_id: "<mg-test-1@mg.example.com>",
+          status: "sent",
+          purpose: "test",
+        }),
+      ]);
+      expect(env.emailProviderSettings[0]).toMatchObject({
+        provider_id: "mailgun",
         last_status: "ready",
       });
     } finally {

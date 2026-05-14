@@ -77,7 +77,9 @@ The account-level sender settings live in Account -> Mailbox settings:
 
 SMTP is the default Core outbound adapter. It uses authenticated SMTP submission over port `587` with STARTTLS by default, or port `465` with TLS when selected. Cloudflare Workers cannot send to SMTP port `25`, so Core rejects that port in sender settings. Its fields are host, port, security mode, username, encrypted password, from address, display name, and optional reply-to.
 
-Postmark is also available as a stable external adapter. Its fields are server API token, confirmed sender signature or verified sender domain, from address, display name, optional reply-to, and message stream (default `outbound`). Mailgun is visible as the next sender path, but its adapter implementation is deferred.
+Mailgun is available as a stable external REST adapter. Its fields are API key, sending domain, region (`US` or `EU`), from address, display name, and optional reply-to. Mailgun API keys are encrypted at rest and never returned to the browser.
+
+Postmark is also available as a stable external adapter. Its fields are server API token, confirmed sender signature or verified sender domain, from address, display name, optional reply-to, and message stream (default `outbound`).
 
 Cloudflare Email Service remains available as a Workers-native optional adapter. Required setup is Workers Paid, a sending domain on Cloudflare DNS, a verified sending address or domain, and either a `send_email` binding named `EMAIL` or REST API account ID/token configured through the owner UI. Its fields are from address, display name, optional reply-to, sending domain, transport (`binding` or `rest`), Cloudflare account ID for REST, and API token for REST.
 
