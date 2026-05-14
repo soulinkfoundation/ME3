@@ -13,6 +13,7 @@
   "dependencies": {
     "@me3-core/plugin-agent-chat": "workspace:*",
     "@me3-core/plugin-calendar": "workspace:*",
+    "@me3-core/plugin-landing-pages": "workspace:*",
     "@me3-core/plugin-social-publishing": "workspace:*",
     "hono": "^4.3.0"
   },

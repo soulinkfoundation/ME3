@@ -1,9 +1,10 @@
 import type { Env } from "./types";
 import { AGENT_CHAT_RUNTIME } from "./agent-chat";
 import { CALENDAR_RUNTIME } from "./calendar";
+import { LANDING_PAGES_RUNTIME } from "@me3-core/plugin-landing-pages";
 import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
 
-export const CORE_PLUGIN_CATALOG_VERSION = "2026-05-11.v1";
+export const CORE_PLUGIN_CATALOG_VERSION = "2026-05-14.v1";
 
 export type CorePluginStatus =
   | "available"
@@ -390,9 +391,83 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   ],
 };
 
+const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
+  schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
+  id: "me3.landing-pages",
+  name: "ME3 Landing Pages",
+  version: "0.1.0",
+  description:
+    "First-party landing-page package for draft generation, template metadata, document validation, and static HTML rendering.",
+  trustTier: "first_party",
+  distribution: "workspace_package",
+  installMode: "enabled_by_owner_config",
+  implementationStatus: LANDING_PAGES_RUNTIME.bundled ? "bundled" : "catalog_only",
+  capabilityIds: ["sites.landing_pages", "agent.landing_page_generation"],
+  permissions: [
+    {
+      id: "sites.landing_pages.manage",
+      label: "Create and manage landing-page drafts",
+    },
+    {
+      id: "agent.landing_pages.generate",
+      label: "Generate landing-page copy and structure",
+    },
+  ],
+  routes: [
+    {
+      id: "sites.landing-page.read.api",
+      path: "/api/sites/:username/landing-page",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "sites.landing-page.save.api",
+      path: "/api/sites/:username/landing-page",
+      methods: ["PUT"],
+      auth: "owner",
+    },
+    {
+      id: "agent.landing-page.generate.api",
+      path: "/api/agent/landing-pages/generate",
+      methods: ["POST"],
+      auth: "owner",
+    },
+  ],
+  uiSlots: [
+    {
+      id: "sites.landing-pages.tab",
+      slot: "sites.nav",
+      label: "Landing pages",
+    },
+    {
+      id: "sites.landing-pages.builder",
+      slot: "sites.builder",
+      label: "Landing page builder",
+    },
+  ],
+  agentTools: [
+    {
+      id: "landing_pages.generate_draft",
+      label: "Generate landing page draft",
+      sideEffect: "internal_write",
+      approvalMode: "approval_required",
+    },
+  ],
+  secrets: [],
+  migrations: [],
+  queuesAndCrons: [],
+  notes: [
+    "Bundled through @me3-core/plugin-landing-pages as a first-party optional Core package.",
+    "The package owns template metadata, v1 document normalization, deterministic draft generation, and HTML rendering.",
+    "Worker routes retain owner auth, site lookup, file persistence, and publish behavior.",
+    "Hosted ME3 should keep Pro gating, me3.app URL defaults, quotas, and billing copy outside this shared package.",
+  ],
+};
+
 export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   AGENT_CHAT_PLUGIN,
   CALENDAR_PLUGIN,
+  LANDING_PAGES_PLUGIN,
   SOCIAL_PUBLISHING_PLUGIN,
 ];
 

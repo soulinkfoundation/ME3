@@ -17,6 +17,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@me3-core/plugin-landing-pages':
+        specifier: workspace:*
+        version: link:../../packages/landing-pages
       '@tanstack/vue-table':
         specifier: ^8.21.3
         version: 8.21.3(vue@3.5.34(typescript@5.9.3))
@@ -138,6 +141,9 @@ importers:
       '@me3-core/plugin-calendar':
         specifier: workspace:*
         version: link:../../packages/calendar
+      '@me3-core/plugin-landing-pages':
+        specifier: workspace:*
+        version: link:../../packages/landing-pages
       '@me3-core/plugin-social-publishing':
         specifier: workspace:*
         version: link:../../packages/social-publishing
@@ -176,6 +182,15 @@ importers:
       typescript:
         specifier: ^5.3.3
         version: 5.9.3
+
+  packages/landing-pages:
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.19.18)(happy-dom@14.12.3)
 
   packages/social-publishing:
     devDependencies:

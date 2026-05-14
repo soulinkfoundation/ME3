@@ -8,7 +8,7 @@ import type {
   LandingPageDocument,
   LandingPageTemplateId,
   SiteType,
-} from "../../../../shared/landing-pages";
+} from "@me3-core/plugin-landing-pages";
 
 interface Site {
   id: string;

@@ -48,11 +48,12 @@ import {
   getOrCreateInstallSessionSecret,
 } from "./install-secrets";
 import {
-  getLandingPageTemplate,
+  buildLandingPageDocument,
+  normalizeLandingPageDocument,
+  normalizeLandingTemplate,
+  renderLandingPageHtml,
   type LandingPageDocument,
-  type LandingPageSection,
-  type LandingPageTemplateId,
-} from "../../../shared/landing-pages";
+} from "@me3-core/plugin-landing-pages";
 import {
   activateAgentMailbox,
   cancelAgentReminder,
@@ -183,7 +184,6 @@ const ME3_CLOUD_USERNAME_CONFLICT_MESSAGE =
 const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const D1_SITE_FILE_MAX_BYTES = 1_900_000;
-const LANDING_PAGE_TEMPLATES = new Set<LandingPageTemplateId>(["event", "service", "waitlist"]);
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -3313,28 +3313,6 @@ function injectBaseHref(html: string, baseHref: string): string {
   return html.replace(/<head(\s[^>]*)?>/i, `<head$1><base href="${escapeHtml(baseHref)}">`);
 }
 
-function normalizeLandingTemplate(value: string | null | undefined): LandingPageTemplateId | null {
-  return LANDING_PAGE_TEMPLATES.has(value as LandingPageTemplateId)
-    ? (value as LandingPageTemplateId)
-    : null;
-}
-
-function normalizeLandingPageDocument(value: unknown): LandingPageDocument | null {
-  if (!value || typeof value !== "object") return null;
-  const page = value as Partial<LandingPageDocument>;
-  if (
-    page.version !== 1 ||
-    !normalizeLandingTemplate(page.template) ||
-    typeof page.title !== "string" ||
-    typeof page.brief !== "string" ||
-    !page.hero ||
-    !Array.isArray(page.sections)
-  ) {
-    return null;
-  }
-  return page as LandingPageDocument;
-}
-
 async function loadLandingPage(env: Env, siteId: string): Promise<LandingPageDocument | null> {
   const text = await getSiteFileText(env, siteId, "landing/page.json");
   if (!text) return null;
@@ -3351,146 +3329,6 @@ async function saveLandingPage(env: Env, site: DbSite, page: LandingPageDocument
   await env.DB.prepare("UPDATE sites SET template_id = ?, updated_at = datetime('now') WHERE id = ?")
     .bind(page.template, site.id)
     .run();
-}
-
-function buildLandingPageDocument(input: {
-  username: string;
-  brief: string;
-  template: LandingPageTemplateId;
-  heroImage?: string | null;
-  sectionImage?: string | null;
-  feedback?: string | null;
-  profile: { name: string | null; bio: string | null; avatar: string | null; profileUrl: string | null };
-}): LandingPageDocument {
-  const template = getLandingPageTemplate(input.template);
-  const combined = [input.brief, input.feedback || ""].filter(Boolean).join("\n\n");
-  const title = extractLandingTitle(combined, input.template);
-  const description = firstSentence(combined) || "A focused landing page built with ME3 Core.";
-  const ctaLabel = extractCta(input.feedback) || template.defaultCta;
-  const sections: LandingPageSection[] = [
-    {
-      type: "text",
-      heading: input.template === "event" ? "Why This Matters" : input.template === "waitlist" ? "What's Coming" : "The Offer",
-      body: description,
-    },
-    {
-      type: "list",
-      heading: input.template === "service" ? "What's Included" : "Highlights",
-      items: deriveLandingItems(combined),
-    },
-    ...(input.sectionImage
-      ? [
-          {
-            type: "image",
-            heading: "Preview",
-            image: input.sectionImage,
-            caption: description,
-          } satisfies LandingPageSection,
-        ]
-      : []),
-    {
-      type: input.template === "waitlist" ? "signup" : "profile",
-      ...(input.template === "waitlist"
-        ? {
-            heading: "Join the List",
-            body: "Leave your email and you'll hear first when there is news.",
-            buttonLabel: ctaLabel,
-            placeholder: "you@example.com",
-          }
-        : {
-            heading: "About",
-            body: input.profile.bio || `${input.profile.name || input.username} is the host behind this page.`,
-            profileName: input.profile.name || input.username,
-            profileImage: input.profile.avatar,
-            profileLink: input.profile.profileUrl,
-          }),
-    } as LandingPageSection,
-  ];
-
-  return {
-    version: 1,
-    template: input.template,
-    title,
-    brief: input.brief.trim(),
-    meta: { description, ogImage: input.heroImage || null },
-    hero: {
-      eyebrow: template.shortName,
-      headline: title,
-      subheadline: description,
-      image: input.heroImage || null,
-      cta: { label: ctaLabel, href: input.template === "waitlist" ? "#signup" : "#contact" },
-    },
-    sections,
-    footer: {
-      cta: { label: ctaLabel, href: input.template === "waitlist" ? "#signup" : "#contact" },
-      note: "Built with ME3 Core.",
-      profileLink: input.profile.profileUrl,
-    },
-    style: {
-      vibe: input.template === "event" ? "warm" : input.template === "waitlist" ? "tech" : "minimal",
-      accentColor: input.template === "waitlist" ? "#2d4cff" : "#0f766e",
-    },
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function extractLandingTitle(text: string, template: LandingPageTemplateId): string {
-  const firstLine = text.split(/\n+/).map((line) => line.trim()).find((line) => line.length > 8);
-  if (firstLine) return firstLine.slice(0, 90);
-  if (template === "event") return "A focused event page";
-  if (template === "waitlist") return "A clear waitlist page";
-  return "A focused offer page";
-}
-
-function firstSentence(text: string): string {
-  return text.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) || "";
-}
-
-function deriveLandingItems(text: string): string[] {
-  const lines = text
-    .split(/\n+/)
-    .map((line) => line.replace(/^[-*]\s*/, "").trim())
-    .filter((line) => line.length > 0 && line.length < 96)
-    .slice(1, 4);
-  return lines.length > 0
-    ? lines
-    : ["A clear promise", "A simple next step", "A page connected to your ME3 profile"];
-}
-
-function extractCta(feedback: string | null | undefined): string | null {
-  const match = feedback?.match(/cta\s+(?:to|as)\s+["']?([^"'\n.]+)/i);
-  return match?.[1]?.trim() || null;
-}
-
-function renderLandingPageHtml(page: LandingPageDocument, username: string): string {
-  const accent = page.style.accentColor || "#0f766e";
-  const sections = page.sections.map((section) => renderLandingSection(section, username)).join("");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.title)}</title><meta name="description" content="${escapeHtml(page.meta.description)}"><style>:root{--accent:${escapeHtml(accent)};font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#151c19;background:#fbfcfb}body{margin:0}.shell{width:min(1080px,calc(100vw - 32px));margin:0 auto}.top{border-bottom:1px solid rgba(21,28,25,.12);padding:16px 0}.hero{padding:56px 0;display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.8fr);gap:24px;align-items:center}.hero-copy,.media,.card{border:1px solid rgba(21,28,25,.12);border-radius:22px;background:#fff;padding:28px;box-shadow:0 18px 48px rgba(16,24,20,.06)}h1{font-size:clamp(2.4rem,6vw,5rem);line-height:1;margin:0 0 18px}.eyebrow{color:var(--accent);font-weight:800;text-transform:uppercase;font-size:12px;letter-spacing:.12em}p,li{color:#52615b;line-height:1.65}.button,button{display:inline-flex;border:0;border-radius:999px;background:var(--accent);color:white;padding:12px 18px;text-decoration:none;font-weight:800}.section{padding:28px 0}.media{min-height:280px;display:grid;place-items:center;overflow:hidden}.media img{width:100%;height:100%;object-fit:cover}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}input{padding:12px 14px;border:1px solid rgba(21,28,25,.18);border-radius:12px}@media(max-width:760px){.hero{grid-template-columns:1fr}}</style></head><body><header class="top"><div class="shell"><strong>${escapeHtml(username)}</strong></div></header><main><section class="shell hero"><div class="hero-copy"><p class="eyebrow">${escapeHtml(page.hero.eyebrow || "")}</p><h1>${escapeHtml(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><a class="button" href="${escapeHtml(page.hero.cta.href)}">${escapeHtml(page.hero.cta.label)}</a></div><div class="media">${page.hero.image ? `<img src="${escapeHtml(page.hero.image)}" alt="">` : `<span class="eyebrow">ME3 Core</span>`}</div></section>${sections}</main></body></html>`;
-}
-
-function renderLandingSection(section: LandingPageSection, username: string): string {
-  if (section.type === "text") {
-    return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p></div></section>`;
-  }
-  if (section.type === "list" || section.type === "steps") {
-    return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><ul>${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div></section>`;
-  }
-  if (section.type === "image") {
-    return `<section class="shell section"><div class="media"><img src="${escapeHtml(section.image)}" alt="${escapeHtml(section.heading)}"></div></section>`;
-  }
-  if (section.type === "signup") {
-    return `<section id="signup" class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p><form><input type="email" placeholder="${escapeHtml(section.placeholder || "Email")}"> <button type="button">${escapeHtml(section.buttonLabel)}</button></form></div></section>`;
-  }
-  if (section.type === "profile") {
-    return `<section id="contact" class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p>${section.profileLink ? `<a href="${escapeHtml(section.profileLink)}">Visit profile</a>` : ""}</div></section>`;
-  }
-  if (section.type === "pricing") {
-    return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><div class="grid">${section.tiers.map((tier) => `<article><strong>${escapeHtml(tier.name)}</strong><p>${escapeHtml(tier.price)}</p></article>`).join("")}</div></div></section>`;
-  }
-  if (section.type === "faq") {
-    return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2><div class="grid">${section.items.map((item) => `<article><strong>${escapeHtml(item.question)}</strong><p>${escapeHtml(item.answer)}</p></article>`).join("")}</div></div></section>`;
-  }
-  return `<section class="shell section"><div class="card"><h2>${escapeHtml(section.heading)}</h2></div></section>`;
 }
 
 async function parseSubscriberBody(c: AppContext): Promise<{

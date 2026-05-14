@@ -11,8 +11,8 @@ import type {
   LandingPageDocument,
   LandingPageSection,
   LandingPageTemplateId,
-} from "../../../../../../shared/landing-pages";
-import { LANDING_PAGE_TEMPLATES } from "../../../../../../shared/landing-pages";
+} from "@me3-core/plugin-landing-pages";
+import { LANDING_PAGE_TEMPLATES } from "@me3-core/plugin-landing-pages";
 
 definePage({
   meta: {
