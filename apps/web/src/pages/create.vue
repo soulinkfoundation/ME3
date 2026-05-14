@@ -34,7 +34,6 @@ definePage({
 const wizard = useWizardStore();
 const router = useRouter();
 const { isPublishing: isQuickPublishing, publish } = usePublish();
-const INTRO_SEEN_STORAGE_KEY = "me3:create-intro-seen";
 const showIntroScreen = ref(false);
 
 // Reference to the current component instance
@@ -209,7 +208,6 @@ function handleExit() {
 }
 
 function handleIntroGetStarted() {
-  localStorage.setItem(INTRO_SEEN_STORAGE_KEY, "true");
   showIntroScreen.value = false;
 }
 
@@ -223,8 +221,7 @@ function clearImportedDraft() {
 }
 
 onMounted(() => {
-  showIntroScreen.value =
-    !wizard.lastPublishedAt && localStorage.getItem(INTRO_SEEN_STORAGE_KEY) !== "true";
+  showIntroScreen.value = !wizard.lastPublishedAt;
 
   // Check for saved progress
   if (wizard.profile.name && wizard.currentStep > 1) {
