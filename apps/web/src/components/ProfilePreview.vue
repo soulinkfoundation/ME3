@@ -36,6 +36,7 @@ import {
 import UiIcon from "./UiIcon.vue";
 import TestimonialCard from "./TestimonialCard.vue";
 import { isUiIconName, type UiIconName } from "../utils/icons";
+import { formatPublicLocation } from "../utils/location-display";
 
 const props = defineProps<{
   profile: WizardProfile;
@@ -90,6 +91,7 @@ const agentPrompt = computed(
 const agentPromptButtonLabel = computed(() =>
   agentPromptCopied.value ? "Prompt copied" : "Copy prompt for an AI agent",
 );
+const displayLocation = computed(() => formatPublicLocation(props.profile));
 
 function getCurrencySymbol(currency: "USD" | "GBP" | "EUR" | "CAD" | "AUD" | "CHF" | "SGD" | "INR" | "PKR"): string {
   switch (currency) {
@@ -1285,7 +1287,7 @@ const vibeCss = computed(() => {
         </div>
 
         <h1 class="name">{{ profile.name || "Your Name" }}</h1>
-        <p v-if="profile.location" class="location">{{ profile.location }}</p>
+        <p v-if="displayLocation" class="location">{{ displayLocation }}</p>
         <p v-if="profile.bio" class="bio" v-html="parsedBio"></p>
       </header>
 

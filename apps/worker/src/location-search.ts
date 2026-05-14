@@ -163,7 +163,12 @@ function normalizePhotonFeature(feature: PhotonFeature): LocationSearchResult | 
   const precision = normalizePrecision(properties);
   const name = text(properties.name);
   const city = text(properties.city);
-  const locality = city || text(properties.locality) || text(properties.district);
+  const rawLocality = city || text(properties.locality) || text(properties.district);
+  const locality =
+    rawLocality ||
+    (precision === "city" || precision === "locality" || precision === "district"
+      ? name
+      : undefined);
   const county = text(properties.county);
   const state = text(properties.state);
   const country = text(properties.country);

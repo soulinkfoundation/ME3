@@ -24,4 +24,27 @@ describe("site generator", () => {
     expect(files["about.html"]).toContain("Generated from markdown.");
     expect(files["me.json"]).toContain('"handle": "test"');
   });
+
+  it("renders concise public locations from structured location data", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Cork Coach",
+        location: "Cork, County Cork, Eire / Ireland",
+        locationData: {
+          label: "Cork, County Cork, Eire / Ireland",
+          latitude: 51.89851,
+          longitude: -8.47264,
+          precision: "city",
+          region: "County Cork",
+          country: "Eire / Ireland",
+          countryCode: "IE",
+        },
+      },
+      [],
+    );
+
+    expect(files["index.html"]).toContain("Cork, Ireland");
+    expect(files["index.html"]).not.toContain("County Cork, Eire / Ireland");
+  });
 });

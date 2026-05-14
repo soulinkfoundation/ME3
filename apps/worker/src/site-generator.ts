@@ -1,3 +1,8 @@
+import {
+  formatPublicLocation,
+  type PublicLocationData,
+} from "./location-display";
+
 type Me3LinkMap = Record<string, string | undefined>;
 
 type Me3Button = {
@@ -42,6 +47,7 @@ export type Me3SiteProfile = {
   name?: string;
   handle?: string;
   location?: string;
+  locationData?: PublicLocationData;
   bio?: string;
   avatar?: string;
   banner?: string;
@@ -165,6 +171,7 @@ function generateIndexHtml(profile: Me3SiteProfile, capabilities: SiteRenderCapa
     : "";
   const booking = capabilities.bookingsEnabled ? generateBooking(profile) : "";
   const newsletter = capabilities.newsletterSignup ? generateNewsletter(profile) : "";
+  const displayLocation = formatPublicLocation(profile);
 
   return pageShell(profile, {
     title,
@@ -176,7 +183,7 @@ function generateIndexHtml(profile: Me3SiteProfile, capabilities: SiteRenderCapa
         <header class="profile-header">
           ${avatar}
           <h1 class="name">${escapeHtml(title)}</h1>
-          ${profile.location ? `<p class="location">${escapeHtml(profile.location)}</p>` : ""}
+          ${displayLocation ? `<p class="location">${escapeHtml(displayLocation)}</p>` : ""}
           ${profile.bio ? `<p class="bio">${parseInlineMarkdown(profile.bio)}</p>` : ""}
         </header>
         ${generateNav(profile, "", "./")}
