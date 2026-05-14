@@ -472,6 +472,30 @@ function defaultTimeInput(offsetHours = 1): string {
   return `${hours}:${minutes}`;
 }
 
+function dateInputFromDate(value: Date): string {
+  const y = value.getFullYear();
+  const m = String(value.getMonth() + 1).padStart(2, "0");
+  const d = String(value.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function syncEventEndFromStart() {
+  const form = newEventForm.value;
+  if (form.allDay) {
+    form.endDate = form.startDate;
+    return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(form.startDate) || !/^\d{2}:\d{2}$/.test(form.startTime)) {
+    return;
+  }
+
+  const [year, month, day] = form.startDate.split("-").map(Number);
+  const [hour, minute] = form.startTime.split(":").map(Number);
+  const end = new Date(year, month - 1, day, hour + 1, minute, 0, 0);
+  form.endDate = dateInputFromDate(end);
+  form.endTime = `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+}
+
 function dateInputFromIso(value: string, subtractDays = 0): string {
   const d = new Date(value);
   if (subtractDays) d.setDate(d.getDate() - subtractDays);
@@ -1929,18 +1953,18 @@ onBeforeUnmount(() => {
           </label>
 
           <label class="checkbox-row">
-            <input v-model="newEventForm.allDay" type="checkbox" />
+            <input v-model="newEventForm.allDay" type="checkbox" @change="syncEventEndFromStart" />
             <span>All day</span>
           </label>
 
           <div class="field-row">
             <label>
               <span>Start date</span>
-              <input v-model="newEventForm.startDate" type="date" required />
+              <input v-model="newEventForm.startDate" type="date" required @change="syncEventEndFromStart" />
             </label>
             <label v-if="!newEventForm.allDay">
               <span>Start time</span>
-              <input v-model="newEventForm.startTime" type="time" required />
+              <input v-model="newEventForm.startTime" type="time" required @change="syncEventEndFromStart" />
             </label>
           </div>
 
