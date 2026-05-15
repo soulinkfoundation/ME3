@@ -30,6 +30,8 @@ Plugins are how ME3 gains new abilities without turning Core into a tangle of op
 
 Mission Control is expected to become the default base plugin for making the assistant visible. It should show projects, tasks, capture, approvals, private memory, run history, plugin activity, context sources, and optional local-daemon status in one place.
 
+The implementation-ready MVP outline lives in [`docs/mission-control-plugin-mvp.md`](docs/mission-control-plugin-mvp.md).
+
 Privacy and security are product features, not paperwork. ME3 should make it easy to see what the assistant knows, what it can access, what it has done, and what is waiting for approval.
 
 The roadmap points toward a personal/business AI operating layer: local files and repos when explicitly connected, private memory that compounds, safer action execution, richer public protocols, and a managed ME3 Cloud path for people who do not want to run the infrastructure themselves.
