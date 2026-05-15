@@ -44,17 +44,22 @@ const EVENT_WORDS = [
 ] as const;
 
 const EVENT_TIME_PHRASES =
-  /\b(at|from)\s+\d{1,2}(?::\d{2})?\s*(am|pm)?\b|\b(tomorrow|today|tonight|next\s+(mon|tue|wed|thu|fri|sat|sun)\w*)\b/i;
+  /\b(today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next\s+(mon|tue|wed|thu|fri|sat|sun)\w*|\d{1,2}(?::\d{2})?\s?(am|pm))\b/i;
 
 export function inferMissionCaptureType(text: string): MissionCaptureType {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return "task";
 
-  if (/^remind\s+me\b/.test(normalized) || /\breminder\b/.test(normalized)) {
+  if (/^(remind|reminder|nudge|ping)\b/.test(normalized)) {
     return "reminder";
   }
 
+  if (/^(event|meeting|meet|coffee|lunch|dinner|call)\b/.test(normalized)) {
+    return "event";
+  }
+
   if (
+    /\b(with|at|from)\b/.test(normalized) &&
     EVENT_TIME_PHRASES.test(normalized) &&
     EVENT_WORDS.some((word) => normalized.includes(word))
   ) {

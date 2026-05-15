@@ -22,12 +22,14 @@ definePage({
 
 type MissionSection =
   | "today"
+  | "journal"
   | "projects"
-  | "approvals"
-  | "runs"
+  | "activity"
   | "memory"
   | "sources"
   | "setup";
+type PrimaryMissionSection = "today" | "journal" | "projects";
+type SettingsMissionSection = "activity" | "memory" | "sources" | "setup";
 
 type MissionProject = {
   id: string;
@@ -167,23 +169,26 @@ type MissionOverviewResponse = {
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
 
+type ActivityViewItem = {
+  id: string;
+  kind: string;
+  title: string;
+  summary: string | null;
+  status: string | null;
+  createdAt: string;
+};
+
 const route = useRoute();
 const router = useRouter();
 
-const sectionIds: MissionSection[] = [
-  "today",
-  "projects",
-  "approvals",
-  "runs",
-  "memory",
-  "sources",
-  "setup",
-];
+const primarySections: PrimaryMissionSection[] = ["today", "journal", "projects"];
+const settingsSections: SettingsMissionSection[] = ["activity", "memory", "sources", "setup"];
+const sectionIds: MissionSection[] = [...primarySections, ...settingsSections];
 const sectionLabels: Record<MissionSection, string> = {
   today: "Today",
+  journal: "Journal",
   projects: "Projects",
-  approvals: "Approvals",
-  runs: "Runs",
+  activity: "Activity",
   memory: "Memory",
   sources: "Sources",
   setup: "Setup",
@@ -223,6 +228,7 @@ const journalDraft = ref("");
 const journalState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const memoryDraft = ref("");
 const sourceDraft = ref("");
+const settingsMenuOpen = ref(false);
 let journalSaveTimer: number | null = null;
 
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
@@ -238,16 +244,52 @@ const openCaptures = computed(() =>
 const doneCaptures = computed(() =>
   captures.value.filter((capture) => capture.status === "done"),
 );
-const selectedProjectName = computed(() => {
-  const project = projects.value.find((item) => item.id === selectedProjectId.value);
-  return project?.name || "Personal";
-});
 const journalStatusText = computed(() => {
   if (journalState.value === "saving") return "Saving";
   if (journalState.value === "saved") return "Saved";
   if (journalState.value === "error") return "Could not save";
   return "";
 });
+const capturePlaceholder = computed(() => {
+  if (captureType.value === "reminder") return "Remind me to take a break tomorrow at 3pm";
+  if (captureType.value === "event") return "Coffee with Alex tomorrow at 10am";
+  return "Fix login redirect";
+});
+const activityItems = computed<ActivityViewItem[]>(() => [
+  ...pendingApprovals.value.map((approval) => ({
+    id: `approval:${approval.id}`,
+    kind: "Approval",
+    title: approval.title,
+    summary: approval.summary || approval.actionId,
+    status: approval.riskLevel,
+    createdAt: approval.requestedAt,
+  })),
+  ...recentRuns.value.map((run) => ({
+    id: `run:${run.id}`,
+    kind: "Run",
+    title: run.title,
+    summary: run.promptSummary || run.model || "Run summary pending",
+    status: run.status,
+    createdAt: run.finishedAt || run.startedAt || run.createdAt,
+  })),
+  ...activity.value.map((item) => ({
+    id: `activity:${item.id}`,
+    kind: "Activity",
+    title: item.title,
+    summary: item.summary,
+    status: item.status,
+    createdAt: item.createdAt,
+  })),
+]);
+const settingsSectionActive = computed(() =>
+  settingsSections.includes(activeSection.value as SettingsMissionSection),
+);
+const settingsSectionDescriptions: Record<SettingsMissionSection, string> = {
+  activity: "Approvals and runs",
+  memory: "Private context",
+  sources: "Connected context",
+  setup: "Daemon and integrations",
+};
 
 async function loadOverview() {
   loading.value = true;
@@ -380,6 +422,7 @@ function scheduleJournalSave() {
 
 function setSection(section: MissionSection) {
   activeSection.value = section;
+  settingsMenuOpen.value = false;
   void router.replace({
     query: {
       ...route.query,
@@ -502,10 +545,20 @@ function todayKey(): string {
 
 function normalizeSection(value: unknown): MissionSection {
   const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === "approvals" || raw === "runs") return "activity";
   return sectionIds.includes(raw as MissionSection) ? (raw as MissionSection) : "today";
 }
 
+function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") settingsMenuOpen.value = false;
+}
+
 watch(captureText, (text) => {
+  if (!text.trim()) {
+    manualCaptureType.value = false;
+    captureType.value = "task";
+    return;
+  }
   if (!manualCaptureType.value) {
     captureType.value = inferMissionCaptureType(text);
   }
@@ -529,19 +582,21 @@ watch(
 
 onMounted(() => {
   void loadOverview();
+  window.addEventListener("keydown", handleWindowKeydown);
 });
 
 onBeforeUnmount(() => {
   if (journalSaveTimer) window.clearTimeout(journalSaveTimer);
+  window.removeEventListener("keydown", handleWindowKeydown);
 });
 </script>
 
 <template>
   <main class="mission-control">
     <header class="mission-control__topbar">
-      <nav class="mission-control__sections" aria-label="Mission Control sections">
+      <nav class="mission-control__sections" aria-label="Mission Control primary sections">
         <button
-          v-for="section in sectionIds"
+          v-for="section in primarySections"
           :key="section"
           type="button"
           class="mission-control__section-tab"
@@ -564,64 +619,93 @@ onBeforeUnmount(() => {
           <UiIcon name="ChevronRight" :size="18" />
         </button>
       </div>
+
+      <div class="settings-menu" @click.stop>
+        <button
+          type="button"
+          class="icon-button"
+          :class="{ 'is-active': settingsMenuOpen || settingsSectionActive }"
+          aria-label="Mission Control settings"
+          :aria-expanded="settingsMenuOpen"
+          aria-haspopup="menu"
+          @click="settingsMenuOpen = !settingsMenuOpen"
+        >
+          <UiIcon name="Settings" :size="18" />
+        </button>
+        <div v-if="settingsMenuOpen" class="settings-menu__dropdown" role="menu">
+          <button
+            v-for="section in settingsSections"
+            :key="section"
+            type="button"
+            class="settings-menu__item"
+            :class="{ 'is-active': activeSection === section }"
+            role="menuitem"
+            @click="setSection(section)"
+          >
+            <span>{{ sectionLabels[section] }}</span>
+            <small>{{ settingsSectionDescriptions[section] }}</small>
+          </button>
+        </div>
+      </div>
     </header>
 
     <p v-if="error" class="mission-control__message is-error">{{ error }}</p>
     <p v-else-if="notice" class="mission-control__message">{{ notice }}</p>
 
-    <section v-show="activeSection === 'today'" class="mission-control__today">
-      <form class="capture-row" @submit.prevent="submitCapture">
-        <div class="capture-row__type" role="group" aria-label="Capture type">
-          <button
-            v-for="option in captureTypeOptions"
-            :key="option.id"
-            type="button"
-            class="type-button"
-            :class="{ 'is-active': captureType === option.id }"
-            :aria-label="option.label"
-            :title="option.label"
-            @click="chooseType(option.id)"
-          >
-            <UiIcon :name="option.icon" :size="18" />
-          </button>
-        </div>
-        <input
-          v-model="captureText"
-          class="capture-row__input"
-          type="text"
-          :placeholder="`Capture for ${selectedProjectName}`"
-          autocomplete="off"
-        />
-        <select v-model="selectedProjectId" class="capture-row__project" aria-label="Project">
-          <option
-            v-for="project in activeProjectOptions"
-            :key="project.id"
-            :value="project.id"
-          >
-            {{ project.name }}
-          </option>
-        </select>
-        <button
-          type="submit"
-          class="capture-row__submit"
-          :disabled="savingCapture || !captureText.trim()"
-          aria-label="Add capture"
-          title="Add capture"
-        >
-          <UiIcon name="Plus" :size="18" />
-        </button>
-      </form>
-
-      <div class="mission-grid">
-        <section class="mission-panel">
-          <div class="mission-panel__header">
-            <h1>Open</h1>
-            <span>{{ openCaptures.length }}</span>
+    <section v-show="activeSection === 'today'" class="mission-page">
+      <div class="daily-sheet">
+        <form class="capture-row" @submit.prevent="submitCapture">
+          <input
+            v-model="captureText"
+            type="text"
+            class="capture-row__input"
+            :placeholder="capturePlaceholder"
+            autocomplete="off"
+          />
+          <select v-model="selectedProjectId" class="capture-row__project" aria-label="Project">
+            <option value="">Personal</option>
+            <option v-for="project in activeProjectOptions" :key="project.id" :value="project.id">
+              {{ project.name }}
+            </option>
+          </select>
+          <div class="capture-row__type" role="group" aria-label="Capture type">
+            <button
+              v-for="option in captureTypeOptions"
+              :key="option.id"
+              type="button"
+              class="type-button"
+              :class="{ 'is-active': captureType === option.id }"
+              :aria-label="option.label"
+              :title="option.label"
+              @click="chooseType(option.id)"
+            >
+              <UiIcon :name="option.icon" :size="18" />
+            </button>
           </div>
+          <button
+            type="submit"
+            class="capture-row__submit"
+            :disabled="savingCapture || !captureText.trim()"
+            aria-label="Add capture"
+          >
+            <UiIcon name="Plus" :size="18" />
+          </button>
+        </form>
+
+        <section class="capture-list" aria-label="Today list">
+          <div class="capture-list__header">
+            <div>
+              <h1>{{ selectedDateLabel }}</h1>
+              <span>{{ selectedDate }}</span>
+            </div>
+            <span>{{ openCaptures.length }} open</span>
+          </div>
+
           <div v-if="loading" class="empty-row">Loading...</div>
-          <div v-else-if="openCaptures.length === 0" class="empty-row">
+          <div v-else-if="openCaptures.length === 0 && tasksDueToday.length === 0" class="empty-row">
             Clear for {{ selectedDateLabel.toLowerCase() }}.
           </div>
+
           <article
             v-for="capture in openCaptures"
             :key="capture.id"
@@ -633,7 +717,7 @@ onBeforeUnmount(() => {
               aria-label="Mark done"
               @click="setCaptureStatus(capture, 'done')"
             >
-              <UiIcon name="Circle" :size="18" />
+              <UiIcon name="Square" :size="16" />
             </button>
             <div class="capture-item__body">
               <p>{{ capture.text }}</p>
@@ -644,8 +728,7 @@ onBeforeUnmount(() => {
                   {{ formatDateTime(capture.eventStartAt || capture.dueAt) }}
                 </span>
                 <span
-                  class="sync-pill"
-                  :class="`sync-pill--${capture.syncStatus}`"
+                  :class="`sync-pill sync-pill--${capture.syncStatus}`"
                   :title="capture.syncError || syncLabel(capture)"
                 >
                   {{ syncLabel(capture) }}
@@ -658,215 +741,222 @@ onBeforeUnmount(() => {
               aria-label="Archive capture"
               @click="archiveCapture(capture)"
             >
-              <UiIcon name="Archive" :size="17" />
+              <UiIcon name="X" :size="16" />
             </button>
           </article>
-        </section>
 
-        <section class="mission-panel">
-          <div class="mission-panel__header">
-            <h2>Done</h2>
-            <span>{{ doneCaptures.length }}</span>
-          </div>
-          <div v-if="doneCaptures.length === 0" class="empty-row">Nothing completed yet.</div>
           <article
-            v-for="capture in doneCaptures"
-            :key="capture.id"
-            class="capture-item capture-item--done"
+            v-for="task in tasksDueToday"
+            :key="task.id"
+            class="capture-item capture-item--scheduled"
           >
-            <button
-              type="button"
-              class="capture-item__check"
-              aria-label="Reopen"
-              @click="setCaptureStatus(capture, 'open')"
-            >
-              <UiIcon name="CircleCheck" :size="18" />
-            </button>
+            <span class="capture-item__check capture-item__check--static">
+              <UiIcon name="CalendarDays" :size="16" />
+            </span>
             <div class="capture-item__body">
-              <p>{{ capture.text }}</p>
+              <p>{{ task.title }}</p>
               <div class="capture-item__meta">
-                <span>{{ captureTypeLabel(capture.type) }}</span>
-                <span>{{ projectName(capture.projectId) }}</span>
+                <span>Scheduled</span>
+                <span>{{ projectName(task.projectId) }}</span>
+                <span>{{ formatShortDate(task.dueAt || task.scheduledFor) }}</span>
               </div>
             </div>
           </article>
+
+          <template v-if="doneCaptures.length">
+            <div class="list-divider">Done</div>
+            <article
+              v-for="capture in doneCaptures"
+              :key="capture.id"
+              class="capture-item capture-item--done"
+            >
+              <button
+                type="button"
+                class="capture-item__check"
+                aria-label="Reopen"
+                @click="setCaptureStatus(capture, 'open')"
+              >
+                <UiIcon name="SquareCheck" :size="16" />
+              </button>
+              <div class="capture-item__body">
+                <p>{{ capture.text }}</p>
+                <div class="capture-item__meta">
+                  <span>{{ captureTypeLabel(capture.type) }}</span>
+                  <span>{{ projectName(capture.projectId) }}</span>
+                </div>
+              </div>
+            </article>
+          </template>
         </section>
       </div>
+    </section>
 
-      <section class="journal-editor">
-        <div class="mission-panel__header">
-          <h2>Journal</h2>
-          <span>{{ journalStatusText }}</span>
+    <section v-show="activeSection === 'journal'" class="mission-page">
+      <div class="journal-sheet">
+        <div class="journal-editor__header">
+          <div>
+            <h1>{{ selectedDateLabel }}</h1>
+            <span>{{ selectedDate }}</span>
+          </div>
+          <span v-if="journalStatusText">{{ journalStatusText }}</span>
         </div>
         <textarea
           v-model="journalDraft"
           class="journal-editor__textarea"
-          rows="12"
-          :placeholder="`${selectedDateLabel} notes`"
+          rows="16"
+          placeholder="Journal entry field..."
         />
-      </section>
-    </section>
-
-    <section v-show="activeSection === 'projects'" class="mission-panel">
-      <div class="mission-panel__header">
-        <h1>Projects</h1>
-        <span>{{ projects.length }}</span>
-      </div>
-      <article v-for="project in projects" :key="project.id" class="detail-row">
-        <div>
-          <h2>{{ project.name }}</h2>
-          <p>{{ project.description || "No description" }}</p>
-        </div>
-        <span class="status-badge">{{ project.status }}</span>
-      </article>
-    </section>
-
-    <section v-show="activeSection === 'approvals'" class="mission-panel">
-      <div class="mission-panel__header">
-        <h1>Approvals</h1>
-        <span>{{ pendingApprovals.length }}</span>
-      </div>
-      <div v-if="pendingApprovals.length === 0" class="empty-row">No pending approvals.</div>
-      <article v-for="approval in pendingApprovals" :key="approval.id" class="detail-row">
-        <div>
-          <h2>{{ approval.title }}</h2>
-          <p>{{ approval.summary || approval.actionId }}</p>
-        </div>
-        <span class="status-badge">{{ approval.riskLevel }}</span>
-      </article>
-    </section>
-
-    <section v-show="activeSection === 'runs'" class="mission-panel">
-      <div class="mission-panel__header">
-        <h1>Runs</h1>
-        <span>{{ recentRuns.length }}</span>
-      </div>
-      <div v-if="recentRuns.length === 0" class="empty-row">No agent runs yet.</div>
-      <article v-for="run in recentRuns" :key="run.id" class="detail-row">
-        <div>
-          <h2>{{ run.title }}</h2>
-          <p>{{ run.promptSummary || run.model || "Run summary pending" }}</p>
-        </div>
-        <span class="status-badge">{{ run.status }}</span>
-      </article>
-    </section>
-
-    <section v-show="activeSection === 'memory'" class="mission-panel">
-      <div class="mission-panel__header">
-        <h1>Memory</h1>
-        <span>{{ memory.length }}</span>
-      </div>
-      <form class="inline-form" @submit.prevent="addMemory">
-        <input v-model="memoryDraft" type="text" placeholder="Private memory" />
-        <button type="submit" class="icon-button" aria-label="Add memory">
-          <UiIcon name="Plus" :size="18" />
-        </button>
-      </form>
-      <article v-for="item in memory" :key="item.id" class="detail-row">
-        <div>
-          <h2>{{ item.title || item.memoryKind }}</h2>
-          <p>{{ item.body }}</p>
-        </div>
-        <span class="status-badge">{{ item.reviewStatus }}</span>
-      </article>
-    </section>
-
-    <section v-show="activeSection === 'sources'" class="mission-panel">
-      <div class="mission-panel__header">
-        <h1>Sources</h1>
-        <span>{{ sources.length }}</span>
-      </div>
-      <form class="inline-form" @submit.prevent="addSource">
-        <input v-model="sourceDraft" type="text" placeholder="Source name or URL" />
-        <button type="submit" class="icon-button" aria-label="Add source">
-          <UiIcon name="Plus" :size="18" />
-        </button>
-      </form>
-      <article v-for="source in sources" :key="source.id" class="detail-row">
-        <div>
-          <h2>{{ source.label }}</h2>
-          <p>{{ source.description || source.sourceRef || source.sourceKind }}</p>
-        </div>
-        <span class="status-badge">{{ source.status }}</span>
-      </article>
-    </section>
-
-    <section v-show="activeSection === 'setup'" class="mission-panel">
-      <div class="mission-panel__header">
-        <h1>Setup</h1>
-        <button type="button" class="text-button" @click="startDaemonPairing">
-          Pair daemon
-        </button>
-      </div>
-      <article v-for="item in setupItems" :key="item.id" class="detail-row">
-        <div>
-          <h2>{{ item.label }}</h2>
-          <p>{{ item.detail }}</p>
-        </div>
-        <span class="status-badge">{{ item.status }}</span>
-      </article>
-      <div class="daemon-summary">
-        <h2>Local daemon</h2>
-        <p>{{ daemon?.connected ? "Connected" : "Not paired" }}</p>
-        <div class="daemon-summary__paths">
-          <span v-for="entry in daemon?.allowlist || []" :key="entry.id">
-            {{ entry.label }} · {{ entry.permissionTier }}
-          </span>
-        </div>
       </div>
     </section>
 
-    <aside v-if="activeSection === 'today'" class="mission-rail" aria-label="Daily context">
-      <section>
-        <h2>Tasks</h2>
-        <p v-if="tasksDueToday.length === 0">No dated tasks.</p>
-        <div v-for="task in tasksDueToday" :key="task.id" class="rail-item">
-          <strong>{{ task.title }}</strong>
-          <span>{{ formatShortDate(task.dueAt || task.scheduledFor) }}</span>
+    <section v-show="activeSection === 'projects'" class="mission-page">
+      <div class="simple-sheet">
+        <div class="simple-sheet__header">
+          <h1>Projects</h1>
+          <span>{{ projects.length }}</span>
         </div>
-      </section>
-      <section>
-        <h2>Activity</h2>
-        <p v-if="activity.length === 0">No activity yet.</p>
-        <div v-for="item in activity" :key="item.id" class="rail-item">
-          <strong>{{ item.title }}</strong>
-          <span>{{ item.status || formatShortDate(item.createdAt) }}</span>
+        <article v-for="project in projects" :key="project.id" class="detail-row">
+          <div>
+            <h2>{{ project.name }}</h2>
+            <p>{{ project.description || "No description" }}</p>
+          </div>
+          <span class="status-badge">{{ project.status }}</span>
+        </article>
+      </div>
+    </section>
+
+    <section v-show="activeSection === 'activity'" class="mission-page">
+      <div class="simple-sheet simple-sheet--wide">
+        <div class="simple-sheet__header">
+          <div>
+            <h1>Activity</h1>
+            <p>Approvals, runs, and Mission Control updates.</p>
+          </div>
+          <span>{{ activityItems.length }}</span>
         </div>
-      </section>
-    </aside>
+        <div v-if="activityItems.length === 0" class="empty-row">No activity yet.</div>
+        <article v-for="item in activityItems" :key="item.id" class="detail-row activity-row">
+          <div>
+            <span class="activity-row__kind">{{ item.kind }}</span>
+            <h2>{{ item.title }}</h2>
+            <p>{{ item.summary || "No summary yet" }}</p>
+          </div>
+          <div class="detail-row__aside">
+            <span v-if="item.status" class="status-badge">{{ item.status }}</span>
+            <span>{{ formatDateTime(item.createdAt) }}</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section v-show="activeSection === 'memory'" class="mission-page">
+      <div class="simple-sheet">
+        <div class="simple-sheet__header">
+          <h1>Memory</h1>
+          <span>{{ memory.length }}</span>
+        </div>
+        <form class="inline-form" @submit.prevent="addMemory">
+          <input v-model="memoryDraft" type="text" placeholder="Private memory" />
+          <button type="submit" class="icon-button" aria-label="Add memory">
+            <UiIcon name="Plus" :size="18" />
+          </button>
+        </form>
+        <article v-for="item in memory" :key="item.id" class="detail-row">
+          <div>
+            <h2>{{ item.title || item.memoryKind }}</h2>
+            <p>{{ item.body }}</p>
+          </div>
+          <span class="status-badge">{{ item.reviewStatus }}</span>
+        </article>
+      </div>
+    </section>
+
+    <section v-show="activeSection === 'sources'" class="mission-page">
+      <div class="simple-sheet">
+        <div class="simple-sheet__header">
+          <h1>Sources</h1>
+          <span>{{ sources.length }}</span>
+        </div>
+        <form class="inline-form" @submit.prevent="addSource">
+          <input v-model="sourceDraft" type="text" placeholder="Source name or URL" />
+          <button type="submit" class="icon-button" aria-label="Add source">
+            <UiIcon name="Plus" :size="18" />
+          </button>
+        </form>
+        <article v-for="source in sources" :key="source.id" class="detail-row">
+          <div>
+            <h2>{{ source.label }}</h2>
+            <p>{{ source.description || source.sourceRef || source.sourceKind }}</p>
+          </div>
+          <span class="status-badge">{{ source.status }}</span>
+        </article>
+      </div>
+    </section>
+
+    <section v-show="activeSection === 'setup'" class="mission-page">
+      <div class="simple-sheet">
+        <div class="simple-sheet__header">
+          <h1>Setup</h1>
+          <button type="button" class="text-button" @click="startDaemonPairing">
+            Pair daemon
+          </button>
+        </div>
+        <article v-for="item in setupItems" :key="item.id" class="detail-row">
+          <div>
+            <h2>{{ item.label }}</h2>
+            <p>{{ item.detail }}</p>
+          </div>
+          <span class="status-badge">{{ item.status }}</span>
+        </article>
+        <section class="daemon-summary">
+          <div>
+            <h2>Local daemon</h2>
+            <p>{{ daemon?.connected ? "Connected" : "Not paired" }}</p>
+          </div>
+          <div class="daemon-summary__paths">
+            <span v-for="entry in daemon?.allowlist || []" :key="entry.id">
+              {{ entry.label }} - {{ entry.permissionTier }}
+            </span>
+          </div>
+        </section>
+      </div>
+    </section>
   </main>
 </template>
 
 <style scoped>
 .mission-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
   min-height: 100vh;
-  padding: 24px;
+  padding: 0 24px 40px;
   background: var(--ui-bg);
   color: var(--ui-text);
 }
 
-.mission-control__topbar,
-.mission-control__today,
-.mission-control__message {
-  grid-column: 1 / -1;
-}
-
 .mission-control__topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto minmax(44px, 1fr);
   align-items: center;
   gap: 16px;
+  min-height: 64px;
   min-width: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--ui-border);
+  background: color-mix(in oklab, var(--ui-bg), transparent 4%);
+  backdrop-filter: blur(16px);
 }
 
 .mission-control__sections {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 6px;
   min-width: 0;
+  overflow-x: auto;
 }
 
 .mission-control__section-tab,
@@ -882,12 +972,13 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__section-tab {
-  min-height: 34px;
-  padding: 6px 10px;
-  border-radius: var(--ui-radius-md);
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: var(--ui-radius-sm);
   color: var(--ui-text-muted);
   font-size: 13px;
   font-weight: 650;
+  white-space: nowrap;
 }
 
 .mission-control__section-tab:hover,
@@ -898,10 +989,10 @@ onBeforeUnmount(() => {
 
 .mission-control__day-switcher {
   display: grid;
-  grid-template-columns: 36px minmax(160px, 240px) 36px;
+  grid-template-columns: 34px minmax(128px, 190px) 34px;
   align-items: center;
   justify-self: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .mission-control__day-label {
@@ -918,9 +1009,10 @@ onBeforeUnmount(() => {
 .mission-control__day-label span,
 .capture-item__meta,
 .detail-row p,
-.rail-item span,
 .daemon-summary p,
-.mission-panel__header span {
+.simple-sheet__header span,
+.journal-editor__header span,
+.detail-row__aside {
   color: var(--ui-text-muted);
   font-size: 12px;
 }
@@ -932,13 +1024,14 @@ onBeforeUnmount(() => {
   width: 36px;
   height: 36px;
   place-items: center;
-  border-radius: var(--ui-radius-md);
+  border-radius: var(--ui-radius-sm);
 }
 
 .icon-button:hover,
 .type-button:hover,
 .capture-row__submit:hover,
-.type-button.is-active {
+.type-button.is-active,
+.icon-button.is-active {
   background: var(--ui-accent-soft);
   color: var(--ui-accent-contrast);
 }
@@ -948,39 +1041,100 @@ onBeforeUnmount(() => {
   color: var(--ui-text);
 }
 
-.mission-control__message {
-  min-height: 38px;
-  padding: 8px 12px;
+.settings-menu {
+  position: relative;
+  justify-self: end;
+}
+
+.settings-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 230px;
+  padding: 6px;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  box-shadow: 0 18px 50px color-mix(in oklab, #000, transparent 86%);
+}
+
+.settings-menu__item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-menu__item span {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.settings-menu__item small {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+.settings-menu__item:hover,
+.settings-menu__item.is-active {
+  background: var(--ui-surface-muted);
+}
+
+.mission-control__message {
+  width: min(700px, 100%);
+  padding: 8px 12px;
+  align-self: center;
+  border-radius: var(--ui-radius-sm);
   background: var(--ui-surface-muted);
   font-size: 13px;
 }
 
 .mission-control__message.is-error {
-  border-color: color-mix(in oklab, #dc2626, transparent 45%);
+  color: #b91c1c;
 }
 
-.mission-control__today {
+.mission-page {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding-top: 16px;
+}
+
+.daily-sheet,
+.journal-sheet,
+.simple-sheet {
   display: grid;
-  gap: 18px;
+  width: min(700px, 100%);
+  gap: 20px;
+}
+
+.simple-sheet--wide {
+  width: min(920px, 100%);
 }
 
 .capture-row,
 .inline-form {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(150px, 210px) 40px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, 170px) auto 40px;
+  gap: 6px;
   align-items: center;
-  padding: 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-lg);
-  background: var(--ui-surface);
+  padding: 6px;
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
 }
 
 .capture-row__type {
   display: flex;
-  gap: 4px;
+  gap: 2px;
 }
 
 .capture-row__input,
@@ -989,9 +1143,9 @@ onBeforeUnmount(() => {
 .inline-form input {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-bg);
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
   color: var(--ui-text);
   font: inherit;
 }
@@ -1001,6 +1155,19 @@ onBeforeUnmount(() => {
 .inline-form input {
   min-height: 40px;
   padding: 0 12px;
+}
+
+.capture-row__input::placeholder,
+.journal-editor__textarea::placeholder {
+  color: var(--ui-text-muted);
+}
+
+.capture-row__input:focus,
+.capture-row__project:focus,
+.journal-editor__textarea:focus,
+.inline-form input:focus {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 1px;
 }
 
 .capture-row__submit {
@@ -1013,60 +1180,49 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
-.mission-grid {
+.capture-list,
+.simple-sheet,
+.journal-sheet {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
-  gap: 16px;
+  gap: 0;
 }
 
-.mission-panel,
-.journal-editor,
-.mission-rail {
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-lg);
-  background: var(--ui-surface);
-}
-
-.mission-panel,
-.journal-editor {
-  display: grid;
-  gap: 10px;
-  padding: 16px;
-}
-
-.mission-panel__header {
+.capture-list__header,
+.simple-sheet__header,
+.journal-editor__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid var(--ui-border);
 }
 
-.mission-panel__header h1,
-.mission-panel__header h2,
+.capture-list__header h1,
+.simple-sheet__header h1,
+.journal-editor__header h1,
 .detail-row h2,
-.daemon-summary h2,
-.mission-rail h2 {
+.daemon-summary h2 {
   margin: 0;
   font-size: 15px;
   line-height: 1.25;
 }
 
-.capture-item,
-.detail-row,
-.rail-item,
-.daemon-summary {
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-bg);
+.simple-sheet__header p {
+  margin: 3px 0 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
 }
 
 .capture-item {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 36px;
   gap: 8px;
-  align-items: start;
-  padding: 10px;
+  align-items: center;
+  min-height: 56px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .capture-item__check {
@@ -1077,26 +1233,33 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: var(--ui-radius-sm);
   background: transparent;
-  color: var(--ui-accent);
+  color: var(--ui-text-muted);
   cursor: pointer;
+}
+
+.capture-item__check:hover {
+  color: var(--ui-accent);
+}
+
+.capture-item__check--static {
+  cursor: default;
 }
 
 .capture-item__body {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
 .capture-item__body p,
 .detail-row p,
-.daemon-summary p,
-.mission-rail p {
+.daemon-summary p {
   margin: 0;
 }
 
 .capture-item__body p {
   overflow-wrap: anywhere;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.45;
 }
 
@@ -1105,10 +1268,14 @@ onBeforeUnmount(() => {
   text-decoration: line-through;
 }
 
+.capture-item--scheduled .capture-item__body p {
+  color: var(--ui-text-muted);
+}
+
 .capture-item__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 
@@ -1116,10 +1283,9 @@ onBeforeUnmount(() => {
 .status-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
-  padding: 2px 7px;
-  border: 1px solid var(--ui-border);
-  border-radius: 999px;
+  min-height: 20px;
+  padding: 2px 6px;
+  border-radius: var(--ui-radius-sm);
   background: var(--ui-surface-muted);
   color: var(--ui-text-muted);
   font-size: 12px;
@@ -1128,35 +1294,48 @@ onBeforeUnmount(() => {
 
 .sync-pill--synced,
 .status-badge.ready {
-  border-color: color-mix(in oklab, var(--ui-accent), transparent 55%);
   color: var(--ui-accent);
 }
 
 .sync-pill--setup_required,
 .sync-pill--failed {
-  border-color: color-mix(in oklab, #dc2626, transparent 55%);
+  color: #b91c1c;
+}
+
+.list-divider {
+  padding: 18px 0 6px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .empty-row {
-  padding: 14px;
-  border: 1px dashed var(--ui-border);
-  border-radius: var(--ui-radius-md);
+  padding: 18px 0;
+  border-bottom: 1px solid var(--ui-border);
   color: var(--ui-text-muted);
   font-size: 13px;
 }
 
+.journal-sheet {
+  gap: 12px;
+}
+
 .journal-editor__textarea {
-  min-height: 260px;
+  min-height: 58vh;
   resize: vertical;
-  padding: 14px;
-  line-height: 1.55;
+  padding: 18px 0;
+  font-size: 16px;
+  line-height: 1.65;
 }
 
 .detail-row {
   display: flex;
   justify-content: space-between;
-  gap: 14px;
-  padding: 12px;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .detail-row div {
@@ -1170,90 +1349,74 @@ onBeforeUnmount(() => {
   line-height: 1.45;
 }
 
+.detail-row__aside {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  text-align: right;
+}
+
+.activity-row__kind {
+  color: var(--ui-accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .inline-form {
   grid-template-columns: minmax(0, 1fr) 40px;
-  padding: 6px;
+  margin: 14px 0 4px;
 }
 
 .text-button {
   min-height: 34px;
   padding: 6px 10px;
-  border-color: var(--ui-border);
-  border-radius: var(--ui-radius-md);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
 }
 
 .text-button:hover {
   background: var(--ui-surface-muted);
 }
 
-.mission-rail {
-  display: grid;
-  align-content: start;
-  gap: 16px;
-  grid-column: 2;
-  grid-row: 3 / span 3;
-  padding: 16px;
-}
-
-.mission-rail section {
-  display: grid;
-  gap: 8px;
-}
-
-.rail-item {
-  display: grid;
-  gap: 2px;
-  padding: 10px;
-}
-
-.rail-item strong {
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
 .daemon-summary {
-  display: grid;
+  display: flex;
+  justify-content: space-between;
   gap: 8px;
-  padding: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .daemon-summary__paths {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
 }
 
 .daemon-summary__paths span {
   padding: 4px 7px;
-  border-radius: 999px;
+  border-radius: var(--ui-radius-sm);
   background: var(--ui-surface-muted);
   color: var(--ui-text-muted);
   font-size: 12px;
 }
 
-@media (max-width: 1100px) {
-  .mission-control {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .mission-rail {
-    grid-column: 1;
-    grid-row: auto;
-  }
-}
-
 @media (max-width: 760px) {
   .mission-control {
-    padding: 16px;
+    padding: 0 14px 32px;
   }
 
   .mission-control__topbar {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
   }
 
   .mission-control__day-switcher {
-    justify-self: stretch;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: center;
   }
 
   .capture-row {
@@ -1265,8 +1428,19 @@ onBeforeUnmount(() => {
     grid-column: 1 / -1;
   }
 
-  .mission-grid {
-    grid-template-columns: 1fr;
+  .detail-row,
+  .daemon-summary {
+    flex-direction: column;
+  }
+
+  .detail-row__aside {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .settings-menu__dropdown {
+    right: 0;
+    width: min(230px, calc(100vw - 28px));
   }
 }
 </style>
