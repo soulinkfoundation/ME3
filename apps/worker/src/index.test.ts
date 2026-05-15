@@ -1342,6 +1342,7 @@ async function createSignedMe3ClaimToken(input: {
   coreOrigin: string;
   callbackUrl: string;
   email: string;
+  handle?: string | null;
 }): Promise<{ token: string; publicJwk: JsonWebKey & { kid?: string; alg?: string; use?: string } }> {
   const keyPair = await crypto.subtle.generateKey(
     {
@@ -1364,7 +1365,7 @@ async function createSignedMe3ClaimToken(input: {
 
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT", kid: "test-key" };
-  const payload = {
+  const payload: Record<string, unknown> = {
     iss: input.issuer,
     sub: "user123",
     aud: "me3-core-install-claim",
@@ -1377,6 +1378,9 @@ async function createSignedMe3ClaimToken(input: {
     iat: now,
     exp: now + 600,
   };
+  if (input.handle !== null) {
+    payload.handle = input.handle || "kieran";
+  }
   const signingInput = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
   const signature = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
@@ -1564,12 +1568,58 @@ describe("ME3 Core Worker auth", () => {
     expect(env.owner).toMatchObject({
       id: "owner",
       email: "owner@example.com",
-      username: "owner",
+      username: "kieran",
       password_hash: null,
     });
     expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBe("user123");
     expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
     expect(env.me3ClaimStates).toHaveLength(0);
+
+    fetchMock.mockRestore();
+  });
+
+  it("rejects ME3 Cloud install claim callbacks without a valid handle", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+
+    const startResponse = await app.fetch(
+      new Request("https://core.example/api/auth/me3/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirect: "/account" }),
+      }),
+      env,
+    );
+    const startBody = (await startResponse.json()) as { state: string };
+    const signedClaim = await createSignedMe3ClaimToken({
+      issuer: "https://api.me3.example",
+      state: startBody.state,
+      coreOrigin: "http://localhost:4000",
+      callbackUrl: "http://localhost:8787/api/auth/me3/callback",
+      email: "owner@example.com",
+      handle: null,
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ keys: [signedClaim.publicJwk] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const callbackResponse = await app.fetch(
+      new Request(
+        `http://localhost:8787/api/auth/me3/callback?state=${encodeURIComponent(
+          startBody.state,
+        )}&claim_token=${encodeURIComponent(signedClaim.token)}`,
+      ),
+      env,
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("location")).toContain(
+      "me3_claim_error=claim_mismatch",
+    );
+    expect(env.owner).toBeNull();
 
     fetchMock.mockRestore();
   });

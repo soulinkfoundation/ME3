@@ -129,6 +129,7 @@ type Me3ClaimTokenPayload = {
   sub?: unknown;
   aud?: unknown;
   email?: unknown;
+  handle?: unknown;
   core_origin?: unknown;
   callback_url?: unknown;
   state?: unknown;
@@ -312,6 +313,7 @@ app.get("/api/auth/me3/callback", async (c) => {
   const webOrigin = getCoreWebOrigin(c.env, c.req.url);
   const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
   const callbackUrl = `${apiOrigin}/api/auth/me3/callback`;
+  const claimedHandle = normalizeUsername(payload.handle);
 
   if (
     payload.state !== state ||
@@ -320,12 +322,14 @@ app.get("/api/auth/me3/callback", async (c) => {
     payload.callback_url !== callbackUrl ||
     typeof payload.sub !== "string" ||
     typeof payload.email !== "string" ||
-    !payload.email.trim()
+    !payload.email.trim() ||
+    !claimedHandle ||
+    !USERNAME_REGEX.test(claimedHandle)
   ) {
     return redirectMe3ClaimError(c, "claim_mismatch", pending.redirect_path);
   }
 
-  await upsertMe3ClaimedOwner(c.env, payload);
+  await upsertMe3ClaimedOwner(c.env, payload, claimedHandle);
   await getOrCreateInstallEncryptionKey(c.env);
   await deleteMe3ClaimState(c.env, state);
   await setOwnerSession(c, "owner");
@@ -3958,6 +3962,7 @@ function redirectMe3ClaimError(
 async function upsertMe3ClaimedOwner(
   env: Env,
   payload: Me3ClaimTokenPayload,
+  handle: string,
 ): Promise<void> {
   const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
   const name = email ? email.split("@")[0] || "ME3 Core Owner" : "ME3 Core Owner";
@@ -3971,7 +3976,7 @@ async function upsertMe3ClaimedOwner(
        username = COALESCE(owner_profile.username, excluded.username),
        updated_at = CURRENT_TIMESTAMP`,
   )
-    .bind("owner", email, name, "owner", null, null, null, null)
+    .bind("owner", email, name, handle, null, null, null, null)
     .run();
 
   await setStoredMe3CloudOwnerId(env, String(payload.sub));
