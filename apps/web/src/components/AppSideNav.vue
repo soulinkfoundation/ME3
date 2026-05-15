@@ -21,6 +21,7 @@ const isMobileViewport = ref(false);
 const mobileNavOpen = ref(false);
 const mobileMediaQuery = "(max-width: 959px)";
 const navDrawerId = "app-side-nav-drawer";
+const missionControlInstalled = ref(false);
 const calendarInstalled = ref(false);
 const socialPublishingInstalled = ref(false);
 const pluginChangedEvent = "me3:plugins-changed";
@@ -65,6 +66,7 @@ onBeforeUnmount(() => {
 });
 
 const isCalendar = computed(() => route.path.startsWith("/calendar"));
+const isMissionControl = computed(() => route.path.startsWith("/mission-control"));
 const isEmail = computed(() => route.path.startsWith("/email"));
 const isSites = computed(
   () => route.path.startsWith("/sites/") || route.path.startsWith("/create"),
@@ -84,9 +86,18 @@ const showMobileDrawer = computed(
 );
 
 function rowActive(
-  kind: "calendar" | "email" | "sites" | "assistant" | "social" | "account",
+  kind:
+    | "mission-control"
+    | "calendar"
+    | "email"
+    | "sites"
+    | "assistant"
+    | "social"
+    | "account",
 ): boolean {
   switch (kind) {
+    case "mission-control":
+      return isMissionControl.value;
     case "calendar":
       return isCalendar.value;
     case "email":
@@ -109,6 +120,12 @@ async function loadInstalledPluginNav() {
     const response = await api.get<{
       plugins: Array<{ id: string; status: string; enabled: boolean }>;
     }>("/plugins");
+    missionControlInstalled.value = response.plugins.some(
+      (plugin) =>
+        plugin.id === "me3.mission-control" &&
+        plugin.enabled &&
+        plugin.status === "installed",
+    );
     calendarInstalled.value = response.plugins.some(
       (plugin) =>
         plugin.id === "me3.calendar" &&
@@ -122,6 +139,7 @@ async function loadInstalledPluginNav() {
         plugin.status === "installed",
     );
   } catch {
+    missionControlInstalled.value = false;
     calendarInstalled.value = false;
     socialPublishingInstalled.value = false;
   }
@@ -164,7 +182,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
       </button>
 
       <RouterLink
-        :to="calendarInstalled ? '/calendar' : '/assistant'"
+        :to="missionControlInstalled ? '/mission-control' : calendarInstalled ? '/calendar' : '/assistant'"
         class="app-side-nav-mobile-bar__logo"
         aria-label="ME3"
         @click="closeMobileNav"
@@ -198,7 +216,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
       aria-label="App navigation"
     >
       <RouterLink
-        :to="calendarInstalled ? '/calendar' : '/assistant'"
+        :to="missionControlInstalled ? '/mission-control' : calendarInstalled ? '/calendar' : '/assistant'"
         class="app-side-nav__logo"
         aria-label="ME3"
         @click="closeMobileNav"
@@ -211,6 +229,19 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
       </RouterLink>
 
       <nav class="app-side-nav__links" aria-label="Primary">
+        <RouterLink
+          v-if="missionControlInstalled"
+          to="/mission-control"
+          class="app-side-nav__row"
+          :class="{ 'app-side-nav__row--active': rowActive('mission-control') }"
+          aria-label="Mission Control"
+          title="Mission Control"
+          @click="closeMobileNav"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">🚀</span>
+          <span class="sr-only">Mission Control</span>
+        </RouterLink>
+
         <RouterLink
           v-if="calendarInstalled"
           to="/calendar"

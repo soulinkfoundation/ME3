@@ -2,6 +2,7 @@ import type { Env } from "./types";
 import { AGENT_CHAT_RUNTIME } from "./agent-chat";
 import { CALENDAR_RUNTIME } from "./calendar";
 import { LANDING_PAGES_RUNTIME } from "@me3-core/plugin-landing-pages";
+import { MISSION_CONTROL_RUNTIME } from "@me3-core/plugin-mission-control";
 import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
 
 export const CORE_PLUGIN_CATALOG_VERSION = "2026-05-15.v1";
@@ -210,6 +211,244 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
     "Current runtime exposes owner-only content bank, OAuth account connection, account inventory reads, and approval-first queue state when installed.",
     "ME3-hosted provider OAuth should supply social app credentials; Core installs should only connect their own social accounts.",
     "External publishing workers and cron dispatch remain approval-first follow-up work.",
+  ],
+};
+
+const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
+  schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
+  id: "me3.mission-control",
+  name: "ME3 Mission Control",
+  version: "0.1.0",
+  description:
+    "Default first-party Core workspace for daily capture, tasks, projects, approvals, agent run history, plugin activity, private memory, context sources, setup status, and optional local-daemon bridge.",
+  trustTier: "first_party",
+  distribution: "workspace_package",
+  installMode: "enabled_by_owner_config",
+  defaultEnabled: true,
+  implementationStatus: MISSION_CONTROL_RUNTIME.bundled ? "bundled" : "catalog_only",
+  capabilityIds: [
+    "workspace.mission_control",
+    "workspace.daily_capture",
+    "workspace.tasks",
+    "workspace.approvals",
+    "workspace.private_memory",
+    "workspace.context_sources",
+    "workspace.agent_runs",
+    "workspace.local_daemon_bridge",
+  ],
+  permissions: [
+    {
+      id: "mission.capture.manage",
+      label: "Create and manage daily captures and journal entries",
+    },
+    {
+      id: "mission.tasks.manage",
+      label: "Create and manage Mission Control tasks and projects",
+    },
+    {
+      id: "mission.approvals.manage",
+      label: "Review and resolve assistant approvals",
+    },
+    {
+      id: "mission.memory.manage",
+      label: "Store and manage private owner memory",
+    },
+    {
+      id: "mission.context_sources.manage",
+      label: "Manage private context source inventory",
+    },
+    {
+      id: "mission.agent_runs.read",
+      label: "Read agent run history and plugin activity",
+    },
+    {
+      id: "mission.daemon.pair",
+      label: "Pair optional local daemon bridges",
+    },
+  ],
+  routes: [
+    {
+      id: "mission.overview.api",
+      path: "/api/mission-control/overview",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "mission.day.api",
+      path: "/api/mission-control/days/:date",
+      methods: ["GET", "PATCH"],
+      auth: "owner",
+    },
+    {
+      id: "mission.capture.api",
+      path: "/api/mission-control/capture",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "mission.capture.item.api",
+      path: "/api/mission-control/capture/:id",
+      methods: ["PATCH", "DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "mission.projects.api",
+      path: "/api/mission-control/projects",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "mission.tasks.api",
+      path: "/api/mission-control/tasks",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "mission.task.api",
+      path: "/api/mission-control/tasks/:id",
+      methods: ["PATCH", "DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "mission.approvals.api",
+      path: "/api/mission-control/approvals",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "mission.approval.api",
+      path: "/api/mission-control/approvals/:id",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
+      id: "mission.runs.api",
+      path: "/api/mission-control/agent-runs",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "mission.memory.api",
+      path: "/api/mission-control/memory",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "mission.memory.item.api",
+      path: "/api/mission-control/memory/:id",
+      methods: ["PATCH", "DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "mission.context-sources.api",
+      path: "/api/mission-control/context-sources",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "mission.context-source.api",
+      path: "/api/mission-control/context-sources/:id",
+      methods: ["PATCH", "DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "mission.plugin-activity.api",
+      path: "/api/mission-control/plugin-activity",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "mission.setup.api",
+      path: "/api/mission-control/setup",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "mission.daemon.api",
+      path: "/api/mission-control/daemon/*",
+      methods: ["GET", "POST", "PATCH"],
+      auth: "owner",
+    },
+  ],
+  uiSlots: [
+    {
+      id: "mission.dashboard.nav",
+      slot: "dashboard.nav",
+      label: "🚀 Mission Control",
+    },
+    {
+      id: "mission.workspace.page",
+      slot: "dashboard.page",
+      label: "Mission Control",
+    },
+    {
+      id: "mission.setup.panel",
+      slot: "account.plugins.setup",
+      label: "Mission Control setup",
+    },
+    {
+      id: "mission.approvals.panel",
+      slot: "app.shell.alerts",
+      label: "Pending approvals",
+    },
+  ],
+  agentTools: [
+    {
+      id: "mission.capture.create",
+      label: "Create daily capture",
+      sideEffect: "internal_write",
+      approvalMode: "none",
+    },
+    {
+      id: "mission.task.create",
+      label: "Create task",
+      sideEffect: "internal_write",
+      approvalMode: "approval_required",
+    },
+    {
+      id: "mission.memory.write",
+      label: "Write private memory",
+      sideEffect: "internal_write",
+      approvalMode: "approval_required",
+    },
+    {
+      id: "mission.approval.request",
+      label: "Request owner approval",
+      sideEffect: "internal_write",
+      approvalMode: "none",
+    },
+    {
+      id: "mission.daemon.read",
+      label: "Read approved local context through paired daemon",
+      sideEffect: "local_read",
+      approvalMode: "approval_required",
+    },
+    {
+      id: "mission.daemon.write",
+      label: "Write approved local files through paired daemon",
+      sideEffect: "local_write",
+      approvalMode: "approval_required",
+    },
+    {
+      id: "mission.daemon.shell",
+      label: "Run approved local shell command through paired daemon",
+      sideEffect: "local_shell",
+      approvalMode: "approval_required",
+    },
+  ],
+  secrets: [],
+  migrations: [
+    {
+      id: "mission.0015",
+      path: "./apps/worker/migrations/0015_mission_control_plugin.sql",
+      destructive: false,
+    },
+  ],
+  queuesAndCrons: [],
+  notes: [
+    "Mission Control is bundled as a first-party package and enabled by default.",
+    "Public me.json remains Core-owned and separate from plugin private memory.",
+    "Local daemon access is optional, owner-paired, path-scoped, and approval-gated.",
   ],
 };
 
@@ -472,6 +711,7 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
 
 export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   AGENT_CHAT_PLUGIN,
+  MISSION_CONTROL_PLUGIN,
   CALENDAR_PLUGIN,
   LANDING_PAGES_PLUGIN,
   SOCIAL_PUBLISHING_PLUGIN,

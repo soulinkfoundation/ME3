@@ -33,6 +33,38 @@ import {
   listCorePluginRecords,
 } from "./plugins";
 import {
+  MissionControlInputError,
+  archiveMissionCapture,
+  archiveMissionTask,
+  createMissionCapture,
+  createMissionContextSource,
+  createMissionMemory,
+  createMissionProject,
+  createMissionTask,
+  deleteMissionContextSource,
+  deleteMissionMemory,
+  getMissionControlOverview,
+  getMissionDaemonStatus,
+  getMissionDay,
+  getMissionSetup,
+  listMissionAgentRuns,
+  listMissionApprovals,
+  listMissionContextSources,
+  listMissionMemory,
+  listMissionPluginActivity,
+  listMissionProjects,
+  listMissionTasks,
+  listMissionDaemonAudit,
+  resolveMissionApproval,
+  startMissionDaemonPairing,
+  updateMissionCapture,
+  updateMissionContextSource,
+  updateMissionDay,
+  updateMissionMemory,
+  updateMissionProject,
+  updateMissionTask,
+} from "./mission-control";
+import {
   SocialPublishingGateError,
   SocialPublishingInputError,
   appendContentItemMedia,
@@ -658,6 +690,482 @@ app.post("/api/plugins/:pluginId/deactivate", async (c) => {
       return c.json({ error: error.message }, error.status as any);
     }
     throw error;
+  }
+});
+
+app.get("/api/mission-control/overview", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await getMissionControlOverview(c.env, ownerId, c.req.query("date")));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/days/:date", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await getMissionDay(c.env, ownerId, c.req.param("date")));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.patch("/api/mission-control/days/:date", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await updateMissionDay(
+        c.env,
+        ownerId,
+        c.req.param("date"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/capture", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await getMissionDay(c.env, ownerId, c.req.query("date") || localDateKey()));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/capture", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await createMissionCapture(
+        c.env,
+        ownerId,
+        await c.req.json().catch(() => ({})),
+      ),
+      201,
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.patch("/api/mission-control/capture/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await updateMissionCapture(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.delete("/api/mission-control/capture/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await archiveMissionCapture(c.env, ownerId, c.req.param("id")));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/projects", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({ projects: await listMissionProjects(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/projects", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await createMissionProject(c.env, ownerId, await c.req.json().catch(() => ({}))),
+      201,
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.patch("/api/mission-control/projects/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await updateMissionProject(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/tasks", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({
+      tasks: await listMissionTasks(c.env, ownerId, {
+        status: c.req.query("status"),
+        dueDate: c.req.query("date"),
+      }),
+    });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/tasks", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await createMissionTask(c.env, ownerId, await c.req.json().catch(() => ({}))),
+      201,
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.patch("/api/mission-control/tasks/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await updateMissionTask(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.delete("/api/mission-control/tasks/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await archiveMissionTask(c.env, ownerId, c.req.param("id")));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/approvals", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({
+      approvals: await listMissionApprovals(c.env, ownerId, c.req.query("status")),
+    });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/approvals/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await resolveMissionApproval(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/agent-runs", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({ runs: await listMissionAgentRuns(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/plugin-activity", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({ activity: await listMissionPluginActivity(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/memory", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({ memory: await listMissionMemory(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/memory", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await createMissionMemory(c.env, ownerId, await c.req.json().catch(() => ({}))),
+      201,
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.patch("/api/mission-control/memory/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await updateMissionMemory(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.delete("/api/mission-control/memory/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await deleteMissionMemory(c.env, ownerId, c.req.param("id")));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/context-sources", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({ sources: await listMissionContextSources(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/context-sources", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await createMissionContextSource(
+        c.env,
+        ownerId,
+        await c.req.json().catch(() => ({})),
+      ),
+      201,
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.patch("/api/mission-control/context-sources/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await updateMissionContextSource(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.delete("/api/mission-control/context-sources/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await deleteMissionContextSource(c.env, ownerId, c.req.param("id")));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/setup", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({ setup: await getMissionSetup(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/daemon/status", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({ daemon: await getMissionDaemonStatus(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/daemon/pairing/start", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await startMissionDaemonPairing(
+        c.env,
+        ownerId,
+        await c.req.json().catch(() => ({})),
+      ),
+      201,
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/daemon/audit", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await listMissionDaemonAudit(c.env, ownerId));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
   }
 });
 
@@ -3464,6 +3972,23 @@ function socialPublishingErrorResponse(c: AppContext, error: unknown) {
     return c.json({ ok: false, error: error.message }, error.status as any);
   }
   throw error;
+}
+
+async function requireMissionControlPlugin(c: AppContext) {
+  if (await isCorePluginEnabled(c.env, "me3.mission-control")) return null;
+  return c.json({ ok: false, error: "ME3 Mission Control is disabled" }, 403);
+}
+
+function missionControlErrorResponse(c: AppContext, error: unknown) {
+  if (error instanceof MissionControlInputError) {
+    return c.json({ ok: false, error: error.message }, error.status as any);
+  }
+  throw error;
+}
+
+function localDateKey(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
 function siteStorageSetupRequired(c: AppContext) {

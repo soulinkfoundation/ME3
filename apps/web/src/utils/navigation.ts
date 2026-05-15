@@ -1,1 +1,1 @@
-export const DEFAULT_APP_PATH = "/assistant";
+export const DEFAULT_APP_PATH = "/mission-control";

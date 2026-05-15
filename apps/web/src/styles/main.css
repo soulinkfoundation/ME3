@@ -14,6 +14,22 @@
   --color-accent: var(--brand-primary);
   --color-accent-contrast: #102118;
   --shadow-soft: 0 12px 30px rgba(27, 27, 29, 0.08);
+  --ui-bg: var(--color-bg);
+  --ui-surface: var(--color-bg);
+  --ui-surface-muted: var(--color-bg-subtle);
+  --ui-text: var(--color-text);
+  --ui-text-muted: var(--color-text-muted);
+  --ui-border: var(--color-border);
+  --ui-border-strong: var(--color-border-strong);
+  --ui-accent: var(--color-accent);
+  --ui-accent-strong: var(--brand-primary-strong);
+  --ui-accent-soft: var(--brand-primary-soft);
+  --ui-accent-contrast: var(--color-accent-contrast);
+  --ui-radius-sm: 6px;
+  --ui-radius-md: 8px;
+  --ui-radius-lg: 12px;
+  --ui-shadow-sm: 0 8px 22px rgba(27, 27, 29, 0.08);
+  --ui-shadow-md: var(--shadow-soft);
   --font-sans:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

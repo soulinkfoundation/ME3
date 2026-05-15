@@ -25,6 +25,7 @@ declare module 'vue-router/auto-routes' {
     '/calendar': RouteRecordInfo<'/calendar', '/calendar', Record<never, never>, Record<never, never>>,
     '/create': RouteRecordInfo<'/create', '/create', Record<never, never>, Record<never, never>>,
     '/email': RouteRecordInfo<'/email', '/email', Record<never, never>, Record<never, never>>,
+    '/mission-control': RouteRecordInfo<'/mission-control', '/mission-control', Record<never, never>, Record<never, never>>,
     '/sites/[username]': RouteRecordInfo<'/sites/[username]', '/sites/:username', { username: ParamValue<true> }, { username: ParamValue<false> }>,
     '/sites/[username]/build': RouteRecordInfo<'/sites/[username]/build', '/sites/:username/build', { username: ParamValue<true> }, { username: ParamValue<false> }>,
     '/sites/[username]/landing-pages/new': RouteRecordInfo<'/sites/[username]/landing-pages/new', '/sites/:username/landing-pages/new', { username: ParamValue<true> }, { username: ParamValue<false> }>,
