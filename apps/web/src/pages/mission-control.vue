@@ -22,13 +22,12 @@ definePage({
 
 type MissionSection =
   | "today"
-  | "journal"
   | "projects"
   | "activity"
   | "memory"
   | "sources"
   | "setup";
-type PrimaryMissionSection = "today" | "journal" | "projects";
+type PrimaryMissionSection = "today" | "projects";
 type SettingsMissionSection = "activity" | "memory" | "sources" | "setup";
 
 type MissionProject = {
@@ -181,12 +180,11 @@ type ActivityViewItem = {
 const route = useRoute();
 const router = useRouter();
 
-const primarySections: PrimaryMissionSection[] = ["today", "journal", "projects"];
+const primarySections: PrimaryMissionSection[] = ["today", "projects"];
 const settingsSections: SettingsMissionSection[] = ["activity", "memory", "sources", "setup"];
 const sectionIds: MissionSection[] = [...primarySections, ...settingsSections];
 const sectionLabels: Record<MissionSection, string> = {
-  today: "Today",
-  journal: "Journal",
+  today: "Journal",
   projects: "Projects",
   activity: "Activity",
   memory: "Memory",
@@ -229,6 +227,13 @@ const journalState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const memoryDraft = ref("");
 const sourceDraft = ref("");
 const settingsMenuOpen = ref(false);
+const projectModalOpen = ref(false);
+const projectTitle = ref("");
+const projectDescription = ref("");
+const projectLogoData = ref("");
+const projectLogoName = ref("");
+const projectSaving = ref(false);
+const projectError = ref("");
 let journalSaveTimer: number | null = null;
 
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
@@ -290,6 +295,9 @@ const settingsSectionDescriptions: Record<SettingsMissionSection, string> = {
   sources: "Connected context",
   setup: "Daemon and integrations",
 };
+const projectCreateDisabled = computed(
+  () => projectSaving.value || projectTitle.value.trim().length === 0,
+);
 
 async function loadOverview() {
   loading.value = true;
@@ -431,6 +439,81 @@ function setSection(section: MissionSection) {
   });
 }
 
+function openProjectModal() {
+  projectTitle.value = "";
+  projectDescription.value = "";
+  projectLogoData.value = "";
+  projectLogoName.value = "";
+  projectError.value = "";
+  projectModalOpen.value = true;
+}
+
+function closeProjectModal() {
+  if (projectSaving.value) return;
+  projectModalOpen.value = false;
+}
+
+function chooseProjectLogo(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  projectError.value = "";
+  if (!file.type.startsWith("image/")) {
+    projectError.value = "Choose an image file for the project logo";
+    input.value = "";
+    return;
+  }
+  if (file.size > 180_000) {
+    projectError.value = "Choose a logo under 180 KB";
+    input.value = "";
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    projectLogoData.value = typeof reader.result === "string" ? reader.result : "";
+    projectLogoName.value = file.name;
+  };
+  reader.onerror = () => {
+    projectError.value = "Could not read that image";
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeProjectLogo() {
+  projectLogoData.value = "";
+  projectLogoName.value = "";
+}
+
+async function addProject() {
+  const name = projectTitle.value.trim();
+  if (!name || projectSaving.value) return;
+  projectSaving.value = true;
+  projectError.value = "";
+  try {
+    const response = await api.post<{ project: MissionProject }>(
+      "/mission-control/projects",
+      {
+        name,
+        description: projectDescription.value.trim() || undefined,
+        icon: projectLogoData.value || undefined,
+      },
+    );
+    projects.value = [response.project, ...projects.value].sort((a, b) => {
+      if (a.name === "Personal") return -1;
+      if (b.name === "Personal") return 1;
+      return a.name.localeCompare(b.name);
+    });
+    selectedProjectId.value ||= response.project.id;
+    notice.value = "Project added";
+    projectModalOpen.value = false;
+  } catch (e) {
+    projectError.value = e instanceof ApiError ? e.message : "Could not create project";
+  } finally {
+    projectSaving.value = false;
+  }
+}
+
 function moveDay(delta: number) {
   selectedDate.value = addDays(selectedDate.value, delta);
 }
@@ -502,6 +585,15 @@ function projectName(projectId: string | null): string {
   return projects.value.find((project) => project.id === projectId)?.name || "Personal";
 }
 
+function projectInitial(project: MissionProject): string {
+  return project.name.trim().charAt(0).toUpperCase() || "P";
+}
+
+function isProjectLogo(value: string | null): boolean {
+  if (!value) return false;
+  return /^data:image\//.test(value) || /^https?:\/\//.test(value);
+}
+
 function formatDateTime(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -545,11 +637,16 @@ function todayKey(): string {
 
 function normalizeSection(value: unknown): MissionSection {
   const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === "journal") return "today";
   if (raw === "approvals" || raw === "runs") return "activity";
   return sectionIds.includes(raw as MissionSection) ? (raw as MissionSection) : "today";
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && projectModalOpen.value) {
+    closeProjectModal();
+    return;
+  }
   if (event.key === "Escape") settingsMenuOpen.value = false;
 }
 
@@ -607,7 +704,11 @@ onBeforeUnmount(() => {
         </button>
       </nav>
 
-      <div class="mission-control__day-switcher" aria-label="Selected day">
+      <div
+        v-if="activeSection === 'today'"
+        class="mission-control__day-switcher"
+        aria-label="Selected day"
+      >
         <button type="button" class="icon-button" aria-label="Previous day" @click="moveDay(-1)">
           <UiIcon name="ChevronLeft" :size="18" />
         </button>
@@ -618,6 +719,9 @@ onBeforeUnmount(() => {
         <button type="button" class="icon-button" aria-label="Next day" @click="moveDay(1)">
           <UiIcon name="ChevronRight" :size="18" />
         </button>
+      </div>
+      <div v-else class="mission-control__section-title">
+        {{ sectionLabels[activeSection] }}
       </div>
 
       <div class="settings-menu" @click.stop>
@@ -663,7 +767,6 @@ onBeforeUnmount(() => {
             autocomplete="off"
           />
           <select v-model="selectedProjectId" class="capture-row__project" aria-label="Project">
-            <option value="">Personal</option>
             <option v-for="project in activeProjectOptions" :key="project.id" :value="project.id">
               {{ project.name }}
             </option>
@@ -696,7 +799,6 @@ onBeforeUnmount(() => {
           <div class="capture-list__header">
             <div>
               <h1>{{ selectedDateLabel }}</h1>
-              <span>{{ selectedDate }}</span>
             </div>
             <span>{{ openCaptures.length }} open</span>
           </div>
@@ -788,37 +890,53 @@ onBeforeUnmount(() => {
             </article>
           </template>
         </section>
-      </div>
-    </section>
 
-    <section v-show="activeSection === 'journal'" class="mission-page">
-      <div class="journal-sheet">
-        <div class="journal-editor__header">
-          <div>
-            <h1>{{ selectedDateLabel }}</h1>
-            <span>{{ selectedDate }}</span>
+        <section class="journal-sheet" aria-label="Journal entry">
+          <div class="journal-editor__header">
+            <h2>Journal</h2>
+            <span v-if="journalStatusText">{{ journalStatusText }}</span>
           </div>
-          <span v-if="journalStatusText">{{ journalStatusText }}</span>
-        </div>
-        <textarea
-          v-model="journalDraft"
-          class="journal-editor__textarea"
-          rows="16"
-          placeholder="Journal entry field..."
-        />
+          <textarea
+            v-model="journalDraft"
+            class="journal-editor__textarea"
+            rows="12"
+            placeholder="Journal entry field..."
+          />
+        </section>
       </div>
     </section>
 
     <section v-show="activeSection === 'projects'" class="mission-page">
       <div class="simple-sheet">
         <div class="simple-sheet__header">
-          <h1>Projects</h1>
-          <span>{{ projects.length }}</span>
-        </div>
-        <article v-for="project in projects" :key="project.id" class="detail-row">
           <div>
-            <h2>{{ project.name }}</h2>
-            <p>{{ project.description || "No description" }}</p>
+            <h1>Projects</h1>
+            <span>{{ projects.length }}</span>
+          </div>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="Add project"
+            title="Add project"
+            @click="openProjectModal"
+          >
+            <UiIcon name="Plus" :size="18" />
+          </button>
+        </div>
+        <article v-for="project in projects" :key="project.id" class="detail-row project-row">
+          <div class="project-row__main">
+            <div class="project-row__logo" aria-hidden="true">
+              <img
+                v-if="isProjectLogo(project.icon)"
+                :src="project.icon || ''"
+                :alt="`${project.name} logo`"
+              />
+              <span v-else>{{ projectInitial(project) }}</span>
+            </div>
+            <div>
+              <h2>{{ project.name }}</h2>
+              <p>{{ project.description || "No description" }}</p>
+            </div>
           </div>
           <span class="status-badge">{{ project.status }}</span>
         </article>
@@ -921,6 +1039,73 @@ onBeforeUnmount(() => {
         </section>
       </div>
     </section>
+
+    <Teleport to="body">
+      <div
+        v-if="projectModalOpen"
+        class="mission-modal"
+        role="presentation"
+        @click.self="closeProjectModal"
+      >
+        <form
+          class="mission-modal__dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="project-modal-title"
+          @submit.prevent="addProject"
+        >
+          <div class="mission-modal__header">
+            <h2 id="project-modal-title">Add project</h2>
+            <button
+              type="button"
+              class="icon-button quiet"
+              aria-label="Close"
+              @click="closeProjectModal"
+            >
+              <UiIcon name="X" :size="18" />
+            </button>
+          </div>
+
+          <label class="field">
+            <span>Title</span>
+            <input v-model="projectTitle" type="text" autocomplete="off" autofocus />
+          </label>
+
+          <label class="field">
+            <span>Description</span>
+            <textarea v-model="projectDescription" rows="4" />
+          </label>
+
+          <label class="field">
+            <span>Logo</span>
+            <input type="file" accept="image/*" @change="chooseProjectLogo" />
+          </label>
+
+          <div v-if="projectLogoData" class="project-logo-preview">
+            <img :src="projectLogoData" alt="" />
+            <span>{{ projectLogoName }}</span>
+            <button type="button" class="text-button" @click="removeProjectLogo">
+              Remove
+            </button>
+          </div>
+
+          <p v-if="projectError" class="mission-modal__error">{{ projectError }}</p>
+
+          <div class="mission-modal__actions">
+            <button type="button" class="text-button" @click="closeProjectModal">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="text-button text-button--primary"
+              :disabled="projectCreateDisabled"
+            >
+              {{ projectSaving ? "Adding..." : "Add project" }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </Teleport>
   </main>
 </template>
 
@@ -993,6 +1178,14 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-self: center;
   gap: 4px;
+}
+
+.mission-control__section-title {
+  justify-self: center;
+  color: var(--ui-text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 .mission-control__day-label {
@@ -1202,6 +1395,7 @@ onBeforeUnmount(() => {
 .capture-list__header h1,
 .simple-sheet__header h1,
 .journal-editor__header h1,
+.journal-editor__header h2,
 .detail-row h2,
 .daemon-summary h2 {
   margin: 0;
@@ -1323,7 +1517,7 @@ onBeforeUnmount(() => {
 }
 
 .journal-editor__textarea {
-  min-height: 58vh;
+  min-height: 260px;
   resize: vertical;
   padding: 18px 0;
   font-size: 16px;
@@ -1364,6 +1558,37 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
+.project-row {
+  align-items: center;
+}
+
+.detail-row .project-row__main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.project-row__logo {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+  color: var(--ui-accent);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.project-row__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .inline-form {
   grid-template-columns: minmax(0, 1fr) 40px;
   margin: 14px 0 4px;
@@ -1378,6 +1603,21 @@ onBeforeUnmount(() => {
 
 .text-button:hover {
   background: var(--ui-surface-muted);
+}
+
+.text-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.text-button--primary {
+  border-color: transparent;
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
+}
+
+.text-button--primary:hover {
+  background: var(--ui-accent-strong);
 }
 
 .daemon-summary {
@@ -1403,6 +1643,122 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
+.mission-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in oklab, #000, transparent 64%);
+}
+
+.mission-modal__dialog {
+  display: grid;
+  width: min(460px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  gap: 14px;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  box-shadow: 0 24px 80px color-mix(in oklab, #000, transparent 78%);
+}
+
+.mission-modal__header,
+.mission-modal__actions,
+.project-logo-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mission-modal__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.mission-modal__actions {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+}
+
+.field input {
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.field input[type="file"] {
+  display: grid;
+  min-height: auto;
+  padding: 8px;
+  color: var(--ui-text-muted);
+  font-weight: 500;
+}
+
+.field textarea {
+  resize: vertical;
+  padding: 10px;
+  line-height: 1.5;
+}
+
+.field input:focus,
+.field textarea:focus {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 1px;
+}
+
+.project-logo-preview {
+  justify-content: flex-start;
+  padding: 8px;
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+.project-logo-preview img {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--ui-radius-sm);
+  object-fit: cover;
+}
+
+.project-logo-preview span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-modal__error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
 @media (max-width: 760px) {
   .mission-control {
     padding: 0 14px 32px;
@@ -1413,7 +1769,12 @@ onBeforeUnmount(() => {
     gap: 10px;
   }
 
-  .mission-control__day-switcher {
+  .mission-control__sections {
+    padding-left: 48px;
+  }
+
+  .mission-control__day-switcher,
+  .mission-control__section-title {
     grid-column: 1 / -1;
     grid-row: 2;
     justify-self: center;
@@ -1433,6 +1794,10 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
+  .project-row__main {
+    width: 100%;
+  }
+
   .detail-row__aside {
     align-items: flex-start;
     text-align: left;
@@ -1441,6 +1806,10 @@ onBeforeUnmount(() => {
   .settings-menu__dropdown {
     right: 0;
     width: min(230px, calc(100vw - 28px));
+  }
+
+  .mission-modal {
+    padding: 14px;
   }
 }
 </style>
