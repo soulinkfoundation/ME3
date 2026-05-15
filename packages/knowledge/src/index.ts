@@ -86,6 +86,62 @@ export type Me3KnowledgeRuntimeContext = {
   maxAgentCapabilities?: number;
 };
 
+export type Me3KnowledgePluginTool = {
+  id: string;
+  label?: string;
+  sideEffect?: string;
+  approvalMode?: string;
+};
+
+export type Me3KnowledgePluginRoute = {
+  id: string;
+  path: string;
+  methods?: readonly string[];
+  auth?: string;
+};
+
+export type Me3KnowledgePluginSetupRequirement = {
+  id: string;
+  label: string;
+  kind: string;
+  required: boolean;
+  configured: boolean;
+  note?: string;
+};
+
+export type Me3KnowledgePluginSource = {
+  id: string;
+  name: string;
+  description: string;
+  status?: string;
+  enabled?: boolean;
+  installed?: boolean;
+  capabilityIds?: readonly string[];
+  routes?: readonly Me3KnowledgePluginRoute[];
+  agentTools?: readonly Me3KnowledgePluginTool[];
+  setupRequirements?: readonly Me3KnowledgePluginSetupRequirement[];
+};
+
+export type Me3KnowledgePluginDerivedSummary = {
+  id: string;
+  name: string;
+  description: string;
+  status: string | null;
+  enabled: boolean | null;
+  installed: boolean | null;
+  capabilityIds: readonly string[];
+  routePaths: readonly string[];
+  agentToolIds: readonly string[];
+  setupRequirements: readonly Me3KnowledgePluginSetupRequirement[];
+};
+
+export type Me3KnowledgeValidationIssue = {
+  capabilityId: string;
+  pluginId?: string;
+  field: "pluginId" | "agentToolIds" | "appRoutes";
+  message: string;
+};
+
 export type Me3ResolvedCapability = Me3Capability & {
   runtimeState: Me3CapabilityRuntimeState;
   runtimeNote: string;
@@ -96,6 +152,7 @@ export type Me3KnowledgeSnapshot = {
   schemaVersion: string;
   facts: readonly Me3KnowledgeFact[];
   capabilities: readonly Me3ResolvedCapability[];
+  plugins?: readonly Me3KnowledgePluginDerivedSummary[];
 };
 
 export const ME3_PRODUCT_KNOWLEDGE: readonly Me3KnowledgeFact[] = [
@@ -440,6 +497,7 @@ export function listMe3Capabilities(filters: {
 
 export function getMe3KnowledgeSnapshot(
   context: Me3KnowledgeRuntimeContext = {},
+  plugins: readonly Me3KnowledgePluginSource[] = [],
 ): Me3KnowledgeSnapshot {
   return {
     schemaVersion: ME3_KNOWLEDGE_SCHEMA_VERSION,
@@ -447,6 +505,7 @@ export function getMe3KnowledgeSnapshot(
     capabilities: ME3_CAPABILITIES.map((capability) =>
       resolveMe3Capability(capability, context),
     ),
+    plugins: plugins.length ? deriveMe3KnowledgeFromPlugins(plugins) : undefined,
   };
 }
 
@@ -469,9 +528,15 @@ export function buildMe3CapabilityContext(
 ): string {
   const snapshot = getMe3KnowledgeSnapshot(context);
   const includeComingSoon = context.includeComingSoon === true;
-  const maxCapabilities = context.maxAgentCapabilities ?? 12;
+  const maxCapabilities = context.maxAgentCapabilities ?? 8;
   const capabilities = snapshot.capabilities
-    .filter((capability) => includeComingSoon || capability.runtimeState !== "coming_soon")
+    .filter((capability) => {
+      if (!includeComingSoon && capability.runtimeState === "coming_soon") return false;
+      return !["disabled", "not_installed", "unsupported", "unknown"].includes(
+        capability.runtimeState,
+      );
+    })
+    .sort(compareAgentPromptCapabilities)
     .slice(0, maxCapabilities);
 
   const factLines = snapshot.facts
@@ -501,6 +566,106 @@ export function buildMe3CapabilityContext(
     "ME3 runtime guidance:",
     ...runtimeLines,
   ].join("\n");
+}
+
+export function deriveMe3KnowledgeFromPlugins(
+  plugins: readonly Me3KnowledgePluginSource[],
+): readonly Me3KnowledgePluginDerivedSummary[] {
+  return plugins.map((plugin) => ({
+    id: plugin.id,
+    name: plugin.name,
+    description: plugin.description,
+    status: typeof plugin.status === "string" ? plugin.status : null,
+    enabled: typeof plugin.enabled === "boolean" ? plugin.enabled : null,
+    installed: typeof plugin.installed === "boolean" ? plugin.installed : null,
+    capabilityIds: [...(plugin.capabilityIds || [])],
+    routePaths: [...new Set((plugin.routes || []).map((route) => route.path))],
+    agentToolIds: [...new Set((plugin.agentTools || []).map((tool) => tool.id))],
+    setupRequirements: plugin.setupRequirements || [],
+  }));
+}
+
+export function validateMe3KnowledgeAgainstPlugins(
+  plugins: readonly Me3KnowledgePluginSource[],
+): readonly Me3KnowledgeValidationIssue[] {
+  const pluginById = new Map(plugins.map((plugin) => [plugin.id, plugin]));
+  const issues: Me3KnowledgeValidationIssue[] = [];
+
+  for (const capability of ME3_CAPABILITIES) {
+    if (!capability.pluginId) continue;
+
+    const plugin = pluginById.get(capability.pluginId);
+    if (!plugin) {
+      issues.push({
+        capabilityId: capability.id,
+        pluginId: capability.pluginId,
+        field: "pluginId",
+        message: `Capability references missing plugin ${capability.pluginId}.`,
+      });
+      continue;
+    }
+
+    const pluginToolIds = new Set((plugin.agentTools || []).map((tool) => tool.id));
+    for (const toolId of capability.agentToolIds || []) {
+      if (!pluginToolIds.has(toolId)) {
+        issues.push({
+          capabilityId: capability.id,
+          pluginId: capability.pluginId,
+          field: "agentToolIds",
+          message: `Capability references missing agent tool ${toolId}.`,
+        });
+      }
+    }
+
+    // Route facts are derived from plugin manifests for app/API rendering, but
+    // several Core routes are still owned outside plugin manifests while the
+    // extraction scaffold settles. Validate routes once manifests are complete.
+  }
+
+  return issues;
+}
+
+function compareAgentPromptCapabilities(
+  left: Me3ResolvedCapability,
+  right: Me3ResolvedCapability,
+): number {
+  return (
+    runtimeStateRank(left.runtimeState) - runtimeStateRank(right.runtimeState) ||
+    categoryRank(left.category) - categoryRank(right.category) ||
+    left.title.localeCompare(right.title)
+  );
+}
+
+function runtimeStateRank(runtimeState: Me3CapabilityRuntimeState): number {
+  switch (runtimeState) {
+    case "available":
+      return 0;
+    case "partial":
+      return 1;
+    case "setup_required":
+      return 2;
+    case "coming_soon":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function categoryRank(category: Me3CapabilityCategory): number {
+  const order: readonly Me3CapabilityCategory[] = [
+    "assistant",
+    "identity",
+    "workspace",
+    "calendar",
+    "mailbox",
+    "contacts",
+    "sites",
+    "content",
+    "providers",
+    "safety",
+  ];
+  const index = order.indexOf(category);
+  return index === -1 ? order.length : index;
 }
 
 function resolveRuntimeState(

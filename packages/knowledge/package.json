@@ -1,5 +1,5 @@
 {
-  "name": "@me3-core/knowledge",
+  "name": "@me3/knowledge",
   "version": "0.1.0",
   "private": true,
   "type": "module",

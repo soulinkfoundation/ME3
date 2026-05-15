@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@me3-core/knowledge": "workspace:*",
+    "@me3/knowledge": "workspace:*",
     "@me3-core/plugin-calendar": "workspace:*",
     "@me3-core/plugin-social-publishing": "workspace:*"
   },

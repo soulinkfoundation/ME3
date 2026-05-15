@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
-import type { DbPluginInstallation } from "./plugins";
+import { CORE_PLUGIN_CATALOG, type DbPluginInstallation } from "./plugins";
 import type {
   DbAiModelDefault,
   DbAiProviderCredential,
@@ -2286,6 +2287,10 @@ describe("ME3 Core Worker auth", () => {
     );
   });
 
+  it("keeps shared ME3 knowledge aligned with plugin manifest tools", () => {
+    expect(validateMe3KnowledgeAgainstPlugins(CORE_PLUGIN_CATALOG)).toEqual([]);
+  });
+
   it("requires owner auth for plugin catalog access", async () => {
     const env = createEnv();
 
@@ -2309,6 +2314,7 @@ describe("ME3 Core Worker auth", () => {
       catalogVersion: string;
       facts: Array<{ id: string }>;
       capabilities: Array<{ id: string; runtimeState: string; runtimeNote: string }>;
+      plugins: Array<{ id: string; routePaths: string[]; agentToolIds: string[] }>;
     };
 
     expect(response.status).toBe(200);
@@ -2336,6 +2342,15 @@ describe("ME3 Core Worker auth", () => {
         expect.objectContaining({
           id: "ai.chat_provider",
           runtimeState: "setup_required",
+        }),
+      ]),
+    );
+    expect(body.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "me3.mission-control",
+          routePaths: expect.arrayContaining(["/api/mission-control/overview"]),
+          agentToolIds: expect.arrayContaining(["mission.task.create"]),
         }),
       ]),
     );

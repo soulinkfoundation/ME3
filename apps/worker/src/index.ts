@@ -92,7 +92,7 @@ import {
 import {
   getMe3KnowledgeSnapshot,
   type Me3KnowledgeRuntimeContext,
-} from "@me3-core/knowledge";
+} from "@me3/knowledge";
 import {
   activateAgentMailbox,
   cancelAgentReminder,
@@ -676,6 +676,7 @@ app.get("/api/knowledge", async (c) => {
   ]);
   const snapshot = getMe3KnowledgeSnapshot(
     buildKnowledgeRuntimeContext(plugins, aiConfigured),
+    plugins,
   );
 
   return c.json({

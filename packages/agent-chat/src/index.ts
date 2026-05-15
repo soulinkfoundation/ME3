@@ -5,7 +5,7 @@ import {
 import {
   buildMe3CapabilityContext,
   type Me3KnowledgeRuntimeContext,
-} from "@me3-core/knowledge";
+} from "@me3/knowledge";
 
 export {
   createAgentContentItem,

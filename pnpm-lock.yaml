@@ -23,6 +23,9 @@ importers:
       '@me3-core/plugin-mission-control':
         specifier: workspace:*
         version: link:../../packages/mission-control
+      '@me3/knowledge':
+        specifier: workspace:*
+        version: link:../../packages/knowledge
       '@tanstack/vue-table':
         specifier: ^8.21.3
         version: 8.21.3(vue@3.5.34(typescript@5.9.3))
@@ -138,9 +141,6 @@ importers:
 
   apps/worker:
     dependencies:
-      '@me3-core/knowledge':
-        specifier: workspace:*
-        version: link:../../packages/knowledge
       '@me3-core/plugin-agent-chat':
         specifier: workspace:*
         version: link:../../packages/agent-chat
@@ -156,6 +156,9 @@ importers:
       '@me3-core/plugin-social-publishing':
         specifier: workspace:*
         version: link:../../packages/social-publishing
+      '@me3/knowledge':
+        specifier: workspace:*
+        version: link:../../packages/knowledge
       hono:
         specifier: ^4.3.0
         version: 4.12.18
@@ -175,15 +178,15 @@ importers:
 
   packages/agent-chat:
     dependencies:
-      '@me3-core/knowledge':
-        specifier: workspace:*
-        version: link:../knowledge
       '@me3-core/plugin-calendar':
         specifier: workspace:*
         version: link:../calendar
       '@me3-core/plugin-social-publishing':
         specifier: workspace:*
         version: link:../social-publishing
+      '@me3/knowledge':
+        specifier: workspace:*
+        version: link:../knowledge
     devDependencies:
       typescript:
         specifier: ^5.3.3
