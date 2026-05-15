@@ -33,3 +33,5 @@ playwright-report/
 # Local-only repository metadata
 .gitattributes
 AGENTS.md
+
+apps/web/public/page-builder-resources
