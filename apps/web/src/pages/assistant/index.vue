@@ -1,573 +1,468 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
-import { api } from "../../api";
-import Button from "../../components/Button.vue";
-import UiIcon from "../../components/UiIcon.vue";
-import type {
-  Me3CapabilityCategory,
-  Me3CapabilityRuntimeState,
-  Me3KnowledgeFact,
-  Me3KnowledgePluginDerivedSummary,
-  Me3ResolvedCapability,
-} from "@me3/knowledge";
-import type { UiIconName } from "../../utils/icons";
+import {
+  createColumnHelper,
+  getCoreRowModel,
+  getSortedRowModel,
+  useVueTable,
+  type SortingState,
+} from "@tanstack/vue-table";
 
 definePage({
   meta: {
     requiresAuth: true,
     title: "Assistant | ME3",
-    description: "ME3 Core assistant workspace.",
+    description: "ME3 Core assistant jobs.",
     robots: "noindex,follow",
   },
 });
 
-type KnowledgeResponse = {
-  schemaVersion: string;
-  catalogVersion: string;
-  facts: Me3KnowledgeFact[];
-  capabilities: Me3ResolvedCapability[];
-  plugins?: Me3KnowledgePluginDerivedSummary[];
+type AssistantJobStatus = "active" | "paused";
+
+type AssistantJob = {
+  id: string;
+  name: string;
+  schedule: string;
+  status: AssistantJobStatus;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
 };
 
-const knowledge = ref<KnowledgeResponse | null>(null);
-const loading = ref(true);
-const error = ref<string | null>(null);
-const pluginChangedEvent = "me3:plugins-changed";
-
-const categoryLabels: Record<Me3CapabilityCategory, string> = {
-  assistant: "Assistant",
-  identity: "Identity",
-  workspace: "Workspace",
-  calendar: "Calendar",
-  mailbox: "Mailbox",
-  contacts: "Contacts",
-  content: "Content",
-  sites: "Sites",
-  providers: "Providers",
-  safety: "Safety",
-};
-
-const categoryIcons: Record<Me3CapabilityCategory, UiIconName> = {
-  assistant: "Bot",
-  identity: "Fingerprint",
-  workspace: "ClipboardList",
-  calendar: "CalendarDays",
-  mailbox: "Mail",
-  contacts: "Users",
-  content: "Megaphone",
-  sites: "Globe2",
-  providers: "Settings2",
-  safety: "ShieldCheck",
-};
-
-const stateLabels: Record<Me3CapabilityRuntimeState, string> = {
-  available: "Available",
-  partial: "Partial",
-  setup_required: "Setup required",
-  disabled: "Disabled",
-  coming_soon: "Coming soon",
-  not_installed: "Not installed",
-  unsupported: "Unsupported",
-  unknown: "Unknown",
-};
-
-const stateIcons: Record<Me3CapabilityRuntimeState, UiIconName> = {
-  available: "CheckCircle2",
-  partial: "CircleDashed",
-  setup_required: "AlertCircle",
-  disabled: "CircleOff",
-  coming_soon: "Clock3",
-  not_installed: "PackageOpen",
-  unsupported: "Ban",
-  unknown: "CircleHelp",
-};
-
-const priorityStates: Me3CapabilityRuntimeState[] = [
-  "available",
-  "partial",
-  "setup_required",
-  "coming_soon",
-  "disabled",
-  "not_installed",
-  "unsupported",
-  "unknown",
+const starterJobs: AssistantJob[] = [
+  {
+    id: "booking-reminders",
+    name: "Booking Reminders",
+    schedule: "Event-driven",
+    status: "active",
+    lastRunAt: null,
+    nextRunAt: null,
+  },
+  {
+    id: "daily-morning-briefing",
+    name: "Daily Morning Briefing",
+    schedule: "Every day at 7:00 AM",
+    status: "active",
+    lastRunAt: "2026-05-15T07:00:00",
+    nextRunAt: "2026-05-16T07:00:00",
+  },
+  {
+    id: "client-discovery",
+    name: "Client Discovery",
+    schedule: "Every week",
+    status: "paused",
+    lastRunAt: "2026-05-04T15:00:00",
+    nextRunAt: null,
+  },
+  {
+    id: "invoice-expense-triage",
+    name: "Invoice & Expense Triage",
+    schedule: "Every 6 hours",
+    status: "paused",
+    lastRunAt: "2026-05-06T16:00:00",
+    nextRunAt: null,
+  },
+  {
+    id: "weekly-review-digest",
+    name: "Weekly Review Digest",
+    schedule: "Every Monday at 8:00 AM",
+    status: "paused",
+    lastRunAt: "2026-03-30T09:00:00",
+    nextRunAt: null,
+  },
 ];
 
-const capabilities = computed(() => knowledge.value?.capabilities || []);
-const facts = computed(() => knowledge.value?.facts || []);
-const pluginCount = computed(() => knowledge.value?.plugins?.length || 0);
-const availableCount = computed(
-  () =>
-    capabilities.value.filter(
-      (capability) =>
-        capability.runtimeState === "available" ||
-        capability.runtimeState === "partial",
-    ).length,
-);
-const setupCount = computed(
-  () =>
-    capabilities.value.filter(
-      (capability) => capability.runtimeState === "setup_required",
-    ).length,
-);
+const jobs = ref<AssistantJob[]>(starterJobs);
+const sorting = ref<SortingState>([
+  { id: "status", desc: false },
+  { id: "name", desc: false },
+]);
 
-const groupedCapabilities = computed(() => {
-  const groups = new Map<Me3CapabilityCategory, Me3ResolvedCapability[]>();
-  for (const capability of capabilities.value) {
-    const group = groups.get(capability.category) || [];
-    group.push(capability);
-    groups.set(capability.category, group);
-  }
+function formatDate(value: string | null): string {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
 
-  return Array.from(groups.entries()).map(([category, items]) => ({
-    category,
-    label: categoryLabels[category],
-    icon: categoryIcons[category],
-    items: items.sort(compareCapabilities),
-  }));
-});
-
-function compareCapabilities(
-  left: Me3ResolvedCapability,
-  right: Me3ResolvedCapability,
-): number {
-  return (
-    priorityStates.indexOf(left.runtimeState) -
-      priorityStates.indexOf(right.runtimeState) ||
-    left.title.localeCompare(right.title)
+function toggleJob(job: AssistantJob) {
+  jobs.value = jobs.value.map((existing) =>
+    existing.id === job.id
+      ? {
+          ...existing,
+          status: existing.status === "active" ? "paused" : "active",
+          nextRunAt:
+            existing.status === "active"
+              ? null
+              : existing.id === "daily-morning-briefing"
+                ? "2026-05-16T07:00:00"
+                : existing.nextRunAt,
+        }
+      : existing,
   );
 }
 
-function statusLabel(state: Me3CapabilityRuntimeState): string {
-  return stateLabels[state] || "Unknown";
-}
+const columnHelper = createColumnHelper<AssistantJob>();
 
-function statusIcon(state: Me3CapabilityRuntimeState): UiIconName {
-  return stateIcons[state] || "CircleHelp";
-}
+const columns = [
+  columnHelper.accessor("name", {
+    header: "Job",
+    size: 320,
+    sortingFn: "alphanumeric",
+  }),
+  columnHelper.accessor("schedule", {
+    header: "Schedule",
+    size: 220,
+    sortingFn: "alphanumeric",
+  }),
+  columnHelper.accessor("status", {
+    header: "Status",
+    size: 140,
+    sortingFn: "alphanumeric",
+  }),
+  columnHelper.accessor("lastRunAt", {
+    header: "Last run",
+    size: 180,
+    sortingFn: "datetime",
+  }),
+  columnHelper.accessor("nextRunAt", {
+    header: "Next run",
+    size: 180,
+    sortingFn: "datetime",
+  }),
+  columnHelper.display({
+    id: "actions",
+    header: "Actions",
+    size: 180,
+    enableSorting: false,
+  }),
+];
 
-async function loadKnowledge() {
-  loading.value = true;
-  error.value = null;
-  try {
-    knowledge.value = await api.get<KnowledgeResponse>("/knowledge");
-  } catch (err) {
-    error.value =
-      err instanceof Error ? err.message : "Failed to load assistant knowledge";
-  } finally {
-    loading.value = false;
-  }
-}
-
-function handlePluginChanged() {
-  void loadKnowledge();
-}
-
-onMounted(() => {
-  void loadKnowledge();
-  window.addEventListener(pluginChangedEvent, handlePluginChanged);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener(pluginChangedEvent, handlePluginChanged);
+const table = useVueTable({
+  get data() {
+    return jobs.value;
+  },
+  columns,
+  state: {
+    get sorting() {
+      return sorting.value;
+    },
+  },
+  onSortingChange: (updater) => {
+    sorting.value =
+      typeof updater === "function" ? updater(sorting.value) : updater;
+  },
+  getCoreRowModel: getCoreRowModel(),
+  getSortedRowModel: getSortedRowModel(),
 });
 </script>
 
 <template>
-  <main class="assistant-knowledge">
-    <section class="assistant-knowledge__intro">
-      <div class="assistant-knowledge__intro-copy">
-        <div class="assistant-knowledge__icon" aria-hidden="true">
-          <UiIcon name="Bot" :size="22" />
-        </div>
-        <div>
-          <h1>Assistant</h1>
-          <p>
-            ME3 keeps one setup-aware capability map for chat, app help, and
-            plugin surfaces. The chat agent gets a lean version; this page shows
-            the fuller owner view.
-          </p>
-        </div>
-      </div>
+  <div class="agent-page">
+    <Teleport to="#app-side-nav-mobile-page-controls">
+      <div class="assistant-mobile-title">Assistant Jobs</div>
+    </Teleport>
 
-      <div class="assistant-knowledge__actions">
-        <Button to="/account?section=plugins" variant="outline">
-          <template #icon>
-            <UiIcon name="Plug" :size="16" />
-          </template>
-          Plugins
-        </Button>
-        <Button to="/account" variant="outline">
-          <template #icon>
-            <UiIcon name="Settings2" :size="16" />
-          </template>
-          Settings
-        </Button>
-      </div>
-    </section>
-
-    <section v-if="loading" class="knowledge-state" aria-live="polite">
-      Loading assistant knowledge...
-    </section>
-
-    <section v-else-if="error" class="knowledge-state knowledge-state--error">
-      <p>{{ error }}</p>
-      <Button variant="outline" @click="loadKnowledge">Try again</Button>
-    </section>
-
-    <template v-else-if="knowledge">
-      <section class="knowledge-summary" aria-label="Assistant knowledge summary">
-        <div class="knowledge-summary__item">
-          <strong>{{ availableCount }}</strong>
-          <span>ready or partial</span>
-        </div>
-        <div class="knowledge-summary__item">
-          <strong>{{ setupCount }}</strong>
-          <span>need setup</span>
-        </div>
-        <div class="knowledge-summary__item">
-          <strong>{{ pluginCount }}</strong>
-          <span>plugin sources</span>
-        </div>
-      </section>
-
-      <section class="knowledge-facts" aria-label="ME3 boundaries">
-        <article
-          v-for="fact in facts"
-          :key="fact.id"
-          class="knowledge-fact"
-        >
-          <h2>{{ fact.title }}</h2>
-          <p>{{ fact.summary }}</p>
-        </article>
-      </section>
-
-      <section class="knowledge-capabilities" aria-label="ME3 capabilities">
-        <article
-          v-for="group in groupedCapabilities"
-          :key="group.category"
-          class="knowledge-group"
-        >
-          <header class="knowledge-group__header">
-            <span class="knowledge-group__icon" aria-hidden="true">
-              <UiIcon :name="group.icon" :size="18" />
-            </span>
-            <h2>{{ group.label }}</h2>
-          </header>
-
-          <div class="knowledge-capability-list">
-            <article
-              v-for="capability in group.items"
-              :key="capability.id"
-              class="knowledge-capability"
+    <main class="agent-main">
+      <section class="jobs-panel" aria-label="ME3 assistant jobs">
+        <table class="jobs-table">
+          <thead>
+            <tr>
+              <th
+                v-for="header in table.getFlatHeaders()"
+                :key="header.id"
+                :style="
+                  header.column.columnDef.size
+                    ? `width: ${header.column.columnDef.size}px`
+                    : ''
+                "
+                :class="header.column.getCanSort() ? 'col-sortable' : ''"
+                @click="header.column.getToggleSortingHandler()?.($event)"
+              >
+                {{ header.column.columnDef.header as string }}
+                <span
+                  v-if="header.column.getIsSorted()"
+                  class="sort-indicator"
+                >
+                  {{ header.column.getIsSorted() === "asc" ? "↑" : "↓" }}
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in table.getRowModel().rows"
+              :key="row.original.id"
+              class="job-row"
+              :class="{ 'job-row--disabled': row.original.status === 'paused' }"
             >
-              <div class="knowledge-capability__main">
-                <div class="knowledge-capability__title-row">
-                  <h3>{{ capability.title }}</h3>
+              <td class="cell-job">
+                <span class="job-name">
+                  {{ row.original.name }}
+                </span>
+              </td>
+              <td class="cell-schedule">
+                {{ row.original.schedule }}
+              </td>
+              <td>
+                <div class="status-cell">
                   <span
-                    class="knowledge-status"
-                    :class="`knowledge-status--${capability.runtimeState}`"
-                  >
-                    <UiIcon
-                      :name="statusIcon(capability.runtimeState)"
-                      :size="14"
-                      aria-hidden="true"
-                    />
-                    {{ statusLabel(capability.runtimeState) }}
-                  </span>
+                    class="status-dot"
+                    :class="
+                      row.original.status === 'active'
+                        ? 'status-dot--active'
+                        : 'status-dot--off'
+                    "
+                  />
+                  <span>{{
+                    row.original.status === "active" ? "Active" : "Paused"
+                  }}</span>
                 </div>
-                <p>{{ capability.summary }}</p>
-                <small>{{ capability.runtimeNote }}</small>
-              </div>
-            </article>
-          </div>
-        </article>
+              </td>
+              <td class="cell-run">
+                {{ row.original.lastRunAt ? formatDate(row.original.lastRunAt) : "Never" }}
+              </td>
+              <td class="cell-run">
+                {{
+                  row.original.nextRunAt && row.original.status === "active"
+                    ? formatDate(row.original.nextRunAt)
+                    : "—"
+                }}
+              </td>
+              <td class="cell-actions">
+                <div class="cell-actions__content">
+                  <button
+                    class="toggle-btn"
+                    :class="{ 'toggle-btn--on': row.original.status === 'active' }"
+                    :aria-label="
+                      row.original.status === 'active'
+                        ? `Pause ${row.original.name}`
+                        : `Activate ${row.original.name}`
+                    "
+                    @click="toggleJob(row.original)"
+                  >
+                    <span class="toggle-track">
+                      <span class="toggle-thumb" />
+                    </span>
+                  </button>
+                  <button class="job-detail-link" type="button">
+                    Details
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </section>
-    </template>
-  </main>
+    </main>
+  </div>
 </template>
 
 <style scoped>
-.assistant-knowledge {
+.agent-page {
   min-height: 100vh;
-  padding: 32px;
-  background: var(--ui-bg);
-  color: var(--ui-text);
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
-.assistant-knowledge__intro,
-.knowledge-summary,
-.knowledge-facts,
-.knowledge-capabilities {
-  width: min(1040px, 100%);
+.agent-main {
+  display: grid;
+  gap: 14px;
   margin: 0 auto;
+  padding: 32px 40px 40px;
 }
 
-.assistant-knowledge__intro {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  padding-bottom: 28px;
-  border-bottom: 1px solid var(--ui-border);
+.assistant-mobile-title {
+  display: none;
 }
 
-.assistant-knowledge__intro-copy {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  min-width: 0;
+.jobs-panel {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  -webkit-overflow-scrolling: touch;
 }
 
-.assistant-knowledge__icon,
-.knowledge-group__icon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  border: 1px solid var(--ui-border);
-  background: var(--ui-surface-muted);
-  color: var(--ui-accent);
+.jobs-table {
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.assistant-knowledge__icon {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--ui-radius-md);
+.jobs-table thead tr {
+  border-bottom: 1px solid var(--color-border);
 }
 
-.assistant-knowledge h1 {
-  margin: 0 0 8px;
-  font-size: 30px;
-  line-height: 1.1;
-  letter-spacing: 0;
-}
-
-.assistant-knowledge p {
-  margin: 0;
-  color: var(--ui-text-muted);
-}
-
-.assistant-knowledge__intro p {
-  max-width: 680px;
-  font-size: 15px;
-  line-height: 1.6;
-}
-
-.assistant-knowledge__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.knowledge-state {
-  width: min(1040px, 100%);
-  margin: 24px auto 0;
-  padding: 18px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text-muted);
-}
-
-.knowledge-state--error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  border-color: var(--ui-border-strong);
-}
-
-.knowledge-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  margin-top: 24px;
-  overflow: hidden;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-border);
-}
-
-.knowledge-summary__item {
-  display: grid;
-  gap: 2px;
-  padding: 16px;
-  background: var(--ui-surface);
-}
-
-.knowledge-summary__item strong {
-  font-size: 22px;
-  line-height: 1;
-}
-
-.knowledge-summary__item span {
-  color: var(--ui-text-muted);
-  font-size: 13px;
-}
-
-.knowledge-facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  margin-top: 24px;
-  overflow: hidden;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-border);
-}
-
-.knowledge-fact {
-  min-width: 0;
-  padding: 18px;
-  background: var(--ui-surface);
-}
-
-.knowledge-fact h2,
-.knowledge-group h2,
-.knowledge-capability h3 {
-  margin: 0;
-  letter-spacing: 0;
-}
-
-.knowledge-fact h2 {
-  margin-bottom: 8px;
-  font-size: 16px;
-}
-
-.knowledge-fact p {
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.knowledge-capabilities {
-  display: grid;
-  gap: 18px;
-  margin-top: 24px;
-}
-
-.knowledge-group {
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface);
-  overflow: hidden;
-}
-
-.knowledge-group__header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--ui-border);
-  background: var(--ui-surface-muted);
-}
-
-.knowledge-group__icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--ui-radius-sm);
-}
-
-.knowledge-group h2 {
-  font-size: 16px;
-}
-
-.knowledge-capability-list {
-  display: grid;
-}
-
-.knowledge-capability + .knowledge-capability {
-  border-top: 1px solid var(--ui-border);
-}
-
-.knowledge-capability {
-  padding: 16px 18px;
-}
-
-.knowledge-capability__main {
-  display: grid;
-  gap: 8px;
-}
-
-.knowledge-capability__title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.knowledge-capability h3 {
-  min-width: 0;
-  font-size: 15px;
-  line-height: 1.3;
-}
-
-.knowledge-capability p {
-  max-width: 780px;
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.knowledge-capability small {
-  color: var(--ui-text-muted);
+.jobs-table th {
+  padding: 14px 16px;
+  text-align: left;
+  color: var(--color-text-muted);
   font-size: 12px;
-  line-height: 1.45;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
 }
 
-.knowledge-status {
-  display: inline-flex;
-  align-items: center;
-  justify-self: start;
-  flex: 0 0 auto;
-  gap: 5px;
-  min-height: 24px;
-  padding: 4px 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: 999px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1;
+.jobs-table td {
+  padding: 18px 16px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+  vertical-align: middle;
+}
+
+.job-row:last-child td {
+  border-bottom: none;
+}
+
+.job-row--disabled {
+  opacity: 0.52;
+}
+
+.job-row:hover {
+  background: var(--color-bg-subtle);
+}
+
+.col-sortable {
+  cursor: pointer;
+}
+
+.col-sortable:hover {
+  color: var(--color-text);
+}
+
+.sort-indicator {
+  margin-left: 4px;
+}
+
+.cell-job {
+  min-width: 280px;
+}
+
+.job-name {
+  color: var(--color-text);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.cell-schedule,
+.cell-run {
+  color: var(--color-text-muted);
+  font-size: 15px;
   white-space: nowrap;
 }
 
-.knowledge-status--available {
-  border-color: color-mix(in oklab, var(--ui-accent), transparent 45%);
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-contrast);
+.status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 800;
 }
 
-.knowledge-status--partial,
-.knowledge-status--setup_required {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
 }
 
-.knowledge-status--coming_soon {
-  background: var(--ui-surface-muted);
+.status-dot--active {
+  background: var(--color-text);
 }
 
-@media (max-width: 760px) {
-  .assistant-knowledge {
-    padding: calc(var(--app-shell-mobile-nav-height, 68px) + 20px) 20px 20px;
+.status-dot--off {
+  background: var(--color-border);
+}
+
+.cell-actions {
+  width: 180px;
+}
+
+.cell-actions__content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  white-space: nowrap;
+}
+
+.toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.toggle-track {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--color-border);
+  transition: background 0.15s ease;
+}
+
+.toggle-btn--on .toggle-track {
+  background: #000;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+
+.toggle-btn--on .toggle-thumb {
+  transform: translateX(18px);
+}
+
+.job-detail-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.job-detail-link:hover {
+  color: var(--color-text);
+}
+
+@media (max-width: 960px) {
+  .agent-main {
+    padding: calc(var(--app-shell-mobile-nav-height, 68px) + 20px) 20px 32px;
   }
 
-  .assistant-knowledge__intro {
-    flex-direction: column;
+  .assistant-mobile-title {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 15px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .assistant-knowledge__actions {
-    justify-content: flex-start;
-  }
-
-  .knowledge-summary,
-  .knowledge-facts {
-    grid-template-columns: 1fr;
-  }
-
-  .knowledge-capability__title-row {
-    display: grid;
+  .jobs-table {
+    min-width: 960px;
   }
 }
 </style>

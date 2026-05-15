@@ -15,7 +15,6 @@
     "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
-    "@me3/knowledge": "workspace:*",
     "@me3-core/plugin-mission-control": "workspace:*",
     "@me3-core/plugin-landing-pages": "workspace:*",
     "@tanstack/vue-table": "^8.21.3",

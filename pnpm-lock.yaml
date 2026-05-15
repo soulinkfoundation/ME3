@@ -23,9 +23,6 @@ importers:
       '@me3-core/plugin-mission-control':
         specifier: workspace:*
         version: link:../../packages/mission-control
-      '@me3/knowledge':
-        specifier: workspace:*
-        version: link:../../packages/knowledge
       '@tanstack/vue-table':
         specifier: ^8.21.3
         version: 8.21.3(vue@3.5.34(typescript@5.9.3))
