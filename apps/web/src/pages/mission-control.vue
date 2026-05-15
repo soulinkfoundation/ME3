@@ -225,8 +225,7 @@ const manualCaptureType = ref(false);
 const selectedProjectId = ref("");
 const savingCapture = ref(false);
 const schedulePickerOpen = ref(false);
-const scheduleDate = ref("");
-const scheduleTime = ref("");
+const scheduleDateTime = ref("");
 const journalDraft = ref("");
 const journalState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const memoryDraft = ref("");
@@ -275,6 +274,17 @@ const capturePlaceholder = computed(() => {
   if (captureType.value === "reminder") return "Remind me to take a break tomorrow at 3pm";
   if (captureType.value === "event") return "Coffee with Alex tomorrow at 10am";
   return "Fix login redirect";
+});
+const schedulePickerTitle = computed(() =>
+  captureType.value === "event" ? "Schedule event" : "Schedule reminder",
+);
+const scheduledDate = computed(() => {
+  const [date] = scheduleDateTime.value.split("T");
+  return normalizeLocalDateInput(date);
+});
+const scheduledTime = computed(() => {
+  const time = scheduleDateTime.value.split("T")[1] || "";
+  return normalizeLocalTimeInput(time);
 });
 const activityItems = computed<ActivityViewItem[]>(() => [
   ...pendingApprovals.value.map((approval) => ({
@@ -367,7 +377,7 @@ async function submitCapture() {
   if (!text || savingCapture.value) return;
   savingCapture.value = true;
   error.value = "";
-  const hasPickedSchedule = captureType.value !== "task" && scheduleDate.value && scheduleTime.value;
+  const hasPickedSchedule = captureType.value !== "task" && scheduledDate.value && scheduledTime.value;
   try {
     const response = await api.post<{ capture: MissionCapture }>(
       "/mission-control/capture",
@@ -376,8 +386,8 @@ async function submitCapture() {
         text,
         type: captureType.value,
         projectId: selectedProjectId.value || undefined,
-        scheduledDate: hasPickedSchedule ? scheduleDate.value : undefined,
-        scheduledTime: hasPickedSchedule ? scheduleTime.value : undefined,
+        scheduledDate: hasPickedSchedule ? scheduledDate.value : undefined,
+        scheduledTime: hasPickedSchedule ? scheduledTime.value : undefined,
         timezone: hasPickedSchedule ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined,
       },
     );
@@ -385,8 +395,7 @@ async function submitCapture() {
     manualCaptureType.value = false;
     captureType.value = "task";
     schedulePickerOpen.value = false;
-    scheduleDate.value = "";
-    scheduleTime.value = "";
+    scheduleDateTime.value = "";
     notice.value = `${captureTypeLabel(response.capture.type)} captured`;
     await loadOverview();
   } catch (e) {
@@ -556,8 +565,17 @@ function chooseType(type: MissionCaptureType) {
     schedulePickerOpen.value = false;
     return;
   }
-  scheduleDate.value ||= selectedDate.value;
+  scheduleDateTime.value ||= defaultScheduleDateTime(selectedDate.value);
   schedulePickerOpen.value = true;
+}
+
+function closeSchedulePicker() {
+  schedulePickerOpen.value = false;
+}
+
+function clearSchedulePicker() {
+  scheduleDateTime.value = "";
+  schedulePickerOpen.value = false;
 }
 
 async function addMemory() {
@@ -661,6 +679,20 @@ function formatShortDate(value: string | null): string {
   }).format(date);
 }
 
+function defaultScheduleDateTime(date: string): string {
+  return `${date}T09:00`;
+}
+
+function normalizeLocalDateInput(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+function normalizeLocalTimeInput(value: string): string {
+  const match = value.match(/^(\d{2}):(\d{2})/);
+  if (!match) return "";
+  return `${match[1]}:${match[2]}`;
+}
+
 function addDays(dateKey: string, days: number): string {
   const [year, month, dayNumber] = dateKey.split("-").map(Number);
   const date = new Date(year, month - 1, dayNumber + days);
@@ -680,6 +712,10 @@ function normalizeSection(value: unknown): MissionSection {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && schedulePickerOpen.value) {
+    closeSchedulePicker();
+    return;
+  }
   if (event.key === "Escape" && projectModalOpen.value) {
     closeProjectModal();
     return;
@@ -692,6 +728,7 @@ watch(captureText, (text) => {
     manualCaptureType.value = false;
     captureType.value = "task";
     schedulePickerOpen.value = false;
+    scheduleDateTime.value = "";
     return;
   }
   if (!manualCaptureType.value) {
@@ -700,8 +737,8 @@ watch(captureText, (text) => {
 });
 
 watch(selectedDate, (nextDate, previousDate) => {
-  if (!scheduleDate.value || scheduleDate.value === previousDate) {
-    scheduleDate.value = nextDate;
+  if (scheduleDateTime.value && scheduledDate.value === previousDate) {
+    scheduleDateTime.value = `${nextDate}T${scheduledTime.value || "09:00"}`;
   }
   void loadOverview();
 });
@@ -835,24 +872,6 @@ onBeforeUnmount(() => {
             <UiIcon name="Plus" :size="18" />
           </button>
         </form>
-
-        <div
-          v-if="schedulePickerOpen && captureType !== 'task'"
-          class="schedule-picker"
-          aria-label="Schedule picker"
-        >
-          <label>
-            <span>Date</span>
-            <input v-model="scheduleDate" type="date" />
-          </label>
-          <label>
-            <span>Time</span>
-            <input v-model="scheduleTime" type="time" />
-          </label>
-          <button type="button" class="text-button" @click="schedulePickerOpen = false">
-            Done
-          </button>
-        </div>
 
         <section v-if="showCaptureList" class="capture-list" aria-label="Today list">
           <div class="capture-list__header">
@@ -1105,6 +1124,47 @@ onBeforeUnmount(() => {
     </section>
 
     <Teleport to="body">
+      <div
+        v-if="schedulePickerOpen && captureType !== 'task'"
+        class="mission-modal mission-modal--compact"
+        role="presentation"
+        @click.self="closeSchedulePicker"
+      >
+        <form
+          class="mission-modal__dialog schedule-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="schedule-modal-title"
+          @submit.prevent="closeSchedulePicker"
+        >
+          <div class="mission-modal__header">
+            <h2 id="schedule-modal-title">{{ schedulePickerTitle }}</h2>
+            <button
+              type="button"
+              class="icon-button quiet"
+              aria-label="Close"
+              @click="closeSchedulePicker"
+            >
+              <UiIcon name="X" :size="18" />
+            </button>
+          </div>
+
+          <label class="field">
+            <span>Date and time</span>
+            <input v-model="scheduleDateTime" type="datetime-local" autofocus />
+          </label>
+
+          <div class="mission-modal__actions">
+            <button type="button" class="text-button" @click="clearSchedulePicker">
+              Clear
+            </button>
+            <button type="button" class="text-button text-button--primary" @click="closeSchedulePicker">
+              Done
+            </button>
+          </div>
+        </form>
+      </div>
+
       <div
         v-if="projectModalOpen"
         class="mission-modal"
@@ -1437,33 +1497,6 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
-.schedule-picker {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 8px;
-  padding: 0 2px;
-}
-
-.schedule-picker label {
-  display: grid;
-  gap: 4px;
-  color: var(--ui-text-muted);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.schedule-picker input {
-  min-height: 36px;
-  min-width: 140px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-bg);
-  color: var(--ui-text);
-  font: inherit;
-  padding: 0 10px;
-}
-
 .capture-list,
 .simple-sheet,
 .journal-sheet {
@@ -1758,6 +1791,10 @@ onBeforeUnmount(() => {
   box-shadow: 0 24px 80px color-mix(in oklab, #000, transparent 78%);
 }
 
+.mission-modal--compact .mission-modal__dialog {
+  width: min(360px, 100%);
+}
+
 .mission-modal__header,
 .mission-modal__actions,
 .project-logo-preview {
@@ -1892,15 +1929,6 @@ onBeforeUnmount(() => {
   .capture-row__submit {
     grid-column: 3;
     grid-row: 2;
-  }
-
-  .schedule-picker {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  }
-
-  .schedule-picker input {
-    min-width: 0;
   }
 
   .detail-row,
