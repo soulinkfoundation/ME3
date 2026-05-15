@@ -334,11 +334,10 @@ onMounted(() => {
           alt="ME3 protocol profile preview"
         />
         <div class="intro-copy">
-          <h1 id="intro-title">Create Your ME3 Site</h1>
+          <h1 id="intro-title">Create Your ME3 Profile</h1>
           <p>
-            Your ME3 site is a simple profile that includes everything you need
-            for an effective website. It also doubles as important context for
-            your ME3 agent.
+            Your ME3 profile includes everything you might need for an effective
+            website, it's also important context for your ME3 agent.
             <a href="https://me3.app/protocol" target="_blank" rel="noreferrer">
               Learn more about that here </a
             >.
