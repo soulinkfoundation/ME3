@@ -16,9 +16,12 @@ import {
   duplicateAssistantJob,
   getAssistantJob,
   listAssistantJobRecipes,
+  listAssistantJobIngressEvents,
   listAssistantJobs,
+  recordAssistantJobIngressEvent,
   runAssistantJobNow,
   setAssistantJobPaused,
+  updateAssistantJobIngressEvent,
   updateAssistantJob,
 } from "./assistant-jobs";
 import {
@@ -555,6 +558,71 @@ app.get("/api/assistant/jobs/recipes", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
   return c.json(listAssistantJobRecipes());
+});
+
+app.get("/api/assistant/jobs/events", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    return c.json(await listAssistantJobIngressEvents(c.env, ownerId, c.req.query("status")));
+  } catch (error) {
+    return assistantJobsErrorResponse(c, error);
+  }
+});
+
+app.post("/api/assistant/jobs/events/internal", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    return c.json(
+      await recordAssistantJobIngressEvent(
+        c.env,
+        ownerId,
+        await c.req.json().catch(() => ({})),
+      ),
+      201,
+    );
+  } catch (error) {
+    return assistantJobsErrorResponse(c, error);
+  }
+});
+
+app.post("/api/assistant/jobs/events/webhook", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(
+      await recordAssistantJobIngressEvent(c.env, ownerId, {
+        ...(typeof body === "object" && body !== null ? body : {}),
+        sourceKind: "webhook",
+      }),
+      201,
+    );
+  } catch (error) {
+    return assistantJobsErrorResponse(c, error);
+  }
+});
+
+app.patch("/api/assistant/jobs/events/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    return c.json(
+      await updateAssistantJobIngressEvent(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return assistantJobsErrorResponse(c, error);
+  }
 });
 
 app.get("/api/assistant/jobs", async (c) => {

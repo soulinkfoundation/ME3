@@ -28,6 +28,14 @@ type AssistantJobRunStatus =
   | "failed"
   | "cancelled"
   | "blocked";
+type AssistantJobIngressSourceKind = "core" | "mission_control" | "plugin" | "webhook";
+type AssistantJobIngressStatus =
+  | "received"
+  | "matched"
+  | "queued"
+  | "processed"
+  | "ignored"
+  | "failed";
 
 type AssistantJobRow = {
   id: string;
@@ -92,6 +100,21 @@ type AssistantJobRunRow = {
   updated_at: string;
 };
 
+type AssistantJobIngressEventRow = {
+  id: string;
+  user_id: string;
+  source_kind: AssistantJobIngressSourceKind;
+  source_id: string;
+  source_event_id: string;
+  event_type: string;
+  idempotency_key: string;
+  payload_json: string;
+  raw_payload_ref: string | null;
+  status: AssistantJobIngressStatus;
+  created_at: string;
+  updated_at: string;
+};
+
 type CreateAssistantJobBody = {
   recipeId?: unknown;
   draft?: unknown;
@@ -106,6 +129,21 @@ type UpdateAssistantJobBody = {
   purpose?: unknown;
   status?: unknown;
   projectId?: unknown;
+};
+
+type CreateAssistantJobIngressEventBody = {
+  sourceKind?: unknown;
+  sourceId?: unknown;
+  sourceEventId?: unknown;
+  eventType?: unknown;
+  idempotencyKey?: unknown;
+  payload?: unknown;
+  rawPayloadRef?: unknown;
+};
+
+type UpdateAssistantJobIngressEventBody = {
+  status?: unknown;
+  errorMessage?: unknown;
 };
 
 export function listAssistantJobRecipes() {
@@ -123,6 +161,98 @@ export async function listAssistantJobs(env: Env, userId: string, status?: strin
   const stmt = normalizedStatus ? env.DB.prepare(query).bind(userId, normalizedStatus) : env.DB.prepare(query).bind(userId);
   const rows = await stmt.all<AssistantJobRow>();
   return { jobs: rows.results.map(serializeJob) };
+}
+
+export async function listAssistantJobIngressEvents(
+  env: Env,
+  userId: string,
+  status?: string | null,
+) {
+  const normalizedStatus = normalizeIngressStatus(status);
+  const query = normalizedStatus
+    ? `SELECT * FROM assistant_job_ingress_events
+       WHERE user_id = ? AND status = ?
+       ORDER BY created_at DESC
+       LIMIT 100`
+    : `SELECT * FROM assistant_job_ingress_events
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 100`;
+  const stmt = normalizedStatus
+    ? env.DB.prepare(query).bind(userId, normalizedStatus)
+    : env.DB.prepare(query).bind(userId);
+  const rows = await stmt.all<AssistantJobIngressEventRow>();
+  return { events: rows.results.map(serializeIngressEvent) };
+}
+
+export async function recordAssistantJobIngressEvent(
+  env: Env,
+  userId: string,
+  body: CreateAssistantJobIngressEventBody,
+) {
+  const event = normalizeIngressEventBody(body);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO assistant_job_ingress_events
+     (id, user_id, source_kind, source_id, source_event_id, event_type,
+      idempotency_key, payload_json, raw_payload_ref, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?)`,
+  )
+    .bind(
+      id,
+      userId,
+      event.sourceKind,
+      event.sourceId,
+      event.sourceEventId,
+      event.eventType,
+      event.idempotencyKey,
+      stringifyJson(event.payload),
+      event.rawPayloadRef,
+      now,
+      now,
+    )
+    .run();
+
+  const row = await getAssistantJobIngressEventByIdempotencyKey(
+    env,
+    userId,
+    event.idempotencyKey,
+  );
+  if (!row) throw new AssistantJobsInputError("Ingress event was not recorded", 409);
+
+  return {
+    event: serializeIngressEvent(row),
+    duplicate: row.id !== id,
+    queued: false,
+  };
+}
+
+export async function updateAssistantJobIngressEvent(
+  env: Env,
+  userId: string,
+  eventId: string,
+  body: UpdateAssistantJobIngressEventBody,
+) {
+  const existing = await requireAssistantJobIngressEvent(env, userId, eventId);
+  const status = normalizeIngressStatus(body.status);
+  if (!status) throw new AssistantJobsInputError("Valid ingress event status is required");
+  const payload = parseJson<Record<string, unknown>>(existing.payload_json, {});
+  const errorMessage = normalizeOptionalText(body.errorMessage);
+  const nextPayload = errorMessage ? { ...payload, errorMessage } : payload;
+
+  await env.DB.prepare(
+    `UPDATE assistant_job_ingress_events
+     SET status = ?, payload_json = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(status, stringifyJson(nextPayload), eventId, userId)
+    .run();
+
+  return {
+    event: serializeIngressEvent(await requireAssistantJobIngressEvent(env, userId, eventId)),
+  };
 }
 
 export async function getAssistantJob(env: Env, userId: string, jobId: string) {
@@ -509,6 +639,28 @@ async function requireAssistantJobRun(env: Env, userId: string, runId: string) {
   return run;
 }
 
+async function getAssistantJobIngressEventByIdempotencyKey(
+  env: Env,
+  userId: string,
+  idempotencyKey: string,
+) {
+  return env.DB.prepare(
+    "SELECT * FROM assistant_job_ingress_events WHERE user_id = ? AND idempotency_key = ?",
+  )
+    .bind(userId, idempotencyKey)
+    .first<AssistantJobIngressEventRow>();
+}
+
+async function requireAssistantJobIngressEvent(env: Env, userId: string, eventId: string) {
+  const event = await env.DB.prepare(
+    "SELECT * FROM assistant_job_ingress_events WHERE id = ? AND user_id = ?",
+  )
+    .bind(eventId, userId)
+    .first<AssistantJobIngressEventRow>();
+  if (!event) throw new AssistantJobsInputError("Assistant Job ingress event not found", 404);
+  return event;
+}
+
 function draftFromVersion(job: AssistantJobRow, version: AssistantJobVersionRow): AssistantJobDraft {
   return {
     name: version.name,
@@ -632,12 +784,88 @@ function serializeRun(row: AssistantJobRunRow) {
   };
 }
 
+function serializeIngressEvent(row: AssistantJobIngressEventRow) {
+  return {
+    id: row.id,
+    sourceKind: row.source_kind,
+    sourceId: row.source_id,
+    sourceEventId: row.source_event_id,
+    eventType: row.event_type,
+    idempotencyKey: row.idempotency_key,
+    payload: parseJson(row.payload_json, {}),
+    rawPayloadRef: row.raw_payload_ref,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function summarizeTrigger(trigger: AssistantJobDraft["trigger"]) {
   if (trigger.kind === "manual") return "Manual";
   if (trigger.kind === "event") return `When ${trigger.eventType} happens`;
   if (trigger.cadence === "weekly" && trigger.localTime) return `Weekly at ${trigger.localTime}`;
   if (trigger.cadence === "daily" && trigger.localTime) return `Daily at ${trigger.localTime}`;
   return trigger.cadence;
+}
+
+function normalizeIngressEventBody(body: CreateAssistantJobIngressEventBody) {
+  const sourceKind = normalizeIngressSourceKind(body.sourceKind);
+  const sourceId = normalizeOptionalText(body.sourceId);
+  const sourceEventId = normalizeOptionalText(body.sourceEventId);
+  const eventType = normalizeOptionalText(body.eventType);
+  if (!sourceKind) throw new AssistantJobsInputError("Valid sourceKind is required");
+  if (!sourceId) throw new AssistantJobsInputError("sourceId is required");
+  if (!sourceEventId) throw new AssistantJobsInputError("sourceEventId is required");
+  if (!eventType) throw new AssistantJobsInputError("eventType is required");
+
+  const idempotencyKey =
+    normalizeOptionalText(body.idempotencyKey) ||
+    buildIngressIdempotencyKey(sourceKind, sourceId, eventType, sourceEventId);
+
+  return {
+    sourceKind,
+    sourceId,
+    sourceEventId,
+    eventType,
+    idempotencyKey,
+    payload: body.payload === undefined ? {} : body.payload,
+    rawPayloadRef: normalizeNullableText(body.rawPayloadRef),
+  };
+}
+
+function buildIngressIdempotencyKey(
+  sourceKind: AssistantJobIngressSourceKind,
+  sourceId: string,
+  eventType: string,
+  sourceEventId: string,
+) {
+  return `${sourceKind}:${sourceId}:${eventType}:${sourceEventId}`;
+}
+
+function normalizeIngressSourceKind(value: unknown): AssistantJobIngressSourceKind | null {
+  if (
+    value === "core" ||
+    value === "mission_control" ||
+    value === "plugin" ||
+    value === "webhook"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeIngressStatus(value: unknown): AssistantJobIngressStatus | null {
+  if (
+    value === "received" ||
+    value === "matched" ||
+    value === "queued" ||
+    value === "processed" ||
+    value === "ignored" ||
+    value === "failed"
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function normalizeJobStatus(value: unknown): AssistantJobStatus | null {

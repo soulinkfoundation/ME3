@@ -4,21 +4,31 @@ import {
   createAssistantJob,
   duplicateAssistantJob,
   getAssistantJob,
+  listAssistantJobIngressEvents,
   listAssistantJobs,
+  recordAssistantJobIngressEvent,
   runAssistantJobNow,
   setAssistantJobPaused,
+  updateAssistantJobIngressEvent,
 } from "./assistant-jobs";
 import type { Env } from "./types";
 
 type JobRow = Record<string, unknown> & { id: string; user_id: string; status: string };
 type VersionRow = Record<string, unknown> & { id: string; job_id: string; user_id: string };
 type RunRow = Record<string, unknown> & { id: string; job_id: string; user_id: string };
+type IngressRow = Record<string, unknown> & {
+  id: string;
+  user_id: string;
+  idempotency_key: string;
+  status: string;
+};
 
 type AssistantJobsDbState = {
   jobs: JobRow[];
   versions: VersionRow[];
   runs: RunRow[];
   events: Record<string, unknown>[];
+  ingressEvents: IngressRow[];
 };
 
 describe("assistant jobs persistence", () => {
@@ -65,6 +75,49 @@ describe("assistant jobs persistence", () => {
     expect(run.run.status).toBe("blocked");
     expect(run.validation.status).toBe("needs_setup");
   });
+
+  it("records assistant job ingress events idempotently", async () => {
+    const env = createAssistantJobsEnv();
+    const body = {
+      sourceKind: "mission_control",
+      sourceId: "mission-control",
+      sourceEventId: "review-packet-123",
+      eventType: "review_packet.created",
+      payload: { projectId: "project-1", title: "Weekly packet" },
+    };
+
+    const first = await recordAssistantJobIngressEvent(env, "owner", body);
+    const duplicate = await recordAssistantJobIngressEvent(env, "owner", body);
+    const listed = await listAssistantJobIngressEvents(env, "owner");
+
+    expect(first.duplicate).toBe(false);
+    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.event.id).toBe(first.event.id);
+    expect(listed.events).toHaveLength(1);
+    expect(listed.events[0]?.payload).toEqual({ projectId: "project-1", title: "Weekly packet" });
+  });
+
+  it("updates and filters assistant job ingress event status", async () => {
+    const env = createAssistantJobsEnv();
+
+    const recorded = await recordAssistantJobIngressEvent(env, "owner", {
+      sourceKind: "webhook",
+      sourceId: "mailchimp",
+      sourceEventId: "evt-1",
+      eventType: "campaign.sent",
+      idempotencyKey: "custom-key",
+      payload: { campaignId: "campaign-1" },
+      rawPayloadRef: "r2://assistant-jobs/webhooks/evt-1.json",
+    });
+    const updated = await updateAssistantJobIngressEvent(env, "owner", recorded.event.id, {
+      status: "queued",
+    });
+    const queued = await listAssistantJobIngressEvents(env, "owner", "queued");
+
+    expect(updated.event.status).toBe("queued");
+    expect(updated.event.rawPayloadRef).toBe("r2://assistant-jobs/webhooks/evt-1.json");
+    expect(queued.events.map((event) => event.id)).toEqual([recorded.event.id]);
+  });
 });
 
 function createAssistantJobsEnv(): Env {
@@ -73,6 +126,7 @@ function createAssistantJobsEnv(): Env {
     versions: [],
     runs: [],
     events: [],
+    ingressEvents: [],
   };
 
   const db = {
@@ -185,6 +239,39 @@ class FakeStatement {
       return { success: true };
     }
 
+    if (sql.includes("INSERT OR IGNORE INTO assistant_job_ingress_events")) {
+      const exists = this.state.ingressEvents.some(
+        (event) => event.user_id === values[1] && event.idempotency_key === values[6],
+      );
+      if (!exists) {
+        this.state.ingressEvents.push({
+          id: values[0] as string,
+          user_id: values[1] as string,
+          source_kind: values[2] as string,
+          source_id: values[3] as string,
+          source_event_id: values[4] as string,
+          event_type: values[5] as string,
+          idempotency_key: values[6] as string,
+          payload_json: values[7] as string,
+          raw_payload_ref: values[8] as string | null,
+          status: "received",
+          created_at: values[9] as string,
+          updated_at: values[10] as string,
+        });
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("UPDATE assistant_job_ingress_events")) {
+      const event = this.findIngressEvent(values[2], values[3]);
+      if (event) {
+        event.status = values[0] as string;
+        event.payload_json = values[1] as string;
+        event.updated_at = new Date().toISOString();
+      }
+      return { success: true };
+    }
+
     if (sql.includes("SET name = ?")) {
       const job = this.findJob(values[4], values[5]);
       if (job) {
@@ -226,6 +313,16 @@ class FakeStatement {
   async first<T>() {
     const sql = this.sql;
     const values = this.values;
+    if (sql.includes("FROM assistant_job_ingress_events") && sql.includes("idempotency_key")) {
+      return (
+        this.state.ingressEvents.find(
+          (event) => event.user_id === values[0] && event.idempotency_key === values[1],
+        ) || null
+      ) as T | null;
+    }
+    if (sql.includes("FROM assistant_job_ingress_events")) {
+      return this.findIngressEvent(values[0], values[1]) as T | null;
+    }
     if (sql.includes("FROM assistant_jobs")) {
       return (this.findJob(values[0], values[1]) || null) as T | null;
     }
@@ -247,6 +344,18 @@ class FakeStatement {
   async all<T>() {
     const sql = this.sql;
     const values = this.values;
+    if (sql.includes("FROM assistant_job_ingress_events") && sql.includes("status = ?")) {
+      return {
+        results: this.state.ingressEvents.filter(
+          (event) => event.user_id === values[0] && event.status === values[1],
+        ) as T[],
+      };
+    }
+    if (sql.includes("FROM assistant_job_ingress_events")) {
+      return {
+        results: this.state.ingressEvents.filter((event) => event.user_id === values[0]) as T[],
+      };
+    }
     if (sql.includes("FROM assistant_jobs") && sql.includes("status = ?")) {
       return {
         results: this.state.jobs.filter(
@@ -273,5 +382,12 @@ class FakeStatement {
 
   private findJob(id: unknown, userId: unknown) {
     return this.state.jobs.find((job) => job.id === id && job.user_id === userId) || null;
+  }
+
+  private findIngressEvent(id: unknown, userId: unknown) {
+    return (
+      this.state.ingressEvents.find((event) => event.id === id && event.user_id === userId) ||
+      null
+    );
   }
 }
