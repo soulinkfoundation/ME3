@@ -223,6 +223,32 @@ export type Me3AgentContextPrompt = {
   budget: Me3AgentContextBudget;
 };
 
+export type Me3AgentContextManifestSource = {
+  id: string;
+  kind: Me3AgentContextSourceKind;
+  label: string;
+  visibility: Me3AgentContextVisibility;
+  status: NonNullable<Me3AgentContextSource["status"]>;
+  reason: string | null;
+  sourceRef: string | null;
+  updatedAt: string | null;
+};
+
+export type Me3AgentContextManifest = {
+  packetId: string;
+  schemaVersion: typeof ME3_AGENT_CONTEXT_SCHEMA_VERSION;
+  generatedAt: string;
+  purpose: Me3AgentContextPurpose;
+  surface: Me3AgentContextSurface;
+  sourceCount: number;
+  sources: readonly Me3AgentContextManifestSource[];
+  budget: Pick<
+    Me3AgentContextBudget,
+    "maxPromptChars" | "usedPromptChars" | "wasTrimmed" | "trimReason"
+  >;
+  warnings: readonly string[];
+};
+
 export type Me3AgentContextValidationIssue = {
   path: string;
   message: string;
@@ -486,6 +512,59 @@ export function buildMe3AgentContextPrompt(
       trimReason: "maxPromptChars",
     },
   };
+}
+
+export function createMe3AgentContextManifest(
+  packet: Me3AgentContextPacket,
+  budget: Me3AgentContextBudget = packet.budget,
+): Me3AgentContextManifest {
+  return {
+    packetId: packet.id,
+    schemaVersion: packet.schemaVersion,
+    generatedAt: packet.generatedAt,
+    purpose: packet.purpose,
+    surface: packet.surface,
+    sourceCount: packet.sources.length,
+    sources: packet.sources.map((source) => ({
+      id: source.id,
+      kind: source.kind,
+      label: source.label,
+      visibility: source.visibility,
+      status: source.status || "included",
+      reason: source.reason ?? null,
+      sourceRef: source.sourceRef ?? null,
+      updatedAt: source.updatedAt ?? null,
+    })),
+    budget: {
+      maxPromptChars: budget.maxPromptChars,
+      usedPromptChars: budget.usedPromptChars,
+      wasTrimmed: budget.wasTrimmed,
+      trimReason: budget.trimReason ?? null,
+    },
+    warnings: [...packet.warnings],
+  };
+}
+
+export function summarizeMe3AgentContextManifest(
+  manifest: Me3AgentContextManifest,
+): string {
+  const included = manifest.sources.filter((source) => source.status === "included");
+  const failedCount = manifest.sources.filter((source) => source.status === "failed").length;
+  const trimmedCount = manifest.sources.filter((source) => source.status === "trimmed").length;
+  const groups = groupManifestSources(included);
+  const groupSummary = groups.length
+    ? groups.join(", ")
+    : "no matched sources";
+  const suffixes = [
+    failedCount ? `${failedCount} failed` : null,
+    trimmedCount ? `${trimmedCount} source${trimmedCount === 1 ? "" : "s"} trimmed` : null,
+    manifest.budget.wasTrimmed ? "prompt trimmed" : null,
+    manifest.warnings.length ? `${manifest.warnings.length} warning${manifest.warnings.length === 1 ? "" : "s"}` : null,
+  ].filter((item): item is string => Boolean(item));
+
+  return suffixes.length
+    ? `Used context from: ${groupSummary}. ${suffixes.join("; ")}.`
+    : `Used context from: ${groupSummary}.`;
 }
 
 export function validateMe3AgentContextPacket(
@@ -997,6 +1076,78 @@ function mergeSources(
   return [...byKey.values()].sort((left, right) =>
     `${left.kind}:${left.id}`.localeCompare(`${right.kind}:${right.id}`),
   );
+}
+
+function groupManifestSources(
+  sources: readonly Me3AgentContextManifestSource[],
+): readonly string[] {
+  const counts = new Map<Me3AgentContextSourceKind, number>();
+  for (const source of sources) {
+    counts.set(source.kind, (counts.get(source.kind) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([left], [right]) => sourceKindDisplayOrder(left) - sourceKindDisplayOrder(right))
+    .map(([kind, count]) => formatManifestSourceGroup(kind, count));
+}
+
+function sourceKindDisplayOrder(kind: Me3AgentContextSourceKind): number {
+  const order: Me3AgentContextSourceKind[] = [
+    "owner_profile",
+    "public_me_json",
+    "private_memory",
+    "contact",
+    "email_thread",
+    "project",
+    "task",
+    "calendar_event",
+    "assistant_message",
+    "agent_job",
+    "mission_capture",
+    "plugin",
+    "manual",
+    "unknown",
+  ];
+  const index = order.indexOf(kind);
+  return index === -1 ? order.length : index;
+}
+
+function formatManifestSourceGroup(kind: Me3AgentContextSourceKind, count: number): string {
+  const label = manifestSourceKindLabel(kind, count);
+  return count === 1 ? `1 ${label}` : `${count} ${label}`;
+}
+
+function manifestSourceKindLabel(kind: Me3AgentContextSourceKind, count: number): string {
+  const plural = count !== 1;
+  switch (kind) {
+    case "owner_profile":
+      return plural ? "owner profiles" : "owner profile";
+    case "public_me_json":
+      return "public me.json";
+    case "private_memory":
+      return plural ? "private memories" : "private memory";
+    case "contact":
+      return plural ? "contacts" : "contact";
+    case "email_thread":
+      return plural ? "email threads" : "email thread";
+    case "calendar_event":
+      return plural ? "calendar events" : "calendar event";
+    case "task":
+      return plural ? "tasks" : "task";
+    case "project":
+      return plural ? "projects" : "project";
+    case "mission_capture":
+      return plural ? "mission captures" : "mission capture";
+    case "assistant_message":
+      return plural ? "recent messages" : "recent message";
+    case "agent_job":
+      return plural ? "agent jobs" : "agent job";
+    case "plugin":
+      return plural ? "plugins" : "plugin";
+    case "manual":
+      return plural ? "manual sources" : "manual source";
+    case "unknown":
+      return plural ? "unknown sources" : "unknown source";
+  }
 }
 
 function formatOwnerProfile(

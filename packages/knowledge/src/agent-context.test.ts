@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMe3AgentContextPrompt,
+  createMe3AgentContextManifest,
   createMe3AgentContextPacket,
   resolveMe3AgentContextPacket,
+  summarizeMe3AgentContextManifest,
   validateMe3AgentContextPacket,
   type Me3AgentContextContact,
   type Me3AgentContextEmailThread,
@@ -285,6 +287,104 @@ describe("ME3 agent context contract", () => {
       visibility: "private",
     });
     expect(validateMe3AgentContextPacket(packet)).toEqual([]);
+  });
+
+  it("creates display-ready source manifests with failures and trimming decisions", () => {
+    const packet = createMe3AgentContextPacket({
+      id: "packet-manifest",
+      generatedAt: "2026-05-16T11:00:00.000Z",
+      ownerId: "owner",
+      purpose: "debug",
+      ownerProfile: {
+        displayName: "Kieran",
+        source: ownerSource,
+      },
+      privateMemory: [
+        {
+          id: "memory-tone",
+          kind: "preference",
+          body: "Prefers concise replies.",
+          source: {
+            id: "memory-tone",
+            kind: "private_memory",
+            label: "Tone preference",
+            visibility: "private",
+            reason: "Matched reply request.",
+          },
+        },
+      ],
+      contacts: [
+        {
+          id: "contact-ada",
+          name: "Ada Lovelace",
+          source: {
+            id: "contact-ada",
+            kind: "contact",
+            label: "Ada Lovelace",
+            visibility: "private",
+            reason: "Contact name matched the request.",
+          },
+        },
+      ],
+      sources: [
+        {
+          id: "thread-long",
+          kind: "email_thread",
+          label: "Long thread",
+          visibility: "private",
+          status: "trimmed",
+          reason: "Exceeded prompt budget.",
+        },
+        {
+          id: "gmail-sync",
+          kind: "plugin",
+          label: "Gmail sync",
+          visibility: "private",
+          status: "failed",
+          reason: "Provider unavailable.",
+        },
+      ],
+      budget: { maxPromptChars: 240 },
+      warnings: ["Calendar lookup skipped."],
+    });
+
+    const manifest = createMe3AgentContextManifest(packet, {
+      ...packet.budget,
+      usedPromptChars: 240,
+      wasTrimmed: true,
+      trimReason: "maxPromptChars",
+    });
+
+    expect(manifest.sources).toContainEqual(
+      expect.objectContaining({
+        id: "contact-ada",
+        kind: "contact",
+        reason: "Contact name matched the request.",
+        status: "included",
+      }),
+    );
+    expect(manifest.sources).toContainEqual(
+      expect.objectContaining({
+        id: "thread-long",
+        status: "trimmed",
+        reason: "Exceeded prompt budget.",
+      }),
+    );
+    expect(manifest.sources).toContainEqual(
+      expect.objectContaining({
+        id: "gmail-sync",
+        status: "failed",
+        reason: "Provider unavailable.",
+      }),
+    );
+    expect(manifest.budget).toMatchObject({
+      usedPromptChars: 240,
+      wasTrimmed: true,
+      trimReason: "maxPromptChars",
+    });
+    expect(summarizeMe3AgentContextManifest(manifest)).toBe(
+      "Used context from: 1 owner profile, 1 private memory, 1 contact. 1 failed; 1 source trimmed; prompt trimmed; 1 warning.",
+    );
   });
 });
 

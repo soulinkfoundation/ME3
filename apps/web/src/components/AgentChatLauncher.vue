@@ -16,9 +16,12 @@ type AgentSandboxResponse = {
   specialist: string | null;
   replyText: string | null;
   model: string | null;
-  source: "openai" | "workers-ai" | "workers-ai-gateway" | "fallback" | "tool" | null;
+  source: "openai" | "anthropic" | "workers-ai" | "workers-ai-gateway" | "fallback" | "tool" | null;
   fallbackReason?: string | null;
   debugError?: string | null;
+  contextPacketId?: string | null;
+  contextSummary?: string | null;
+  contextManifest?: unknown;
   emailAction?: {
     kind: "drafted" | "sent";
     messageId: string;

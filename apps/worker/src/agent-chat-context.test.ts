@@ -186,6 +186,15 @@ describe("Core chat native context", () => {
     );
 
     expect(response.replyText).toBe("Context-aware reply.");
+    expect(response.contextPacketId).toBe("agent-context:owner:chat_reply");
+    expect(response.contextSummary).toContain("Used context from:");
+    expect(response.contextManifest?.sources).toContainEqual(
+      expect.objectContaining({
+        id: "contact-ada",
+        kind: "contact",
+        reason: "Contact token matched the request.",
+      }),
+    );
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
     };
@@ -218,6 +227,9 @@ describe("Core chat native context", () => {
     );
 
     expect(response.replyText).toBe("Plain reply.");
+    expect(response.contextPacketId).toBeNull();
+    expect(response.contextManifest).toBeNull();
+    expect(response.contextSummary).toBeNull();
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
     };
@@ -263,7 +275,7 @@ describe("Core chat native context", () => {
       ],
     });
 
-    await dispatchAgentSandboxTurn(
+    const response = await dispatchAgentSandboxTurn(
       { ...env, AI: { run: aiRun } } as never,
       createStorage(),
       dispatchInput("Use the budget context."),
@@ -273,6 +285,11 @@ describe("Core chat native context", () => {
       messages: Array<{ role: string; content: string }>;
     };
     expect(modelInput.messages[0]?.content).toContain("[Context trimmed to prompt budget]");
+    expect(response.contextManifest?.budget).toMatchObject({
+      wasTrimmed: true,
+      trimReason: "maxPromptChars",
+    });
+    expect(response.contextSummary).toContain("prompt trimmed");
   });
 });
 

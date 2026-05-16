@@ -878,12 +878,18 @@ export async function createMissionMemory(env: Env, userId: string, input: unkno
   if (!text) throw new MissionControlInputError("Memory body is required");
   const kind = normalizeMemoryKind(body.memoryKind) || "owner_note";
   const scopeKind = normalizeScopeKind(body.scopeKind) || "owner";
+  const sourceKind = normalizeMemorySourceKind(body.sourceKind) || "manual";
+  const reviewStatus =
+    sourceKind === "agent"
+      ? "needs_review"
+      : normalizeMemoryReviewStatus(body.reviewStatus) || "active";
   const id = crypto.randomUUID();
 
   await env.DB.prepare(
     `INSERT INTO mission_private_memory
-       (id, user_id, memory_kind, scope_kind, scope_id, title, body, confidence, source_kind, review_status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', 'active')`,
+       (id, user_id, memory_kind, scope_kind, scope_id, title, body, confidence,
+        source_kind, source_ref, review_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -894,10 +900,22 @@ export async function createMissionMemory(env: Env, userId: string, input: unkno
       normalizeNullableText(body.title),
       text,
       normalizeConfidence(body.confidence),
+      sourceKind,
+      normalizeNullableText(body.sourceRef),
+      reviewStatus,
     )
     .run();
 
-  return { memory: (await listMissionMemory(env, userId, 1))[0] };
+  return { memory: serializeMemory((await getMissionMemory(env, userId, id)) as MissionMemoryRow) };
+}
+
+export async function suggestMissionMemory(env: Env, userId: string, input: unknown) {
+  const body = isRecord(input) ? input : {};
+  return createMissionMemory(env, userId, {
+    ...body,
+    sourceKind: "agent",
+    reviewStatus: "needs_review",
+  });
 }
 
 export async function updateMissionMemory(
@@ -909,11 +927,14 @@ export async function updateMissionMemory(
   const body = isRecord(input) ? input : {};
   const existing = await getMissionMemory(env, userId, memoryId);
   if (!existing) throw new MissionControlInputError("Memory not found", 404);
+  if (existing.review_status === "archived") {
+    throw new MissionControlInputError("Memory not found", 404);
+  }
 
   await env.DB.prepare(
     `UPDATE mission_private_memory
      SET title = ?, body = ?, review_status = ?, updated_at = datetime('now')
-     WHERE id = ? AND user_id = ?`,
+     WHERE id = ? AND user_id = ? AND review_status != 'archived'`,
   )
     .bind(
       body.title === undefined ? existing.title : normalizeNullableText(body.title),
@@ -923,6 +944,26 @@ export async function updateMissionMemory(
       userId,
     )
     .run();
+
+  return { memory: serializeMemory((await getMissionMemory(env, userId, memoryId)) as MissionMemoryRow) };
+}
+
+export async function approveMissionMemory(env: Env, userId: string, memoryId: string) {
+  const existing = await getMissionMemory(env, userId, memoryId);
+  if (!existing || existing.review_status === "archived") {
+    throw new MissionControlInputError("Memory not found", 404);
+  }
+
+  const result = await env.DB.prepare(
+    `UPDATE mission_private_memory
+     SET review_status = 'active', updated_at = datetime('now')
+     WHERE id = ? AND user_id = ? AND review_status != 'archived'`,
+  )
+    .bind(memoryId, userId)
+    .run();
+  if ((result.meta?.changes || 0) === 0) {
+    throw new MissionControlInputError("Memory not found", 404);
+  }
 
   return { memory: serializeMemory((await getMissionMemory(env, userId, memoryId)) as MissionMemoryRow) };
 }
@@ -1784,6 +1825,13 @@ function normalizeScopeKind(value: unknown): MissionMemoryRow["scope_kind"] | nu
 
 function normalizeMemoryReviewStatus(value: unknown): MissionMemoryRow["review_status"] | null {
   if (value === "active" || value === "needs_review" || value === "archived") return value;
+  return null;
+}
+
+function normalizeMemorySourceKind(value: unknown): MissionMemoryRow["source_kind"] | null {
+  if (value === "manual" || value === "agent" || value === "import" || value === "daemon") {
+    return value;
+  }
   return null;
 }
 

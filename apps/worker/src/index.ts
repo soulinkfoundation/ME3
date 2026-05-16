@@ -35,6 +35,7 @@ import {
 } from "./plugins";
 import {
   MissionControlInputError,
+  approveMissionMemory,
   archiveMissionCapture,
   archiveMissionTask,
   createMissionCapture,
@@ -58,6 +59,7 @@ import {
   listMissionDaemonAudit,
   resolveMissionApproval,
   startMissionDaemonPairing,
+  suggestMissionMemory,
   updateMissionCapture,
   updateMissionContextSource,
   updateMissionDay,
@@ -1030,6 +1032,35 @@ app.post("/api/mission-control/memory", async (c) => {
       await createMissionMemory(c.env, ownerId, await c.req.json().catch(() => ({}))),
       201,
     );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/memory/suggestions", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await suggestMissionMemory(c.env, ownerId, await c.req.json().catch(() => ({}))),
+      201,
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/memory/:id/approve", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await approveMissionMemory(c.env, ownerId, c.req.param("id")));
   } catch (error) {
     return missionControlErrorResponse(c, error);
   }

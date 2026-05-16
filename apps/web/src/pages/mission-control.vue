@@ -100,9 +100,15 @@ type MissionRun = {
 type MissionMemory = {
   id: string;
   memoryKind: string;
+  scopeKind: string;
+  scopeId: string | null;
   title: string | null;
   body: string;
+  confidence: number;
+  sourceKind: string;
+  sourceRef: string | null;
   reviewStatus: "active" | "needs_review" | "archived";
+  createdAt: string;
   updatedAt: string;
 };
 
@@ -229,6 +235,7 @@ const scheduleDateTime = ref("");
 const journalDraft = ref("");
 const journalState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const memoryDraft = ref("");
+const memoryActionId = ref("");
 const sourceDraft = ref("");
 const settingsMenuOpen = ref(false);
 const projectModalOpen = ref(false);
@@ -590,6 +597,43 @@ async function addMemory() {
   }
 }
 
+async function approveMemory(item: MissionMemory) {
+  memoryActionId.value = item.id;
+  error.value = "";
+  try {
+    const response = await api.post<{ memory: MissionMemory }>(
+      `/mission-control/memory/${encodeURIComponent(item.id)}/approve`,
+      {},
+    );
+    replaceMemory(response.memory);
+    notice.value = "Memory approved";
+  } catch (e) {
+    error.value = e instanceof ApiError ? e.message : "Could not approve memory";
+  } finally {
+    memoryActionId.value = "";
+  }
+}
+
+async function forgetMemory(item: MissionMemory) {
+  memoryActionId.value = item.id;
+  error.value = "";
+  try {
+    await api.delete<{ ok: true }>(`/mission-control/memory/${encodeURIComponent(item.id)}`);
+    memory.value = memory.value.filter((entry) => entry.id !== item.id);
+    notice.value = "Memory forgotten";
+  } catch (e) {
+    error.value = e instanceof ApiError ? e.message : "Could not forget memory";
+  } finally {
+    memoryActionId.value = "";
+  }
+}
+
+function replaceMemory(next: MissionMemory) {
+  const index = memory.value.findIndex((item) => item.id === next.id);
+  if (index >= 0) memory.value.splice(index, 1, next);
+  else memory.value.unshift(next);
+}
+
 async function addSource() {
   const label = sourceDraft.value.trim();
   if (!label) return;
@@ -677,6 +721,34 @@ function formatShortDate(value: string | null): string {
     month: "short",
     day: "numeric",
   }).format(date);
+}
+
+function memoryKindLabel(kind: string): string {
+  return kind
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function memoryStatusLabel(status: MissionMemory["reviewStatus"]): string {
+  if (status === "needs_review") return "Needs review";
+  if (status === "archived") return "Archived";
+  return "Active";
+}
+
+function memorySourceLabel(item: MissionMemory): string {
+  if (item.sourceKind === "agent") {
+    return item.sourceRef ? `Agent suggestion: ${item.sourceRef}` : "Agent suggestion";
+  }
+  if (item.sourceKind === "daemon") return item.sourceRef ? `Daemon: ${item.sourceRef}` : "Daemon";
+  if (item.sourceKind === "import") return item.sourceRef ? `Import: ${item.sourceRef}` : "Import";
+  return item.sourceRef ? `Manual: ${item.sourceRef}` : "Manual";
+}
+
+function memoryScopeLabel(item: MissionMemory): string {
+  return item.scopeId
+    ? `${memoryKindLabel(item.scopeKind)}: ${item.scopeId}`
+    : memoryKindLabel(item.scopeKind);
 }
 
 function defaultScheduleDateTime(date: string): string {
@@ -1062,12 +1134,48 @@ onBeforeUnmount(() => {
             <UiIcon name="Plus" :size="18" />
           </button>
         </form>
-        <article v-for="item in memory" :key="item.id" class="detail-row">
+        <div v-if="memory.length === 0" class="empty-row">No private memory yet.</div>
+        <article
+          v-for="item in memory"
+          :key="item.id"
+          class="detail-row memory-row"
+          :class="{ 'memory-row--pending': item.reviewStatus === 'needs_review' }"
+        >
           <div>
-            <h2>{{ item.title || item.memoryKind }}</h2>
+            <div class="memory-row__heading">
+              <h2>{{ item.title || memoryKindLabel(item.memoryKind) }}</h2>
+              <span class="status-badge" :class="`status-badge--${item.reviewStatus}`">
+                {{ memoryStatusLabel(item.reviewStatus) }}
+              </span>
+            </div>
             <p>{{ item.body }}</p>
+            <div class="capture-item__meta">
+              <span>{{ memorySourceLabel(item) }}</span>
+              <span>{{ memoryScopeLabel(item) }}</span>
+              <span>{{ formatDateTime(item.updatedAt) }}</span>
+            </div>
           </div>
-          <span class="status-badge">{{ item.reviewStatus }}</span>
+          <div class="detail-row__aside memory-row__actions">
+            <button
+              v-if="item.reviewStatus === 'needs_review'"
+              type="button"
+              class="text-button text-button--primary"
+              :disabled="memoryActionId === item.id"
+              @click="approveMemory(item)"
+            >
+              <UiIcon name="Check" :size="14" />
+              Approve
+            </button>
+            <button
+              type="button"
+              class="text-button text-button--danger"
+              :disabled="memoryActionId === item.id"
+              @click="forgetMemory(item)"
+            >
+              <UiIcon name="Trash2" :size="14" />
+              Forget
+            </button>
+          </div>
         </article>
       </div>
     </section>
@@ -1620,6 +1728,14 @@ onBeforeUnmount(() => {
   color: #b91c1c;
 }
 
+.status-badge--needs_review {
+  color: #b45309;
+}
+
+.status-badge--active {
+  color: var(--ui-accent);
+}
+
 .list-divider {
   padding: 18px 0 6px;
   color: var(--ui-text-muted);
@@ -1674,6 +1790,38 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   gap: 6px;
   text-align: right;
+}
+
+.memory-row {
+  align-items: flex-start;
+}
+
+.memory-row--pending {
+  border-color: color-mix(in oklab, #b45309, var(--ui-border) 72%);
+}
+
+.memory-row__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.memory-row__actions {
+  min-width: 116px;
+}
+
+.memory-row__actions .text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.memory-row .capture-item__meta span {
+  overflow-wrap: anywhere;
 }
 
 .activity-row__kind {
@@ -1742,6 +1890,15 @@ onBeforeUnmount(() => {
 
 .text-button--primary:hover {
   background: var(--ui-accent-strong);
+}
+
+.text-button--danger {
+  border-color: color-mix(in oklab, #b91c1c, var(--ui-border) 60%);
+  color: #b91c1c;
+}
+
+.text-button--danger:hover {
+  background: color-mix(in oklab, #b91c1c, transparent 92%);
 }
 
 .daemon-summary {
@@ -1943,6 +2100,16 @@ onBeforeUnmount(() => {
   .detail-row__aside {
     align-items: flex-start;
     text-align: left;
+  }
+
+  .memory-row__actions {
+    flex-direction: row;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .memory-row__actions .text-button {
+    width: auto;
   }
 
   .settings-menu__dropdown {

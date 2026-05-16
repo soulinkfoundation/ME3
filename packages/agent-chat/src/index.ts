@@ -5,10 +5,13 @@ import {
 import {
   buildMe3AgentContextPrompt,
   buildMe3CapabilityContext,
+  createMe3AgentContextManifest,
   resolveMe3AgentContextPacket,
+  summarizeMe3AgentContextManifest,
   type Me3AgentContextCalendarEvent,
   type Me3AgentContextContact,
   type Me3AgentContextEmailThread,
+  type Me3AgentContextManifest,
   type Me3AgentContextPrivateMemory,
   type Me3AgentContextProject,
   type Me3AgentContextRecentMessage,
@@ -76,6 +79,9 @@ export type AgentSandboxDispatchResponse = {
   source: AgentChatSource;
   fallbackReason?: string | null;
   debugError?: string | null;
+  contextPacketId?: string | null;
+  contextManifest?: Me3AgentContextManifest | null;
+  contextSummary?: string | null;
   emailAction?: null;
   reminderAction?: null;
   contentAction?: null;
@@ -466,6 +472,12 @@ type DbCalendarContextEventRow = {
   timezone: string | null;
   created_at: string;
   updated_at?: string | null;
+};
+
+type CoreChatAgentContextResult = {
+  prompt: string;
+  manifest: Me3AgentContextManifest;
+  summary: string;
 };
 
 type NormalizedMailboxDraftInput = {
@@ -1413,7 +1425,7 @@ export async function dispatchAgentSandboxTurn(
   const route = await resolveAiRoute(env, input.userId);
   const recent = await loadRecentMessages(env, input.userId);
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
-  const agentContextPrompt = await loadCoreChatAgentContextPrompt(env, {
+  const agentContext = await loadCoreChatAgentContext(env, {
     ownerId: input.userId,
     owner,
     recent,
@@ -1424,7 +1436,7 @@ export async function dispatchAgentSandboxTurn(
     recent,
     input.messageText,
     knowledgeContext,
-    agentContextPrompt,
+    agentContext?.prompt ?? null,
   );
 
   let response: AgentSandboxDispatchResponse;
@@ -1448,6 +1460,7 @@ export async function dispatchAgentSandboxTurn(
   } else {
     response = await runModelTurn(route, messages, input.turnId);
   }
+  response = attachAgentContextToResponse(response, agentContext);
 
   await persistAssistantMessage(env, input.userId, "user", input.messageText);
   if (response.replyText) {
@@ -2537,7 +2550,19 @@ function buildChatMessages(
   ];
 }
 
-async function loadCoreChatAgentContextPrompt(
+function attachAgentContextToResponse(
+  response: AgentSandboxDispatchResponse,
+  context: CoreChatAgentContextResult | null,
+): AgentSandboxDispatchResponse {
+  return {
+    ...response,
+    contextPacketId: context?.manifest.packetId ?? null,
+    contextManifest: context?.manifest ?? null,
+    contextSummary: context?.summary ?? null,
+  };
+}
+
+async function loadCoreChatAgentContext(
   env: CoreAgentChatEnv,
   input: {
     ownerId: string;
@@ -2545,7 +2570,7 @@ async function loadCoreChatAgentContextPrompt(
     recent: Array<{ role: "user" | "assistant"; content: string }>;
     messageText: string;
   },
-): Promise<string | null> {
+): Promise<CoreChatAgentContextResult | null> {
   try {
     const activeDate = localDateForTimezone(input.owner?.timezone || null);
     const contacts = await loadCoreContextContacts(env, input.ownerId);
@@ -2590,7 +2615,13 @@ async function loadCoreChatAgentContextPrompt(
       budget: { maxPromptChars: CHAT_CONTEXT_PROMPT_BUDGET_CHARS },
     });
 
-    return buildMe3AgentContextPrompt(packet).text;
+    const prompt = buildMe3AgentContextPrompt(packet);
+    const manifest = createMe3AgentContextManifest(packet, prompt.budget);
+    return {
+      prompt: prompt.text,
+      manifest,
+      summary: summarizeMe3AgentContextManifest(manifest),
+    };
   } catch {
     return null;
   }

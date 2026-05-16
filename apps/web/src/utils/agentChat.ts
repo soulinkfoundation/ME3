@@ -4,6 +4,7 @@ export type AgentChatRuntimeResult = {
   model: string | null;
   source:
     | "openai"
+    | "anthropic"
     | "workers-ai"
     | "workers-ai-gateway"
     | "fallback"
@@ -11,6 +12,9 @@ export type AgentChatRuntimeResult = {
     | null;
   fallbackReason?: string | null;
   debugError?: string | null;
+  contextPacketId?: string | null;
+  contextSummary?: string | null;
+  contextManifest?: unknown;
 };
 
 const EMPTY_REPLY_FALLBACK =
@@ -26,6 +30,7 @@ export function formatAgentRuntimeMetadata(
     result.source ? result.source : null,
     result.model ? result.model : null,
     result.specialist ? result.specialist : null,
+    result.contextSummary ? result.contextSummary : null,
   ].filter(Boolean);
 
   return parts.length ? parts.join(" · ") : null;

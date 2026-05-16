@@ -1,10 +1,13 @@
 import {
   buildMe3AgentContextPrompt,
+  createMe3AgentContextManifest,
   resolveMe3AgentContextPacket,
   type Me3AgentContextBudget,
   type Me3AgentContextCalendarEvent,
   type Me3AgentContextContact,
   type Me3AgentContextEmailThread,
+  type Me3AgentContextManifest,
+  type Me3AgentContextManifestSource,
   type Me3AgentContextOwnerProfile,
   type Me3AgentContextPacket,
   type Me3AgentContextPrivateMemory,
@@ -264,31 +267,9 @@ export type AssistantJobContextInput = {
   warnings?: readonly string[];
 };
 
-export type AssistantJobContextRunManifestSource = {
-  id: string;
-  kind: Me3AgentContextSource["kind"];
-  label: string;
-  visibility: Me3AgentContextSource["visibility"];
-  status: NonNullable<Me3AgentContextSource["status"]>;
-  reason: string | null;
-  sourceRef: string | null;
-  updatedAt: string | null;
-};
+export type AssistantJobContextRunManifestSource = Me3AgentContextManifestSource;
 
-export type AssistantJobContextRunManifest = {
-  packetId: string;
-  schemaVersion: Me3AgentContextPacket["schemaVersion"];
-  generatedAt: string;
-  purpose: Me3AgentContextPurpose;
-  surface: Me3AgentContextPacket["surface"];
-  sourceCount: number;
-  sources: readonly AssistantJobContextRunManifestSource[];
-  budget: Pick<
-    Me3AgentContextBudget,
-    "maxPromptChars" | "usedPromptChars" | "wasTrimmed" | "trimReason"
-  >;
-  warnings: readonly string[];
-};
+export type AssistantJobContextRunManifest = Me3AgentContextManifest;
 
 export type AssistantJobContextResult = {
   packet: Me3AgentContextPacket;
@@ -1326,31 +1307,7 @@ export function createAssistantJobContextRunManifest(
   packet: Me3AgentContextPacket,
   budget: Me3AgentContextBudget = packet.budget,
 ): AssistantJobContextRunManifest {
-  return {
-    packetId: packet.id,
-    schemaVersion: packet.schemaVersion,
-    generatedAt: packet.generatedAt,
-    purpose: packet.purpose,
-    surface: packet.surface,
-    sourceCount: packet.sources.length,
-    sources: packet.sources.map((source) => ({
-      id: source.id,
-      kind: source.kind,
-      label: source.label,
-      visibility: source.visibility,
-      status: source.status || "included",
-      reason: source.reason ?? null,
-      sourceRef: source.sourceRef ?? null,
-      updatedAt: source.updatedAt ?? null,
-    })),
-    budget: {
-      maxPromptChars: budget.maxPromptChars,
-      usedPromptChars: budget.usedPromptChars,
-      wasTrimmed: budget.wasTrimmed,
-      trimReason: budget.trimReason ?? null,
-    },
-    warnings: [...packet.warnings],
-  };
+  return createMe3AgentContextManifest(packet, budget);
 }
 
 export function attachAssistantJobContextToRunResult(

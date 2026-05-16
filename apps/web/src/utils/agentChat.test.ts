@@ -31,6 +31,21 @@ describe("agent chat utils", () => {
     ).toBe("openai · gpt-4o-mini · supervisor.reminders.create");
   });
 
+  it("includes context summaries in development metadata", () => {
+    expect(
+      formatAgentRuntimeMetadata(
+        {
+          specialist: "core.agent-chat",
+          replyText: "All set",
+          model: "gpt-4o-mini",
+          source: "openai",
+          contextSummary: "Used context from: 1 contact.",
+        },
+        { showRuntimeMetadata: true },
+      ),
+    ).toBe("openai · gpt-4o-mini · core.agent-chat · Used context from: 1 contact.");
+  });
+
   it("combines fallback detail when both values exist", () => {
     expect(
       formatAgentRuntimeDetail({
