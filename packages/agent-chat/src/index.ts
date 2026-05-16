@@ -3,7 +3,17 @@ import {
   normalizeTimeZone,
 } from "@me3-core/plugin-calendar";
 import {
+  buildMe3AgentContextPrompt,
   buildMe3CapabilityContext,
+  resolveMe3AgentContextPacket,
+  type Me3AgentContextCalendarEvent,
+  type Me3AgentContextContact,
+  type Me3AgentContextEmailThread,
+  type Me3AgentContextPrivateMemory,
+  type Me3AgentContextProject,
+  type Me3AgentContextRecentMessage,
+  type Me3AgentContextSource,
+  type Me3AgentContextTask,
   type Me3KnowledgeRuntimeContext,
 } from "@me3/knowledge";
 
@@ -251,6 +261,8 @@ type CoreAgentChatEnv = {
   ME3_AI_DEFAULT_MODEL?: string;
   ME3_AI_CHAT_PROVIDER?: string;
   ME3_AI_CHAT_MODEL?: string;
+  CORE_API_ORIGIN?: string;
+  CORE_WEB_ORIGIN?: string;
 };
 
 type D1Like = {
@@ -411,6 +423,51 @@ type DbMailboxMessageRow = {
   created_at: string;
 };
 
+type DbMissionMemoryRow = {
+  id: string;
+  memory_kind: string;
+  scope_kind: string;
+  scope_id: string | null;
+  title: string | null;
+  body: string;
+  confidence: number | null;
+  source_ref: string | null;
+  updated_at: string;
+};
+
+type DbMissionProjectRow = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  status: string;
+  source_ref: string | null;
+  updated_at: string;
+};
+
+type DbMissionTaskRow = {
+  id: string;
+  project_id: string | null;
+  title: string;
+  description: string | null;
+  status: string;
+  due_at: string | null;
+  scheduled_for: string | null;
+  source_ref: string | null;
+  updated_at: string;
+};
+
+type DbCalendarContextEventRow = {
+  id: string;
+  title: string;
+  notes: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  timezone: string | null;
+  created_at: string;
+  updated_at?: string | null;
+};
+
 type NormalizedMailboxDraftInput = {
   fromAddress: string;
   toAddress: string;
@@ -445,6 +502,7 @@ const DEFAULT_WORKERS_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest";
 const INSTALL_ENCRYPTION_KEY_NAME = "TOKEN_ENCRYPTION_KEY";
+const CHAT_CONTEXT_PROMPT_BUDGET_CHARS = 3500;
 const CONTACT_SOURCES = new Set<AgentContactSource>([
   "booking",
   "manual",
@@ -1355,11 +1413,18 @@ export async function dispatchAgentSandboxTurn(
   const route = await resolveAiRoute(env, input.userId);
   const recent = await loadRecentMessages(env, input.userId);
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
+  const agentContextPrompt = await loadCoreChatAgentContextPrompt(env, {
+    ownerId: input.userId,
+    owner,
+    recent,
+    messageText: input.messageText,
+  });
   const messages = buildChatMessages(
     owner,
     recent,
     input.messageText,
     knowledgeContext,
+    agentContextPrompt,
   );
 
   let response: AgentSandboxDispatchResponse;
@@ -1935,6 +2000,118 @@ function parseJsonArray(value: string | null): string[] {
   }
 }
 
+function contextSource(input: {
+  id: string;
+  kind: Me3AgentContextSource["kind"];
+  label: string;
+  visibility: Me3AgentContextSource["visibility"];
+  reason?: string;
+  sourceRef?: string | null;
+  updatedAt?: string | null;
+}): Me3AgentContextSource {
+  return {
+    id: input.id,
+    kind: input.kind,
+    label: input.label,
+    visibility: input.visibility,
+    reason: input.reason,
+    sourceRef: input.sourceRef ?? null,
+    updatedAt: input.updatedAt ?? null,
+  };
+}
+
+function summarizeRequest(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+}
+
+function coreMeJsonUrl(env: CoreAgentChatEnv): string | null {
+  const origin = normalizeOrigin(env.CORE_API_ORIGIN || env.CORE_WEB_ORIGIN);
+  return origin ? `${origin}/.well-known/me.json` : null;
+}
+
+function normalizeOrigin(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//.test(trimmed)) return null;
+  return trimmed;
+}
+
+function localDateForTimezone(timezone: string | null): string {
+  const normalizedTimezone = normalizeTimeZone(timezone) || "UTC";
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: normalizedTimezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+    if (year && month && day) return `${year}-${month}-${day}`;
+  } catch {
+    // Fall back to UTC if the stored timezone is invalid in this runtime.
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+function contactAliases(row: DbContactRow): string[] {
+  const metadata = parseJsonRecord(row.metadata);
+  const aliases = Array.isArray(metadata.aliases)
+    ? metadata.aliases.filter((alias): alias is string => typeof alias === "string")
+    : [];
+  return uniqueStrings([
+    ...aliases,
+    ...parseJsonArray(row.tags),
+    row.email || "",
+    ...Object.values(stringRecord(parseJsonRecord(row.social_handles))),
+  ]);
+}
+
+function summarizeContactRow(row: DbContactRow): string {
+  const parts = [
+    row.notes,
+    row.outreach_status ? `Outreach: ${row.outreach_status}.` : null,
+    row.next_followup_at ? `Next follow-up: ${row.next_followup_at}.` : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.join(" ");
+}
+
+function summarizeMailboxRow(row: DbMailboxMessageRow): string {
+  const body = normalizeWhitespace(row.text_body || "");
+  if (body) return body.length > 420 ? `${body.slice(0, 417)}...` : body;
+  return row.subject ? `Email about ${row.subject}.` : "Email thread with no summary yet.";
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function contactIdForEmail(
+  email: string | null,
+  contactsByEmail: ReadonlyMap<string, string>,
+): string | null {
+  if (!email) return null;
+  return contactsByEmail.get(email.trim().toLowerCase()) || null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized.toLowerCase())) continue;
+    seen.add(normalized.toLowerCase());
+    result.push(normalized);
+  }
+  return result;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -2337,6 +2514,7 @@ function buildChatMessages(
   recent: Array<{ role: "user" | "assistant"; content: string }>,
   messageText: string,
   knowledgeContext: string,
+  agentContextPrompt: string | null,
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
   const ownerName = owner?.name?.trim() || owner?.username?.trim() || "the owner";
   const system = [
@@ -2345,6 +2523,7 @@ function buildChatMessages(
     owner?.bio ? `Owner profile context: ${owner.bio}` : null,
     owner?.timezone ? `Owner timezone: ${owner.timezone}` : null,
     knowledgeContext,
+    agentContextPrompt,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
     "This first Core chat slice can converse and reason, but richer plugin tools are still being wired in.",
   ]
@@ -2356,6 +2535,330 @@ function buildChatMessages(
     ...recent,
     { role: "user", content: messageText },
   ];
+}
+
+async function loadCoreChatAgentContextPrompt(
+  env: CoreAgentChatEnv,
+  input: {
+    ownerId: string;
+    owner: OwnerProfileRow | null;
+    recent: Array<{ role: "user" | "assistant"; content: string }>;
+    messageText: string;
+  },
+): Promise<string | null> {
+  try {
+    const activeDate = localDateForTimezone(input.owner?.timezone || null);
+    const contacts = await loadCoreContextContacts(env, input.ownerId);
+    const [emailThreads, projects, tasks, calendarEvents, privateMemory] =
+      await Promise.all([
+        loadCoreContextEmailThreads(env, input.ownerId, contacts),
+        loadCoreContextProjects(env, input.ownerId),
+        loadCoreContextTasks(env, input.ownerId),
+        loadCoreContextCalendarEvents(env, input.ownerId),
+        loadCoreContextPrivateMemory(env, input.ownerId),
+      ]);
+
+    const packet = resolveMe3AgentContextPacket({
+      ownerId: input.ownerId,
+      purpose: "chat_reply",
+      surface: "core",
+      requestSummary: summarizeRequest(input.messageText),
+      requestText: input.messageText,
+      ownerProfile: input.owner ? mapOwnerProfileToContext(input.owner) : null,
+      publicIdentity: input.owner
+        ? {
+            summary: input.owner.bio,
+            meJsonUrl: coreMeJsonUrl(env),
+            actions: ["chat"],
+            source: contextSource({
+              id: "owner-me-json",
+              kind: "public_me_json",
+              label: "Public me.json",
+              visibility: "public",
+              reason: "Public identity context for agents.",
+            }),
+          }
+        : null,
+      candidateContacts: contacts,
+      candidateEmailThreads: emailThreads,
+      candidateProjects: projects,
+      candidateTasks: tasks,
+      candidateCalendarEvents: calendarEvents,
+      candidatePrivateMemory: privateMemory,
+      candidateRecentMessages: mapRecentMessagesToContext(input.recent),
+      activeScope: { date: activeDate },
+      budget: { maxPromptChars: CHAT_CONTEXT_PROMPT_BUDGET_CHARS },
+    });
+
+    return buildMe3AgentContextPrompt(packet).text;
+  } catch {
+    return null;
+  }
+}
+
+async function loadCoreContextContacts(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<Me3AgentContextContact[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, name, email, phone, source, source_ref,
+            relationship, status, notes, tags, last_interaction_at,
+            next_followup_at, outreach_status, social_handles, metadata,
+            created_at, updated_at
+     FROM contacts
+     WHERE user_id = ? AND status != 'archived'
+     ORDER BY COALESCE(last_interaction_at, updated_at, created_at) DESC
+     LIMIT 40`,
+  )
+    .bind(ownerId)
+    .all<DbContactRow>();
+
+  return (rows.results || []).map((row) => ({
+    id: row.id,
+    name: row.name,
+    aliases: contactAliases(row),
+    email: row.email,
+    relationship: row.relationship,
+    summary: summarizeContactRow(row),
+    lastInteractionAt: row.last_interaction_at,
+    source: contextSource({
+      id: row.id,
+      kind: "contact",
+      label: row.name,
+      visibility: "private",
+      sourceRef: row.source_ref,
+      updatedAt: row.updated_at,
+    }),
+  }));
+}
+
+async function loadCoreContextEmailThreads(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+  contacts: readonly Me3AgentContextContact[],
+): Promise<Me3AgentContextEmailThread[]> {
+  const rows = await env.DB.prepare(
+    `SELECT m.id, m.direction, m.message_kind, m.status, m.thread_key, m.from_address,
+            m.provider_id, m.provider_message_id, m.to_address, m.subject, m.text_body,
+            m.html_body, m.raw_headers_json, m.raw_message, m.metadata_json, m.source_id,
+            m.folder, m.read_at, m.agent_summary, m.agent_labels_json, m.forwarded_to,
+            m.error_message, m.created_by, m.approved_by_user_id, m.received_at,
+            m.approved_at, m.sent_at, m.created_at
+     FROM mailbox_messages m
+     JOIN mailbox_aliases a ON a.id = m.mailbox_id
+     WHERE a.user_id = ? AND m.folder != 'trash'
+     ORDER BY COALESCE(m.sent_at, m.received_at, m.approved_at, m.created_at) DESC
+     LIMIT 40`,
+  )
+    .bind(ownerId)
+    .all<DbMailboxMessageRow>();
+
+  const contactsByEmail = new Map(
+    contacts
+      .map((contact) => [contact.email?.toLowerCase() || "", contact.id] as const)
+      .filter(([email]) => Boolean(email)),
+  );
+  const byThread = new Map<string, Me3AgentContextEmailThread>();
+
+  for (const row of rows.results || []) {
+    const metadata = parseJsonRecord(row.metadata_json);
+    const id = row.thread_key || row.id;
+    const existing = byThread.get(id);
+    const participants = uniqueStrings([
+      ...(existing?.participants || []),
+      row.from_address || "",
+      row.to_address || "",
+    ]);
+    const contactId =
+      stringValue(metadata.contactId) ||
+      existing?.contactId ||
+      contactIdForEmail(row.from_address, contactsByEmail) ||
+      contactIdForEmail(row.to_address, contactsByEmail);
+    const projectId = stringValue(metadata.projectId) || existing?.projectId || null;
+    const summary = row.agent_summary || summarizeMailboxRow(row);
+    const lastMessageAt =
+      row.sent_at || row.received_at || row.approved_at || row.created_at || existing?.lastMessageAt;
+
+    byThread.set(id, {
+      id,
+      subject: existing?.subject || row.subject || "(no subject)",
+      participants,
+      contactId,
+      projectId,
+      summary: existing ? existing.summary : summary,
+      lastMessageAt,
+      source: contextSource({
+        id,
+        kind: "email_thread",
+        label: row.subject || id,
+        visibility: "private",
+        sourceRef: row.source_id || row.id,
+        updatedAt: lastMessageAt || null,
+      }),
+    });
+  }
+
+  return [...byThread.values()];
+}
+
+async function loadCoreContextProjects(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<Me3AgentContextProject[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, name, slug, description, status, source_ref, updated_at
+     FROM mission_projects
+     WHERE user_id = ? AND status != 'archived'
+     ORDER BY updated_at DESC
+     LIMIT 30`,
+  )
+    .bind(ownerId)
+    .all<DbMissionProjectRow>();
+
+  return (rows.results || []).map((row) => ({
+    id: row.id,
+    name: row.name,
+    aliases: [row.slug].filter(Boolean),
+    summary: row.description,
+    status: row.status,
+    source: contextSource({
+      id: row.id,
+      kind: "project",
+      label: row.name,
+      visibility: "private",
+      sourceRef: row.source_ref,
+      updatedAt: row.updated_at,
+    }),
+  }));
+}
+
+async function loadCoreContextTasks(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<Me3AgentContextTask[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, project_id, title, description, status, due_at, scheduled_for,
+            source_ref, updated_at
+     FROM mission_tasks
+     WHERE user_id = ?
+       AND archived_at IS NULL
+       AND status NOT IN ('done', 'cancelled')
+     ORDER BY priority ASC, COALESCE(due_at, scheduled_for, updated_at) ASC
+     LIMIT 50`,
+  )
+    .bind(ownerId)
+    .all<DbMissionTaskRow>();
+
+  return (rows.results || []).map((row) => ({
+    id: row.id,
+    title: row.description ? `${row.title}: ${row.description}` : row.title,
+    status: row.status,
+    dueAt: row.due_at || row.scheduled_for,
+    projectId: row.project_id,
+    source: contextSource({
+      id: row.id,
+      kind: "task",
+      label: row.title,
+      visibility: "private",
+      sourceRef: row.source_ref,
+      updatedAt: row.updated_at,
+    }),
+  }));
+}
+
+async function loadCoreContextCalendarEvents(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<Me3AgentContextCalendarEvent[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, title, notes, starts_at, ends_at, timezone, created_at, updated_at
+     FROM user_calendar_events
+     WHERE user_id = ?
+     ORDER BY starts_at ASC
+     LIMIT 30`,
+  )
+    .bind(ownerId)
+    .all<DbCalendarContextEventRow>();
+
+  return (rows.results || []).map((row) => ({
+    id: row.id,
+    title: row.notes ? `${row.title}: ${row.notes}` : row.title,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    timezone: row.timezone,
+    source: contextSource({
+      id: row.id,
+      kind: "calendar_event",
+      label: row.title,
+      visibility: "private",
+      updatedAt: row.updated_at || row.created_at,
+    }),
+  }));
+}
+
+async function loadCoreContextPrivateMemory(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<Me3AgentContextPrivateMemory[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, memory_kind, scope_kind, scope_id, title, body, confidence,
+            source_ref, updated_at
+     FROM mission_private_memory
+     WHERE user_id = ? AND review_status = 'active'
+     ORDER BY updated_at DESC
+     LIMIT 40`,
+  )
+    .bind(ownerId)
+    .all<DbMissionMemoryRow>();
+
+  return (rows.results || []).map((row) => ({
+    id: row.id,
+    kind: row.memory_kind,
+    title: row.title,
+    body: row.body,
+    scope: row.scope_id ? `${row.scope_kind}:${row.scope_id}` : row.scope_kind,
+    confidence: row.confidence,
+    source: contextSource({
+      id: row.id,
+      kind: "private_memory",
+      label: row.title || row.memory_kind,
+      visibility: "private",
+      sourceRef: row.source_ref,
+      updatedAt: row.updated_at,
+    }),
+  }));
+}
+
+function mapOwnerProfileToContext(owner: OwnerProfileRow) {
+  return {
+    displayName: owner.name,
+    username: owner.username,
+    bio: owner.bio,
+    timezone: owner.timezone,
+    source: contextSource({
+      id: owner.id,
+      kind: "owner_profile",
+      label: "Owner profile",
+      visibility: "public",
+      reason: "Always include a small owner profile.",
+    }),
+  };
+}
+
+function mapRecentMessagesToContext(
+  recent: Array<{ role: "user" | "assistant"; content: string }>,
+): Me3AgentContextRecentMessage[] {
+  return recent.map((message, index) => ({
+    id: `recent-${index + 1}`,
+    role: message.role,
+    content: message.content,
+    source: contextSource({
+      id: `recent-${index + 1}`,
+      kind: "assistant_message",
+      label: "Recent chat",
+      visibility: "private",
+    }),
+  }));
 }
 
 async function loadMe3KnowledgeRuntimeContext(
