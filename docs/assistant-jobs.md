@@ -213,11 +213,13 @@ The product rule stays the same: `/assistant` manages routines; Mission Control 
 
 The next specs should land in this order:
 
-1. `me3-wsn.17` - safety, approval, and permission policy.
-2. `me3-wsn.2` - job schema, recipe model, and migrations.
-3. `me3-wsn.3` - capability registry and job action manifest.
-4. `me3-wsn.4` - agent custom job creation capability.
-5. `me3-wsn.6` - Assistant Jobs page and builder UX.
-6. `me3-wsn.22` - heartbeat and reconciliation design.
+1. `me3-wsn.17` - safety, approval, and permission policy: [`docs/assistant-jobs-safety.md`](assistant-jobs-safety.md).
+2. `me3-wsn.2` - job schema, recipe model, and migrations: [`docs/assistant-jobs-schema.md`](assistant-jobs-schema.md).
+3. `me3-wsn.3` - capability registry and job action manifest: [`docs/assistant-jobs-capability-registry.md`](assistant-jobs-capability-registry.md).
+4. `me3-wsn.4` - agent custom job creation capability: [`docs/assistant-job-creation-capability.md`](assistant-job-creation-capability.md).
+5. `me3-wsn.6` - Assistant Jobs page and builder UX: [`docs/assistant-jobs-ux.md`](assistant-jobs-ux.md).
+6. `me3-wsn.22` - heartbeat and reconciliation design: [`docs/assistant-jobs-heartbeat.md`](assistant-jobs-heartbeat.md).
+
+The starter recipe library lives in [`docs/assistant-jobs-starter-recipes.md`](assistant-jobs-starter-recipes.md).
 
 Implementation should begin only after those boundaries are clear enough that the architecture can stay boring.
