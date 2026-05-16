@@ -1,3 +1,24 @@
+import {
+  buildMe3AgentContextPrompt,
+  resolveMe3AgentContextPacket,
+  type Me3AgentContextBudget,
+  type Me3AgentContextCalendarEvent,
+  type Me3AgentContextContact,
+  type Me3AgentContextEmailThread,
+  type Me3AgentContextOwnerProfile,
+  type Me3AgentContextPacket,
+  type Me3AgentContextPrivateMemory,
+  type Me3AgentContextProject,
+  type Me3AgentContextPrompt,
+  type Me3AgentContextPublicIdentity,
+  type Me3AgentContextPurpose,
+  type Me3AgentContextRecentMessage,
+  type Me3AgentContextResolverOptions,
+  type Me3AgentContextResolverScope,
+  type Me3AgentContextSource,
+  type Me3AgentContextTask,
+} from "@me3/knowledge";
+
 export const ASSISTANT_JOBS_PACKAGE_NAME = "@me3-core/assistant-jobs";
 
 export const ASSISTANT_JOB_APPROVAL_MODES = [
@@ -212,6 +233,67 @@ export type AssistantJobDraftValidationOptions = {
   enabledCapabilityIds?: readonly string[];
   readySetupRequirements?: readonly string[];
   availableSkillIds?: readonly string[];
+};
+
+export type AssistantJobContextScope = Me3AgentContextResolverScope;
+
+export type AssistantJobContextInput = {
+  ownerId: string;
+  jobId?: string | null;
+  runId?: string | null;
+  jobName: string;
+  jobPurpose?: string | null;
+  trigger?: AssistantJobTrigger | null;
+  scope?: AssistantJobScope | null;
+  destination?: AssistantJobDestination | null;
+  purpose?: Me3AgentContextPurpose;
+  requestText?: string | null;
+  contextScope?: AssistantJobContextScope;
+  ownerProfile?: Me3AgentContextOwnerProfile | null;
+  publicIdentity?: Me3AgentContextPublicIdentity | null;
+  candidatePrivateMemory?: readonly Me3AgentContextPrivateMemory[];
+  candidateContacts?: readonly Me3AgentContextContact[];
+  candidateEmailThreads?: readonly Me3AgentContextEmailThread[];
+  candidateProjects?: readonly Me3AgentContextProject[];
+  candidateTasks?: readonly Me3AgentContextTask[];
+  candidateCalendarEvents?: readonly Me3AgentContextCalendarEvent[];
+  candidateRecentMessages?: readonly Me3AgentContextRecentMessage[];
+  failedSources?: readonly Me3AgentContextSource[];
+  resolverOptions?: Me3AgentContextResolverOptions;
+  budget?: Partial<Me3AgentContextBudget>;
+  warnings?: readonly string[];
+};
+
+export type AssistantJobContextRunManifestSource = {
+  id: string;
+  kind: Me3AgentContextSource["kind"];
+  label: string;
+  visibility: Me3AgentContextSource["visibility"];
+  status: NonNullable<Me3AgentContextSource["status"]>;
+  reason: string | null;
+  sourceRef: string | null;
+  updatedAt: string | null;
+};
+
+export type AssistantJobContextRunManifest = {
+  packetId: string;
+  schemaVersion: Me3AgentContextPacket["schemaVersion"];
+  generatedAt: string;
+  purpose: Me3AgentContextPurpose;
+  surface: Me3AgentContextPacket["surface"];
+  sourceCount: number;
+  sources: readonly AssistantJobContextRunManifestSource[];
+  budget: Pick<
+    Me3AgentContextBudget,
+    "maxPromptChars" | "usedPromptChars" | "wasTrimmed" | "trimReason"
+  >;
+  warnings: readonly string[];
+};
+
+export type AssistantJobContextResult = {
+  packet: Me3AgentContextPacket;
+  prompt: Me3AgentContextPrompt;
+  manifest: AssistantJobContextRunManifest;
 };
 
 const EMPTY_SCHEMA = { type: "object" } as const satisfies AssistantCapabilitySchema;
@@ -1198,6 +1280,91 @@ export function createAssistantJobDraftFromRecipe(
   return cloneJson(recipe.defaultDraft);
 }
 
+export function createAssistantJobContext(
+  input: AssistantJobContextInput,
+): AssistantJobContextResult {
+  const activeScope = assistantJobContextScope(input);
+  const requestText = assistantJobContextRequestText(input, activeScope);
+  const purpose = input.purpose ?? assistantJobContextPurpose(input.destination);
+
+  const packet = resolveMe3AgentContextPacket({
+    id: input.runId
+      ? `agent-context:${input.ownerId}:job-run:${input.runId}`
+      : input.jobId
+        ? `agent-context:${input.ownerId}:job:${input.jobId}`
+        : undefined,
+    ownerId: input.ownerId,
+    purpose,
+    surface: "core",
+    requestSummary: assistantJobContextRequestSummary(input),
+    requestText,
+    ownerProfile: input.ownerProfile ?? null,
+    publicIdentity: input.publicIdentity ?? null,
+    candidatePrivateMemory: input.candidatePrivateMemory ?? [],
+    candidateContacts: input.candidateContacts ?? [],
+    candidateEmailThreads: input.candidateEmailThreads ?? [],
+    candidateProjects: input.candidateProjects ?? [],
+    candidateTasks: input.candidateTasks ?? [],
+    candidateCalendarEvents: input.candidateCalendarEvents ?? [],
+    candidateRecentMessages: input.candidateRecentMessages ?? [],
+    activeScope,
+    sources: input.failedSources ?? [],
+    resolverOptions: input.resolverOptions,
+    budget: input.budget,
+    warnings: input.warnings,
+  });
+  const prompt = buildMe3AgentContextPrompt(packet);
+
+  return {
+    packet,
+    prompt,
+    manifest: createAssistantJobContextRunManifest(packet, prompt.budget),
+  };
+}
+
+export function createAssistantJobContextRunManifest(
+  packet: Me3AgentContextPacket,
+  budget: Me3AgentContextBudget = packet.budget,
+): AssistantJobContextRunManifest {
+  return {
+    packetId: packet.id,
+    schemaVersion: packet.schemaVersion,
+    generatedAt: packet.generatedAt,
+    purpose: packet.purpose,
+    surface: packet.surface,
+    sourceCount: packet.sources.length,
+    sources: packet.sources.map((source) => ({
+      id: source.id,
+      kind: source.kind,
+      label: source.label,
+      visibility: source.visibility,
+      status: source.status || "included",
+      reason: source.reason ?? null,
+      sourceRef: source.sourceRef ?? null,
+      updatedAt: source.updatedAt ?? null,
+    })),
+    budget: {
+      maxPromptChars: budget.maxPromptChars,
+      usedPromptChars: budget.usedPromptChars,
+      wasTrimmed: budget.wasTrimmed,
+      trimReason: budget.trimReason ?? null,
+    },
+    warnings: [...packet.warnings],
+  };
+}
+
+export function attachAssistantJobContextToRunResult(
+  result: Record<string, unknown>,
+  context: AssistantJobContextResult | AssistantJobContextRunManifest,
+): Record<string, unknown> {
+  const manifest = "manifest" in context ? context.manifest : context;
+  return {
+    ...result,
+    contextPacketId: manifest.packetId,
+    contextManifest: manifest,
+  };
+}
+
 export function validateAssistantJobDraft(
   draft: AssistantJobDraft,
   options: AssistantJobDraftValidationOptions = {},
@@ -1367,6 +1534,65 @@ export function buildAssistantJobPermissionSummary(
     setupRequirements: Array.from(setupRequirements),
     skills: Array.from(new Set([...draft.recommendedSkillIds, ...draft.requiredSkillIds])),
   };
+}
+
+function assistantJobContextScope(
+  input: AssistantJobContextInput,
+): AssistantJobContextScope {
+  return {
+    contactId: input.contextScope?.contactId ?? null,
+    emailThreadId: input.contextScope?.emailThreadId ?? null,
+    projectId:
+      input.contextScope?.projectId ??
+      input.destination?.projectId ??
+      input.scope?.projectId ??
+      null,
+    date: input.contextScope?.date ?? null,
+  };
+}
+
+function assistantJobContextPurpose(
+  destination: AssistantJobDestination | null | undefined,
+): Me3AgentContextPurpose {
+  if (destination?.landing === "memory_review") return "memory_review";
+  if (destination?.landing === "review_packet") return "mission_review";
+  return "assistant_job";
+}
+
+function assistantJobContextRequestSummary(input: AssistantJobContextInput): string {
+  const purpose = input.jobPurpose?.trim();
+  return purpose ? `${input.jobName}: ${purpose}` : input.jobName;
+}
+
+function assistantJobContextRequestText(
+  input: AssistantJobContextInput,
+  activeScope: AssistantJobContextScope,
+): string {
+  return [
+    input.requestText,
+    input.jobName,
+    input.jobPurpose,
+    input.jobId ? `job:${input.jobId}` : null,
+    input.runId ? `run:${input.runId}` : null,
+    input.destination ? `destination:${input.destination.landing}` : null,
+    input.scope?.projectId ? `project:${input.scope.projectId}` : null,
+    ...(input.scope?.sourceIds ?? []).map((sourceId) => `source:${sourceId}`),
+    activeScope.contactId ? `contact:${activeScope.contactId}` : null,
+    activeScope.emailThreadId ? `email:${activeScope.emailThreadId}` : null,
+    activeScope.projectId ? `project:${activeScope.projectId}` : null,
+    activeScope.date ? `date:${activeScope.date}` : null,
+    input.trigger ? assistantJobTriggerSummary(input.trigger) : null,
+  ]
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .join(" ");
+}
+
+function assistantJobTriggerSummary(trigger: AssistantJobTrigger): string {
+  if (trigger.kind === "manual") return "manual run";
+  if (trigger.kind === "schedule") {
+    return `scheduled ${trigger.cadence} ${trigger.localTime || ""} ${trigger.timezone}`;
+  }
+  return `event ${trigger.source}:${trigger.sourceId}:${trigger.eventType}`;
 }
 
 function isValidTrigger(trigger: AssistantJobTrigger): boolean {

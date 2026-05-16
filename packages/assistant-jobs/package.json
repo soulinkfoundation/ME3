@@ -14,5 +14,8 @@
   "devDependencies": {
     "typescript": "^5.3.3",
     "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "@me3/knowledge": "workspace:*"
   }
 }

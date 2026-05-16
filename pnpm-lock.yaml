@@ -190,6 +190,10 @@ importers:
         version: 5.9.3
 
   packages/assistant-jobs:
+    dependencies:
+      '@me3/knowledge':
+        specifier: workspace:*
+        version: link:../knowledge
     devDependencies:
       typescript:
         specifier: ^5.3.3
