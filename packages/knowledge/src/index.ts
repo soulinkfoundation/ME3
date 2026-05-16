@@ -1,3 +1,5 @@
+export * from "./agent-context";
+
 export const ME3_KNOWLEDGE_SCHEMA_VERSION = "2026-05-15.v1";
 
 export type Me3KnowledgeAudience = "agent" | "app" | "docs";

@@ -37,7 +37,11 @@ const sourceDocuments = [
 ];
 
 const knowledgeSource = await readFile(knowledgeSourcePath, "utf8");
-const compiledKnowledge = ts.transpileModule(knowledgeSource, {
+const llmsKnowledgeSource = knowledgeSource.replace(
+  /^export \* from "\.\/agent-context";\n/m,
+  "",
+);
+const compiledKnowledge = ts.transpileModule(llmsKnowledgeSource, {
   compilerOptions: {
     module: ts.ModuleKind.ES2022,
     target: ts.ScriptTarget.ES2022,

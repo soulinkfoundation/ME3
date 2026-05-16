@@ -137,7 +137,7 @@ Possible later options:
 - Local indexed search across approved sources.
 - Summaries for long email threads and project histories.
 - Embeddings or semantic search.
-- External memory adapters such as Honcho.
+- External memory adapters, if native context eventually proves insufficient.
 
 The rule is simple: smarter retrieval must plug into the same packet contract, source manifest, privacy rules, and tests.
 
@@ -155,9 +155,7 @@ Guidelines:
 
 ## Current Decision
 
-Do not implement Honcho now.
-
-Work toward native ME3 context first. If native context starts to feel limited, evaluate Honcho or another memory engine as a later adapter behind the same contract.
+Work toward native ME3 context first. If native context starts to feel limited, evaluate a separate retrieval or memory adapter later behind the same contract.
 
 ## Tracking Beads
 
@@ -169,7 +167,3 @@ Work toward native ME3 context first. If native context starts to feel limited, 
 - `me3-ctx.5`: Add owner-approved remember, forget, and memory review flows.
 - `me3-ctx.6`: Expose context source manifests for trust and debugging.
 - `me3-ctx.7`: Plan and prove me3-app migration path for native context system.
-
-Related later option:
-
-- `me3-wsn.21`: Prototype optional Honcho memory adapter for ME3 agent runtime. This should wait until the native context packet contract exists.

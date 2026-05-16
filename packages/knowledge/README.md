@@ -8,6 +8,13 @@ runtimes should inject only the compact `buildMe3CapabilityContext` output, whil
 apps can render the fuller snapshot in help surfaces, onboarding, setup panels,
 and empty states.
 
+The package also owns the portable agent context packet contract. Chat and
+Assistant Jobs should use `createMe3AgentContextPacket` plus
+`buildMe3AgentContextPrompt` to pass small, source-labeled slices of profile,
+public identity, private memory, contacts, email, project/task/calendar context,
+and recent messages into model calls. Keep source manifests visible enough for
+debugging, and keep private context marked private.
+
 The first slice is intentionally static and versioned with code. Plugin manifests
 and user-specific install state can be merged at runtime through
 `getMe3KnowledgeSnapshot` or `buildMe3CapabilityContext`.
