@@ -8,7 +8,7 @@ import {
   type AssistantJobDraftValidation,
   type AssistantJobStarterRecipe,
 } from "@me3-core/assistant-jobs";
-import type { Env } from "./types";
+import type { AssistantJobEventQueueMessage, Env } from "./types";
 
 export class AssistantJobsInputError extends Error {
   constructor(
@@ -221,12 +221,55 @@ export async function recordAssistantJobIngressEvent(
     event.idempotencyKey,
   );
   if (!row) throw new AssistantJobsInputError("Ingress event was not recorded", 409);
+  const duplicate = row.id !== id;
+  let queued = false;
+  if (!duplicate) {
+    queued = await enqueueAssistantJobIngressEvent(env, row);
+  }
 
   return {
     event: serializeIngressEvent(row),
-    duplicate: row.id !== id,
-    queued: false,
+    duplicate,
+    queued,
   };
+}
+
+export async function processAssistantJobIngressQueueMessage(
+  env: Env,
+  message: AssistantJobEventQueueMessage,
+) {
+  const eventId = normalizeOptionalText(message.eventId);
+  const userId = normalizeOptionalText(message.userId);
+  if (!eventId || !userId) {
+    throw new AssistantJobsInputError("Assistant Job queue message is missing eventId or userId");
+  }
+
+  const event = await requireAssistantJobIngressEvent(env, userId, eventId);
+  if (event.status === "processed") {
+    return { event: serializeIngressEvent(event), outcome: "already_processed" };
+  }
+
+  const processed = await setAssistantJobIngressEventStatus(env, userId, eventId, "processed", {
+    queueProcessedAt: new Date().toISOString(),
+    queueOutcome: "trigger_matching_not_implemented",
+  });
+  return { event: serializeIngressEvent(processed), outcome: "processed_noop" };
+}
+
+export async function markAssistantJobIngressQueueMessageFailed(
+  env: Env,
+  message: AssistantJobEventQueueMessage,
+  error: unknown,
+) {
+  const eventId = normalizeOptionalText(message.eventId);
+  const userId = normalizeOptionalText(message.userId);
+  if (!eventId || !userId) return { event: null, outcome: "invalid_message" };
+
+  const failed = await setAssistantJobIngressEventStatus(env, userId, eventId, "failed", {
+    queueFailedAt: new Date().toISOString(),
+    errorMessage: getErrorMessage(error),
+  });
+  return { event: serializeIngressEvent(failed), outcome: "failed" };
 }
 
 export async function updateAssistantJobIngressEvent(
@@ -238,17 +281,15 @@ export async function updateAssistantJobIngressEvent(
   const existing = await requireAssistantJobIngressEvent(env, userId, eventId);
   const status = normalizeIngressStatus(body.status);
   if (!status) throw new AssistantJobsInputError("Valid ingress event status is required");
-  const payload = parseJson<Record<string, unknown>>(existing.payload_json, {});
   const errorMessage = normalizeOptionalText(body.errorMessage);
-  const nextPayload = errorMessage ? { ...payload, errorMessage } : payload;
-
-  await env.DB.prepare(
-    `UPDATE assistant_job_ingress_events
-     SET status = ?, payload_json = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND user_id = ?`,
-  )
-    .bind(status, stringifyJson(nextPayload), eventId, userId)
-    .run();
+  await setAssistantJobIngressEventStatus(
+    env,
+    userId,
+    eventId,
+    status,
+    errorMessage ? { errorMessage } : undefined,
+    existing,
+  );
 
   return {
     event: serializeIngressEvent(await requireAssistantJobIngressEvent(env, userId, eventId)),
@@ -661,6 +702,47 @@ async function requireAssistantJobIngressEvent(env: Env, userId: string, eventId
   return event;
 }
 
+async function enqueueAssistantJobIngressEvent(env: Env, row: AssistantJobIngressEventRow) {
+  if (!env.ASSISTANT_JOB_EVENTS) return false;
+
+  try {
+    await env.ASSISTANT_JOB_EVENTS.send({ eventId: row.id, userId: row.user_id });
+    await setAssistantJobIngressEventStatus(env, row.user_id, row.id, "queued", {
+      queuedAt: new Date().toISOString(),
+    }, row);
+    return true;
+  } catch (error) {
+    await setAssistantJobIngressEventStatus(env, row.user_id, row.id, "failed", {
+      queueFailedAt: new Date().toISOString(),
+      errorMessage: getErrorMessage(error),
+    }, row);
+    throw error;
+  }
+}
+
+async function setAssistantJobIngressEventStatus(
+  env: Env,
+  userId: string,
+  eventId: string,
+  status: AssistantJobIngressStatus,
+  payloadPatch?: Record<string, unknown>,
+  existing?: AssistantJobIngressEventRow,
+) {
+  const row = existing || (await requireAssistantJobIngressEvent(env, userId, eventId));
+  const payload = parseJson<Record<string, unknown>>(row.payload_json, {});
+  const nextPayload = payloadPatch ? { ...payload, ...payloadPatch } : payload;
+
+  await env.DB.prepare(
+    `UPDATE assistant_job_ingress_events
+     SET status = ?, payload_json = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(status, stringifyJson(nextPayload), eventId, userId)
+    .run();
+
+  return requireAssistantJobIngressEvent(env, userId, eventId);
+}
+
 function draftFromVersion(job: AssistantJobRow, version: AssistantJobVersionRow): AssistantJobDraft {
   return {
     name: version.name,
@@ -866,6 +948,10 @@ function normalizeIngressStatus(value: unknown): AssistantJobIngressStatus | nul
     return value;
   }
   return null;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unknown Assistant Job queue error";
 }
 
 function normalizeJobStatus(value: unknown): AssistantJobStatus | null {

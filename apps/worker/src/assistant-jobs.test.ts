@@ -6,6 +6,8 @@ import {
   getAssistantJob,
   listAssistantJobIngressEvents,
   listAssistantJobs,
+  markAssistantJobIngressQueueMessageFailed,
+  processAssistantJobIngressQueueMessage,
   recordAssistantJobIngressEvent,
   runAssistantJobNow,
   setAssistantJobPaused,
@@ -29,6 +31,7 @@ type AssistantJobsDbState = {
   runs: RunRow[];
   events: Record<string, unknown>[];
   ingressEvents: IngressRow[];
+  queueMessages: unknown[];
 };
 
 describe("assistant jobs persistence", () => {
@@ -77,7 +80,7 @@ describe("assistant jobs persistence", () => {
   });
 
   it("records assistant job ingress events idempotently", async () => {
-    const env = createAssistantJobsEnv();
+    const env = createAssistantJobsEnv({ queue: true });
     const body = {
       sourceKind: "mission_control",
       sourceId: "mission-control",
@@ -91,10 +94,18 @@ describe("assistant jobs persistence", () => {
     const listed = await listAssistantJobIngressEvents(env, "owner");
 
     expect(first.duplicate).toBe(false);
+    expect(first.queued).toBe(true);
     expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.queued).toBe(false);
     expect(duplicate.event.id).toBe(first.event.id);
     expect(listed.events).toHaveLength(1);
-    expect(listed.events[0]?.payload).toEqual({ projectId: "project-1", title: "Weekly packet" });
+    expect(listed.events[0]?.status).toBe("queued");
+    expect(env.__state.queueMessages).toEqual([{ eventId: first.event.id, userId: "owner" }]);
+    expect(listed.events[0]?.payload).toMatchObject({
+      projectId: "project-1",
+      title: "Weekly packet",
+      queuedAt: expect.any(String),
+    });
   });
 
   it("updates and filters assistant job ingress event status", async () => {
@@ -118,15 +129,63 @@ describe("assistant jobs persistence", () => {
     expect(updated.event.rawPayloadRef).toBe("r2://assistant-jobs/webhooks/evt-1.json");
     expect(queued.events.map((event) => event.id)).toEqual([recorded.event.id]);
   });
+
+  it("processes queued ingress events without running jobs yet", async () => {
+    const env = createAssistantJobsEnv({ queue: true });
+
+    const recorded = await recordAssistantJobIngressEvent(env, "owner", {
+      sourceKind: "core",
+      sourceId: "mission-control",
+      sourceEventId: "evt-2",
+      eventType: "capture.created",
+      payload: { captureId: "capture-1" },
+    });
+
+    const processed = await processAssistantJobIngressQueueMessage(env, {
+      eventId: recorded.event.id,
+      userId: "owner",
+    });
+
+    expect(processed.outcome).toBe("processed_noop");
+    expect(processed.event.status).toBe("processed");
+    expect(processed.event.payload).toMatchObject({
+      captureId: "capture-1",
+      queueOutcome: "trigger_matching_not_implemented",
+    });
+  });
+
+  it("marks dead-lettered ingress events as failed", async () => {
+    const env = createAssistantJobsEnv();
+
+    const recorded = await recordAssistantJobIngressEvent(env, "owner", {
+      sourceKind: "webhook",
+      sourceId: "stripe",
+      sourceEventId: "evt-3",
+      eventType: "invoice.created",
+    });
+
+    const failed = await markAssistantJobIngressQueueMessageFailed(
+      env,
+      { eventId: recorded.event.id, userId: "owner" },
+      new Error("boom"),
+    );
+
+    expect(failed.outcome).toBe("failed");
+    expect(failed.event?.status).toBe("failed");
+    expect(failed.event?.payload).toMatchObject({ errorMessage: "boom" });
+  });
 });
 
-function createAssistantJobsEnv(): Env {
+type AssistantJobsTestEnv = Env & { __state: AssistantJobsDbState };
+
+function createAssistantJobsEnv(options: { queue?: boolean } = {}): AssistantJobsTestEnv {
   const state: AssistantJobsDbState = {
     jobs: [],
     versions: [],
     runs: [],
     events: [],
     ingressEvents: [],
+    queueMessages: [],
   };
 
   const db = {
@@ -142,7 +201,17 @@ function createAssistantJobsEnv(): Env {
     },
   };
 
-  return { DB: db as unknown as D1Database };
+  const queue = {
+    async send(message: unknown) {
+      state.queueMessages.push(message);
+    },
+  };
+
+  return {
+    DB: db as unknown as D1Database,
+    ASSISTANT_JOB_EVENTS: options.queue ? (queue as unknown as Queue) : undefined,
+    __state: state,
+  };
 }
 
 class FakeStatement {

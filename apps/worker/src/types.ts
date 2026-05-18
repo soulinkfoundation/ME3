@@ -4,6 +4,7 @@ export interface Env {
   AI?: Ai;
   ASSETS?: Fetcher;
   SITE_ASSETS?: R2Bucket;
+  ASSISTANT_JOB_EVENTS?: Queue<AssistantJobEventQueueMessage>;
 
   ENVIRONMENT?: string;
   CORE_WEB_ORIGIN?: string;
@@ -45,6 +46,11 @@ export interface Env {
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
 }
+
+export type AssistantJobEventQueueMessage = {
+  eventId: string;
+  userId: string;
+};
 
 export interface OwnerProfile {
   id: string;

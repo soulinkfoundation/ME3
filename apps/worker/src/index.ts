@@ -18,6 +18,8 @@ import {
   listAssistantJobRecipes,
   listAssistantJobIngressEvents,
   listAssistantJobs,
+  markAssistantJobIngressQueueMessageFailed,
+  processAssistantJobIngressQueueMessage,
   recordAssistantJobIngressEvent,
   runAssistantJobNow,
   setAssistantJobPaused,
@@ -153,6 +155,7 @@ import {
 import { searchLocationQuery } from "./location-search";
 import { generateSiteHtml, type Me3SiteProfile } from "./site-generator";
 import type {
+  AssistantJobEventQueueMessage,
   DbAgentChannelConnection,
   DbAgentChannelEvent,
   DbBooking,
@@ -5064,4 +5067,42 @@ function getSetupPassword(env: Env): string | undefined {
   return env.SETUP_PASSWORD;
 }
 
-export default app;
+async function handleAssistantJobQueueBatch(
+  batch: MessageBatch<AssistantJobEventQueueMessage>,
+  env: Env,
+) {
+  const isDeadLetterBatch = batch.queue.includes("dlq");
+
+  for (const message of batch.messages) {
+    try {
+      if (isDeadLetterBatch) {
+        await markAssistantJobIngressQueueMessageFailed(
+          env,
+          message.body,
+          new Error("Assistant Job event reached the dead-letter queue"),
+        );
+      } else {
+        await processAssistantJobIngressQueueMessage(env, message.body);
+      }
+      message.ack();
+    } catch (error) {
+      if (isDeadLetterBatch) {
+        message.ack();
+      } else {
+        message.retry();
+      }
+    }
+  }
+}
+
+const worker = {
+  fetch(request: Request, env: Env, ctx?: ExecutionContext) {
+    return app.fetch(request, env, ctx);
+  },
+  queue(batch: MessageBatch<AssistantJobEventQueueMessage>, env: Env) {
+    return handleAssistantJobQueueBatch(batch, env);
+  },
+};
+
+export { handleAssistantJobQueueBatch };
+export default worker;

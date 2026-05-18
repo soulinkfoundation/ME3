@@ -24,6 +24,23 @@ migrations_dir = "apps/worker/migrations"
 binding = "SITE_ASSETS"
 bucket_name = "me3-site-assets"
 
+[[queues.producers]]
+binding = "ASSISTANT_JOB_EVENTS"
+queue = "me3-assistant-job-events"
+
+[[queues.consumers]]
+queue = "me3-assistant-job-events"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+dead_letter_queue = "me3-assistant-job-events-dlq"
+
+[[queues.consumers]]
+queue = "me3-assistant-job-events-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 0
+
 # Optional Cloudflare Email Service sender binding. ME3 Core can also send with
 # owner-configured SMTP or Postmark settings from Account -> Mailbox settings.
 # [[send_email]]
