@@ -31,6 +31,7 @@ type AssistantJobsDbState = {
   runs: RunRow[];
   events: Record<string, unknown>[];
   ingressEvents: IngressRow[];
+  pluginActivities: Record<string, unknown>[];
   queueMessages: unknown[];
 };
 
@@ -132,6 +133,10 @@ describe("assistant jobs persistence", () => {
 
   it("processes queued ingress events without running jobs yet", async () => {
     const env = createAssistantJobsEnv({ queue: true });
+    const job = await createAssistantJob(env, "owner", {
+      draft: eventJobDraft(),
+      status: "active",
+    });
 
     const recorded = await recordAssistantJobIngressEvent(env, "owner", {
       sourceKind: "core",
@@ -145,13 +150,48 @@ describe("assistant jobs persistence", () => {
       eventId: recorded.event.id,
       userId: "owner",
     });
+    const repeated = await processAssistantJobIngressQueueMessage(env, {
+      eventId: recorded.event.id,
+      userId: "owner",
+    });
+    const detail = await getAssistantJob(env, "owner", job.job.id);
 
-    expect(processed.outcome).toBe("processed_noop");
-    expect(processed.event.status).toBe("processed");
+    expect(processed.outcome).toBe("matched");
+    expect(processed.runCount).toBe(1);
+    expect(processed.event.status).toBe("matched");
     expect(processed.event.payload).toMatchObject({
       captureId: "capture-1",
-      queueOutcome: "trigger_matching_not_implemented",
+      matchedRunCount: 1,
+      matchedJobIds: [job.job.id],
     });
+    expect(repeated.outcome).toBe("already_processed");
+    expect(detail.runs).toHaveLength(1);
+    expect(detail.runs[0]).toMatchObject({
+      jobId: job.job.id,
+      triggerKind: "event",
+      triggerRef: recorded.event.id,
+      status: "queued",
+    });
+  });
+
+  it("ignores ingress events that do not match active event jobs", async () => {
+    const env = createAssistantJobsEnv();
+
+    const recorded = await recordAssistantJobIngressEvent(env, "owner", {
+      sourceKind: "core",
+      sourceId: "mission-control",
+      sourceEventId: "evt-ignored",
+      eventType: "capture.created",
+    });
+    const processed = await processAssistantJobIngressQueueMessage(env, {
+      eventId: recorded.event.id,
+      userId: "owner",
+    });
+
+    expect(processed.outcome).toBe("ignored");
+    expect(processed.runCount).toBe(0);
+    expect(processed.event.status).toBe("ignored");
+    expect(processed.event.payload).toMatchObject({ queueOutcome: "no_matching_jobs" });
   });
 
   it("marks dead-lettered ingress events as failed", async () => {
@@ -173,8 +213,64 @@ describe("assistant jobs persistence", () => {
     expect(failed.outcome).toBe("failed");
     expect(failed.event?.status).toBe("failed");
     expect(failed.event?.payload).toMatchObject({ errorMessage: "boom" });
+    expect(env.__state.pluginActivities).toEqual([
+      expect.objectContaining({
+        plugin_id: "me3.assistant-jobs",
+        activity_type: "assistant_job_event_dlq",
+        status: "failed",
+        related_id: recorded.event.id,
+      }),
+    ]);
   });
 });
+
+function eventJobDraft() {
+  return {
+    name: "Capture Review",
+    purpose: "Review new Mission Control captures.",
+    recipeId: null,
+    trigger: {
+      kind: "event",
+      source: "core",
+      sourceId: "mission-control",
+      eventType: "capture.created",
+      filters: [],
+    },
+    scope: {
+      projectId: null,
+      sourceIds: [],
+      providerAccountIds: [],
+      filters: [],
+    },
+    rules: [],
+    actions: [
+      {
+        id: "create-review-packet",
+        capabilityId: "mission.review_packet.create",
+        label: "Create review packet",
+        inputs: {},
+        approvalMode: "review_required",
+        onFailure: "request_review",
+        idempotencyScope: "run",
+      },
+    ],
+    approvalPolicy: {
+      defaultMode: "review_required",
+      overrides: [],
+      ownerCanApproveFrom: "mission_control",
+      approvalExpiresAfterHours: null,
+    },
+    destination: {
+      kind: "mission_control",
+      projectId: null,
+      landing: "review_packet",
+      quietIfNoChanges: true,
+    },
+    projectId: null,
+    recommendedSkillIds: [],
+    requiredSkillIds: [],
+  };
+}
 
 type AssistantJobsTestEnv = Env & { __state: AssistantJobsDbState };
 
@@ -185,6 +281,7 @@ function createAssistantJobsEnv(options: { queue?: boolean } = {}): AssistantJob
     runs: [],
     events: [],
     ingressEvents: [],
+    pluginActivities: [],
     queueMessages: [],
   };
 
@@ -287,7 +384,7 @@ class FakeStatement {
         user_id: values[1] as string,
         job_id: values[2] as string,
         job_version_id: values[3] as string,
-        trigger_kind: "manual",
+        trigger_kind: sql.includes("'event'") ? "event" : "manual",
         trigger_ref: values[4] as string,
         status: values[5] as string,
         started_at: null,
@@ -305,6 +402,21 @@ class FakeStatement {
 
     if (sql.includes("INSERT INTO assistant_job_run_events")) {
       this.state.events.push({ id: values[0], run_id: values[1], event_type: values[2] });
+      return { success: true };
+    }
+
+    if (sql.includes("INSERT INTO mission_plugin_activity")) {
+      this.state.pluginActivities.push({
+        id: values[0] as string,
+        user_id: values[1] as string,
+        plugin_id: "me3.assistant-jobs",
+        activity_type: values[2] as string,
+        title: values[3] as string,
+        summary: values[4] as string | null,
+        status: values[5] as string | null,
+        related_id: values[6] as string | null,
+        metadata_json: values[7] as string,
+      });
       return { success: true };
     }
 
@@ -413,6 +525,41 @@ class FakeStatement {
   async all<T>() {
     const sql = this.sql;
     const values = this.values;
+    if (sql.includes("FROM assistant_jobs j")) {
+      return {
+        results: this.state.jobs
+          .filter((job) => job.user_id === values[0] && job.status === "active")
+          .flatMap((job) => {
+            const version = this.state.versions.find(
+              (candidate) =>
+                candidate.id === job.current_version_id && candidate.user_id === job.user_id,
+            );
+            if (!version) return [];
+            return [
+              {
+                ...job,
+                version_id: version.id,
+                version_number: version.version_number,
+                version_name: version.name,
+                version_purpose: version.purpose,
+                candidate_trigger_json: version.trigger_json,
+                candidate_scope_json: version.scope_json,
+                candidate_rules_json: version.rules_json,
+                candidate_actions_json: version.actions_json,
+                candidate_approval_policy_json: version.approval_policy_json,
+                candidate_destination_json: version.destination_json,
+                candidate_capability_ids_json: version.capability_ids_json,
+                candidate_permission_summary_json: version.permission_summary_json,
+                candidate_recommended_skill_ids_json: version.recommended_skill_ids_json,
+                candidate_required_skill_ids_json: version.required_skill_ids_json,
+                candidate_validation_status: version.validation_status,
+                candidate_validation_errors_json: version.validation_errors_json,
+                version_created_at: version.created_at,
+              },
+            ];
+          }) as T[],
+      };
+    }
     if (sql.includes("FROM assistant_job_ingress_events") && sql.includes("status = ?")) {
       return {
         results: this.state.ingressEvents.filter(
@@ -436,6 +583,16 @@ class FakeStatement {
       return {
         results: this.state.jobs.filter(
           (job) => job.user_id === values[0] && job.status !== "archived",
+        ) as T[],
+      };
+    }
+    if (sql.includes("FROM assistant_job_runs") && sql.includes("trigger_ref = ?")) {
+      return {
+        results: this.state.runs.filter(
+          (run) =>
+            run.user_id === values[0] &&
+            run.trigger_kind === "event" &&
+            run.trigger_ref === values[1],
         ) as T[],
       };
     }

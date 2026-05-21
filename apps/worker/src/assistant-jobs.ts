@@ -115,6 +115,26 @@ type AssistantJobIngressEventRow = {
   updated_at: string;
 };
 
+type AssistantJobMatchCandidateRow = AssistantJobRow & {
+  version_id: string;
+  version_number: number;
+  version_name: string;
+  version_purpose: string;
+  candidate_trigger_json: string;
+  candidate_scope_json: string;
+  candidate_rules_json: string;
+  candidate_actions_json: string;
+  candidate_approval_policy_json: string;
+  candidate_destination_json: string;
+  candidate_capability_ids_json: string;
+  candidate_permission_summary_json: string;
+  candidate_recommended_skill_ids_json: string;
+  candidate_required_skill_ids_json: string;
+  candidate_validation_status: AssistantJobDraftValidation["status"];
+  candidate_validation_errors_json: string;
+  version_created_at: string;
+};
+
 type CreateAssistantJobBody = {
   recipeId?: unknown;
   draft?: unknown;
@@ -245,15 +265,48 @@ export async function processAssistantJobIngressQueueMessage(
   }
 
   const event = await requireAssistantJobIngressEvent(env, userId, eventId);
-  if (event.status === "processed") {
-    return { event: serializeIngressEvent(event), outcome: "already_processed" };
+  if (event.status === "matched" || event.status === "ignored" || event.status === "processed") {
+    return { event: serializeIngressEvent(event), outcome: "already_processed", runCount: 0 };
   }
 
-  const processed = await setAssistantJobIngressEventStatus(env, userId, eventId, "processed", {
-    queueProcessedAt: new Date().toISOString(),
-    queueOutcome: "trigger_matching_not_implemented",
+  const existingRuns = await listAssistantJobRunsForTrigger(env, userId, event.id);
+  if (existingRuns.length > 0) {
+    const matched = await setAssistantJobIngressEventStatus(env, userId, eventId, "matched", {
+      matchedAt: new Date().toISOString(),
+      matchedRunCount: existingRuns.length,
+      matchedJobIds: existingRuns.map((run) => run.job_id),
+    });
+    return {
+      event: serializeIngressEvent(matched),
+      outcome: "already_matched",
+      runCount: existingRuns.length,
+    };
+  }
+
+  const candidates = await listEventTriggerCandidates(env, userId);
+  const matchedCandidates = candidates.filter((candidate) =>
+    assistantJobCandidateMatchesEvent(candidate, event),
+  );
+
+  if (matchedCandidates.length === 0) {
+    const ignored = await setAssistantJobIngressEventStatus(env, userId, eventId, "ignored", {
+      ignoredAt: new Date().toISOString(),
+      queueOutcome: "no_matching_jobs",
+    });
+    return { event: serializeIngressEvent(ignored), outcome: "ignored", runCount: 0 };
+  }
+
+  const runs = [];
+  for (const candidate of matchedCandidates) {
+    runs.push(await createAssistantJobRunForEvent(env, candidate, event));
+  }
+
+  const matched = await setAssistantJobIngressEventStatus(env, userId, eventId, "matched", {
+    matchedAt: new Date().toISOString(),
+    matchedRunCount: runs.length,
+    matchedJobIds: runs.map((run) => run.jobId),
   });
-  return { event: serializeIngressEvent(processed), outcome: "processed_noop" };
+  return { event: serializeIngressEvent(matched), outcome: "matched", runCount: runs.length, runs };
 }
 
 export async function markAssistantJobIngressQueueMessageFailed(
@@ -268,6 +321,17 @@ export async function markAssistantJobIngressQueueMessageFailed(
   const failed = await setAssistantJobIngressEventStatus(env, userId, eventId, "failed", {
     queueFailedAt: new Date().toISOString(),
     errorMessage: getErrorMessage(error),
+  });
+  await appendAssistantJobMissionActivity(env, userId, {
+    activityType: "assistant_job_event_dlq",
+    title: "Assistant Job event needs review",
+    summary: getErrorMessage(error),
+    status: "failed",
+    relatedId: eventId,
+    metadata: {
+      eventId,
+      queueOutcome: "dead_lettered",
+    },
   });
   return { event: serializeIngressEvent(failed), outcome: "failed" };
 }
@@ -530,6 +594,61 @@ export async function runAssistantJobNow(env: Env, userId: string, jobId: string
   };
 }
 
+async function createAssistantJobRunForEvent(
+  env: Env,
+  candidate: AssistantJobMatchCandidateRow,
+  event: AssistantJobIngressEventRow,
+) {
+  const version = candidateVersionFromRow(candidate);
+  const draft = draftFromVersion(candidate, version);
+  const validation = validateAssistantJobDraft(draft);
+  const runId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const blocked = validation.status !== "valid";
+  const status: AssistantJobRunStatus = blocked ? "blocked" : "queued";
+  const errorMessage = blocked
+    ? validation.errors[0]?.message || "Job is not ready to run"
+    : null;
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO assistant_job_runs
+       (id, user_id, job_id, job_version_id, trigger_kind, trigger_ref, status,
+        error_code, error_message, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'event', ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      runId,
+      event.user_id,
+      candidate.id,
+      version.id,
+      event.id,
+      status,
+      blocked ? "validation_blocked" : null,
+      errorMessage,
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `INSERT INTO assistant_job_run_events (id, run_id, event_type, message, payload_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      runId,
+      blocked ? "blocked" : "queued",
+      blocked ? "Event-triggered run blocked by validation" : "Event-triggered run queued",
+      stringifyJson({ validation, ingressEventId: event.id }),
+      now,
+    ),
+    env.DB.prepare(
+      `UPDATE assistant_jobs
+       SET last_run_at = ?, last_run_status = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ?`,
+    ).bind(now, status, candidate.id, event.user_id),
+  ]);
+
+  return serializeRun(await requireAssistantJobRun(env, event.user_id, runId));
+}
+
 function normalizeAssistantJobDraft(body: CreateAssistantJobBody): AssistantJobDraft {
   const rawDraft = body.draft;
   const recipeId = normalizeOptionalText(body.recipeId);
@@ -680,6 +799,51 @@ async function requireAssistantJobRun(env: Env, userId: string, runId: string) {
   return run;
 }
 
+async function listAssistantJobRunsForTrigger(env: Env, userId: string, triggerRef: string) {
+  const rows = await env.DB.prepare(
+    `SELECT * FROM assistant_job_runs
+     WHERE user_id = ? AND trigger_kind = 'event' AND trigger_ref = ?
+     ORDER BY created_at DESC`,
+  )
+    .bind(userId, triggerRef)
+    .all<AssistantJobRunRow>();
+  return rows.results;
+}
+
+async function listEventTriggerCandidates(env: Env, userId: string) {
+  const rows = await env.DB.prepare(
+    `SELECT
+       j.*,
+       v.id AS version_id,
+       v.version_number AS version_number,
+       v.name AS version_name,
+       v.purpose AS version_purpose,
+       v.trigger_json AS candidate_trigger_json,
+       v.scope_json AS candidate_scope_json,
+       v.rules_json AS candidate_rules_json,
+       v.actions_json AS candidate_actions_json,
+       v.approval_policy_json AS candidate_approval_policy_json,
+       v.destination_json AS candidate_destination_json,
+       v.capability_ids_json AS candidate_capability_ids_json,
+       v.permission_summary_json AS candidate_permission_summary_json,
+       v.recommended_skill_ids_json AS candidate_recommended_skill_ids_json,
+       v.required_skill_ids_json AS candidate_required_skill_ids_json,
+       v.validation_status AS candidate_validation_status,
+       v.validation_errors_json AS candidate_validation_errors_json,
+       v.created_at AS version_created_at
+     FROM assistant_jobs j
+     JOIN assistant_job_versions v
+       ON v.id = j.current_version_id AND v.user_id = j.user_id
+     WHERE j.user_id = ?
+       AND j.status = 'active'
+       AND j.archived_at IS NULL
+     ORDER BY j.updated_at DESC, j.created_at DESC`,
+  )
+    .bind(userId)
+    .all<AssistantJobMatchCandidateRow>();
+  return rows.results;
+}
+
 async function getAssistantJobIngressEventByIdempotencyKey(
   env: Env,
   userId: string,
@@ -743,6 +907,40 @@ async function setAssistantJobIngressEventStatus(
   return requireAssistantJobIngressEvent(env, userId, eventId);
 }
 
+async function appendAssistantJobMissionActivity(
+  env: Env,
+  userId: string,
+  input: {
+    activityType: string;
+    title: string;
+    summary?: string | null;
+    status?: string | null;
+    relatedId?: string | null;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO mission_plugin_activity
+         (id, user_id, plugin_id, activity_type, title, summary, status, related_id, metadata_json)
+       VALUES (?, ?, 'me3.assistant-jobs', ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        userId,
+        input.activityType,
+        input.title,
+        input.summary || null,
+        input.status || null,
+        input.relatedId || null,
+        stringifyJson(input.metadata || {}),
+      )
+      .run();
+  } catch {
+    // Mission Control activity should not make queue failure handling fail again.
+  }
+}
+
 function draftFromVersion(job: AssistantJobRow, version: AssistantJobVersionRow): AssistantJobDraft {
   return {
     name: version.name,
@@ -773,6 +971,80 @@ function draftFromVersion(job: AssistantJobRow, version: AssistantJobVersionRow)
     recommendedSkillIds: parseJson(version.recommended_skill_ids_json, []),
     requiredSkillIds: parseJson(version.required_skill_ids_json, []),
   };
+}
+
+function candidateVersionFromRow(row: AssistantJobMatchCandidateRow): AssistantJobVersionRow {
+  return {
+    id: row.version_id,
+    job_id: row.id,
+    user_id: row.user_id,
+    version_number: row.version_number,
+    name: row.version_name,
+    purpose: row.version_purpose,
+    trigger_json: row.candidate_trigger_json,
+    scope_json: row.candidate_scope_json,
+    rules_json: row.candidate_rules_json,
+    actions_json: row.candidate_actions_json,
+    approval_policy_json: row.candidate_approval_policy_json,
+    destination_json: row.candidate_destination_json,
+    capability_ids_json: row.candidate_capability_ids_json,
+    permission_summary_json: row.candidate_permission_summary_json,
+    recommended_skill_ids_json: row.candidate_recommended_skill_ids_json,
+    required_skill_ids_json: row.candidate_required_skill_ids_json,
+    validation_status: row.candidate_validation_status,
+    validation_errors_json: row.candidate_validation_errors_json,
+    created_at: row.version_created_at,
+  };
+}
+
+function assistantJobCandidateMatchesEvent(
+  candidate: AssistantJobMatchCandidateRow,
+  event: AssistantJobIngressEventRow,
+) {
+  const trigger = parseJson<AssistantJobDraft["trigger"]>(candidate.candidate_trigger_json, {
+    kind: "manual",
+  });
+  if (trigger.kind !== "event") return false;
+  if (trigger.source !== event.source_kind) return false;
+  if (trigger.sourceId !== event.source_id) return false;
+  if (trigger.eventType !== event.event_type) return false;
+  return trigger.filters.every((filter) =>
+    matchesEventFilter(
+      parseJson(event.payload_json, {}),
+      filter.field,
+      filter.operator,
+      filter.value,
+    ),
+  );
+}
+
+function matchesEventFilter(
+  payload: Record<string, unknown>,
+  field: string,
+  operator: string,
+  expected: unknown,
+) {
+  const actual = getValueAtPath(payload, field);
+  if (operator === "equals") return actual === expected;
+  if (operator === "contains") {
+    if (typeof actual === "string") return actual.includes(String(expected));
+    if (Array.isArray(actual)) return actual.includes(expected);
+    return false;
+  }
+  if (operator === "starts_with") {
+    return typeof actual === "string" && actual.startsWith(String(expected));
+  }
+  if (operator === "in") {
+    return Array.isArray(expected) && expected.includes(actual);
+  }
+  return false;
+}
+
+function getValueAtPath(payload: Record<string, unknown>, path: string) {
+  return path.split(".").reduce<unknown>((value, part) => {
+    if (!isRecord(value)) return undefined;
+    return value[part];
+  }, payload);
 }
 
 function resolveInitialStatus(
