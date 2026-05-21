@@ -5,6 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import CustomDomain from "../components/CustomDomain.vue";
 import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
+import UiIcon from "../components/UiIcon.vue";
 import {
   useTheme,
   type ThemePreference,
@@ -664,22 +665,22 @@ const themePreferenceLabel = computed(() => {
 const themeOptions: Array<{
   value: ThemePreference;
   label: string;
-  description: string;
+  icon: "Sun" | "Monitor" | "Moon";
 }> = [
   {
     value: "light",
     label: "Light",
-    description: "Use the light interface.",
+    icon: "Sun",
   },
   {
     value: "system",
     label: "System",
-    description: "Follow this device.",
+    icon: "Monitor",
   },
   {
     value: "dark",
     label: "Dark",
-    description: "Use the dark interface.",
+    icon: "Moon",
   },
 ];
 
@@ -1331,10 +1332,11 @@ onMounted(async () => {
                 }"
                 role="radio"
                 :aria-checked="themePreference === option.value"
+                :aria-label="`${option.label} theme`"
+                :title="`${option.label} theme`"
                 @click="chooseThemePreference(option.value)"
               >
-                <span>{{ option.label }}</span>
-                <small>{{ option.description }}</small>
+                <UiIcon :name="option.icon" :size="16" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -2360,27 +2362,28 @@ h1 {
 }
 
 .theme-segmented {
-  display: grid;
+  display: inline-grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px;
-  padding: 4px;
+  width: fit-content;
+  gap: 2px;
+  padding: 3px;
   border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 12px);
+  border-radius: 999px;
   background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
 .theme-segmented__option {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-  min-height: 58px;
-  padding: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm, 8px);
+  border-radius: 999px;
   background: transparent;
   color: var(--ui-text-muted, var(--color-text-muted));
   font: inherit;
-  text-align: center;
   cursor: pointer;
   transition:
     background 0.15s ease,
@@ -2408,20 +2411,6 @@ h1 {
   background: var(--ui-surface, var(--color-bg));
   color: var(--ui-text, var(--color-text));
   box-shadow: var(--ui-shadow-sm, var(--shadow-soft));
-}
-
-.theme-segmented__option span {
-  overflow-wrap: anywhere;
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.theme-segmented__option small {
-  color: inherit;
-  font-size: 12px;
-  line-height: 1.25;
-  opacity: 0.76;
 }
 
 .field-hint {
@@ -3076,10 +3065,6 @@ h1 {
   }
 
   .ai-route-fields {
-    grid-template-columns: 1fr;
-  }
-
-  .theme-segmented {
     grid-template-columns: 1fr;
   }
 
