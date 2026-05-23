@@ -300,12 +300,8 @@ type AssistantSetupItem = {
 };
 
 type AccountSection =
-  | "email"
-  | "connections"
-  | "regional"
-  | "domain"
+  | "advanced"
   | "mailbox"
-  | "telegram"
   | "ai"
   | "plugins";
 
@@ -368,12 +364,8 @@ const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
 );
 
 const openSection = ref({
-  email: true,
-  connections: false,
-  regional: false,
-  domain: false,
+  advanced: false,
   mailbox: false,
-  telegram: false,
   ai: false,
   plugins: false,
 });
@@ -1355,20 +1347,20 @@ onMounted(async () => {
   void loadPlugins();
   void loadAppConnections();
   if (route.query.section === "connections") {
-    openSection.value.connections = true;
+    openSection.value.advanced = true;
   }
   if (typeof route.query.me3_claim_error === "string") {
-    openSection.value.connections = true;
+    openSection.value.advanced = true;
     appConnectionsError.value = "ME3.app connection failed. Please try again.";
   }
   if (route.query.section === "telegram") {
-    openSection.value.telegram = true;
+    openSection.value.advanced = true;
   }
   if (route.query.section === "mailbox") {
     openSection.value.mailbox = true;
   }
   if (route.query.section === "domain" || route.query.section === "custom-domain") {
-    openSection.value.domain = true;
+    openSection.value.advanced = true;
   }
   if (route.query.section === "plugins") {
     openSection.value.plugins = true;
@@ -1466,274 +1458,6 @@ onMounted(async () => {
           </div>
         </section>
 
-        <h2 class="account-section-heading primary-heading">
-          Core setup
-        </h2>
-
-        <h2 class="account-section-heading plugins-heading">
-          Plugins
-        </h2>
-
-        <h2 class="account-section-heading advanced-heading">
-          Advanced
-        </h2>
-
-        <section class="card accordion-card advanced-section">
-          <button
-            id="account-trigger-email"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.email"
-            aria-controls="account-panel-email"
-            @click="openSection.email = !openSection.email"
-          >
-            <span class="accordion-title-wrap">
-              <h2>Account email</h2>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-email"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-email"
-            :hidden="!openSection.email"
-          >
-            <div class="email-row">
-              <input
-                class="input"
-                type="email"
-                :value="auth.user?.email || ''"
-                disabled
-              />
-              <button class="button secondary" type="button" @click="logout">
-                Sign out
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <section class="card accordion-card advanced-section">
-          <button
-            id="account-trigger-connections"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.connections"
-            aria-controls="account-panel-connections"
-            @click="openSection.connections = !openSection.connections"
-          >
-            <span class="accordion-title-wrap accordion-title-flex">
-              <h2>App connections</h2>
-              <span class="status-badge" :class="me3ConnectionStatusClass">
-                {{ me3ConnectionStatusLabel }}
-              </span>
-              <span class="accordion-header-hint">
-                Connect this Core install to ME3.app sign-in
-              </span>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-connections"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-connections"
-            :hidden="!openSection.connections"
-          >
-            <div v-if="appConnectionsLoading" class="status-row">
-              Loading app connections...
-            </div>
-
-            <template v-else>
-              <div
-                class="connection-row"
-                :class="{ 'connection-row--connected': me3Connection?.connected }"
-              >
-                <div class="connection-row__body">
-                  <span
-                    class="status-badge compact"
-                    :class="me3ConnectionStatusClass"
-                  >
-                    {{ me3ConnectionStatusLabel }}
-                  </span>
-                  <div>
-                    <h3>ME3.app</h3>
-                    <p>
-                      {{
-                        me3Connection?.connected
-                          ? "ME3.app can be used to sign in to this Core install."
-                          : "Link your ME3 account before ME3.app appears on the sign-in screen."
-                      }}
-                    </p>
-                    <p v-if="me3Connection?.origin" class="field-hint">
-                      Identity provider: {{ me3Connection.origin }}
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  v-if="me3Connection?.connected"
-                  class="button secondary connection-row__action"
-                  type="button"
-                  :disabled="
-                    appConnectionsSaving || !me3Connection.disconnectAvailable
-                  "
-                  @click="disconnectMe3App"
-                >
-                  {{ appConnectionsSaving ? "Disconnecting..." : "Disconnect" }}
-                </button>
-                <button
-                  v-else
-                  class="button primary connection-row__action"
-                  type="button"
-                  :disabled="appConnectionsSaving"
-                  @click="connectMe3App"
-                >
-                  {{ appConnectionsSaving ? "Opening..." : "Connect" }}
-                </button>
-              </div>
-
-              <p
-                v-if="
-                  me3Connection?.connected && !me3Connection.disconnectAvailable
-                "
-                class="field-hint"
-              >
-                Add password authentication before disconnecting ME3.app.
-              </p>
-              <p v-if="appConnectionsMessage" class="success">
-                {{ appConnectionsMessage }}
-              </p>
-              <p v-if="appConnectionsError" class="error">
-                {{ appConnectionsError }}
-              </p>
-            </template>
-          </div>
-        </section>
-
-        <section class="card accordion-card advanced-section">
-          <button
-            id="account-trigger-regional"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.regional"
-            aria-controls="account-panel-regional"
-            @click="openSection.regional = !openSection.regional"
-          >
-            <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Regional settings</h2>
-              <span class="accordion-header-hint">
-                {{ timezoneDisplay }}
-              </span>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-regional"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-regional"
-            :hidden="!openSection.regional"
-          >
-            <p class="hint">
-              Agent replies follow your locale preference, and scheduled jobs,
-              briefings, and account-level dates use your timezone.
-            </p>
-            <div class="timezone-grid">
-              <label class="field">
-                <span>Timezone</span>
-                <input
-                  v-model="timezoneInput"
-                  class="input"
-                  type="text"
-                  list="account-timezone-options"
-                  placeholder="Start typing a timezone"
-                  spellcheck="false"
-                />
-                <datalist id="account-timezone-options">
-                  <option
-                    v-for="zone in supportedTimeZones"
-                    :key="zone"
-                    :value="zone"
-                  >
-                    {{ getTimeZoneDisplayLabel(zone) }}
-                  </option>
-                </datalist>
-              </label>
-            </div>
-
-            <div class="button-row">
-              <button
-                class="button secondary"
-                type="button"
-                @click="detectTimezoneValue"
-              >
-                Detect from browser
-              </button>
-              <button
-                class="button primary"
-                type="button"
-                :disabled="saveDisabled"
-                @click="saveSettings"
-              >
-                {{ saving ? "Saving..." : "Save regional settings" }}
-              </button>
-            </div>
-
-            <p v-if="message" class="success">{{ message }}</p>
-            <p v-if="error" class="error">{{ error }}</p>
-          </div>
-        </section>
-
-        <section class="card accordion-card advanced-section">
-          <button
-            id="account-trigger-domain"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.domain"
-            aria-controls="account-panel-domain"
-            @click="openSection.domain = !openSection.domain"
-          >
-            <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Custom domain</h2>
-              <span class="status-badge" :class="customDomainStatusClass">
-                {{ customDomainStatusLabel }}
-              </span>
-              <span class="accordion-header-hint">
-                Site and mailbox domain setup
-              </span>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-domain"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-domain"
-            :hidden="!openSection.domain"
-          >
-            <p class="hint">
-              Connect the Cloudflare-managed domain people should use for your
-              public ME3 site. The same domain can also be used for mailbox
-              addresses after Email Routing is enabled.
-            </p>
-
-            <div v-if="sites.loading" class="status-row">
-              Loading site domain settings...
-            </div>
-            <template v-else-if="customDomainSite">
-              <CustomDomain
-                :username="customDomainSite.username"
-                :show-settings-link="false"
-                @domain-status-changed="() => void sites.fetchSites()"
-              />
-            </template>
-            <p v-else class="error">
-              Create a ME3 site before connecting a custom domain.
-            </p>
-          </div>
-        </section>
-
         <section class="card accordion-card primary-section">
           <button
             id="account-trigger-mailbox"
@@ -1744,7 +1468,7 @@ onMounted(async () => {
             @click="openSection.mailbox = !openSection.mailbox"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Mailbox settings</h2>
+              <h2>Email</h2>
               <template v-if="mailboxAvailable">
                 <span
                   class="status-badge"
@@ -1779,6 +1503,21 @@ onMounted(async () => {
             aria-labelledby="account-trigger-mailbox"
             :hidden="!openSection.mailbox"
           >
+            <div class="email-row account-email-row">
+              <label class="field account-email-field">
+                <span>Account email</span>
+                <input
+                  class="input"
+                  type="email"
+                  :value="auth.user?.email || ''"
+                  disabled
+                />
+              </label>
+              <button class="button secondary" type="button" @click="logout">
+                Sign out
+              </button>
+            </div>
+
             <div v-if="mailboxLoading" class="status-row">Loading mailbox...</div>
 
             <template v-else-if="mailboxAvailable">
@@ -2029,44 +1768,6 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card advanced-section">
-          <button
-            id="account-trigger-telegram"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.telegram"
-            aria-controls="account-panel-telegram"
-            @click="openSection.telegram = !openSection.telegram"
-          >
-            <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Telegram settings</h2>
-              <span
-                v-if="telegramPanelRef?.available"
-                class="status-badge"
-                :class="telegramStatusClass"
-              >
-                {{ telegramStatusLabel }}
-              </span>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-telegram"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-telegram"
-            :hidden="!openSection.telegram"
-          >
-            <TelegramConnectPanel
-              ref="telegramPanelRef"
-              variant="default"
-              :auto-prepare-when-not-connected="
-                route.query.section === 'telegram'
-              "
-            />
-          </div>
-        </section>
-
         <section class="card accordion-card primary-section">
           <button
             id="account-trigger-ai"
@@ -2077,7 +1778,7 @@ onMounted(async () => {
             @click="openSection.ai = !openSection.ai"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>ME3 agent model</h2>
+              <h2>AI model</h2>
               <span class="status-badge" :class="aiSettingsSummaryStatusClass">
                 {{ aiSettingsSummaryLabel }}
               </span>
@@ -2327,6 +2028,219 @@ onMounted(async () => {
           </div>
         </section>
 
+        <section class="card accordion-card advanced-section">
+          <button
+            id="account-trigger-advanced"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.advanced"
+            aria-controls="account-panel-advanced"
+            @click="openSection.advanced = !openSection.advanced"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Advanced</h2>
+              <span class="accordion-header-hint">
+                App connections, timezone, custom domain, and Telegram
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-advanced"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-advanced"
+            :hidden="!openSection.advanced"
+          >
+            <div class="advanced-settings">
+              <section class="advanced-subsection">
+                <div class="advanced-subsection__header">
+                  <h3>App connections</h3>
+                  <span class="status-badge compact" :class="me3ConnectionStatusClass">
+                    {{ me3ConnectionStatusLabel }}
+                  </span>
+                </div>
+
+                <div v-if="appConnectionsLoading" class="status-row">
+                  Loading app connections...
+                </div>
+
+                <template v-else>
+                  <div
+                    class="connection-row"
+                    :class="{ 'connection-row--connected': me3Connection?.connected }"
+                  >
+                    <div class="connection-row__body">
+                      <span
+                        class="status-badge compact"
+                        :class="me3ConnectionStatusClass"
+                      >
+                        {{ me3ConnectionStatusLabel }}
+                      </span>
+                      <div>
+                        <h3>ME3.app</h3>
+                        <p>
+                          {{
+                            me3Connection?.connected
+                              ? "ME3.app can be used to sign in to this Core install."
+                              : "Link your ME3 account before ME3.app appears on the sign-in screen."
+                          }}
+                        </p>
+                        <p v-if="me3Connection?.origin" class="field-hint">
+                          Identity provider: {{ me3Connection.origin }}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      v-if="me3Connection?.connected"
+                      class="button secondary connection-row__action"
+                      type="button"
+                      :disabled="
+                        appConnectionsSaving || !me3Connection.disconnectAvailable
+                      "
+                      @click="disconnectMe3App"
+                    >
+                      {{ appConnectionsSaving ? "Disconnecting..." : "Disconnect" }}
+                    </button>
+                    <button
+                      v-else
+                      class="button primary connection-row__action"
+                      type="button"
+                      :disabled="appConnectionsSaving"
+                      @click="connectMe3App"
+                    >
+                      {{ appConnectionsSaving ? "Opening..." : "Connect" }}
+                    </button>
+                  </div>
+
+                  <p
+                    v-if="
+                      me3Connection?.connected && !me3Connection.disconnectAvailable
+                    "
+                    class="field-hint"
+                  >
+                    Add password authentication before disconnecting ME3.app.
+                  </p>
+                  <p v-if="appConnectionsMessage" class="success">
+                    {{ appConnectionsMessage }}
+                  </p>
+                  <p v-if="appConnectionsError" class="error">
+                    {{ appConnectionsError }}
+                  </p>
+                </template>
+              </section>
+
+              <section class="advanced-subsection">
+                <div class="advanced-subsection__header">
+                  <h3>Regional settings</h3>
+                  <span class="accordion-header-hint">
+                    {{ timezoneDisplay }}
+                  </span>
+                </div>
+
+                <p class="hint">
+                  Agent replies follow your locale preference, and scheduled jobs,
+                  briefings, and account-level dates use your timezone.
+                </p>
+                <div class="timezone-grid">
+                  <label class="field">
+                    <span>Timezone</span>
+                    <input
+                      v-model="timezoneInput"
+                      class="input"
+                      type="text"
+                      list="account-timezone-options"
+                      placeholder="Start typing a timezone"
+                      spellcheck="false"
+                    />
+                    <datalist id="account-timezone-options">
+                      <option
+                        v-for="zone in supportedTimeZones"
+                        :key="zone"
+                        :value="zone"
+                      >
+                        {{ getTimeZoneDisplayLabel(zone) }}
+                      </option>
+                    </datalist>
+                  </label>
+                </div>
+
+                <div class="button-row">
+                  <button
+                    class="button secondary"
+                    type="button"
+                    @click="detectTimezoneValue"
+                  >
+                    Detect from browser
+                  </button>
+                  <button
+                    class="button primary"
+                    type="button"
+                    :disabled="saveDisabled"
+                    @click="saveSettings"
+                  >
+                    {{ saving ? "Saving..." : "Save regional settings" }}
+                  </button>
+                </div>
+
+                <p v-if="message" class="success">{{ message }}</p>
+                <p v-if="error" class="error">{{ error }}</p>
+              </section>
+
+              <section class="advanced-subsection">
+                <div class="advanced-subsection__header">
+                  <h3>Custom domain</h3>
+                  <span class="status-badge compact" :class="customDomainStatusClass">
+                    {{ customDomainStatusLabel }}
+                  </span>
+                </div>
+
+                <p class="hint">
+                  Connect the Cloudflare-managed domain people should use for your
+                  public ME3 site. The same domain can also be used for mailbox
+                  addresses after Email Routing is enabled.
+                </p>
+
+                <div v-if="sites.loading" class="status-row">
+                  Loading site domain settings...
+                </div>
+                <template v-else-if="customDomainSite">
+                  <CustomDomain
+                    :username="customDomainSite.username"
+                    :show-settings-link="false"
+                    @domain-status-changed="() => void sites.fetchSites()"
+                  />
+                </template>
+                <p v-else class="error">
+                  Create a ME3 site before connecting a custom domain.
+                </p>
+              </section>
+
+              <section class="advanced-subsection">
+                <div class="advanced-subsection__header">
+                  <h3>Telegram settings</h3>
+                  <span
+                    v-if="telegramPanelRef?.available"
+                    class="status-badge compact"
+                    :class="telegramStatusClass"
+                  >
+                    {{ telegramStatusLabel }}
+                  </span>
+                </div>
+
+                <TelegramConnectPanel
+                  ref="telegramPanelRef"
+                  variant="default"
+                  :auto-prepare-when-not-connected="
+                    route.query.section === 'telegram'
+                  "
+                />
+              </section>
+            </div>
+          </div>
+        </section>
+
         <section class="danger-section advanced-section">
           <h2>Danger zone</h2>
           <div class="danger-card">
@@ -2554,38 +2468,20 @@ h1 {
   font-size: 13px;
 }
 
-.account-section-heading {
-  margin: 4px 0 10px;
-}
-
-.primary-heading {
+.primary-section {
   order: 2;
 }
 
-.primary-section {
+.plugins-section {
   order: 3;
 }
 
-.plugins-heading {
-  order: 4;
-  margin-top: 8px;
-}
-
-.plugins-section {
-  order: 5;
-}
-
-.advanced-heading {
-  order: 6;
-  margin-top: 8px;
-}
-
 .advanced-section {
-  order: 7;
+  order: 4;
 }
 
 .danger-section.advanced-section {
-  order: 8;
+  order: 5;
 }
 
 .card {
@@ -2669,6 +2565,15 @@ h1 {
   flex: 1;
 }
 
+.account-email-row {
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.account-email-field {
+  flex: 1;
+}
+
 .hint {
   margin: 0 0 16px;
   color: var(--color-text-muted);
@@ -2686,6 +2591,38 @@ h1 {
 .timezone-grid {
   display: grid;
   gap: 16px;
+}
+
+.advanced-settings {
+  display: grid;
+  gap: 20px;
+}
+
+.advanced-subsection {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--ui-border, var(--color-border));
+}
+
+.advanced-subsection:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.advanced-subsection__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.advanced-subsection__header h3 {
+  margin: 0;
+  color: var(--ui-text, var(--color-text));
+  font-size: 15px;
+  line-height: 1.25;
 }
 
 .theme-segmented {
