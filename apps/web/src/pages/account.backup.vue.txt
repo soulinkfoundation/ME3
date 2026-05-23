@@ -287,28 +287,6 @@ type AppConnectionsResponse = {
   };
 };
 
-type AssistantSetupItem = {
-  id: "profile" | "email" | "mission-control" | "ai";
-  title: string;
-  description: string;
-  statusLabel: string;
-  statusClass: string;
-  actionLabel: string;
-  icon: "UserRound" | "Mail" | "ClipboardCheck" | "Bot";
-  done: boolean;
-  optional?: boolean;
-};
-
-type AccountSection =
-  | "email"
-  | "connections"
-  | "regional"
-  | "domain"
-  | "mailbox"
-  | "telegram"
-  | "ai"
-  | "plugins";
-
 const auth = useAuthStore();
 const sites = useSitesStore();
 const { themePreference, setThemePreference } = useTheme();
@@ -369,6 +347,7 @@ const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
 
 const openSection = ref({
   email: true,
+  appearance: false,
   connections: false,
   regional: false,
   domain: false,
@@ -387,14 +366,6 @@ const customDomainSiteUsername = computed(() => {
 
 const customDomainSite = computed(() =>
   sites.sites.find((site) => site.username === customDomainSiteUsername.value),
-);
-
-const profileSite = computed(() =>
-  sites.sites.find((site) => (site.site_type || "profile") === "profile"),
-);
-
-const profileSetupReady = computed(() =>
-  Boolean(profileSite.value?.published_at || profileSite.value),
 );
 
 const customDomainStatusLabel = computed(() => {
@@ -499,25 +470,6 @@ const pluginSummaryStatusClass = computed(() => {
     return "coming_soon";
   }
   return "available";
-});
-
-const missionControlPlugin = computed(() =>
-  plugins.value.find((plugin) => plugin.id === "me3.mission-control") || null,
-);
-
-const missionControlReady = computed(() =>
-  Boolean(
-    missionControlPlugin.value?.enabled &&
-      missionControlPlugin.value.status === "installed",
-  ),
-);
-
-const missionControlActionLabel = computed(() => {
-  const plugin = missionControlPlugin.value;
-  if (pluginsLoading.value) return "Loading";
-  if (missionControlReady.value) return "Open";
-  if (plugin && canActivatePlugin(plugin)) return "Turn on";
-  return "Review";
 });
 
 const aiDefaultRouteInput = computed(
@@ -695,64 +647,6 @@ const emailProviderTestDisabled = computed(
     !emailProviderTestTo.value.trim(),
 );
 
-const emailSetupReady = computed(() =>
-  Boolean(
-    mailbox.value?.status === "active" || activeEmailProvider.value?.configured,
-  ),
-);
-
-const assistantSetupItems = computed<AssistantSetupItem[]>(() => [
-  {
-    id: "profile",
-    title: "Create your profile",
-    description:
-      "Give ME3 the public identity and baseline context it needs to represent you.",
-    statusLabel: profileSetupReady.value ? "Ready" : "Start here",
-    statusClass: profileSetupReady.value ? "active" : "setup_required",
-    actionLabel: profileSetupReady.value ? "Edit profile" : "Create profile",
-    icon: "UserRound",
-    done: profileSetupReady.value,
-  },
-  {
-    id: "email",
-    title: "Connect email",
-    description:
-      "Let the assistant work around real messages, drafts, and approvals.",
-    statusLabel: emailSetupReady.value ? "Ready" : "Needs setup",
-    statusClass: emailSetupReady.value ? "active" : "setup_required",
-    actionLabel: "Set up email",
-    icon: "Mail",
-    done: emailSetupReady.value,
-  },
-  {
-    id: "mission-control",
-    title: "Open Mission Control",
-    description:
-      "Use the workspace for capture, tasks, projects, approvals, and memory.",
-    statusLabel: missionControlReady.value ? "Ready" : "Needs setup",
-    statusClass: missionControlReady.value ? "active" : "setup_required",
-    actionLabel: missionControlActionLabel.value,
-    icon: "ClipboardCheck",
-    done: missionControlReady.value,
-  },
-  {
-    id: "ai",
-    title: "Choose assistant quality",
-    description:
-      "Use the built-in default or connect a premium model for stronger reasoning.",
-    statusLabel: aiAgentModelConfigured.value ? "Ready" : "Recommended",
-    statusClass: aiAgentModelConfigured.value ? "active" : "setup_required",
-    actionLabel: aiAgentModelConfigured.value ? "Review model" : "Choose model",
-    icon: "Bot",
-    done: aiAgentModelConfigured.value,
-    optional: true,
-  },
-]);
-
-const assistantSetupCompleteCount = computed(
-  () => assistantSetupItems.value.filter((item) => item.done).length,
-);
-
 const me3ConnectionStatusLabel = computed(() => {
   if (appConnectionsLoading.value) return "Loading";
   return me3Connection.value?.connected ? "Connected" : "Not connected";
@@ -761,6 +655,12 @@ const me3ConnectionStatusLabel = computed(() => {
 const me3ConnectionStatusClass = computed(() =>
   me3Connection.value?.connected ? "active" : "pending_setup",
 );
+
+const themePreferenceLabel = computed(() => {
+  if (themePreference.value === "light") return "Light";
+  if (themePreference.value === "dark") return "Dark";
+  return "System";
+});
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -786,40 +686,6 @@ const themeOptions: Array<{
 
 function chooseThemePreference(nextTheme: ThemePreference) {
   setThemePreference(nextTheme);
-}
-
-function openAccountSection(section: AccountSection) {
-  openSection.value[section] = true;
-}
-
-async function handleAssistantSetupAction(item: AssistantSetupItem) {
-  if (item.id === "profile") {
-    await router.push("/create");
-    return;
-  }
-
-  if (item.id === "email") {
-    openAccountSection("mailbox");
-    return;
-  }
-
-  if (item.id === "ai") {
-    openAccountSection("ai");
-    return;
-  }
-
-  if (missionControlReady.value) {
-    await router.push("/mission-control");
-    return;
-  }
-
-  const plugin = missionControlPlugin.value;
-  if (plugin && canActivatePlugin(plugin)) {
-    await activatePlugin(plugin);
-    return;
-  }
-
-  openAccountSection("plugins");
 }
 
 function syncAccount(response: AccountResponse) {
@@ -1386,99 +1252,12 @@ onMounted(async () => {
     </Teleport>
 
     <main class="main">
-      <header class="account-header">
-        <div>
-          <h1>Account</h1>
-          <p class="account-header__subtitle">
-            Set up ME3 so your assistant can understand you and start doing real work.
-          </p>
-        </div>
-        <div
-          class="theme-segmented account-theme-switch"
-          role="radiogroup"
-          aria-label="Interface theme"
-        >
-          <button
-            v-for="option in themeOptions"
-            :key="option.value"
-            type="button"
-            class="theme-segmented__option"
-            :class="{
-              'theme-segmented__option--active':
-                themePreference === option.value,
-            }"
-            role="radio"
-            :aria-checked="themePreference === option.value"
-            :aria-label="`${option.label} theme`"
-            :title="`${option.label} theme`"
-            @click="chooseThemePreference(option.value)"
-          >
-            <UiIcon :name="option.icon" :size="16" aria-hidden="true" />
-          </button>
-        </div>
-      </header>
+      <h1>Account</h1>
 
       <div v-if="loading" class="status-row">Loading account...</div>
 
       <template v-else>
-        <section class="setup-checklist" aria-labelledby="assistant-setup-title">
-          <div class="setup-checklist__header">
-            <div>
-              <h2 id="assistant-setup-title">Assistant setup</h2>
-              <p>
-                {{ assistantSetupCompleteCount }} of
-                {{ assistantSetupItems.length }} ready
-              </p>
-            </div>
-            <router-link class="button secondary link-button-inline" to="/mission-control">
-              First job
-            </router-link>
-          </div>
-
-          <div class="setup-checklist__items">
-            <article
-              v-for="item in assistantSetupItems"
-              :key="item.id"
-              class="setup-item"
-              :class="{ 'setup-item--done': item.done }"
-            >
-              <div class="setup-item__icon" aria-hidden="true">
-                <UiIcon :name="item.icon" :size="18" />
-              </div>
-              <div class="setup-item__body">
-                <div class="setup-item__title-row">
-                  <h3>{{ item.title }}</h3>
-                  <span class="status-badge compact" :class="item.statusClass">
-                    {{ item.statusLabel }}
-                  </span>
-                </div>
-                <p>{{ item.description }}</p>
-              </div>
-              <button
-                class="button secondary setup-item__action"
-                type="button"
-                :disabled="item.id === 'mission-control' && pluginsLoading"
-                @click="handleAssistantSetupAction(item)"
-              >
-                {{ item.actionLabel }}
-              </button>
-            </article>
-          </div>
-        </section>
-
-        <h2 class="account-section-heading primary-heading">
-          Core setup
-        </h2>
-
-        <h2 class="account-section-heading plugins-heading">
-          Plugins
-        </h2>
-
-        <h2 class="account-section-heading advanced-heading">
-          Advanced
-        </h2>
-
-        <section class="card accordion-card advanced-section">
+        <section class="card accordion-card">
           <button
             id="account-trigger-email"
             class="accordion-trigger"
@@ -1513,7 +1292,57 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card advanced-section">
+        <section class="card accordion-card">
+          <button
+            id="account-trigger-appearance"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.appearance"
+            aria-controls="account-panel-appearance"
+            @click="openSection.appearance = !openSection.appearance"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Appearance</h2>
+              <span class="accordion-header-hint">
+                {{ themePreferenceLabel }}
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-appearance"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-appearance"
+            :hidden="!openSection.appearance"
+          >
+            <div
+              class="theme-segmented"
+              role="radiogroup"
+              aria-label="Interface theme"
+            >
+              <button
+                v-for="option in themeOptions"
+                :key="option.value"
+                type="button"
+                class="theme-segmented__option"
+                :class="{
+                  'theme-segmented__option--active':
+                    themePreference === option.value,
+                }"
+                role="radio"
+                :aria-checked="themePreference === option.value"
+                :aria-label="`${option.label} theme`"
+                :title="`${option.label} theme`"
+                @click="chooseThemePreference(option.value)"
+              >
+                <UiIcon :name="option.icon" :size="16" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card accordion-card">
           <button
             id="account-trigger-connections"
             class="accordion-trigger"
@@ -1611,7 +1440,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card advanced-section">
+        <section class="card accordion-card">
           <button
             id="account-trigger-regional"
             class="accordion-trigger"
@@ -1685,7 +1514,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card advanced-section">
+        <section class="card accordion-card">
           <button
             id="account-trigger-domain"
             class="accordion-trigger"
@@ -1734,7 +1563,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card primary-section">
+        <section class="card accordion-card">
           <button
             id="account-trigger-mailbox"
             class="accordion-trigger"
@@ -2029,7 +1858,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card advanced-section">
+        <section class="card accordion-card">
           <button
             id="account-trigger-telegram"
             class="accordion-trigger"
@@ -2067,7 +1896,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card primary-section">
+        <section class="card accordion-card">
           <button
             id="account-trigger-ai"
             class="accordion-trigger"
@@ -2208,7 +2037,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card plugins-section">
+        <section class="card accordion-card">
           <button
             id="account-trigger-plugins"
             class="accordion-trigger"
@@ -2327,7 +2156,7 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="danger-section advanced-section">
+        <section class="danger-section">
           <h2>Danger zone</h2>
           <div class="danger-card">
             <div>
@@ -2417,181 +2246,25 @@ onMounted(async () => {
 }
 
 .main {
-  display: flex;
-  flex-direction: column;
   max-width: 700px;
   margin: 0 auto;
   padding: 20px 40px;
 }
 
-.account-header {
-  order: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 20px;
-}
-
 h1 {
-  margin: 0;
+  margin: 0 0 24px;
   font-size: 28px;
   line-height: 1.1;
-}
-
-.account-header__subtitle {
-  max-width: 520px;
-  margin: 8px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.account-theme-switch {
-  flex: 0 0 auto;
 }
 
 .account-mobile-title {
   display: none;
 }
 
-.setup-checklist {
-  order: 1;
-  display: grid;
-  gap: 14px;
-  margin-bottom: 28px;
-  padding: 16px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 8px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-}
-
-.setup-checklist__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.setup-checklist__header h2,
-.account-section-heading {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 18px;
-  line-height: 1.2;
-}
-
-.setup-checklist__header p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-}
-
-.setup-checklist__items {
-  display: grid;
-  gap: 8px;
-}
-
-.setup-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 8px);
-  background: var(--ui-surface, var(--color-bg));
-}
-
-.setup-item--done {
-  border-color: color-mix(
-    in oklab,
-    var(--ui-accent, #4caf50) 30%,
-    var(--ui-border, var(--color-border))
-  );
-}
-
-.setup-item__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: var(--ui-accent-soft, rgba(76, 175, 80, 0.1));
-  color: var(--ui-accent-strong, #2e7d32);
-}
-
-.setup-item__body {
-  min-width: 0;
-}
-
-.setup-item__title-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.setup-item h3 {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 15px;
-  line-height: 1.25;
-}
-
-.setup-item p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.setup-item__action {
-  min-width: 104px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-}
-
-.account-section-heading {
-  margin: 4px 0 10px;
-}
-
-.primary-heading {
-  order: 2;
-}
-
-.primary-section {
-  order: 3;
-}
-
-.plugins-heading {
-  order: 4;
-  margin-top: 8px;
-}
-
-.plugins-section {
-  order: 5;
-}
-
-.advanced-heading {
-  order: 6;
-  margin-top: 8px;
-}
-
-.advanced-section {
-  order: 7;
-}
-
-.danger-section.advanced-section {
-  order: 8;
-}
-
 .card {
   margin-bottom: 20px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: 16px;
   background: var(--color-bg);
 }
 
@@ -3357,13 +3030,7 @@ h1 {
     padding: 16px;
   }
 
-  .account-header {
-    align-items: center;
-    justify-content: flex-end;
-    margin-bottom: 16px;
-  }
-
-  .account-header > div:first-child {
+  .main > h1 {
     display: none;
   }
 
@@ -3382,18 +3049,9 @@ h1 {
   .email-row,
   .connection-row,
   .connection-row__body,
-  .plugin-row__header,
-  .setup-item {
+  .plugin-row__header {
     flex-direction: column;
     align-items: flex-start;
-  }
-
-  .setup-item {
-    grid-template-columns: 1fr;
-  }
-
-  .setup-item__action {
-    width: 100%;
   }
 
   .plugin-row__badges {
