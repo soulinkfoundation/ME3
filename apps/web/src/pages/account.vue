@@ -288,13 +288,13 @@ type AppConnectionsResponse = {
 };
 
 type AssistantSetupItem = {
-  id: "profile" | "email" | "mission-control" | "ai";
+  id: "profile" | "email" | "mission-control";
   title: string;
   description: string;
   statusLabel: string;
   statusClass: string;
   actionLabel: string;
-  icon: "UserRound" | "Mail" | "ClipboardCheck" | "Bot";
+  icon: "UserRound" | "Mail" | "ClipboardCheck";
   done: boolean;
   optional?: boolean;
 };
@@ -369,6 +369,7 @@ const openSection = ref({
   ai: false,
   plugins: false,
 });
+const showAiModelSection = false;
 
 const customDomainSiteUsername = computed(() => {
   const accountUsername = auth.user?.username || "";
@@ -727,18 +728,6 @@ const assistantSetupItems = computed<AssistantSetupItem[]>(() => [
     icon: "ClipboardCheck",
     done: missionControlReady.value,
   },
-  {
-    id: "ai",
-    title: "Choose assistant quality",
-    description:
-      "Use the built-in default or connect a premium model for stronger reasoning.",
-    statusLabel: aiAgentModelConfigured.value ? "Ready" : "Recommended",
-    statusClass: aiAgentModelConfigured.value ? "active" : "setup_required",
-    actionLabel: aiAgentModelConfigured.value ? "Review model" : "Choose model",
-    icon: "Bot",
-    done: aiAgentModelConfigured.value,
-    optional: true,
-  },
 ]);
 
 const assistantSetupCompleteCount = computed(
@@ -792,11 +781,6 @@ async function handleAssistantSetupAction(item: AssistantSetupItem) {
 
   if (item.id === "email") {
     openAccountSection("mailbox");
-    return;
-  }
-
-  if (item.id === "ai") {
-    openAccountSection("ai");
     return;
   }
 
@@ -1365,9 +1349,6 @@ onMounted(async () => {
   if (route.query.section === "plugins") {
     openSection.value.plugins = true;
   }
-  if (route.query.section === "ai" || route.query.section === "providers") {
-    openSection.value.ai = true;
-  }
 });
 </script>
 
@@ -1768,7 +1749,10 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card primary-section">
+        <section
+          v-if="showAiModelSection"
+          class="card accordion-card primary-section"
+        >
           <button
             id="account-trigger-ai"
             class="accordion-trigger"
