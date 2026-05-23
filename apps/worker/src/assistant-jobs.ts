@@ -963,6 +963,13 @@ async function executeAssistantJobAction(
     });
   }
 
+  const missionOutputResult = await executeAssistantJobMissionOutputAction(env, {
+    ...input,
+    capability,
+    idempotencyKey,
+  });
+  if (missionOutputResult) return missionOutputResult;
+
   return insertAssistantJobActionResult(env, {
     runId: input.run.id,
     actionId: input.action.id,
@@ -970,6 +977,197 @@ async function executeAssistantJobAction(
     idempotencyKey,
     status: "succeeded",
     externalRef: `${capability.auditEventKind}:${input.run.id}:${input.action.id}`,
+  });
+}
+
+async function executeAssistantJobMissionOutputAction(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+) {
+  if (input.capability.id === "mission.task.create") {
+    return createAssistantJobMissionTask(env, input);
+  }
+  if (input.capability.id === "mission.capture.create") {
+    return createAssistantJobMissionCapture(env, input);
+  }
+  if (input.capability.id === "mission.activity.create") {
+    return createAssistantJobMissionActivity(env, input, "assistant_job.activity");
+  }
+  if (input.capability.id === "mission.review_packet.create") {
+    return createAssistantJobMissionActivity(env, input, "assistant_job.review_packet");
+  }
+  return null;
+}
+
+async function createAssistantJobMissionTask(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+) {
+  const taskId = missionOutputId(input.run, input.action, "task");
+  const title = missionTextInput(input.action, "title")
+    || input.action.label
+    || `${input.job.name} follow-up`;
+  const description = missionTextInput(input.action, "description") || input.job.purpose || null;
+  const projectId = resolveMissionOutputProjectId(input.job, input.draft, input.action);
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO mission_tasks
+       (id, user_id, project_id, title, description, status, priority, due_at, scheduled_for,
+        source_kind, source_ref, approval_id, metadata_json, created_at, updated_at, archived_at)
+     VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, 'agent', ?, NULL, ?, ?, ?, NULL)`,
+  )
+    .bind(
+      taskId,
+      input.userId,
+      projectId,
+      title,
+      description,
+      normalizeMissionPriority(input.action.inputs.priority),
+      normalizeNullableText(input.action.inputs.dueAt),
+      normalizeNullableText(input.action.inputs.scheduledFor),
+      input.idempotencyKey,
+      stringifyJson(missionOutputMetadata(input)),
+      now,
+      now,
+    )
+    .run();
+
+  return insertAssistantJobActionResult(env, {
+    runId: input.run.id,
+    actionId: input.action.id,
+    capabilityId: input.capability.id,
+    idempotencyKey: input.idempotencyKey,
+    status: "succeeded",
+    externalRef: taskId,
+  });
+}
+
+async function createAssistantJobMissionCapture(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+) {
+  const date = normalizeMissionDate(input.action.inputs.date) || new Date().toISOString().slice(0, 10);
+  const dayId = missionDailyNoteId(input.userId, date);
+  const captureId = missionOutputId(input.run, input.action, "capture");
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO mission_daily_notes
+       (id, user_id, date, title, journal_text, created_at, updated_at)
+     VALUES (?, ?, ?, ?, '', ?, ?)`,
+  )
+    .bind(dayId, input.userId, date, `Assistant Jobs - ${date}`, now, now)
+    .run();
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO mission_capture_items
+       (id, user_id, day_id, type, text, project_id, status, task_id, calendar_event_id,
+        reminder_id, due_at, event_start_at, event_end_at, timezone, sync_status, sync_error,
+        source, source_ref, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, ?, ?, ?, ?, 'local', NULL,
+       'agent', ?, ?, ?)`,
+  )
+    .bind(
+      captureId,
+      input.userId,
+      dayId,
+      normalizeMissionCaptureType(input.action.inputs.type),
+      missionTextInput(input.action, "text")
+        || missionTextInput(input.action, "title")
+        || input.action.label
+        || input.job.name,
+      resolveMissionOutputProjectId(input.job, input.draft, input.action),
+      normalizeNullableText(input.action.inputs.dueAt),
+      normalizeNullableText(input.action.inputs.eventStartAt),
+      normalizeNullableText(input.action.inputs.eventEndAt),
+      normalizeNullableText(input.action.inputs.timezone),
+      input.idempotencyKey,
+      now,
+      now,
+    )
+    .run();
+
+  return insertAssistantJobActionResult(env, {
+    runId: input.run.id,
+    actionId: input.action.id,
+    capabilityId: input.capability.id,
+    idempotencyKey: input.idempotencyKey,
+    status: "succeeded",
+    externalRef: captureId,
+  });
+}
+
+async function createAssistantJobMissionActivity(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+  defaultActivityType: string,
+) {
+  const activityId = missionOutputId(input.run, input.action, "activity");
+  const title = missionTextInput(input.action, "title")
+    || (defaultActivityType === "assistant_job.review_packet"
+      ? `Review packet: ${input.job.name}`
+      : input.action.label)
+    || input.job.name;
+  const summary = missionTextInput(input.action, "summary") || input.job.purpose || null;
+  const status = missionTextInput(input.action, "status") || "succeeded";
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO mission_plugin_activity
+       (id, user_id, plugin_id, activity_type, title, summary, status, related_id, metadata_json)
+     VALUES (?, ?, 'me3.assistant-jobs', ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      activityId,
+      input.userId,
+      missionTextInput(input.action, "activityType") || defaultActivityType,
+      title,
+      summary,
+      status,
+      input.run.id,
+      stringifyJson(missionOutputMetadata(input)),
+    )
+    .run();
+
+  return insertAssistantJobActionResult(env, {
+    runId: input.run.id,
+    actionId: input.action.id,
+    capabilityId: input.capability.id,
+    idempotencyKey: input.idempotencyKey,
+    status: "succeeded",
+    externalRef: activityId,
   });
 }
 
@@ -1913,6 +2111,64 @@ function buildActionIdempotencyKey(run: AssistantJobRunRow, action: AssistantJob
     return `${run.user_id}:${run.job_id}:${action.id}:${run.trigger_ref}`;
   }
   return `${run.id}:${action.id}`;
+}
+
+function missionOutputId(run: AssistantJobRunRow, action: AssistantJobAction, kind: string) {
+  return `assistant-job-output:${run.id}:${action.id}:${kind}`;
+}
+
+function missionDailyNoteId(userId: string, date: string) {
+  return `assistant-job-day:${userId}:${date}`;
+}
+
+function missionTextInput(action: AssistantJobAction, key: string) {
+  return normalizeNullableText(action.inputs[key]);
+}
+
+function resolveMissionOutputProjectId(
+  job: AssistantJobRow,
+  draft: AssistantJobDraft,
+  action: AssistantJobAction,
+) {
+  return missionTextInput(action, "projectId")
+    || draft.destination.projectId
+    || draft.projectId
+    || draft.scope.projectId
+    || job.project_id
+    || null;
+}
+
+function missionOutputMetadata(input: {
+  job: AssistantJobRow;
+  run: AssistantJobRunRow;
+  action: AssistantJobAction;
+  capability: AssistantCapability;
+  idempotencyKey: string;
+}) {
+  return {
+    assistantJobId: input.job.id,
+    assistantJobName: input.job.name,
+    assistantJobRunId: input.run.id,
+    actionId: input.action.id,
+    capabilityId: input.capability.id,
+    idempotencyKey: input.idempotencyKey,
+    inputs: input.action.inputs,
+  };
+}
+
+function normalizeMissionPriority(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 3;
+  return Math.max(1, Math.min(5, Math.round(value)));
+}
+
+function normalizeMissionDate(value: unknown) {
+  const text = normalizeNullableText(value);
+  if (!text || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  return text;
+}
+
+function normalizeMissionCaptureType(value: unknown) {
+  return value === "reminder" || value === "event" || value === "task" ? value : "task";
 }
 
 function riskLevelForCapability(capability: AssistantCapability) {

@@ -43,6 +43,8 @@ type AssistantJobsDbState = {
   missionAgentRuns: Record<string, unknown>[];
   projects: Record<string, unknown>[];
   tasks: Record<string, unknown>[];
+  dailyNotes: Record<string, unknown>[];
+  captures: Record<string, unknown>[];
   memory: Record<string, unknown>[];
   calendarEvents: Record<string, unknown>[];
   recentMessages: Record<string, unknown>[];
@@ -233,6 +235,67 @@ describe("assistant jobs persistence", () => {
     expect(env.__state.actionResults).toHaveLength(1);
   });
 
+  it("lands safe Assistant Job outputs in Mission Control idempotently", async () => {
+    const env = createAssistantJobsEnv();
+    const created = await createAssistantJob(env, "owner", {
+      draft: missionOutputJobDraft(),
+      status: "active",
+    });
+
+    const first = await runAssistantJobNow(env, "owner", created.job.id);
+    env.__state.runs[0]!.status = "queued";
+    const retry = await executeAssistantJobRun(env, "owner", first.run.id);
+
+    expect(first.run.status).toBe("succeeded");
+    expect(first.actionResults).toEqual([
+      expect.objectContaining({
+        actionId: "create-task",
+        capabilityId: "mission.task.create",
+        status: "succeeded",
+        externalRef: `assistant-job-output:${first.run.id}:create-task:task`,
+      }),
+      expect.objectContaining({
+        actionId: "create-capture",
+        capabilityId: "mission.capture.create",
+        status: "succeeded",
+        externalRef: `assistant-job-output:${first.run.id}:create-capture:capture`,
+      }),
+      expect.objectContaining({
+        actionId: "create-activity",
+        capabilityId: "mission.activity.create",
+        status: "succeeded",
+        externalRef: `assistant-job-output:${first.run.id}:create-activity:activity`,
+      }),
+    ]);
+    expect(retry.execution).toBe("succeeded");
+    expect(env.__state.tasks).toHaveLength(1);
+    expect(env.__state.tasks[0]).toMatchObject({
+      title: "Follow up with Ada",
+      project_id: "project-1",
+      status: "backlog",
+      source_kind: "agent",
+    });
+    expect(env.__state.dailyNotes).toHaveLength(1);
+    expect(env.__state.dailyNotes[0]).toMatchObject({
+      id: "assistant-job-day:owner:2026-05-23",
+      date: "2026-05-23",
+    });
+    expect(env.__state.captures).toHaveLength(1);
+    expect(env.__state.captures[0]).toMatchObject({
+      text: "Review launch notes",
+      project_id: "project-1",
+      type: "task",
+      source: "agent",
+    });
+    expect(env.__state.pluginActivities).toHaveLength(1);
+    expect(env.__state.pluginActivities[0]).toMatchObject({
+      activity_type: "assistant_job.activity",
+      title: "Job finished",
+      related_id: first.run.id,
+    });
+    expect(env.__state.actionResults).toHaveLength(3);
+  });
+
   it("persists scoped context manifests and failed source markers for job runs", async () => {
     const env = createAssistantJobsEnv({
       failMemoryLookup: true,
@@ -400,6 +463,76 @@ function approvalRequiredJobDraft() {
   };
 }
 
+function missionOutputJobDraft() {
+  return {
+    ...eventJobDraft(),
+    name: "Mission Outputs",
+    purpose: "Land boring outputs in Mission Control.",
+    trigger: { kind: "manual" },
+    scope: {
+      projectId: "project-1",
+      sourceIds: [],
+      providerAccountIds: [],
+      filters: [],
+    },
+    actions: [
+      {
+        id: "create-task",
+        capabilityId: "mission.task.create",
+        label: "Create task",
+        inputs: {
+          title: "Follow up with Ada",
+          description: "Send the context packet.",
+          projectId: "project-1",
+          priority: 2,
+        },
+        approvalMode: "none",
+        onFailure: "stop",
+        idempotencyScope: "run",
+      },
+      {
+        id: "create-capture",
+        capabilityId: "mission.capture.create",
+        label: "Create capture",
+        inputs: {
+          text: "Review launch notes",
+          type: "task",
+          projectId: "project-1",
+          date: "2026-05-23",
+        },
+        approvalMode: "none",
+        onFailure: "stop",
+        idempotencyScope: "run",
+      },
+      {
+        id: "create-activity",
+        capabilityId: "mission.activity.create",
+        label: "Create activity",
+        inputs: {
+          title: "Job finished",
+          summary: "Created useful outputs.",
+        },
+        approvalMode: "none",
+        onFailure: "stop",
+        idempotencyScope: "run",
+      },
+    ],
+    approvalPolicy: {
+      defaultMode: "none",
+      overrides: [],
+      ownerCanApproveFrom: "mission_control",
+      approvalExpiresAfterHours: null,
+    },
+    destination: {
+      kind: "mission_control",
+      projectId: "project-1",
+      landing: "activity",
+      quietIfNoChanges: false,
+    },
+    projectId: "project-1",
+  };
+}
+
 type AssistantJobsTestEnv = Env & { __state: AssistantJobsDbState };
 
 type AssistantJobsEnvOptions = Partial<AssistantJobsDbState> & { queue?: boolean };
@@ -422,6 +555,8 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
     missionAgentRuns: [],
     projects: [],
     tasks: [],
+    dailyNotes: [],
+    captures: [],
     memory: [],
     calendarEvents: [],
     recentMessages: [],
@@ -645,18 +780,91 @@ class FakeStatement {
       return { success: true };
     }
 
-    if (sql.includes("INSERT INTO mission_plugin_activity")) {
-      this.state.pluginActivities.push({
-        id: values[0] as string,
-        user_id: values[1] as string,
-        plugin_id: "me3.assistant-jobs",
-        activity_type: values[2] as string,
-        title: values[3] as string,
-        summary: values[4] as string | null,
-        status: values[5] as string | null,
-        related_id: values[6] as string | null,
-        metadata_json: values[7] as string,
-      });
+    if (sql.includes("INSERT OR IGNORE INTO mission_tasks")) {
+      const exists = this.state.tasks.some((task) => task.id === values[0]);
+      if (!exists) {
+        this.state.tasks.push({
+          id: values[0] as string,
+          user_id: values[1] as string,
+          project_id: values[2] as string | null,
+          title: values[3] as string,
+          description: values[4] as string | null,
+          status: "backlog",
+          priority: values[5] as number,
+          due_at: values[6] as string | null,
+          scheduled_for: values[7] as string | null,
+          source_kind: "agent",
+          source_ref: values[8] as string,
+          approval_id: null,
+          metadata_json: values[9] as string,
+          created_at: values[10] as string,
+          updated_at: values[11] as string,
+          archived_at: null,
+        });
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("INSERT OR IGNORE INTO mission_daily_notes")) {
+      const exists = this.state.dailyNotes.some((note) => note.id === values[0]);
+      if (!exists) {
+        this.state.dailyNotes.push({
+          id: values[0] as string,
+          user_id: values[1] as string,
+          date: values[2] as string,
+          title: values[3] as string,
+          journal_text: "",
+          created_at: values[4] as string,
+          updated_at: values[5] as string,
+        });
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("INSERT OR IGNORE INTO mission_capture_items")) {
+      const exists = this.state.captures.some((capture) => capture.id === values[0]);
+      if (!exists) {
+        this.state.captures.push({
+          id: values[0] as string,
+          user_id: values[1] as string,
+          day_id: values[2] as string,
+          type: values[3] as string,
+          text: values[4] as string,
+          project_id: values[5] as string | null,
+          status: "open",
+          task_id: null,
+          calendar_event_id: null,
+          reminder_id: null,
+          due_at: values[6] as string | null,
+          event_start_at: values[7] as string | null,
+          event_end_at: values[8] as string | null,
+          timezone: values[9] as string | null,
+          sync_status: "local",
+          sync_error: null,
+          source: "agent",
+          source_ref: values[10] as string,
+          created_at: values[11] as string,
+          updated_at: values[12] as string,
+        });
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("mission_plugin_activity")) {
+      const exists = this.state.pluginActivities.some((activity) => activity.id === values[0]);
+      if (!exists) {
+        this.state.pluginActivities.push({
+          id: values[0] as string,
+          user_id: values[1] as string,
+          plugin_id: "me3.assistant-jobs",
+          activity_type: values[2] as string,
+          title: values[3] as string,
+          summary: values[4] as string | null,
+          status: values[5] as string | null,
+          related_id: values[6] as string | null,
+          metadata_json: values[7] as string,
+        });
+      }
       return { success: true };
     }
 
