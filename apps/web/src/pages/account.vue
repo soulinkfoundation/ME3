@@ -1409,33 +1409,21 @@ onMounted(async () => {
           </div>
 
           <div class="setup-checklist__items">
-            <article
+            <button
               v-for="item in assistantSetupItems"
               :key="item.id"
               class="setup-item"
               :class="{ 'setup-item--done': item.done }"
+              type="button"
+              :disabled="item.id === 'mission-control' && pluginsLoading"
+              :aria-pressed="item.done"
+              @click="handleAssistantSetupAction(item)"
             >
-              <div class="setup-item__icon" aria-hidden="true">
-                <UiIcon :name="item.icon" :size="18" />
-              </div>
-              <div class="setup-item__body">
-                <div class="setup-item__title-row">
-                  <h3>{{ item.title }}</h3>
-                  <span class="status-badge compact" :class="item.statusClass">
-                    {{ item.statusLabel }}
-                  </span>
-                </div>
-                <p>{{ item.description }}</p>
-              </div>
-              <button
-                class="button secondary setup-item__action"
-                type="button"
-                :disabled="item.id === 'mission-control' && pluginsLoading"
-                @click="handleAssistantSetupAction(item)"
-              >
-                {{ item.actionLabel }}
-              </button>
-            </article>
+              <span class="setup-item__check" aria-hidden="true">
+                <UiIcon v-if="item.done" name="Check" :size="14" />
+              </span>
+              <span class="setup-item__title">{{ item.title }}</span>
+            </button>
           </div>
         </section>
 
@@ -2387,69 +2375,62 @@ h1 {
 
 .setup-checklist__items {
   display: grid;
-  gap: 8px;
+  gap: 4px;
 }
 
 .setup-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 0;
   border-radius: var(--ui-radius-sm, 8px);
+  background: transparent;
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.setup-item:hover,
+.setup-item:focus-visible {
   background: var(--ui-surface, var(--color-bg));
 }
 
-.setup-item--done {
-  border-color: color-mix(
-    in oklab,
-    var(--ui-accent, #4caf50) 30%,
-    var(--ui-border, var(--color-border))
-  );
+.setup-item:focus-visible {
+  outline: 2px solid var(--ui-focus, var(--color-primary));
+  outline-offset: 2px;
 }
 
-.setup-item__icon {
+.setup-item:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.setup-item__check {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: var(--ui-accent-soft, rgba(76, 175, 80, 0.1));
-  color: var(--ui-accent-strong, #2e7d32);
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--ui-border-strong, var(--color-border-strong));
+  border-radius: 999px;
+  color: var(--ui-on-accent, #fff);
 }
 
-.setup-item__body {
+.setup-item--done .setup-item__check {
+  border-color: var(--ui-accent, #4caf50);
+  background: var(--ui-accent, #4caf50);
+}
+
+.setup-item__title {
   min-width: 0;
-}
-
-.setup-item__title-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.setup-item h3 {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 15px;
-  line-height: 1.25;
-}
-
-.setup-item p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 13px;
-  line-height: 1.4;
-}
-
-.setup-item__action {
-  min-width: 104px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.3;
 }
 
 .primary-section {
@@ -3303,18 +3284,9 @@ h1 {
   .email-row,
   .connection-row,
   .connection-row__body,
-  .plugin-row__header,
-  .setup-item {
+  .plugin-row__header {
     flex-direction: column;
     align-items: flex-start;
-  }
-
-  .setup-item {
-    grid-template-columns: 1fr;
-  }
-
-  .setup-item__action {
-    width: 100%;
   }
 
   .plugin-row__badges {
