@@ -730,10 +730,6 @@ const assistantSetupItems = computed<AssistantSetupItem[]>(() => [
   },
 ]);
 
-const assistantSetupCompleteCount = computed(
-  () => assistantSetupItems.value.filter((item) => item.done).length,
-);
-
 const me3ConnectionStatusLabel = computed(() => {
   if (appConnectionsLoading.value) return "Loading";
   return me3Connection.value?.connected ? "Connected" : "Not connected";
@@ -1398,10 +1394,6 @@ onMounted(async () => {
           <div class="setup-checklist__header">
             <div>
               <h2 id="assistant-setup-title">Assistant setup</h2>
-              <p>
-                {{ assistantSetupCompleteCount }} of
-                {{ assistantSetupItems.length }} ready
-              </p>
             </div>
             <router-link class="button secondary link-button-inline" to="/mission-control">
               First job
@@ -2365,12 +2357,6 @@ h1 {
   color: var(--ui-text, var(--color-text));
   font-size: 18px;
   line-height: 1.2;
-}
-
-.setup-checklist__header p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
 }
 
 .setup-checklist__items {
