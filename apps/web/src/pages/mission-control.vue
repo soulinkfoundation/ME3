@@ -991,6 +991,10 @@ function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") settingsMenuOpen.value = false;
 }
 
+function handleWindowClick() {
+  datePickerOpen.value = false;
+}
+
 watch(captureText, (text) => {
   if (!text.trim()) {
     manualCaptureType.value = false;
@@ -1032,11 +1036,13 @@ onMounted(() => {
   void loadOverview();
   if (activeSection.value === "journalArchive") void loadJournalArchive();
   window.addEventListener("keydown", handleWindowKeydown);
+  window.addEventListener("click", handleWindowClick);
 });
 
 onBeforeUnmount(() => {
   if (journalSaveTimer) window.clearTimeout(journalSaveTimer);
   window.removeEventListener("keydown", handleWindowKeydown);
+  window.removeEventListener("click", handleWindowClick);
 });
 </script>
 
@@ -1074,7 +1080,6 @@ onBeforeUnmount(() => {
           @click="toggleDatePicker"
         >
           <strong>{{ selectedDateLabel }}</strong>
-          <UiIcon name="CalendarDays" :size="14" aria-hidden="true" />
         </button>
         <button type="button" class="icon-button" aria-label="Next day" @click="moveDay(1)">
           <UiIcon name="ChevronRight" :size="18" />
