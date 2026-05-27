@@ -205,6 +205,7 @@ type ProjectBoardColumn = {
   label: string;
   tasks: MissionTask[];
 };
+type ProjectBoardStatus = ProjectBoardColumn["id"];
 
 type DatePickerCell = {
   date: string;
@@ -301,6 +302,8 @@ const projectTasksError = ref("");
 const projectTaskDraft = ref("");
 const projectTaskSaving = ref(false);
 const projectTaskActionId = ref("");
+const draggedProjectTaskId = ref("");
+const projectTaskDropStatus = ref<ProjectBoardStatus | "">("");
 let journalSaveTimer: number | null = null;
 
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
@@ -811,6 +814,50 @@ async function setProjectTaskStatus(task: MissionTask, status: MissionTask["stat
   }
 }
 
+function startProjectTaskDrag(event: DragEvent, task: MissionTask) {
+  if (projectTaskActionId.value) {
+    event.preventDefault();
+    return;
+  }
+  draggedProjectTaskId.value = task.id;
+  projectTaskDropStatus.value = task.status;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", task.id);
+  }
+}
+
+function endProjectTaskDrag() {
+  draggedProjectTaskId.value = "";
+  projectTaskDropStatus.value = "";
+}
+
+function handleProjectColumnDragOver(event: DragEvent, status: ProjectBoardStatus) {
+  if (!draggedProjectTaskId.value) return;
+  event.preventDefault();
+  projectTaskDropStatus.value = status;
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "move";
+  }
+}
+
+function handleProjectColumnDragLeave(event: DragEvent, status: ProjectBoardStatus) {
+  const currentTarget = event.currentTarget as HTMLElement | null;
+  const relatedTarget = event.relatedTarget as Node | null;
+  if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget)) return;
+  if (projectTaskDropStatus.value === status) projectTaskDropStatus.value = "";
+}
+
+async function dropProjectTask(event: DragEvent, status: ProjectBoardStatus) {
+  event.preventDefault();
+  const taskId =
+    draggedProjectTaskId.value || event.dataTransfer?.getData("text/plain") || "";
+  endProjectTaskDrag();
+  const task = projectTasks.value.find((item) => item.id === taskId);
+  if (!task) return;
+  await setProjectTaskStatus(task, status);
+}
+
 async function archiveProjectTask(task: MissionTask) {
   if (projectTaskActionId.value) return;
   projectTaskActionId.value = task.id;
@@ -954,19 +1001,6 @@ function syncLabel(capture: MissionCapture): string {
 function projectName(projectId: string | null): string {
   if (!projectId) return "Personal";
   return projects.value.find((project) => project.id === projectId)?.name || "Personal";
-}
-
-function previousTaskStatus(status: MissionTask["status"]): MissionTask["status"] {
-  if (status === "done") return "review";
-  if (status === "review") return "in_progress";
-  if (status === "in_progress") return "backlog";
-  return "backlog";
-}
-
-function nextTaskStatus(status: MissionTask["status"]): MissionTask["status"] {
-  if (status === "backlog") return "in_progress";
-  if (status === "in_progress") return "review";
-  return "done";
 }
 
 function formatDateTime(value: string | null): string {
@@ -1313,6 +1347,11 @@ onBeforeUnmount(() => {
           @click="toggleProjectPicker"
         >
           <strong>{{ selectedProjectDetailLabel }}</strong>
+          <UiIcon
+            name="ChevronDown"
+            :size="15"
+            class="mission-control__project-caret"
+          />
         </button>
         <div
           v-if="projectPickerOpen"
@@ -1610,7 +1649,11 @@ onBeforeUnmount(() => {
               v-for="column in projectBoardColumns"
               :key="column.id"
               class="project-board__column"
+              :class="{ 'is-drop-target': projectTaskDropStatus === column.id }"
               :aria-label="column.label"
+              @dragover="handleProjectColumnDragOver($event, column.id)"
+              @dragleave="handleProjectColumnDragLeave($event, column.id)"
+              @drop="dropProjectTask($event, column.id)"
             >
               <div class="project-board__column-header">
                 <h2>{{ column.label }}</h2>
@@ -1620,32 +1663,23 @@ onBeforeUnmount(() => {
               <div v-if="column.tasks.length === 0" class="project-board__empty">
                 No tasks
               </div>
-              <article v-for="task in column.tasks" :key="task.id" class="project-task-card">
+              <article
+                v-for="task in column.tasks"
+                :key="task.id"
+                class="project-task-card"
+                :class="{
+                  'is-dragging': draggedProjectTaskId === task.id,
+                  'is-updating': projectTaskActionId === task.id,
+                }"
+                draggable="true"
+                @dragstart="startProjectTaskDrag($event, task)"
+                @dragend="endProjectTaskDrag"
+              >
                 <p>{{ task.title }}</p>
                 <span v-if="task.dueAt || task.scheduledFor">
                   {{ formatShortDate(task.dueAt || task.scheduledFor) }}
                 </span>
                 <div class="project-task-card__actions">
-                  <button
-                    v-if="task.status !== 'backlog'"
-                    type="button"
-                    class="icon-button quiet"
-                    aria-label="Move task back"
-                    :disabled="projectTaskActionId === task.id"
-                    @click="setProjectTaskStatus(task, previousTaskStatus(task.status))"
-                  >
-                    <UiIcon name="ChevronLeft" :size="15" />
-                  </button>
-                  <button
-                    v-if="task.status !== 'done'"
-                    type="button"
-                    class="icon-button quiet"
-                    aria-label="Move task forward"
-                    :disabled="projectTaskActionId === task.id"
-                    @click="setProjectTaskStatus(task, nextTaskStatus(task.status))"
-                  >
-                    <UiIcon name="ChevronRight" :size="15" />
-                  </button>
                   <button
                     type="button"
                     class="icon-button quiet"
@@ -2025,6 +2059,16 @@ onBeforeUnmount(() => {
 
 .mission-control__project-label {
   max-width: min(260px, calc(100vw - 120px));
+}
+
+.mission-control__project-caret {
+  flex: 0 0 auto;
+  color: var(--ui-text-muted);
+  transition: transform 0.16s ease;
+}
+
+.mission-control__project-label[aria-expanded="true"] .mission-control__project-caret {
+  transform: rotate(180deg);
 }
 
 .capture-item__meta,
@@ -2612,6 +2656,16 @@ onBeforeUnmount(() => {
   align-content: start;
   gap: 8px;
   min-width: 180px;
+  border-radius: var(--ui-radius-md);
+  transition:
+    background-color 0.16s ease,
+    outline-color 0.16s ease;
+}
+
+.project-board__column.is-drop-target {
+  background: color-mix(in oklab, var(--ui-accent-soft), transparent 30%);
+  outline: 1px solid color-mix(in oklab, var(--ui-accent), transparent 55%);
+  outline-offset: 6px;
 }
 
 .project-board__column-header {
@@ -2648,6 +2702,25 @@ onBeforeUnmount(() => {
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface);
+  cursor: grab;
+  transition:
+    border-color 0.16s ease,
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.project-task-card:active {
+  cursor: grabbing;
+}
+
+.project-task-card.is-dragging {
+  border-color: var(--ui-accent);
+  opacity: 0.48;
+  transform: scale(0.98);
+}
+
+.project-task-card.is-updating {
+  opacity: 0.6;
 }
 
 .project-task-card p {
@@ -2955,6 +3028,7 @@ onBeforeUnmount(() => {
   }
 
   .mission-control__day-switcher,
+  .mission-control__project-switcher,
   .mission-control__section-title {
     grid-column: 1 / -1;
     grid-row: 2;
