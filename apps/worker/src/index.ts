@@ -1114,6 +1114,8 @@ app.get("/api/mission-control/tasks", async (c) => {
       tasks: await listMissionTasks(c.env, ownerId, {
         status: c.req.query("status"),
         dueDate: c.req.query("date"),
+        archived: c.req.query("archived") === "1",
+        projectId: c.req.query("projectId"),
       }),
     });
   } catch (error) {

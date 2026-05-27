@@ -77,6 +77,7 @@ type MissionJournalArchiveEntry = {
 type MissionTask = {
   id: string;
   title: string;
+  description: string | null;
   status: "backlog" | "in_progress" | "review" | "done" | "cancelled";
   projectId: string | null;
   dueAt: string | null;
@@ -84,6 +85,9 @@ type MissionTask = {
   sourceKind: "manual" | "capture" | "agent" | "beads" | "daemon";
   sourceRef: string | null;
   priority: number;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
 };
 
 type MissionApproval = {
@@ -229,7 +233,7 @@ const settingsSections: SettingsMissionSection[] = [
 const sectionIds: MissionSection[] = [...primarySections, ...settingsSections];
 const sectionLabels: Record<MissionSection, string> = {
   today: "Journal",
-  journalArchive: "Journal archive",
+  journalArchive: "Archive",
   projects: "Projects",
   activity: "Activity",
   memory: "Memory",
@@ -285,6 +289,12 @@ const journalArchiveEntries = ref<MissionJournalArchiveEntry[]>([]);
 const journalArchiveLoading = ref(false);
 const journalArchiveError = ref("");
 const selectedArchiveDate = ref("");
+const archivePickerOpen = ref(false);
+const selectedArchiveProjectId = ref("");
+const projectArchiveTasks = ref<MissionTask[]>([]);
+const projectArchiveLoading = ref(false);
+const projectArchiveError = ref("");
+const selectedProjectArchiveTaskId = ref("");
 const memoryDraft = ref("");
 const memoryActionId = ref("");
 const sourceDraft = ref("");
@@ -386,13 +396,6 @@ const activityItems = computed<ActivityViewItem[]>(() => [
 const settingsSectionActive = computed(() =>
   settingsSections.includes(activeSection.value as SettingsMissionSection),
 );
-const settingsSectionDescriptions: Record<SettingsMissionSection, string> = {
-  journalArchive: "Past entries",
-  activity: "Approvals and runs",
-  memory: "Private context",
-  sources: "Connected context",
-  setup: "Daemon and integrations",
-};
 const projectCreateDisabled = computed(
   () => projectSaving.value || projectTitle.value.trim().length === 0,
 );
@@ -429,6 +432,22 @@ const selectedArchiveEntry = computed(
   () =>
     journalArchiveEntries.value.find((entry) => entry.date === selectedArchiveDate.value) ||
     journalArchiveEntries.value[0] ||
+    null,
+);
+const selectedArchiveProject = computed(
+  () =>
+    projects.value.find((project) => project.id === selectedArchiveProjectId.value) ||
+    null,
+);
+const selectedArchiveLabel = computed(() =>
+  selectedArchiveProject.value
+    ? `${selectedArchiveProject.value.name} archive`
+    : "Journal archive",
+);
+const selectedProjectArchiveTask = computed(
+  () =>
+    projectArchiveTasks.value.find((task) => task.id === selectedProjectArchiveTaskId.value) ||
+    projectArchiveTasks.value[0] ||
     null,
 );
 const datePickerWeekdays = ["M", "T", "W", "T", "F", "S", "S"];
@@ -508,6 +527,32 @@ async function loadJournalArchive() {
     selectedArchiveDate.value = "";
   } finally {
     journalArchiveLoading.value = false;
+  }
+}
+
+async function loadProjectArchive(projectId = selectedArchiveProjectId.value) {
+  if (!projectId) return;
+  projectArchiveLoading.value = true;
+  projectArchiveError.value = "";
+  try {
+    const response = await api.get<MissionTasksResponse>(
+      `/mission-control/tasks?archived=1&projectId=${encodeURIComponent(projectId)}`,
+    );
+    projectArchiveTasks.value = response.tasks || [];
+    if (
+      selectedProjectArchiveTaskId.value &&
+      projectArchiveTasks.value.some((task) => task.id === selectedProjectArchiveTaskId.value)
+    ) {
+      return;
+    }
+    selectedProjectArchiveTaskId.value = projectArchiveTasks.value[0]?.id || "";
+  } catch (e) {
+    projectArchiveError.value =
+      e instanceof ApiError ? e.message : "Project archive could not load";
+    projectArchiveTasks.value = [];
+    selectedProjectArchiveTaskId.value = "";
+  } finally {
+    projectArchiveLoading.value = false;
   }
 }
 
@@ -647,6 +692,7 @@ function toggleDatePicker() {
   }
   settingsMenuOpen.value = false;
   projectPickerOpen.value = false;
+  archivePickerOpen.value = false;
   datePickerOpen.value = !datePickerOpen.value;
 }
 
@@ -664,6 +710,8 @@ function pickToday() {
 
 function openJournalArchive() {
   selectedArchiveDate.value = selectedDate.value;
+  selectedArchiveProjectId.value = "";
+  archivePickerOpen.value = false;
   datePickerOpen.value = false;
   setSection("journalArchive");
 }
@@ -675,6 +723,7 @@ function openSelectedArchiveEntry() {
 
 function toggleProjectPicker() {
   datePickerOpen.value = false;
+  archivePickerOpen.value = false;
   settingsMenuOpen.value = false;
   projectPickerOpen.value = !projectPickerOpen.value;
 }
@@ -685,11 +734,34 @@ function selectProjectDetail(projectId: string) {
   resetProjectTaskComposer();
 }
 
+function toggleArchivePicker() {
+  datePickerOpen.value = false;
+  projectPickerOpen.value = false;
+  settingsMenuOpen.value = false;
+  archivePickerOpen.value = !archivePickerOpen.value;
+}
+
+function selectJournalArchive() {
+  selectedArchiveProjectId.value = "";
+  archivePickerOpen.value = false;
+  if (journalArchiveEntries.value.length === 0 && !journalArchiveLoading.value) {
+    void loadJournalArchive();
+  }
+}
+
+function selectProjectArchive(projectId: string) {
+  selectedArchiveProjectId.value = projectId;
+  selectedProjectArchiveTaskId.value = "";
+  archivePickerOpen.value = false;
+  void loadProjectArchive(projectId);
+}
+
 function setSection(section: MissionSection) {
   activeSection.value = section;
   settingsMenuOpen.value = false;
   datePickerOpen.value = false;
   projectPickerOpen.value = false;
+  archivePickerOpen.value = false;
   if (section !== "projects") resetProjectTaskComposer();
   void router.replace({
     query: {
@@ -701,6 +773,7 @@ function setSection(section: MissionSection) {
 
 function openProjectModal() {
   projectPickerOpen.value = false;
+  archivePickerOpen.value = false;
   projectTitle.value = "";
   projectDescription.value = "";
   projectLogoData.value = "";
@@ -1029,6 +1102,14 @@ function projectName(projectId: string | null): string {
   return projects.value.find((project) => project.id === projectId)?.name || "Personal";
 }
 
+function taskStatusLabel(status: MissionTask["status"]): string {
+  if (status === "in_progress") return "Doing";
+  if (status === "review") return "Review";
+  if (status === "done") return "Done";
+  if (status === "cancelled") return "Cancelled";
+  return "Backlog";
+}
+
 function formatDateTime(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -1078,6 +1159,12 @@ function formatShortDate(value: string | null): string {
     month: "short",
     day: "numeric",
   }).format(date);
+}
+
+function formatProjectArchiveLine(task: MissionTask): string {
+  const archived = task.archivedAt ? formatShortDate(task.archivedAt) : "";
+  const status = taskStatusLabel(task.status);
+  return archived ? `${status} - Archived ${archived}` : status;
 }
 
 function memoryKindLabel(kind: string): string {
@@ -1190,6 +1277,10 @@ function normalizeSection(value: unknown): MissionSection {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && archivePickerOpen.value) {
+    archivePickerOpen.value = false;
+    return;
+  }
   if (event.key === "Escape" && projectPickerOpen.value) {
     projectPickerOpen.value = false;
     return;
@@ -1212,6 +1303,7 @@ function handleWindowKeydown(event: KeyboardEvent) {
 function handleWindowClick() {
   datePickerOpen.value = false;
   projectPickerOpen.value = false;
+  archivePickerOpen.value = false;
 }
 
 watch(captureText, (text) => {
@@ -1248,13 +1340,19 @@ watch(
 );
 
 watch(activeSection, (section) => {
-  if (section === "journalArchive") void loadJournalArchive();
+  if (section === "journalArchive") {
+    if (selectedArchiveProjectId.value) void loadProjectArchive();
+    else void loadJournalArchive();
+  }
   if (section === "projects") void loadProjectTasks();
 });
 
 onMounted(() => {
   void loadOverview();
-  if (activeSection.value === "journalArchive") void loadJournalArchive();
+  if (activeSection.value === "journalArchive") {
+    if (selectedArchiveProjectId.value) void loadProjectArchive();
+    else void loadJournalArchive();
+  }
   if (activeSection.value === "projects") void loadProjectTasks();
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener("click", handleWindowClick);
@@ -1408,6 +1506,56 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
+      <div
+        v-else-if="activeSection === 'journalArchive'"
+        class="mission-control__archive-switcher"
+        aria-label="Selected archive"
+        @click.stop
+      >
+        <button
+          type="button"
+          class="mission-control__archive-label"
+          :aria-expanded="archivePickerOpen"
+          aria-haspopup="dialog"
+          aria-label="Choose archive"
+          @click="toggleArchivePicker"
+        >
+          <strong>{{ selectedArchiveLabel }}</strong>
+          <UiIcon
+            name="ChevronDown"
+            :size="15"
+            class="mission-control__project-caret"
+          />
+        </button>
+        <div
+          v-if="archivePickerOpen"
+          class="archive-picker-popover"
+          role="dialog"
+          aria-label="Choose archive"
+        >
+          <button
+            type="button"
+            class="archive-picker-popover__item"
+            :class="{ 'is-active': !selectedArchiveProject }"
+            @click="selectJournalArchive"
+          >
+            Journal archive
+          </button>
+          <button
+            v-for="project in projects"
+            :key="project.id"
+            type="button"
+            class="archive-picker-popover__item"
+            :class="{ 'is-active': selectedArchiveProject?.id === project.id }"
+            @click="selectProjectArchive(project.id)"
+          >
+            {{ project.name }} archive
+          </button>
+          <div v-if="projects.length === 0" class="archive-picker-popover__empty">
+            No projects yet.
+          </div>
+        </div>
+      </div>
       <div v-else class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
       </div>
@@ -1420,7 +1568,7 @@ onBeforeUnmount(() => {
           aria-label="Mission Control settings"
           :aria-expanded="settingsMenuOpen"
           aria-haspopup="menu"
-          @click="settingsMenuOpen = !settingsMenuOpen; datePickerOpen = false; projectPickerOpen = false"
+          @click="settingsMenuOpen = !settingsMenuOpen; datePickerOpen = false; projectPickerOpen = false; archivePickerOpen = false"
         >
           <UiIcon name="Settings" :size="18" />
         </button>
@@ -1435,7 +1583,6 @@ onBeforeUnmount(() => {
             @click="setSection(section)"
           >
             <span>{{ sectionLabels[section] }}</span>
-            <small>{{ settingsSectionDescriptions[section] }}</small>
           </button>
         </div>
       </div>
@@ -1600,46 +1747,81 @@ onBeforeUnmount(() => {
 
     <section v-show="activeSection === 'journalArchive'" class="mission-page">
       <div class="archive-sheet">
-        <div class="simple-sheet__header">
-          <h1>Journal archive</h1>
-        </div>
-
-        <div v-if="journalArchiveLoading" class="empty-row">Loading archive...</div>
-        <div v-else-if="journalArchiveError" class="empty-row is-error">
-          {{ journalArchiveError }}
-        </div>
-        <div v-else-if="journalArchiveEntries.length === 0" class="empty-row">
-          No journal entries yet.
-        </div>
-        <div v-else class="journal-archive">
-          <div class="journal-archive__list" aria-label="Journal entries">
-            <button
-              v-for="entry in journalArchiveEntries"
-              :key="entry.id"
-              type="button"
-              class="journal-archive__row"
-              :class="{ 'is-active': selectedArchiveEntry?.id === entry.id }"
-              @click="selectedArchiveDate = entry.date"
-            >
-              <strong>{{ formatArchiveDate(entry.date) }}</strong>
-              <span>{{ entry.preview }}</span>
-            </button>
+        <template v-if="!selectedArchiveProject">
+          <div v-if="journalArchiveLoading" class="empty-row">Loading archive...</div>
+          <div v-else-if="journalArchiveError" class="empty-row is-error">
+            {{ journalArchiveError }}
           </div>
-
-          <article v-if="selectedArchiveEntry" class="journal-archive__preview">
-            <div class="journal-archive__preview-header">
-              <h2>{{ formatArchiveDate(selectedArchiveEntry.date) }}</h2>
+          <div v-else-if="journalArchiveEntries.length === 0" class="empty-row">
+            No journal entries yet.
+          </div>
+          <div v-else class="journal-archive">
+            <div class="journal-archive__list" aria-label="Journal entries">
               <button
+                v-for="entry in journalArchiveEntries"
+                :key="entry.id"
                 type="button"
-                class="text-button"
-                @click="openSelectedArchiveEntry"
+                class="journal-archive__row"
+                :class="{ 'is-active': selectedArchiveEntry?.id === entry.id }"
+                @click="selectedArchiveDate = entry.date"
               >
-                Open entry
+                <strong>{{ formatArchiveDate(entry.date) }}</strong>
+                <span>{{ entry.preview }}</span>
               </button>
             </div>
-            <p>{{ selectedArchiveEntry.journalText }}</p>
-          </article>
-        </div>
+
+            <article v-if="selectedArchiveEntry" class="journal-archive__preview">
+              <div class="journal-archive__preview-header">
+                <h2>{{ formatArchiveDate(selectedArchiveEntry.date) }}</h2>
+                <button
+                  type="button"
+                  class="text-button"
+                  @click="openSelectedArchiveEntry"
+                >
+                  Open entry
+                </button>
+              </div>
+              <p>{{ selectedArchiveEntry.journalText }}</p>
+            </article>
+          </div>
+        </template>
+
+        <template v-else>
+          <div v-if="projectArchiveLoading" class="empty-row">Loading archive...</div>
+          <div v-else-if="projectArchiveError" class="empty-row is-error">
+            {{ projectArchiveError }}
+          </div>
+          <div v-else-if="projectArchiveTasks.length === 0" class="empty-row">
+            No archived tasks for {{ selectedArchiveProject.name }} yet.
+          </div>
+          <div v-else class="journal-archive">
+            <div class="journal-archive__list" aria-label="Archived project tasks">
+              <button
+                v-for="task in projectArchiveTasks"
+                :key="task.id"
+                type="button"
+                class="journal-archive__row"
+                :class="{ 'is-active': selectedProjectArchiveTask?.id === task.id }"
+                @click="selectedProjectArchiveTaskId = task.id"
+              >
+                <strong>{{ task.title }}</strong>
+                <span>{{ formatProjectArchiveLine(task) }}</span>
+              </button>
+            </div>
+
+            <article v-if="selectedProjectArchiveTask" class="journal-archive__preview">
+              <div class="journal-archive__preview-header">
+                <h2>{{ selectedProjectArchiveTask.title }}</h2>
+                <span class="status-badge">
+                  {{ taskStatusLabel(selectedProjectArchiveTask.status) }}
+                </span>
+              </div>
+              <p>
+                {{ selectedProjectArchiveTask.description || "No notes for this task." }}
+              </p>
+            </article>
+          </div>
+        </template>
       </div>
     </section>
 
@@ -2030,6 +2212,7 @@ onBeforeUnmount(() => {
 .mission-control__section-tab,
 .mission-control__day-label,
 .mission-control__project-label,
+.mission-control__archive-label,
 .type-button,
 .icon-button,
 .text-button,
@@ -2074,7 +2257,8 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
-.mission-control__project-switcher {
+.mission-control__project-switcher,
+.mission-control__archive-switcher {
   position: relative;
   display: grid;
   justify-self: center;
@@ -2082,7 +2266,8 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__day-label,
-.mission-control__project-label {
+.mission-control__project-label,
+.mission-control__archive-label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2097,19 +2282,23 @@ onBeforeUnmount(() => {
 .mission-control__day-label:hover,
 .mission-control__day-label[aria-expanded="true"],
 .mission-control__project-label:hover,
-.mission-control__project-label[aria-expanded="true"] {
+.mission-control__project-label[aria-expanded="true"],
+.mission-control__archive-label:hover,
+.mission-control__archive-label[aria-expanded="true"] {
   background: var(--ui-surface-muted);
 }
 
 .mission-control__day-label strong,
-.mission-control__project-label strong {
+.mission-control__project-label strong,
+.mission-control__archive-label strong {
   overflow: hidden;
   font-size: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mission-control__project-label {
+.mission-control__project-label,
+.mission-control__archive-label {
   max-width: min(260px, calc(100vw - 120px));
 }
 
@@ -2119,7 +2308,8 @@ onBeforeUnmount(() => {
   transition: transform 0.16s ease;
 }
 
-.mission-control__project-label[aria-expanded="true"] .mission-control__project-caret {
+.mission-control__project-label[aria-expanded="true"] .mission-control__project-caret,
+.mission-control__archive-label[aria-expanded="true"] .mission-control__project-caret {
   transform: rotate(180deg);
 }
 
@@ -2177,9 +2367,8 @@ onBeforeUnmount(() => {
 
 .settings-menu__item {
   display: grid;
-  gap: 2px;
   width: 100%;
-  min-height: 48px;
+  min-height: 38px;
   padding: 8px 10px;
   border: 0;
   border-radius: var(--ui-radius-sm);
@@ -2193,11 +2382,6 @@ onBeforeUnmount(() => {
 .settings-menu__item span {
   font-size: 13px;
   font-weight: 650;
-}
-
-.settings-menu__item small {
-  color: var(--ui-text-muted);
-  font-size: 12px;
 }
 
 .settings-menu__item:hover,
@@ -2297,7 +2481,8 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.project-picker-popover {
+.project-picker-popover,
+.archive-picker-popover {
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
@@ -2315,7 +2500,8 @@ onBeforeUnmount(() => {
   transform: translateX(-50%);
 }
 
-.project-picker-popover__item {
+.project-picker-popover__item,
+.archive-picker-popover__item {
   width: 100%;
   min-width: 0;
   min-height: 38px;
@@ -2335,11 +2521,14 @@ onBeforeUnmount(() => {
 }
 
 .project-picker-popover__item:hover,
-.project-picker-popover__item.is-active {
+.project-picker-popover__item.is-active,
+.archive-picker-popover__item:hover,
+.archive-picker-popover__item.is-active {
   background: var(--ui-surface-muted);
 }
 
-.project-picker-popover__empty {
+.project-picker-popover__empty,
+.archive-picker-popover__empty {
   padding: 10px;
   color: var(--ui-text-muted);
   font-size: 13px;
@@ -3130,6 +3319,7 @@ onBeforeUnmount(() => {
 
   .mission-control__day-switcher,
   .mission-control__project-switcher,
+  .mission-control__archive-switcher,
   .mission-control__section-title {
     grid-column: 1 / -1;
     grid-row: 2;

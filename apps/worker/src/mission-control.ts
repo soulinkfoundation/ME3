@@ -664,17 +664,32 @@ export async function updateMissionProject(
 export async function listMissionTasks(
   env: Env,
   userId: string,
-  options: { status?: unknown; dueDate?: string; activeOnly?: boolean; limit?: number } = {},
+  options: {
+    status?: unknown;
+    dueDate?: string;
+    activeOnly?: boolean;
+    limit?: number;
+    archived?: boolean;
+    projectId?: unknown;
+  } = {},
 ) {
   const limit = Math.max(1, Math.min(options.limit || 50, 100));
   const status = normalizeMissionTaskStatus(options.status);
+  const projectId =
+    typeof options.projectId === "string" && options.projectId.trim()
+      ? options.projectId.trim()
+      : null;
   const activeWhere = ACTIVE_TASK_STATUSES.map((item) => `'${item}'`).join(", ");
   let sql = `SELECT id, user_id, project_id, title, description, status, priority,
                     due_at, scheduled_for, source_kind, source_ref, approval_id,
                     metadata_json, created_at, updated_at, archived_at
              FROM mission_tasks
-             WHERE user_id = ? AND archived_at IS NULL`;
+             WHERE user_id = ? AND archived_at IS ${options.archived ? "NOT " : ""}NULL`;
   const values: unknown[] = [userId];
+  if (projectId) {
+    sql += " AND project_id = ?";
+    values.push(projectId);
+  }
   if (status) {
     sql += " AND status = ?";
     values.push(status);
@@ -685,7 +700,9 @@ export async function listMissionTasks(
     sql += " AND (scheduled_for = ? OR substr(due_at, 1, 10) = ?)";
     values.push(options.dueDate, options.dueDate);
   }
-  sql += " ORDER BY priority ASC, COALESCE(due_at, scheduled_for, created_at) ASC LIMIT ?";
+  sql += options.archived
+    ? " ORDER BY archived_at DESC, updated_at DESC LIMIT ?"
+    : " ORDER BY priority ASC, COALESCE(due_at, scheduled_for, created_at) ASC LIMIT ?";
   values.push(limit);
 
   const rows = await env.DB.prepare(sql)
