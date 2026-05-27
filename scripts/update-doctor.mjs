@@ -1,0 +1,146 @@
+#!/usr/bin/env node
+import { existsSync, readFileSync } from "node:fs";
+
+const DEFAULT_CONFIG = "wrangler.toml";
+const D1_PLACEHOLDER = "replace-with-generated-d1-id";
+
+const args = parseArgs(process.argv.slice(2));
+const configPath = args.config || DEFAULT_CONFIG;
+const checks = [];
+
+if (!existsSync(configPath)) {
+  fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
+}
+
+const config = readFileSync(configPath, "utf8");
+const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+
+check("wrangler.toml exists", true, configPath);
+check(
+  "Worker entrypoint is Core",
+  /main\s*=\s*"apps\/worker\/src\/index\.ts"/.test(config),
+  'Expected main = "apps/worker/src/index.ts".',
+);
+check(
+  "Static web assets binding is configured",
+  /\[assets\][\s\S]*directory\s*=\s*"apps\/web\/dist"[\s\S]*binding\s*=\s*"ASSETS"/.test(config),
+  'Expected [assets] with directory = "apps/web/dist" and binding = "ASSETS".',
+);
+
+const d1Block = getTomlArrayBlock(config, "d1_databases", "DB");
+const d1DatabaseName = getTomlString(d1Block, "database_name");
+const d1DatabaseId = getTomlString(d1Block, "database_id");
+check("D1 DB binding exists", Boolean(d1Block), 'Expected [[d1_databases]] with binding = "DB".');
+check("D1 database name is set", Boolean(d1DatabaseName), "Expected D1 database_name.");
+check(
+  "D1 database id is provisioned",
+  Boolean(d1DatabaseId) && (args.allowTemplate || d1DatabaseId !== D1_PLACEHOLDER),
+  args.allowTemplate
+    ? "Template placeholder allowed."
+    : "Expected a real D1 database_id. The Deploy to Cloudflare flow should provision this in the copied repo.",
+);
+check(
+  "D1 migrations directory is set",
+  getTomlString(d1Block, "migrations_dir") === "apps/worker/migrations",
+  'Expected migrations_dir = "apps/worker/migrations".',
+);
+
+const r2Block = getTomlArrayBlock(config, "r2_buckets", "SITE_ASSETS");
+check("R2 SITE_ASSETS binding exists", Boolean(r2Block), 'Expected [[r2_buckets]] with binding = "SITE_ASSETS".');
+check("R2 bucket name is set", Boolean(getTomlString(r2Block, "bucket_name")), "Expected R2 bucket_name.");
+
+const durableObjectBlock = getTomlArrayBlock(config, "durable_objects.bindings", "ME3_USER_AGENT");
+check(
+  "ME3_USER_AGENT Durable Object binding exists",
+  Boolean(durableObjectBlock),
+  'Expected [[durable_objects.bindings]] with name = "ME3_USER_AGENT".',
+);
+check(
+  "ME3_USER_AGENT Durable Object class is set",
+  getTomlString(durableObjectBlock, "class_name") === "Me3UserAgent",
+  'Expected class_name = "Me3UserAgent".',
+);
+check(
+  "Durable Object migration is present",
+  /\[\[migrations\]\][\s\S]*new_sqlite_classes\s*=\s*\[[^\]]*"Me3UserAgent"[^\]]*\]/.test(config),
+  'Expected [[migrations]] new_sqlite_classes = ["Me3UserAgent"].',
+);
+
+check(
+  "Deploy script applies migrations before deploy",
+  /db:migrations:apply/.test(packageJson.scripts?.deploy || ""),
+  "Expected pnpm deploy to run db:migrations:apply.",
+);
+check(
+  "Update checker script is available",
+  Boolean(packageJson.scripts?.["update:check"]),
+  "Expected package.json scripts.update:check.",
+);
+
+if (args.json) {
+  console.log(JSON.stringify({ ok: checks.every((item) => item.ok), checks }, null, 2));
+} else {
+  for (const item of checks) {
+    console.log(`${item.ok ? "ok" : "fail"} - ${item.label}${item.detail ? `: ${item.detail}` : ""}`);
+  }
+}
+
+if (checks.some((item) => !item.ok)) {
+  process.exitCode = 1;
+} else if (!args.json) {
+  console.log("");
+  console.log("ME3 Core update doctor passed.");
+}
+
+function parseArgs(values) {
+  const parsed = {
+    allowTemplate: false,
+    config: "",
+    json: false,
+  };
+
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (value === "--") {
+      continue;
+    } else if (value === "--allow-template") {
+      parsed.allowTemplate = true;
+    } else if (value === "--json") {
+      parsed.json = true;
+    } else if (value === "--config") {
+      parsed.config = values[index + 1] || "";
+      index += 1;
+    } else if (value.startsWith("--config=")) {
+      parsed.config = value.slice("--config=".length);
+    } else {
+      fail(`Unknown option: ${value}`);
+    }
+  }
+
+  return parsed;
+}
+
+function check(label, ok, detail = "") {
+  checks.push({ label, ok, detail: ok ? "" : detail });
+}
+
+function getTomlArrayBlock(value, blockName, bindingValue) {
+  const blockPattern = new RegExp(`\\n\\[\\[${escapeRegExp(blockName)}\\]\\][\\s\\S]*?(?=\\n\\[|$)`, "g");
+  const key = blockName === "durable_objects.bindings" ? "name" : "binding";
+  const blocks = value.match(blockPattern) || [];
+  return blocks.find((block) => getTomlString(block, key) === bindingValue) || "";
+}
+
+function getTomlString(block, key) {
+  if (!block) return "";
+  return block.match(new RegExp(`${escapeRegExp(key)}\\s*=\\s*"([^"]+)"`))?.[1] || "";
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}

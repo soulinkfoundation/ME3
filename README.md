@@ -184,9 +184,7 @@ pnpm init:cloudflare
 pnpm deploy
 ```
 
-`pnpm init:cloudflare` creates or reuses the D1 database and R2 bucket, writes local install state to `.me3/install.json`, generates `.wrangler/me3.generated.toml`, and sets a standalone `SETUP_PASSWORD` secret. It prints that setup password once; keep it private if you plan to use advanced standalone setup.
-
-The root `wrangler.toml` stays as the Core deploy template. Manual installs should keep their Cloudflare resource IDs in `.me3/install.json`, which is ignored by Git, so future Core updates can replace template code without trampling local D1/R2 IDs.
+`pnpm init:cloudflare` creates or reuses the D1 database and R2 bucket, writes the generated D1 database ID into `wrangler.toml`, and sets a standalone `SETUP_PASSWORD` secret. It prints that setup password once; keep it private if you plan to use advanced standalone setup.
 
 Common options:
 
@@ -198,19 +196,7 @@ pnpm init:cloudflare -- --skip-secrets
 pnpm init:cloudflare -- --skip-r2
 ```
 
-You can inspect the generated Wrangler config before deploying:
-
-```bash
-pnpm deploy:config
-```
-
-You can also smoke-test config generation without a Cloudflare account:
-
-```bash
-pnpm deploy:config -- --manifest .me3/install.example.json --output .wrangler/me3.example.toml
-```
-
-The `pnpm deploy` script checks/provisions R2, builds the app, applies remote D1 migrations, and deploys the Worker. When `.me3/install.json` exists, deploy commands use `.wrangler/me3.generated.toml`; otherwise they fall back to `wrangler.toml` for Deploy to Cloudflare and older installs. `pnpm deploy:d1-only` is available for constrained experiments, but production Core installs should use the default R2-backed deploy path.
+The `pnpm deploy` script runs the build, remote D1 migrations, R2 provisioning check, and Worker deploy. `pnpm deploy:d1-only` is available for constrained experiments, but production Core installs should use the default R2-backed deploy path.
 
 ### Updating ME3 Core
 
@@ -218,13 +204,15 @@ The Deploy to Cloudflare button is for first-time installs. Do not click it agai
 
 ME3 Core updates are release-based. Public installs should update from tagged stable releases such as `v0.2.0`, not from whatever is currently on `main`. The goal is WordPress-style ownership: Core code is replaceable, while owner data and customizations live outside Core in D1, R2, Worker secrets, Cloudflare dashboard settings, and eventually plugins/themes.
 
-Check for a newer stable release:
+For a Deploy to Cloudflare install, the copied GitHub/GitLab repository is the install. Cloudflare provisions D1/R2/Durable Object resources and records those bindings in that copied repository's `wrangler.toml`. Updating ME3 Core means merging a tagged upstream release into that copied repository, then letting Cloudflare Workers Builds redeploy the same Worker against the same resources.
+
+Check for a newer stable release from the copied repository:
 
 ```bash
 pnpm update:check
 ```
 
-Update from a deploy-button install or GitHub-backed Cloudflare Worker:
+Update from a deploy-button-created repository:
 
 ```bash
 git status
@@ -232,11 +220,18 @@ git remote add upstream https://github.com/Soulink-Foundation/me3.git # only nee
 git fetch upstream --tags
 git merge vX.Y.Z
 pnpm install
+pnpm update:doctor
 pnpm build
 git push origin main
 ```
 
-Cloudflare Workers Builds should then run the configured deploy command for your repository. That deploy applies any new D1 migrations and publishes the updated Worker against the same Cloudflare resources.
+Cloudflare Workers Builds should then run the configured deploy command for your repository. That deploy applies any new D1 migrations and publishes the updated Worker against the same D1/R2/Durable Object resources.
+
+If Git reports conflicts in `wrangler.toml`, preserve the values from your copied repository for provisioned resources such as `database_id`, `bucket_name`, Worker name, custom domain vars, and secrets configured in Cloudflare. Then bring in any new Core bindings or migrations from the release and rerun:
+
+```bash
+pnpm update:doctor
+```
 
 Update from a manual CLI install:
 
@@ -249,9 +244,7 @@ pnpm build
 pnpm deploy
 ```
 
-Before major updates, create or note a Cloudflare D1 Time Travel bookmark. Never overwrite an existing install's `.me3/install.json`, Worker secrets, D1 database, R2 bucket, or custom domains unless you intentionally want a fresh install.
-
-If you have an older manual install with the D1 database ID already written into `wrangler.toml`, rerun `pnpm init:cloudflare -- --db-id existing-d1-uuid` to create `.me3/install.json`, then keep future local install state there.
+Before major updates, create or note a Cloudflare D1 Time Travel bookmark. Never overwrite an existing install's `wrangler.toml` resource IDs, Worker secrets, D1 database, R2 bucket, or custom domains unless you intentionally want a fresh install.
 
 ### Recommended Cloudflare Domains
 

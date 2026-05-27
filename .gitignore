@@ -10,8 +10,6 @@ dist/
 .env
 .env.local
 .dev.vars
-.me3/install.json
-.me3/*.local.json
 
 # Local issue tracker state
 .beads/
