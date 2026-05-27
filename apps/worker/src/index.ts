@@ -50,6 +50,7 @@ import {
   listCorePluginRecords,
   type CorePluginRecord,
 } from "./plugins";
+import { getCoreVersionInfo } from "./core-version";
 import {
   MissionControlInputError,
   approveMissionMemory,
@@ -290,6 +291,7 @@ app.get("/health", async (c) => {
   return c.json({
     ok: true,
     service: "me3-core",
+    core: getCoreVersionInfo(),
     environment: getEnvironment(c.env),
     bindings: {
       db: Boolean(c.env.DB),
@@ -311,6 +313,7 @@ app.get("/api/config", async (c) => {
   const cloudOrigin = getMe3CloudOrigin(c.env);
 
   return c.json({
+    core: getCoreVersionInfo(),
     apiOrigin: getCoreApiOrigin(c.env, c.req.url),
     webOrigin: getCoreWebOrigin(c.env, c.req.url),
     adminHost: getAdminHost(c.env, c.req.url) || null,
@@ -334,6 +337,10 @@ app.get("/api/config", async (c) => {
     ownerPasswordAuthConfigured: authState.passwordConfigured,
     ownerMe3AuthConfigured: authState.me3Configured,
   });
+});
+
+app.get("/api/core/version", (c) => {
+  return c.json(getCoreVersionInfo());
 });
 
 app.post("/api/auth/me3/start", async (c) => {

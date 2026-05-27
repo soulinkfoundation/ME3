@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "channel": "stable",
+  "latest": {
+    "version": "0.1.0",
+    "tag": "v0.1.0",
+    "releasedAt": null,
+    "releaseNotesUrl": "https://github.com/Soulink-Foundation/me3/releases",
+    "migrationRequired": false,
+    "breaking": false,
+    "minimumSupportedVersion": "0.1.0"
+  },
+  "releases": [
+    {
+      "version": "0.1.0",
+      "tag": "v0.1.0",
+      "releasedAt": null,
+      "releaseNotesUrl": "https://github.com/Soulink-Foundation/me3/releases",
+      "migrationRequired": false,
+      "breaking": false
+    }
+  ]
+}

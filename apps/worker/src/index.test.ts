@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
+import { ME3_CORE_VERSION } from "./core-version";
 import { CORE_PLUGIN_CATALOG, type DbPluginInstallation } from "./plugins";
 import type {
   DbAiModelDefault,
@@ -1406,6 +1407,22 @@ function base64UrlBytes(bytes: Uint8Array): string {
 }
 
 describe("ME3 Core Worker auth", () => {
+  it("exposes Core version metadata", async () => {
+    const env = createEnv();
+
+    const response = await app.fetch(new Request("http://localhost/api/core/version"), env);
+    const body = (await response.json()) as {
+      version: string;
+      releaseChannel: string;
+      updateManifestUrl: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.version).toBe(ME3_CORE_VERSION);
+    expect(body.releaseChannel).toBe("stable");
+    expect(body.updateManifestUrl).toContain("updates/stable.json");
+  });
+
   it("bootstraps the owner and sets an httpOnly session cookie", async () => {
     const env = createEnv();
 

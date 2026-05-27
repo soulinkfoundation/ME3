@@ -11,6 +11,7 @@
     "dev:web": "pnpm --filter @me3/web dev",
     "init:cloudflare": "node scripts/init-cloudflare.mjs",
     "generate:llms": "node scripts/generate-llms.mjs",
+    "update:check": "node scripts/check-updates.mjs",
     "setup:dev-vars": "node scripts/create-dev-vars.mjs",
     "storage:r2:provision": "node scripts/provision-r2.mjs",
     "verify:local-boot": "node scripts/verify-local-boot.mjs",

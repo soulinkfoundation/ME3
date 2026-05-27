@@ -198,6 +198,47 @@ pnpm init:cloudflare -- --skip-r2
 
 The `pnpm deploy` script runs the build, remote D1 migrations, R2 provisioning check, and Worker deploy. `pnpm deploy:d1-only` is available for constrained experiments, but production Core installs should use the default R2-backed deploy path.
 
+### Updating ME3 Core
+
+The Deploy to Cloudflare button is for first-time installs. Do not click it again to update an existing ME3 Core install; that can create a new repository, Worker, D1 database, or R2 bucket instead of updating the install you already own.
+
+ME3 Core updates are release-based. Public installs should update from tagged stable releases such as `v0.2.0`, not from whatever is currently on `main`. The goal is WordPress-style ownership: Core code is replaceable, while owner data and customizations live outside Core in D1, R2, Worker secrets, Cloudflare dashboard settings, and eventually plugins/themes.
+
+Check for a newer stable release:
+
+```bash
+pnpm update:check
+```
+
+Update from a deploy-button install or GitHub-backed Cloudflare Worker:
+
+```bash
+git status
+git remote add upstream https://github.com/Soulink-Foundation/me3.git # only needed once
+git fetch upstream --tags
+git merge vX.Y.Z
+pnpm install
+pnpm build
+git push origin main
+```
+
+Cloudflare Workers Builds should then run the configured deploy command for your repository. That deploy applies any new D1 migrations and publishes the updated Worker against the same Cloudflare resources.
+
+Update from a manual CLI install:
+
+```bash
+git status
+git fetch upstream --tags
+git merge vX.Y.Z
+pnpm install
+pnpm build
+pnpm deploy
+```
+
+Before major updates, create or note a Cloudflare D1 Time Travel bookmark. Never overwrite an existing install's `wrangler.toml` resource IDs, Worker secrets, D1 database, R2 bucket, or custom domains unless you intentionally want a fresh install.
+
+Current caveat: `wrangler.toml` contains install-specific Cloudflare resource IDs after manual setup. Future Core releases should move those IDs into a generated/local deploy config so upstream Core updates are less likely to conflict with per-install settings.
+
 ### Recommended Cloudflare Domains
 
 ME3 Core can boot on the generated `workers.dev` URL without a custom domain. Do not add a custom domain during the deploy-button flow unless you already know you need one.
