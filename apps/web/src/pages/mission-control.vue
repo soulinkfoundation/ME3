@@ -22,13 +22,19 @@ definePage({
 
 type MissionSection =
   | "today"
+  | "journalArchive"
   | "projects"
   | "activity"
   | "memory"
   | "sources"
   | "setup";
 type PrimaryMissionSection = "today" | "projects";
-type SettingsMissionSection = "activity" | "memory" | "sources" | "setup";
+type SettingsMissionSection =
+  | "journalArchive"
+  | "activity"
+  | "memory"
+  | "sources"
+  | "setup";
 
 type MissionProject = {
   id: string;
@@ -59,6 +65,13 @@ type MissionDay = {
   title: string | null;
   journalText: string;
   updatedAt: string;
+};
+
+type MissionJournalArchiveEntry = {
+  id: string;
+  date: string;
+  preview: string;
+  journalText: string;
 };
 
 type MissionTask = {
@@ -175,6 +188,7 @@ type MissionOverviewResponse = {
 
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
+type MissionJournalArchiveResponse = { entries: MissionJournalArchiveEntry[] };
 
 type ActivityViewItem = {
   id: string;
@@ -189,10 +203,17 @@ const route = useRoute();
 const router = useRouter();
 
 const primarySections: PrimaryMissionSection[] = ["today", "projects"];
-const settingsSections: SettingsMissionSection[] = ["activity", "memory", "sources", "setup"];
+const settingsSections: SettingsMissionSection[] = [
+  "journalArchive",
+  "activity",
+  "memory",
+  "sources",
+  "setup",
+];
 const sectionIds: MissionSection[] = [...primarySections, ...settingsSections];
 const sectionLabels: Record<MissionSection, string> = {
   today: "Journal",
+  journalArchive: "Journal archive",
   projects: "Projects",
   activity: "Activity",
   memory: "Memory",
@@ -234,6 +255,11 @@ const schedulePickerOpen = ref(false);
 const scheduleDateTime = ref("");
 const journalDraft = ref("");
 const journalState = ref<"idle" | "saving" | "saved" | "error">("idle");
+const datePickerOpen = ref(false);
+const journalArchiveEntries = ref<MissionJournalArchiveEntry[]>([]);
+const journalArchiveLoading = ref(false);
+const journalArchiveError = ref("");
+const selectedArchiveDate = ref("");
 const memoryDraft = ref("");
 const memoryActionId = ref("");
 const sourceDraft = ref("");
@@ -323,6 +349,7 @@ const settingsSectionActive = computed(() =>
   settingsSections.includes(activeSection.value as SettingsMissionSection),
 );
 const settingsSectionDescriptions: Record<SettingsMissionSection, string> = {
+  journalArchive: "Past entries",
   activity: "Approvals and runs",
   memory: "Private context",
   sources: "Connected context",
@@ -330,6 +357,12 @@ const settingsSectionDescriptions: Record<SettingsMissionSection, string> = {
 };
 const projectCreateDisabled = computed(
   () => projectSaving.value || projectTitle.value.trim().length === 0,
+);
+const selectedArchiveEntry = computed(
+  () =>
+    journalArchiveEntries.value.find((entry) => entry.date === selectedArchiveDate.value) ||
+    journalArchiveEntries.value[0] ||
+    null,
 );
 
 async function loadOverview() {
@@ -376,6 +409,31 @@ async function loadMemoryAndSources() {
   } catch {
     memory.value = [];
     sources.value = [];
+  }
+}
+
+async function loadJournalArchive() {
+  journalArchiveLoading.value = true;
+  journalArchiveError.value = "";
+  try {
+    const response = await api.get<MissionJournalArchiveResponse>(
+      "/mission-control/journal-archive",
+    );
+    journalArchiveEntries.value = response.entries || [];
+    if (
+      selectedArchiveDate.value &&
+      journalArchiveEntries.value.some((entry) => entry.date === selectedArchiveDate.value)
+    ) {
+      return;
+    }
+    selectedArchiveDate.value = journalArchiveEntries.value[0]?.date || "";
+  } catch (e) {
+    journalArchiveError.value =
+      e instanceof ApiError ? e.message : "Journal archive could not load";
+    journalArchiveEntries.value = [];
+    selectedArchiveDate.value = "";
+  } finally {
+    journalArchiveLoading.value = false;
   }
 }
 
@@ -475,13 +533,52 @@ function scheduleJournalSave() {
   }, 700);
 }
 
+async function flushPendingJournalSave() {
+  if (journalSaveTimer) {
+    window.clearTimeout(journalSaveTimer);
+    journalSaveTimer = null;
+  }
+  if (day.value && journalDraft.value !== day.value.journalText) {
+    await saveJournalNow();
+  }
+}
+
+async function selectJournalDate(date: string, options: { openToday?: boolean } = {}) {
+  const normalizedDate = normalizeLocalDateInput(date);
+  if (!normalizedDate) return;
+  await flushPendingJournalSave();
+  selectedDate.value = normalizedDate;
+  datePickerOpen.value = false;
+  if (options.openToday) setSection("today");
+}
+
+function handleDatePickerChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  void selectJournalDate(input.value);
+}
+
+function pickToday() {
+  void selectJournalDate(todayKey());
+}
+
+function openJournalArchive() {
+  selectedArchiveDate.value = selectedDate.value;
+  datePickerOpen.value = false;
+  setSection("journalArchive");
+}
+
+function openSelectedArchiveEntry() {
+  if (!selectedArchiveEntry.value) return;
+  void selectJournalDate(selectedArchiveEntry.value.date, { openToday: true });
+}
+
 function setSection(section: MissionSection) {
   activeSection.value = section;
   settingsMenuOpen.value = false;
   void router.replace({
     query: {
       ...route.query,
-      section: section === "today" ? undefined : section,
+      section: section === "today" ? undefined : sectionQueryValue(section),
     },
   });
 }
@@ -562,7 +659,7 @@ async function addProject() {
 }
 
 function moveDay(delta: number) {
-  selectedDate.value = addDays(selectedDate.value, delta);
+  void selectJournalDate(addDays(selectedDate.value, delta));
 }
 
 function chooseType(type: MissionCaptureType) {
@@ -713,6 +810,18 @@ function formatDaySwitcherDate(value: string): string {
   }).format(date);
 }
 
+function formatArchiveDate(value: string): string {
+  if (value === todayKey()) return "Today";
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
 function formatShortDate(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -776,14 +885,24 @@ function todayKey(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function sectionQueryValue(section: MissionSection): string {
+  if (section === "journalArchive") return "journal-archive";
+  return section;
+}
+
 function normalizeSection(value: unknown): MissionSection {
   const raw = Array.isArray(value) ? value[0] : value;
   if (raw === "journal") return "today";
+  if (raw === "archive" || raw === "journal-archive") return "journalArchive";
   if (raw === "approvals" || raw === "runs") return "activity";
   return sectionIds.includes(raw as MissionSection) ? (raw as MissionSection) : "today";
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && datePickerOpen.value) {
+    datePickerOpen.value = false;
+    return;
+  }
   if (event.key === "Escape" && schedulePickerOpen.value) {
     closeSchedulePicker();
     return;
@@ -827,8 +946,13 @@ watch(
   },
 );
 
+watch(activeSection, (section) => {
+  if (section === "journalArchive") void loadJournalArchive();
+});
+
 onMounted(() => {
   void loadOverview();
+  if (activeSection.value === "journalArchive") void loadJournalArchive();
   window.addEventListener("keydown", handleWindowKeydown);
 });
 
@@ -858,17 +982,39 @@ onBeforeUnmount(() => {
         v-if="activeSection === 'today'"
         class="mission-control__day-switcher"
         aria-label="Selected day"
+        @click.stop
       >
         <button type="button" class="icon-button" aria-label="Previous day" @click="moveDay(-1)">
           <UiIcon name="ChevronLeft" :size="18" />
         </button>
-        <div class="mission-control__day-label">
+        <button
+          type="button"
+          class="mission-control__day-label"
+          :aria-expanded="datePickerOpen"
+          aria-haspopup="dialog"
+          aria-label="Choose journal date"
+          @click="datePickerOpen = !datePickerOpen"
+        >
           <strong>{{ selectedDateLabel }}</strong>
-          <span>{{ selectedDate }}</span>
-        </div>
+          <UiIcon name="CalendarDays" :size="14" aria-hidden="true" />
+        </button>
         <button type="button" class="icon-button" aria-label="Next day" @click="moveDay(1)">
           <UiIcon name="ChevronRight" :size="18" />
         </button>
+        <div v-if="datePickerOpen" class="date-picker-popover" role="dialog" aria-label="Choose journal date">
+          <label class="field date-picker-popover__field">
+            <span>Date</span>
+            <input :value="selectedDate" type="date" @change="handleDatePickerChange" />
+          </label>
+          <div class="date-picker-popover__actions">
+            <button type="button" class="text-button" @click="pickToday">
+              Today
+            </button>
+            <button type="button" class="text-button text-button--primary" @click="openJournalArchive">
+              View archive
+            </button>
+          </div>
+        </div>
       </div>
       <div v-else class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
@@ -882,7 +1028,7 @@ onBeforeUnmount(() => {
           aria-label="Mission Control settings"
           :aria-expanded="settingsMenuOpen"
           aria-haspopup="menu"
-          @click="settingsMenuOpen = !settingsMenuOpen"
+          @click="settingsMenuOpen = !settingsMenuOpen; datePickerOpen = false"
         >
           <UiIcon name="Settings" :size="18" />
         </button>
@@ -1058,6 +1204,51 @@ onBeforeUnmount(() => {
             placeholder="Journal entry field..."
           />
         </section>
+      </div>
+    </section>
+
+    <section v-show="activeSection === 'journalArchive'" class="mission-page">
+      <div class="archive-sheet">
+        <div class="simple-sheet__header">
+          <h1>Journal archive</h1>
+        </div>
+
+        <div v-if="journalArchiveLoading" class="empty-row">Loading archive...</div>
+        <div v-else-if="journalArchiveError" class="empty-row is-error">
+          {{ journalArchiveError }}
+        </div>
+        <div v-else-if="journalArchiveEntries.length === 0" class="empty-row">
+          No journal entries yet.
+        </div>
+        <div v-else class="journal-archive">
+          <div class="journal-archive__list" aria-label="Journal entries">
+            <button
+              v-for="entry in journalArchiveEntries"
+              :key="entry.id"
+              type="button"
+              class="journal-archive__row"
+              :class="{ 'is-active': selectedArchiveEntry?.id === entry.id }"
+              @click="selectedArchiveDate = entry.date"
+            >
+              <strong>{{ formatArchiveDate(entry.date) }}</strong>
+              <span>{{ entry.preview }}</span>
+            </button>
+          </div>
+
+          <article v-if="selectedArchiveEntry" class="journal-archive__preview">
+            <div class="journal-archive__preview-header">
+              <h2>{{ formatArchiveDate(selectedArchiveEntry.date) }}</h2>
+              <button
+                type="button"
+                class="text-button"
+                @click="openSelectedArchiveEntry"
+              >
+                Open entry
+              </button>
+            </div>
+            <p>{{ selectedArchiveEntry.journalText }}</p>
+          </article>
+        </div>
       </div>
     </section>
 
@@ -1377,6 +1568,7 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__section-tab,
+.mission-control__day-label,
 .type-button,
 .icon-button,
 .text-button,
@@ -1405,8 +1597,9 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__day-switcher {
+  position: relative;
   display: grid;
-  grid-template-columns: 34px minmax(128px, 190px) 34px;
+  grid-template-columns: 34px minmax(112px, 176px) 34px;
   align-items: center;
   justify-self: center;
   gap: 4px;
@@ -1421,17 +1614,26 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__day-label {
-  display: grid;
-  justify-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-width: 0;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: var(--ui-radius-sm);
   line-height: 1.2;
+}
+
+.mission-control__day-label:hover,
+.mission-control__day-label[aria-expanded="true"] {
+  background: var(--ui-surface-muted);
 }
 
 .mission-control__day-label strong {
   font-size: 15px;
 }
 
-.mission-control__day-label span,
 .capture-item__meta,
 .detail-row p,
 .daemon-summary p,
@@ -1514,6 +1716,32 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted);
 }
 
+.date-picker-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  z-index: 30;
+  display: grid;
+  width: 260px;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  box-shadow: 0 18px 50px color-mix(in oklab, #000, transparent 86%);
+  transform: translateX(-50%);
+}
+
+.date-picker-popover__field {
+  font-weight: 600;
+}
+
+.date-picker-popover__actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .mission-control__message {
   width: min(700px, 100%);
   padding: 8px 12px;
@@ -1540,6 +1768,12 @@ onBeforeUnmount(() => {
   display: grid;
   width: min(700px, 100%);
   gap: 20px;
+}
+
+.archive-sheet {
+  display: grid;
+  width: min(920px, 100%);
+  gap: 0;
 }
 
 .simple-sheet--wide {
@@ -1752,6 +1986,10 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
+.empty-row.is-error {
+  color: #b91c1c;
+}
+
 .journal-sheet {
   gap: 12px;
 }
@@ -1859,6 +2097,90 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.journal-archive {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 28px;
+  min-width: 0;
+}
+
+.journal-archive__list {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+}
+
+.journal-archive__row {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--ui-border);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.journal-archive__row:hover,
+.journal-archive__row.is-active {
+  color: var(--ui-accent);
+}
+
+.journal-archive__row strong {
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journal-archive__row span {
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journal-archive__preview {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+  padding-left: 28px;
+  border-left: 1px solid var(--ui-border);
+}
+
+.journal-archive__preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.journal-archive__preview h2 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journal-archive__preview p {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1.65;
+  white-space: pre-wrap;
 }
 
 .inline-form {
@@ -2100,6 +2422,16 @@ onBeforeUnmount(() => {
   .detail-row__aside {
     align-items: flex-start;
     text-align: left;
+  }
+
+  .journal-archive {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .journal-archive__preview {
+    padding-left: 0;
+    border-left: 0;
   }
 
   .memory-row__actions {

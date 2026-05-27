@@ -280,6 +280,12 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       auth: "owner",
     },
     {
+      id: "mission.journal_archive.api",
+      path: "/api/mission-control/journal-archive",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
       id: "mission.capture.api",
       path: "/api/mission-control/capture",
       methods: ["GET", "POST"],

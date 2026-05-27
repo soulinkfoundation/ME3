@@ -324,6 +324,26 @@ export async function getMissionDay(env: Env, userId: string, date: string) {
   };
 }
 
+export async function listMissionJournalEntries(
+  env: Env,
+  userId: string,
+  options: { limit?: unknown } = {},
+) {
+  const limit = normalizeListLimit(options.limit, 100);
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, date, title, journal_text, created_at, updated_at
+     FROM mission_daily_notes
+     WHERE user_id = ?
+       AND LENGTH(TRIM(REPLACE(REPLACE(journal_text, char(10), ' '), char(13), ' '))) > 0
+     ORDER BY date DESC
+     LIMIT ?`,
+  )
+    .bind(userId, limit)
+    .all<MissionDailyNoteRow>();
+
+  return (rows.results || []).map(serializeJournalEntry);
+}
+
 export async function updateMissionDay(
   env: Env,
   userId: string,
@@ -1517,6 +1537,16 @@ function serializeDay(row: MissionDailyNoteRow) {
   };
 }
 
+function serializeJournalEntry(row: MissionDailyNoteRow) {
+  const text = row.journal_text || "";
+  return {
+    id: row.id,
+    date: row.date,
+    preview: journalPreview(text),
+    journalText: text,
+  };
+}
+
 function serializeCapture(row: MissionCaptureRow) {
   return {
     id: row.id,
@@ -1794,6 +1824,16 @@ function normalizePriority(value: unknown, fallback = 3): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(5, Math.round(parsed)));
+}
+
+function normalizeListLimit(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(100, Math.round(parsed)));
+}
+
+function journalPreview(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
 function normalizeConfidence(value: unknown): number {

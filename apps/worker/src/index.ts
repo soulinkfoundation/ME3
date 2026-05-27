@@ -70,6 +70,7 @@ import {
   listMissionAgentRuns,
   listMissionApprovals,
   listMissionContextSources,
+  listMissionJournalEntries,
   listMissionMemory,
   listMissionPluginActivity,
   listMissionProjects,
@@ -945,6 +946,23 @@ app.get("/api/mission-control/days/:date", async (c) => {
 
   try {
     return c.json(await getMissionDay(c.env, ownerId, c.req.param("date")));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/journal-archive", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json({
+      entries: await listMissionJournalEntries(c.env, ownerId, {
+        limit: c.req.query("limit"),
+      }),
+    });
   } catch (error) {
     return missionControlErrorResponse(c, error);
   }
