@@ -1,27 +1,40 @@
 #!/usr/bin/env node
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
+import {
+  D1_PLACEHOLDER,
+  DEFAULT_INSTALL_MANIFEST,
+  createInstallManifest,
+  getD1Config,
+  getR2BucketName,
+  isValidDatabaseId,
+  isValidResourceName,
+  prepareDeployConfig,
+  writeInstallManifest,
+} from "./lib/deploy-config.mjs";
 
 const DEFAULT_CONFIG = "wrangler.toml";
 const DEFAULT_DB_NAME = "me3-core-db";
 const DEFAULT_BUCKET = "me3-site-assets";
-const D1_PLACEHOLDER = "replace-with-generated-d1-id";
 
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
+const manifestPath = args.manifest || DEFAULT_INSTALL_MANIFEST;
 
 if (!existsSync(configPath)) {
   fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
 }
 
 const originalConfig = readFileSync(configPath, "utf8");
-let config = originalConfig;
-const db = getD1Config(config);
+const db = getD1Config(originalConfig);
 const dbName = args.dbName || db.databaseName || DEFAULT_DB_NAME;
-const bucketName = args.bucket || getR2BucketName(config) || DEFAULT_BUCKET;
+const bucketName = args.bucket || getR2BucketName(originalConfig) || DEFAULT_BUCKET;
+const workerName = args.workerName || getWorkerName(originalConfig) || "me3-core-worker";
+let databaseId = "";
 
 if (!isValidResourceName(dbName)) {
   fail(`Invalid D1 database name "${dbName}". Use lowercase letters, numbers, and hyphens.`);
@@ -31,12 +44,17 @@ if (!isValidResourceName(bucketName)) {
   fail(`Invalid R2 bucket name "${bucketName}". Use lowercase letters, numbers, and hyphens.`);
 }
 
+if (!isValidResourceName(workerName)) {
+  fail(`Invalid Worker name "${workerName}". Use lowercase letters, numbers, and hyphens.`);
+}
+
 if (args.dbId && !isValidDatabaseId(args.dbId)) {
   fail(`Invalid D1 database id "${args.dbId}". Expected a UUID from \`wrangler d1 list\`.`);
 }
 
 console.log("Preparing ME3 Core for a manual Cloudflare deploy.");
 console.log(`Wrangler config: ${configPath}`);
+console.log(`Install manifest: ${manifestPath}`);
 
 if (!args.yes) {
   await confirm("This will create or reuse Cloudflare D1/R2 resources and put Worker secrets. Continue?");
@@ -47,9 +65,12 @@ runWrangler(["whoami"], {
 });
 
 if (args.dbId) {
-  config = setD1Config(config, dbName, args.dbId);
+  databaseId = args.dbId;
   console.log(`Configured DB -> ${dbName} (${args.dbId})`);
-} else if (!db.databaseId || db.databaseId === D1_PLACEHOLDER) {
+} else if (db.databaseId && db.databaseId !== D1_PLACEHOLDER) {
+  databaseId = db.databaseId;
+  console.log(`Configured DB already present -> ${db.databaseName} (${db.databaseId})`);
+} else {
   const createOutput = runWrangler(["d1", "create", dbName], {
     allowAlreadyExists: true,
     failureMessage: "Could not create the D1 database.",
@@ -63,10 +84,8 @@ if (args.dbId) {
     );
   }
 
-  config = setD1Config(config, dbName, createdDatabaseId);
+  databaseId = createdDatabaseId;
   console.log(`Configured DB -> ${dbName} (${createdDatabaseId})`);
-} else {
-  console.log(`Configured DB already present -> ${db.databaseName} (${db.databaseId})`);
 }
 
 if (!args.skipR2) {
@@ -74,21 +93,34 @@ if (!args.skipR2) {
     allowAlreadyExists: true,
     failureMessage: "Could not create the R2 bucket.",
   });
-  config = setR2BucketName(config, bucketName);
   console.log(`Configured SITE_ASSETS -> ${bucketName}`);
 }
 
-if (config !== originalConfig) {
-  writeFileSync(configPath, config);
-  console.log(`Updated ${configPath}.`);
-} else {
-  console.log(`${configPath} already has the needed resource bindings.`);
-}
+const now = new Date().toISOString();
+await writeInstallManifest(
+  path.resolve(manifestPath),
+  createInstallManifest({
+    workerName,
+    databaseName: dbName,
+    databaseId,
+    bucketName,
+    createdAt: now,
+    updatedAt: now,
+  }),
+);
+
+console.log(`Updated ${manifestPath}.`);
+
+const preparedConfig = await prepareDeployConfig({
+  templateConfig: configPath,
+  manifest: manifestPath,
+});
+console.log(`Generated ${preparedConfig.configPathRelative}.`);
 
 if (!args.skipSecrets) {
   const setupPassword = args.setupPassword || randomBytes(16).toString("hex");
 
-  putSecret("SETUP_PASSWORD", setupPassword);
+  putSecret("SETUP_PASSWORD", setupPassword, preparedConfig.configPath);
 
   console.log("");
   console.log("Remote standalone setup password secret is set.");
@@ -99,17 +131,19 @@ if (!args.skipSecrets) {
 console.log("");
 console.log("Next:");
 console.log("  pnpm deploy");
-console.log("  pnpm exec wrangler deployments status --config wrangler.toml");
+console.log(`  pnpm exec wrangler deployments status --config ${preparedConfig.configPathRelative}`);
 
 function parseArgs(values) {
   const parsed = {
     setupPassword: "",
     bucket: "",
     config: "",
+    manifest: "",
     dbId: "",
     dbName: "",
     skipR2: false,
     skipSecrets: false,
+    workerName: "",
     yes: false,
   };
 
@@ -138,6 +172,11 @@ function parseArgs(values) {
       index += 1;
     } else if (value.startsWith("--config=")) {
       parsed.config = value.slice("--config=".length);
+    } else if (value === "--manifest") {
+      parsed.manifest = values[index + 1] || "";
+      index += 1;
+    } else if (value.startsWith("--manifest=")) {
+      parsed.manifest = value.slice("--manifest=".length);
     } else if (value === "--db-name") {
       parsed.dbName = values[index + 1] || "";
       index += 1;
@@ -148,6 +187,11 @@ function parseArgs(values) {
       index += 1;
     } else if (value.startsWith("--db-id=")) {
       parsed.dbId = value.slice("--db-id=".length);
+    } else if (value === "--worker-name") {
+      parsed.workerName = values[index + 1] || "";
+      index += 1;
+    } else if (value.startsWith("--worker-name=")) {
+      parsed.workerName = value.slice("--worker-name=".length);
     } else {
       fail(`Unknown option: ${value}`);
     }
@@ -186,78 +230,13 @@ function runWrangler(commandArgs, options = {}) {
   fail(options.failureMessage || `Wrangler command failed: wrangler ${commandArgs.join(" ")}`);
 }
 
-function putSecret(name, value) {
-  runWrangler(["secret", "put", name, "--config", configPath], {
+function putSecret(name, value, deployConfigPath) {
+  runWrangler(["secret", "put", name, "--config", deployConfigPath], {
     input: `${value}\n`,
     failureMessage:
       `Could not put the ${name} Worker secret. ` +
-      `You can set it later with \`pnpm exec wrangler secret put ${name} --config ${configPath}\`.`,
+      `You can set it later with \`pnpm exec wrangler secret put ${name} --config ${deployConfigPath}\`.`,
   });
-}
-
-function getD1Config(value) {
-  const block = value.match(
-    /\n\[\[d1_databases\]\]\n(?:(?!\n\[)[\s\S])*?binding\s*=\s*"DB"(?:(?!\n\[)[\s\S])*/,
-  )?.[0];
-
-  return {
-    databaseId: block?.match(/database_id\s*=\s*"([^"]+)"/)?.[1] || "",
-    databaseName: block?.match(/database_name\s*=\s*"([^"]+)"/)?.[1] || "",
-  };
-}
-
-function setD1Config(value, databaseName, databaseId) {
-  const blockPattern =
-    /\n\[\[d1_databases\]\]\n(?:(?!\n\[)[\s\S])*?binding\s*=\s*"DB"(?:(?!\n\[)[\s\S])*/;
-
-  if (!blockPattern.test(value)) {
-    fail(`Could not find a [[d1_databases]] block with binding = "DB" in ${configPath}.`);
-  }
-
-  return value.replace(blockPattern, (block) => {
-    let next = setTomlString(block, "database_name", databaseName);
-    next = setTomlString(next, "database_id", databaseId);
-    return next;
-  });
-}
-
-function getR2BucketName(value) {
-  const block = value.match(
-    /\n\[\[r2_buckets\]\]\n(?:(?!\n\[)[\s\S])*?binding\s*=\s*"SITE_ASSETS"(?:(?!\n\[)[\s\S])*/,
-  )?.[0];
-  return block?.match(/bucket_name\s*=\s*"([^"]+)"/)?.[1] || "";
-}
-
-function setR2BucketName(value, bucketName) {
-  const blockPattern =
-    /\n\[\[r2_buckets\]\]\n(?:(?!\n\[)[\s\S])*?binding\s*=\s*"SITE_ASSETS"(?:(?!\n\[)[\s\S])*/;
-
-  if (blockPattern.test(value)) {
-    return value.replace(blockPattern, (block) => setTomlString(block, "bucket_name", bucketName));
-  }
-
-  const activeBlock = [
-    "",
-    "# Core file storage for site media and future plugin-owned files.",
-    "[[r2_buckets]]",
-    'binding = "SITE_ASSETS"',
-    `bucket_name = "${bucketName}"`,
-  ].join("\n");
-  const assetsIndex = value.indexOf("\n[assets]");
-
-  if (assetsIndex !== -1) {
-    return `${value.slice(0, assetsIndex)}${activeBlock}\n${value.slice(assetsIndex)}`;
-  }
-
-  return `${value.trimEnd()}${activeBlock}\n`;
-}
-
-function setTomlString(block, key, value) {
-  const pattern = new RegExp(`${key}\\s*=\\s*"[^"]*"`);
-  if (pattern.test(block)) {
-    return block.replace(pattern, `${key} = "${value}"`);
-  }
-  return `${block.trimEnd()}\n${key} = "${value}"\n`;
 }
 
 function parseDatabaseId(text) {
@@ -269,12 +248,8 @@ function parseDatabaseId(text) {
   );
 }
 
-function isValidResourceName(value) {
-  return /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(value);
-}
-
-function isValidDatabaseId(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+function getWorkerName(value) {
+  return value.match(/^name\s*=\s*"([^"]+)"/m)?.[1] || "";
 }
 
 function fail(message) {

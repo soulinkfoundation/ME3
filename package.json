@@ -10,6 +10,7 @@
     "dev:worker": "pnpm --filter @me3-core/worker dev",
     "dev:web": "pnpm --filter @me3/web dev",
     "init:cloudflare": "node scripts/init-cloudflare.mjs",
+    "deploy:config": "node scripts/prepare-deploy-config.mjs",
     "generate:llms": "node scripts/generate-llms.mjs",
     "update:check": "node scripts/check-updates.mjs",
     "setup:dev-vars": "node scripts/create-dev-vars.mjs",
@@ -17,9 +18,9 @@
     "verify:local-boot": "node scripts/verify-local-boot.mjs",
     "build": "pnpm generate:llms && pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
-    "deploy": "pnpm storage:r2:provision --yes && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
-    "deploy:d1-only": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
+    "db:migrations:apply": "node scripts/apply-migrations.mjs",
+    "deploy": "pnpm storage:r2:provision --yes && pnpm build && pnpm db:migrations:apply && node scripts/deploy-worker.mjs",
+    "deploy:d1-only": "pnpm build && pnpm db:migrations:apply && node scripts/deploy-worker.mjs"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

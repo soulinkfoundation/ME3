@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import {
+  DEFAULT_INSTALL_MANIFEST,
+  prepareDeployConfig,
+  readInstallManifest,
+} from "./lib/deploy-config.mjs";
 
 const DEFAULT_BUCKET = "me3-site-assets";
 const DEFAULT_CONFIG = "wrangler.toml";
@@ -10,18 +16,28 @@ const BINDING = "SITE_ASSETS";
 
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
+const manifestPath = args.manifest || DEFAULT_INSTALL_MANIFEST;
 
 if (!existsSync(configPath)) {
   fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
 }
 
 const before = readFileSync(configPath, "utf8");
+const installManifest = await readInstallManifest(path.resolve(manifestPath));
 const existingBucketName = getExistingR2BucketName(before);
 const bucketName =
+  installManifest?.r2?.bucketName ||
   args.bucket ||
   process.env.ME3_R2_BUCKET_NAME ||
   existingBucketName ||
   (args.yes ? DEFAULT_BUCKET : await promptBucketName());
+
+if (installManifest?.r2?.bucketName && args.bucket && installManifest.r2.bucketName !== args.bucket) {
+  fail(
+    `Install manifest already uses R2 bucket ${installManifest.r2.bucketName}. ` +
+      `Update ${manifestPath} or rerun pnpm init:cloudflare if you want to change it.`,
+  );
+}
 
 if (!isValidBucketName(bucketName)) {
   fail(
@@ -31,6 +47,16 @@ if (!isValidBucketName(bucketName)) {
 
 if (!args.skipCreate) {
   runWrangler(["r2", "bucket", "create", bucketName]);
+}
+
+if (installManifest) {
+  const preparedConfig = await prepareDeployConfig({
+    templateConfig: configPath,
+    manifest: manifestPath,
+  });
+  console.log(`Using ${manifestPath}; generated ${preparedConfig.configPathRelative}.`);
+  console.log("R2 large-site storage is ready for the next deploy.");
+  process.exit(0);
 }
 
 const after = ensureR2Binding(before, bucketName);
@@ -48,6 +74,7 @@ function parseArgs(values) {
   const parsed = {
     bucket: "",
     config: "",
+    manifest: "",
     yes: false,
     skipCreate: false,
   };
@@ -70,6 +97,11 @@ function parseArgs(values) {
       index += 1;
     } else if (value.startsWith("--config=")) {
       parsed.config = value.slice("--config=".length);
+    } else if (value === "--manifest") {
+      parsed.manifest = values[index + 1] || "";
+      index += 1;
+    } else if (value.startsWith("--manifest=")) {
+      parsed.manifest = value.slice("--manifest=".length);
     } else {
       fail(`Unknown option: ${value}`);
     }
