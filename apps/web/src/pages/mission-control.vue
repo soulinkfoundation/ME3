@@ -279,6 +279,7 @@ const journalDraft = ref("");
 const journalState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const datePickerOpen = ref(false);
 const datePickerMonth = ref(monthKey(selectedDate.value));
+const projectPickerOpen = ref(false);
 const journalArchiveEntries = ref<MissionJournalArchiveEntry[]>([]);
 const journalArchiveLoading = ref(false);
 const journalArchiveError = ref("");
@@ -410,8 +411,8 @@ const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
     tasks: selectedProjectTasks.value.filter((task) => task.status === column.id),
   })),
 );
-const selectedProjectOpenTaskCount = computed(
-  () => selectedProjectTasks.value.filter((task) => task.status !== "done").length,
+const selectedProjectDetailLabel = computed(
+  () => selectedProjectDetail.value?.name || "Projects",
 );
 const projectTaskCreateDisabled = computed(
   () => projectTaskSaving.value || !projectTaskDraft.value.trim() || !selectedProjectDetail.value,
@@ -637,6 +638,7 @@ function toggleDatePicker() {
     datePickerMonth.value = monthKey(selectedDate.value);
   }
   settingsMenuOpen.value = false;
+  projectPickerOpen.value = false;
   datePickerOpen.value = !datePickerOpen.value;
 }
 
@@ -663,9 +665,22 @@ function openSelectedArchiveEntry() {
   void selectJournalDate(selectedArchiveEntry.value.date, { openToday: true });
 }
 
+function toggleProjectPicker() {
+  datePickerOpen.value = false;
+  settingsMenuOpen.value = false;
+  projectPickerOpen.value = !projectPickerOpen.value;
+}
+
+function selectProjectDetail(projectId: string) {
+  selectedProjectDetailId.value = projectId;
+  projectPickerOpen.value = false;
+}
+
 function setSection(section: MissionSection) {
   activeSection.value = section;
   settingsMenuOpen.value = false;
+  datePickerOpen.value = false;
+  projectPickerOpen.value = false;
   void router.replace({
     query: {
       ...route.query,
@@ -675,6 +690,7 @@ function setSection(section: MissionSection) {
 }
 
 function openProjectModal() {
+  projectPickerOpen.value = false;
   projectTitle.value = "";
   projectDescription.value = "";
   projectLogoData.value = "";
@@ -940,10 +956,6 @@ function projectName(projectId: string | null): string {
   return projects.value.find((project) => project.id === projectId)?.name || "Personal";
 }
 
-function projectInitial(project: MissionProject): string {
-  return project.name.trim().charAt(0).toUpperCase() || "P";
-}
-
 function previousTaskStatus(status: MissionTask["status"]): MissionTask["status"] {
   if (status === "done") return "review";
   if (status === "review") return "in_progress";
@@ -955,11 +967,6 @@ function nextTaskStatus(status: MissionTask["status"]): MissionTask["status"] {
   if (status === "backlog") return "in_progress";
   if (status === "in_progress") return "review";
   return "done";
-}
-
-function isProjectLogo(value: string | null): boolean {
-  if (!value) return false;
-  return /^data:image\//.test(value) || /^https?:\/\//.test(value);
 }
 
 function formatDateTime(value: string | null): string {
@@ -1123,6 +1130,10 @@ function normalizeSection(value: unknown): MissionSection {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && projectPickerOpen.value) {
+    projectPickerOpen.value = false;
+    return;
+  }
   if (event.key === "Escape" && datePickerOpen.value) {
     datePickerOpen.value = false;
     return;
@@ -1140,6 +1151,7 @@ function handleWindowKeydown(event: KeyboardEvent) {
 
 function handleWindowClick() {
   datePickerOpen.value = false;
+  projectPickerOpen.value = false;
 }
 
 watch(captureText, (text) => {
@@ -1286,6 +1298,51 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      <div
+        v-else-if="activeSection === 'projects'"
+        class="mission-control__project-switcher"
+        aria-label="Selected project"
+        @click.stop
+      >
+        <button
+          type="button"
+          class="mission-control__project-label"
+          :aria-expanded="projectPickerOpen"
+          aria-haspopup="dialog"
+          aria-label="Choose project"
+          @click="toggleProjectPicker"
+        >
+          <strong>{{ selectedProjectDetailLabel }}</strong>
+        </button>
+        <div
+          v-if="projectPickerOpen"
+          class="project-picker-popover"
+          role="dialog"
+          aria-label="Choose project"
+        >
+          <button
+            v-for="project in projects"
+            :key="project.id"
+            type="button"
+            class="project-picker-popover__item"
+            :class="{ 'is-active': selectedProjectDetail?.id === project.id }"
+            @click="selectProjectDetail(project.id)"
+          >
+            {{ project.name }}
+          </button>
+          <div v-if="projects.length === 0" class="project-picker-popover__empty">
+            No projects yet.
+          </div>
+          <button
+            type="button"
+            class="text-button text-button--primary project-picker-popover__add"
+            @click="openProjectModal"
+          >
+            <UiIcon name="Plus" :size="15" />
+            Add project
+          </button>
+        </div>
+      </div>
       <div v-else class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
       </div>
@@ -1298,7 +1355,7 @@ onBeforeUnmount(() => {
           aria-label="Mission Control settings"
           :aria-expanded="settingsMenuOpen"
           aria-haspopup="menu"
-          @click="settingsMenuOpen = !settingsMenuOpen; datePickerOpen = false"
+          @click="settingsMenuOpen = !settingsMenuOpen; datePickerOpen = false; projectPickerOpen = false"
         >
           <UiIcon name="Settings" :size="18" />
         </button>
@@ -1523,62 +1580,9 @@ onBeforeUnmount(() => {
 
     <section v-show="activeSection === 'projects'" class="mission-page">
       <div class="projects-workspace">
-        <div class="project-tabs" role="tablist" aria-label="Projects">
-          <button
-            v-for="project in projects"
-            :key="project.id"
-            type="button"
-            class="project-tab"
-            :class="{ 'is-active': selectedProjectDetail?.id === project.id }"
-            role="tab"
-            :aria-selected="selectedProjectDetail?.id === project.id"
-            @click="selectedProjectDetailId = project.id"
-          >
-            <span class="project-tab__logo" aria-hidden="true">
-              <img
-                v-if="isProjectLogo(project.icon)"
-                :src="project.icon || ''"
-                :alt="`${project.name} logo`"
-              />
-              <span v-else>{{ projectInitial(project) }}</span>
-            </span>
-            <span>{{ project.name }}</span>
-          </button>
-          <button
-            type="button"
-            class="project-tab project-tab--add"
-            aria-label="Add project"
-            title="Add project"
-            @click="openProjectModal"
-          >
-            <UiIcon name="Plus" :size="18" />
-          </button>
-        </div>
-
         <div v-if="!selectedProjectDetail" class="empty-row">No projects yet.</div>
 
         <template v-else>
-          <section class="project-detail">
-            <div class="project-detail__identity">
-              <div class="project-row__logo project-detail__logo" aria-hidden="true">
-                <img
-                  v-if="isProjectLogo(selectedProjectDetail.icon)"
-                  :src="selectedProjectDetail.icon || ''"
-                  :alt="`${selectedProjectDetail.name} logo`"
-                />
-                <span v-else>{{ projectInitial(selectedProjectDetail) }}</span>
-              </div>
-              <div>
-                <h1>{{ selectedProjectDetail.name }}</h1>
-                <p>{{ selectedProjectDetail.description || "No description yet." }}</p>
-              </div>
-            </div>
-            <div>
-              <span class="status-badge">{{ selectedProjectDetail.status }}</span>
-              <span>{{ selectedProjectOpenTaskCount }} open</span>
-            </div>
-          </section>
-
           <form class="project-task-form" @submit.prevent="addProjectTask">
             <input
               v-model="projectTaskDraft"
@@ -1939,6 +1943,7 @@ onBeforeUnmount(() => {
 
 .mission-control__section-tab,
 .mission-control__day-label,
+.mission-control__project-label,
 .type-button,
 .icon-button,
 .text-button,
@@ -1983,7 +1988,15 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
-.mission-control__day-label {
+.mission-control__project-switcher {
+  position: relative;
+  display: grid;
+  justify-self: center;
+  min-width: 0;
+}
+
+.mission-control__day-label,
+.mission-control__project-label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1996,12 +2009,22 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__day-label:hover,
-.mission-control__day-label[aria-expanded="true"] {
+.mission-control__day-label[aria-expanded="true"],
+.mission-control__project-label:hover,
+.mission-control__project-label[aria-expanded="true"] {
   background: var(--ui-surface-muted);
 }
 
-.mission-control__day-label strong {
+.mission-control__day-label strong,
+.mission-control__project-label strong {
+  overflow: hidden;
   font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-control__project-label {
+  max-width: min(260px, calc(100vw - 120px));
 }
 
 .capture-item__meta,
@@ -2176,6 +2199,60 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   gap: 8px;
+}
+
+.project-picker-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  z-index: 30;
+  display: grid;
+  width: min(280px, calc(100vw - 28px));
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  box-shadow: 0 18px 50px color-mix(in oklab, #000, transparent 86%);
+  transform: translateX(-50%);
+}
+
+.project-picker-popover__item {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.project-picker-popover__item:hover,
+.project-picker-popover__item.is-active {
+  background: var(--ui-surface-muted);
+}
+
+.project-picker-popover__empty {
+  padding: 10px;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+}
+
+.project-picker-popover__add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 .mission-control__message {
@@ -2515,147 +2592,6 @@ onBeforeUnmount(() => {
   color: var(--ui-accent);
   font-size: 12px;
   font-weight: 700;
-}
-
-.project-row__logo {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  overflow: hidden;
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-  color: var(--ui-accent);
-  font-size: 14px;
-  font-weight: 750;
-}
-
-.project-row__logo img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.project-tabs {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 6px;
-  min-width: 0;
-  overflow-x: auto;
-  padding-bottom: 2px;
-}
-
-.project-tab {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 8px;
-  min-height: 38px;
-  max-width: 220px;
-  padding: 6px 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.project-tab:hover,
-.project-tab.is-active {
-  border-color: transparent;
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
-}
-
-.project-tab > span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-tab__logo {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  overflow: hidden;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-muted);
-  color: var(--ui-accent);
-  font-size: 11px;
-  font-weight: 750;
-}
-
-.project-tab__logo img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.project-tab--add {
-  width: 38px;
-  justify-content: center;
-  padding: 0;
-  color: var(--ui-text);
-}
-
-.project-detail {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  min-width: 0;
-  padding: 10px 0 16px;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.project-detail__identity {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.project-detail__identity > div:last-child {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.project-detail__logo {
-  width: 44px;
-  height: 44px;
-}
-
-.project-detail h1 {
-  margin: 0;
-  overflow: hidden;
-  font-size: 18px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-detail p {
-  margin: 0;
-  color: var(--ui-text-muted);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.project-detail > div:last-child {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
 }
 
 .project-task-form {
@@ -3056,14 +2992,6 @@ onBeforeUnmount(() => {
   .detail-row__aside {
     align-items: flex-start;
     text-align: left;
-  }
-
-  .project-detail {
-    flex-direction: column;
-  }
-
-  .project-detail > div:last-child {
-    flex-wrap: wrap;
   }
 
   .project-board {
