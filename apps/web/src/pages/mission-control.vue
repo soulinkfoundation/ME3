@@ -2303,7 +2303,9 @@ onBeforeUnmount(() => {
   left: 50%;
   z-index: 30;
   display: grid;
-  width: min(280px, calc(100vw - 28px));
+  width: 50vw;
+  min-width: min(320px, calc(100vw - 28px));
+  max-width: calc(100vw - 28px);
   gap: 4px;
   padding: 6px;
   border: 1px solid var(--ui-border);
