@@ -199,6 +199,14 @@ type ActivityViewItem = {
   createdAt: string;
 };
 
+type DatePickerCell = {
+  date: string;
+  day: number;
+  inMonth: boolean;
+  isSelected: boolean;
+  isToday: boolean;
+};
+
 const route = useRoute();
 const router = useRouter();
 
@@ -256,6 +264,7 @@ const scheduleDateTime = ref("");
 const journalDraft = ref("");
 const journalState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const datePickerOpen = ref(false);
+const datePickerMonth = ref(monthKey(selectedDate.value));
 const journalArchiveEntries = ref<MissionJournalArchiveEntry[]>([]);
 const journalArchiveLoading = ref(false);
 const journalArchiveError = ref("");
@@ -276,6 +285,10 @@ let journalSaveTimer: number | null = null;
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
 const selectedDateLabel = computed(() =>
   currentDateIsToday.value ? "Today" : formatDaySwitcherDate(selectedDate.value),
+);
+const datePickerMonthLabel = computed(() => formatDatePickerMonth(datePickerMonth.value));
+const datePickerCells = computed(() =>
+  buildDatePickerCells(datePickerMonth.value, selectedDate.value, todayKey()),
 );
 const activeProjectOptions = computed(() =>
   projects.value.filter((project) => project.status === "active"),
@@ -364,6 +377,7 @@ const selectedArchiveEntry = computed(
     journalArchiveEntries.value[0] ||
     null,
 );
+const datePickerWeekdays = ["M", "T", "W", "T", "F", "S", "S"];
 
 async function loadOverview() {
   loading.value = true;
@@ -552,9 +566,20 @@ async function selectJournalDate(date: string, options: { openToday?: boolean } 
   if (options.openToday) setSection("today");
 }
 
-function handleDatePickerChange(event: Event) {
-  const input = event.target as HTMLInputElement;
-  void selectJournalDate(input.value);
+function toggleDatePicker() {
+  if (!datePickerOpen.value) {
+    datePickerMonth.value = monthKey(selectedDate.value);
+  }
+  settingsMenuOpen.value = false;
+  datePickerOpen.value = !datePickerOpen.value;
+}
+
+function moveDatePickerMonth(delta: number) {
+  datePickerMonth.value = addMonths(datePickerMonth.value, delta);
+}
+
+function chooseDatePickerDay(date: string) {
+  void selectJournalDate(date);
 }
 
 function pickToday() {
@@ -822,6 +847,15 @@ function formatArchiveDate(value: string): string {
   }).format(date);
 }
 
+function formatDatePickerMonth(value: string): string {
+  const date = new Date(`${value}-01T12:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
 function formatShortDate(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -877,12 +911,55 @@ function normalizeLocalTimeInput(value: string): string {
 function addDays(dateKey: string, days: number): string {
   const [year, month, dayNumber] = dateKey.split("-").map(Number);
   const date = new Date(year, month - 1, dayNumber + days);
+  return dateToKey(date);
+}
+
+function addMonths(monthKeyValue: string, months: number): string {
+  const [year, month] = monthKeyValue.split("-").map(Number);
+  const date = new Date(year, month - 1 + months, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function buildDatePickerCells(
+  monthKeyValue: string,
+  selectedDateKey: string,
+  todayDateKey: string,
+): DatePickerCell[] {
+  const [year, month] = monthKeyValue.split("-").map(Number);
+  const first = new Date(year, month - 1, 1);
+  const leadDays = (first.getDay() + 6) % 7;
+  let cursor = new Date(year, month - 1, 1 - leadDays);
+  const cells: DatePickerCell[] = [];
+
+  for (let i = 0; i < 42; i += 1) {
+    const date = dateToKey(cursor);
+    cells.push({
+      date,
+      day: cursor.getDate(),
+      inMonth: cursor.getMonth() === month - 1,
+      isSelected: date === selectedDateKey,
+      isToday: date === todayDateKey,
+    });
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+  }
+
+  return cells;
+}
+
+function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function monthKey(dateKey: string): string {
+  const normalized = normalizeLocalDateInput(dateKey);
+  if (normalized) return normalized.slice(0, 7);
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function todayKey(): string {
   const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return dateToKey(date);
 }
 
 function sectionQueryValue(section: MissionSection): string {
@@ -931,6 +1008,7 @@ watch(selectedDate, (nextDate, previousDate) => {
   if (scheduleDateTime.value && scheduledDate.value === previousDate) {
     scheduleDateTime.value = `${nextDate}T${scheduledTime.value || "09:00"}`;
   }
+  datePickerMonth.value = monthKey(nextDate);
   void loadOverview();
 });
 
@@ -993,7 +1071,7 @@ onBeforeUnmount(() => {
           :aria-expanded="datePickerOpen"
           aria-haspopup="dialog"
           aria-label="Choose journal date"
-          @click="datePickerOpen = !datePickerOpen"
+          @click="toggleDatePicker"
         >
           <strong>{{ selectedDateLabel }}</strong>
           <UiIcon name="CalendarDays" :size="14" aria-hidden="true" />
@@ -1002,10 +1080,48 @@ onBeforeUnmount(() => {
           <UiIcon name="ChevronRight" :size="18" />
         </button>
         <div v-if="datePickerOpen" class="date-picker-popover" role="dialog" aria-label="Choose journal date">
-          <label class="field date-picker-popover__field">
-            <span>Date</span>
-            <input :value="selectedDate" type="date" @change="handleDatePickerChange" />
-          </label>
+          <div class="date-picker-popover__header">
+            <button
+              type="button"
+              class="icon-button quiet"
+              aria-label="Previous month"
+              @click="moveDatePickerMonth(-1)"
+            >
+              <UiIcon name="ChevronLeft" :size="16" />
+            </button>
+            <strong>{{ datePickerMonthLabel }}</strong>
+            <button
+              type="button"
+              class="icon-button quiet"
+              aria-label="Next month"
+              @click="moveDatePickerMonth(1)"
+            >
+              <UiIcon name="ChevronRight" :size="16" />
+            </button>
+          </div>
+          <div class="date-picker-popover__weekdays" aria-hidden="true">
+            <span v-for="(weekday, index) in datePickerWeekdays" :key="`${weekday}-${index}`">
+              {{ weekday }}
+            </span>
+          </div>
+          <div class="date-picker-popover__grid" role="grid">
+            <button
+              v-for="cell in datePickerCells"
+              :key="cell.date"
+              type="button"
+              class="date-picker-popover__day"
+              :class="{
+                'is-off-month': !cell.inMonth,
+                'is-today': cell.isToday,
+                'is-selected': cell.isSelected,
+              }"
+              :aria-label="formatArchiveDate(cell.date)"
+              :aria-pressed="cell.isSelected"
+              @click="chooseDatePickerDay(cell.date)"
+            >
+              {{ cell.day }}
+            </button>
+          </div>
           <div class="date-picker-popover__actions">
             <button type="button" class="text-button" @click="pickToday">
               Today
@@ -1722,7 +1838,7 @@ onBeforeUnmount(() => {
   left: 50%;
   z-index: 30;
   display: grid;
-  width: 260px;
+  width: min(292px, calc(100vw - 28px));
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--ui-border);
@@ -1732,8 +1848,74 @@ onBeforeUnmount(() => {
   transform: translateX(-50%);
 }
 
-.date-picker-popover__field {
-  font-weight: 600;
+.date-picker-popover__header {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+.date-picker-popover__header .icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.date-picker-popover__header strong {
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.date-picker-popover__weekdays,
+.date-picker-popover__grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.date-picker-popover__weekdays span {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.date-picker-popover__day {
+  display: inline-grid;
+  width: 100%;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.date-picker-popover__day:hover {
+  background: var(--ui-surface-muted);
+}
+
+.date-picker-popover__day.is-off-month {
+  color: color-mix(in oklab, var(--ui-text-muted), transparent 35%);
+}
+
+.date-picker-popover__day.is-today:not(.is-selected) {
+  border-color: color-mix(in oklab, var(--ui-accent), transparent 30%);
+  color: var(--ui-accent);
+}
+
+.date-picker-popover__day.is-selected {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
 }
 
 .date-picker-popover__actions {
