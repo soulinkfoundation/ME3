@@ -189,6 +189,7 @@ type MissionOverviewResponse = {
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
 type MissionJournalArchiveResponse = { entries: MissionJournalArchiveEntry[] };
+type MissionTasksResponse = { tasks: MissionTask[] };
 
 type ActivityViewItem = {
   id: string;
@@ -197,6 +198,12 @@ type ActivityViewItem = {
   summary: string | null;
   status: string | null;
   createdAt: string;
+};
+
+type ProjectBoardColumn = {
+  id: MissionTask["status"];
+  label: string;
+  tasks: MissionTask[];
 };
 
 type DatePickerCell = {
@@ -237,6 +244,12 @@ const captureTypeOptions: Array<{
   { id: "reminder", icon: "Clock", label: "Reminder" },
   { id: "event", icon: "CalendarDays", label: "Event" },
 ];
+const projectBoardStatuses: Array<{ id: MissionTask["status"]; label: string }> = [
+  { id: "backlog", label: "Backlog" },
+  { id: "in_progress", label: "Doing" },
+  { id: "review", label: "Review" },
+  { id: "done", label: "Done" },
+];
 
 const selectedDate = ref(todayKey());
 const activeSection = ref<MissionSection>(normalizeSection(route.query.section));
@@ -258,6 +271,7 @@ const captureText = ref("");
 const captureType = ref<MissionCaptureType>("task");
 const manualCaptureType = ref(false);
 const selectedProjectId = ref("");
+const selectedProjectDetailId = ref("");
 const savingCapture = ref(false);
 const schedulePickerOpen = ref(false);
 const scheduleDateTime = ref("");
@@ -280,6 +294,12 @@ const projectLogoData = ref("");
 const projectLogoName = ref("");
 const projectSaving = ref(false);
 const projectError = ref("");
+const projectTasks = ref<MissionTask[]>([]);
+const projectTasksLoading = ref(false);
+const projectTasksError = ref("");
+const projectTaskDraft = ref("");
+const projectTaskSaving = ref(false);
+const projectTaskActionId = ref("");
 let journalSaveTimer: number | null = null;
 
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
@@ -371,6 +391,31 @@ const settingsSectionDescriptions: Record<SettingsMissionSection, string> = {
 const projectCreateDisabled = computed(
   () => projectSaving.value || projectTitle.value.trim().length === 0,
 );
+const selectedProjectDetail = computed(
+  () =>
+    projects.value.find((project) => project.id === selectedProjectDetailId.value) ||
+    projects.value[0] ||
+    null,
+);
+const selectedProjectTasks = computed(() => {
+  const projectId = selectedProjectDetail.value?.id;
+  if (!projectId) return [];
+  return projectTasks.value.filter(
+    (task) => task.projectId === projectId && task.status !== "cancelled",
+  );
+});
+const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
+  projectBoardStatuses.map((column) => ({
+    ...column,
+    tasks: selectedProjectTasks.value.filter((task) => task.status === column.id),
+  })),
+);
+const selectedProjectOpenTaskCount = computed(
+  () => selectedProjectTasks.value.filter((task) => task.status !== "done").length,
+);
+const projectTaskCreateDisabled = computed(
+  () => projectTaskSaving.value || !projectTaskDraft.value.trim() || !selectedProjectDetail.value,
+);
 const selectedArchiveEntry = computed(
   () =>
     journalArchiveEntries.value.find((entry) => entry.date === selectedArchiveDate.value) ||
@@ -408,6 +453,12 @@ function applyOverview(response: MissionOverviewResponse) {
   journalState.value = "idle";
   if (!selectedProjectId.value && projects.value[0]) {
     selectedProjectId.value = projects.value[0].id;
+  }
+  if (
+    !selectedProjectDetailId.value ||
+    !projects.value.some((project) => project.id === selectedProjectDetailId.value)
+  ) {
+    selectedProjectDetailId.value = projects.value[0]?.id || "";
   }
   void loadMemoryAndSources();
 }
@@ -448,6 +499,21 @@ async function loadJournalArchive() {
     selectedArchiveDate.value = "";
   } finally {
     journalArchiveLoading.value = false;
+  }
+}
+
+async function loadProjectTasks() {
+  projectTasksLoading.value = true;
+  projectTasksError.value = "";
+  try {
+    const response = await api.get<MissionTasksResponse>("/mission-control/tasks");
+    projectTasks.value = response.tasks || [];
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Project tasks could not load";
+    projectTasks.value = [];
+  } finally {
+    projectTasksLoading.value = false;
   }
 }
 
@@ -674,6 +740,7 @@ async function addProject() {
       return a.name.localeCompare(b.name);
     });
     selectedProjectId.value ||= response.project.id;
+    selectedProjectDetailId.value = response.project.id;
     notice.value = "Project added";
     projectModalOpen.value = false;
   } catch (e) {
@@ -681,6 +748,73 @@ async function addProject() {
   } finally {
     projectSaving.value = false;
   }
+}
+
+async function addProjectTask() {
+  const title = projectTaskDraft.value.trim();
+  const project = selectedProjectDetail.value;
+  if (!title || !project || projectTaskSaving.value) return;
+  projectTaskSaving.value = true;
+  projectTasksError.value = "";
+  try {
+    const response = await api.post<{ task: MissionTask }>("/mission-control/tasks", {
+      title,
+      projectId: project.id,
+      status: "backlog",
+    });
+    projectTasks.value = [response.task, ...projectTasks.value];
+    projectTaskDraft.value = "";
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not add task";
+  } finally {
+    projectTaskSaving.value = false;
+  }
+}
+
+async function setProjectTaskStatus(task: MissionTask, status: MissionTask["status"]) {
+  if (task.status === status || projectTaskActionId.value) return;
+  projectTaskActionId.value = task.id;
+  projectTasksError.value = "";
+  try {
+    const response = await api.patch<{ task: MissionTask }>(
+      `/mission-control/tasks/${encodeURIComponent(task.id)}`,
+      { status },
+    );
+    replaceProjectTask(response.task);
+    if (tasksDueToday.value.some((item) => item.id === response.task.id)) {
+      tasksDueToday.value = tasksDueToday.value.map((item) =>
+        item.id === response.task.id ? response.task : item,
+      );
+    }
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not update task";
+  } finally {
+    projectTaskActionId.value = "";
+  }
+}
+
+async function archiveProjectTask(task: MissionTask) {
+  if (projectTaskActionId.value) return;
+  projectTaskActionId.value = task.id;
+  projectTasksError.value = "";
+  try {
+    await api.delete(`/mission-control/tasks/${encodeURIComponent(task.id)}`);
+    projectTasks.value = projectTasks.value.filter((item) => item.id !== task.id);
+    tasksDueToday.value = tasksDueToday.value.filter((item) => item.id !== task.id);
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not archive task";
+  } finally {
+    projectTaskActionId.value = "";
+  }
+}
+
+function replaceProjectTask(next: MissionTask) {
+  const index = projectTasks.value.findIndex((item) => item.id === next.id);
+  if (index >= 0) projectTasks.value.splice(index, 1, next);
+  else projectTasks.value.unshift(next);
 }
 
 function moveDay(delta: number) {
@@ -808,6 +942,19 @@ function projectName(projectId: string | null): string {
 
 function projectInitial(project: MissionProject): string {
   return project.name.trim().charAt(0).toUpperCase() || "P";
+}
+
+function previousTaskStatus(status: MissionTask["status"]): MissionTask["status"] {
+  if (status === "done") return "review";
+  if (status === "review") return "in_progress";
+  if (status === "in_progress") return "backlog";
+  return "backlog";
+}
+
+function nextTaskStatus(status: MissionTask["status"]): MissionTask["status"] {
+  if (status === "backlog") return "in_progress";
+  if (status === "in_progress") return "review";
+  return "done";
 }
 
 function isProjectLogo(value: string | null): boolean {
@@ -1030,11 +1177,13 @@ watch(
 
 watch(activeSection, (section) => {
   if (section === "journalArchive") void loadJournalArchive();
+  if (section === "projects") void loadProjectTasks();
 });
 
 onMounted(() => {
   void loadOverview();
   if (activeSection.value === "journalArchive") void loadJournalArchive();
+  if (activeSection.value === "projects") void loadProjectTasks();
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener("click", handleWindowClick);
 });
@@ -1314,10 +1463,9 @@ onBeforeUnmount(() => {
         </section>
 
         <section class="journal-sheet" aria-label="Journal entry">
-          <div class="journal-editor__header">
-            <h2>Journal</h2>
-            <span v-if="journalStatusText">{{ journalStatusText }}</span>
-          </div>
+          <span v-if="journalStatusText" class="journal-editor__status">
+            {{ journalStatusText }}
+          </span>
           <textarea
             v-model="journalDraft"
             class="journal-editor__textarea"
@@ -1374,15 +1522,31 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-show="activeSection === 'projects'" class="mission-page">
-      <div class="simple-sheet">
-        <div class="simple-sheet__header">
-          <div>
-            <h1>Projects</h1>
-            <span>{{ projects.length }}</span>
-          </div>
+      <div class="projects-workspace">
+        <div class="project-tabs" role="tablist" aria-label="Projects">
+          <button
+            v-for="project in projects"
+            :key="project.id"
+            type="button"
+            class="project-tab"
+            :class="{ 'is-active': selectedProjectDetail?.id === project.id }"
+            role="tab"
+            :aria-selected="selectedProjectDetail?.id === project.id"
+            @click="selectedProjectDetailId = project.id"
+          >
+            <span class="project-tab__logo" aria-hidden="true">
+              <img
+                v-if="isProjectLogo(project.icon)"
+                :src="project.icon || ''"
+                :alt="`${project.name} logo`"
+              />
+              <span v-else>{{ projectInitial(project) }}</span>
+            </span>
+            <span>{{ project.name }}</span>
+          </button>
           <button
             type="button"
-            class="icon-button"
+            class="project-tab project-tab--add"
             aria-label="Add project"
             title="Add project"
             @click="openProjectModal"
@@ -1390,23 +1554,108 @@ onBeforeUnmount(() => {
             <UiIcon name="Plus" :size="18" />
           </button>
         </div>
-        <article v-for="project in projects" :key="project.id" class="detail-row project-row">
-          <div class="project-row__main">
-            <div class="project-row__logo" aria-hidden="true">
-              <img
-                v-if="isProjectLogo(project.icon)"
-                :src="project.icon || ''"
-                :alt="`${project.name} logo`"
-              />
-              <span v-else>{{ projectInitial(project) }}</span>
+
+        <div v-if="!selectedProjectDetail" class="empty-row">No projects yet.</div>
+
+        <template v-else>
+          <section class="project-detail">
+            <div class="project-detail__identity">
+              <div class="project-row__logo project-detail__logo" aria-hidden="true">
+                <img
+                  v-if="isProjectLogo(selectedProjectDetail.icon)"
+                  :src="selectedProjectDetail.icon || ''"
+                  :alt="`${selectedProjectDetail.name} logo`"
+                />
+                <span v-else>{{ projectInitial(selectedProjectDetail) }}</span>
+              </div>
+              <div>
+                <h1>{{ selectedProjectDetail.name }}</h1>
+                <p>{{ selectedProjectDetail.description || "No description yet." }}</p>
+              </div>
             </div>
             <div>
-              <h2>{{ project.name }}</h2>
-              <p>{{ project.description || "No description" }}</p>
+              <span class="status-badge">{{ selectedProjectDetail.status }}</span>
+              <span>{{ selectedProjectOpenTaskCount }} open</span>
             </div>
+          </section>
+
+          <form class="project-task-form" @submit.prevent="addProjectTask">
+            <input
+              v-model="projectTaskDraft"
+              type="text"
+              placeholder="Add a task to this project"
+              autocomplete="off"
+            />
+            <button
+              type="submit"
+              class="icon-button"
+              aria-label="Add project task"
+              :disabled="projectTaskCreateDisabled"
+            >
+              <UiIcon name="Plus" :size="18" />
+            </button>
+          </form>
+
+          <p v-if="projectTasksError" class="mission-control__message is-error">
+            {{ projectTasksError }}
+          </p>
+
+          <div v-if="projectTasksLoading" class="empty-row">Loading project tasks...</div>
+          <div v-else class="project-board" aria-label="Project board">
+            <section
+              v-for="column in projectBoardColumns"
+              :key="column.id"
+              class="project-board__column"
+              :aria-label="column.label"
+            >
+              <div class="project-board__column-header">
+                <h2>{{ column.label }}</h2>
+                <span>{{ column.tasks.length }}</span>
+              </div>
+
+              <div v-if="column.tasks.length === 0" class="project-board__empty">
+                No tasks
+              </div>
+              <article v-for="task in column.tasks" :key="task.id" class="project-task-card">
+                <p>{{ task.title }}</p>
+                <span v-if="task.dueAt || task.scheduledFor">
+                  {{ formatShortDate(task.dueAt || task.scheduledFor) }}
+                </span>
+                <div class="project-task-card__actions">
+                  <button
+                    v-if="task.status !== 'backlog'"
+                    type="button"
+                    class="icon-button quiet"
+                    aria-label="Move task back"
+                    :disabled="projectTaskActionId === task.id"
+                    @click="setProjectTaskStatus(task, previousTaskStatus(task.status))"
+                  >
+                    <UiIcon name="ChevronLeft" :size="15" />
+                  </button>
+                  <button
+                    v-if="task.status !== 'done'"
+                    type="button"
+                    class="icon-button quiet"
+                    aria-label="Move task forward"
+                    :disabled="projectTaskActionId === task.id"
+                    @click="setProjectTaskStatus(task, nextTaskStatus(task.status))"
+                  >
+                    <UiIcon name="ChevronRight" :size="15" />
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-button quiet"
+                    aria-label="Archive task"
+                    :disabled="projectTaskActionId === task.id"
+                    @click="archiveProjectTask(task)"
+                  >
+                    <UiIcon name="X" :size="15" />
+                  </button>
+                </div>
+              </article>
+            </section>
           </div>
-          <span class="status-badge">{{ project.status }}</span>
-        </article>
+        </template>
       </div>
     </section>
 
@@ -1759,7 +2008,7 @@ onBeforeUnmount(() => {
 .detail-row p,
 .daemon-summary p,
 .simple-sheet__header span,
-.journal-editor__header span,
+.journal-editor__status,
 .detail-row__aside {
   color: var(--ui-text-muted);
   font-size: 12px;
@@ -1963,12 +2212,19 @@ onBeforeUnmount(() => {
   gap: 0;
 }
 
+.projects-workspace {
+  display: grid;
+  width: min(1120px, 100%);
+  gap: 18px;
+}
+
 .simple-sheet--wide {
   width: min(920px, 100%);
 }
 
 .capture-row,
-.inline-form {
+.inline-form,
+.project-task-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(130px, 170px) auto 40px;
   gap: 6px;
@@ -1986,7 +2242,8 @@ onBeforeUnmount(() => {
 .capture-row__input,
 .capture-row__project,
 .journal-editor__textarea,
-.inline-form input {
+.inline-form input,
+.project-task-form input {
   width: 100%;
   min-width: 0;
   border: 0;
@@ -1998,7 +2255,8 @@ onBeforeUnmount(() => {
 
 .capture-row__input,
 .capture-row__project,
-.inline-form input {
+.inline-form input,
+.project-task-form input {
   min-height: 40px;
   padding: 0 12px;
 }
@@ -2011,7 +2269,8 @@ onBeforeUnmount(() => {
 .capture-row__input:focus,
 .capture-row__project:focus,
 .journal-editor__textarea:focus,
-.inline-form input:focus {
+.inline-form input:focus,
+.project-task-form input:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
 }
@@ -2021,7 +2280,8 @@ onBeforeUnmount(() => {
   color: var(--ui-accent-contrast);
 }
 
-.capture-row__submit:disabled {
+.capture-row__submit:disabled,
+.project-task-form .icon-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -2034,8 +2294,7 @@ onBeforeUnmount(() => {
 }
 
 .capture-list__header,
-.simple-sheet__header,
-.journal-editor__header {
+.simple-sheet__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2047,8 +2306,6 @@ onBeforeUnmount(() => {
 
 .capture-list__header h1,
 .simple-sheet__header h1,
-.journal-editor__header h1,
-.journal-editor__header h2,
 .detail-row h2,
 .daemon-summary h2 {
   margin: 0;
@@ -2181,6 +2438,11 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.journal-editor__status {
+  justify-self: end;
+  padding-top: 4px;
+}
+
 .journal-editor__textarea {
   min-height: 260px;
   resize: vertical;
@@ -2255,17 +2517,6 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
-.project-row {
-  align-items: center;
-}
-
-.detail-row .project-row__main {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
 .project-row__logo {
   display: inline-grid;
   flex: 0 0 auto;
@@ -2284,6 +2535,206 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.project-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.project-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+  min-height: 38px;
+  max-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.project-tab:hover,
+.project-tab.is-active {
+  border-color: transparent;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.project-tab > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tab__logo {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+  color: var(--ui-accent);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.project-tab__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.project-tab--add {
+  width: 38px;
+  justify-content: center;
+  padding: 0;
+  color: var(--ui-text);
+}
+
+.project-detail {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 10px 0 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.project-detail__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.project-detail__identity > div:last-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.project-detail__logo {
+  width: 44px;
+  height: 44px;
+}
+
+.project-detail h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 18px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-detail p {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.project-detail > div:last-child {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+.project-task-form {
+  grid-template-columns: minmax(0, 1fr) 40px;
+  padding: 6px;
+}
+
+.project-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.project-board__column {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 180px;
+}
+
+.project-board__column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.project-board__column-header h2 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.project-board__column-header span,
+.project-board__empty,
+.project-task-card span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+.project-board__empty {
+  padding: 10px 0;
+}
+
+.project-task-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+}
+
+.project-task-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.project-task-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.project-task-card__actions .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+.project-task-card__actions .icon-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .journal-archive {
@@ -2602,13 +3053,26 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
-  .project-row__main {
-    width: 100%;
-  }
-
   .detail-row__aside {
     align-items: flex-start;
     text-align: left;
+  }
+
+  .project-detail {
+    flex-direction: column;
+  }
+
+  .project-detail > div:last-child {
+    flex-wrap: wrap;
+  }
+
+  .project-board {
+    grid-template-columns: 1fr;
+    overflow-x: visible;
+  }
+
+  .project-board__column {
+    min-width: 0;
   }
 
   .journal-archive {
