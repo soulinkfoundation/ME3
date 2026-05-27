@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -302,6 +302,7 @@ const projectTasksError = ref("");
 const projectTaskDraft = ref("");
 const projectTaskSaving = ref(false);
 const projectTaskActionId = ref("");
+const projectTaskComposerStatus = ref<ProjectBoardStatus | "">("");
 const draggedProjectTaskId = ref("");
 const projectTaskDropStatus = ref<ProjectBoardStatus | "">("");
 let journalSaveTimer: number | null = null;
@@ -418,7 +419,11 @@ const selectedProjectDetailLabel = computed(
   () => selectedProjectDetail.value?.name || "Projects",
 );
 const projectTaskCreateDisabled = computed(
-  () => projectTaskSaving.value || !projectTaskDraft.value.trim() || !selectedProjectDetail.value,
+  () =>
+    projectTaskSaving.value ||
+    !projectTaskComposerStatus.value ||
+    !projectTaskDraft.value.trim() ||
+    !selectedProjectDetail.value,
 );
 const selectedArchiveEntry = computed(
   () =>
@@ -677,6 +682,7 @@ function toggleProjectPicker() {
 function selectProjectDetail(projectId: string) {
   selectedProjectDetailId.value = projectId;
   projectPickerOpen.value = false;
+  resetProjectTaskComposer();
 }
 
 function setSection(section: MissionSection) {
@@ -684,6 +690,7 @@ function setSection(section: MissionSection) {
   settingsMenuOpen.value = false;
   datePickerOpen.value = false;
   projectPickerOpen.value = false;
+  if (section !== "projects") resetProjectTaskComposer();
   void router.replace({
     query: {
       ...route.query,
@@ -769,7 +776,26 @@ async function addProject() {
   }
 }
 
-async function addProjectTask() {
+function resetProjectTaskComposer() {
+  projectTaskComposerStatus.value = "";
+  projectTaskDraft.value = "";
+}
+
+function openProjectTaskComposer(status: ProjectBoardStatus) {
+  if (projectTaskSaving.value) return;
+  projectTaskComposerStatus.value = status;
+  projectTaskDraft.value = "";
+  void nextTick(() => {
+    document.querySelector<HTMLInputElement>(".project-task-composer__input")?.focus();
+  });
+}
+
+function cancelProjectTaskComposer() {
+  if (projectTaskSaving.value) return;
+  resetProjectTaskComposer();
+}
+
+async function addProjectTask(status: ProjectBoardStatus) {
   const title = projectTaskDraft.value.trim();
   const project = selectedProjectDetail.value;
   if (!title || !project || projectTaskSaving.value) return;
@@ -779,10 +805,10 @@ async function addProjectTask() {
     const response = await api.post<{ task: MissionTask }>("/mission-control/tasks", {
       title,
       projectId: project.id,
-      status: "backlog",
+      status,
     });
     projectTasks.value = [response.task, ...projectTasks.value];
-    projectTaskDraft.value = "";
+    resetProjectTaskComposer();
   } catch (e) {
     projectTasksError.value =
       e instanceof ApiError ? e.message : "Could not add task";
@@ -1622,23 +1648,6 @@ onBeforeUnmount(() => {
         <div v-if="!selectedProjectDetail" class="empty-row">No projects yet.</div>
 
         <template v-else>
-          <form class="project-task-form" @submit.prevent="addProjectTask">
-            <input
-              v-model="projectTaskDraft"
-              type="text"
-              placeholder="Add a task to this project"
-              autocomplete="off"
-            />
-            <button
-              type="submit"
-              class="icon-button"
-              aria-label="Add project task"
-              :disabled="projectTaskCreateDisabled"
-            >
-              <UiIcon name="Plus" :size="18" />
-            </button>
-          </form>
-
           <p v-if="projectTasksError" class="mission-control__message is-error">
             {{ projectTasksError }}
           </p>
@@ -1691,6 +1700,49 @@ onBeforeUnmount(() => {
                   </button>
                 </div>
               </article>
+              <form
+                v-if="projectTaskComposerStatus === column.id"
+                class="project-task-composer"
+                @submit.prevent="addProjectTask(column.id)"
+              >
+                <input
+                  v-model="projectTaskDraft"
+                  class="project-task-composer__input"
+                  type="text"
+                  placeholder="Task name"
+                  autocomplete="off"
+                  @keydown.esc.prevent="cancelProjectTaskComposer"
+                />
+                <div class="project-task-composer__actions">
+                  <button
+                    type="button"
+                    class="icon-button quiet"
+                    aria-label="Cancel task"
+                    :disabled="projectTaskSaving"
+                    @click="cancelProjectTaskComposer"
+                  >
+                    <UiIcon name="X" :size="15" />
+                  </button>
+                  <button
+                    type="submit"
+                    class="icon-button"
+                    aria-label="Add task"
+                    :disabled="projectTaskCreateDisabled"
+                  >
+                    <UiIcon name="Plus" :size="16" />
+                  </button>
+                </div>
+              </form>
+              <button
+                v-else
+                type="button"
+                class="project-column-add"
+                :disabled="projectTaskSaving"
+                @click="openProjectTaskComposer(column.id)"
+              >
+                <UiIcon name="Plus" :size="15" />
+                Add task
+              </button>
             </section>
           </div>
         </template>
@@ -2344,8 +2396,7 @@ onBeforeUnmount(() => {
 }
 
 .capture-row,
-.inline-form,
-.project-task-form {
+.inline-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(130px, 170px) auto 40px;
   gap: 6px;
@@ -2364,7 +2415,7 @@ onBeforeUnmount(() => {
 .capture-row__project,
 .journal-editor__textarea,
 .inline-form input,
-.project-task-form input {
+.project-task-composer__input {
   width: 100%;
   min-width: 0;
   border: 0;
@@ -2377,13 +2428,14 @@ onBeforeUnmount(() => {
 .capture-row__input,
 .capture-row__project,
 .inline-form input,
-.project-task-form input {
+.project-task-composer__input {
   min-height: 40px;
   padding: 0 12px;
 }
 
 .capture-row__input::placeholder,
-.journal-editor__textarea::placeholder {
+.journal-editor__textarea::placeholder,
+.project-task-composer__input::placeholder {
   color: var(--ui-text-muted);
 }
 
@@ -2391,7 +2443,7 @@ onBeforeUnmount(() => {
 .capture-row__project:focus,
 .journal-editor__textarea:focus,
 .inline-form input:focus,
-.project-task-form input:focus {
+.project-task-composer__input:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
 }
@@ -2402,7 +2454,8 @@ onBeforeUnmount(() => {
 }
 
 .capture-row__submit:disabled,
-.project-task-form .icon-button:disabled {
+.project-task-composer .icon-button:disabled,
+.project-column-add:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -2638,11 +2691,6 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
-.project-task-form {
-  grid-template-columns: minmax(0, 1fr) 40px;
-  padding: 6px;
-}
-
 .project-board {
   display: grid;
   grid-template-columns: repeat(4, minmax(180px, 1fr));
@@ -2744,6 +2792,57 @@ onBeforeUnmount(() => {
 .project-task-card__actions .icon-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.project-task-composer {
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.project-task-composer__input {
+  min-height: 36px;
+  padding: 0 8px;
+}
+
+.project-task-composer__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.project-task-composer__actions .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.project-task-composer__actions .icon-button[type="submit"] {
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
+}
+
+.project-column-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.project-column-add:hover {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
 }
 
 .journal-archive {
