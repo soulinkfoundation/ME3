@@ -974,6 +974,10 @@ async function moveMessage(
     : messages.value.filter((message) => message.id !== msg.id);
   if (!targetIsCurrentTab) {
     total.value = Math.max(0, total.value - 1);
+    if (expandedId.value === msg.id) {
+      expandedId.value = null;
+      mobileThreadOpen.value = false;
+    }
   }
   syncSelectedMessages(messages.value);
 
@@ -1953,11 +1957,7 @@ onBeforeUnmount(() => {
                     @keydown.enter.prevent="selectMessage(message.id)"
                     @keydown.space.prevent="selectMessage(message.id)"
                   >
-                    <span
-                      class="unread-dot"
-                      :class="{ 'unread-dot--hidden': !message.unread }"
-                    />
-                    <label class="conversation-select">
+                    <label class="conversation-select" @click.stop>
                       <input
                         type="checkbox"
                         :checked="selectedMessageIds.has(message.id)"
@@ -3144,6 +3144,13 @@ onBeforeUnmount(() => {
   color: var(--color-text-muted);
 }
 
+.conversation-select {
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+}
+
 .bulk-select {
   gap: 8px;
   min-width: 82px;
@@ -3217,7 +3224,7 @@ onBeforeUnmount(() => {
 .conversation-item {
   position: relative;
   display: grid;
-  grid-template-columns: 10px 18px minmax(0, 1fr) auto;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -3244,20 +3251,9 @@ onBeforeUnmount(() => {
 }
 
 .conversation-item--unread .conversation-item__meta strong,
+.conversation-item--unread .conversation-item__summary,
 .conversation-item--unread .conversation-item__subject {
   font-weight: 800;
-}
-
-.unread-dot {
-  align-self: center;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-text);
-}
-
-.unread-dot--hidden {
-  visibility: hidden;
 }
 
 .conversation-item__content {
@@ -4232,8 +4228,8 @@ onBeforeUnmount(() => {
   .mail-workspace {
     display: flex;
     flex-direction: column;
-    height: auto;
-    min-height: calc(100dvh - 132px);
+    height: 100%;
+    min-height: 0;
   }
 
   .inbox-panel {
@@ -4366,7 +4362,9 @@ onBeforeUnmount(() => {
 
   .conversation-list {
     order: 3;
-    min-height: calc(100dvh - 270px);
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .conversation-list__head {
@@ -4374,7 +4372,11 @@ onBeforeUnmount(() => {
   }
 
   .conversation-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
     max-height: none;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .bulk-mail-toolbar {
@@ -4397,10 +4399,16 @@ onBeforeUnmount(() => {
   }
 
   .conversation-item {
-    grid-template-columns: 8px 18px minmax(0, 1fr) auto;
-    gap: 7px;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    gap: 6px;
     min-height: 54px;
-    padding: 8px 12px;
+    padding: 6px 12px 6px 4px;
+  }
+
+  .conversation-select {
+    justify-content: center;
+    width: 44px;
+    height: 44px;
   }
 
   .conversation-item__content {
