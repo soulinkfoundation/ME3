@@ -2,11 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import CalendarAgenda from "../components/calendar/CalendarAgenda.vue";
+import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import CalendarMiniMonth from "../components/calendar/CalendarMiniMonth.vue";
 import CalendarMonthBoard from "../components/calendar/CalendarMonthBoard.vue";
 import CalendarWeekBoard from "../components/calendar/CalendarWeekBoard.vue";
 import Button from "../components/Button.vue";
 import UiIcon from "../components/UiIcon.vue";
+import type { UiIconName } from "../utils/icons";
 import type {
   CalendarAgendaEvent,
   CalendarAgendaSiteOption,
@@ -151,6 +153,8 @@ const monthCursor = ref(new Date());
 const dayCursor = ref(new Date());
 const activeCreateMode = ref<CreateMode>(null);
 const showCreateMenu = ref(false);
+const calendarPickerOpen = ref(false);
+const calendarPickerMonth = ref(monthKeyFromDate(new Date()));
 const quickCreateDayKey = ref<string | null>(null);
 
 function startOfWeekMonday(from: Date): Date {
@@ -350,6 +354,47 @@ const activeToolbarTitle = computed(() => {
   return monthToolbarTitle.value;
 });
 
+const mobileToolbarTitle = computed(() => {
+  if (rangeMode.value !== "week") return activeToolbarTitle.value;
+  const start = weekCursor.value;
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  const day = new Intl.DateTimeFormat("en-GB", { day: "numeric" });
+  const monthYear = new Intl.DateTimeFormat("en-GB", {
+    month: "short",
+    year: "numeric",
+  });
+  if (
+    start.getMonth() === end.getMonth() &&
+    start.getFullYear() === end.getFullYear()
+  ) {
+    return `${day.format(start)}-${day.format(end)} ${monthYear.format(start)}`;
+  }
+  const compact = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+  });
+  return `${compact.format(start)}-${compact.format(end)}`;
+});
+
+const calendarPickerSelectedDate = computed(() => {
+  if (rangeMode.value === "day") return dayKeyFormatter.value.format(dayCursor.value);
+  if (focusedDayKey.value) return focusedDayKey.value;
+  if (rangeMode.value === "week") return dayKeyFormatter.value.format(weekCursor.value);
+  return null;
+});
+
+const mobileRangeCycleLabel = computed(() => {
+  const nextMode = nextCycleRangeMode();
+  return `Switch to ${nextMode === "schedule" ? "Schedule" : nextMode === "week" ? "Week" : "Month"} view`;
+});
+
+const mobileRangeIcon = computed<UiIconName>(() => {
+  if (rangeMode.value === "schedule") return "SquareCheck";
+  if (rangeMode.value === "week") return "CalendarDays";
+  return "LayoutGrid";
+});
+
 const focusedAgendaDayKey = computed(() => {
   if (rangeMode.value !== "day") return focusedDayKey.value;
   return dayKeyFormatter.value.format(dayCursor.value);
@@ -461,6 +506,16 @@ function defaultDateInput(): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function monthKeyFromDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function addMonthsToKey(monthKeyValue: string, delta: number): string {
+  const [year, month] = monthKeyValue.split("-").map(Number);
+  const date = new Date(year, month - 1 + delta, 1);
+  return monthKeyFromDate(date);
 }
 
 function defaultTimeInput(offsetHours = 1): string {
@@ -852,9 +907,52 @@ function siteDotColor(key: string): string {
   return SITE_DOT_PALETTE[Math.abs(h) % SITE_DOT_PALETTE.length];
 }
 
+const cycleRangeModes: CalendarRangeMode[] = ["schedule", "week", "month"];
+
+function nextCycleRangeMode(): CalendarRangeMode {
+  const currentIndex = cycleRangeModes.indexOf(rangeMode.value);
+  if (currentIndex < 0) return "schedule";
+  return cycleRangeModes[(currentIndex + 1) % cycleRangeModes.length];
+}
+
+function cycleRangeMode() {
+  onRangeChange(nextCycleRangeMode());
+}
+
+function syncCalendarPickerMonth() {
+  calendarPickerMonth.value = monthKeyFromDate(miniCalendarCursor.value);
+}
+
+function toggleCalendarPicker() {
+  if (!calendarPickerOpen.value) {
+    syncCalendarPickerMonth();
+  }
+  showCreateMenu.value = false;
+  calendarPickerOpen.value = !calendarPickerOpen.value;
+}
+
+function moveCalendarPickerMonth(delta: number) {
+  calendarPickerMonth.value = addMonthsToKey(calendarPickerMonth.value, delta);
+}
+
+function chooseCalendarPickerDay(dayKey: string) {
+  calendarPickerOpen.value = false;
+  onMiniPick(dayKey);
+}
+
+function pickCalendarToday() {
+  chooseCalendarPickerDay(todayDayKey.value);
+}
+
+function toggleCreateMenu() {
+  calendarPickerOpen.value = false;
+  showCreateMenu.value = !showCreateMenu.value;
+}
+
 function onRangeChange(mode: CalendarRangeMode) {
   const previous = rangeMode.value;
   rangeMode.value = mode;
+  calendarPickerOpen.value = false;
   boardHighlightId.value = "";
   if (mode === "day" && previous !== "day") {
     dayCursor.value = new Date();
@@ -944,6 +1042,12 @@ watch(visibleEvents, (nextEvents) => {
   }
 });
 
+watch(miniCalendarCursor, () => {
+  if (calendarPickerOpen.value) {
+    syncCalendarPickerMonth();
+  }
+});
+
 watch(siteOptions, (nextOptions) => {
   if (
     sidebarSiteFilter.value !== "all" &&
@@ -956,11 +1060,6 @@ watch(siteOptions, (nextOptions) => {
 function applyMobileCalendarDefaults(matches: boolean) {
   if (!matches) return;
   sidebarSiteFilter.value = "all";
-  if (rangeMode.value !== "schedule") {
-    monthCursor.value = new Date();
-    focusedDayKey.value = null;
-    rangeMode.value = "schedule";
-  }
 }
 
 function onMobileCalendarChange(event: MediaQueryListEvent) {
@@ -1084,6 +1183,7 @@ function resetImportForm() {
 
 function openCreateMode(mode: Exclude<CreateMode, null>, dayKey?: string) {
   showCreateMenu.value = false;
+  calendarPickerOpen.value = false;
   statusMessage.value = "";
   if (dayKey) {
     focusedDayKey.value = dayKey;
@@ -1113,6 +1213,7 @@ function openEditReminder(reminderId: string) {
   const reminder = reminders.value.find((item) => item.id === reminderId);
   if (!reminder) return;
   showCreateMenu.value = false;
+  calendarPickerOpen.value = false;
   statusMessage.value = "";
   newReminderError.value = "";
   editingReminderId.value = reminder.id;
@@ -1132,6 +1233,7 @@ function openEditEvent(eventId: string) {
   const event = events.value.find((item) => item.id === eventId);
   if (!event) return;
   showCreateMenu.value = false;
+  calendarPickerOpen.value = false;
   statusMessage.value = "";
   newEventError.value = "";
   editingEventId.value = event.id;
@@ -1180,6 +1282,7 @@ function isQuickCreateMode(mode: CreateMode): mode is QuickCreateMode {
 function closeCreateMode() {
   activeCreateMode.value = null;
   showCreateMenu.value = false;
+  calendarPickerOpen.value = false;
   quickCreateDayKey.value = null;
   editingEventId.value = null;
   editingReminderId.value = null;
@@ -1430,10 +1533,27 @@ watch(
   },
 );
 
+function closeCalendarHeaderMenus() {
+  calendarPickerOpen.value = false;
+  showCreateMenu.value = false;
+}
+
+function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    closeCalendarHeaderMenus();
+  }
+}
+
+function handleWindowClick() {
+  closeCalendarHeaderMenus();
+}
+
 onMounted(async () => {
   mobileMediaQuery = window.matchMedia("(max-width: 760px)");
   applyMobileCalendarDefaults(mobileMediaQuery.matches);
   mobileMediaQuery.addEventListener("change", onMobileCalendarChange);
+  window.addEventListener("keydown", handleWindowKeydown);
+  window.addEventListener("click", handleWindowClick);
   await sites.fetchSites();
   if (sites.sites[0]) {
     newBookingForm.value.username = sites.sites[0].username;
@@ -1443,14 +1563,16 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   mobileMediaQuery?.removeEventListener("change", onMobileCalendarChange);
+  window.removeEventListener("keydown", handleWindowKeydown);
+  window.removeEventListener("click", handleWindowClick);
 });
 </script>
 
 <template>
   <div class="ops-page calendar-spike">
     <Teleport to="#app-side-nav-mobile-page-controls">
-      <div v-if="!loading && !error" class="cal-mobile-nav-controls">
-        <div class="cal-mobile-nav-period">
+      <div v-if="!loading && !error" class="cal-mobile-nav-controls" @click.stop>
+        <div class="cal-period-switcher cal-period-switcher--mobile" aria-label="Calendar period">
           <button
             type="button"
             class="cal-arrow"
@@ -1459,9 +1581,16 @@ onBeforeUnmount(() => {
           >
             <UiIcon name="ChevronLeft" :size="18" aria-hidden="true" />
           </button>
-          <span class="cal-mobile-nav-title">
-            {{ activeToolbarTitle }}
-          </span>
+          <button
+            type="button"
+            class="cal-period-title"
+            :aria-expanded="calendarPickerOpen"
+            aria-haspopup="dialog"
+            aria-label="Choose calendar date"
+            @click="toggleCalendarPicker"
+          >
+            {{ mobileToolbarTitle }}
+          </button>
           <button
             type="button"
             class="cal-arrow"
@@ -1470,40 +1599,32 @@ onBeforeUnmount(() => {
           >
             <UiIcon name="ChevronRight" :size="18" aria-hidden="true" />
           </button>
+          <DatePickerPopover
+            v-if="calendarPickerOpen"
+            :month-key="calendarPickerMonth"
+            :selected-date="calendarPickerSelectedDate"
+            :today-date="todayDayKey"
+            aria-label="Choose calendar date"
+            @move-month="moveCalendarPickerMonth"
+            @select-date="chooseCalendarPickerDay"
+            @today="pickCalendarToday"
+          />
         </div>
-        <div
-          class="cal-view-toggle cal-view-toggle--mobile-nav"
-          role="group"
-          aria-label="Calendar range"
+        <button
+          type="button"
+          class="cal-icon-button cal-mobile-view-cycle"
+          :aria-label="mobileRangeCycleLabel"
+          :title="mobileRangeCycleLabel"
+          @click="cycleRangeMode"
         >
-          <button
-            type="button"
-            :class="{ 'is-on': rangeMode === 'schedule' }"
-            @click="onRangeChange('schedule')"
-          >
-            Schedule
-          </button>
-          <button
-            type="button"
-            :class="{ 'is-on': rangeMode === 'week' }"
-            @click="onRangeChange('week')"
-          >
-            Week
-          </button>
-          <button
-            type="button"
-            :class="{ 'is-on': rangeMode === 'month' }"
-            @click="onRangeChange('month')"
-          >
-            Month
-          </button>
-        </div>
+          <UiIcon :name="mobileRangeIcon" :size="18" aria-hidden="true" />
+        </button>
         <div class="cal-mobile-create-wrap">
           <button
             type="button"
-            class="cal-create-mobile"
+            class="cal-icon-button cal-create-mobile"
             aria-label="Create calendar item"
-            @click="showCreateMenu = !showCreateMenu"
+            @click="toggleCreateMenu"
           >
             <UiIcon name="Plus" :size="18" aria-hidden="true" />
           </button>
@@ -1529,52 +1650,94 @@ onBeforeUnmount(() => {
     </Teleport>
 
     <main class="main">
-      <div v-if="!loading && !error" class="cal-toolbar">
+      <div v-if="!loading && !error" class="cal-toolbar" @click.stop>
         <div class="cal-toolbar-left">
-          <div class="cal-arrows">
+          <div class="cal-view-toggle" role="group" aria-label="Calendar range">
             <button
               type="button"
-              class="cal-arrow"
-              aria-label="Previous period"
-              @click="onToolbarPrev"
+              :class="{ 'is-on': rangeMode === 'schedule' }"
+              @click="onRangeChange('schedule')"
             >
-              <UiIcon name="ChevronLeft" :size="20" aria-hidden="true" />
+              Schedule
             </button>
             <button
               type="button"
-              class="cal-arrow"
-              aria-label="Next period"
-              @click="onToolbarNext"
+              :class="{ 'is-on': rangeMode === 'week' }"
+              @click="onRangeChange('week')"
             >
-              <UiIcon name="ChevronRight" :size="20" aria-hidden="true" />
+              Week
+            </button>
+            <button
+              type="button"
+              :class="{ 'is-on': rangeMode === 'month' }"
+              @click="onRangeChange('month')"
+            >
+              Month
             </button>
           </div>
-          <h2 class="cal-toolbar-heading">
-            {{ activeToolbarTitle }}
-          </h2>
         </div>
-        <div class="cal-view-toggle" role="group" aria-label="Calendar range">
+        <div class="cal-period-switcher" aria-label="Calendar period">
           <button
             type="button"
-            :class="{ 'is-on': rangeMode === 'schedule' }"
-            @click="onRangeChange('schedule')"
+            class="cal-arrow"
+            aria-label="Previous period"
+            @click="onToolbarPrev"
           >
-            Schedule
+            <UiIcon name="ChevronLeft" :size="20" aria-hidden="true" />
           </button>
           <button
             type="button"
-            :class="{ 'is-on': rangeMode === 'week' }"
-            @click="onRangeChange('week')"
+            class="cal-period-title"
+            :aria-expanded="calendarPickerOpen"
+            aria-haspopup="dialog"
+            aria-label="Choose calendar date"
+            @click="toggleCalendarPicker"
           >
-            Week
+            {{ activeToolbarTitle }}
           </button>
           <button
             type="button"
-            :class="{ 'is-on': rangeMode === 'month' }"
-            @click="onRangeChange('month')"
+            class="cal-arrow"
+            aria-label="Next period"
+            @click="onToolbarNext"
           >
-            Month
+            <UiIcon name="ChevronRight" :size="20" aria-hidden="true" />
           </button>
+          <DatePickerPopover
+            v-if="calendarPickerOpen"
+            :month-key="calendarPickerMonth"
+            :selected-date="calendarPickerSelectedDate"
+            :today-date="todayDayKey"
+            aria-label="Choose calendar date"
+            @move-month="moveCalendarPickerMonth"
+            @select-date="chooseCalendarPickerDay"
+            @today="pickCalendarToday"
+          />
+        </div>
+        <div class="cal-toolbar-actions">
+          <div class="cal-create-wrap">
+            <button type="button" class="cal-create" @click="toggleCreateMenu">
+              <UiIcon name="Plus" :size="16" aria-hidden="true" />
+              Create
+            </button>
+            <div v-if="showCreateMenu" class="cal-create-menu cal-create-menu--toolbar">
+              <button type="button" @click="openCreateMode('booking')">
+                New booking
+              </button>
+              <button type="button" @click="openCreateMode('reminder')">
+                New reminder
+              </button>
+              <button type="button" @click="openCreateMode('event')">
+                New event
+              </button>
+              <button type="button" @click="openCreateMode('birthday')">
+                New birthday
+              </button>
+              <button type="button" @click="openCreateMode('import')">
+                Import .ics
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1590,32 +1753,6 @@ onBeforeUnmount(() => {
           :class="{ 'cal-shell--board-view': rangeMode !== 'schedule' }"
         >
             <aside class="cal-sidebar">
-              <div class="cal-create-wrap">
-                <button
-                  type="button"
-                  class="cal-create"
-                  @click="showCreateMenu = !showCreateMenu"
-                >
-                  + Create
-                </button>
-                <div v-if="showCreateMenu" class="cal-create-menu">
-                  <button type="button" @click="openCreateMode('booking')">
-                    New booking
-                  </button>
-                  <button type="button" @click="openCreateMode('reminder')">
-                    New reminder
-                  </button>
-                  <button type="button" @click="openCreateMode('event')">
-                    New event
-                  </button>
-                  <button type="button" @click="openCreateMode('birthday')">
-                    New birthday
-                  </button>
-                  <button type="button" @click="openCreateMode('import')">
-                    Import .ics
-                  </button>
-                </div>
-              </div>
               <div class="cal-sidebar-calendar-tools">
                 <CalendarMiniMonth
                   :year="miniCalendarCursor.getFullYear()"
@@ -2461,26 +2598,36 @@ onBeforeUnmount(() => {
 }
 
 .cal-toolbar {
-  display: flex;
-  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 0px 0 6px;
-  border-bottom: 1px solid var(--color-border);
+  gap: 16px;
+  min-height: 64px;
+  min-width: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--ui-border);
+  background: color-mix(in oklab, var(--ui-bg), transparent 4%);
+  backdrop-filter: blur(16px);
 }
 
 .cal-toolbar-left {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  justify-self: start;
   min-width: 0;
 }
 
-.cal-arrows {
-  display: flex;
+.cal-period-switcher {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(148px, 240px) 36px;
+  align-items: center;
+  justify-self: center;
   gap: 4px;
+  min-width: 0;
 }
 
 .cal-arrow {
@@ -2490,15 +2637,15 @@ onBeforeUnmount(() => {
   width: 36px;
   height: 36px;
   padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: var(--color-bg-subtle);
-  color: var(--color-text);
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
   cursor: pointer;
 }
 
 .cal-arrow:hover:not(:disabled) {
-  border-color: var(--color-border-strong);
+  background: var(--ui-surface-muted);
 }
 
 .cal-arrow:disabled {
@@ -2506,39 +2653,82 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
-.cal-toolbar-heading {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+.cal-period-title {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cal-period-title:hover,
+.cal-period-title[aria-expanded="true"] {
+  background: var(--ui-surface-muted);
 }
 
 .cal-view-toggle {
   display: flex;
-  flex-wrap: wrap;
   gap: 6px;
-  padding: 4px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: var(--color-bg-subtle);
+  min-width: 0;
 }
 
 .cal-view-toggle button {
-  padding: 8px 14px;
-  border: 0;
-  border-radius: 999px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
   background: transparent;
-  color: var(--color-text-muted);
+  color: var(--ui-text-muted);
   font: inherit;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
   cursor: pointer;
 }
 
+.cal-view-toggle button:hover,
 .cal-view-toggle button.is-on {
-  background: var(--color-bg);
-  color: var(--color-text);
-  box-shadow: 0 0 0 1px var(--color-border-strong);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.cal-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  justify-self: end;
+  min-width: 0;
+}
+
+.cal-icon-button {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  cursor: pointer;
+}
+
+.cal-icon-button:hover {
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-contrast);
 }
 
 .cal-loading,
@@ -2578,17 +2768,22 @@ onBeforeUnmount(() => {
 }
 
 .cal-create {
-  width: 100%;
-  padding: 12px 16px;
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
   border: 0;
-  border-radius: 999px;
-  background: var(--color-text);
-  color: var(--color-bg);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-text);
+  color: var(--ui-bg);
   font: inherit;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 650;
   cursor: pointer;
   text-align: center;
+  white-space: nowrap;
 }
 
 .cal-create:hover {
@@ -2604,27 +2799,33 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 4px;
   padding: 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
-  background: var(--color-bg);
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  box-shadow: 0 18px 50px color-mix(in oklab, #000, transparent 86%);
+}
+
+.cal-create-menu--toolbar {
+  right: 0;
+  left: auto;
+  width: 190px;
 }
 
 .cal-create-menu button {
   padding: 10px 12px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--ui-radius-sm);
   background: transparent;
-  color: var(--color-text);
+  color: var(--ui-text);
   font: inherit;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 650;
   text-align: left;
   cursor: pointer;
 }
 
 .cal-create-menu button:hover {
-  background: var(--color-bg-subtle);
+  background: var(--ui-surface-muted);
 }
 
 .cal-filters-title {
@@ -2952,10 +3153,6 @@ onBeforeUnmount(() => {
     gap: 12px;
   }
 
-  .cal-create {
-    grid-column: 1 / -1;
-  }
-
   .cal-filters {
     grid-column: 1 / -1;
   }
@@ -2976,45 +3173,30 @@ onBeforeUnmount(() => {
 
   .cal-mobile-nav-controls {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) 36px 36px;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     width: 100%;
     min-width: 0;
   }
 
-  .cal-mobile-nav-period {
-    display: grid;
+  .cal-period-switcher--mobile {
     grid-template-columns: 32px minmax(0, 1fr) 32px;
-    align-items: center;
+    justify-self: stretch;
     min-width: 0;
   }
 
-  .cal-mobile-nav-period .cal-arrow {
+  .cal-period-switcher--mobile .cal-arrow {
     width: 32px;
     height: 32px;
     border: 0;
     background: transparent;
   }
 
-  .cal-mobile-nav-title {
-    overflow: hidden;
-    text-align: center;
+  .cal-period-switcher--mobile .cal-period-title {
+    min-height: 32px;
+    padding-inline: 6px;
     font-size: 14px;
-    font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .cal-view-toggle--mobile-nav {
-    flex-wrap: nowrap;
-    gap: 2px;
-    padding: 2px;
-  }
-
-  .cal-view-toggle--mobile-nav button {
-    padding: 7px 9px;
-    font-size: 11px;
   }
 
   .cal-mobile-create-wrap {
@@ -3022,24 +3204,25 @@ onBeforeUnmount(() => {
   }
 
   .cal-create-mobile {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
+    width: 36px;
+    height: 36px;
     border: 0;
-    border-radius: 999px;
-    background: var(--color-text);
-    color: var(--color-bg);
-    cursor: pointer;
+    background: var(--ui-text);
+    color: var(--ui-bg);
+  }
+
+  .cal-create-mobile:hover {
+    background: var(--ui-text);
+    color: var(--ui-bg);
+    opacity: 0.92;
   }
 
   .cal-create-menu--mobile-nav {
     position: fixed;
-    top: 58px;
-    right: 12px;
+    top: 62px;
+    right: 14px;
     left: auto;
-    width: min(220px, calc(100vw - 24px));
+    width: min(220px, calc(100vw - 28px));
   }
 
   .cal-sidebar {

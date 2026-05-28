@@ -7,7 +7,9 @@ import {
   type MissionCaptureType,
 } from "@me3-core/plugin-mission-control";
 import { ApiError, api } from "../api";
+import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import UiIcon from "../components/UiIcon.vue";
+import type { UiIconName } from "../utils/icons";
 
 definePage({
   meta: {
@@ -211,14 +213,6 @@ type ProjectBoardColumn = {
 };
 type ProjectBoardStatus = ProjectBoardColumn["id"];
 
-type DatePickerCell = {
-  date: string;
-  day: number;
-  inMonth: boolean;
-  isSelected: boolean;
-  isToday: boolean;
-};
-
 const route = useRoute();
 const router = useRouter();
 
@@ -321,10 +315,6 @@ const currentDateIsToday = computed(() => selectedDate.value === todayKey());
 const selectedDateLabel = computed(() =>
   currentDateIsToday.value ? "Today" : formatDaySwitcherDate(selectedDate.value),
 );
-const datePickerMonthLabel = computed(() => formatDatePickerMonth(datePickerMonth.value));
-const datePickerCells = computed(() =>
-  buildDatePickerCells(datePickerMonth.value, selectedDate.value, todayKey()),
-);
 const activeProjectOptions = computed(() =>
   projects.value.filter((project) => project.status === "active"),
 );
@@ -396,6 +386,12 @@ const activityItems = computed<ActivityViewItem[]>(() => [
 const settingsSectionActive = computed(() =>
   settingsSections.includes(activeSection.value as SettingsMissionSection),
 );
+const mobilePrimarySectionCycleLabel = computed(() =>
+  activeSection.value === "today" ? "Switch to projects" : "Switch to journal",
+);
+const mobilePrimarySectionIcon = computed<UiIconName>(() =>
+  activeSection.value === "today" ? "LayoutGrid" : "CalendarDays",
+);
 const projectCreateDisabled = computed(
   () => projectSaving.value || projectTitle.value.trim().length === 0,
 );
@@ -450,7 +446,6 @@ const selectedProjectArchiveTask = computed(
     projectArchiveTasks.value[0] ||
     null,
 );
-const datePickerWeekdays = ["M", "T", "W", "T", "F", "S", "S"];
 
 async function loadOverview() {
   loading.value = true;
@@ -769,6 +764,10 @@ function setSection(section: MissionSection) {
       section: section === "today" ? undefined : sectionQueryValue(section),
     },
   });
+}
+
+function cyclePrimarySection() {
+  setSection(activeSection.value === "today" ? "projects" : "today");
 }
 
 function openProjectModal() {
@@ -1142,15 +1141,6 @@ function formatArchiveDate(value: string): string {
   }).format(date);
 }
 
-function formatDatePickerMonth(value: string): string {
-  const date = new Date(`${value}-01T12:00:00`);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-GB", {
-    month: "long",
-    year: "numeric",
-  }).format(date);
-}
-
 function formatShortDate(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -1219,32 +1209,6 @@ function addMonths(monthKeyValue: string, months: number): string {
   const [year, month] = monthKeyValue.split("-").map(Number);
   const date = new Date(year, month - 1 + months, 1);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function buildDatePickerCells(
-  monthKeyValue: string,
-  selectedDateKey: string,
-  todayDateKey: string,
-): DatePickerCell[] {
-  const [year, month] = monthKeyValue.split("-").map(Number);
-  const first = new Date(year, month - 1, 1);
-  const leadDays = (first.getDay() + 6) % 7;
-  let cursor = new Date(year, month - 1, 1 - leadDays);
-  const cells: DatePickerCell[] = [];
-
-  for (let i = 0; i < 42; i += 1) {
-    const date = dateToKey(cursor);
-    cells.push({
-      date,
-      day: cursor.getDate(),
-      inMonth: cursor.getMonth() === month - 1,
-      isSelected: date === selectedDateKey,
-      isToday: date === todayDateKey,
-    });
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
-  }
-
-  return cells;
 }
 
 function dateToKey(date: Date): string {
@@ -1403,58 +1367,18 @@ onBeforeUnmount(() => {
         <button type="button" class="icon-button" aria-label="Next day" @click="moveDay(1)">
           <UiIcon name="ChevronRight" :size="18" />
         </button>
-        <div v-if="datePickerOpen" class="date-picker-popover" role="dialog" aria-label="Choose journal date">
-          <div class="date-picker-popover__header">
-            <button
-              type="button"
-              class="icon-button quiet"
-              aria-label="Previous month"
-              @click="moveDatePickerMonth(-1)"
-            >
-              <UiIcon name="ChevronLeft" :size="16" />
-            </button>
-            <strong>{{ datePickerMonthLabel }}</strong>
-            <button
-              type="button"
-              class="icon-button quiet"
-              aria-label="Next month"
-              @click="moveDatePickerMonth(1)"
-            >
-              <UiIcon name="ChevronRight" :size="16" />
-            </button>
-          </div>
-          <div class="date-picker-popover__weekdays" aria-hidden="true">
-            <span v-for="(weekday, index) in datePickerWeekdays" :key="`${weekday}-${index}`">
-              {{ weekday }}
-            </span>
-          </div>
-          <div class="date-picker-popover__grid" role="grid">
-            <button
-              v-for="cell in datePickerCells"
-              :key="cell.date"
-              type="button"
-              class="date-picker-popover__day"
-              :class="{
-                'is-off-month': !cell.inMonth,
-                'is-today': cell.isToday,
-                'is-selected': cell.isSelected,
-              }"
-              :aria-label="formatArchiveDate(cell.date)"
-              :aria-pressed="cell.isSelected"
-              @click="chooseDatePickerDay(cell.date)"
-            >
-              {{ cell.day }}
-            </button>
-          </div>
-          <div class="date-picker-popover__actions">
-            <button type="button" class="text-button" @click="pickToday">
-              Today
-            </button>
-            <button type="button" class="text-button text-button--primary" @click="openJournalArchive">
-              View archive
-            </button>
-          </div>
-        </div>
+        <DatePickerPopover
+          v-if="datePickerOpen"
+          :month-key="datePickerMonth"
+          :selected-date="selectedDate"
+          :today-date="todayKey()"
+          aria-label="Choose journal date"
+          secondary-action-label="View archive"
+          @move-month="moveDatePickerMonth"
+          @select-date="chooseDatePickerDay"
+          @today="pickToday"
+          @secondary-action="openJournalArchive"
+        />
       </div>
       <div
         v-else-if="activeSection === 'projects'"
@@ -1559,6 +1483,16 @@ onBeforeUnmount(() => {
       <div v-else class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
       </div>
+
+      <button
+        type="button"
+        class="icon-button mission-control__mobile-section-cycle"
+        :aria-label="mobilePrimarySectionCycleLabel"
+        :title="mobilePrimarySectionCycleLabel"
+        @click="cyclePrimarySection"
+      >
+        <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
+      </button>
 
       <div class="settings-menu" @click.stop>
         <button
@@ -2352,6 +2286,10 @@ onBeforeUnmount(() => {
   justify-self: end;
 }
 
+.mission-control__mobile-section-cycle {
+  display: none;
+}
+
 .settings-menu__dropdown {
   position: absolute;
   top: calc(100% + 8px);
@@ -2387,98 +2325,6 @@ onBeforeUnmount(() => {
 .settings-menu__item:hover,
 .settings-menu__item.is-active {
   background: var(--ui-surface-muted);
-}
-
-.date-picker-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 50%;
-  z-index: 30;
-  display: grid;
-  width: min(292px, calc(100vw - 28px));
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface);
-  box-shadow: 0 18px 50px color-mix(in oklab, #000, transparent 86%);
-  transform: translateX(-50%);
-}
-
-.date-picker-popover__header {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 32px;
-  align-items: center;
-  gap: 8px;
-}
-
-.date-picker-popover__header .icon-button {
-  width: 32px;
-  height: 32px;
-}
-
-.date-picker-popover__header strong {
-  overflow: hidden;
-  font-size: 13px;
-  line-height: 1.2;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.date-picker-popover__weekdays,
-.date-picker-popover__grid {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 4px;
-}
-
-.date-picker-popover__weekdays span {
-  color: var(--ui-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.2;
-  text-align: center;
-}
-
-.date-picker-popover__day {
-  display: inline-grid;
-  width: 100%;
-  aspect-ratio: 1;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.date-picker-popover__day:hover {
-  background: var(--ui-surface-muted);
-}
-
-.date-picker-popover__day.is-off-month {
-  color: color-mix(in oklab, var(--ui-text-muted), transparent 35%);
-}
-
-.date-picker-popover__day.is-today:not(.is-selected) {
-  border-color: color-mix(in oklab, var(--ui-accent), transparent 30%);
-  color: var(--ui-accent);
-}
-
-.date-picker-popover__day.is-selected {
-  border-color: var(--ui-accent);
-  background: var(--ui-accent);
-  color: var(--ui-accent-contrast);
-}
-
-.date-picker-popover__actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
 }
 
 .project-picker-popover,
@@ -3309,21 +3155,48 @@ onBeforeUnmount(() => {
   }
 
   .mission-control__topbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
+    grid-template-columns: minmax(0, 1fr) 36px 36px;
+    gap: 6px;
+    padding-left: 48px;
   }
 
   .mission-control__sections {
-    padding-left: 48px;
+    display: none;
   }
 
   .mission-control__day-switcher,
   .mission-control__project-switcher,
   .mission-control__archive-switcher,
   .mission-control__section-title {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: center;
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: stretch;
+  }
+
+  .mission-control__day-switcher {
+    grid-template-columns: 32px minmax(0, 1fr) 32px;
+    gap: 2px;
+  }
+
+  .mission-control__day-switcher .icon-button {
+    width: 32px;
+    height: 32px;
+  }
+
+  .mission-control__project-label,
+  .mission-control__archive-label {
+    max-width: none;
+  }
+
+  .mission-control__mobile-section-cycle {
+    display: inline-grid;
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .settings-menu {
+    grid-column: 3;
+    grid-row: 1;
   }
 
   .capture-row {
