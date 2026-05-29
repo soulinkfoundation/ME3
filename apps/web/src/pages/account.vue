@@ -287,6 +287,17 @@ type AppConnectionsResponse = {
   };
 };
 
+type CommerceSettingsResponse = {
+  encryptionConfigured: boolean;
+  stripe: {
+    configured: boolean;
+    source: "environment" | "stored" | "not_configured";
+    keyHint: string | null;
+    keyUpdatedAt: string | null;
+    mode: "direct";
+  };
+};
+
 type AssistantSetupItem = {
   id: "profile" | "email" | "mission-control";
   title: string;
@@ -303,6 +314,7 @@ type AccountSection =
   | "advanced"
   | "mailbox"
   | "ai"
+  | "payments"
   | "plugins";
 
 const auth = useAuthStore();
@@ -358,6 +370,12 @@ const appConnectionsSaving = ref(false);
 const me3Connection = ref<AppConnectionsResponse["me3"] | null>(null);
 const appConnectionsMessage = ref<string | null>(null);
 const appConnectionsError = ref<string | null>(null);
+const commerceLoading = ref(false);
+const commerceSaving = ref(false);
+const commerceSettings = ref<CommerceSettingsResponse | null>(null);
+const stripeSecretInput = ref("");
+const commerceMessage = ref<string | null>(null);
+const commerceError = ref<string | null>(null);
 
 const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
   null,
@@ -367,6 +385,7 @@ const openSection = ref({
   advanced: false,
   mailbox: false,
   ai: false,
+  payments: false,
   plugins: false,
 });
 const showAiModelSection = false;
@@ -692,6 +711,44 @@ const emailSetupReady = computed(() =>
   Boolean(
     mailbox.value?.status === "active" || activeEmailProvider.value?.configured,
   ),
+);
+
+const paymentsStatusLabel = computed(() => {
+  if (commerceLoading.value) return "Loading";
+  if (commerceSettings.value?.stripe.configured) return "Ready";
+  return "Setup required";
+});
+
+const paymentsStatusClass = computed(() =>
+  commerceSettings.value?.stripe.configured ? "active" : "setup_required",
+);
+
+const stripeSourceLabel = computed(() => {
+  const source = commerceSettings.value?.stripe.source;
+  if (source === "environment") return "Wrangler secret";
+  if (source === "stored") return "Account settings";
+  return "Not configured";
+});
+
+const stripeKeyHintLabel = computed(() => {
+  const hint = commerceSettings.value?.stripe.keyHint;
+  return hint ? `Stored key ${hint}` : "No Stripe key saved";
+});
+
+const stripeSecretPlaceholder = computed(() => {
+  const hint = commerceSettings.value?.stripe.keyHint;
+  return hint ? `Paste a new key to replace ${hint}` : "sk_test_...";
+});
+
+const commerceSaveDisabled = computed(
+  () =>
+    commerceSaving.value ||
+    commerceLoading.value ||
+    !stripeSecretInput.value.trim(),
+);
+
+const commerceClearDisabled = computed(
+  () => commerceSaving.value || commerceLoading.value,
 );
 
 const assistantSetupItems = computed<AssistantSetupItem[]>(() => [
@@ -1225,6 +1282,69 @@ async function sendEmailProviderTestMessage() {
   }
 }
 
+function syncCommerceSettings(response: CommerceSettingsResponse) {
+  commerceSettings.value = response;
+  stripeSecretInput.value = "";
+}
+
+async function loadCommerceSettings() {
+  commerceLoading.value = true;
+  commerceError.value = null;
+
+  try {
+    const response = await api.get<CommerceSettingsResponse>("/commerce/status");
+    syncCommerceSettings(response);
+  } catch (e: any) {
+    commerceError.value = e.message || "Failed to load payment settings";
+  } finally {
+    commerceLoading.value = false;
+  }
+}
+
+async function saveCommerceSettings() {
+  if (commerceSaveDisabled.value) return;
+
+  commerceSaving.value = true;
+  commerceMessage.value = null;
+  commerceError.value = null;
+
+  try {
+    const response = await api.put<CommerceSettingsResponse>(
+      "/commerce/settings",
+      {
+        stripeSecretKey: stripeSecretInput.value.trim(),
+      },
+    );
+    syncCommerceSettings(response);
+    commerceMessage.value = "Stripe key saved.";
+  } catch (e: any) {
+    commerceError.value = e.message || "Failed to save payment settings";
+  } finally {
+    commerceSaving.value = false;
+  }
+}
+
+async function clearCommerceStripeKey() {
+  commerceSaving.value = true;
+  commerceMessage.value = null;
+  commerceError.value = null;
+
+  try {
+    const response = await api.put<CommerceSettingsResponse>(
+      "/commerce/settings",
+      {
+        clearStripeSecretKey: true,
+      },
+    );
+    syncCommerceSettings(response);
+    commerceMessage.value = "Stored Stripe key removed.";
+  } catch (e: any) {
+    commerceError.value = e.message || "Failed to remove Stripe key";
+  } finally {
+    commerceSaving.value = false;
+  }
+}
+
 async function loadAppConnections() {
   appConnectionsLoading.value = true;
   appConnectionsError.value = null;
@@ -1326,6 +1446,7 @@ onMounted(async () => {
   void loadEmailProviderSettings();
   void loadPlugins();
   void loadAppConnections();
+  void loadCommerceSettings();
   if (route.query.section === "connections") {
     openSection.value.advanced = true;
   }
@@ -1344,6 +1465,9 @@ onMounted(async () => {
   }
   if (route.query.section === "plugins") {
     openSection.value.plugins = true;
+  }
+  if (route.query.section === "payments" || route.query.section === "commerce") {
+    openSection.value.payments = true;
   }
 });
 </script>
@@ -1726,6 +1850,118 @@ onMounted(async () => {
             <p v-else class="error">
               Mailbox configuration is not available in this Core install.
             </p>
+          </div>
+        </section>
+
+        <section class="card accordion-card primary-section">
+          <button
+            id="account-trigger-payments"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.payments"
+            aria-controls="account-panel-payments"
+            @click="openSection.payments = !openSection.payments"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Payments</h2>
+              <span class="status-badge" :class="paymentsStatusClass">
+                {{ paymentsStatusLabel }}
+              </span>
+              <span class="accordion-header-hint">
+                Stripe Checkout for paid bookings
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-payments"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-payments"
+            :hidden="!openSection.payments"
+          >
+            <div v-if="commerceLoading" class="status-row">
+              Loading payment settings...
+            </div>
+
+            <template v-else>
+              <p class="hint">
+                Add your Stripe secret key here to accept direct paid bookings
+                from your ME3 site. Existing keys are encrypted at rest and
+                never returned to the browser.
+              </p>
+
+              <div class="payment-summary-row">
+                <div>
+                  <span>Stripe source</span>
+                  <strong>{{ stripeSourceLabel }}</strong>
+                </div>
+                <div>
+                  <span>Key</span>
+                  <strong>{{ stripeKeyHintLabel }}</strong>
+                </div>
+              </div>
+
+              <p
+                v-if="
+                  commerceSettings?.stripe.source === 'environment' &&
+                  commerceSettings?.stripe.keyHint
+                "
+                class="field-hint"
+              >
+                A configured Wrangler secret takes priority over any stored
+                account key.
+              </p>
+
+              <p
+                v-if="commerceSettings && !commerceSettings.encryptionConfigured"
+                class="field-hint"
+              >
+                A local encryption key will be initialized before this Stripe
+                key is stored.
+              </p>
+
+              <label class="field payment-key-field">
+                <span>Stripe secret key</span>
+                <input
+                  v-model="stripeSecretInput"
+                  class="input"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck="false"
+                  :placeholder="stripeSecretPlaceholder"
+                  @keydown.enter.prevent="saveCommerceSettings"
+                />
+                <p class="field-hint">
+                  Use a Stripe key that starts with sk_test_ or sk_live_.
+                </p>
+              </label>
+
+              <div class="button-row">
+                <button
+                  class="button primary"
+                  type="button"
+                  :disabled="commerceSaveDisabled"
+                  @click="saveCommerceSettings"
+                >
+                  {{ commerceSaving ? "Saving..." : "Save Stripe key" }}
+                </button>
+                <button
+                  v-if="commerceSettings?.stripe.source === 'stored'"
+                  class="button secondary"
+                  type="button"
+                  :disabled="commerceClearDisabled"
+                  @click="clearCommerceStripeKey"
+                >
+                  Remove stored key
+                </button>
+              </div>
+
+              <p v-if="commerceMessage" class="success">
+                {{ commerceMessage }}
+              </p>
+              <p v-if="commerceError" class="error">{{ commerceError }}</p>
+            </template>
           </div>
         </section>
 
@@ -2707,6 +2943,41 @@ h1 {
   flex: 0 0 auto;
 }
 
+.payment-summary-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.payment-summary-row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.payment-summary-row span {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.payment-summary-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ui-text, var(--color-text));
+  font-size: 14px;
+}
+
+.payment-key-field {
+  margin-top: 16px;
+}
+
 .outbound-sender-panel {
   display: grid;
   gap: 14px;
@@ -3282,7 +3553,8 @@ h1 {
 
   .plugin-meta-grid,
   .plugin-detail-grid,
-  .email-provider-fields {
+  .email-provider-fields,
+  .payment-summary-row {
     grid-template-columns: 1fr;
   }
 

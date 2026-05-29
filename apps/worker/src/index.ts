@@ -103,6 +103,12 @@ import {
   getOrCreateInstallSessionSecret,
 } from "./install-secrets";
 import {
+  CommerceSettingsInputError,
+  getCommerceSettings,
+  getStripeSecretKey,
+  updateCommerceSettings,
+} from "./commerce-settings";
+import {
   buildLandingPageDocument,
   LANDING_PAGES_PLUGIN_ID,
   getLandingPageTemplateId,
@@ -420,17 +426,28 @@ app.get("/api/commerce/status", async (c) => {
 
   return c.json({
     ok: true,
-    stripeConfigured: Boolean(c.env.STRIPE_SECRET_KEY),
-    mode: "direct",
+    ...(await getCommerceSettings(c.env, ownerId)),
   });
 });
 
-app.post("/api/book/:username/checkout-session", async (c) => {
-  const stripe = getStripe(c.env);
-  if (!stripe) return c.json({ error: "Stripe is not configured for this ME3 Core install" }, 503);
+app.put("/api/commerce/settings", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
 
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    return c.json(await updateCommerceSettings(c.env, ownerId, body));
+  } catch (error) {
+    return commerceSettingsErrorResponse(c, error);
+  }
+});
+
+app.post("/api/book/:username/checkout-session", async (c) => {
   const site = await getSiteByUsername(c.env, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const stripe = await getStripe(c.env, site.user_id);
+  if (!stripe) return c.json({ error: "Stripe is not configured for this ME3 Core install" }, 503);
 
   const body = await c.req.json<PaidBookingCheckoutBody>().catch(() => null);
   if (!body) return c.json({ error: "Invalid request body" }, 400);
@@ -570,11 +587,11 @@ app.post("/api/book/:username/checkout-session", async (c) => {
 });
 
 app.post("/api/book/:username/complete-checkout", async (c) => {
-  const stripe = getStripe(c.env);
-  if (!stripe) return c.json({ error: "Stripe is not configured for this ME3 Core install" }, 503);
-
   const site = await getSiteByUsername(c.env, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const stripe = await getStripe(c.env, site.user_id);
+  if (!stripe) return c.json({ error: "Stripe is not configured for this ME3 Core install" }, 503);
 
   const body = await c.req.json<PaidBookingCompletionBody>().catch(() => null);
   const sessionId = normalizeShortText(body?.sessionId, 200);
@@ -4636,6 +4653,13 @@ function socialPublishingErrorResponse(c: AppContext, error: unknown) {
   throw error;
 }
 
+function commerceSettingsErrorResponse(c: AppContext, error: unknown) {
+  if (error instanceof CommerceSettingsInputError) {
+    return c.json({ ok: false, error: error.message }, error.status as any);
+  }
+  throw error;
+}
+
 async function requireMissionControlPlugin(c: AppContext) {
   if (await isCorePluginEnabled(c.env, "me3.mission-control")) return null;
   return c.json({ ok: false, error: "ME3 Mission Control is disabled" }, 403);
@@ -4687,9 +4711,10 @@ function isMissingSubscribersTableError(error: unknown): boolean {
   return message.includes("subscribers") && /no such table|does not exist/i.test(message);
 }
 
-function getStripe(env: Env): Stripe | null {
-  if (!env.STRIPE_SECRET_KEY) return null;
-  return new Stripe(env.STRIPE_SECRET_KEY, {
+async function getStripe(env: Env, ownerId: string): Promise<Stripe | null> {
+  const secretKey = await getStripeSecretKey(env, ownerId);
+  if (!secretKey) return null;
+  return new Stripe(secretKey, {
     apiVersion: "2025-02-24.acacia",
   });
 }

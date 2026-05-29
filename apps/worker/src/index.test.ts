@@ -104,6 +104,14 @@ type StoredMe3ClaimState = {
   install_id: string | null;
   expires_at: string;
 };
+type StoredCommerceSettings = {
+  user_id: string;
+  encrypted_stripe_secret_key: string | null;
+  stripe_key_hint: string | null;
+  stripe_key_updated_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
 type StoredContentItem = {
   id: string;
   site_id: string;
@@ -151,6 +159,7 @@ function createEnv(): Env & {
   socialProviderSettings: StoredSocialProviderSetting[];
   socialOauthStates: StoredSocialOauthState[];
   me3ClaimStates: StoredMe3ClaimState[];
+  commerceSettings: StoredCommerceSettings | null;
   contentItems: StoredContentItem[];
 } {
   const state = {
@@ -174,6 +183,7 @@ function createEnv(): Env & {
     socialProviderSettings: [] as StoredSocialProviderSetting[],
     socialOauthStates: [] as StoredSocialOauthState[],
     me3ClaimStates: [] as StoredMe3ClaimState[],
+    commerceSettings: null as StoredCommerceSettings | null,
     contentItems: [] as StoredContentItem[],
   };
 
@@ -449,6 +459,18 @@ function createEnv(): Env & {
 
               if (sql.includes("INSERT INTO install_secrets")) {
                 state.installSecrets.set(values[0] as string, values[1] as string);
+              }
+
+              if (sql.includes("INSERT INTO commerce_settings")) {
+                const existing = state.commerceSettings;
+                state.commerceSettings = {
+                  user_id: values[0] as string,
+                  encrypted_stripe_secret_key: values[1] as string | null,
+                  stripe_key_hint: values[2] as string | null,
+                  stripe_key_updated_at: values[3] as string | null,
+                  created_at: existing?.created_at || "2026-05-29T10:00:00Z",
+                  updated_at: "2026-05-29T10:05:00Z",
+                };
               }
 
               if (sql.includes("INSERT INTO ai_provider_credentials")) {
@@ -1008,6 +1030,11 @@ function createEnv(): Env & {
                 const value = state.installSecrets.get(values[0] as string);
                 return value ? ({ value } as T) : null;
               }
+              if (sql.includes("FROM commerce_settings")) {
+                return state.commerceSettings?.user_id === values[0]
+                  ? (state.commerceSettings as T)
+                  : null;
+              }
               if (sql.includes("FROM contacts")) {
                 return (
                   state.contacts.find(
@@ -1176,6 +1203,9 @@ function createEnv(): Env & {
     },
     get me3ClaimStates() {
       return state.me3ClaimStates;
+    },
+    get commerceSettings() {
+      return state.commerceSettings;
     },
     get contentItems() {
       return state.contentItems;
@@ -2326,6 +2356,72 @@ describe("ME3 Core Worker auth", () => {
     expect(body.user.timezone).toBe("UTC");
     expect(body.user.locale).toBe("en-US");
     expect(body.user.localeSource).toBe("inferred");
+  });
+
+  it("stores Stripe payment settings for the signed-in owner", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.TOKEN_ENCRYPTION_KEY = undefined;
+
+    const beforeResponse = await app.fetch(
+      new Request("http://localhost/api/commerce/status", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const beforeBody = (await beforeResponse.json()) as {
+      encryptionConfigured: boolean;
+      stripe: { configured: boolean; source: string; keyHint: string | null };
+    };
+
+    expect(beforeResponse.status).toBe(200);
+    expect(beforeBody.encryptionConfigured).toBe(false);
+    expect(beforeBody.stripe).toMatchObject({
+      configured: false,
+      source: "not_configured",
+      keyHint: null,
+    });
+
+    const saveResponse = await app.fetch(
+      new Request("http://localhost/api/commerce/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          stripeSecretKey: ["sk", "test", "accountsettings1234"].join("_"),
+        }),
+      }),
+      env,
+    );
+    const saveBody = (await saveResponse.json()) as {
+      stripe: { configured: boolean; source: string; keyHint: string | null };
+    };
+
+    expect(saveResponse.status).toBe(200);
+    expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
+    expect(saveBody.stripe).toMatchObject({
+      configured: true,
+      source: "stored",
+      keyHint: "***1234",
+    });
+
+    const clearResponse = await app.fetch(
+      new Request("http://localhost/api/commerce/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({ clearStripeSecretKey: true }),
+      }),
+      env,
+    );
+    const clearBody = (await clearResponse.json()) as {
+      stripe: { configured: boolean; source: string; keyHint: string | null };
+    };
+
+    expect(clearResponse.status).toBe(200);
+    expect(clearBody.stripe).toMatchObject({
+      configured: false,
+      source: "not_configured",
+      keyHint: null,
+    });
   });
 
   it("lists curated Core plugins for the signed-in owner", async () => {
