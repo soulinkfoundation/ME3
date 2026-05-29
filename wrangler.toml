@@ -54,6 +54,7 @@ max_retries = 0
 # ME3_SITE_HOST = "yourdomain.com"
 # ME3_ADMIN_HOST = "me3.yourdomain.com"
 # CORE_WEB_ORIGIN = "https://me3.yourdomain.com"
+# CORE_API_ORIGIN = "https://me3.yourdomain.com"
 
 [assets]
 directory = "apps/web/dist"

@@ -3461,9 +3461,12 @@ function getAdminHost(env: Env, requestUrl?: string): string {
 }
 
 function getApiHost(env: Env, requestUrl?: string): string {
+  const explicitAdminHost =
+    normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN);
   return (
     normalizeHost(env.ME3_API_HOST) ||
     hostnameFromUrl(env.CORE_API_ORIGIN) ||
+    explicitAdminHost ||
     prefixedHost("api", getRootCustomDomain(env)) ||
     getAdminHost(env, requestUrl)
   );

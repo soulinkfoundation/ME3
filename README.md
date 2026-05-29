@@ -120,6 +120,16 @@ If the owner wants the apex domain too, configure Cloudflare to redirect `custom
 
 To serve the public profile directly at the apex instead, set `ME3_SITE_HOST = "customdomain.com"` and attach that hostname to the same Worker. Keep the private admin app on a separate hostname such as `me3.customdomain.com`.
 
+For a simpler two-host setup where the private app and API share the same host, set both origins to the admin host:
+
+```toml
+ME3_CUSTOM_DOMAIN = "customdomain.com"
+ME3_SITE_HOST = "customdomain.com"
+ME3_ADMIN_HOST = "me3.customdomain.com"
+CORE_WEB_ORIGIN = "https://me3.customdomain.com"
+CORE_API_ORIGIN = "https://me3.customdomain.com"
+```
+
 The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches the inferred or explicit public site host and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
 
 ### Core File Storage
