@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "releaseChannel": "stable",
   "updateManifestUrl": "https://raw.githubusercontent.com/Soulink-Foundation/ME3/main/updates/stable.json",
   "releaseNotesUrl": "https://github.com/Soulink-Foundation/ME3/releases"
