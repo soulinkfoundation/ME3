@@ -2,7 +2,7 @@
   "name": "me3",
   "version": "0.1.1",
   "private": true,
-  "description": "Installable ME3 Core assistant scaffold",
+  "description": "Personal OS and AI assistant",
   "license": "MIT",
   "type": "module",
   "scripts": {

@@ -14,8 +14,7 @@ definePage({
   alias: ["/login"],
   meta: {
     title: "Set up ME3 Core | Personal AI assistant",
-    description:
-      "Claim your installable ME3 Core personal AI assistant with a ME3 account.",
+    description: "Claim installation with a ME3 account.",
     robots: "noindex,follow",
     ogImage: "/icons/icon-512.png",
   },
