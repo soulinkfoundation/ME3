@@ -84,6 +84,7 @@ type BookingType = {
   offers?: BookingOffer[];
   classes?: BookingClass[];
   retreats?: BookingRetreat[];
+  availability?: { timezone?: string; windows?: Record<string, string[]> };
 };
 
 export type Me3SiteProfile = {
@@ -119,6 +120,7 @@ export type Me3SiteProfile = {
       retreats?: BookingRetreat[];
       bookingTypes?: BookingType[];
       availability?: { timezone?: string; windows?: Record<string, string[]> };
+      bufferTime?: number;
       url?: string;
     };
     gift?: { enabled?: boolean; title?: string; description?: string; icon?: string };
@@ -407,7 +409,7 @@ function generateBooking(profile: Me3SiteProfile): string {
           .join("")}</div>`
       : "";
 
-  return `<section class="booking" id="booking"><h2>${escapeHtml(title)}</h2>${description ? `<p>${escapeHtml(description)}</p>` : ""}${tabs}${generateBookingTypeBody(activeType, book)}</section>`;
+  return `<section class="booking" id="booking"><h2>${escapeHtml(title)}</h2>${description ? `<p>${escapeHtml(description)}</p>` : ""}${tabs}${generateBookingTypeBody(activeType, book, profile)}</section>`;
 }
 
 function normalizeBookingTypes(book: NonNullable<Me3SiteProfile["intents"]>["book"]): BookingType[] {
@@ -424,6 +426,7 @@ function normalizeBookingTypes(book: NonNullable<Me3SiteProfile["intents"]>["boo
         title: item.title || book.title || "1:1",
         description: item.description || book.description || "",
         offers: Array.isArray(item.offers) ? item.offers : [],
+        availability: item.availability || book.availability,
       });
     } else if (item.type === "class") {
       bookingTypes.push({
@@ -450,6 +453,7 @@ function normalizeBookingTypes(book: NonNullable<Me3SiteProfile["intents"]>["boo
       label: "1:1",
       title: book.title || "1:1",
       description: book.description || "",
+      availability: book.availability,
       offers:
         Array.isArray(book.offers) && book.offers.length > 0
           ? book.offers
@@ -489,6 +493,7 @@ function normalizeBookingTypes(book: NonNullable<Me3SiteProfile["intents"]>["boo
 function generateBookingTypeBody(
   type: BookingType,
   book: NonNullable<Me3SiteProfile["intents"]>["book"],
+  profile: Me3SiteProfile,
 ): string {
   if (type.type === "class") {
     const classes = Array.isArray(type.classes) ? type.classes : [];
@@ -527,13 +532,202 @@ function generateBookingTypeBody(
     return `<div class="booking-card${index === 0 ? " active" : ""}"><strong>${escapeHtml(offer.title || `${duration}-min Session`)}</strong><span>${duration} min${price ? ` · ${escapeHtml(price)}` : ""}</span></div>`;
   }).join("");
 
-  return `<div class="booking-session-preview">${cards}</div><label>Select a date:<input type="date"></label><p class="booking-note">Interactive booking calendar will appear here</p>`;
+  const paidOffers = offers.filter((offer) => offer.pricing?.enabled);
+  if (paidOffers.length === 0) {
+    return `<div class="booking-session-preview">${cards}</div><p class="booking-note">Add a paid price in the ME3 wizard to accept booking payments.</p>`;
+  }
+
+  return generatePaidBookingWidget({
+    username: profile.handle || "owner",
+    offers: paidOffers,
+    availability: type.availability || book?.availability || {},
+    bufferTime: book?.bufferTime || 0,
+    fallbackDuration: book?.duration || 30,
+    cards,
+  });
+}
+
+function generatePaidBookingWidget(input: {
+  username: string;
+  offers: BookingOffer[];
+  availability: { timezone?: string; windows?: Record<string, string[]> };
+  bufferTime: number;
+  fallbackDuration: number;
+  cards: string;
+}): string {
+  const normalizedOffers = input.offers.map((offer, index) => ({
+    id: offer.id || slugify(offer.title || `booking-${index + 1}`) || `booking-${index + 1}`,
+    title: offer.title || `${offer.duration || input.fallbackDuration}-min Session`,
+    duration: offer.duration || input.fallbackDuration,
+    pricing: {
+      enabled: offer.pricing?.enabled === true,
+      suggestedAmount: offer.pricing?.suggestedAmount || 0,
+      currency: offer.pricing?.currency || "USD",
+      allowFlexiblePricing: offer.pricing?.allowFlexiblePricing !== false,
+      minimumAmount: offer.pricing?.minimumAmount || 5,
+    },
+  }));
+  const firstOffer = normalizedOffers[0];
+  const config = {
+    username: input.username,
+    timezone: input.availability.timezone || "UTC",
+    windows: input.availability.windows || {},
+    bufferTime: input.bufferTime || 0,
+    offers: normalizedOffers,
+  };
+  const offerControls =
+    normalizedOffers.length > 1
+      ? `<div class="booking-offer-list">${normalizedOffers
+          .map(
+            (offer, index) =>
+              `<button type="button" class="booking-offer-btn${index === 0 ? " active" : ""}" data-offer-id="${escapeHtml(offer.id)}">${escapeHtml(offer.title)}<span>${offer.duration} min · ${escapeHtml(formatPricing(offer.pricing))}</span></button>`,
+          )
+          .join("")}</div>`
+      : "";
+  const amountRow = firstOffer?.pricing.allowFlexiblePricing
+    ? `<label class="booking-field booking-amount-field">Amount (${escapeHtml(firstOffer.pricing.currency)})<input name="amount" type="number" min="${escapeHtml(String(firstOffer.pricing.minimumAmount))}" step="1" value="${escapeHtml(String(firstOffer.pricing.suggestedAmount))}"></label>`
+    : "";
+
+  return `<div class="booking-session-preview">${input.cards}</div>
+    <div class="booking-widget" data-booking-widget>
+      <script type="application/json" data-booking-config>${jsonForScript(config)}</script>
+      ${offerControls}
+      <form class="booking-form">
+        <div class="booking-fields-two">
+          <label class="booking-field">Date<input name="localDate" type="date" required></label>
+          <label class="booking-field">Time<select name="localTime" required disabled><option value="">Choose a date first</option></select></label>
+        </div>
+        ${amountRow}
+        <label class="booking-field">Name<input name="guestName" type="text" autocomplete="name" required></label>
+        <label class="booking-field">Email<input name="guestEmail" type="email" autocomplete="email" required></label>
+        <label class="booking-field">Notes<textarea name="notes" rows="3"></textarea></label>
+        <p class="booking-timezone">Times shown in ${escapeHtml(config.timezone)}</p>
+        <button type="submit" class="booking-submit">Continue to payment</button>
+        <p class="booking-status" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+    <script>${paidBookingWidgetScript()}</script>`;
+}
+
+function paidBookingWidgetScript(): string {
+  return `(function(){
+  var script=document.currentScript;
+  var root=script&&script.previousElementSibling;
+  if(!root||!root.matches('[data-booking-widget]')) return;
+  var config=JSON.parse(root.querySelector('[data-booking-config]').textContent||'{}');
+  var form=root.querySelector('.booking-form');
+  var statusEl=root.querySelector('.booking-status');
+  var dateInput=form.elements.localDate;
+  var timeSelect=form.elements.localTime;
+  var amountInput=form.elements.amount;
+  var selectedOfferId=(config.offers[0]&&config.offers[0].id)||'';
+  var dayNames=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  function setStatus(message,isError){statusEl.textContent=message||'';statusEl.classList.toggle('is-error',!!isError);}
+  function offer(){return config.offers.find(function(item){return item.id===selectedOfferId;})||config.offers[0];}
+  function toMinutes(value){var parts=String(value||'').split(':').map(Number);if(parts.length!==2||parts.some(isNaN))return null;return parts[0]*60+parts[1];}
+  function toTime(value){var h=Math.floor(value/60);var m=value%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');}
+  function dayName(dateValue){if(!dateValue)return '';return dayNames[new Date(dateValue+'T12:00:00Z').getUTCDay()];}
+  function populateTimes(){
+    var selected=offer();
+    timeSelect.innerHTML='';
+    var dateValue=dateInput.value;
+    var windows=(config.windows&&config.windows[dayName(dateValue)])||[];
+    var duration=Number(selected.duration||30);
+    var found=false;
+    windows.forEach(function(windowValue){
+      var parts=String(windowValue).split('-');
+      var start=toMinutes((parts[0]||'').trim());
+      var end=toMinutes((parts[1]||'').trim());
+      if(start===null||end===null)return;
+      for(var t=start;t+duration<=end;t+=15){
+        var value=toTime(t);
+        var option=document.createElement('option');
+        option.value=value;
+        option.textContent=value;
+        timeSelect.appendChild(option);
+        found=true;
+      }
+    });
+    if(!found){
+      var option=document.createElement('option');
+      option.value='';
+      option.textContent=dateValue?'No times available':'Choose a date first';
+      timeSelect.appendChild(option);
+    }
+    timeSelect.disabled=!found;
+  }
+  root.querySelectorAll('.booking-offer-btn').forEach(function(button){
+    button.addEventListener('click',function(){
+      selectedOfferId=button.dataset.offerId||selectedOfferId;
+      root.querySelectorAll('.booking-offer-btn').forEach(function(item){item.classList.toggle('active',item===button);});
+      var selected=offer();
+      if(amountInput&&selected.pricing){
+        amountInput.value=selected.pricing.suggestedAmount||amountInput.value;
+        amountInput.min=selected.pricing.minimumAmount||5;
+        var label=amountInput.closest('label');
+        if(label) label.firstChild.textContent='Amount ('+(selected.pricing.currency||'USD')+')';
+      }
+      populateTimes();
+    });
+  });
+  dateInput.min=new Date().toISOString().slice(0,10);
+  dateInput.addEventListener('change',populateTimes);
+  form.addEventListener('submit',function(event){
+    event.preventDefault();
+    setStatus('Creating secure checkout...');
+    var selected=offer();
+    var payload={
+      offerId:selected.id,
+      localDate:dateInput.value,
+      localTime:timeSelect.value,
+      guestName:form.elements.guestName.value,
+      guestEmail:form.elements.guestEmail.value,
+      notes:form.elements.notes.value,
+      amount:amountInput?Number(amountInput.value):selected.pricing.suggestedAmount,
+      returnUrl:window.location.href.split('#')[0]
+    };
+    fetch('/api/book/'+encodeURIComponent(config.username)+'/checkout-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+      .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Failed to create checkout.');return data;});})
+      .then(function(data){if(data.url){window.location.href=data.url;return;}throw new Error('Stripe checkout URL missing.');})
+      .catch(function(error){setStatus(error.message||'Failed to create checkout.',true);});
+  });
+  var params=new URLSearchParams(window.location.search);
+  if(params.get('booking')==='success'&&params.get('session_id')){
+    setStatus('Confirming your booking...');
+    fetch('/api/book/'+encodeURIComponent(config.username)+'/complete-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:params.get('session_id')})})
+      .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Payment succeeded, but booking confirmation failed.');return data;});})
+      .then(function(){setStatus('Payment successful. Your booking is confirmed.');})
+      .catch(function(error){setStatus(error.message,true);});
+  } else if(params.get('booking')==='cancelled'){
+    setStatus('Checkout cancelled. No payment was taken.',true);
+  }
+})();`;
 }
 
 function bookingTypeLabel(type?: string): string {
   if (type === "class") return "Classes";
   if (type === "retreat") return "Retreats";
   return "1:1";
+}
+
+function jsonForScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
 }
 
 function generateNewsletter(profile: Me3SiteProfile): string {
@@ -711,5 +905,5 @@ function escapeHtml(value: string): string {
 
 function siteCss(vibe: string, accentOverride?: string): string {
   const accent = accentOverride || (vibe === "tech" ? "#00ff88" : "#222222");
-  return `:root{--bg:#faf8f5;--surface:#fff;--text:#24262b;--muted:#6d7078;--border:#e7e2dc;--accent:${accent};--radius:18px;--font:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55}.container{width:min(640px,100%);margin:0 auto;min-height:100vh;background:var(--surface)}.banner{position:relative;height:190px;overflow:hidden;border-radius:0 0 var(--radius) var(--radius);background:#ddd}.banner img{width:100%;height:100%;object-fit:cover;display:block}.link-icon svg,.btn-icon svg{width:18px;height:18px}.main{padding:0 32px 36px}.profile-header{text-align:center;margin-top:-56px;position:relative}.banner+.main .profile-header{margin-top:-56px}.avatar{width:120px;height:120px;border-radius:999px;object-fit:cover;border:5px solid var(--surface);background:var(--surface)}.name{font-size:clamp(2rem,7vw,3rem);line-height:1.05;margin:22px 0 8px;font-weight:800;letter-spacing:0}.location,.bio{color:var(--muted);margin:8px auto;max-width:38rem}.nav{display:flex;gap:8px;justify-content:center;margin:28px 0 24px;flex-wrap:wrap}.nav-link{padding:9px 16px;text-decoration:none;color:var(--muted);font-weight:700}.nav-link.active{background:var(--text);color:var(--surface)}.buttons{display:grid;gap:12px;margin:24px 0}.cta-button{display:flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:14px 18px;text-decoration:none;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:var(--accent);color:#050505}.cta-button.secondary{background:var(--text);color:var(--surface)}.cta-button.outline{background:transparent;color:var(--text);border:2px solid var(--text)}.links{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:22px 0}.link-item{width:44px;height:44px;border-radius:999px;display:grid;place-items:center;color:var(--text);background:rgba(0,0,0,.06)}.link-label{display:none}.testimonials,.booking,.newsletter,.content{margin:32px 0;padding:24px;background:rgba(0,0,0,.055)}.testimonial-card{margin:16px 0}.testimonial-card img{width:48px;height:48px;border-radius:999px;object-fit:cover}.booking-card{border:2px solid var(--border);padding:16px;margin:16px 0;display:grid;gap:4px}.booking label{display:grid;gap:8px;color:var(--muted)}input{font:inherit;padding:14px;border:2px solid var(--border);background:transparent;color:inherit}.booking-note{font-style:italic;color:var(--muted);text-align:center}.newsletter form{display:flex;gap:8px}.newsletter input{min-width:0;flex:1}.newsletter button{font:inherit;font-weight:800;border:0;background:var(--accent);padding:0 18px}.footer{text-align:center;color:var(--muted);padding:24px 32px}.footer a{color:inherit}.page-header{padding:28px 32px 0}.back-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;font-weight:800}.avatar-small{width:42px;height:42px;border-radius:999px;object-fit:cover}.content{padding:32px}.content h1{font-size:2.2rem;line-height:1.1}.content img{max-width:100%;height:auto}.collection-list{display:grid;gap:12px}.collection-card{display:grid;gap:8px;text-decoration:none;color:inherit;padding:18px;border:2px solid var(--border)}@media (max-width:560px){.main{padding:0 20px 28px}.newsletter form{display:grid}}${vibe === "tech" ? `:root{--bg:#0a0a0a;--surface:#0a0a0a;--text:#e0e0e0;--muted:#8f8f8f;--border:#2a2a2a;--accent:${accent};--radius:0;--font:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}.name{text-transform:lowercase;font-family:var(--font)}.name:before{content:"> ";color:var(--accent)}.banner{border-radius:0}.nav-link.active{background:var(--text);color:#111}.links{background:#242424;padding:16px}.link-item{border-radius:0;background:transparent}.booking,.newsletter,.testimonials,.content{background:#242424}.booking-card{background:#050505}.cta-button{border-radius:0}` : ""}`;
+  return `:root{--bg:#faf8f5;--surface:#fff;--text:#24262b;--muted:#6d7078;--border:#e7e2dc;--accent:${accent};--radius:18px;--font:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55}.container{width:min(640px,100%);margin:0 auto;min-height:100vh;background:var(--surface)}.banner{position:relative;height:190px;overflow:hidden;border-radius:0 0 var(--radius) var(--radius);background:#ddd}.banner img{width:100%;height:100%;object-fit:cover;display:block}.link-icon svg,.btn-icon svg{width:18px;height:18px}.main{padding:0 32px 36px}.profile-header{text-align:center;margin-top:-56px;position:relative}.banner+.main .profile-header{margin-top:-56px}.avatar{width:120px;height:120px;border-radius:999px;object-fit:cover;border:5px solid var(--surface);background:var(--surface)}.name{font-size:clamp(2rem,7vw,3rem);line-height:1.05;margin:22px 0 8px;font-weight:800;letter-spacing:0}.location,.bio{color:var(--muted);margin:8px auto;max-width:38rem}.nav{display:flex;gap:8px;justify-content:center;margin:28px 0 24px;flex-wrap:wrap}.nav-link{padding:9px 16px;text-decoration:none;color:var(--muted);font-weight:700}.nav-link.active{background:var(--text);color:var(--surface)}.buttons{display:grid;gap:12px;margin:24px 0}.cta-button{display:flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:14px 18px;text-decoration:none;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:var(--accent);color:#050505}.cta-button.secondary{background:var(--text);color:var(--surface)}.cta-button.outline{background:transparent;color:var(--text);border:2px solid var(--text)}.links{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:22px 0}.link-item{width:44px;height:44px;border-radius:999px;display:grid;place-items:center;color:var(--text);background:rgba(0,0,0,.06)}.link-label{display:none}.testimonials,.booking,.newsletter,.content{margin:32px 0;padding:24px;background:rgba(0,0,0,.055)}.testimonial-card{margin:16px 0}.testimonial-card img{width:48px;height:48px;border-radius:999px;object-fit:cover}.booking-card{border:2px solid var(--border);padding:16px;margin:16px 0;display:grid;gap:4px}.booking-widget{display:grid;gap:16px}.booking-offer-list{display:grid;gap:10px;margin:16px 0}.booking-offer-btn{font:inherit;text-align:left;border:2px solid var(--border);background:transparent;color:inherit;padding:14px;display:grid;gap:4px;cursor:pointer}.booking-offer-btn.active{border-color:var(--accent);background:rgba(0,0,0,.04)}.booking-offer-btn span{color:var(--muted);font-size:.9rem}.booking-form{display:grid;gap:14px;margin-top:16px}.booking-fields-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}.booking-submit{font:inherit;font-weight:800;border:0;background:var(--accent);color:#050505;padding:14px 18px;cursor:pointer}.booking-status{min-height:1.4em;color:var(--muted);margin:0}.booking-status.is-error{color:#b42318}.booking-timezone{color:var(--muted);font-size:.9rem;margin:0}.booking label{display:grid;gap:8px;color:var(--muted)}input,select,textarea{font:inherit;padding:14px;border:2px solid var(--border);background:transparent;color:inherit;box-sizing:border-box;width:100%}textarea{resize:vertical}.booking-note{font-style:italic;color:var(--muted);text-align:center}.newsletter form{display:flex;gap:8px}.newsletter input{min-width:0;flex:1}.newsletter button{font:inherit;font-weight:800;border:0;background:var(--accent);padding:0 18px}.footer{text-align:center;color:var(--muted);padding:24px 32px}.footer a{color:inherit}.page-header{padding:28px 32px 0}.back-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;font-weight:800}.avatar-small{width:42px;height:42px;border-radius:999px;object-fit:cover}.content{padding:32px}.content h1{font-size:2.2rem;line-height:1.1}.content img{max-width:100%;height:auto}.collection-list{display:grid;gap:12px}.collection-card{display:grid;gap:8px;text-decoration:none;color:inherit;padding:18px;border:2px solid var(--border)}@media (max-width:560px){.main{padding:0 20px 28px}.newsletter form{display:grid}.booking-fields-two{grid-template-columns:1fr}}${vibe === "tech" ? `:root{--bg:#0a0a0a;--surface:#0a0a0a;--text:#e0e0e0;--muted:#8f8f8f;--border:#2a2a2a;--accent:${accent};--radius:0;--font:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}.name{text-transform:lowercase;font-family:var(--font)}.name:before{content:"> ";color:var(--accent)}.banner{border-radius:0}.nav-link.active{background:var(--text);color:#111}.links{background:#242424;padding:16px}.link-item{border-radius:0;background:transparent}.booking,.newsletter,.testimonials,.content{background:#242424}.booking-card{background:#050505}.cta-button{border-radius:0}` : ""}`;
 }

@@ -132,6 +132,21 @@ CORE_API_ORIGIN = "https://me3.customdomain.com"
 
 The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches the inferred or explicit public site host and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
 
+### Paid Bookings
+
+ME3 Core supports direct Stripe Checkout for paid 1:1 bookings. Payments use the Stripe account configured on your own Core Worker; this is separate from ME3 Cloud subscription billing.
+
+Configure Stripe on the Worker:
+
+```bash
+cd apps/worker
+pnpm wrangler secret put STRIPE_SECRET_KEY --config wrangler.core.example.toml
+```
+
+Use a Stripe secret key from your own Stripe account. After the secret is set, create a paid booking offer in the site wizard, publish the site, and test the booking form from the live `/me` page or your configured public site domain.
+
+Local development can use `apps/worker/.dev.vars` with `STRIPE_SECRET_KEY=sk_test_...`. Do not commit real Stripe keys.
+
 ### Core File Storage
 
 ME3 Core uses D1 for structured data and R2 for files.

@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import Stripe from "stripe";
 import { Me3UserAgent } from "./user-agent";
 import {
   AiSettingsInputError,
@@ -220,6 +221,19 @@ type LandingPageGenerateBody = {
   sectionImage?: string | null;
   feedback?: string | null;
 };
+type PaidBookingCheckoutBody = {
+  offerId?: unknown;
+  localDate?: unknown;
+  localTime?: unknown;
+  guestName?: unknown;
+  guestEmail?: unknown;
+  notes?: unknown;
+  amount?: unknown;
+  returnUrl?: unknown;
+};
+type PaidBookingCompletionBody = {
+  sessionId?: unknown;
+};
 type SessionPayload = { sub: string; iat: number; exp: number };
 type OwnerRecord = OwnerProfile & { password_hash: string | null };
 type JwtHeader = { alg?: unknown; kid?: unknown; typ?: unknown };
@@ -236,6 +250,56 @@ type SiteFileRecord = {
   content_type: string;
   size: number;
   sha256: string | null;
+  updated_at: string;
+};
+type CoreBookingPricing = {
+  enabled?: boolean;
+  suggestedAmount?: number;
+  currency?: string;
+  allowFree?: boolean;
+  allowFlexiblePricing?: boolean;
+  minimumAmount?: number;
+};
+type CoreBookingOffer = {
+  id?: string;
+  title?: string;
+  description?: string;
+  duration?: number;
+  pricing?: CoreBookingPricing;
+};
+type CoreBookingAvailability = {
+  timezone?: string;
+  windows?: Record<string, string[]>;
+};
+type CoreBookIntent = NonNullable<Me3SiteProfile["intents"]>["book"] & {
+  bufferTime?: number;
+  offers?: CoreBookingOffer[];
+  availability?: CoreBookingAvailability;
+  bookingTypes?: Array<{
+    type?: string;
+    offers?: CoreBookingOffer[];
+    availability?: CoreBookingAvailability;
+  }>;
+};
+type ResolvedPaidBookingOffer = {
+  id: string;
+  title: string;
+  duration: number;
+  pricing: CoreBookingPricing;
+  availability: CoreBookingAvailability;
+};
+type BookingHoldRecord = {
+  id: string;
+  site_id: string;
+  booking_id: string | null;
+  offer_id: string | null;
+  booking_type: "one_to_one" | "class" | "retreat";
+  hold_token: string;
+  slot_start: string;
+  slot_end: string;
+  status: "active" | "confirmed" | "released" | "expired";
+  expires_at: string;
+  created_at: string;
   updated_at: string;
 };
 const SESSION_COOKIE_NAME = "me3_core_session";
@@ -287,7 +351,8 @@ app.use(
 );
 
 app.use("*", async (c, next) => {
-  if (isPublicSiteHost(c.env, c.req.url)) {
+  const pathname = new URL(c.req.url).pathname;
+  if (!pathname.startsWith("/api/") && isPublicSiteHost(c.env, c.req.url)) {
     return servePublicSiteRequest(c.env, c.req.raw);
   }
   await next();
@@ -347,6 +412,271 @@ app.get("/api/config", async (c) => {
 
 app.get("/api/core/version", (c) => {
   return c.json(getCoreVersionInfo());
+});
+
+app.get("/api/commerce/status", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  return c.json({
+    ok: true,
+    stripeConfigured: Boolean(c.env.STRIPE_SECRET_KEY),
+    mode: "direct",
+  });
+});
+
+app.post("/api/book/:username/checkout-session", async (c) => {
+  const stripe = getStripe(c.env);
+  if (!stripe) return c.json({ error: "Stripe is not configured for this ME3 Core install" }, 503);
+
+  const site = await getSiteByUsername(c.env, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const body = await c.req.json<PaidBookingCheckoutBody>().catch(() => null);
+  if (!body) return c.json({ error: "Invalid request body" }, 400);
+
+  const guestName = normalizeShortText(body.guestName, 120);
+  const guestEmail = normalizeEmail(body.guestEmail);
+  const notes = normalizeLongText(body.notes, 2000);
+  const localDate = normalizeShortText(body.localDate, 20);
+  const localTime = normalizeShortText(body.localTime, 20);
+
+  if (!guestName || !guestEmail || !localDate || !localTime) {
+    return c.json({ error: "Name, email, date, and time are required" }, 400);
+  }
+
+  const profile = await loadSiteProfileForCommerce(c.env, site);
+  const bookIntent = profile?.intents?.book as CoreBookIntent | undefined;
+  if (!bookIntent?.enabled) return c.json({ error: "Booking is not enabled for this site" }, 404);
+
+  const offer = resolvePaidOneToOneOffer(bookIntent, normalizeShortText(body.offerId, 100));
+  if (!offer) return c.json({ error: "Paid booking offer not found" }, 404);
+
+  const pricing = offer.pricing;
+  const amount = normalizeBookingAmount(body.amount, pricing);
+  if (!amount.ok) return c.json({ error: amount.error }, 400);
+
+  const slot = resolveBookingSlot({
+    localDate,
+    localTime,
+    durationMinutes: offer.duration,
+    timezone: resolveTimeZone(offer.availability.timezone),
+  });
+  if (!slot) return c.json({ error: "Invalid booking date or time" }, 400);
+  if (slot.startsAtMs <= Date.now() + 5 * 60_000) {
+    return c.json({ error: "Choose a future booking time" }, 400);
+  }
+
+  const availabilityError = validateBookingAvailability(
+    offer.availability,
+    localDate,
+    localTime,
+    offer.duration,
+  );
+  if (availabilityError) return c.json({ error: availabilityError }, 400);
+
+  const overlap = await findConfirmedBookingOverlap(c.env, {
+    siteId: site.id,
+    offerId: offer.id,
+    startsAt: slot.startsAt,
+    endsAt: slot.endsAt,
+  });
+  if (overlap) return c.json({ error: "That time has already been booked" }, 409);
+
+  const activeHold = await findActiveBookingHoldOverlap(c.env, {
+    siteId: site.id,
+    offerId: offer.id,
+    startsAt: slot.startsAt,
+    endsAt: slot.endsAt,
+  });
+  if (activeHold) {
+    return c.json({ error: "That time is being held for another checkout. Try another slot or check back shortly." }, 409);
+  }
+
+  const holdToken = crypto.randomUUID();
+  const holdExpiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  await createBookingHold(c.env, {
+    siteId: site.id,
+    offerId: offer.id,
+    holdToken,
+    startsAt: slot.startsAt,
+    endsAt: slot.endsAt,
+    expiresAt: holdExpiresAt,
+  });
+
+  const requestOrigin = new URL(c.req.url).origin;
+  const returnUrl = normalizeSameOriginReturnUrl(body.returnUrl, requestOrigin);
+  const successUrl = appendQueryParams(returnUrl, {
+    booking: "success",
+    session_id: "{CHECKOUT_SESSION_ID}",
+  });
+  const cancelUrl = appendQueryParams(returnUrl, { booking: "cancelled" });
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      customer_email: guestEmail,
+      line_items: [
+        {
+          price_data: {
+            currency: amount.currency,
+            product_data: {
+              name: offer.title,
+              description: `${localDate} ${localTime} (${offer.duration} minutes)`,
+            },
+            unit_amount: amount.amountCents,
+          },
+          quantity: 1,
+        },
+      ],
+      payment_intent_data: {
+        metadata: {
+          purchase_kind: "booking",
+          site_id: site.id,
+          offer_id: offer.id,
+          booking_type: "one_to_one",
+          hold_token: holdToken,
+          guest_name: guestName,
+          guest_email: guestEmail,
+          notes,
+          starts_at: slot.startsAt,
+          ends_at: slot.endsAt,
+          duration_minutes: String(offer.duration),
+        },
+      },
+      metadata: {
+        purchase_kind: "booking",
+        site_id: site.id,
+        offer_id: offer.id,
+        booking_type: "one_to_one",
+        hold_token: holdToken,
+        guest_name: guestName,
+        guest_email: guestEmail,
+        notes,
+        starts_at: slot.startsAt,
+        ends_at: slot.endsAt,
+        duration_minutes: String(offer.duration),
+      },
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
+    });
+
+    return c.json({ url: session.url, sessionId: session.id });
+  } catch (error) {
+    await releaseBookingHold(c.env, holdToken);
+    throw error;
+  }
+});
+
+app.post("/api/book/:username/complete-checkout", async (c) => {
+  const stripe = getStripe(c.env);
+  if (!stripe) return c.json({ error: "Stripe is not configured for this ME3 Core install" }, 503);
+
+  const site = await getSiteByUsername(c.env, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const body = await c.req.json<PaidBookingCompletionBody>().catch(() => null);
+  const sessionId = normalizeShortText(body?.sessionId, 200);
+  if (!sessionId) return c.json({ error: "Missing Stripe Checkout session ID" }, 400);
+
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+  if (session.payment_status !== "paid") {
+    return c.json({ error: "Payment has not completed yet" }, 400);
+  }
+
+  const metadata = session.metadata || {};
+  if (metadata.purchase_kind !== "booking" || metadata.site_id !== site.id) {
+    return c.json({ error: "Checkout session does not match this site" }, 400);
+  }
+
+  const paymentIntentId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id || null;
+  if (!paymentIntentId) return c.json({ error: "Stripe payment intent missing from session" }, 400);
+
+  const existing = await c.env.DB.prepare(
+    `SELECT id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
+            duration_minutes, calendar_event_id, status, notes, created_at, cancelled_at,
+            payment_intent_id, amount_paid, suggested_amount, currency, payment_status,
+            is_free_booking, paid_at
+     FROM bookings
+     WHERE payment_intent_id = ?`,
+  )
+    .bind(paymentIntentId)
+    .first<DbBooking>();
+  if (existing) return c.json({ ok: true, booking: serializeBooking(existing), alreadyCompleted: true });
+
+  const offerId = metadata.offer_id || null;
+  const startsAt = metadata.starts_at || "";
+  const endsAt = metadata.ends_at || "";
+  const durationMinutes = Number(metadata.duration_minutes || 0);
+  const guestName = metadata.guest_name || "";
+  const guestEmail = metadata.guest_email || "";
+  const notes = metadata.notes || "";
+  const holdToken = metadata.hold_token || "";
+
+  if (!offerId || !startsAt || !endsAt || !durationMinutes || !guestName || !guestEmail || !holdToken) {
+    return c.json({ error: "Checkout session is missing booking details" }, 400);
+  }
+
+  const hold = await findActiveBookingHoldByToken(c.env, holdToken);
+  if (!hold || hold.site_id !== site.id || hold.offer_id !== offerId || hold.slot_start !== startsAt || hold.slot_end !== endsAt) {
+    return c.json({ error: "Booking hold expired. Payment succeeded, but the booking was not confirmed automatically." }, 409);
+  }
+
+  const overlap = await findConfirmedBookingOverlap(c.env, {
+    siteId: site.id,
+    offerId,
+    startsAt,
+    endsAt,
+  });
+  if (overlap) {
+    await releaseBookingHold(c.env, holdToken);
+    return c.json({ error: "That time has already been booked. Payment succeeded, but the booking was not confirmed automatically." }, 409);
+  }
+
+  const bookingId = crypto.randomUUID();
+  await c.env.DB.prepare(
+    `INSERT INTO bookings
+     (id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
+      duration_minutes, status, notes, created_at, payment_intent_id, amount_paid,
+      suggested_amount, currency, payment_status, is_free_booking, paid_at)
+     VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
+             ?, ?, ?, ?, 'succeeded', 0, datetime('now'))`,
+  )
+    .bind(
+      bookingId,
+      site.id,
+      offerId,
+      guestName,
+      guestEmail,
+      startsAt,
+      endsAt,
+      durationMinutes,
+      notes || null,
+      paymentIntentId,
+      session.amount_total || null,
+      session.amount_subtotal || session.amount_total || null,
+      session.currency || null,
+    )
+    .run();
+
+  await confirmBookingHold(c.env, holdToken, bookingId);
+
+  const booking = await c.env.DB.prepare(
+    `SELECT id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
+            duration_minutes, calendar_event_id, status, notes, created_at, cancelled_at,
+            payment_intent_id, amount_paid, suggested_amount, currency, payment_status,
+            is_free_booking, paid_at
+     FROM bookings
+     WHERE id = ?`,
+  )
+    .bind(bookingId)
+    .first<DbBooking>();
+
+  return c.json({ ok: true, booking: booking ? serializeBooking(booking) : { id: bookingId } });
 });
 
 app.post("/api/auth/me3/start", async (c) => {
@@ -4355,6 +4685,372 @@ function isMissingSiteFilesTableError(error: unknown): boolean {
 function isMissingSubscribersTableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("subscribers") && /no such table|does not exist/i.test(message);
+}
+
+function getStripe(env: Env): Stripe | null {
+  if (!env.STRIPE_SECRET_KEY) return null;
+  return new Stripe(env.STRIPE_SECRET_KEY, {
+    apiVersion: "2025-02-24.acacia",
+  });
+}
+
+function normalizeShortText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, maxLength);
+}
+
+function normalizeLongText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, maxLength);
+}
+
+function normalizeEmail(value: unknown): string {
+  const email = normalizeShortText(value, 254).toLowerCase();
+  return EMAIL_REGEX.test(email) ? email : "";
+}
+
+async function loadSiteProfileForCommerce(
+  env: Env,
+  site: DbSite,
+): Promise<Me3SiteProfile | null> {
+  const meJson =
+    (await getSiteFileText(env, site.id, "public/me.json")) ||
+    (await getSiteFileText(env, site.id, "src/me.json"));
+  return meJson ? parseSiteProfile(meJson, site.username) : null;
+}
+
+function resolvePaidOneToOneOffer(
+  book: CoreBookIntent,
+  offerId: string,
+): ResolvedPaidBookingOffer | null {
+  const oneToOneType = Array.isArray(book.bookingTypes)
+    ? book.bookingTypes.find((type) => type?.type === "one_to_one")
+    : null;
+  const availability = oneToOneType?.availability || book.availability || {};
+  const offers =
+    Array.isArray(oneToOneType?.offers) && oneToOneType.offers.length > 0
+      ? oneToOneType.offers
+      : Array.isArray(book.offers) && book.offers.length > 0
+        ? book.offers
+        : [
+            {
+              id: "book-session",
+              title: book.title || "Book a session",
+              duration: book.duration || 30,
+              pricing: book.pricing as CoreBookingPricing | undefined,
+            },
+          ];
+  const selected =
+    offers.find((offer) => (offer.id || slugifyBookingOfferId(offer.title || "book-session")) === offerId) ||
+    offers[0];
+  if (!selected?.pricing?.enabled) return null;
+  const pricing = selected.pricing;
+  if (
+    typeof pricing.suggestedAmount !== "number" ||
+    !Number.isFinite(pricing.suggestedAmount) ||
+    pricing.suggestedAmount <= 0 ||
+    !pricing.currency
+  ) {
+    return null;
+  }
+
+  const duration =
+    typeof selected.duration === "number" && Number.isFinite(selected.duration)
+      ? Math.max(15, Math.min(24 * 60, Math.round(selected.duration)))
+      : typeof book.duration === "number" && Number.isFinite(book.duration)
+        ? Math.max(15, Math.min(24 * 60, Math.round(book.duration)))
+        : 30;
+
+  return {
+    id: selected.id || slugifyBookingOfferId(selected.title || "book-session") || "book-session",
+    title: selected.title || book.title || "Book a session",
+    duration,
+    pricing,
+    availability,
+  };
+}
+
+function slugifyBookingOfferId(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+function normalizeBookingAmount(
+  value: unknown,
+  pricing: CoreBookingPricing,
+): { ok: true; amountCents: number; currency: string } | { ok: false; error: string } {
+  const suggestedAmount = Number(pricing.suggestedAmount);
+  const requestedAmount =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : suggestedAmount;
+
+  if (!Number.isFinite(requestedAmount)) {
+    return { ok: false, error: "Amount must be a valid number" };
+  }
+
+  if (pricing.allowFlexiblePricing === false && requestedAmount !== suggestedAmount) {
+    return { ok: false, error: `Amount must be ${suggestedAmount} ${pricing.currency}` };
+  }
+
+  const minimumAmount =
+    typeof pricing.minimumAmount === "number" && Number.isFinite(pricing.minimumAmount)
+      ? pricing.minimumAmount
+      : 5;
+  if (requestedAmount < minimumAmount) {
+    return { ok: false, error: `Minimum amount is ${minimumAmount} ${pricing.currency || "USD"}` };
+  }
+
+  return {
+    ok: true,
+    amountCents: Math.round(requestedAmount * 100),
+    currency: String(pricing.currency || "USD").toLowerCase(),
+  };
+}
+
+function resolveBookingSlot(input: {
+  localDate: string;
+  localTime: string;
+  durationMinutes: number;
+  timezone: string;
+}): { startsAt: string; endsAt: string; startsAtMs: number } | null {
+  const dateMatch = input.localDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = input.localTime.match(/^(\d{2}):(\d{2})$/);
+  if (!dateMatch || !timeMatch) return null;
+
+  const [, year, month, day] = dateMatch.map(Number);
+  const [, hour, minute] = timeMatch.map(Number);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) {
+    return null;
+  }
+
+  const startsAtMs = getUtcMsForLocalTime(
+    { year, month, day, hour, minute },
+    input.timezone,
+  );
+  const endsAtMs = startsAtMs + input.durationMinutes * 60_000;
+  return {
+    startsAt: new Date(startsAtMs).toISOString(),
+    endsAt: new Date(endsAtMs).toISOString(),
+    startsAtMs,
+  };
+}
+
+function validateBookingAvailability(
+  availability: CoreBookingAvailability,
+  localDate: string,
+  localTime: string,
+  durationMinutes: number,
+): string | null {
+  const windows = availability.windows || {};
+  const weekday = weekdayForDate(localDate);
+  if (!weekday) return "Invalid booking date";
+  const dayWindows = Array.isArray(windows[weekday]) ? windows[weekday] : [];
+  if (dayWindows.length === 0) return "This date is not available for bookings";
+
+  const startMinutes = timeToMinutes(localTime);
+  if (startMinutes === null) return "Invalid booking time";
+  const endMinutes = startMinutes + durationMinutes;
+
+  for (const window of dayWindows) {
+    const [windowStart, windowEnd] = String(window).split("-").map((part) => part.trim());
+    const windowStartMinutes = timeToMinutes(windowStart);
+    const windowEndMinutes = timeToMinutes(windowEnd);
+    if (windowStartMinutes === null || windowEndMinutes === null) continue;
+    if (startMinutes >= windowStartMinutes && endMinutes <= windowEndMinutes) {
+      return null;
+    }
+  }
+
+  return "That time is outside the published booking availability";
+}
+
+function weekdayForDate(localDate: string): string | null {
+  const match = localDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const [, year, month, day] = match.map(Number);
+  const weekdayIndex = new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay();
+  return [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ][weekdayIndex];
+}
+
+function timeToMinutes(value: string): number | null {
+  const match = value.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+async function findConfirmedBookingOverlap(
+  env: Env,
+  input: { siteId: string; offerId: string; startsAt: string; endsAt: string },
+): Promise<DbBooking | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
+              duration_minutes, calendar_event_id, status, notes, created_at, cancelled_at,
+              payment_intent_id, amount_paid, suggested_amount, currency, payment_status,
+              is_free_booking, paid_at
+       FROM bookings
+       WHERE site_id = ?
+         AND status = 'confirmed'
+         AND (? IS NULL OR offer_id = ?)
+         AND starts_at < ?
+         AND ends_at > ?
+       LIMIT 1`,
+    )
+      .bind(input.siteId, input.offerId, input.offerId, input.endsAt, input.startsAt)
+      .first<DbBooking>()) || null
+  );
+}
+
+async function findActiveBookingHoldOverlap(
+  env: Env,
+  input: { siteId: string; offerId: string; startsAt: string; endsAt: string },
+): Promise<BookingHoldRecord | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT id, site_id, booking_id, offer_id, booking_type, hold_token, slot_start, slot_end,
+              status, expires_at, created_at, updated_at
+       FROM booking_holds
+       WHERE site_id = ?
+         AND status = 'active'
+         AND expires_at > datetime('now')
+         AND (? IS NULL OR offer_id = ?)
+         AND slot_start < ?
+         AND slot_end > ?
+       LIMIT 1`,
+    )
+      .bind(input.siteId, input.offerId, input.offerId, input.endsAt, input.startsAt)
+      .first<BookingHoldRecord>()) || null
+  );
+}
+
+async function findActiveBookingHoldByToken(
+  env: Env,
+  holdToken: string,
+): Promise<BookingHoldRecord | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT id, site_id, booking_id, offer_id, booking_type, hold_token, slot_start, slot_end,
+              status, expires_at, created_at, updated_at
+       FROM booking_holds
+       WHERE hold_token = ?
+         AND status = 'active'
+         AND expires_at > datetime('now')`,
+    )
+      .bind(holdToken)
+      .first<BookingHoldRecord>()) || null
+  );
+}
+
+async function createBookingHold(
+  env: Env,
+  input: {
+    siteId: string;
+    offerId: string;
+    holdToken: string;
+    startsAt: string;
+    endsAt: string;
+    expiresAt: string;
+  },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO booking_holds
+     (id, site_id, booking_id, offer_id, booking_type, hold_token, slot_start, slot_end,
+      status, expires_at, created_at, updated_at)
+     VALUES (?, ?, NULL, ?, 'one_to_one', ?, ?, ?, 'active', ?, datetime('now'), datetime('now'))`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      input.siteId,
+      input.offerId,
+      input.holdToken,
+      input.startsAt,
+      input.endsAt,
+      input.expiresAt,
+    )
+    .run();
+}
+
+async function releaseBookingHold(env: Env, holdToken: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE booking_holds
+     SET status = 'released', updated_at = datetime('now')
+     WHERE hold_token = ? AND status = 'active'`,
+  )
+    .bind(holdToken)
+    .run();
+}
+
+async function confirmBookingHold(
+  env: Env,
+  holdToken: string,
+  bookingId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE booking_holds
+     SET status = 'confirmed', booking_id = ?, updated_at = datetime('now')
+     WHERE hold_token = ? AND status = 'active'`,
+  )
+    .bind(bookingId, holdToken)
+    .run();
+}
+
+function normalizeSameOriginReturnUrl(value: unknown, fallbackOrigin: string): string {
+  if (typeof value !== "string") return fallbackOrigin;
+  try {
+    const parsed = new URL(value);
+    if (parsed.origin !== fallbackOrigin) return fallbackOrigin;
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return fallbackOrigin;
+  }
+}
+
+function appendQueryParams(url: string, params: Record<string, string>): string {
+  const parsed = new URL(url);
+  for (const [key, value] of Object.entries(params)) {
+    parsed.searchParams.set(key, value);
+  }
+  return parsed.toString().replace("%7BCHECKOUT_SESSION_ID%7D", "{CHECKOUT_SESSION_ID}");
+}
+
+function serializeBooking(booking: DbBooking) {
+  return {
+    id: booking.id,
+    offerId: booking.offer_id,
+    bookingType: booking.booking_type || "one_to_one",
+    guestName: booking.guest_name,
+    guestEmail: booking.guest_email,
+    startsAt: booking.starts_at,
+    endsAt: booking.ends_at,
+    durationMinutes: booking.duration_minutes,
+    status: booking.status,
+    notes: booking.notes,
+    paymentStatus: booking.payment_status || "not_required",
+    amountPaid: booking.amount_paid,
+    currency: booking.currency,
+    paidAt: booking.paid_at,
+  };
 }
 
 function normalizeUsername(value: unknown): string {

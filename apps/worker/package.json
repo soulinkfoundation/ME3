@@ -12,13 +12,14 @@
   },
   "dependencies": {
     "@me3-core/assistant-jobs": "workspace:*",
-    "@me3/knowledge": "workspace:*",
     "@me3-core/plugin-agent-chat": "workspace:*",
     "@me3-core/plugin-calendar": "workspace:*",
     "@me3-core/plugin-landing-pages": "workspace:*",
     "@me3-core/plugin-mission-control": "workspace:*",
     "@me3-core/plugin-social-publishing": "workspace:*",
-    "hono": "^4.3.0"
+    "@me3/knowledge": "workspace:*",
+    "hono": "^4.3.0",
+    "stripe": "^17.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240405.0",
