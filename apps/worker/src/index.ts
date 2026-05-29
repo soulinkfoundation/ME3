@@ -2359,8 +2359,8 @@ app.post("/api/domains/:username", async (c) => {
 
   const body = await c.req.json<{ domain?: unknown }>().catch((): { domain?: unknown } => ({}));
   const domain = normalizeDomain(body.domain);
-  if (!domain || !domain.startsWith("www.")) {
-    return c.json({ error: "Use a www subdomain, for example www.yourdomain.com." }, 400);
+  if (!isValidPublicSiteDomain(domain)) {
+    return c.json({ error: "Use a domain you control, for example kieranbutler.com or www.kieranbutler.com." }, 400);
   }
 
   const status = getCoreDomainState(c.env, site, domain);
@@ -3412,6 +3412,15 @@ function normalizeDomain(value: unknown): string {
   if (!trimmed) return "";
   const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
   return normalizeHost(withoutProtocol.split("/")[0]);
+}
+
+function isValidPublicSiteDomain(domain: string): boolean {
+  if (!domain || domain.length > 253) return false;
+  if (domain.includes("*") || domain.includes("_")) return false;
+  if (!domain.includes(".")) return false;
+  return domain
+    .split(".")
+    .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
 }
 
 function hostnameFromUrl(value: string | null | undefined): string {

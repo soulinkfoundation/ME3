@@ -47,6 +47,14 @@ max_retries = 0
 # name = "EMAIL"
 # allowed_sender_addresses = ["hello@example.com"]
 
+[vars]
+# Optional custom-domain setup. Leave these commented until you attach the
+# matching hostnames to this Worker in Cloudflare.
+# ME3_CUSTOM_DOMAIN = "yourdomain.com"
+# ME3_SITE_HOST = "yourdomain.com"
+# ME3_ADMIN_HOST = "me3.yourdomain.com"
+# CORE_WEB_ORIGIN = "https://me3.yourdomain.com"
+
 [assets]
 directory = "apps/web/dist"
 binding = "ASSETS"

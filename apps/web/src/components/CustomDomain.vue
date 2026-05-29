@@ -24,6 +24,10 @@ const isConnected = computed(
   () => domainStatus.value?.connected && domainStatus.value?.domain,
 );
 const isDomainActive = computed(() => domainStatus.value?.status === "active");
+const workerFallbackUrl = computed(() => {
+  if (typeof window === "undefined") return "/me";
+  return `${window.location.origin.replace(/\/+$/, "")}/me`;
+});
 onMounted(async () => {
   await loadDomainStatus();
 });
@@ -37,9 +41,9 @@ async function connectDomain() {
   const domainToConnect = domainInputForConnect.value;
   if (!domainToConnect) return;
 
-  if (!isWwwDomain.value) {
+  if (!isValidDomain.value) {
     domainError.value =
-      "Please use a www subdomain (e.g., www.yourdomain.com).";
+      "Enter a domain you control, for example kieranbutler.com or www.kieranbutler.com.";
     return;
   }
 
@@ -140,13 +144,45 @@ const domainInputForConnect = computed(() => {
   return normalizedDomainInput.value;
 });
 
-const isWwwDomain = computed(() =>
-  domainInputForConnect.value.startsWith("www."),
+const isValidDomain = computed(() =>
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+    domainInputForConnect.value,
+  ),
 );
 
 const domainPreview = computed(() => {
-  return isWwwDomain.value ? domainInputForConnect.value : "";
+  return isValidDomain.value ? domainInputForConnect.value : "";
 });
+
+const rootDomain = computed(() => {
+  const domain = domainStatus.value?.domain || domainInputForConnect.value;
+  if (!domain) return "";
+  return domain.startsWith("www.") ? domain.slice(4) : domain;
+});
+
+const adminHost = computed(() => {
+  if (domainStatus.value?.admin_host) return domainStatus.value.admin_host;
+  return rootDomain.value ? `me3.${rootDomain.value}` : "";
+});
+
+const setupDomain = computed(() => domainStatus.value?.domain || domainPreview.value);
+
+const wranglerSnippet = computed(() => {
+  if (!setupDomain.value || !rootDomain.value || !adminHost.value) return "";
+  return [
+    `[vars]`,
+    `ME3_CUSTOM_DOMAIN = "${rootDomain.value}"`,
+    `ME3_SITE_HOST = "${setupDomain.value}"`,
+    `ME3_ADMIN_HOST = "${adminHost.value}"`,
+    `CORE_WEB_ORIGIN = "https://${adminHost.value}"`,
+  ].join("\n");
+});
+
+const setupHostnames = computed(() =>
+  [setupDomain.value, adminHost.value].filter(
+    (hostname, index, all) => hostname && all.indexOf(hostname) === index,
+  ),
+);
 </script>
 
 <template>
@@ -154,6 +190,13 @@ const domainPreview = computed(() => {
     <div class="domain-management">
       <!-- Connected domain -->
       <div v-if="isConnected" class="connected-domain">
+        <div class="fallback-row">
+          <span>Worker fallback</span>
+          <a :href="workerFallbackUrl" target="_blank" rel="noopener">
+            {{ workerFallbackUrl }}
+          </a>
+        </div>
+
         <div class="domain-info">
           <div class="domain-header">
             <span class="domain-name">{{ domainStatus?.domain }}</span>
@@ -185,6 +228,29 @@ const domainPreview = computed(() => {
             Complete the Cloudflare setup for this Core install, then click
             Check Status.
           </p>
+
+          <div v-if="wranglerSnippet" class="setup-card">
+            <div class="setup-card__header">
+              <strong>1. Add these Worker vars</strong>
+              <button
+                class="copy-btn"
+                @click="copyToClipboard(wranglerSnippet, 'wrangler')"
+              >
+                {{ copySuccess === "wrangler" ? "✓" : "Copy" }}
+              </button>
+            </div>
+            <pre><code>{{ wranglerSnippet }}</code></pre>
+          </div>
+
+          <div v-if="setupHostnames.length" class="setup-card">
+            <strong>2. Attach custom domains to this Worker</strong>
+            <ul class="hostname-list">
+              <li v-for="hostname in setupHostnames" :key="hostname">
+                <code>{{ hostname }}</code>
+                <span>same ME3 Worker</span>
+              </li>
+            </ul>
+          </div>
 
           <ol
             v-if="domainStatus?.instructions?.length"
@@ -287,6 +353,13 @@ const domainPreview = computed(() => {
 
       <!-- No domain connected -->
       <div v-else class="no-domain">
+        <div class="fallback-row">
+          <span>Available now</span>
+          <a :href="workerFallbackUrl" target="_blank" rel="noopener">
+            {{ workerFallbackUrl }}
+          </a>
+        </div>
+
         <!-- Connect existing domain -->
         <div v-if="!showDomainInput" class="domain-actions">
           <button class="button primary" @click="showDomainInput = true">
@@ -300,14 +373,14 @@ const domainPreview = computed(() => {
             <input
               v-model="newDomain"
               type="text"
-              placeholder="www.yourdomain.com"
+              placeholder="yourdomain.com"
               class="domain-input"
               @keyup.enter="connectDomain"
             />
             <button
               class="button primary"
               :disabled="
-                domainLoading || !normalizedDomainInput || !isWwwDomain
+                domainLoading || !normalizedDomainInput || !isValidDomain
               "
               @click="connectDomain"
             >
@@ -322,8 +395,28 @@ const domainPreview = computed(() => {
               Will connect: <strong>{{ domainPreview }}</strong>
             </span>
             <span v-else-if="normalizedDomainInput" class="domain-note">
-              Use <strong>www</strong> (example: www.yourdomain.com).
+              Use a domain you control, like <strong>kieranbutler.com</strong>
+              or <strong>www.kieranbutler.com</strong>.
             </span>
+          </div>
+          <div v-if="wranglerSnippet" class="setup-card">
+            <div class="setup-card__header">
+              <strong>Generated Worker vars</strong>
+              <button
+                class="copy-btn"
+                @click="copyToClipboard(wranglerSnippet, 'wrangler')"
+              >
+                {{ copySuccess === "wrangler" ? "✓" : "Copy" }}
+              </button>
+            </div>
+            <pre><code>{{ wranglerSnippet }}</code></pre>
+            <p>
+              After redeploying, attach
+              <template v-for="(hostname, index) in setupHostnames" :key="hostname">
+                <code>{{ hostname }}</code>{{ index < setupHostnames.length - 1 ? " and " : "" }}
+              </template>
+              to this Worker in Cloudflare.
+            </p>
           </div>
           <p v-if="domainError" class="error">{{ domainError }}</p>
         </div>
@@ -412,6 +505,36 @@ const domainPreview = computed(() => {
 
 .domain-actions .button {
   width: 100%;
+}
+
+.fallback-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.fallback-row span {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.fallback-row a {
+  color: var(--color-text);
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.fallback-row a:hover {
+  text-decoration: underline;
 }
 
 .connected-domain {
@@ -505,6 +628,70 @@ const domainPreview = computed(() => {
   color: var(--color-text-muted);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.setup-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  margin-bottom: 14px;
+  background: var(--color-border);
+  border-radius: 8px;
+}
+
+.setup-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.setup-card strong {
+  font-size: 13px;
+}
+
+.setup-card pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  background: var(--color-bg);
+  border-radius: 6px;
+}
+
+.setup-card code {
+  font-size: 12px;
+}
+
+.setup-card p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.hostname-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hostname-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.hostname-list code {
+  padding: 4px 8px;
+  background: var(--color-bg);
+  border-radius: 4px;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
 }
 
 .dns-tip {
@@ -676,6 +863,19 @@ const domainPreview = computed(() => {
   border-radius: 8px;
   background: var(--color-bg);
   color: var(--color-text);
+}
+
+@media (max-width: 720px) {
+  .input-row,
+  .fallback-row,
+  .hostname-list li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fallback-row a {
+    text-align: left;
+  }
 }
 
 .domain-input::placeholder {

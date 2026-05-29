@@ -52,7 +52,9 @@ ENVIRONMENT = "local"
 CORE_WEB_ORIGIN = "http://localhost:4000"
 CORE_API_ORIGIN = "http://localhost:8787"
 # Production two-host setup:
-# ME3_CUSTOM_DOMAIN = "customdomain.com"
-# Core infers me3.customdomain.com, api.customdomain.com, and www.customdomain.com.
+# ME3_CUSTOM_DOMAIN = "yourdomain.com"
+# ME3_SITE_HOST = "yourdomain.com"
+# ME3_ADMIN_HOST = "me3.yourdomain.com"
+# CORE_WEB_ORIGIN = "https://me3.yourdomain.com"
 # ME3_SITE_USERNAME = "owner"
 ME3_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"

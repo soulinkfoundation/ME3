@@ -2161,9 +2161,10 @@ onMounted(async () => {
                 </div>
 
                 <p class="hint">
-                  Connect the Cloudflare-managed domain people should use for your
-                  public ME3 site. The same domain can also be used for mailbox
-                  addresses after Email Routing is enabled.
+                  Your profile works on the Worker URL first. When you are
+                  ready, choose the domain people should use for the public
+                  site and this panel will generate the Worker vars and
+                  Cloudflare custom-domain steps.
                 </p>
 
                 <div v-if="sites.loading" class="status-row">
