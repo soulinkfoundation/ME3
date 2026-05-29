@@ -1,6 +1,6 @@
 {
   "name": "me3",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Installable ME3 Core assistant scaffold",
   "license": "MIT",
