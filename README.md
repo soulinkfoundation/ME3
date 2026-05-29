@@ -40,11 +40,28 @@ Check for a newer stable release from the copied repository:
 pnpm update:check
 ```
 
-Update from a deploy-button-created repository:
+Update from a deploy-button-created repository with the reusable updater:
+
+```bash
+pnpm update:core
+git push origin main
+```
+
+The updater adds the `upstream` remote if it is missing, fetches release tags, connects copied Deploy-button history to the installed upstream tag when needed, merges the latest stable release, then runs `pnpm install`, `pnpm update:doctor`, and `pnpm build`.
+
+If your install predates `pnpm update:core`, update manually once to the release that adds it, or bootstrap the latest updater from Core:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Soulink-Foundation/ME3/main/scripts/update-core.mjs -o /tmp/me3-update-core.mjs
+node /tmp/me3-update-core.mjs
+git push origin main
+```
+
+Manual update path:
 
 ```bash
 git status
-git remote add upstream https://github.com/Soulink-Foundation/me3.git # only needed once
+git remote add upstream https://github.com/Soulink-Foundation/ME3.git # only needed once
 git fetch upstream --tags
 git merge vX.Y.Z
 pnpm install

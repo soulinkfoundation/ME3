@@ -90,6 +90,11 @@ check(
   Boolean(packageJson.scripts?.["update:check"]),
   "Expected package.json scripts.update:check.",
 );
+check(
+  "Core update script is available",
+  Boolean(packageJson.scripts?.["update:core"]),
+  "Expected package.json scripts.update:core.",
+);
 
 if (args.json) {
   console.log(JSON.stringify({ ok: checks.every((item) => item.ok), checks }, null, 2));

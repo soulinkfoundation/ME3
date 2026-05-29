@@ -7,7 +7,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const coreMetadataPath = path.join(rootDir, "me3-core.json");
 const packageJsonPath = path.join(rootDir, "package.json");
 const defaultManifestUrl =
-  "https://raw.githubusercontent.com/Soulink-Foundation/me3/main/updates/stable.json";
+  "https://raw.githubusercontent.com/Soulink-Foundation/ME3/main/updates/stable.json";
 
 const args = parseArgs(process.argv.slice(2));
 const coreMetadata = await loadInstalledCoreMetadata();
@@ -152,12 +152,8 @@ function printHumanResult(result) {
   if (result.releaseNotesUrl) console.log(`Release notes: ${result.releaseNotesUrl}`);
   console.log("");
   console.log("MVP update path:");
-  console.log("  git remote add upstream https://github.com/Soulink-Foundation/me3.git # if missing");
-  console.log("  git fetch upstream --tags");
-  console.log(`  git merge ${result.latestTag || `v${result.latestVersion}`}`);
-  console.log("  pnpm install");
-  console.log("  pnpm build");
-  console.log("  pnpm deploy");
+  console.log("  pnpm update:core");
+  console.log("  git push origin main");
 }
 
 function normalizeVersion(value) {

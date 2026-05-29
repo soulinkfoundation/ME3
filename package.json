@@ -12,6 +12,7 @@
     "init:cloudflare": "node scripts/init-cloudflare.mjs",
     "generate:llms": "node scripts/generate-llms.mjs",
     "update:check": "node scripts/check-updates.mjs",
+    "update:core": "node scripts/update-core.mjs",
     "update:doctor": "node scripts/update-doctor.mjs",
     "setup:dev-vars": "node scripts/create-dev-vars.mjs",
     "storage:r2:provision": "node scripts/provision-r2.mjs",
