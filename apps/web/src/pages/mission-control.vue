@@ -9,6 +9,7 @@ import {
 import { ApiError, api } from "../api";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import UiIcon from "../components/UiIcon.vue";
+import { useAppToast } from "../composables/useAppToast";
 import type { UiIconName } from "../utils/icons";
 
 definePage({
@@ -219,6 +220,7 @@ type ProjectBoardStatus = ProjectBoardColumn["id"];
 
 const route = useRoute();
 const router = useRouter();
+const { toastSuccess } = useAppToast();
 
 const primarySections: PrimaryMissionSection[] = ["today", "projects"];
 const settingsSections: SettingsMissionSection[] = [
@@ -270,7 +272,6 @@ const daemon = ref<MissionDaemonStatus | null>(null);
 const activity = ref<MissionActivity[]>([]);
 const loading = ref(false);
 const error = ref("");
-const notice = ref("");
 const captureText = ref("");
 const captureType = ref<MissionCaptureType>("task");
 const manualCaptureType = ref(false);
@@ -337,12 +338,13 @@ const visibleScheduledTasks = computed(() =>
   tasksDueToday.value.filter((task) => task.sourceKind !== "capture"),
 );
 const openItemCount = computed(() => openCaptures.value.length + visibleScheduledTasks.value.length);
+const selectedDayIsLoaded = computed(() => day.value?.date === selectedDate.value && !loading.value);
 const showCaptureList = computed(
   () =>
-    loading.value ||
-    openCaptures.value.length > 0 ||
-    doneCaptures.value.length > 0 ||
-    visibleScheduledTasks.value.length > 0,
+    selectedDayIsLoaded.value &&
+    (openCaptures.value.length > 0 ||
+      doneCaptures.value.length > 0 ||
+      visibleScheduledTasks.value.length > 0),
 );
 const journalStatusText = computed(() => {
   if (journalState.value === "saving") return "Saving";
@@ -457,17 +459,20 @@ const selectedProjectArchiveTask = computed(
 );
 
 async function loadOverview() {
+  const requestDate = selectedDate.value;
   loading.value = true;
   error.value = "";
   try {
     const response = await api.get<MissionOverviewResponse>(
-      `/mission-control/overview?date=${encodeURIComponent(selectedDate.value)}`,
+      `/mission-control/overview?date=${encodeURIComponent(requestDate)}`,
     );
+    if (selectedDate.value !== requestDate) return;
     applyOverview(response);
   } catch (e) {
+    if (selectedDate.value !== requestDate) return;
     error.value = e instanceof ApiError ? e.message : "Mission Control could not load";
   } finally {
-    loading.value = false;
+    if (selectedDate.value === requestDate) loading.value = false;
   }
 }
 
@@ -662,7 +667,7 @@ async function submitCapture() {
     captureType.value = "task";
     schedulePickerOpen.value = false;
     scheduleDateTime.value = "";
-    notice.value = `${captureTypeLabel(response.capture.type)} captured`;
+    toastSuccess(`${captureTypeLabel(response.capture.type)} captured`);
     await loadOverview();
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "Capture failed";
@@ -911,7 +916,7 @@ async function addProject() {
     });
     selectedProjectId.value ||= response.project.id;
     selectedProjectDetailId.value = response.project.id;
-    notice.value = "Project added";
+    toastSuccess("Project added");
     projectModalOpen.value = false;
   } catch (e) {
     projectError.value = e instanceof ApiError ? e.message : "Could not create project";
@@ -1121,7 +1126,7 @@ async function approveMemory(item: MissionMemory) {
       {},
     );
     replaceMemory(response.memory);
-    notice.value = "Memory approved";
+    toastSuccess("Memory approved");
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "Could not approve memory";
   } finally {
@@ -1135,7 +1140,7 @@ async function forgetMemory(item: MissionMemory) {
   try {
     await api.delete<{ ok: true }>(`/mission-control/memory/${encodeURIComponent(item.id)}`);
     memory.value = memory.value.filter((entry) => entry.id !== item.id);
-    notice.value = "Memory forgotten";
+    toastSuccess("Memory forgotten");
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "Could not forget memory";
   } finally {
@@ -1173,7 +1178,7 @@ async function startDaemonPairing() {
     }>("/mission-control/daemon/pairing/start", {
       displayName: "Local daemon",
     });
-    notice.value = `Pairing code ${response.code}`;
+    toastSuccess(`Pairing code ${response.code}`);
     await loadOverview();
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "Could not start pairing";
@@ -1626,7 +1631,6 @@ onBeforeUnmount(() => {
     </header>
 
     <p v-if="error" class="mission-control__message is-error">{{ error }}</p>
-    <p v-else-if="notice" class="mission-control__message">{{ notice }}</p>
 
     <section v-show="activeSection === 'today'" class="mission-page">
       <div class="daily-sheet">
