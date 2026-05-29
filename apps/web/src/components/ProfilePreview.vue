@@ -60,10 +60,7 @@ const props = defineProps<{
 
 // Current view: 'home' or a page slug
 const currentView = ref<string>("home");
-const showQrModal = ref(false);
 const giftModalOpen = ref(false);
-const agentPromptCopied = ref(false);
-let agentPromptCopyTimeout: number | null = null;
 
 function openGiftModal() {
   giftModalOpen.value = true;
@@ -73,24 +70,6 @@ function closeGiftModal() {
   giftModalOpen.value = false;
 }
 
-const shareHandle = computed(() => {
-  const handle = props.profile.handle?.trim();
-  return handle || "username";
-});
-
-const shareUrl = computed(() => `https://${shareHandle.value}.example.com`);
-const meJsonUrl = computed(() => `${shareUrl.value}/me.json`);
-const qrImageUrl = computed(() => {
-  const encoded = encodeURIComponent(shareUrl.value);
-  return `https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=${encoded}`;
-});
-const agentPrompt = computed(
-  () =>
-    `Use this ME3 profile with your AI agent: ${meJsonUrl.value}. Review what this person offers and which actions are available. If booking is enabled and your agent supports web actions, check availability and help book a suitable session.`,
-);
-const agentPromptButtonLabel = computed(() =>
-  agentPromptCopied.value ? "Prompt copied" : "Copy prompt for an AI agent",
-);
 const displayLocation = computed(() => formatPublicLocation(props.profile));
 
 function getCurrencySymbol(currency: "USD" | "GBP" | "EUR" | "CAD" | "AUD" | "CHF" | "SGD" | "INR" | "PKR"): string {
@@ -113,47 +92,6 @@ function getCurrencySymbol(currency: "USD" | "GBP" | "EUR" | "CAD" | "AUD" | "CH
       return "Rs";
     default:
       return "$";
-  }
-}
-
-function openQrModal() {
-  showQrModal.value = true;
-}
-
-function closeQrModal() {
-  showQrModal.value = false;
-}
-
-async function copyText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "absolute";
-  textarea.style.left = "-9999px";
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  document.body.removeChild(textarea);
-}
-
-async function copyAgentPrompt() {
-  try {
-    await copyText(agentPrompt.value);
-    agentPromptCopied.value = true;
-    if (agentPromptCopyTimeout !== null) {
-      window.clearTimeout(agentPromptCopyTimeout);
-    }
-    agentPromptCopyTimeout = window.setTimeout(() => {
-      agentPromptCopied.value = false;
-      agentPromptCopyTimeout = null;
-    }, 1800);
-  } catch (error) {
-    console.error("Failed to copy AI agent prompt", error);
   }
 }
 
@@ -979,16 +917,9 @@ function handlePageBodyClick(event: MouseEvent) {
   event.preventDefault();
 }
 
-function handleQrKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") {
-    closeQrModal();
-  }
-}
-
 onMounted(() => {
   initEmbla();
   initContentCarousels();
-  window.addEventListener("keydown", handleQrKeydown);
 });
 
 watch(
@@ -1029,10 +960,6 @@ onBeforeUnmount(() => {
   destroyContentCarousels();
   destroyLightboxEmbla();
   unlockBodyScroll();
-  if (agentPromptCopyTimeout !== null) {
-    window.clearTimeout(agentPromptCopyTimeout);
-  }
-  window.removeEventListener("keydown", handleQrKeydown);
 });
 
 function getPostExcerpt(post: WizardPost): string {
@@ -1225,54 +1152,9 @@ const vibeCss = computed(() => {
         v-if="profile.banner"
         class="banner"
         :style="{ backgroundImage: `url('${profile.banner}')` }"
-      >
-        <button
-          class="qr-chip"
-          type="button"
-          aria-label="Share profile"
-          @click="openQrModal"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M8 12l8-5" />
-            <path d="M8 12l8 5" />
-            <circle cx="6" cy="12" r="2.5" />
-            <circle cx="18" cy="7" r="2.5" />
-            <circle cx="18" cy="17" r="2.5" />
-          </svg>
-        </button>
-      </div>
+      ></div>
       <div v-else class="banner placeholder-banner">
         <span>Banner</span>
-        <button
-          class="qr-chip"
-          type="button"
-          aria-label="Share profile"
-          @click="openQrModal"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M8 12l8-5" />
-            <path d="M8 12l8 5" />
-            <circle cx="6" cy="12" r="2.5" />
-            <circle cx="18" cy="7" r="2.5" />
-            <circle cx="18" cy="17" r="2.5" />
-          </svg>
-        </button>
       </div>
 
       <!-- Profile Header -->
@@ -1290,65 +1172,6 @@ const vibeCss = computed(() => {
         <p v-if="displayLocation" class="location">{{ displayLocation }}</p>
         <p v-if="profile.bio" class="bio" v-html="parsedBio"></p>
       </header>
-
-      <div v-if="showQrModal" class="qr-modal" @click.self="closeQrModal">
-        <div class="qr-card" role="dialog" aria-modal="true">
-          <button class="qr-close" type="button" @click="closeQrModal">
-            Close
-          </button>
-          <div class="qr-header">
-            <div class="qr-avatar">
-              <img v-if="profile.avatar" :src="profile.avatar" alt="" />
-              <span v-else aria-hidden="true">
-                {{ (profile.name || "Me")[0] }}
-              </span>
-            </div>
-            <div class="qr-title">
-              <p class="qr-name">{{ profile.name || "Your Name" }}</p>
-              <p class="qr-handle">@{{ shareHandle }}</p>
-            </div>
-          </div>
-          <div class="qr-agent-top">
-            <div class="qr-agent-label">
-              <p class="qr-section-title">Share this profile</p>
-              <div class="qr-tooltip">
-                <button
-                  class="qr-tooltip-trigger"
-                  type="button"
-                  aria-label="Learn more about AI agents"
-                >
-                  i
-                </button>
-                <div class="qr-tooltip-content" role="tooltip">
-                  Agent-enabled tools may be able to read this profile, inspect
-                  structured actions, and help with tasks like checking
-                  availability or booking. Regular AI chats may not support live
-                  website actions yet.
-                </div>
-              </div>
-            </div>
-            <p class="qr-agent-copy">
-              Copy a prompt for an AI agent, or scan this QR code if you want to
-              open the site on your phone.
-            </p>
-            <button
-              class="qr-agent-button"
-              type="button"
-              @click="copyAgentPrompt"
-            >
-              {{ agentPromptButtonLabel }}
-            </button>
-          </div>
-          <div class="qr-divider" aria-hidden="true"></div>
-          <img
-            class="qr-image"
-            :src="qrImageUrl"
-            :alt="`QR code for ${shareUrl}`"
-          />
-          <p class="qr-caption">Scan to open this profile on your phone</p>
-          <p class="qr-url">{{ shareUrl }}</p>
-        </div>
-      </div>
 
       <div v-if="lightboxOpen" class="lightbox" @click.self="closeLightbox">
         <div class="lightbox-card" role="dialog" aria-modal="true" @click.stop>
@@ -2217,48 +2040,6 @@ const vibeCss = computed(() => {
   background-color: var(--color-border, #e5e5e5);
 }
 
-.qr-chip {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  background: rgba(17, 17, 17, 0.65);
-  color: #fff;
-  backdrop-filter: blur(8px);
-  cursor: pointer;
-  transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease,
-    opacity 0.2s ease;
-}
-
-.qr-chip:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.25);
-}
-
-.qr-chip svg {
-  width: 18px;
-  height: 18px;
-}
-
-.qr-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(10, 10, 10, 0.75);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  z-index: 999;
-}
-
 .lightbox {
   position: fixed;
   inset: 0;
@@ -2374,189 +2155,6 @@ const vibeCss = computed(() => {
     width: 32px;
     height: 32px;
   }
-}
-
-.qr-card {
-  width: min(92vw, 400px);
-  background: var(--color-bg, #fff);
-  color: var(--color-text, #111);
-  border-radius: 20px;
-  padding: 24px;
-  box-shadow: 0 24px 50px rgba(0, 0, 0, 0.25);
-  text-align: center;
-  position: relative;
-}
-
-.qr-close {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-muted, #666);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.qr-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  justify-content: center;
-  margin-bottom: 16px;
-}
-
-.qr-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  overflow: hidden;
-  background: var(--color-border, #e5e5e5);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 600;
-  color: var(--color-text, #111);
-}
-
-.qr-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.qr-title {
-  text-align: left;
-}
-
-.qr-name {
-  font-weight: 700;
-  font-size: 16px;
-}
-
-.qr-agent-top {
-  margin-bottom: 18px;
-}
-
-.qr-agent-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.qr-section-title {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.qr-tooltip {
-  position: relative;
-}
-
-.qr-tooltip-trigger {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border, #d8d8d8);
-  background: transparent;
-  color: var(--color-text-muted, #666);
-  font-size: 11px;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: help;
-}
-
-.qr-tooltip-content {
-  position: absolute;
-  top: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(72vw, 250px);
-  background: #111;
-  color: #fff;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.45;
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.24);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition:
-    opacity 0.2s ease,
-    visibility 0.2s ease;
-  z-index: 2;
-}
-
-.qr-tooltip:hover .qr-tooltip-content,
-.qr-tooltip:focus-within .qr-tooltip-content {
-  opacity: 1;
-  visibility: visible;
-}
-
-.qr-agent-copy {
-  margin-top: 10px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--color-text-muted, #666);
-}
-
-.qr-agent-button {
-  width: 100%;
-  margin-top: 14px;
-  border: none;
-  border-radius: 14px;
-  background: var(--color-primary, #111);
-  color: #fff;
-  padding: 12px 16px;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease,
-    opacity 0.2s ease;
-}
-
-.qr-agent-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
-}
-
-.qr-divider {
-  height: 1px;
-  background: var(--color-border, #ececec);
-  margin: 0 0 18px;
-}
-
-.qr-handle {
-  font-size: 13px;
-  color: var(--color-text-muted, #666);
-}
-
-.qr-image {
-  width: min(70vw, 240px);
-  height: auto;
-  border-radius: 16px;
-  background: #fff;
-  padding: 10px;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
-}
-
-.qr-caption {
-  margin-top: 14px;
-  font-size: 12px;
-  color: var(--color-text, #111);
-  font-weight: 600;
-}
-
-.qr-url {
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--color-text-muted, #666);
-  word-break: break-all;
 }
 
 .placeholder-banner {
