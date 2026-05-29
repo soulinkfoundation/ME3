@@ -101,6 +101,7 @@ type StoredSocialOauthState = {
 type StoredMe3ClaimState = {
   state: string;
   redirect_path: string | null;
+  install_id: string | null;
   expires_at: string;
 };
 type StoredContentItem = {
@@ -338,7 +339,8 @@ function createEnv(): Env & {
                 const entry: StoredMe3ClaimState = {
                   state: values[0] as string,
                   redirect_path: values[1] as string | null,
-                  expires_at: values[2] as string,
+                  install_id: values[2] as string | null,
+                  expires_at: values[3] as string,
                 };
                 if (existingIndex >= 0) {
                   state.me3ClaimStates[existingIndex] = entry;
@@ -1345,6 +1347,7 @@ async function createSignedMe3ClaimToken(input: {
   callbackUrl: string;
   email: string;
   handle?: string | null;
+  installId?: string;
 }): Promise<{ token: string; publicJwk: JsonWebKey & { kid?: string; alg?: string; use?: string } }> {
   const keyPair = await crypto.subtle.generateKey(
     {
@@ -1372,6 +1375,7 @@ async function createSignedMe3ClaimToken(input: {
     sub: "user123",
     aud: "me3-core-install-claim",
     email: input.email,
+    install_id: input.installId || "core_11111111-1111-4111-8111-111111111111",
     core_origin: input.coreOrigin,
     callback_url: input.callbackUrl,
     state: input.state,
@@ -1534,6 +1538,12 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.state).toMatch(/[0-9a-f-]{36}/);
+    expect(claimUrl.searchParams.get("install_id")).toMatch(
+      /^core_[0-9a-f-]{36}$/,
+    );
+    expect(env.installSecrets.get("ME3_CORE_INSTALL_ID")).toBe(
+      claimUrl.searchParams.get("install_id"),
+    );
     expect(claimUrl.origin).toBe("https://me3.example");
     expect(claimUrl.pathname).toBe("/core/claim");
     expect(claimUrl.searchParams.get("core_origin")).toBe("http://localhost:4000");
@@ -1541,6 +1551,41 @@ describe("ME3 Core Worker auth", () => {
       "http://localhost:8787/api/auth/me3/callback",
     );
     expect(claimUrl.searchParams.get("redirect")).toBe("/account");
+  });
+
+  it("reuses the same stable install id across claim starts on different URLs", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.CORE_WEB_ORIGIN = undefined;
+
+    const workerResponse = await app.fetch(
+      new Request("https://kierans-me3.kieranbutler.workers.dev/api/auth/me3/start", {
+        method: "POST",
+      }),
+      env,
+    );
+    const customResponse = await app.fetch(
+      new Request("https://me3.kieranbutler.com/api/auth/me3/start", {
+        method: "POST",
+      }),
+      env,
+    );
+    const workerUrl = new URL(((await workerResponse.json()) as { url: string }).url);
+    const customUrl = new URL(((await customResponse.json()) as { url: string }).url);
+
+    expect(workerUrl.searchParams.get("install_id")).toMatch(
+      /^core_[0-9a-f-]{36}$/,
+    );
+    expect(customUrl.searchParams.get("install_id")).toBe(
+      workerUrl.searchParams.get("install_id"),
+    );
+    expect(env.me3ClaimStates).toHaveLength(2);
+    expect(env.me3ClaimStates[0].install_id).toBe(
+      workerUrl.searchParams.get("install_id"),
+    );
+    expect(env.me3ClaimStates[1].install_id).toBe(
+      workerUrl.searchParams.get("install_id"),
+    );
   });
 
   it("uses the explicit admin host for ME3 claim callbacks when no API host is configured", async () => {
@@ -1588,9 +1633,11 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const startBody = (await startResponse.json()) as { state: string };
+    const installId = env.me3ClaimStates[0].install_id || "";
     const signedClaim = await createSignedMe3ClaimToken({
       issuer: "https://api.me3.example",
       state: startBody.state,
+      installId,
       coreOrigin: "http://localhost:4000",
       callbackUrl: "http://localhost:8787/api/auth/me3/callback",
       email: "owner@example.com",
@@ -1640,9 +1687,11 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const startBody = (await startResponse.json()) as { state: string };
+    const installId = env.me3ClaimStates[0].install_id || "";
     const signedClaim = await createSignedMe3ClaimToken({
       issuer: "https://api.me3.example",
       state: startBody.state,
+      installId,
       coreOrigin: "http://localhost:4000",
       callbackUrl: "http://localhost:8787/api/auth/me3/callback",
       email: "owner@example.com",
@@ -1668,6 +1717,53 @@ describe("ME3 Core Worker auth", () => {
       "me3_claim_error=claim_mismatch",
     );
     expect(env.owner).toBeNull();
+
+    fetchMock.mockRestore();
+  });
+
+  it("rejects ME3 Cloud install claim callbacks for a different install id", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+
+    const startResponse = await app.fetch(
+      new Request("https://core.example/api/auth/me3/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirect: "/account" }),
+      }),
+      env,
+    );
+    const startBody = (await startResponse.json()) as { state: string };
+    const signedClaim = await createSignedMe3ClaimToken({
+      issuer: "https://api.me3.example",
+      state: startBody.state,
+      installId: "core_22222222-2222-4222-8222-222222222222",
+      coreOrigin: "http://localhost:4000",
+      callbackUrl: "http://localhost:8787/api/auth/me3/callback",
+      email: "owner@example.com",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ keys: [signedClaim.publicJwk] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const callbackResponse = await app.fetch(
+      new Request(
+        `http://localhost:8787/api/auth/me3/callback?state=${encodeURIComponent(
+          startBody.state,
+        )}&claim_token=${encodeURIComponent(signedClaim.token)}`,
+      ),
+      env,
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("location")).toContain(
+      "me3_claim_error=claim_mismatch",
+    );
+    expect(env.owner).toBeNull();
+    expect(env.me3ClaimStates).toHaveLength(1);
 
     fetchMock.mockRestore();
   });
@@ -1725,9 +1821,11 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const startBody = (await startResponse.json()) as { state: string };
+    const installId = env.me3ClaimStates[0].install_id || "";
     const signedClaim = await createSignedMe3ClaimToken({
       issuer: "https://api.me3.example",
       state: startBody.state,
+      installId,
       coreOrigin: "http://localhost:4000",
       callbackUrl: "http://localhost:8787/api/auth/me3/callback",
       email: "owner@example.com",

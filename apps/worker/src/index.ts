@@ -189,6 +189,7 @@ type Me3ClaimTokenPayload = {
   aud?: unknown;
   email?: unknown;
   handle?: unknown;
+  install_id?: unknown;
   core_origin?: unknown;
   callback_url?: unknown;
   state?: unknown;
@@ -200,6 +201,7 @@ type Me3ClaimTokenPayload = {
 type Me3ClaimStateRecord = {
   state: string;
   redirect_path: string | null;
+  install_id: string | null;
   expires_at: string;
 };
 type OwnerAuthState = {
@@ -241,9 +243,12 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
 const PASSWORD_HASH_ITERATIONS = 100_000;
 const ME3_CLOUD_OWNER_SECRET_NAME = "ME3_CLOUD_OWNER_ID";
+const ME3_CORE_INSTALL_ID_SECRET_NAME = "ME3_CORE_INSTALL_ID";
 const ME3_CLOUD_USERNAME_CONFLICT_MESSAGE =
   "This username is already taken on ME3 Cloud. Choose another handle before publishing.";
 const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
+const ME3_CORE_INSTALL_ID_REGEX =
+  /^core_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const D1_SITE_FILE_MAX_BYTES = 1_900_000;
 
@@ -379,10 +384,13 @@ app.get("/api/auth/me3/callback", async (c) => {
   const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
   const callbackUrl = `${apiOrigin}/api/auth/me3/callback`;
   const claimedHandle = normalizeUsername(payload.handle);
+  const claimedInstallId = normalizeMe3CoreInstallId(payload.install_id);
 
   if (
     payload.state !== state ||
     payload.aud !== "me3-core-install-claim" ||
+    !pending.install_id ||
+    claimedInstallId !== pending.install_id ||
     payload.core_origin !== webOrigin ||
     payload.callback_url !== callbackUrl ||
     typeof payload.sub !== "string" ||
@@ -4708,12 +4716,14 @@ async function getOwnerByEmail(env: Env, email: string): Promise<OwnerRecord | n
 async function createMe3ClaimStartResponse(c: AppContext, rawRedirect?: unknown): Promise<Response> {
   const webOrigin = getCoreWebOrigin(c.env, c.req.url);
   const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
+  const installId = await getOrCreateMe3CoreInstallId(c.env);
   const state = crypto.randomUUID();
   const claimUrl = new URL("/core/claim", getMe3CloudOrigin(c.env));
   const redirect = normalizeClaimRedirect(rawRedirect);
 
-  await storeMe3ClaimState(c.env, state, redirect);
+  await storeMe3ClaimState(c.env, state, redirect, installId);
 
+  claimUrl.searchParams.set("install_id", installId);
   claimUrl.searchParams.set("core_origin", webOrigin);
   claimUrl.searchParams.set("callback_url", `${apiOrigin}/api/auth/me3/callback`);
   claimUrl.searchParams.set("state", state);
@@ -4766,16 +4776,18 @@ async function storeMe3ClaimState(
   env: Env,
   state: string,
   redirectPath: string,
+  installId: string,
 ): Promise<void> {
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
   await env.DB.prepare(
-    `INSERT INTO me3_install_claim_states (state, redirect_path, expires_at, created_at)
-     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    `INSERT INTO me3_install_claim_states (state, redirect_path, install_id, expires_at, created_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(state) DO UPDATE SET
        redirect_path = excluded.redirect_path,
+       install_id = excluded.install_id,
        expires_at = excluded.expires_at`,
   )
-    .bind(state, redirectPath || null, expiresAt)
+    .bind(state, redirectPath || null, installId, expiresAt)
     .run();
 }
 
@@ -4784,12 +4796,30 @@ async function getMe3ClaimState(
   state: string,
 ): Promise<Me3ClaimStateRecord | null> {
   const result = await env.DB.prepare(
-    "SELECT state, redirect_path, expires_at FROM me3_install_claim_states WHERE state = ?",
+    "SELECT state, redirect_path, install_id, expires_at FROM me3_install_claim_states WHERE state = ?",
   )
     .bind(state)
     .first<Me3ClaimStateRecord>();
 
   return result ?? null;
+}
+
+function normalizeMe3CoreInstallId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return ME3_CORE_INSTALL_ID_REGEX.test(normalized) ? normalized : null;
+}
+
+async function getOrCreateMe3CoreInstallId(env: Env): Promise<string> {
+  const stored = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
+    .bind(ME3_CORE_INSTALL_ID_SECRET_NAME)
+    .first<{ value: string }>();
+  const existing = normalizeMe3CoreInstallId(stored?.value);
+  if (existing) return existing;
+
+  const installId = `core_${crypto.randomUUID()}`;
+  await setStoredInstallSecret(env, ME3_CORE_INSTALL_ID_SECRET_NAME, installId);
+  return installId;
 }
 
 async function deleteMe3ClaimState(env: Env, state: string): Promise<void> {
@@ -4842,6 +4872,14 @@ async function getStoredMe3CloudOwnerId(env: Env): Promise<string | null> {
 }
 
 async function setStoredMe3CloudOwnerId(env: Env, ownerId: string): Promise<void> {
+  await setStoredInstallSecret(env, ME3_CLOUD_OWNER_SECRET_NAME, ownerId);
+}
+
+async function setStoredInstallSecret(
+  env: Env,
+  name: string,
+  value: string,
+): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO install_secrets (name, value, created_at, updated_at)
      VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -4849,7 +4887,7 @@ async function setStoredMe3CloudOwnerId(env: Env, ownerId: string): Promise<void
        value = excluded.value,
        updated_at = CURRENT_TIMESTAMP`,
   )
-    .bind(ME3_CLOUD_OWNER_SECRET_NAME, ownerId)
+    .bind(name, value)
     .run();
 }
 
