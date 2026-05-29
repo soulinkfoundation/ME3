@@ -2513,7 +2513,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px 28px 40px;
+  padding: 0 24px 40px;
 }
 
 .cal-toolbar {
