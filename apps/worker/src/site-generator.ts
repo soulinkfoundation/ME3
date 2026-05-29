@@ -894,6 +894,10 @@ function currencySymbol(currency: string): string {
 
 function filePathForHtml(url: string, basePath = "./"): string {
   if (/^https?:\/\//i.test(url) || url.startsWith("data:")) return url;
+  const previewAsset = url.match(
+    /^\.?\/?preview\/[^/]+\/(files\/(?:avatar|banner|testimonial-\d+)\.[a-z0-9]+)$/i,
+  );
+  if (previewAsset) return `${basePath}${previewAsset[1]}`;
   if (url.startsWith("./")) return `${basePath}${url.slice(2)}`;
   if (url.startsWith("/")) return `${basePath}${url.slice(1)}`;
   return `${basePath}${url}`;

@@ -2744,14 +2744,14 @@ export const useWizardStore = defineStore("wizard", () => {
   function fileReferenceToRelativePath(url: string | null): string | null {
     if (!url) return null;
     const trimmed = url.trim();
-    if (trimmed.startsWith("./")) return trimmed;
-    if (trimmed.startsWith("/")) return `.${trimmed}`;
     const m = trimmed.match(
       /\/files\/(avatar|banner|testimonial-\d+)\.([a-z0-9]+)$/i,
     );
     if (m) {
       return `./files/${m[1]}.${m[2]}`;
     }
+    if (trimmed.startsWith("./files/")) return trimmed;
+    if (trimmed.startsWith("/files/")) return `.${trimmed}`;
     return null;
   }
 

@@ -686,6 +686,18 @@ describe("wizard store", () => {
       expect(me3.testimonials?.[0].avatar).toBe("./files/testimonial-1.jpg");
     });
 
+    it("should strip preview prefixes from published profile image paths", () => {
+      const store = useWizardStore();
+      store.profile.name = "Test User";
+      store.profile.avatar = "./preview/testuser/files/avatar.jpg";
+      store.profile.banner = "/preview/testuser/files/banner.jpg";
+
+      const me3 = store.generateMe3Json();
+
+      expect(me3.avatar).toBe("./files/avatar.jpg");
+      expect(me3.banner).toBe("./files/banner.jpg");
+    });
+
     it("should include non-home testimonial placement targets as link extensions", () => {
       const store = useWizardStore();
       store.profile.name = "Test User";

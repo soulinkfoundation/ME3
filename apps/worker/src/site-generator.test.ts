@@ -74,6 +74,22 @@ describe("site generator", () => {
     expect(files["now.html"]).not.toContain("\\[\\*\\*ME3");
   });
 
+  it("normalizes stale preview-prefixed profile image paths", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Preview Asset Site",
+        avatar: "./preview/testuser/files/avatar.jpg",
+        banner: "/preview/testuser/files/banner.jpg",
+      },
+      [],
+    );
+
+    expect(files["index.html"]).toContain('src="./files/avatar.jpg"');
+    expect(files["index.html"]).toContain('src="./files/banner.jpg"');
+    expect(files["index.html"]).not.toContain("/preview/testuser/files/");
+  });
+
   it("renders homepage booking, testimonials, and newsletter like the app site", async () => {
     const files = await generateSiteHtml(
       {
