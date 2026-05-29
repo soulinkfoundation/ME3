@@ -42,6 +42,50 @@ type Me3Testimonial = {
   profileUrl?: string;
 };
 
+type BookingPricingConfig = PricingConfig & {
+  allowFlexiblePricing?: boolean;
+  minimumAmount?: number;
+};
+
+type BookingOffer = {
+  id?: string;
+  title?: string;
+  description?: string;
+  duration?: number;
+  pricing?: BookingPricingConfig;
+};
+
+type BookingClass = BookingOffer & {
+  timezone?: string;
+  recurrence?: {
+    frequency?: "weekly" | "biweekly" | string;
+    weekday?: string;
+    startTime?: string;
+  };
+  capacity?: number | null;
+};
+
+type BookingRetreat = BookingOffer & {
+  durationDays?: number;
+  startDate?: string;
+  startTime?: string;
+  endDate?: string;
+  endTime?: string;
+  timezone?: string;
+  capacity?: number | null;
+};
+
+type BookingType = {
+  id?: string;
+  type?: "one_to_one" | "class" | "retreat" | string;
+  label?: string;
+  title?: string;
+  description?: string;
+  offers?: BookingOffer[];
+  classes?: BookingClass[];
+  retreats?: BookingRetreat[];
+};
+
 export type Me3SiteProfile = {
   version?: string;
   name?: string;
@@ -69,8 +113,13 @@ export type Me3SiteProfile = {
       title?: string;
       description?: string;
       duration?: number;
-      offers?: Array<{ title?: string; duration?: number; pricing?: PricingConfig }>;
-      bookingTypes?: string[];
+      pricing?: BookingPricingConfig;
+      offers?: BookingOffer[];
+      classes?: BookingClass[];
+      retreats?: BookingRetreat[];
+      bookingTypes?: BookingType[];
+      availability?: { timezone?: string; windows?: Record<string, string[]> };
+      url?: string;
     };
     gift?: { enabled?: boolean; title?: string; description?: string; icon?: string };
   };
@@ -346,11 +395,145 @@ function generateTestimonials(profile: Me3SiteProfile): string {
 function generateBooking(profile: Me3SiteProfile): string {
   const book = profile.intents?.book;
   if (!book?.enabled) return "";
-  const offer = book.offers?.[0];
-  const title = book.title || offer?.title || "Book a session";
-  const duration = offer?.duration || book.duration || 30;
-  const price = formatPricing(offer?.pricing);
-  return `<section class="booking" id="booking"><h2>${escapeHtml(title)}</h2>${book.description ? `<p>${escapeHtml(book.description)}</p>` : ""}<div class="booking-card"><strong>${escapeHtml(offer?.title || `${duration}-min Session`)}</strong><span>${duration} min${price ? ` · ${escapeHtml(price)}` : ""}</span></div><label>Select a date:<input type="text" placeholder="dd/mm/yyyy" readonly></label><p class="booking-note">Interactive booking calendar will appear here</p></section>`;
+  const bookingTypes = normalizeBookingTypes(book);
+  if (bookingTypes.length === 0) return "";
+  const activeType = bookingTypes[0];
+  const title = activeType.title || book.title || "Book a session";
+  const description = activeType.description || book.description || "";
+  const tabs =
+    bookingTypes.length > 1
+      ? `<div class="booking-type-tablist">${bookingTypes
+          .map((type, index) => `<button type="button" class="booking-type-tab${index === 0 ? " active" : ""}" disabled>${escapeHtml(type.label || bookingTypeLabel(type.type))}</button>`)
+          .join("")}</div>`
+      : "";
+
+  return `<section class="booking" id="booking"><h2>${escapeHtml(title)}</h2>${description ? `<p>${escapeHtml(description)}</p>` : ""}${tabs}${generateBookingTypeBody(activeType, book)}</section>`;
+}
+
+function normalizeBookingTypes(book: NonNullable<Me3SiteProfile["intents"]>["book"]): BookingType[] {
+  if (!book) return [];
+  const explicitTypes = Array.isArray(book.bookingTypes) ? book.bookingTypes : [];
+  const bookingTypes: BookingType[] = [];
+
+  for (const item of explicitTypes) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type === "one_to_one") {
+      bookingTypes.push({
+        type: "one_to_one",
+        label: item.label || "1:1",
+        title: item.title || book.title || "1:1",
+        description: item.description || book.description || "",
+        offers: Array.isArray(item.offers) ? item.offers : [],
+      });
+    } else if (item.type === "class") {
+      bookingTypes.push({
+        type: "class",
+        label: item.label || "Classes",
+        title: item.title || "Classes",
+        description: item.description || "",
+        classes: Array.isArray(item.classes) ? item.classes : [],
+      });
+    } else if (item.type === "retreat") {
+      bookingTypes.push({
+        type: "retreat",
+        label: item.label || "Retreats",
+        title: item.title || "Retreats",
+        description: item.description || "",
+        retreats: Array.isArray(item.retreats) ? item.retreats : [],
+      });
+    }
+  }
+
+  if (bookingTypes.length === 0 && (Array.isArray(book.offers) || book.availability?.windows)) {
+    bookingTypes.push({
+      type: "one_to_one",
+      label: "1:1",
+      title: book.title || "1:1",
+      description: book.description || "",
+      offers:
+        Array.isArray(book.offers) && book.offers.length > 0
+          ? book.offers
+          : [
+              {
+                id: "book-session",
+                title: book.title || "Book a call",
+                description: book.description || "",
+                duration: book.duration || 30,
+                pricing: book.pricing,
+              },
+            ],
+    });
+  }
+
+  if (bookingTypes.length === 0 && Array.isArray(book.classes) && book.classes.length > 0) {
+    bookingTypes.push({
+      type: "class",
+      label: "Classes",
+      title: "Classes",
+      classes: book.classes,
+    });
+  }
+
+  if (bookingTypes.length === 0 && Array.isArray(book.retreats) && book.retreats.length > 0) {
+    bookingTypes.push({
+      type: "retreat",
+      label: "Retreats",
+      title: "Retreats",
+      retreats: book.retreats,
+    });
+  }
+
+  return bookingTypes;
+}
+
+function generateBookingTypeBody(
+  type: BookingType,
+  book: NonNullable<Me3SiteProfile["intents"]>["book"],
+): string {
+  if (type.type === "class") {
+    const classes = Array.isArray(type.classes) ? type.classes : [];
+    const cards = classes.map((offer, index) => {
+      const recurrence = offer.recurrence;
+      const capacity = typeof offer.capacity === "number" ? `${offer.capacity} seats` : "Unlimited seats";
+      return `<div class="booking-card${index === 0 ? " active" : ""}"><strong>${escapeHtml(offer.title || "Class")}</strong><span>${escapeHtml(recurrence?.weekday || "Weekly")} · ${escapeHtml(recurrence?.startTime || "--:--")} · ${offer.duration || 60} min</span><small>${escapeHtml(capacity)}</small></div>`;
+    }).join("");
+    return `<div class="booking-session-preview">${cards}</div><p class="booking-note">Visitors will choose a class, then an upcoming session.</p>`;
+  }
+
+  if (type.type === "retreat") {
+    const retreats = Array.isArray(type.retreats) ? type.retreats : [];
+    const cards = retreats.map((offer, index) => {
+      const dates = offer.startDate && offer.endDate ? ` · ${offer.startDate} → ${offer.endDate}` : "";
+      const capacity = typeof offer.capacity === "number" ? `${offer.capacity} spaces` : "Unlimited spaces";
+      return `<div class="booking-card${index === 0 ? " active" : ""}"><strong>${escapeHtml(offer.title || "Retreat")}</strong><span>${offer.durationDays || 1} days${escapeHtml(dates)}</span><small>${escapeHtml(capacity)}</small></div>`;
+    }).join("");
+    return `<div class="booking-session-preview">${cards}</div><p class="booking-note">Visitors book the fixed retreat dates shown on your live site.</p>`;
+  }
+
+  const offers =
+    Array.isArray(type.offers) && type.offers.length > 0
+      ? type.offers
+      : [
+          {
+            title: book?.title || "Book a call",
+            description: book?.description || "",
+            duration: book?.duration || 30,
+            pricing: book?.pricing,
+          },
+        ];
+  const cards = offers.map((offer, index) => {
+    const duration = offer.duration || book?.duration || 30;
+    const price = formatPricing(offer.pricing);
+    return `<div class="booking-card${index === 0 ? " active" : ""}"><strong>${escapeHtml(offer.title || `${duration}-min Session`)}</strong><span>${duration} min${price ? ` · ${escapeHtml(price)}` : ""}</span></div>`;
+  }).join("");
+
+  return `<div class="booking-session-preview">${cards}</div><label>Select a date:<input type="date"></label><p class="booking-note">Interactive booking calendar will appear here</p>`;
+}
+
+function bookingTypeLabel(type?: string): string {
+  if (type === "class") return "Classes";
+  if (type === "retreat") return "Retreats";
+  return "1:1";
 }
 
 function generateNewsletter(profile: Me3SiteProfile): string {
@@ -370,40 +553,95 @@ function generateFooter(profile: Me3SiteProfile, allowCustom: boolean): string {
   return `<footer class="footer"><p>Powered by <a href="https://me3.app">me3</a></p></footer>`;
 }
 
-function markdownToHtml(markdown: string): string {
+export function markdownToHtml(markdown: string): string {
+  if (looksLikeHtml(markdown)) return markdown;
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const html: string[] = [];
   let paragraph: string[] = [];
+  let list: { type: "ul" | "ol"; items: string[] } | null = null;
   const flushParagraph = () => {
     if (paragraph.length === 0) return;
-    html.push(`<p>${parseInlineMarkdown(paragraph.join(" "))}</p>`);
+    html.push(`<p>${parseInlineMarkdown(unescapeMarkdownPunctuation(paragraph.join(" ")))}</p>`);
     paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    html.push(`<${list.type}>${list.items.map((item) => `<li>${parseInlineMarkdown(unescapeMarkdownPunctuation(item))}</li>`).join("")}</${list.type}>`);
+    list = null;
   };
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
       flushParagraph();
+      flushList();
       continue;
     }
     const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       flushParagraph();
+      flushList();
       const level = heading[1].length;
-      html.push(`<h${level}>${parseInlineMarkdown(heading[2])}</h${level}>`);
+      html.push(`<h${level}>${parseInlineMarkdown(unescapeMarkdownPunctuation(heading[2]))}</h${level}>`);
       continue;
     }
+    const image = trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)$/);
+    if (image) {
+      flushParagraph();
+      flushList();
+      html.push(`<figure><img src="${escapeHtml(image[2])}" alt="${escapeHtml(unescapeMarkdownPunctuation(image[1] || ""))}" loading="lazy" decoding="async">${image[3] ? `<figcaption>${escapeHtml(unescapeMarkdownPunctuation(image[3]))}</figcaption>` : ""}</figure>`);
+      continue;
+    }
+    const blockquote = trimmed.match(/^>\s+(.+)$/);
+    if (blockquote) {
+      flushParagraph();
+      flushList();
+      html.push(`<blockquote>${parseInlineMarkdown(unescapeMarkdownPunctuation(blockquote[1]))}</blockquote>`);
+      continue;
+    }
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    if (unordered) {
+      flushParagraph();
+      if (!list || list.type !== "ul") {
+        flushList();
+        list = { type: "ul", items: [] };
+      }
+      list.items.push(unordered[1]);
+      continue;
+    }
+    const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (ordered) {
+      flushParagraph();
+      if (!list || list.type !== "ol") {
+        flushList();
+        list = { type: "ol", items: [] };
+      }
+      list.items.push(ordered[1]);
+      continue;
+    }
+    flushList();
     paragraph.push(trimmed);
   }
   flushParagraph();
+  flushList();
   return html.join("\n");
 }
 
 function parseInlineMarkdown(value: string): string {
-  return escapeHtml(value)
+  const escaped = escapeHtml(value);
+  return escaped
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|\.?\/[^)\s]+|files\/[^)\s]+)\)/g, '<img src="$2" alt="$1" loading="lazy" decoding="async">')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+function unescapeMarkdownPunctuation(value: string): string {
+  return value.replace(/\\([\\`*{}[\]()#+\-.!_>])/g, "$1");
+}
+
+function looksLikeHtml(value: string): boolean {
+  return /<\/?[a-z][\s\S]*>/i.test(value.trim());
 }
 
 function markdownToText(markdown: string): string {
@@ -415,11 +653,12 @@ function markdownToText(markdown: string): string {
     .trim();
 }
 
-function formatPricing(pricing?: PricingConfig): string {
+function formatPricing(pricing?: BookingPricingConfig): string {
   if (!pricing?.enabled) return "Free";
   const amount = typeof pricing.suggestedAmount === "number" ? pricing.suggestedAmount : 0;
   if (amount <= 0 && pricing.allowFree) return "Free";
-  return `${currencySymbol(pricing.currency || "USD")}${amount}`;
+  const prefix = pricing.allowFlexiblePricing === false ? "" : "From ";
+  return `${prefix}${currencySymbol(pricing.currency || "USD")}${amount}`;
 }
 
 function currencySymbol(currency: string): string {

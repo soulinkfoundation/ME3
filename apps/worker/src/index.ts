@@ -155,7 +155,7 @@ import {
   type AgentReminderInput,
 } from "./agent-chat";
 import { searchLocationQuery } from "./location-search";
-import { generateSiteHtml, type Me3SiteProfile } from "./site-generator";
+import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "./site-generator";
 import type {
   AssistantJobEventQueueMessage,
   DbAgentChannelConnection,
@@ -2596,7 +2596,7 @@ app.get("/api/sites/:username/content", async (c) => {
     const item = {
       slug: slug.split("/").pop() || slug,
       title: titleFromSlug(slug),
-      content: await arrayBufferToText(file.content),
+      content: markdownToHtml(await arrayBufferToText(file.content)),
     };
     if (slug.startsWith("blog/")) posts.push(item);
     else if (slug.startsWith("shop/")) products.push(item);

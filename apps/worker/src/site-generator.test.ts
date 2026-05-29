@@ -47,4 +47,67 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("Cork, Ireland");
     expect(files["index.html"]).not.toContain("County Cork, Eire / Ireland");
   });
+
+  it("renders escaped markdown links and images as html", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Markdown Site",
+        pages: [{ slug: "now", title: "Now", file: "now.md" }],
+      },
+      [
+        {
+          name: "now.md",
+          content:
+            "### Work\n\n\\[\\*\\*ME3\\*\\*\\](https://me3.app)\n\n![Alt text](./files/now-1.webp)",
+        },
+      ],
+    );
+
+    expect(files["now.html"]).toContain("<h3>Work</h3>");
+    expect(files["now.html"]).toContain(
+      '<a href="https://me3.app" target="_blank" rel="noopener"><strong>ME3</strong></a>',
+    );
+    expect(files["now.html"]).toContain(
+      '<img src="./files/now-1.webp" alt="Alt text"',
+    );
+    expect(files["now.html"]).not.toContain("\\[\\*\\*ME3");
+  });
+
+  it("renders every one-to-one booking offer and a native date input", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Booking Site",
+        intents: {
+          book: {
+            enabled: true,
+            title: "Book a call",
+            description: "Choose what fits.",
+            availability: { timezone: "Europe/Dublin", windows: { monday: ["09:00"] } },
+            offers: [
+              { title: "ME3 Setup", duration: 60, pricing: { enabled: false } },
+              {
+                title: "Coaching call",
+                duration: 60,
+                pricing: {
+                  enabled: true,
+                  currency: "EUR",
+                  suggestedAmount: 75,
+                  allowFlexiblePricing: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+      [],
+    );
+
+    expect(files["index.html"]).toContain("ME3 Setup");
+    expect(files["index.html"]).toContain("Coaching call");
+    expect(files["index.html"]).toContain("From €75");
+    expect(files["index.html"]).toContain('type="date"');
+    expect(files["index.html"]).not.toContain("readonly");
+  });
 });

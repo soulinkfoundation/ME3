@@ -3862,6 +3862,30 @@ export const useWizardStore = defineStore("wizard", () => {
     username.value = siteUsername;
     isUsernameAvailable.value = true; // Already claimed by this user
 
+    const previewAssetBase = `/preview/${encodeURIComponent(siteUsername)}/`;
+    const resolveLoadedSiteAssetUrl = (value: string | null | undefined): string | null => {
+      if (!value) return null;
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      if (/^(https?:|data:|blob:)/i.test(trimmed)) return trimmed;
+      if (trimmed.startsWith(previewAssetBase)) return trimmed;
+      const normalized = trimmed
+        .replace(/^\.?\//, "")
+        .replace(/^(\.\.\/)+/, "");
+      if (normalized.startsWith("files/") || normalized === "favicon.png") {
+        return `${previewAssetBase}${normalized}`;
+      }
+      return trimmed;
+    };
+    const resolveLoadedContentAssetUrls = (content: string): string =>
+      content.replace(
+        /\b(src|href)=["']((?:\.\.?\/)*files\/[^"']+)["']/g,
+        (_match, attr: string, rawUrl: string) => {
+          const resolved = resolveLoadedSiteAssetUrl(rawUrl) || rawUrl;
+          return `${attr}="${resolved}"`;
+        },
+      );
+
     // Map profile data - cast buttons to proper type
     const buttons: Me3Button[] = (siteProfile.buttons || []).map((b) => ({
       text: b.text,
@@ -4119,8 +4143,8 @@ export const useWizardStore = defineStore("wizard", () => {
       location: (siteProfile as any).location || "",
       locationData: normalizeLocationData((siteProfile as any).locationData),
       bio: siteProfile.bio || "",
-      avatar: siteProfile.avatar || null,
-      banner: siteProfile.banner || null,
+      avatar: resolveLoadedSiteAssetUrl(siteProfile.avatar),
+      banner: resolveLoadedSiteAssetUrl(siteProfile.banner),
       avatarBlob: null, // Can't restore blobs from server
       bannerBlob: null,
       avatarOriginalBlob: null,
@@ -4173,7 +4197,7 @@ export const useWizardStore = defineStore("wizard", () => {
       title: p.title,
       slug: p.slug,
       slugCustomized: inferSlugCustomized(p.title, p.slug, "page"),
-      content: p.content,
+      content: resolveLoadedContentAssetUrls(p.content),
       images: [],
       visible: pageVisibility.get(p.slug) ?? true,
     }));
@@ -4189,7 +4213,7 @@ export const useWizardStore = defineStore("wizard", () => {
         title: p.title,
         slug: p.slug,
         slugCustomized: inferSlugCustomized(p.title, p.slug, "post"),
-        content: p.content,
+        content: resolveLoadedContentAssetUrls(p.content),
         images: [],
         type,
         caption: "",
@@ -4217,7 +4241,7 @@ export const useWizardStore = defineStore("wizard", () => {
         title: p.title,
         slug: p.slug,
         slugCustomized: inferSlugCustomized(p.title, p.slug, "product"),
-        content: p.content,
+        content: resolveLoadedContentAssetUrls(p.content),
         images: [],
         price: p.price,
         currency: p.currency,
@@ -4232,7 +4256,7 @@ export const useWizardStore = defineStore("wizard", () => {
       name: t.name,
       quote: t.quote,
       handle: t.handle?.replace(/^@/, ""),
-      avatar: t.avatar,
+      avatar: resolveLoadedSiteAssetUrl(t.avatar) || undefined,
       avatarBlob: null,
       profileUrl: t.profileUrl,
     }));
