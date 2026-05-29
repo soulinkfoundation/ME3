@@ -5,13 +5,11 @@ import CalendarAgenda from "../components/calendar/CalendarAgenda.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import CalendarMiniMonth from "../components/calendar/CalendarMiniMonth.vue";
 import CalendarMonthBoard from "../components/calendar/CalendarMonthBoard.vue";
-import CalendarWeekBoard from "../components/calendar/CalendarWeekBoard.vue";
 import Button from "../components/Button.vue";
 import UiIcon from "../components/UiIcon.vue";
 import type { UiIconName } from "../utils/icons";
 import type {
   CalendarAgendaEvent,
-  CalendarAgendaSiteOption,
   CalendarRangeMode,
 } from "../components/calendar/calendarAgenda";
 import { ApiError, api } from "../api";
@@ -104,6 +102,11 @@ interface CalendarSourceRow {
   createdAt: string;
 }
 
+interface CalendarSiteOption {
+  value: string;
+  label: string;
+}
+
 interface CalendarFeedResponse {
   bookings: CalendarBookingRow[];
   reminders: CalendarReminderRow[];
@@ -148,7 +151,7 @@ const statusMessage = ref("");
 const updatingReminderId = ref<string | null>(null);
 const cancellingBookingId = ref<string | null>(null);
 const deletingEventId = ref<string | null>(null);
-const rangeMode = ref<CalendarRangeMode>("schedule");
+const rangeMode = ref<CalendarRangeMode>("month");
 const monthCursor = ref(new Date());
 const dayCursor = ref(new Date());
 const activeCreateMode = ref<CreateMode>(null);
@@ -178,7 +181,6 @@ function monthGridWindow(from: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
-const weekCursor = ref(startOfWeekMonday(new Date()));
 const focusedDayKey = ref<string | null>(null);
 const preferSelectEventId = ref<string | null>(null);
 const sidebarSiteFilter = ref<string>("all");
@@ -197,18 +199,6 @@ const monthToolbarTitle = computed(() =>
   }).format(monthCursor.value),
 );
 
-const weekToolbarTitle = computed(() => {
-  const start = weekCursor.value;
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  const fmt = new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-  return `${fmt.format(start)} – ${fmt.format(end)}`;
-});
-
 const dayToolbarTitle = computed(() =>
   new Intl.DateTimeFormat("en-GB", {
     weekday: "short",
@@ -218,20 +208,16 @@ const dayToolbarTitle = computed(() =>
   }).format(dayCursor.value),
 );
 
-const weekStartForBoard = computed(() => startOfWeekMonday(weekCursor.value));
-
 const miniCalendarCursor = computed(() =>
   rangeMode.value === "day"
     ? dayCursor.value
-    : rangeMode.value === "week"
-      ? weekCursor.value
-      : monthCursor.value,
+    : monthCursor.value,
 );
 
 const rangeLabel = computed(() => {
   if (rangeMode.value === "schedule") return "Schedule";
   if (rangeMode.value === "day") return "Day";
-  return rangeMode.value === "month" ? "Month" : "Week";
+  return "Month";
 });
 
 const resolvedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -306,12 +292,6 @@ const calendarWindow = computed(() => {
     end.setDate(end.getDate() + 1);
     return { start, end };
   }
-  if (rangeMode.value === "week") {
-    const start = startOfWeekMonday(weekCursor.value);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 7);
-    return { start, end };
-  }
   const c = monthCursor.value;
   return monthGridWindow(c);
 });
@@ -350,48 +330,24 @@ const quickCreateHeading = computed(() => {
 const activeToolbarTitle = computed(() => {
   if (rangeMode.value === "schedule") return monthToolbarTitle.value;
   if (rangeMode.value === "day") return dayToolbarTitle.value;
-  if (rangeMode.value === "week") return weekToolbarTitle.value;
   return monthToolbarTitle.value;
 });
 
-const mobileToolbarTitle = computed(() => {
-  if (rangeMode.value !== "week") return activeToolbarTitle.value;
-  const start = weekCursor.value;
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  const day = new Intl.DateTimeFormat("en-GB", { day: "numeric" });
-  const monthYear = new Intl.DateTimeFormat("en-GB", {
-    month: "short",
-    year: "numeric",
-  });
-  if (
-    start.getMonth() === end.getMonth() &&
-    start.getFullYear() === end.getFullYear()
-  ) {
-    return `${day.format(start)}-${day.format(end)} ${monthYear.format(start)}`;
-  }
-  const compact = new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-  });
-  return `${compact.format(start)}-${compact.format(end)}`;
-});
+const mobileToolbarTitle = computed(() => activeToolbarTitle.value);
 
 const calendarPickerSelectedDate = computed(() => {
   if (rangeMode.value === "day") return dayKeyFormatter.value.format(dayCursor.value);
   if (focusedDayKey.value) return focusedDayKey.value;
-  if (rangeMode.value === "week") return dayKeyFormatter.value.format(weekCursor.value);
   return null;
 });
 
 const mobileRangeCycleLabel = computed(() => {
   const nextMode = nextCycleRangeMode();
-  return `Switch to ${nextMode === "schedule" ? "Schedule" : nextMode === "week" ? "Week" : "Month"} view`;
+  return `Switch to ${nextMode === "schedule" ? "Schedule" : "Month"} view`;
 });
 
 const mobileRangeIcon = computed<UiIconName>(() => {
   if (rangeMode.value === "schedule") return "SquareCheck";
-  if (rangeMode.value === "week") return "CalendarDays";
   return "LayoutGrid";
 });
 
@@ -732,7 +688,7 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
   };
 }
 
-const siteOptions = computed<CalendarAgendaSiteOption[]>(() => [
+const siteOptions = computed<CalendarSiteOption[]>(() => [
   ...sites.sites.map((site) => ({
     value: site.username,
     label: `${site.username}.example.com`,
@@ -907,7 +863,7 @@ function siteDotColor(key: string): string {
   return SITE_DOT_PALETTE[Math.abs(h) % SITE_DOT_PALETTE.length];
 }
 
-const cycleRangeModes: CalendarRangeMode[] = ["schedule", "week", "month"];
+const cycleRangeModes: CalendarRangeMode[] = ["schedule", "month"];
 
 function nextCycleRangeMode(): CalendarRangeMode {
   const currentIndex = cycleRangeModes.indexOf(rangeMode.value);
@@ -962,10 +918,6 @@ function onRangeChange(mode: CalendarRangeMode) {
     monthCursor.value = new Date();
     focusedDayKey.value = null;
   }
-  if (mode === "week" && previous !== "week") {
-    weekCursor.value = startOfWeekMonday(new Date());
-    focusedDayKey.value = null;
-  }
   if (mode === "schedule" && previous !== "schedule") {
     monthCursor.value = new Date();
     focusedDayKey.value = null;
@@ -1003,34 +955,18 @@ function onNextMonth() {
   void reloadCalendar();
 }
 
-function onPrevWeek() {
-  const d = new Date(weekCursor.value);
-  d.setDate(d.getDate() - 7);
-  weekCursor.value = d;
-  focusedDayKey.value = null;
-  void reloadCalendar();
-}
-
-function onNextWeek() {
-  const d = new Date(weekCursor.value);
-  d.setDate(d.getDate() + 7);
-  weekCursor.value = d;
-  focusedDayKey.value = null;
-  void reloadCalendar();
-}
-
 function onToolbarPrev() {
   if (rangeMode.value === "day") onPrevDay();
   else if (rangeMode.value === "month" || rangeMode.value === "schedule") {
     onPrevMonth();
-  } else if (rangeMode.value === "week") onPrevWeek();
+  }
 }
 
 function onToolbarNext() {
   if (rangeMode.value === "day") onNextDay();
   else if (rangeMode.value === "month" || rangeMode.value === "schedule") {
     onNextMonth();
-  } else if (rangeMode.value === "week") onNextWeek();
+  }
 }
 
 watch(visibleEvents, (nextEvents) => {
@@ -1057,14 +993,17 @@ watch(siteOptions, (nextOptions) => {
   }
 });
 
-function applyMobileCalendarDefaults(matches: boolean) {
-  if (!matches) return;
+function applyCalendarViewportDefaults(matches: boolean) {
   sidebarSiteFilter.value = "all";
+  rangeMode.value = matches ? "schedule" : "month";
+  monthCursor.value = new Date();
+  focusedDayKey.value = null;
+  boardHighlightId.value = "";
 }
 
 function onMobileCalendarChange(event: MediaQueryListEvent) {
-  applyMobileCalendarDefaults(event.matches);
-  if (event.matches) void reloadCalendar();
+  applyCalendarViewportDefaults(event.matches);
+  void reloadCalendar();
 }
 
 function onBoardSelectEvent(id: string) {
@@ -1101,9 +1040,6 @@ function onMiniPick(dayKey: string) {
     if (rangeMode.value === "day") {
       dayCursor.value = picked;
       focusedDayKey.value = dayKey;
-      void reloadCalendar();
-    } else if (rangeMode.value === "week") {
-      weekCursor.value = startOfWeekMonday(picked);
       void reloadCalendar();
     } else if (rangeMode.value === "month" || rangeMode.value === "schedule") {
       monthCursor.value = new Date(year, month - 1, 1);
@@ -1550,7 +1486,7 @@ function handleWindowClick() {
 
 onMounted(async () => {
   mobileMediaQuery = window.matchMedia("(max-width: 760px)");
-  applyMobileCalendarDefaults(mobileMediaQuery.matches);
+  applyCalendarViewportDefaults(mobileMediaQuery.matches);
   mobileMediaQuery.addEventListener("change", onMobileCalendarChange);
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener("click", handleWindowClick);
@@ -1659,13 +1595,6 @@ onBeforeUnmount(() => {
               @click="onRangeChange('schedule')"
             >
               Schedule
-            </button>
-            <button
-              type="button"
-              :class="{ 'is-on': rangeMode === 'week' }"
-              @click="onRangeChange('week')"
-            >
-              Week
             </button>
             <button
               type="button"
@@ -1864,7 +1793,6 @@ onBeforeUnmount(() => {
               <CalendarAgenda
                 v-if="rangeMode === 'schedule'"
                 :events="visibleEvents"
-                :site-options="siteOptions"
                 :range-mode="rangeMode"
                 :range-label="rangeLabel"
                 :focus-day-key="focusedDayKey"
@@ -1881,7 +1809,6 @@ onBeforeUnmount(() => {
               <CalendarAgenda
                 v-else-if="rangeMode === 'day'"
                 :events="visibleEvents"
-                :site-options="siteOptions"
                 title="Daily schedule"
                 description="Bookings, reminders, events, and imported calendars."
                 range-label="Day"
@@ -1889,7 +1816,6 @@ onBeforeUnmount(() => {
                 :focus-day-key="focusedAgendaDayKey"
                 :prefer-select-event-id="preferSelectEventId"
                 :cancelling-booking-id="cancellingBookingId"
-                hide-site-filter
                 @event-action="handleEventAction"
                 @event-danger-action="handleEventDangerAction"
                 @cancel-booking="handleCancelBooking"
@@ -1897,38 +1823,9 @@ onBeforeUnmount(() => {
                 @consumed-prefer-select="preferSelectEventId = null"
               />
               <template v-else>
-                <label
-                  v-if="siteOptions.length > 1"
-                  class="board-calendar-select-wrap"
-                >
-                  <select
-                    v-model="sidebarSiteFilter"
-                    class="board-calendar-select"
-                    aria-label="Calendar"
-                  >
-                    <option value="all">All calendars</option>
-                    <option
-                      v-for="option in siteOptions"
-                      :key="option.value"
-                      :value="option.value"
-                    >
-                      {{ option.label }}
-                    </option>
-                  </select>
-                </label>
                 <CalendarMonthBoard
-                  v-if="rangeMode === 'month'"
                   :year="monthCursor.getFullYear()"
                   :month="monthCursor.getMonth()"
-                  :events="visibleEvents"
-                  :selected-event-id="boardHighlightId"
-                  :today-day-key="todayDayKey"
-                  @select-event="onBoardSelectEvent"
-                  @select-day="onBoardSelectDay"
-                />
-                <CalendarWeekBoard
-                  v-else
-                  :week-start="weekStartForBoard"
                   :events="visibleEvents"
                   :selected-event-id="boardHighlightId"
                   :today-day-key="todayDayKey"
@@ -2882,23 +2779,6 @@ onBeforeUnmount(() => {
 
 .cal-board-wrap {
   min-width: 0;
-}
-
-.board-calendar-select-wrap {
-  display: grid;
-  width: 100%;
-  margin-bottom: 14px;
-}
-
-.board-calendar-select {
-  width: 100%;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg-subtle);
-  color: var(--color-text);
-  font: inherit;
 }
 
 .cal-detail-wrap {

@@ -2,14 +2,12 @@
 import { computed, ref, watch } from "vue";
 import type {
   CalendarAgendaEvent,
-  CalendarAgendaSiteOption,
   CalendarRangeMode,
 } from "./calendarAgenda";
 
 const props = withDefaults(
   defineProps<{
     events?: CalendarAgendaEvent[];
-    siteOptions?: CalendarAgendaSiteOption[];
     loading?: boolean;
     error?: string | null;
     title?: string;
@@ -22,11 +20,9 @@ const props = withDefaults(
     cancellingBookingId?: string | null;
     /** Sidebar-style layout: detail panel only (feed hidden). */
     variant?: "default" | "detail-only";
-    hideSiteFilter?: boolean;
   }>(),
   {
     events: () => [],
-    siteOptions: () => [],
     loading: false,
     error: null,
     title: "Upcoming bookings",
@@ -37,7 +33,6 @@ const props = withDefaults(
     preferSelectEventId: null,
     cancellingBookingId: null,
     variant: "default",
-    hideSiteFilter: false,
   },
 );
 const emit = defineEmits<{
@@ -55,7 +50,6 @@ type CalendarDayGroup = {
   items: CalendarAgendaEvent[];
 };
 
-const selectedSite = ref("all");
 const selectedEventId = ref("");
 const resolvedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const timeZoneOptions = resolvedTimeZone ? { timeZone: resolvedTimeZone } : {};
@@ -64,12 +58,6 @@ const sortedEvents = computed(() =>
   [...props.events].sort(
     (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
   ),
-);
-
-const filteredEvents = computed(() =>
-  selectedSite.value === "all"
-    ? sortedEvents.value
-    : sortedEvents.value.filter((event) => event.siteKey === selectedSite.value),
 );
 
 const dayKeyFormatter = computed(
@@ -83,8 +71,8 @@ const dayKeyFormatter = computed(
 );
 
 const focusFilteredEvents = computed(() => {
-  if (!props.focusDayKey) return filteredEvents.value;
-  return filteredEvents.value.filter((event) => {
+  if (!props.focusDayKey) return sortedEvents.value;
+  return sortedEvents.value.filter((event) => {
     const key = dayKeyFormatter.value.format(new Date(event.startsAt));
     return key === props.focusDayKey;
   });
@@ -139,24 +127,12 @@ const selectedEvent = computed(() =>
   null,
 );
 
-const activeSiteLabel = computed(() => {
-  if (selectedSite.value === "all") return "all calendars";
-  return (
-    props.siteOptions.find((option) => option.value === selectedSite.value)
-      ?.label || "selected calendar"
-  );
-});
-
 const emptyMessage = computed(() => {
   const range = props.rangeLabel.toLowerCase();
   const focusHint = props.focusDayKey
     ? ` on ${focusDayLabel.value}`
     : "";
-  if (selectedSite.value === "all") {
-    return `No scheduled items in the ${range}${focusHint}.`;
-  }
-
-  return `No scheduled items for ${activeSiteLabel.value} in the ${range}${focusHint}.`;
+  return `No scheduled items in the ${range}${focusHint}.`;
 });
 
 function formatTime(value: string) {
@@ -224,9 +200,7 @@ watch(
       class="calendar-empty"
     >
       <p>{{ emptyMessage }}</p>
-      <p v-if="siteOptions.length > 1" class="calendar-empty-hint">
-        Use the site filter above to switch context, or check back when more items arrive.
-      </p>
+      <p class="calendar-empty-hint">Check back when more items arrive.</p>
     </div>
 
     <div v-else-if="variant === 'detail-only' && selectedEvent" class="calendar-detail-solo-wrap">
@@ -291,25 +265,6 @@ watch(
 
     <div v-else-if="variant === 'default'" class="calendar-grid">
       <div class="calendar-feed">
-        <div class="calendar-controls">
-          <label
-            v-if="!hideSiteFilter && siteOptions.length > 1"
-            class="calendar-select-wrap"
-          >
-            <select v-model="selectedSite" class="calendar-select">
-              <option value="all">All calendars</option>
-              <option
-                v-for="option in siteOptions"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-
-        </div>
-
         <div class="calendar-days">
           <section v-for="group in dayGroups" :key="group.key" class="calendar-day">
             <div class="calendar-day-head">
@@ -514,36 +469,6 @@ watch(
   padding: 16px;
 }
 
-.calendar-controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: stretch;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.calendar-select-wrap {
-  display: grid;
-  gap: 6px;
-  flex: 1 1 auto;
-  width: 100%;
-}
-
-.calendar-select-label {
-  display: none;
-}
-
-.calendar-select {
-  width: 100%;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg-subtle);
-  color: var(--color-text);
-  font: inherit;
-}
-
 .calendar-days {
   display: grid;
   gap: 14px;
@@ -730,7 +655,6 @@ watch(
 }
 
 @media (max-width: 960px) {
-  .calendar-controls,
   .calendar-item {
     flex-direction: column;
     align-items: flex-start;
