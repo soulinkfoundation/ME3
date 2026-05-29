@@ -3061,6 +3061,12 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 760px) {
+  :global(#app-side-nav-mobile-page-controls:has(.cal-mobile-nav-controls)) {
+    min-height: 64px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
   .ops-page {
     padding: 0;
   }
