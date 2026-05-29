@@ -66,9 +66,7 @@ const showAuthChoice = computed(
 );
 const useBootstrapCodeInput = computed(
   () =>
-    isSetupMode.value ||
-    isResetMode.value ||
-    isCustomPasswordSetupMode.value,
+    isSetupMode.value || isResetMode.value || isCustomPasswordSetupMode.value,
 );
 const missingBootstrapCode = computed(
   () =>
@@ -77,9 +75,7 @@ const missingBootstrapCode = computed(
       isCustomPasswordSetupMode.value) &&
     setupRequired.value.includes("SETUP_PASSWORD"),
 );
-const missingOwnerSecrets = computed(
-  () => missingBootstrapCode.value,
-);
+const missingOwnerSecrets = computed(() => missingBootstrapCode.value);
 const showBootstrapSetup = computed(
   () =>
     !showAuthChoice.value &&
@@ -232,10 +228,9 @@ async function submitAuth() {
         ? "Custom authentication enabled. Sign in with your new password."
         : "Password reset. Sign in with your new password.";
     } else {
-      error.value =
-        wasCustomPasswordSetup
-          ? "Custom authentication setup failed. Check your ME3 account email, setup password, and new password."
-          : "Reset failed. Check your email, setup password, and new password.";
+      error.value = wasCustomPasswordSetup
+        ? "Custom authentication setup failed. Check your ME3 account email, setup password, and new password."
+        : "Reset failed. Check your email, setup password, and new password.";
     }
 
     loading.value = false;
@@ -337,17 +332,17 @@ onMounted(loadConfig);
         >
           {{ me3SignInLoading ? "Opening ME3..." : "Sign in with ME3.app" }}
         </button>
-        <button
-          type="button"
-          class="text-button"
-          @click="startAdvancedSetup"
-        >
+        <button type="button" class="text-button" @click="startAdvancedSetup">
           Advanced setup for custom authentication
         </button>
         <p v-if="error" class="error">{{ error }}</p>
       </section>
 
-      <form v-if="!showAuthChoice" class="login-form" @submit.prevent="submitAuth">
+      <form
+        v-if="!showAuthChoice"
+        class="login-form"
+        @submit.prevent="submitAuth"
+      >
         <section
           v-if="showBootstrapSetup && missingOwnerSecrets"
           class="setup-note"
@@ -360,10 +355,9 @@ onMounted(loadConfig);
               <code>openssl rand -hex 16</code>.
             </li>
             <li>
-              Create a variable here: Cloudflare Dashboard -> Workers & Pages
-              -> me3 -> Settings -> Variables and Secrets called
-              <code>SETUP_PASSWORD</code> using the key you just
-              generated.
+              Create a variable here: Cloudflare Dashboard -> Workers & Pages ->
+              [YOUR ME3 WORKER NAME] -> Settings -> Variables and Secrets called
+              <code>SETUP_PASSWORD</code> using the key you just generated.
             </li>
           </ol>
         </section>
@@ -457,7 +451,10 @@ onMounted(loadConfig);
           {{ passwordRequirementText }}
         </p>
 
-        <div v-if="showBootstrapSetup && useBootstrapCodeInput" class="password-field">
+        <div
+          v-if="showBootstrapSetup && useBootstrapCodeInput"
+          class="password-field"
+        >
           <input
             v-model="bootstrapCode"
             :type="showBootstrapCode ? 'text' : 'password'"
@@ -493,14 +490,14 @@ onMounted(loadConfig);
                 ? "Resetting..."
                 : isCustomPasswordSetupMode
                   ? "Enabling..."
-                : "Opening..."
+                  : "Opening..."
               : isSetupMode
                 ? "Create account"
                 : isResetMode
                   ? "Reset password"
                   : isCustomPasswordSetupMode
                     ? "Enable custom authentication"
-                  : "Sign in"
+                    : "Sign in"
           }}
         </button>
 
@@ -599,7 +596,10 @@ onMounted(loadConfig);
   padding: 14px;
   border: 1px solid var(--ui-border-strong, var(--color-border-strong));
   border-radius: var(--ui-radius-sm, 8px);
-  background: var(--ui-surface-muted, color-mix(in srgb, var(--ui-text, #fff) 5%, transparent));
+  background: var(
+    --ui-surface-muted,
+    color-mix(in srgb, var(--ui-text, #fff) 5%, transparent)
+  );
   color: var(--ui-text, var(--color-text));
   font-size: 0.9rem;
   line-height: 1.45;

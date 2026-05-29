@@ -1,11 +1,8 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
-import { ref, computed, onBeforeUnmount, onMounted, watch } from "vue";
+import { ref, computed, onBeforeUnmount, onMounted } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
-import {
-  useSitesStore,
-  type DomainStatus,
-} from "../../stores/sites";
+import { useSitesStore } from "../../stores/sites";
 import {
   LANDING_PAGES_PLUGIN_ID,
   LANDING_PAGE_TEMPLATES,
@@ -43,7 +40,7 @@ const route = useRoute();
 const router = useRouter();
 const sites = useSitesStore();
 const wizard = useWizardStore();
-const { toastError, toastSuccess } = useAppToast();
+const { toastError } = useAppToast();
 
 /** Nested children need the parent RouterView or their pages never appear. */
 const isNestedSitesTool = computed(
@@ -91,17 +88,6 @@ const uploadError = ref("");
 const uploadNotice = ref("");
 const uploadSuccess = ref(false);
 const selectedFiles = ref<SiteUploadFile[]>([]);
-// Custom domain active → show favicon control in header (mirrors CustomDomain card)
-const headerDomainStatus = ref<DomainStatus | null>(null);
-const isCustomDomainActive = computed(
-  () => headerDomainStatus.value?.status === "active",
-);
-
-const faviconLoading = ref(false);
-const faviconUrl = ref<string | null>(null);
-const faviconFileInput = ref<HTMLInputElement | null>(null);
-const faviconImageErrored = ref(false);
-
 async function syncLandingPagesFeature() {
   try {
     const response = await api.get<{
@@ -120,92 +106,6 @@ async function syncLandingPagesFeature() {
 function handlePluginsChanged() {
   void syncLandingPagesFeature();
 }
-
-async function syncHeaderDomainStatus() {
-  const u = username.value;
-  if (!u) return;
-  headerDomainStatus.value = await sites.getDomainStatus(u);
-}
-
-async function loadFavicon() {
-  try {
-    const baseUrl = siteUrl.value.replace(/\/$/, "");
-    faviconImageErrored.value = false;
-    faviconUrl.value = `${baseUrl}/favicon.png?t=${Date.now()}`;
-  } catch (error) {
-    console.warn("Failed to load favicon:", error);
-  }
-}
-
-async function handleFaviconUpload(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-
-  if (!file.type.startsWith("image/")) {
-    toastError("Please select an image file");
-    return;
-  }
-
-  faviconLoading.value = true;
-
-  try {
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    const img = new Image();
-
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
-      img.src = URL.createObjectURL(file);
-    });
-
-    canvas.width = 192;
-    canvas.height = 192;
-    ctx?.drawImage(img, 0, 0, 192, 192);
-
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, "image/png", 1.0);
-    });
-
-    if (!blob) {
-      throw new Error("Failed to process image");
-    }
-
-    const result = await sites.uploadFavicon(username.value, blob);
-
-    if (result) {
-      await loadFavicon();
-      toastSuccess("Site icon updated");
-    } else {
-      toastError("Failed to upload site icon");
-    }
-  } catch (error: unknown) {
-    toastError(
-      error instanceof Error ? error.message : "Failed to upload site icon",
-    );
-  } finally {
-    faviconLoading.value = false;
-    if (faviconFileInput.value) {
-      faviconFileInput.value.value = "";
-    }
-  }
-}
-
-watch(username, () => void syncHeaderDomainStatus(), { immediate: true });
-
-watch(
-  isCustomDomainActive,
-  (active) => {
-    if (active) {
-      void loadFavicon();
-    } else {
-      faviconUrl.value = null;
-      faviconImageErrored.value = false;
-    }
-  },
-  { immediate: true },
-);
 
 // Initialize turndown for HTML to Markdown conversion
 const turndown = new TurndownService({
@@ -819,42 +719,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
               <span v-else class="status draft">Not published</span>
             </div>
           </div>
-
-          <div v-if="isCustomDomainActive" class="site-favicon-wrap">
-            <label
-              class="site-favicon-hit"
-              :class="{ 'is-busy': faviconLoading }"
-            >
-              <span class="site-favicon-sr-only">Change site icon</span>
-              <input
-                ref="faviconFileInput"
-                type="file"
-                class="site-favicon-input"
-                accept="image/png,image/jpeg,image/webp"
-                :disabled="faviconLoading"
-                @change="handleFaviconUpload"
-              />
-              <img
-                v-if="faviconUrl && !faviconImageErrored"
-                :src="faviconUrl"
-                alt=""
-                class="site-favicon-img"
-                @error="faviconImageErrored = true"
-              />
-              <div v-else class="site-favicon-placeholder" aria-hidden="true">
-                ?
-              </div>
-              <span class="site-favicon-hover" aria-hidden="true">
-                <UiIcon
-                  v-if="faviconLoading"
-                  name="Loader2"
-                  :size="20"
-                  class="site-favicon-spin"
-                />
-                <UiIcon v-else name="Upload" :size="20" />
-              </span>
-            </label>
-          </div>
         </div>
       </div>
 
@@ -1291,102 +1155,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   padding: 2px 8px;
   border-radius: 999px;
   line-height: 1.25;
-}
-
-.site-favicon-wrap {
-  flex-shrink: 0;
-}
-
-.site-favicon-hit {
-  position: relative;
-  display: block;
-  width: 44px;
-  height: 44px;
-  border-radius: 9999px;
-  overflow: hidden;
-  cursor: pointer;
-  border: 1px solid var(--color-border);
-  background: var(--color-border);
-}
-
-.site-favicon-hit:focus-within {
-  outline: 2px solid var(--color-text);
-  outline-offset: 2px;
-}
-
-.site-favicon-hit.is-busy {
-  cursor: wait;
-}
-
-.site-favicon-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.site-favicon-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.site-favicon-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.site-favicon-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-text-muted);
-}
-
-.site-favicon-hover {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  color: #fff;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
-}
-
-.site-favicon-hit:hover .site-favicon-hover,
-.site-favicon-hit:focus-within .site-favicon-hover,
-.site-favicon-hit.is-busy .site-favicon-hover {
-  opacity: 1;
-}
-
-@keyframes site-favicon-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.site-favicon-spin {
-  animation: site-favicon-spin 0.7s linear infinite;
 }
 
 .status {
