@@ -27,6 +27,7 @@ import {
   prepareSiteUploadFiles,
   type SiteUploadFile,
 } from "../../utils/siteUpload";
+import { resolvePublicProfileUrl } from "../../utils/publicSiteUrl";
 import { useAppToast } from "../../composables/useAppToast";
 
 definePage({
@@ -72,12 +73,9 @@ const showLandingPageControls = computed(
   () => isLandingPage.value && landingPagesFeatureEnabled.value,
 );
 
-// Use local preview URL in development
-const isDev = import.meta.env.DEV;
-const siteUrl = computed(() =>
-  isDev
-    ? `http://localhost:8787/preview/${username.value}/`
-    : `https://${username.value}.example.com`,
+const siteUrl = ref("/me");
+const siteUrlLabel = computed(() =>
+  siteUrl.value.replace(/^https?:\/\//, "").replace(/\/$/, ""),
 );
 
 // UI State
@@ -131,9 +129,7 @@ async function syncHeaderDomainStatus() {
 
 async function loadFavicon() {
   try {
-    const baseUrl = isDev
-      ? `http://localhost:8787/preview/${username.value}`
-      : `https://${username.value}.example.com`;
+    const baseUrl = siteUrl.value.replace(/\/$/, "");
     faviconImageErrored.value = false;
     faviconUrl.value = `${baseUrl}/favicon.png?t=${Date.now()}`;
   } catch (error) {
@@ -226,6 +222,8 @@ turndown.keep((node) => {
 });
 
 onMounted(async () => {
+  siteUrl.value = await resolvePublicProfileUrl(username.value);
+
   if (sites.sites.length === 0) {
     await sites.fetchSites();
   }
@@ -741,8 +739,8 @@ ${
 
 ## How to publish
 
-### Option 1: example.com (easiest)
-1. Go to https://example.com
+### Option 1: ME3 Core
+1. Open your ME3 Core app
 2. Sign in and claim your username
 3. Upload this zip or the extracted folder
 
@@ -801,17 +799,17 @@ Note: Opening index.html directly (file://) won't work due to browser security.
                 target="_blank"
                 rel="noopener"
                 class="site-link"
-                :title="`${username}.example.com`"
+                :title="siteUrlLabel"
               >
-                <span class="site-title-text">{{ username }}.example.com</span>
+                <span class="site-title-text">{{ siteUrlLabel }}</span>
                 <UiIcon name="Eye" :size="16" class="site-link-icon" />
               </a>
               <span
                 v-else
                 class="site-title-plain"
-                :title="`${username}.example.com`"
+                :title="siteUrlLabel"
               >
-                <span class="site-title-text">{{ username }}.example.com</span>
+                <span class="site-title-text">{{ siteUrlLabel }}</span>
               </span>
             </h1>
             <div class="site-badges">
@@ -993,7 +991,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
             :to="`/sites/${landing.username}/build`"
           >
             <span>
-              <strong>{{ landing.username }}.example.com</strong>
+              <strong>{{ landing.username }}</strong>
               <small>{{ landingTemplateLabel(landing.template_id) }}</small>
             </span>
             <span
@@ -1146,7 +1144,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         <h2>Delete site?</h2>
         <p>
           Are you sure you want to delete
-          <strong>{{ username }}.example.com</strong>? This action cannot be undone.
+          <strong>{{ username }}</strong>? This action cannot be undone.
         </p>
         <div class="modal-actions">
           <button class="button secondary" @click="showDeleteConfirm = false">

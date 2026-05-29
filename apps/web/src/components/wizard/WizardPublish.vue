@@ -22,6 +22,10 @@ import {
   getVibeFontUrl,
   type VibeId,
 } from "../../styles/vibes";
+import {
+  defaultPublicProfileUrlLabel,
+  resolvePublicProfileUrl,
+} from "../../utils/publicSiteUrl";
 
 // Initialize turndown for HTML to Markdown conversion
 const turndown = new TurndownService({
@@ -44,6 +48,12 @@ type ExportedContentImage = {
   blob: Blob;
   filename: string; // e.g. "about-1.webp"
 };
+
+const publicSiteBadge = computed(() => {
+  if (import.meta.env.DEV) return defaultPublicProfileUrlLabel();
+  if (typeof window === "undefined") return defaultPublicProfileUrlLabel();
+  return `${window.location.host}/me`;
+});
 
 function parsePageImagesFromHtml(html: string): string[] {
   if (!html || html.trim() === "") return [];
@@ -291,10 +301,8 @@ async function downloadZip() {
     // Add favicon if it exists (fetch from published site)
     if (wizard.profile.handle) {
       try {
-        const isDev = import.meta.env.DEV;
-        const faviconUrl = isDev
-          ? `http://localhost:8787/preview/${wizard.profile.handle}/favicon.png`
-          : `https://${wizard.profile.handle}.example.com/favicon.png`;
+        const baseUrl = await resolvePublicProfileUrl(wizard.profile.handle);
+        const faviconUrl = `${baseUrl.replace(/\/$/, "")}/favicon.png`;
         const faviconResult = await fetchImageAsBlob(faviconUrl);
         if (faviconResult) {
           zip.file("favicon.png", faviconResult.blob);
@@ -390,8 +398,8 @@ ${wizard.shopEnabled && wizard.products.length > 0 ? wizard.products.map((p) => 
 
 ## How to publish
 
-### Option 1: example.com (easiest)
-1. Go to https://example.com
+### Option 1: ME3 Core
+1. Open your ME3 Core app
 2. Sign in and claim your username
 3. Upload this zip or the extracted folder
 
@@ -570,11 +578,11 @@ function closeFooterModal() {
       <div class="option-card primary-option">
         <div class="option-header">
           <h3>Publish</h3>
-          <span class="badge">{{ wizard.username }}.example.com</span>
+          <span class="badge">{{ publicSiteBadge }}</span>
         </div>
         <p class="option-desc">
-          Instant publishing with free hosting. Your site will be live
-          immediately.
+          Instant publishing on this Worker. Add a custom domain later when
+          you are ready.
         </p>
         <button
           class="btn primary"

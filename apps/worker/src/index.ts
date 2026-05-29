@@ -3356,6 +3356,15 @@ app.get("/preview/:username/*", async (c) => {
   return serveSiteFileResponse(c.env, site, requestedPath, false);
 });
 
+app.get("/me", async (c) => {
+  return serveDefaultPublicSitePath(c.env, c.req.raw, "index.html");
+});
+
+app.get("/me/*", async (c) => {
+  const requestedPath = c.req.path.replace(/^\/me\/?/, "") || "index.html";
+  return serveDefaultPublicSitePath(c.env, c.req.raw, requestedPath);
+});
+
 app.notFound((c) => {
   if (isPublicSiteHost(c.env, c.req.url)) {
     return servePublicSiteRequest(c.env, c.req.raw);
@@ -3686,6 +3695,20 @@ async function servePublicSiteRequest(env: Env, request: Request): Promise<Respo
   });
 
   const requestedPath = new URL(request.url).pathname.replace(/^\/+/, "") || "index.html";
+  return serveSiteFileResponse(env, site, requestedPath, true);
+}
+
+async function serveDefaultPublicSitePath(
+  env: Env,
+  request: Request,
+  requestedPath: string,
+): Promise<Response> {
+  const site = await getPublicSiteForHost(env, new URL(request.url).hostname);
+  if (!site) return new Response(renderNotFoundPage("Site not configured"), {
+    status: 404,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+
   return serveSiteFileResponse(env, site, requestedPath, true);
 }
 

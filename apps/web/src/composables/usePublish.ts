@@ -3,6 +3,7 @@ import TurndownService from "turndown";
 import { useWizardStore, type WizardPageImage } from "../stores/wizard";
 import { productSendsPurchaseConfirmation } from "../../../../shared/product-purchase-confirmation";
 import { useSitesStore, type PublishManifest } from "../stores/sites";
+import { resolvePublicProfileUrl } from "../utils/publicSiteUrl";
 
 type ExportedContentImage = {
   contentSlug: string;
@@ -480,9 +481,7 @@ export function usePublish() {
       // Mark as published in wizard store
       wizard.markAsPublished();
 
-      const siteUrl = import.meta.env.DEV
-        ? `http://localhost:8787/preview/${username}/`
-        : `https://${username}.example.com`;
+      const siteUrl = await resolvePublicProfileUrl(username);
 
       // Trigger celebration animation if enabled
       if (celebrate) {

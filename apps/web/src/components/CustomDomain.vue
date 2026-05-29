@@ -342,7 +342,7 @@ const domainPreview = computed(() => {
           Are you sure you want to disconnect
           <strong>{{ domainStatus?.domain }}</strong
           >? Your site will still be accessible at
-          <strong>{{ username }}.example.com</strong>.
+          <strong>/me</strong> on this Worker.
         </p>
         <div class="modal-actions">
           <button

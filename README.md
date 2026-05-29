@@ -26,6 +26,98 @@ Plugins are how ME3 gains new abilities.
 
 ### Updating ME3 Core
 
+The Deploy to Cloudflare button is for first-time installs. Do not click it again to update an existing ME3 Core install; that can create a new repository, Worker, D1 database, or R2 bucket instead of updating the install you already own.
+
+ME3 Core updates are release-based. Public installs should update from tagged stable releases such as `v0.2.0`, not from whatever is currently on `main`. The goal is WordPress-style ownership: Core code is replaceable, while owner data and customizations live outside Core in D1, R2, Worker secrets, Cloudflare dashboard settings, and eventually plugins/themes.
+
+For a Deploy to Cloudflare install, the copied GitHub/GitLab repository is the install. Cloudflare provisions D1/R2/Durable Object resources and records those bindings in that copied repository's `wrangler.toml`. Updating ME3 Core means merging a tagged upstream release into that copied repository, then letting Cloudflare Workers Builds redeploy the same Worker against the same resources.
+
+Check for a newer stable release from the copied repository:
+
+```bash
+pnpm update:check
+```
+
+Update from a deploy-button-created repository:
+
+```bash
+git status
+git remote add upstream https://github.com/Soulink-Foundation/me3.git # only needed once
+git fetch upstream --tags
+git merge vX.Y.Z
+pnpm install
+pnpm update:doctor
+pnpm build
+git push origin main
+```
+
+Cloudflare Workers Builds should then run the configured deploy command for your repository. That deploy applies any new D1 migrations and publishes the updated Worker against the same D1/R2/Durable Object resources.
+
+If Git reports conflicts in `wrangler.toml`, preserve the values from your copied repository for provisioned resources such as `database_id`, `bucket_name`, Worker name, custom domain vars, and secrets configured in Cloudflare. Then bring in any new Core bindings or migrations from the release and rerun:
+
+```bash
+pnpm update:doctor
+```
+
+Update from a manual CLI install:
+
+```bash
+git status
+git fetch upstream --tags
+git merge vX.Y.Z
+pnpm install
+pnpm build
+pnpm deploy
+```
+
+Before major updates, create or note a Cloudflare D1 Time Travel bookmark. Never overwrite an existing install's `wrangler.toml` resource IDs, Worker secrets, D1 database, R2 bucket, or custom domains unless you intentionally want a fresh install.
+
+### Recommended Cloudflare Domains
+
+ME3 Core can boot on the generated `workers.dev` URL without a custom domain. Do not add a custom domain during the deploy-button flow unless you already know you need one. Before a custom public-site hostname is configured, the first/profile site is published at `/me` on the Worker URL, for example:
+
+```text
+https://your-me3.your-account.workers.dev/me
+```
+
+When an owner is ready to use their own domain, set one root domain:
+
+```toml
+ME3_CUSTOM_DOMAIN = "customdomain.com"
+```
+
+Core infers the hostnames from that one value:
+
+- `me3.customdomain.com` serves the private admin app and login.
+- `api.customdomain.com` serves API URLs and `me.json` action links.
+- `www.customdomain.com` serves the public ME3 site.
+
+Attach all three hostnames to the same Worker as Cloudflare Worker custom domains:
+
+```text
+me3.customdomain.com  -> me3 Worker
+api.customdomain.com  -> me3 Worker
+www.customdomain.com  -> me3 Worker
+```
+
+Advanced installs may still override the inferred values if needed:
+
+```toml
+CORE_WEB_ORIGIN = "https://me3.customdomain.com"
+CORE_API_ORIGIN = "https://api.customdomain.com"
+ME3_ADMIN_HOST = "me3.customdomain.com"
+ME3_API_HOST = "api.customdomain.com"
+ME3_SITE_HOST = "www.customdomain.com"
+# Optional: force the public host to serve a specific claimed site username.
+# ME3_SITE_USERNAME = "owner"
+```
+
+If the owner wants the apex domain too, configure Cloudflare to redirect `customdomain.com` to `www.customdomain.com`. Core keeps admin, API, and public-site routing separate by hostname.
+
+To serve the public profile directly at the apex instead, set `ME3_SITE_HOST = "customdomain.com"` and attach that hostname to the same Worker. Keep the private admin app on a separate hostname such as `me3.customdomain.com`.
+
+The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches the inferred or explicit public site host and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
+
 ### Core File Storage
 
 ME3 Core uses D1 for structured data and R2 for files.
