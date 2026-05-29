@@ -545,6 +545,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
         class="panel assistant-placeholder"
         aria-label="No assistant jobs"
       >
+        <img
+          class="assistant-placeholder__image"
+          src="/me3protocol.jpg"
+          alt=""
+          aria-hidden="true"
+        />
         <p>Create a job for your assistant</p>
         <button type="button" class="primary-button" @click="openAddModal">
           <UiIcon name="Plus" :size="18" />
@@ -997,15 +1003,34 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-placeholder {
   display: grid;
   justify-items: center;
-  gap: 16px;
-  min-height: 220px;
+  gap: 18px;
+  min-height: 380px;
   align-content: center;
-  padding: 28px;
+  padding: 38px 28px;
   text-align: center;
 }
 
 .assistant-placeholder p {
+  max-width: 430px;
+  color: var(--ui-text);
+  font-size: clamp(28px, 5vw, 38px);
   font-weight: 800;
+  line-height: 1.08;
+}
+
+.assistant-placeholder__image {
+  display: block;
+  width: min(68vw, 240px);
+  height: min(68vw, 240px);
+  object-fit: cover;
+  border-radius: 50%;
+  box-shadow: var(--ui-shadow-md, 0 22px 70px rgba(15, 23, 42, 0.14));
+}
+
+.assistant-placeholder .primary-button {
+  min-height: 44px;
+  padding: 0 18px;
+  font-size: 14px;
 }
 
 .starter-list,

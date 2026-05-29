@@ -670,17 +670,17 @@ onMounted(() => {
 }
 
 .intro-panel {
-  width: min(100%, 720px);
+  width: min(100%, 550px);
   display: grid;
   justify-items: center;
-  gap: 28px;
+  gap: 24px;
   text-align: center;
 }
 
 .intro-image {
   display: block;
-  width: min(72vw, 320px);
-  height: min(72vw, 320px);
+  width: min(68vw, 270px);
+  height: min(68vw, 270px);
   object-fit: cover;
   border-radius: 50%;
   box-shadow: var(--ui-shadow-md, 0 22px 70px rgba(15, 23, 42, 0.14));
@@ -695,17 +695,17 @@ onMounted(() => {
 .intro-copy h1 {
   margin: 0;
   color: var(--ui-text, var(--color-text));
-  font-size: clamp(36px, 5vw, 58px);
-  line-height: 0.98;
+  font-size: clamp(34px, 4.6vw, 48px);
+  line-height: 1;
   letter-spacing: 0;
 }
 
 .intro-copy p {
-  max-width: 640px;
+  max-width: 550px;
   margin: 0;
   color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 18px;
-  line-height: 1.6;
+  font-size: 17px;
+  line-height: 1.55;
 }
 
 .intro-copy a {
@@ -932,12 +932,12 @@ onMounted(() => {
   }
 
   .intro-image {
-    width: min(72vw, 260px);
-    height: min(72vw, 260px);
+    width: min(70vw, 230px);
+    height: min(70vw, 230px);
   }
 
   .intro-copy h1 {
-    font-size: 36px;
+    font-size: 34px;
   }
 
   .intro-copy p {
