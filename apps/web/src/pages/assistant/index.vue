@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../../api";
 import UiIcon from "../../components/UiIcon.vue";
@@ -139,23 +139,19 @@ const loadingJobs = ref(false);
 const loadingRecipes = ref(false);
 const loadingDetail = ref(false);
 const pageError = ref("");
-const addPanelOpen = ref(false);
+const addModalOpen = ref(false);
+const detailModalOpen = ref(false);
 const busyKeys = ref(new Set<string>());
 
 const suggestedRecipeOrder = [
   "daily-briefing",
   "weekly-review",
-  "task-carry-over",
-  "project-digest",
-  "approval-sweep",
-  "memory-review",
-  "setup-health-check",
-  "email-watch",
   "email-triage",
   "invoice-receipt-triage",
   "booking-reminder",
-  "relationship-follow-up",
 ];
+
+const suggestedRecipeIds = new Set(suggestedRecipeOrder);
 
 const sortedJobs = computed(() =>
   [...jobs.value].sort((a, b) => {
@@ -168,7 +164,7 @@ const sortedJobs = computed(() =>
 const suggestedRecipes = computed(() => {
   const order = new Map(suggestedRecipeOrder.map((id, index) => [id, index]));
   return recipes.value
-    .filter((recipe) => recipe.id !== "source-monitor")
+    .filter((recipe) => suggestedRecipeIds.has(recipe.id))
     .sort(
       (a, b) =>
         (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999) ||
@@ -176,25 +172,17 @@ const suggestedRecipes = computed(() => {
     );
 });
 
-const activeCount = computed(
-  () => jobs.value.filter((job) => job.status === "active").length,
-);
-const needsAttentionCount = computed(
-  () =>
-    jobs.value.filter(
-      (job) =>
-        job.status === "needs_setup" ||
-        job.status === "failing" ||
-        job.lastRunStatus === "waiting_for_approval",
-    ).length,
-);
-
 const selectedJob = computed(() =>
   jobs.value.find((job) => job.id === selectedJobId.value) || selectedDetail.value?.job || null,
 );
 
 onMounted(() => {
   void loadPage();
+  window.addEventListener("keydown", handleWindowKeydown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleWindowKeydown);
 });
 
 async function loadPage() {
@@ -207,9 +195,8 @@ async function loadJobs() {
   try {
     const data = await api.get<JobsResponse>("/assistant/jobs");
     jobs.value = data.jobs || [];
-    if (!selectedJobId.value && jobs.value.length > 0) {
-      selectedJobId.value = jobs.value[0].id;
-      void openJob(jobs.value[0].id);
+    if (selectedJobId.value && !jobs.value.some((job) => job.id === selectedJobId.value)) {
+      closeDetailModal();
     }
   } catch (err) {
     pageError.value = messageFromUnknown(err, "Could not load jobs.");
@@ -232,12 +219,14 @@ async function loadRecipes() {
 
 async function openJob(jobId: string) {
   selectedJobId.value = jobId;
+  detailModalOpen.value = true;
   loadingDetail.value = true;
   try {
     selectedDetail.value = await api.get<AssistantJobDetail>(
       `/assistant/jobs/${encodeURIComponent(jobId)}`,
     );
   } catch (err) {
+    closeDetailModal();
     toastFromUnknown(err, "Could not load job details.");
   } finally {
     loadingDetail.value = false;
@@ -254,10 +243,11 @@ async function createStarterJob(recipe: AssistantJobRecipe) {
       status: recipe.state === "ready" ? "active" : undefined,
     });
 
-    addPanelOpen.value = false;
-    selectedJobId.value = data.job.id;
+    addModalOpen.value = false;
+    selectedJobId.value = null;
+    selectedDetail.value = null;
+    detailModalOpen.value = false;
     await loadJobs();
-    await openJob(data.job.id);
     toastSuccess(
       data.job.status === "needs_setup"
         ? "Saved. It needs setup before it can run."
@@ -270,7 +260,9 @@ async function runJob(job: AssistantJob) {
   await withBusy(`run:${job.id}`, async () => {
     await api.post(`/assistant/jobs/${encodeURIComponent(job.id)}/run`);
     await loadJobs();
-    await openJob(job.id);
+    if (detailModalOpen.value && selectedJobId.value === job.id) {
+      await openJob(job.id);
+    }
     toastSuccess("Run started.");
   });
 }
@@ -282,7 +274,7 @@ async function toggleJob(job: AssistantJob) {
       `/assistant/jobs/${encodeURIComponent(job.id)}/${endpoint}`,
     );
     jobs.value = jobs.value.map((item) => (item.id === job.id ? data.job : item));
-    if (selectedJobId.value === job.id) {
+    if (detailModalOpen.value && selectedJobId.value === job.id) {
       await openJob(job.id);
     }
     toastSuccess(endpoint === "pause" ? "Job paused." : "Job resumed.");
@@ -309,14 +301,35 @@ async function archiveJob(job: AssistantJob) {
     await api.delete(`/assistant/jobs/${encodeURIComponent(job.id)}`);
     jobs.value = jobs.value.filter((item) => item.id !== job.id);
     if (selectedJobId.value === job.id) {
-      selectedJobId.value = jobs.value[0]?.id || null;
-      selectedDetail.value = null;
-      if (selectedJobId.value) {
-        await openJob(selectedJobId.value);
-      }
+      closeDetailModal();
     }
     toastSuccess("Job archived.");
   });
+}
+
+function openAddModal() {
+  addModalOpen.value = true;
+}
+
+function closeAddModal() {
+  addModalOpen.value = false;
+}
+
+function closeDetailModal() {
+  detailModalOpen.value = false;
+  selectedJobId.value = null;
+  selectedDetail.value = null;
+}
+
+function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key !== "Escape") return;
+  if (addModalOpen.value) {
+    closeAddModal();
+    return;
+  }
+  if (detailModalOpen.value) {
+    closeDetailModal();
+  }
 }
 
 async function withBusy(key: string, action: () => Promise<void>) {
@@ -393,16 +406,6 @@ function actionStatusLabel(status: AssistantJobActionResult["status"]) {
   return labels[status] || status;
 }
 
-function recipeStateLabel(state: AssistantRecipeState) {
-  const labels: Record<AssistantRecipeState, string> = {
-    ready: "Ready",
-    needs_setup: "Needs setup",
-    manual_only: "Manual",
-    coming_later: "Later",
-  };
-  return labels[state] || state;
-}
-
 function recipeActionLabel(recipe: AssistantJobRecipe) {
   if (recipe.state === "coming_later") return "Later";
   if (recipe.state === "needs_setup") return "Save";
@@ -477,17 +480,6 @@ function formatDestination(detail: AssistantJobDetail | null) {
   return "Mission Control results";
 }
 
-function setupLabelForRecipe(recipe: AssistantJobRecipe) {
-  if (recipe.state === "ready") return "Ready to add";
-  const ids = [...recipe.requiredCapabilityIds, ...recipe.optionalCapabilityIds].join(" ");
-  if (ids.includes("email.")) return "Email setup needed";
-  if (ids.includes("calendar.")) return "Calendar setup needed";
-  if (ids.includes("source.")) return "Source setup needed";
-  if (ids.includes("message.owner.notify")) return "Notifications setup needed";
-  if (ids.includes("daemon.")) return "Local app setup needed";
-  return recipeStateLabel(recipe.state);
-}
-
 function setupMessageForJob(job: AssistantJob) {
   const error = job.setupState?.errors?.find((entry) => entry.message)?.message;
   if (!error) return "Setup is needed before this job can run.";
@@ -536,112 +528,50 @@ function messageFromUnknown(err: unknown, fallback: string) {
 <template>
   <div class="assistant-page">
     <Teleport to="#app-side-nav-mobile-page-controls">
-      <div class="assistant-mobile-title">Assistant Jobs</div>
+      <div class="assistant-mobile-spacer" aria-hidden="true"></div>
     </Teleport>
 
     <main class="assistant-main">
-      <header class="assistant-header">
-        <div>
-          <h1>Assistant Jobs</h1>
-          <p>Create small repeatable jobs. Results land in Mission Control, and ME3 asks before risky actions.</p>
-        </div>
-        <button
-          type="button"
-          class="primary-button"
-          :aria-expanded="addPanelOpen ? 'true' : 'false'"
-          @click="addPanelOpen = !addPanelOpen"
-        >
-          <UiIcon :name="addPanelOpen ? 'X' : 'Plus'" :size="18" />
-          {{ addPanelOpen ? "Close" : "Add job" }}
-        </button>
-      </header>
-
       <section v-if="pageError" class="notice notice--error" role="alert">
         {{ pageError }}
       </section>
 
-      <section class="summary-strip" aria-label="Job summary">
-        <span>{{ activeCount }} active</span>
-        <span>{{ jobs.length }} total</span>
-        <span v-if="needsAttentionCount > 0">{{ needsAttentionCount }} need you</span>
+      <section v-if="loadingJobs" class="panel assistant-placeholder">
+        Loading jobs...
       </section>
 
-      <section v-if="addPanelOpen" class="panel starters-panel" aria-labelledby="starter-jobs-title">
-        <div class="panel-heading">
-          <div>
-            <h2 id="starter-jobs-title">Suggested Jobs</h2>
-            <p>Pick a starter, then tune it later.</p>
-          </div>
-        </div>
-
-        <div v-if="loadingRecipes" class="empty-row">Loading suggested jobs...</div>
-        <div v-else class="starter-list">
-          <article
-            v-for="recipe in suggestedRecipes"
-            :key="recipe.id"
-            class="starter-row"
-          >
-            <div class="starter-main">
-              <div class="starter-title-line">
-                <h3>{{ recipe.name }}</h3>
-                <span
-                  class="status-badge"
-                  :class="`status-badge--${recipe.state}`"
-                >
-                  {{ recipeStateLabel(recipe.state) }}
-                </span>
-              </div>
-              <p>{{ cleanPlainText(recipe.outcome) }}</p>
-              <span class="setup-note">{{ setupLabelForRecipe(recipe) }}</span>
-            </div>
-            <button
-              type="button"
-              class="secondary-button"
-              :disabled="!canCreateRecipe(recipe) || isBusy(`recipe:${recipe.id}`)"
-              @click="createStarterJob(recipe)"
-            >
-              <UiIcon name="Plus" :size="16" />
-              {{ recipeActionLabel(recipe) }}
-            </button>
-          </article>
-        </div>
+      <section
+        v-else-if="sortedJobs.length === 0"
+        class="panel assistant-placeholder"
+        aria-label="No assistant jobs"
+      >
+        <p>Create a job for your assistant</p>
+        <button type="button" class="primary-button" @click="openAddModal">
+          <UiIcon name="Plus" :size="18" />
+          Add Job
+        </button>
       </section>
 
-      <div class="assistant-workspace">
-        <section class="panel jobs-panel" aria-labelledby="jobs-title">
-          <div class="panel-heading">
-            <div>
-              <h2 id="jobs-title">Jobs</h2>
-              <p>Active, paused, and draft jobs.</p>
-            </div>
-            <button
-              type="button"
-              class="icon-button"
-              title="Refresh jobs"
-              aria-label="Refresh jobs"
-              :disabled="loadingJobs"
-              @click="loadJobs"
-            >
-              <UiIcon name="RefreshCw" :size="17" />
-            </button>
-          </div>
-
-          <div v-if="loadingJobs" class="empty-row">Loading jobs...</div>
-          <div v-else-if="sortedJobs.length === 0" class="empty-state">
-            <h3>No jobs yet.</h3>
-            <p>Add a Daily Briefing or Weekly Review to get started.</p>
-            <button type="button" class="primary-button" @click="addPanelOpen = true">
+      <template v-else>
+        <header class="assistant-topbar">
+          <div aria-hidden="true"></div>
+          <h1>Assistant Jobs</h1>
+          <div class="assistant-topbar__actions">
+            <button type="button" class="primary-button" @click="openAddModal">
               <UiIcon name="Plus" :size="18" />
               Add job
             </button>
           </div>
-          <div v-else class="job-list">
+        </header>
+
+        <section class="panel jobs-panel" aria-label="Assistant jobs">
+          <div class="job-list">
             <article
               v-for="job in sortedJobs"
               :key="job.id"
               class="job-row"
               :class="{
-                'job-row--selected': selectedJobId === job.id,
+                'job-row--selected': detailModalOpen && selectedJobId === job.id,
                 'job-row--muted': job.status === 'paused' || job.status === 'draft',
               }"
             >
@@ -709,24 +639,108 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </article>
           </div>
         </section>
+      </template>
+    </main>
 
-        <aside class="panel detail-panel" aria-label="Job detail">
-          <div v-if="loadingDetail" class="empty-row">Loading details...</div>
-          <div v-else-if="!selectedJob" class="empty-state detail-empty">
-            <h3>Select a job.</h3>
-            <p>Details, runs, and recent results appear here.</p>
+    <Teleport to="body">
+      <div
+        v-if="addModalOpen"
+        class="assistant-modal"
+        @click.self="closeAddModal"
+      >
+        <section
+          class="assistant-modal__dialog assistant-modal__dialog--wide"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-job-title"
+        >
+          <header class="assistant-modal__header">
+            <h2 id="add-job-title">Add Job</h2>
+            <button
+              type="button"
+              class="modal-close"
+              aria-label="Close"
+              @click="closeAddModal"
+            >
+              <UiIcon name="X" :size="20" />
+            </button>
+          </header>
+
+          <div v-if="loadingRecipes" class="empty-row">Loading suggested jobs...</div>
+          <div v-else class="starter-list">
+            <article
+              v-for="recipe in suggestedRecipes"
+              :key="recipe.id"
+              class="starter-row"
+            >
+              <div class="starter-main">
+                <div class="starter-title-line">
+                  <h3>{{ recipe.name }}</h3>
+                  <span
+                    v-if="recipe.state === 'needs_setup'"
+                    class="status-badge status-badge--needs_setup"
+                  >
+                    Needs setup
+                  </span>
+                </div>
+                <p>{{ cleanPlainText(recipe.outcome) }}</p>
+              </div>
+              <button
+                type="button"
+                class="secondary-button"
+                :disabled="!canCreateRecipe(recipe) || isBusy(`recipe:${recipe.id}`)"
+                @click="createStarterJob(recipe)"
+              >
+                <UiIcon name="Plus" :size="16" />
+                {{ recipeActionLabel(recipe) }}
+              </button>
+            </article>
           </div>
-          <template v-else>
-            <div class="detail-header">
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="detailModalOpen"
+        class="assistant-modal"
+        @click.self="closeDetailModal"
+      >
+        <section
+          class="assistant-modal__dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="job-detail-title"
+        >
+          <div v-if="loadingDetail" class="empty-row">Loading details...</div>
+          <template v-else-if="selectedJob">
+            <header class="assistant-modal__header">
               <div>
-                <h2>{{ selectedJob.name }}</h2>
+                <h2 id="job-detail-title">{{ selectedJob.name }}</h2>
                 <p>{{ cleanPlainText(selectedJob.purpose) }}</p>
               </div>
+              <button
+                type="button"
+                class="modal-close"
+                aria-label="Close"
+                @click="closeDetailModal"
+              >
+                <UiIcon name="X" :size="20" />
+              </button>
+            </header>
+
+            <div class="modal-status-line">
               <span
                 class="status-badge"
                 :class="`status-badge--${selectedJob.status}`"
               >
                 {{ statusLabel(selectedJob.status) }}
+              </span>
+              <span
+                v-if="selectedJob.lastRunStatus === 'waiting_for_approval'"
+                class="needs-you"
+              >
+                Needs you
               </span>
             </div>
 
@@ -876,9 +890,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
               Archive job
             </button>
           </template>
-        </aside>
+        </section>
       </div>
-    </main>
+    </Teleport>
   </div>
 </template>
 
@@ -892,30 +906,43 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-main {
   display: grid;
   gap: 16px;
-  width: min(1280px, 100%);
+  width: min(600px, 100%);
   margin: 0 auto;
-  padding: 32px 40px 44px;
+  padding: 16px 18px 44px;
 }
 
-.assistant-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
+.assistant-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  min-height: 64px;
+  min-width: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--ui-border);
+  background: color-mix(in oklab, var(--ui-bg), transparent 4%);
+  backdrop-filter: blur(16px);
 }
 
-.assistant-header h1 {
+.assistant-topbar h1 {
+  justify-self: center;
   margin: 0;
-  font-size: clamp(28px, 3vw, 40px);
-  line-height: 1.05;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
   letter-spacing: 0;
 }
 
-.assistant-header p,
-.panel-heading p,
-.detail-header p,
+.assistant-topbar__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.assistant-modal__header p,
 .starter-main p,
-.empty-state p,
 .run-row p {
   margin: 6px 0 0;
   color: var(--ui-text-muted);
@@ -923,18 +950,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   line-height: 1.5;
 }
 
-.assistant-mobile-title {
+.assistant-mobile-spacer {
   display: none;
 }
 
-.summary-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.summary-strip span,
-.setup-note,
 .needs-you,
 .action-result {
   display: inline-flex;
@@ -956,13 +975,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text);
 }
 
-.assistant-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.7fr);
-  gap: 16px;
-  align-items: start;
-}
-
 .panel {
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-md);
@@ -970,20 +982,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   overflow: hidden;
 }
 
-.panel-heading,
-.detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.panel-heading h2,
-.detail-header h2,
 .detail-section h3,
-.empty-state h3 {
+.assistant-placeholder p {
   margin: 0;
   font-size: 17px;
   line-height: 1.25;
@@ -992,6 +992,20 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .detail-section h3 {
   font-size: 15px;
+}
+
+.assistant-placeholder {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  min-height: 220px;
+  align-content: center;
+  padding: 28px;
+  text-align: center;
+}
+
+.assistant-placeholder p {
+  font-weight: 800;
 }
 
 .starter-list,
@@ -1018,6 +1032,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .starter-row {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  padding: 12px 0;
 }
 
 .starter-title-line {
@@ -1105,7 +1120,6 @@ button:focus-visible {
 
 .detail-actions {
   justify-content: flex-start;
-  padding: 0 16px 16px;
 }
 
 .primary-button,
@@ -1135,7 +1149,7 @@ button:focus-visible {
 .primary-button {
   border: 1px solid var(--ui-accent);
   background: var(--ui-accent);
-  color: var(--ui-accent-contrast);
+  color: #fff;
 }
 
 .secondary-button {
@@ -1146,7 +1160,6 @@ button:focus-visible {
 
 .danger-button {
   width: fit-content;
-  margin: 0 16px 16px;
   border: 1px solid color-mix(in oklab, #e53935 45%, var(--ui-border));
   background: transparent;
   color: var(--ui-text);
@@ -1208,7 +1221,6 @@ button:disabled {
 }
 
 .notice {
-  margin: 16px;
   border: 1px solid color-mix(in oklab, var(--ui-accent) 40%, var(--ui-border));
   border-radius: var(--ui-radius-md);
   padding: 12px;
@@ -1219,29 +1231,15 @@ button:disabled {
 }
 
 .notice--error {
-  margin: 0;
   border-color: color-mix(in oklab, #e53935 42%, var(--ui-border));
   background: color-mix(in oklab, #e53935 10%, var(--ui-surface));
 }
 
-.empty-row,
-.empty-state {
+.empty-row {
   padding: 24px 16px;
   color: var(--ui-text-muted);
   font-size: 14px;
   text-align: center;
-}
-
-.empty-state {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
-  min-height: 180px;
-  align-content: center;
-}
-
-.detail-empty {
-  min-height: 360px;
 }
 
 .detail-facts {
@@ -1279,8 +1277,8 @@ button:disabled {
 .detail-section {
   display: grid;
   gap: 12px;
-  padding: 16px;
   border-top: 1px solid var(--ui-border);
+  padding-top: 16px;
 }
 
 .permission-grid {
@@ -1335,30 +1333,85 @@ button:disabled {
   margin-top: 10px;
 }
 
-@media (max-width: 1080px) {
-  .assistant-workspace {
-    grid-template-columns: 1fr;
-  }
+.assistant-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in oklab, #000, transparent 62%);
+}
+
+.assistant-modal__dialog {
+  display: grid;
+  gap: 16px;
+  width: min(600px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  overflow: auto;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  padding: 18px;
+  box-shadow: 0 24px 80px color-mix(in oklab, #000, transparent 78%);
+}
+
+.assistant-modal__dialog--wide {
+  width: min(600px, 100%);
+}
+
+.assistant-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-modal__header h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  cursor: pointer;
+}
+
+.modal-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (max-width: 760px) {
   .assistant-main {
-    padding: 18px 14px 28px;
+    padding: 14px 14px 28px;
   }
 
-  .assistant-mobile-title {
+  .assistant-mobile-spacer {
     display: block;
-    color: var(--ui-text);
-    font-size: 14px;
-    font-weight: 800;
+    min-height: 36px;
   }
 
-  .assistant-header {
-    display: grid;
+  .assistant-topbar {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 10px;
   }
 
-  .assistant-header h1 {
-    font-size: 30px;
+  .assistant-topbar .primary-button {
+    min-width: 36px;
+    padding: 0 10px;
   }
 
   .starter-row,
@@ -1383,6 +1436,15 @@ button:disabled {
   .detail-facts div {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .assistant-modal {
+    align-items: stretch;
+    padding: 10px;
+  }
+
+  .assistant-modal__dialog {
+    max-height: calc(100vh - 20px);
   }
 }
 </style>

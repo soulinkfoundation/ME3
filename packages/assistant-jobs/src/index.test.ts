@@ -18,11 +18,6 @@ describe("assistant jobs package", () => {
     expect(coreRecipes.map((recipe) => recipe.id)).toEqual([
       "weekly-review",
       "daily-briefing",
-      "task-carry-over",
-      "project-digest",
-      "approval-sweep",
-      "memory-review",
-      "setup-health-check",
     ]);
 
     for (const recipe of coreRecipes) {
@@ -123,9 +118,9 @@ describe("assistant jobs package", () => {
   it("builds project-scoped context for Mission Control job runs", () => {
     const context = createAssistantJobContext({
       ownerId: "owner",
-      jobId: "job-project-digest",
+      jobId: "job-project-summary",
       runId: "run-1",
-      jobName: "Project Digest",
+      jobName: "Project Summary",
       jobPurpose: "Summarize the active analytics project.",
       scope: {
         projectId: "project-analytics",
