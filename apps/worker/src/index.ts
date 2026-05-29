@@ -72,9 +72,9 @@ import {
   listMissionContextSources,
   listMissionJournalEntries,
   listMissionMemory,
+  listMissionTaskPage,
   listMissionPluginActivity,
   listMissionProjects,
-  listMissionTasks,
   listMissionDaemonAudit,
   resolveMissionApproval,
   startMissionDaemonPairing,
@@ -1110,14 +1110,16 @@ app.get("/api/mission-control/tasks", async (c) => {
   if (blocked) return blocked;
 
   try {
-    return c.json({
-      tasks: await listMissionTasks(c.env, ownerId, {
+    return c.json(
+      await listMissionTaskPage(c.env, ownerId, {
         status: c.req.query("status"),
         dueDate: c.req.query("date"),
         archived: c.req.query("archived") === "1",
         projectId: c.req.query("projectId"),
+        limit: c.req.query("limit"),
+        cursor: c.req.query("cursor"),
       }),
-    });
+    );
   } catch (error) {
     return missionControlErrorResponse(c, error);
   }

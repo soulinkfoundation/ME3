@@ -195,7 +195,11 @@ type MissionOverviewResponse = {
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
 type MissionJournalArchiveResponse = { entries: MissionJournalArchiveEntry[] };
-type MissionTasksResponse = { tasks: MissionTask[] };
+type MissionTasksResponse = {
+  tasks: MissionTask[];
+  nextCursor: string | null;
+  limit: number;
+};
 
 type ActivityViewItem = {
   id: string;
@@ -249,6 +253,7 @@ const projectBoardStatuses: Array<{ id: MissionTask["status"]; label: string }> 
   { id: "review", label: "Review" },
   { id: "done", label: "Done" },
 ];
+const PROJECT_TASK_PAGE_SIZE = 50;
 
 const selectedDate = ref(todayKey());
 const activeSection = ref<MissionSection>(normalizeSection(route.query.section));
@@ -287,7 +292,9 @@ const archivePickerOpen = ref(false);
 const selectedArchiveProjectId = ref("");
 const projectArchiveTasks = ref<MissionTask[]>([]);
 const projectArchiveLoading = ref(false);
+const projectArchiveLoadingMore = ref(false);
 const projectArchiveError = ref("");
+const projectArchiveNextCursor = ref<string | null>(null);
 const selectedProjectArchiveTaskId = ref("");
 const memoryDraft = ref("");
 const memoryActionId = ref("");
@@ -302,7 +309,9 @@ const projectSaving = ref(false);
 const projectError = ref("");
 const projectTasks = ref<MissionTask[]>([]);
 const projectTasksLoading = ref(false);
+const projectTasksLoadingMore = ref(false);
 const projectTasksError = ref("");
+const projectTasksNextCursor = ref<string | null>(null);
 const projectTaskDraft = ref("");
 const projectTaskSaving = ref(false);
 const projectTaskActionId = ref("");
@@ -526,14 +535,21 @@ async function loadJournalArchive() {
 }
 
 async function loadProjectArchive(projectId = selectedArchiveProjectId.value) {
-  if (!projectId) return;
+  if (!projectId) {
+    projectArchiveTasks.value = [];
+    projectArchiveNextCursor.value = null;
+    selectedProjectArchiveTaskId.value = "";
+    return;
+  }
   projectArchiveLoading.value = true;
   projectArchiveError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
-      `/mission-control/tasks?archived=1&projectId=${encodeURIComponent(projectId)}`,
+      missionTasksUrl({ archived: true, projectId }),
     );
+    if (selectedArchiveProjectId.value !== projectId) return;
     projectArchiveTasks.value = response.tasks || [];
+    projectArchiveNextCursor.value = response.nextCursor || null;
     if (
       selectedProjectArchiveTaskId.value &&
       projectArchiveTasks.value.some((task) => task.id === selectedProjectArchiveTaskId.value)
@@ -545,24 +561,80 @@ async function loadProjectArchive(projectId = selectedArchiveProjectId.value) {
     projectArchiveError.value =
       e instanceof ApiError ? e.message : "Project archive could not load";
     projectArchiveTasks.value = [];
+    projectArchiveNextCursor.value = null;
     selectedProjectArchiveTaskId.value = "";
   } finally {
     projectArchiveLoading.value = false;
   }
 }
 
-async function loadProjectTasks() {
+async function loadMoreProjectArchive() {
+  const projectId = selectedArchiveProjectId.value;
+  const cursor = projectArchiveNextCursor.value;
+  if (!projectId || !cursor || projectArchiveLoadingMore.value) return;
+  projectArchiveLoadingMore.value = true;
+  projectArchiveError.value = "";
+  try {
+    const response = await api.get<MissionTasksResponse>(
+      missionTasksUrl({ archived: true, projectId, cursor }),
+    );
+    if (selectedArchiveProjectId.value !== projectId) return;
+    projectArchiveTasks.value = appendUniqueTasks(
+      projectArchiveTasks.value,
+      response.tasks || [],
+    );
+    projectArchiveNextCursor.value = response.nextCursor || null;
+  } catch (e) {
+    projectArchiveError.value =
+      e instanceof ApiError ? e.message : "Could not load more archived tasks";
+  } finally {
+    projectArchiveLoadingMore.value = false;
+  }
+}
+
+async function loadProjectTasks(projectId = selectedProjectDetail.value?.id || "") {
+  if (!projectId) {
+    projectTasks.value = [];
+    projectTasksNextCursor.value = null;
+    return;
+  }
   projectTasksLoading.value = true;
   projectTasksError.value = "";
   try {
-    const response = await api.get<MissionTasksResponse>("/mission-control/tasks");
+    const response = await api.get<MissionTasksResponse>(
+      missionTasksUrl({ projectId }),
+    );
+    if (selectedProjectDetail.value?.id !== projectId) return;
     projectTasks.value = response.tasks || [];
+    projectTasksNextCursor.value = response.nextCursor || null;
   } catch (e) {
     projectTasksError.value =
       e instanceof ApiError ? e.message : "Project tasks could not load";
     projectTasks.value = [];
+    projectTasksNextCursor.value = null;
   } finally {
     projectTasksLoading.value = false;
+  }
+}
+
+async function loadMoreProjectTasks() {
+  const projectId = selectedProjectDetail.value?.id || "";
+  const cursor = projectTasksNextCursor.value;
+  if (!projectId || !cursor || projectTasksLoadingMore.value) return;
+  projectTasksLoadingMore.value = true;
+  projectTasksError.value = "";
+  try {
+    const response = await api.get<MissionTasksResponse>(
+      missionTasksUrl({ projectId, cursor }),
+    );
+    if (selectedProjectDetail.value?.id !== projectId) return;
+    projectTasks.value = appendUniqueTasks(projectTasks.value, response.tasks || []);
+    projectTasksNextCursor.value = response.nextCursor || null;
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not load more project tasks";
+  } finally {
+    projectTasksLoadingMore.value = false;
   }
 }
 
@@ -978,6 +1050,32 @@ function replaceProjectTask(next: MissionTask) {
   else projectTasks.value.unshift(next);
 }
 
+function appendUniqueTasks(current: MissionTask[], next: MissionTask[]): MissionTask[] {
+  const seen = new Set(current.map((task) => task.id));
+  return [
+    ...current,
+    ...next.filter((task) => {
+      if (seen.has(task.id)) return false;
+      seen.add(task.id);
+      return true;
+    }),
+  ];
+}
+
+function missionTasksUrl(options: {
+  archived?: boolean;
+  projectId?: string;
+  cursor?: string | null;
+}): string {
+  const params = new URLSearchParams({
+    limit: String(PROJECT_TASK_PAGE_SIZE),
+  });
+  if (options.archived) params.set("archived", "1");
+  if (options.projectId) params.set("projectId", options.projectId);
+  if (options.cursor) params.set("cursor", options.cursor);
+  return `/mission-control/tasks?${params.toString()}`;
+}
+
 function moveDay(delta: number) {
   void selectJournalDate(addDays(selectedDate.value, delta));
 }
@@ -1309,6 +1407,11 @@ watch(activeSection, (section) => {
     else void loadJournalArchive();
   }
   if (section === "projects") void loadProjectTasks();
+});
+
+watch(selectedProjectDetailId, (next, previous) => {
+  if (next === previous) return;
+  if (activeSection.value === "projects") void loadProjectTasks(next);
 });
 
 onMounted(() => {
@@ -1741,6 +1844,16 @@ onBeforeUnmount(() => {
                 <strong>{{ task.title }}</strong>
                 <span>{{ formatProjectArchiveLine(task) }}</span>
               </button>
+              <button
+                v-if="projectArchiveNextCursor"
+                type="button"
+                class="load-more-row"
+                :disabled="projectArchiveLoadingMore"
+                @click="loadMoreProjectArchive"
+              >
+                <UiIcon name="ChevronDown" :size="15" />
+                {{ projectArchiveLoadingMore ? "Loading..." : "Load more" }}
+              </button>
             </div>
 
             <article v-if="selectedProjectArchiveTask" class="journal-archive__preview">
@@ -1769,98 +1882,111 @@ onBeforeUnmount(() => {
           </p>
 
           <div v-if="projectTasksLoading" class="empty-row">Loading project tasks...</div>
-          <div v-else class="project-board" aria-label="Project board">
-            <section
-              v-for="column in projectBoardColumns"
-              :key="column.id"
-              class="project-board__column"
-              :class="{ 'is-drop-target': projectTaskDropStatus === column.id }"
-              :aria-label="column.label"
-              @dragover="handleProjectColumnDragOver($event, column.id)"
-              @dragleave="handleProjectColumnDragLeave($event, column.id)"
-              @drop="dropProjectTask($event, column.id)"
-            >
-              <div class="project-board__column-header">
-                <h2>{{ column.label }}</h2>
-                <span>{{ column.tasks.length }}</span>
-              </div>
+          <template v-else>
+            <div class="project-board" aria-label="Project board">
+              <section
+                v-for="column in projectBoardColumns"
+                :key="column.id"
+                class="project-board__column"
+                :class="{ 'is-drop-target': projectTaskDropStatus === column.id }"
+                :aria-label="column.label"
+                @dragover="handleProjectColumnDragOver($event, column.id)"
+                @dragleave="handleProjectColumnDragLeave($event, column.id)"
+                @drop="dropProjectTask($event, column.id)"
+              >
+                <div class="project-board__column-header">
+                  <h2>{{ column.label }}</h2>
+                  <span>{{ column.tasks.length }}</span>
+                </div>
 
-              <div v-if="column.tasks.length === 0" class="project-board__empty">
-                No tasks
-              </div>
-              <article
-                v-for="task in column.tasks"
-                :key="task.id"
-                class="project-task-card"
-                :class="{
-                  'is-dragging': draggedProjectTaskId === task.id,
-                  'is-updating': projectTaskActionId === task.id,
-                }"
-                draggable="true"
-                @dragstart="startProjectTaskDrag($event, task)"
-                @dragend="endProjectTaskDrag"
-              >
-                <p>{{ task.title }}</p>
-                <span v-if="task.dueAt || task.scheduledFor">
-                  {{ formatShortDate(task.dueAt || task.scheduledFor) }}
-                </span>
-                <div class="project-task-card__actions">
-                  <button
-                    type="button"
-                    class="icon-button quiet"
-                    aria-label="Archive task"
-                    :disabled="projectTaskActionId === task.id"
-                    @click="archiveProjectTask(task)"
-                  >
-                    <UiIcon name="X" :size="15" />
-                  </button>
+                <div v-if="column.tasks.length === 0" class="project-board__empty">
+                  No tasks
                 </div>
-              </article>
-              <form
-                v-if="projectTaskComposerStatus === column.id"
-                class="project-task-composer"
-                @submit.prevent="addProjectTask(column.id)"
-              >
-                <input
-                  v-model="projectTaskDraft"
-                  class="project-task-composer__input"
-                  type="text"
-                  placeholder="Task name"
-                  autocomplete="off"
-                  @keydown.esc.prevent="cancelProjectTaskComposer"
-                />
-                <div class="project-task-composer__actions">
-                  <button
-                    type="button"
-                    class="icon-button quiet"
-                    aria-label="Cancel task"
-                    :disabled="projectTaskSaving"
-                    @click="cancelProjectTaskComposer"
-                  >
-                    <UiIcon name="X" :size="15" />
-                  </button>
-                  <button
-                    type="submit"
-                    class="icon-button"
-                    aria-label="Add task"
-                    :disabled="projectTaskCreateDisabled"
-                  >
-                    <UiIcon name="Plus" :size="16" />
-                  </button>
-                </div>
-              </form>
-              <button
-                v-else
-                type="button"
-                class="project-column-add"
-                :disabled="projectTaskSaving"
-                @click="openProjectTaskComposer(column.id)"
-              >
-                <UiIcon name="Plus" :size="15" />
-                Add task
-              </button>
-            </section>
-          </div>
+                <article
+                  v-for="task in column.tasks"
+                  :key="task.id"
+                  class="project-task-card"
+                  :class="{
+                    'is-dragging': draggedProjectTaskId === task.id,
+                    'is-updating': projectTaskActionId === task.id,
+                  }"
+                  draggable="true"
+                  @dragstart="startProjectTaskDrag($event, task)"
+                  @dragend="endProjectTaskDrag"
+                >
+                  <p>{{ task.title }}</p>
+                  <span v-if="task.dueAt || task.scheduledFor">
+                    {{ formatShortDate(task.dueAt || task.scheduledFor) }}
+                  </span>
+                  <div class="project-task-card__actions">
+                    <button
+                      type="button"
+                      class="icon-button quiet"
+                      aria-label="Archive task"
+                      :disabled="projectTaskActionId === task.id"
+                      @click="archiveProjectTask(task)"
+                    >
+                      <UiIcon name="X" :size="15" />
+                    </button>
+                  </div>
+                </article>
+                <form
+                  v-if="projectTaskComposerStatus === column.id"
+                  class="project-task-composer"
+                  @submit.prevent="addProjectTask(column.id)"
+                >
+                  <input
+                    v-model="projectTaskDraft"
+                    class="project-task-composer__input"
+                    type="text"
+                    placeholder="Task name"
+                    autocomplete="off"
+                    @keydown.esc.prevent="cancelProjectTaskComposer"
+                  />
+                  <div class="project-task-composer__actions">
+                    <button
+                      type="button"
+                      class="icon-button quiet"
+                      aria-label="Cancel task"
+                      :disabled="projectTaskSaving"
+                      @click="cancelProjectTaskComposer"
+                    >
+                      <UiIcon name="X" :size="15" />
+                    </button>
+                    <button
+                      type="submit"
+                      class="icon-button"
+                      aria-label="Add task"
+                      :disabled="projectTaskCreateDisabled"
+                    >
+                      <UiIcon name="Plus" :size="16" />
+                    </button>
+                  </div>
+                </form>
+                <button
+                  v-else
+                  type="button"
+                  class="project-column-add"
+                  :disabled="projectTaskSaving"
+                  @click="openProjectTaskComposer(column.id)"
+                >
+                  <UiIcon name="Plus" :size="15" />
+                  Add task
+                </button>
+              </section>
+            </div>
+
+            <button
+              v-if="projectTasksNextCursor"
+              type="button"
+              class="load-more-row load-more-row--center"
+              :disabled="projectTasksLoadingMore"
+              @click="loadMoreProjectTasks"
+            >
+              <UiIcon name="ChevronDown" :size="15" />
+              {{ projectTasksLoadingMore ? "Loading more tasks..." : "Load more tasks" }}
+            </button>
+          </template>
         </template>
       </div>
     </section>
@@ -2880,6 +3006,41 @@ onBeforeUnmount(() => {
 .project-column-add:hover {
   background: var(--ui-surface-muted);
   color: var(--ui-text);
+}
+
+.load-more-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.load-more-row:hover:not(:disabled) {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.load-more-row:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.load-more-row--center {
+  justify-self: center;
+  width: auto;
+  min-width: 180px;
 }
 
 .journal-archive {

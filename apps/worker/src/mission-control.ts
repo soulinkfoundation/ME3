@@ -61,6 +61,30 @@ type MissionTaskRow = {
   archived_at: string | null;
 };
 
+type MissionTaskListOptions = {
+  status?: unknown;
+  dueDate?: string;
+  activeOnly?: boolean;
+  limit?: unknown;
+  archived?: boolean;
+  projectId?: unknown;
+  cursor?: unknown;
+};
+
+type MissionTaskCursor =
+  | {
+      order: "active";
+      priority: number;
+      sortValue: string;
+      id: string;
+    }
+  | {
+      order: "archived";
+      archivedAt: string;
+      updatedAt: string;
+      id: string;
+    };
+
 type MissionDailyNoteRow = {
   id: string;
   user_id: string;
@@ -661,24 +685,19 @@ export async function updateMissionProject(
   };
 }
 
-export async function listMissionTasks(
+export async function listMissionTaskPage(
   env: Env,
   userId: string,
-  options: {
-    status?: unknown;
-    dueDate?: string;
-    activeOnly?: boolean;
-    limit?: number;
-    archived?: boolean;
-    projectId?: unknown;
-  } = {},
+  options: MissionTaskListOptions = {},
 ) {
-  const limit = Math.max(1, Math.min(options.limit || 50, 100));
+  const limit = normalizeListLimit(options.limit, 50);
   const status = normalizeMissionTaskStatus(options.status);
   const projectId =
     typeof options.projectId === "string" && options.projectId.trim()
       ? options.projectId.trim()
       : null;
+  const order = options.archived ? "archived" : "active";
+  const cursor = decodeMissionTaskCursor(options.cursor, order);
   const activeWhere = ACTIVE_TASK_STATUSES.map((item) => `'${item}'`).join(", ");
   let sql = `SELECT id, user_id, project_id, title, description, status, priority,
                     due_at, scheduled_for, source_kind, source_ref, approval_id,
@@ -700,15 +719,59 @@ export async function listMissionTasks(
     sql += " AND (scheduled_for = ? OR substr(due_at, 1, 10) = ?)";
     values.push(options.dueDate, options.dueDate);
   }
+  if (cursor?.order === "archived") {
+    sql += ` AND (
+      archived_at < ?
+      OR (archived_at = ? AND updated_at < ?)
+      OR (archived_at = ? AND updated_at = ? AND id > ?)
+    )`;
+    values.push(
+      cursor.archivedAt,
+      cursor.archivedAt,
+      cursor.updatedAt,
+      cursor.archivedAt,
+      cursor.updatedAt,
+      cursor.id,
+    );
+  } else if (cursor?.order === "active") {
+    sql += ` AND (
+      priority > ?
+      OR (priority = ? AND COALESCE(due_at, scheduled_for, created_at) > ?)
+      OR (priority = ? AND COALESCE(due_at, scheduled_for, created_at) = ? AND id > ?)
+    )`;
+    values.push(
+      cursor.priority,
+      cursor.priority,
+      cursor.sortValue,
+      cursor.priority,
+      cursor.sortValue,
+      cursor.id,
+    );
+  }
   sql += options.archived
-    ? " ORDER BY archived_at DESC, updated_at DESC LIMIT ?"
-    : " ORDER BY priority ASC, COALESCE(due_at, scheduled_for, created_at) ASC LIMIT ?";
-  values.push(limit);
+    ? " ORDER BY archived_at DESC, updated_at DESC, id ASC LIMIT ?"
+    : " ORDER BY priority ASC, COALESCE(due_at, scheduled_for, created_at) ASC, id ASC LIMIT ?";
+  values.push(limit + 1);
 
   const rows = await env.DB.prepare(sql)
     .bind(...values)
     .all<MissionTaskRow>();
-  return (rows.results || []).map(serializeTask);
+  const allRows = rows.results || [];
+  const pageRows = allRows.slice(0, limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  return {
+    tasks: pageRows.map(serializeTask),
+    nextCursor: allRows.length > limit && lastRow ? encodeMissionTaskCursor(lastRow, order) : null,
+    limit,
+  };
+}
+
+export async function listMissionTasks(
+  env: Env,
+  userId: string,
+  options: MissionTaskListOptions = {},
+) {
+  return (await listMissionTaskPage(env, userId, options)).tasks;
 }
 
 export async function createMissionTask(env: Env, userId: string, input: unknown) {
@@ -1847,6 +1910,81 @@ function normalizeListLimit(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(100, Math.round(parsed)));
+}
+
+function activeTaskSortValue(row: MissionTaskRow): string {
+  return row.due_at || row.scheduled_for || row.created_at;
+}
+
+function encodeMissionTaskCursor(row: MissionTaskRow, order: "active" | "archived"): string {
+  const cursor: MissionTaskCursor =
+    order === "archived"
+      ? {
+          order,
+          archivedAt: row.archived_at || row.updated_at,
+          updatedAt: row.updated_at,
+          id: row.id,
+        }
+      : {
+          order,
+          priority: row.priority,
+          sortValue: activeTaskSortValue(row),
+          id: row.id,
+        };
+  const encoded = btoa(JSON.stringify(cursor));
+  return encoded.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeMissionTaskCursor(
+  value: unknown,
+  expectedOrder: "active" | "archived",
+): MissionTaskCursor | null {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") {
+    throw new MissionControlInputError("Task cursor is invalid");
+  }
+
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(
+      normalized.length + ((4 - (normalized.length % 4)) % 4),
+      "=",
+    );
+    const parsed = JSON.parse(atob(padded)) as unknown;
+    if (!isRecord(parsed) || parsed.order !== expectedOrder) {
+      throw new Error("Cursor order mismatch");
+    }
+    if (
+      parsed.order === "active" &&
+      typeof parsed.priority === "number" &&
+      typeof parsed.sortValue === "string" &&
+      typeof parsed.id === "string"
+    ) {
+      return {
+        order: "active",
+        priority: parsed.priority,
+        sortValue: parsed.sortValue,
+        id: parsed.id,
+      };
+    }
+    if (
+      parsed.order === "archived" &&
+      typeof parsed.archivedAt === "string" &&
+      typeof parsed.updatedAt === "string" &&
+      typeof parsed.id === "string"
+    ) {
+      return {
+        order: "archived",
+        archivedAt: parsed.archivedAt,
+        updatedAt: parsed.updatedAt,
+        id: parsed.id,
+      };
+    }
+  } catch {
+    throw new MissionControlInputError("Task cursor is invalid");
+  }
+
+  throw new MissionControlInputError("Task cursor is invalid");
 }
 
 function journalPreview(value: string): string {
