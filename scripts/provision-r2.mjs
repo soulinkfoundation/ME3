@@ -93,20 +93,38 @@ function runWrangler(commandArgs) {
     encoding: "utf8",
   });
 
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-
-  if (result.status === 0) return;
-
   const outputText = `${result.stdout || ""}\n${result.stderr || ""}`;
-  if (/already exists|bucket.*exists/i.test(outputText)) {
+  const normalizedOutputText = stripAnsi(outputText);
+
+  if (result.status === 0) {
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    return;
+  }
+
+  if (isAlreadyOwnedBucketError(normalizedOutputText)) {
     console.log(`R2 bucket ${bucketName} already exists; continuing.`);
     return;
   }
 
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+
   fail(
     "Could not create the R2 bucket. Make sure Wrangler is logged in, or rerun with --skip-create if the bucket already exists.",
   );
+}
+
+function isAlreadyOwnedBucketError(value) {
+  return (
+    /\b10004\b/.test(value) ||
+    /already exists/i.test(value) ||
+    /bucket[\s\S]*exists/i.test(value)
+  );
+}
+
+function stripAnsi(value) {
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 function ensureR2Binding(config, bucketName) {
