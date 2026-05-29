@@ -424,7 +424,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
 
 @media (max-width: 959px) {
   .app-side-nav-mobile-bar {
-    position: fixed;
+    position: absolute;
     inset: 12px auto auto 8px;
     z-index: 70;
     display: block;

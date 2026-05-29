@@ -181,6 +181,15 @@ function monthGridWindow(from: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
+function monthWindow(from: Date): { start: Date; end: Date } {
+  const year = from.getFullYear();
+  const month = from.getMonth();
+  return {
+    start: new Date(year, month, 1),
+    end: new Date(year, month + 1, 1),
+  };
+}
+
 const focusedDayKey = ref<string | null>(null);
 const preferSelectEventId = ref<string | null>(null);
 const sidebarSiteFilter = ref<string>("all");
@@ -293,6 +302,7 @@ const calendarWindow = computed(() => {
     return { start, end };
   }
   const c = monthCursor.value;
+  if (rangeMode.value === "schedule") return monthWindow(c);
   return monthGridWindow(c);
 });
 
@@ -304,6 +314,14 @@ const dayKeyFormatter = computed(
       day: "2-digit",
       ...timeZoneOptions,
     }),
+);
+
+const calendarWindowStartDayKey = computed(() =>
+  dayKeyFormatter.value.format(calendarWindow.value.start),
+);
+
+const calendarWindowEndDayKey = computed(() =>
+  dayKeyFormatter.value.format(calendarWindow.value.end),
 );
 
 const quickCreateDateLabel = computed(() => {
@@ -347,8 +365,8 @@ const mobileRangeCycleLabel = computed(() => {
 });
 
 const mobileRangeIcon = computed<UiIconName>(() => {
-  if (rangeMode.value === "schedule") return "SquareCheck";
-  return "LayoutGrid";
+  if (rangeMode.value === "schedule") return "List";
+  return "CalendarDays";
 });
 
 const focusedAgendaDayKey = computed(() => {
@@ -1795,6 +1813,8 @@ onBeforeUnmount(() => {
                 :events="visibleEvents"
                 :range-mode="rangeMode"
                 :range-label="rangeLabel"
+                :start-day-key="calendarWindowStartDayKey"
+                :end-day-key="calendarWindowEndDayKey"
                 :focus-day-key="focusedDayKey"
                 :prefer-select-event-id="preferSelectEventId"
                 :cancelling-booking-id="cancellingBookingId"
@@ -1813,6 +1833,8 @@ onBeforeUnmount(() => {
                 description="Bookings, reminders, events, and imported calendars."
                 range-label="Day"
                 range-mode="day"
+                :start-day-key="calendarWindowStartDayKey"
+                :end-day-key="calendarWindowEndDayKey"
                 :focus-day-key="focusedAgendaDayKey"
                 :prefer-select-event-id="preferSelectEventId"
                 :cancelling-booking-id="cancellingBookingId"

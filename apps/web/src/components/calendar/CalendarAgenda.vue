@@ -15,6 +15,8 @@ const props = withDefaults(
     rangeLabel?: string;
     timeZoneLabel?: string;
     rangeMode?: CalendarRangeMode;
+    startDayKey?: string | null;
+    endDayKey?: string | null;
     focusDayKey?: string | null;
     preferSelectEventId?: string | null;
     cancellingBookingId?: string | null;
@@ -29,6 +31,8 @@ const props = withDefaults(
     description: "Upcoming confirmed bookings, grouped by day in your local timezone.",
     rangeLabel: "Month",
     rangeMode: "month",
+    startDayKey: null,
+    endDayKey: null,
     focusDayKey: null,
     preferSelectEventId: null,
     cancellingBookingId: null,
@@ -46,6 +50,8 @@ const emit = defineEmits<{
 
 type CalendarDayGroup = {
   key: string;
+  dayNumber: number;
+  weekdayLabel: string;
   label: string;
   items: CalendarAgendaEvent[];
 };
@@ -92,48 +98,47 @@ const focusDayLabel = computed(() => {
 });
 
 const dayGroups = computed<CalendarDayGroup[]>(() => {
-  const dayLabelFormatter = new Intl.DateTimeFormat("en-GB", {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-    ...timeZoneOptions,
-  });
-
-  const groups = new Map<string, CalendarDayGroup>();
-
+  const eventGroups = new Map<string, CalendarAgendaEvent[]>();
   for (const event of focusFilteredEvents.value) {
     const date = new Date(event.startsAt);
     const key = dayKeyFormatter.value.format(date);
-    const label = dayLabelFormatter.format(date);
-    const existing = groups.get(key);
-
-    if (existing) {
-      existing.items.push(event);
-      continue;
-    }
-
-    groups.set(key, {
-      key,
-      label,
-      items: [event],
-    });
+    eventGroups.set(key, [...(eventGroups.get(key) || []), event]);
   }
 
-  return Array.from(groups.values());
+  if (props.focusDayKey) {
+    return [
+      buildDayGroup(props.focusDayKey, eventGroups.get(props.focusDayKey) || []),
+    ];
+  }
+
+  if (props.startDayKey && props.endDayKey) {
+    const start = dateFromDayKey(props.startDayKey);
+    const end = dateFromDayKey(props.endDayKey);
+    if (start && end && start < end) {
+      const groups: CalendarDayGroup[] = [];
+      let cursor = start;
+      while (cursor < end) {
+        const key = dateToDayKey(cursor);
+        groups.push(buildDayGroup(key, eventGroups.get(key) || []));
+        cursor = new Date(
+          cursor.getFullYear(),
+          cursor.getMonth(),
+          cursor.getDate() + 1,
+        );
+      }
+      return groups;
+    }
+  }
+
+  return Array.from(eventGroups.entries()).map(([key, items]) =>
+    buildDayGroup(key, items),
+  );
 });
 
 const selectedEvent = computed(() =>
   focusFilteredEvents.value.find((event) => event.id === selectedEventId.value) ??
   null,
 );
-
-const emptyMessage = computed(() => {
-  const range = props.rangeLabel.toLowerCase();
-  const focusHint = props.focusDayKey
-    ? ` on ${focusDayLabel.value}`
-    : "";
-  return `No scheduled items in the ${range}${focusHint}.`;
-});
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("en-GB", {
@@ -147,6 +152,44 @@ function formatTimeRange(start: string, end: string, allDay = false) {
   if (allDay) return "All day";
   if (start === end) return formatTime(start);
   return `${formatTime(start)} – ${formatTime(end)}`;
+}
+
+function dateFromDayKey(dayKey: string): Date | null {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+}
+
+function dateToDayKey(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function buildDayGroup(
+  key: string,
+  items: CalendarAgendaEvent[],
+): CalendarDayGroup {
+  const date = dateFromDayKey(key) || new Date(`${key}T12:00:00`);
+  return {
+    key,
+    dayNumber: Number.isNaN(date.getTime()) ? 0 : date.getDate(),
+    weekdayLabel: Number.isNaN(date.getTime())
+      ? ""
+      : new Intl.DateTimeFormat("en-GB", {
+          weekday: "short",
+          ...timeZoneOptions,
+        }).format(date),
+    label: Number.isNaN(date.getTime())
+      ? key
+      : new Intl.DateTimeFormat("en-GB", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          ...timeZoneOptions,
+        }).format(date),
+    items,
+  };
 }
 
 watch(
@@ -196,11 +239,10 @@ watch(
     </div>
 
     <div
-      v-else-if="variant === 'default' && focusFilteredEvents.length === 0"
+      v-else-if="variant === 'default' && dayGroups.length === 0"
       class="calendar-empty"
     >
-      <p>{{ emptyMessage }}</p>
-      <p class="calendar-empty-hint">Check back when more items arrive.</p>
+      <p>No days to show.</p>
     </div>
 
     <div v-else-if="variant === 'detail-only' && selectedEvent" class="calendar-detail-solo-wrap">
@@ -263,13 +305,19 @@ watch(
       </aside>
     </div>
 
-    <div v-else-if="variant === 'default'" class="calendar-grid">
+    <div
+      v-else-if="variant === 'default'"
+      class="calendar-grid"
+      :class="{ 'calendar-grid--with-detail': selectedEvent }"
+    >
       <div class="calendar-feed">
         <div class="calendar-days">
           <section v-for="group in dayGroups" :key="group.key" class="calendar-day">
             <div class="calendar-day-head">
-              <h4>{{ group.label }}</h4>
-              <span>{{ group.items.length }} item{{ group.items.length === 1 ? "" : "s" }}</span>
+              <div class="calendar-date-rail">
+                <span>{{ group.weekdayLabel }}</span>
+                <strong>{{ group.dayNumber }}</strong>
+              </div>
             </div>
 
             <div class="calendar-items">
@@ -295,6 +343,9 @@ watch(
                   </div>
                 </div>
               </button>
+              <p v-if="group.items.length === 0" class="calendar-day-empty">
+                No items
+              </p>
             </div>
           </section>
         </div>
@@ -443,15 +494,15 @@ watch(
   gap: 10px;
 }
 
-.calendar-empty-hint {
-  font-size: 13px;
-}
-
 .calendar-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.calendar-grid--with-detail {
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.8fr);
 }
 
 .calendar-feed,
@@ -462,7 +513,9 @@ watch(
 }
 
 .calendar-feed {
-  padding: 16px;
+  max-height: calc(100dvh - 132px);
+  padding: 0 4px 0 0;
+  overflow: auto;
 }
 
 .calendar-detail {
@@ -471,39 +524,47 @@ watch(
 
 .calendar-days {
   display: grid;
-  gap: 14px;
 }
 
 .calendar-day {
-  padding-top: 14px;
-  border-top: 1px solid var(--color-border);
-}
-
-.calendar-day:first-child {
-  padding-top: 0;
-  border-top: 0;
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 84px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .calendar-day-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  margin-bottom: 10px;
+  display: block;
 }
 
-.calendar-day-head h4 {
-  font-size: 16px;
+.calendar-date-rail {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding-top: 2px;
 }
 
-.calendar-day-head span {
+.calendar-date-rail span {
   font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--color-text-muted);
+}
+
+.calendar-date-rail strong {
+  color: var(--color-text);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.1;
 }
 
 .calendar-items {
   display: grid;
   gap: 10px;
+  align-content: start;
 }
 
 .calendar-item {
@@ -525,6 +586,12 @@ watch(
 
 .calendar-item.is-active {
   box-shadow: inset 0 0 0 1px var(--color-text);
+}
+
+.calendar-day-empty {
+  margin: 5px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
 }
 
 .calendar-item-time {
@@ -664,8 +731,24 @@ watch(
     grid-template-columns: 1fr;
   }
 
+  .calendar-grid--with-detail {
+    grid-template-columns: 1fr;
+  }
+
   .calendar-feed {
+    max-height: none;
     padding: 0;
+    overflow: visible;
+  }
+
+  .calendar-day {
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 12px;
+    min-height: 78px;
+  }
+
+  .calendar-date-rail strong {
+    font-size: 22px;
   }
 
   .calendar-item-time {
