@@ -22,10 +22,7 @@ import {
   getVibeFontUrl,
   type VibeId,
 } from "../../styles/vibes";
-import {
-  defaultPublicProfileUrlLabel,
-  resolvePublicProfileUrl,
-} from "../../utils/publicSiteUrl";
+import { resolvePublicProfileUrl } from "../../utils/publicSiteUrl";
 
 // Initialize turndown for HTML to Markdown conversion
 const turndown = new TurndownService({
@@ -48,12 +45,6 @@ type ExportedContentImage = {
   blob: Blob;
   filename: string; // e.g. "about-1.webp"
 };
-
-const publicSiteBadge = computed(() => {
-  if (import.meta.env.DEV) return defaultPublicProfileUrlLabel();
-  if (typeof window === "undefined") return defaultPublicProfileUrlLabel();
-  return `${window.location.host}/me`;
-});
 
 function parsePageImagesFromHtml(html: string): string[] {
   if (!html || html.trim() === "") return [];
@@ -572,18 +563,8 @@ function closeFooterModal() {
       />
     </div>
 
-    <!-- Actions -->
-    <div class="publish-options">
-      <!-- Publish to me3 -->
-      <div class="option-card primary-option">
-        <div class="option-header">
-          <h3>Publish</h3>
-          <span class="badge">{{ publicSiteBadge }}</span>
-        </div>
-        <p class="option-desc">
-          Instant publishing on this Worker. Add a custom domain later when
-          you are ready.
-        </p>
+    <div class="publish-actions">
+      <div class="publish-action">
         <button
           class="btn primary"
           :disabled="isPublishing"
@@ -605,22 +586,12 @@ function closeFooterModal() {
         </p>
       </div>
 
-      <!-- Download -->
-      <div class="option-card">
-        <h3>Download files</h3>
-        <p class="option-desc">
-          Get a zip file with your me.json and images. Host anywhere you like.
-        </p>
+      <div class="publish-action">
         <button
           class="btn secondary"
           :disabled="isDownloading"
           @click="downloadZip"
         >
-          <UiIcon
-            name="Download"
-            :size="16"
-            style="margin-right: 6px; vertical-align: middle"
-          />
           {{ isDownloading ? "Preparing..." : "Download .zip" }}
         </button>
       </div>
@@ -1058,53 +1029,16 @@ function closeFooterModal() {
   margin: 0 auto 32px;
 }
 
-.publish-options {
+.publish-actions {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   max-width: 400px;
   margin: 0 auto;
 }
 
-.option-card {
-  padding: 20px;
-  border: 2px solid var(--color-border);
-  border-radius: 12px;
-}
-
-.option-card.primary-option {
-  border-color: var(--color-text);
-  background: linear-gradient(
-    135deg,
-    rgba(0, 0, 0, 0.02) 0%,
-    rgba(0, 0, 0, 0) 100%
-  );
-}
-
-.option-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.option-card h3 {
-  font-size: 16px;
-}
-
-.badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
-  background: var(--color-text);
-  color: var(--color-bg);
-  border-radius: 4px;
-}
-
-.option-desc {
-  font-size: 14px;
-  color: var(--color-text-muted);
-  margin-bottom: 16px;
+.publish-action {
+  width: 100%;
 }
 
 .btn {
@@ -1143,16 +1077,6 @@ function closeFooterModal() {
   margin-top: 12px;
   color: #e53935;
   font-size: 13px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .option-card.primary-option {
-    background: linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.05) 0%,
-      rgba(255, 255, 255, 0) 100%
-    );
-  }
 }
 
 /* Modal Styles */
