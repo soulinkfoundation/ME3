@@ -14,6 +14,20 @@ if (!existsSync(configPath)) {
 
 const config = readFileSync(configPath, "utf8");
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+const coreMetadata = existsSync("me3-core.json")
+  ? JSON.parse(readFileSync("me3-core.json", "utf8"))
+  : {};
+
+check(
+  "Core version metadata exists",
+  Boolean(coreMetadata.version),
+  'Expected me3-core.json with a "version" field.',
+);
+check(
+  "Core update manifest URL is set",
+  Boolean(coreMetadata.updateManifestUrl),
+  'Expected me3-core.json with an "updateManifestUrl" field.',
+);
 
 check("wrangler.toml exists", true, configPath);
 check(

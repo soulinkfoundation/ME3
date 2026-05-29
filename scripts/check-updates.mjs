@@ -4,14 +4,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const coreMetadataPath = path.join(rootDir, "me3-core.json");
 const packageJsonPath = path.join(rootDir, "package.json");
 const defaultManifestUrl =
   "https://raw.githubusercontent.com/Soulink-Foundation/me3/main/updates/stable.json";
 
 const args = parseArgs(process.argv.slice(2));
-const manifestUrl = args.manifestUrl || process.env.ME3_UPDATE_MANIFEST_URL || defaultManifestUrl;
-const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
-const installedVersion = normalizeVersion(packageJson.version);
+const coreMetadata = await loadInstalledCoreMetadata();
+const installedVersion = normalizeVersion(coreMetadata.version);
+const manifestUrl =
+  args.manifestUrl ||
+  process.env.ME3_UPDATE_MANIFEST_URL ||
+  coreMetadata.updateManifestUrl ||
+  defaultManifestUrl;
 
 try {
   const manifest = await loadManifest(manifestUrl);
@@ -90,6 +95,19 @@ async function loadManifest(source) {
   }
 
   return fetchManifest(source);
+}
+
+async function loadInstalledCoreMetadata() {
+  try {
+    return JSON.parse(await readFile(coreMetadataPath, "utf8"));
+  } catch (error) {
+    if (!error || error.code !== "ENOENT") throw error;
+    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
+    return {
+      version: packageJson.version,
+      updateManifestUrl: defaultManifestUrl,
+    };
+  }
 }
 
 async function fetchManifest(url) {

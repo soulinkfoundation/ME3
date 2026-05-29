@@ -1,10 +1,10 @@
-import packageJson from "../../../package.json";
+import coreMetadata from "../../../me3-core.json";
 
-export const ME3_CORE_VERSION = packageJson.version;
-export const ME3_CORE_RELEASE_CHANNEL = "stable";
+export const ME3_CORE_VERSION = coreMetadata.version;
+export const ME3_CORE_RELEASE_CHANNEL = coreMetadata.releaseChannel;
 export const ME3_CORE_UPDATE_MANIFEST_URL =
-  "https://raw.githubusercontent.com/Soulink-Foundation/me3/main/updates/stable.json";
-export const ME3_CORE_RELEASE_NOTES_URL = "https://github.com/Soulink-Foundation/me3/releases";
+  coreMetadata.updateManifestUrl;
+export const ME3_CORE_RELEASE_NOTES_URL = coreMetadata.releaseNotesUrl;
 
 export function getCoreVersionInfo() {
   return {

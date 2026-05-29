@@ -32,6 +32,8 @@ ME3 Core updates are release-based. Public installs should update from tagged st
 
 For a Deploy to Cloudflare install, the copied GitHub/GitLab repository is the install. Cloudflare provisions D1/R2/Durable Object resources and records those bindings in that copied repository's `wrangler.toml`. Updating ME3 Core means merging a tagged upstream release into that copied repository, then letting Cloudflare Workers Builds redeploy the same Worker against the same resources.
 
+ME3 Core's installed version is stored in `me3-core.json`. The root `package.json` name belongs to the copied install and may be changed by Cloudflare to match the user's project, so future Core releases should not use `package.json` as the release version source.
+
 Check for a newer stable release from the copied repository:
 
 ```bash
@@ -58,6 +60,8 @@ If Git reports conflicts in `wrangler.toml`, preserve the values from your copie
 ```bash
 pnpm update:doctor
 ```
+
+If an early `v0.1.1` test update reports a conflict at the top of `package.json`, keep the copied install's `name` and the release's version value, then continue the merge. Later releases read Core version metadata from `me3-core.json`, which avoids that recurring conflict.
 
 Update from a manual CLI install:
 
