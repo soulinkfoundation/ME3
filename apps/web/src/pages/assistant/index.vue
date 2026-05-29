@@ -547,7 +547,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
       >
         <img
           class="assistant-placeholder__image"
-          src="/me3protocol.jpg"
+          src="/assistant-jobs.png"
           alt=""
           aria-hidden="true"
         />
