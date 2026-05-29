@@ -240,8 +240,8 @@ function generateIndexHtml(profile: Me3SiteProfile, capabilities: SiteRenderCapa
         ${generateNav(profile, "", "./")}
         ${generateButtons(profile)}
         ${generateLinks(profile)}
-        ${generateTestimonials(profile)}
         ${booking}
+        ${generateTestimonials(profile)}
         ${newsletter}
       </main>`,
     footer: generateFooter(profile, capabilities.footerCustomization),
@@ -389,9 +389,18 @@ function generateTestimonials(profile: Me3SiteProfile): string {
   const testimonials = (profile.testimonials || []).filter((item) => item.name && item.quote);
   if (testimonials.length === 0 || profile.testimonialDisplay === "standalone") return "";
   const cards = testimonials
-    .map((item) => `<figure class="testimonial-card">${item.avatar ? `<img src="${escapeHtml(filePathForHtml(item.avatar))}" alt="">` : ""}<blockquote>${escapeHtml(item.quote || "")}</blockquote><figcaption>${escapeHtml(item.name || "")}${item.handle ? ` <span>@${escapeHtml(item.handle.replace(/^@/, ""))}</span>` : ""}</figcaption></figure>`)
+    .map((item) => {
+      const avatar = item.avatar
+        ? `<img class="testimonial-card__avatar" src="${escapeHtml(filePathForHtml(item.avatar))}" alt="${escapeHtml(item.name || "")}" loading="lazy" decoding="async">`
+        : `<span class="testimonial-card__avatar" aria-hidden="true">${escapeHtml(initialsForName(item.name || ""))}</span>`;
+      const profileLink = item.profileUrl
+        ? `<a class="testimonial-link" href="${escapeHtml(formatHref(item.profileUrl))}" target="_blank" rel="noopener">View site</a>`
+        : "";
+      const handle = item.handle ? `<span class="testimonial-card__handle">@${escapeHtml(item.handle.replace(/^@/, ""))}</span>` : "";
+      return `<article class="testimonial-card"><div class="testimonial-card__person">${avatar}<span class="testimonial-card__meta"><strong class="testimonial-card__name">${escapeHtml(item.name || "")}</strong>${handle}</span>${profileLink}</div><p class="testimonial-card__quote">&ldquo;${escapeHtml(item.quote || "")}&rdquo;</p></article>`;
+    })
     .join("");
-  return `<section class="testimonials"><h2>${escapeHtml(profile.testimonialsTitle || "Kind words")}</h2>${cards}</section>`;
+  return `<section class="testimonials"><h2>${escapeHtml(profile.testimonialsTitle || "Testimonials")}</h2><div class="testimonial-list">${cards}</div></section>`;
 }
 
 function generateBooking(profile: Me3SiteProfile): string {
@@ -400,7 +409,7 @@ function generateBooking(profile: Me3SiteProfile): string {
   const bookingTypes = normalizeBookingTypes(book);
   if (bookingTypes.length === 0) return "";
   const activeType = bookingTypes[0];
-  const title = activeType.title || book.title || "Book a session";
+  const title = normalizeBookingHeading(activeType.title || book.title);
   const description = activeType.description || book.description || "";
   const tabs =
     bookingTypes.length > 1
@@ -409,7 +418,13 @@ function generateBooking(profile: Me3SiteProfile): string {
           .join("")}</div>`
       : "";
 
-  return `<section class="booking" id="booking"><h2>${escapeHtml(title)}</h2>${description ? `<p>${escapeHtml(description)}</p>` : ""}${tabs}${generateBookingTypeBody(activeType, book, profile)}</section>`;
+  return `<section class="booking" id="booking"><h2>${escapeHtml(title || "Book a session")}</h2>${description ? `<p>${escapeHtml(description)}</p>` : ""}${tabs}${generateBookingTypeBody(activeType, book, profile)}</section>`;
+}
+
+function normalizeBookingHeading(value?: string): string {
+  const trimmed = (value || "").trim();
+  if (trimmed.toLowerCase() === "book a call") return "Book a session";
+  return trimmed;
 }
 
 function normalizeBookingTypes(book: NonNullable<Me3SiteProfile["intents"]>["book"]): BookingType[] {
@@ -575,33 +590,25 @@ function generatePaidBookingWidget(input: {
     bufferTime: input.bufferTime || 0,
     offers: normalizedOffers,
   };
-  const offerControls =
-    normalizedOffers.length > 1
-      ? `<div class="booking-offer-list">${normalizedOffers
-          .map(
-            (offer, index) =>
-              `<button type="button" class="booking-offer-btn${index === 0 ? " active" : ""}" data-offer-id="${escapeHtml(offer.id)}">${escapeHtml(offer.title)}<span>${offer.duration} min · ${escapeHtml(formatPricing(offer.pricing))}</span></button>`,
-          )
-          .join("")}</div>`
-      : "";
   const amountRow = firstOffer?.pricing.allowFlexiblePricing
     ? `<label class="booking-field booking-amount-field">Amount (${escapeHtml(firstOffer.pricing.currency)})<input name="amount" type="number" min="${escapeHtml(String(firstOffer.pricing.minimumAmount))}" step="1" value="${escapeHtml(String(firstOffer.pricing.suggestedAmount))}"></label>`
     : "";
 
-  return `<div class="booking-session-preview">${input.cards}</div>
+  return `<h3 class="booking-subtitle">Choose an offer</h3>
     <div class="booking-widget" data-booking-widget>
       <script type="application/json" data-booking-config>${jsonForScript(config)}</script>
-      ${offerControls}
+      <div class="booking-session-preview">${input.cards}</div>
+      <p class="booking-selection-summary" data-booking-selection>${escapeHtml(firstOffer.title)} &bull; ${firstOffer.duration} min</p>
+      <label class="booking-field booking-date-field">Select a date:<input name="localDate" type="date" required></label>
+      <div class="booking-slots" data-booking-slots role="group" aria-label="Available times"></div>
+      <p class="booking-empty-times" data-booking-empty>No available times on this day.</p>
+      <p class="booking-timezone">Slots are shown in ${escapeHtml(config.timezone)}.</p>
       <form class="booking-form">
-        <div class="booking-fields-two">
-          <label class="booking-field">Date<input name="localDate" type="date" required></label>
-          <label class="booking-field">Time<select name="localTime" required disabled><option value="">Choose a date first</option></select></label>
-        </div>
+        <input name="localTime" type="hidden" required>
         ${amountRow}
         <label class="booking-field">Name<input name="guestName" type="text" autocomplete="name" required></label>
         <label class="booking-field">Email<input name="guestEmail" type="email" autocomplete="email" required></label>
         <label class="booking-field">Notes<textarea name="notes" rows="3"></textarea></label>
-        <p class="booking-timezone">Times shown in ${escapeHtml(config.timezone)}</p>
         <button type="submit" class="booking-submit">Continue to payment</button>
         <p class="booking-status" role="status" aria-live="polite"></p>
       </form>
@@ -617,19 +624,33 @@ function paidBookingWidgetScript(): string {
   var config=JSON.parse(root.querySelector('[data-booking-config]').textContent||'{}');
   var form=root.querySelector('.booking-form');
   var statusEl=root.querySelector('.booking-status');
-  var dateInput=form.elements.localDate;
-  var timeSelect=form.elements.localTime;
+  var dateInput=root.querySelector('input[name="localDate"]');
+  var timeInput=form.elements.localTime;
   var amountInput=form.elements.amount;
+  var slotsEl=root.querySelector('[data-booking-slots]');
+  var emptyEl=root.querySelector('[data-booking-empty]');
+  var summaryEl=root.querySelector('[data-booking-selection]');
   var selectedOfferId=(config.offers[0]&&config.offers[0].id)||'';
+  var selectedTime='';
   var dayNames=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
   function setStatus(message,isError){statusEl.textContent=message||'';statusEl.classList.toggle('is-error',!!isError);}
   function offer(){return config.offers.find(function(item){return item.id===selectedOfferId;})||config.offers[0];}
+  function updateSelection(){
+    var selected=offer();
+    if(summaryEl&&selected) summaryEl.textContent=selected.title+' • '+selected.duration+' min';
+  }
+  function setDetailsVisible(visible){
+    form.classList.toggle('is-visible',!!visible);
+  }
   function toMinutes(value){var parts=String(value||'').split(':').map(Number);if(parts.length!==2||parts.some(isNaN))return null;return parts[0]*60+parts[1];}
   function toTime(value){var h=Math.floor(value/60);var m=value%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');}
   function dayName(dateValue){if(!dateValue)return '';return dayNames[new Date(dateValue+'T12:00:00Z').getUTCDay()];}
-  function populateTimes(){
+  function populateSlots(){
     var selected=offer();
-    timeSelect.innerHTML='';
+    slotsEl.innerHTML='';
+    selectedTime='';
+    timeInput.value='';
+    setDetailsVisible(false);
     var dateValue=dateInput.value;
     var windows=(config.windows&&config.windows[dayName(dateValue)])||[];
     var duration=Number(selected.duration||30);
@@ -637,29 +658,36 @@ function paidBookingWidgetScript(): string {
     windows.forEach(function(windowValue){
       var parts=String(windowValue).split('-');
       var start=toMinutes((parts[0]||'').trim());
-      var end=toMinutes((parts[1]||'').trim());
+      var end=parts.length>1?toMinutes((parts[1]||'').trim()):start;
       if(start===null||end===null)return;
-      for(var t=start;t+duration<=end;t+=15){
+      for(var t=start;t+(parts.length>1?duration:0)<=end;t+=15){
         var value=toTime(t);
-        var option=document.createElement('option');
-        option.value=value;
-        option.textContent=value;
-        timeSelect.appendChild(option);
+        var button=document.createElement('button');
+        button.type='button';
+        button.className='booking-slot';
+        button.textContent=value;
+        button.addEventListener('click',function(){
+          selectedTime=value;
+          timeInput.value=value;
+          Array.prototype.forEach.call(slotsEl.querySelectorAll('.booking-slot'),function(item){item.classList.toggle('active',item===button);});
+          setDetailsVisible(true);
+        });
+        slotsEl.appendChild(button);
         found=true;
+        if(parts.length===1) break;
       }
     });
-    if(!found){
-      var option=document.createElement('option');
-      option.value='';
-      option.textContent=dateValue?'No times available':'Choose a date first';
-      timeSelect.appendChild(option);
-    }
-    timeSelect.disabled=!found;
+    slotsEl.hidden=!found;
+    emptyEl.hidden=found||!dateValue;
   }
-  root.querySelectorAll('.booking-offer-btn').forEach(function(button){
+  root.querySelectorAll('.booking-card').forEach(function(button,index){
+    button.setAttribute('role','button');
+    button.setAttribute('tabindex','0');
+    if(config.offers[index]) button.dataset.offerId=config.offers[index].id;
+    button.addEventListener('keydown',function(event){if(event.key==='Enter'||event.key===' '){event.preventDefault();button.click();}});
     button.addEventListener('click',function(){
       selectedOfferId=button.dataset.offerId||selectedOfferId;
-      root.querySelectorAll('.booking-offer-btn').forEach(function(item){item.classList.toggle('active',item===button);});
+      root.querySelectorAll('.booking-card').forEach(function(item){item.classList.toggle('active',item===button);});
       var selected=offer();
       if(amountInput&&selected.pricing){
         amountInput.value=selected.pricing.suggestedAmount||amountInput.value;
@@ -667,11 +695,16 @@ function paidBookingWidgetScript(): string {
         var label=amountInput.closest('label');
         if(label) label.firstChild.textContent='Amount ('+(selected.pricing.currency||'USD')+')';
       }
-      populateTimes();
+      updateSelection();
+      populateSlots();
     });
   });
   dateInput.min=new Date().toISOString().slice(0,10);
-  dateInput.addEventListener('change',populateTimes);
+  dateInput.addEventListener('change',populateSlots);
+  emptyEl.hidden=true;
+  slotsEl.hidden=true;
+  setDetailsVisible(false);
+  updateSelection();
   form.addEventListener('submit',function(event){
     event.preventDefault();
     setStatus('Creating secure checkout...');
@@ -679,7 +712,7 @@ function paidBookingWidgetScript(): string {
     var payload={
       offerId:selected.id,
       localDate:dateInput.value,
-      localTime:timeSelect.value,
+      localTime:selectedTime||timeInput.value,
       guestName:form.elements.guestName.value,
       guestEmail:form.elements.guestEmail.value,
       notes:form.elements.notes.value,
@@ -733,7 +766,7 @@ function slugify(value: string): string {
 function generateNewsletter(profile: Me3SiteProfile): string {
   const subscribe = profile.intents?.subscribe;
   if (!subscribe?.enabled) return "";
-  return `<section class="newsletter"><h2>${escapeHtml(subscribe.title || "Subscribe")}</h2>${subscribe.description ? `<p>${escapeHtml(subscribe.description)}</p>` : ""}<form><input type="email" placeholder="you@example.com" aria-label="Email address"><button type="submit">Subscribe</button></form></section>`;
+  return `<section class="newsletter"><h2>${escapeHtml(subscribe.title || "Newsletter")}</h2>${subscribe.description ? `<p>${escapeHtml(subscribe.description)}</p>` : ""}<form><input type="email" placeholder="you@example.com" aria-label="Email address"><button type="submit">Subscribe</button></form></section>`;
 }
 
 function generateFooter(profile: Me3SiteProfile, allowCustom: boolean): string {
@@ -894,6 +927,16 @@ function titleFromSlug(slug: string): string {
     .join(" ");
 }
 
+function initialsForName(name: string): string {
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2);
+  const initials = parts.map((part) => part.charAt(0).toUpperCase()).join("");
+  return initials || "ME";
+}
+
 function escapeHtml(value: string): string {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -905,5 +948,5 @@ function escapeHtml(value: string): string {
 
 function siteCss(vibe: string, accentOverride?: string): string {
   const accent = accentOverride || (vibe === "tech" ? "#00ff88" : "#222222");
-  return `:root{--bg:#faf8f5;--surface:#fff;--text:#24262b;--muted:#6d7078;--border:#e7e2dc;--accent:${accent};--radius:18px;--font:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55}.container{width:min(640px,100%);margin:0 auto;min-height:100vh;background:var(--surface)}.banner{position:relative;height:190px;overflow:hidden;border-radius:0 0 var(--radius) var(--radius);background:#ddd}.banner img{width:100%;height:100%;object-fit:cover;display:block}.link-icon svg,.btn-icon svg{width:18px;height:18px}.main{padding:0 32px 36px}.profile-header{text-align:center;margin-top:-56px;position:relative}.banner+.main .profile-header{margin-top:-56px}.avatar{width:120px;height:120px;border-radius:999px;object-fit:cover;border:5px solid var(--surface);background:var(--surface)}.name{font-size:clamp(2rem,7vw,3rem);line-height:1.05;margin:22px 0 8px;font-weight:800;letter-spacing:0}.location,.bio{color:var(--muted);margin:8px auto;max-width:38rem}.nav{display:flex;gap:8px;justify-content:center;margin:28px 0 24px;flex-wrap:wrap}.nav-link{padding:9px 16px;text-decoration:none;color:var(--muted);font-weight:700}.nav-link.active{background:var(--text);color:var(--surface)}.buttons{display:grid;gap:12px;margin:24px 0}.cta-button{display:flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:14px 18px;text-decoration:none;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:var(--accent);color:#050505}.cta-button.secondary{background:var(--text);color:var(--surface)}.cta-button.outline{background:transparent;color:var(--text);border:2px solid var(--text)}.links{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:22px 0}.link-item{width:44px;height:44px;border-radius:999px;display:grid;place-items:center;color:var(--text);background:rgba(0,0,0,.06)}.link-label{display:none}.testimonials,.booking,.newsletter,.content{margin:32px 0;padding:24px;background:rgba(0,0,0,.055)}.testimonial-card{margin:16px 0}.testimonial-card img{width:48px;height:48px;border-radius:999px;object-fit:cover}.booking-card{border:2px solid var(--border);padding:16px;margin:16px 0;display:grid;gap:4px}.booking-widget{display:grid;gap:16px}.booking-offer-list{display:grid;gap:10px;margin:16px 0}.booking-offer-btn{font:inherit;text-align:left;border:2px solid var(--border);background:transparent;color:inherit;padding:14px;display:grid;gap:4px;cursor:pointer}.booking-offer-btn.active{border-color:var(--accent);background:rgba(0,0,0,.04)}.booking-offer-btn span{color:var(--muted);font-size:.9rem}.booking-form{display:grid;gap:14px;margin-top:16px}.booking-fields-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}.booking-submit{font:inherit;font-weight:800;border:0;background:var(--accent);color:#050505;padding:14px 18px;cursor:pointer}.booking-status{min-height:1.4em;color:var(--muted);margin:0}.booking-status.is-error{color:#b42318}.booking-timezone{color:var(--muted);font-size:.9rem;margin:0}.booking label{display:grid;gap:8px;color:var(--muted)}input,select,textarea{font:inherit;padding:14px;border:2px solid var(--border);background:transparent;color:inherit;box-sizing:border-box;width:100%}textarea{resize:vertical}.booking-note{font-style:italic;color:var(--muted);text-align:center}.newsletter form{display:flex;gap:8px}.newsletter input{min-width:0;flex:1}.newsletter button{font:inherit;font-weight:800;border:0;background:var(--accent);padding:0 18px}.footer{text-align:center;color:var(--muted);padding:24px 32px}.footer a{color:inherit}.page-header{padding:28px 32px 0}.back-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;font-weight:800}.avatar-small{width:42px;height:42px;border-radius:999px;object-fit:cover}.content{padding:32px}.content h1{font-size:2.2rem;line-height:1.1}.content img{max-width:100%;height:auto}.collection-list{display:grid;gap:12px}.collection-card{display:grid;gap:8px;text-decoration:none;color:inherit;padding:18px;border:2px solid var(--border)}@media (max-width:560px){.main{padding:0 20px 28px}.newsletter form{display:grid}.booking-fields-two{grid-template-columns:1fr}}${vibe === "tech" ? `:root{--bg:#0a0a0a;--surface:#0a0a0a;--text:#e0e0e0;--muted:#8f8f8f;--border:#2a2a2a;--accent:${accent};--radius:0;--font:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}.name{text-transform:lowercase;font-family:var(--font)}.name:before{content:"> ";color:var(--accent)}.banner{border-radius:0}.nav-link.active{background:var(--text);color:#111}.links{background:#242424;padding:16px}.link-item{border-radius:0;background:transparent}.booking,.newsletter,.testimonials,.content{background:#242424}.booking-card{background:#050505}.cta-button{border-radius:0}` : ""}`;
+  return `:root{--bg:#faf8f5;--surface:#fff;--text:#24262b;--muted:#6d7078;--border:#e7e2dc;--accent:${accent};--radius:18px;--font:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55}.container{width:min(640px,100%);margin:0 auto;min-height:100vh;background:var(--surface)}.banner{position:relative;height:190px;overflow:hidden;border-radius:0 0 var(--radius) var(--radius);background:#ddd}.banner img{width:100%;height:100%;object-fit:cover;display:block}.link-icon svg,.btn-icon svg{width:18px;height:18px}.main{padding:0 32px 36px}.profile-header{text-align:center;margin-top:-56px;position:relative}.banner+.main .profile-header{margin-top:-56px}.avatar{width:120px;height:120px;border-radius:999px;object-fit:cover;border:5px solid var(--surface);background:var(--surface)}.name{font-size:clamp(2rem,7vw,3rem);line-height:1.05;margin:22px 0 8px;font-weight:800;letter-spacing:0}.location,.bio{color:var(--muted);margin:8px auto;max-width:38rem}.nav{display:flex;gap:8px;justify-content:center;margin:28px 0 24px;flex-wrap:wrap}.nav-link{padding:9px 16px;text-decoration:none;color:var(--muted);font-weight:700}.nav-link.active{background:var(--text);color:var(--surface)}.buttons{display:grid;gap:12px;margin:24px 0}.cta-button{display:flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:14px 18px;text-decoration:none;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:var(--accent);color:#050505}.cta-button.secondary{background:var(--text);color:var(--surface)}.cta-button.outline{background:transparent;color:var(--text);border:2px solid var(--text)}.links{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:22px 0}.link-item{width:44px;height:44px;border-radius:999px;display:grid;place-items:center;color:var(--text);background:rgba(0,0,0,.06)}.link-label{display:none}.testimonials,.booking,.newsletter,.content{margin:32px 0;padding:24px;background:rgba(0,0,0,.055)}.booking,.newsletter{text-align:center}.booking h2,.newsletter h2,.testimonials h2{margin:0 0 14px;line-height:1.2}.booking>p,.newsletter>p{max-width:36rem;margin:0 auto 18px;color:var(--muted)}.booking-subtitle{font-size:1rem;margin:18px 0 12px}.booking-session-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:16px 0}.booking-session-preview:has(.booking-card:only-child){grid-template-columns:1fr}.booking-card{border:2px solid var(--border);padding:16px;margin:0;display:grid;gap:4px;text-align:left;background:var(--surface);cursor:pointer}.booking-card.active{border-color:var(--text)}.booking-card span,.booking-card small{color:var(--muted)}.booking-widget{display:grid;gap:16px}.booking-selection-summary{margin:0;font-weight:800}.booking-form{display:none;gap:14px;margin-top:8px;text-align:left}.booking-form.is-visible{display:grid}.booking-submit{font:inherit;font-weight:800;border:0;background:var(--accent);color:#050505;padding:14px 18px;cursor:pointer}.booking-status{min-height:1.4em;color:var(--muted);margin:0}.booking-status.is-error{color:#b42318}.booking-timezone,.booking-empty-times{color:var(--muted);font-size:.9rem;margin:0}.booking label{display:grid;gap:8px;color:var(--muted);text-align:left}.booking-slots{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}.booking-slot{font:inherit;border:2px solid var(--border);background:transparent;color:inherit;padding:10px 14px;cursor:pointer}.booking-slot.active{border-color:var(--accent);background:rgba(0,0,0,.05)}input,select,textarea{font:inherit;padding:14px;border:2px solid var(--border);background:transparent;color:inherit;box-sizing:border-box;width:100%}textarea{resize:vertical}.booking-note{font-style:italic;color:var(--muted);text-align:center}.testimonial-list{display:grid;gap:16px}.testimonials h2{text-align:center}.testimonial-card{display:grid;gap:20px;padding:24px;border:1px solid var(--border);border-radius:16px;background:var(--surface);color:var(--text);margin:0}.testimonial-card__person{display:flex;align-items:center;gap:14px}.testimonial-card__avatar{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;flex:0 0 auto;border-radius:999px;background:rgba(0,0,0,.08);color:var(--text);font-weight:800;object-fit:cover}.testimonial-card__meta{display:grid;gap:2px;min-width:0}.testimonial-card__name{color:var(--text)}.testimonial-card__handle{color:var(--muted);font-size:.9rem}.testimonial-link{margin-left:auto;color:var(--accent);font-weight:700}.testimonial-card__quote{font-size:1.05rem;line-height:1.55;margin:0}.newsletter form{display:flex;gap:10px;max-width:520px;margin:18px auto 10px}.newsletter input{min-width:0;flex:1}.newsletter button{font:inherit;font-weight:800;border:0;background:var(--accent);color:#050505;padding:0 22px;cursor:pointer}.footer{text-align:center;color:var(--muted);padding:24px 32px}.footer a{color:inherit}.page-header{padding:28px 32px 0}.back-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;font-weight:800}.avatar-small{width:42px;height:42px;border-radius:999px;object-fit:cover}.content{padding:32px}.content h1{font-size:2.2rem;line-height:1.1}.content img{max-width:100%;height:auto}.collection-list{display:grid;gap:12px}.collection-card{display:grid;gap:8px;text-decoration:none;color:inherit;padding:18px;border:2px solid var(--border)}@media (max-width:560px){.main{padding:0 20px 28px}.newsletter form{display:grid}.booking-session-preview{grid-template-columns:1fr}}${vibe === "tech" ? `:root{--bg:#0a0a0a;--surface:#0a0a0a;--text:#e0e0e0;--muted:#8f8f8f;--border:#2a2a2a;--accent:${accent};--radius:0;--font:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}.name{text-transform:lowercase;font-family:var(--font)}.name:before{content:"> ";color:var(--accent)}.banner{border-radius:0}.nav-link.active{background:var(--text);color:#111}.links{background:#242424;padding:16px}.link-item{border-radius:0;background:transparent}.booking,.newsletter,.content{background:#242424}.testimonials{background:transparent;padding-left:0;padding-right:0}.testimonial-card{background:#050505;border-color:#2a2a2a;border-radius:24px}.testimonial-card__avatar{background:#242424}.booking-card{background:#050505}.booking-slot.active{background:#050505}.cta-button{border-radius:0}` : ""}`;
 }

@@ -74,12 +74,26 @@ describe("site generator", () => {
     expect(files["now.html"]).not.toContain("\\[\\*\\*ME3");
   });
 
-  it("renders every one-to-one booking offer and a native date input", async () => {
+  it("renders homepage booking, testimonials, and newsletter like the app site", async () => {
     const files = await generateSiteHtml(
       {
         version: "0.1",
         name: "Booking Site",
+        testimonials: [
+          {
+            name: "Alie Rae",
+            quote:
+              "Kieran was a pleasure to work with. Incredibly talented in technology.",
+            handle: "Author",
+            profileUrl: "https://example.com",
+          },
+        ],
         intents: {
+          subscribe: {
+            enabled: true,
+            title: "Newsletter",
+            description: "Ideas from the future.",
+          },
           book: {
             enabled: true,
             title: "Book a call",
@@ -104,10 +118,17 @@ describe("site generator", () => {
       [],
     );
 
+    expect(files["index.html"]).toContain("<h2>Book a session</h2>");
+    expect(files["index.html"]).not.toContain("<h2>Book a call</h2>");
     expect(files["index.html"]).toContain("ME3 Setup");
     expect(files["index.html"]).toContain("Coaching call");
     expect(files["index.html"]).toContain("From €75");
+    expect(files["index.html"]).toContain("Choose an offer");
     expect(files["index.html"]).toContain('type="date"');
+    expect(files["index.html"]).toContain("No available times on this day.");
+    expect(files["index.html"]).toContain("<h2>Testimonials</h2>");
+    expect(files["index.html"]).toContain("testimonial-card__quote");
+    expect(files["index.html"]).toContain("<h2>Newsletter</h2>");
     expect(files["index.html"]).not.toContain("readonly");
   });
 });
