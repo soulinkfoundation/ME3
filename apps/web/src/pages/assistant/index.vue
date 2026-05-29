@@ -542,7 +542,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
       <section
         v-else-if="sortedJobs.length === 0"
-        class="panel assistant-placeholder"
+        class="assistant-placeholder"
         aria-label="No assistant jobs"
       >
         <img
@@ -912,7 +912,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-main {
   display: grid;
   gap: 16px;
-  width: min(600px, 100%);
+  place-items: center;
+  min-height: calc(100vh - 32px);
+  width: min(760px, 100%);
   margin: 0 auto;
   padding: 16px 18px 44px;
 }
@@ -1004,9 +1006,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: grid;
   justify-items: center;
   gap: 18px;
-  min-height: 380px;
+  width: min(550px, 100%);
   align-content: center;
-  padding: 38px 28px;
+  padding: 28px 18px;
   text-align: center;
 }
 
