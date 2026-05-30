@@ -4,6 +4,7 @@ import { useSitesStore, type DomainStatus } from "../stores/sites";
 const props = defineProps<{
   username: string;
   showSettingsLink?: boolean;
+  profilePublished?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +25,7 @@ const isConnected = computed(
   () => domainStatus.value?.connected && domainStatus.value?.domain,
 );
 const isDomainActive = computed(() => domainStatus.value?.status === "active");
+const isProfilePublished = computed(() => props.profilePublished === true);
 const workerFallbackUrl = computed(() => {
   if (typeof window === "undefined") return "/me";
   return `${window.location.origin.replace(/\/+$/, "")}/me`;
@@ -41,9 +43,14 @@ async function connectDomain() {
   const domainToConnect = domainInputForConnect.value;
   if (!domainToConnect) return;
 
+  if (!isProfilePublished.value) {
+    domainError.value = "Publish your profile before connecting a custom domain.";
+    return;
+  }
+
   if (!isValidDomain.value) {
     domainError.value =
-      "Enter a domain you control, for example kieranbutler.com or www.kieranbutler.com.";
+      "Enter the root domain you control, for example kieranbutler.com.";
     return;
   }
 
@@ -133,7 +140,10 @@ function normalizeDomainInput(raw: string): string {
   const trimmed = raw.trim().toLowerCase();
   if (!trimmed) return "";
   const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
-  return withoutProtocol.split("/")[0];
+  return withoutProtocol
+    .split("/")[0]
+    .replace(/\.$/, "")
+    .replace(/^www\./, "");
 }
 
 const normalizedDomainInput = computed(() =>
@@ -363,9 +373,23 @@ const setupHostnames = computed(() =>
 
         <!-- Connect existing domain -->
         <div v-if="!showDomainInput" class="domain-actions">
-          <button class="button primary" @click="showDomainInput = true">
-            Connect a Domain You Own
+          <p v-if="!isProfilePublished" class="domain-requirement">
+            Publish your profile before connecting a custom domain.
+          </p>
+          <button
+            class="button primary"
+            :disabled="!isProfilePublished"
+            @click="showDomainInput = true"
+          >
+            Connect root domain
           </button>
+          <router-link
+            v-if="!isProfilePublished"
+            class="button secondary"
+            to="/create"
+          >
+            Publish profile
+          </router-link>
         </div>
 
         <!-- Domain input -->
@@ -381,7 +405,10 @@ const setupHostnames = computed(() =>
             <button
               class="button primary"
               :disabled="
-                domainLoading || !normalizedDomainInput || !isValidDomain
+                domainLoading ||
+                !isProfilePublished ||
+                !normalizedDomainInput ||
+                !isValidDomain
               "
               @click="connectDomain"
             >
@@ -393,11 +420,14 @@ const setupHostnames = computed(() =>
           </div>
           <div class="domain-options">
             <span v-if="domainPreview" class="domain-preview">
-              Will connect: <strong>{{ domainPreview }}</strong>
+              Public profile: <strong>{{ domainPreview }}</strong>
+              <template v-if="adminHost">
+                · ME3 login: <strong>{{ adminHost }}</strong>
+              </template>
             </span>
             <span v-else-if="normalizedDomainInput" class="domain-note">
-              Use a domain you control, like <strong>kieranbutler.com</strong>
-              or <strong>www.kieranbutler.com</strong>.
+              Use the root domain you control, like
+              <strong>kieranbutler.com</strong>.
             </span>
           </div>
           <div v-if="wranglerSnippet" class="setup-card">
@@ -412,7 +442,7 @@ const setupHostnames = computed(() =>
             </div>
             <pre><code>{{ wranglerSnippet }}</code></pre>
             <p>
-              After redeploying, attach
+              Add these vars, redeploy, then in Cloudflare attach
               <template v-for="(hostname, index) in setupHostnames" :key="hostname">
                 <code>{{ hostname }}</code>{{ index < setupHostnames.length - 1 ? " and " : "" }}
               </template>
@@ -506,6 +536,13 @@ const setupHostnames = computed(() =>
 
 .domain-actions .button {
   width: 100%;
+}
+
+.domain-requirement {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .fallback-row {

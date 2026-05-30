@@ -2724,11 +2724,20 @@ app.post("/api/domains/:username", async (c) => {
 
   const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
   if (!site) return c.json({ error: "Site not found" }, 404);
+  if (!site.published_at) {
+    return c.json(
+      {
+        error:
+          "Publish your profile before connecting a custom domain. This prevents an empty domain from going live.",
+      },
+      409,
+    );
+  }
 
   const body = await c.req.json<{ domain?: unknown }>().catch((): { domain?: unknown } => ({}));
   const domain = normalizeDomain(body.domain);
   if (!isValidPublicSiteDomain(domain)) {
-    return c.json({ error: "Use a domain you control, for example kieranbutler.com or www.kieranbutler.com." }, 400);
+    return c.json({ error: "Use a domain you control, for example kieranbutler.com." }, 400);
   }
 
   const status = getCoreDomainState(c.env, site, domain);
@@ -4044,9 +4053,10 @@ function buildCoreDomainStatus(env: Env, site: DbSite) {
     instructions: domain
       ? getCoreDomainInstructions(env, domain, site.username)
       : [
-          "Enter the www domain visitors should use for this ME3 site.",
-          "Set ME3_CUSTOM_DOMAIN to the root domain in this Worker deployment.",
-          "Attach that hostname to the Worker as a Cloudflare custom domain.",
+          "Publish your profile first so the custom domain has a live page to serve.",
+          "Enter the root domain visitors should use for this ME3 site.",
+          "Set ME3_CUSTOM_DOMAIN to that root domain in this Worker deployment.",
+          "Attach the public and me3 login hostnames to the Worker as Cloudflare custom domains.",
         ],
   };
 }
@@ -4069,8 +4079,12 @@ function getCoreDomainInstructions(env: Env, domain: string, username: string): 
   const siteHost = getSiteHost(env);
   const rootDomain = getRootCustomDomain(env);
   const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
+  const adminHost = getAdminHost(env);
   const instructions = [
     `In Cloudflare, attach ${domain} to this same me3 Worker as a custom domain.`,
+    adminHost
+      ? `Attach ${adminHost} to the same Worker for ME3 login and account settings.`
+      : `Attach me3.${domain} to the same Worker for ME3 login and account settings.`,
     rootDomain
       ? `ME3_CUSTOM_DOMAIN is ${rootDomain}, so Core expects the public site on ${siteHost}.`
       : "Set ME3_CUSTOM_DOMAIN to the root domain, then redeploy.",
@@ -4086,7 +4100,7 @@ function getCoreDomainInstructions(env: Env, domain: string, username: string): 
     instructions.unshift(`Current ME3_SITE_HOST is ${siteHost}, so this domain will stay pending until the variable matches.`);
   }
 
-  instructions.push("If you want the apex domain too, redirect it to this www domain in Cloudflare.");
+  instructions.push("If you also use www, redirect it to this public domain in Cloudflare.");
   return instructions;
 }
 

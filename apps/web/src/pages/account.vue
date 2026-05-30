@@ -2410,6 +2410,7 @@ onMounted(async () => {
                   <CustomDomain
                     :username="customDomainSite.username"
                     :show-settings-link="false"
+                    :profile-published="Boolean(customDomainSite.published_at)"
                     @domain-status-changed="() => void sites.fetchSites()"
                   />
                 </template>
