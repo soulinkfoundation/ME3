@@ -154,11 +154,25 @@ const VIBE_FONT_URLS: Record<string, string> = {
 
 const ICONS: Record<string, string> = {
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  infinity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8"/></svg>',
+  twitter:
+    '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg>',
+  instagram:
+    '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.0301.084c-1.2768.0602-2.1487.264-2.911.5634-.7888.3075-1.4575.72-2.1228 1.3877-.6652.6677-1.075 1.3368-1.3802 2.127-.2954.7638-.4956 1.6365-.552 2.914-.0564 1.2775-.0689 1.6882-.0626 4.947.0062 3.2586.0206 3.6671.0825 4.9473.061 1.2765.264 2.1482.5635 2.9107.308.7889.72 1.4573 1.388 2.1228.6679.6655 1.3365 1.0743 2.1285 1.38.7632.295 1.6361.4961 2.9134.552 1.2773.056 1.6884.069 4.9462.0627 3.2578-.0062 3.668-.0207 4.9478-.0814 1.28-.0607 2.147-.2652 2.9098-.5633.7889-.3086 1.4578-.72 2.1228-1.3881.665-.6682 1.0745-1.3378 1.3795-2.1284.2957-.7632.4966-1.636.552-2.9124.056-1.2809.0692-1.6898.063-4.948-.0063-3.2583-.021-3.6668-.0817-4.9465-.0607-1.2797-.264-2.1487-.5633-2.9117-.3084-.7889-.72-1.4568-1.3876-2.1228C21.2982 1.33 20.628.9208 19.8378.6165 19.074.321 18.2017.1197 16.9244.0645 15.6471.0093 15.236-.005 11.977.0014 8.718.0076 8.31.0215 7.0301.0839m.1402 21.6932c-1.17-.0509-1.8053-.2453-2.2287-.408-.5606-.216-.96-.4771-1.3819-.895-.422-.4178-.6811-.8186-.9-1.378-.1644-.4234-.3624-1.058-.4171-2.228-.0595-1.2645-.072-1.6442-.079-4.848-.007-3.2037.0053-3.583.0607-4.848.05-1.169.2456-1.805.408-2.2282.216-.5613.4762-.96.895-1.3816.4188-.4217.8184-.6814 1.3783-.9003.423-.1651 1.0575-.3614 2.227-.4171 1.2655-.06 1.6447-.072 4.848-.079 3.2033-.007 3.5835.005 4.8495.0608 1.169.0508 1.8053.2445 2.228.408.5608.216.96.4754 1.3816.895.4217.4194.6816.8176.9005 1.3787.1653.4217.3617 1.056.4169 2.2263.0602 1.2655.0739 1.645.0796 4.848.0058 3.203-.0055 3.5834-.061 4.848-.051 1.17-.245 1.8055-.408 2.2294-.216.5604-.4763.96-.8954 1.3814-.419.4215-.8181.6811-1.3783.9-.4224.1649-1.0577.3617-2.2262.4174-1.2656.0595-1.6448.072-4.8493.079-3.2045.007-3.5825-.006-4.848-.0608M16.953 5.5864A1.44 1.44 0 1 0 18.39 4.144a1.44 1.44 0 0 0-1.437 1.4424M5.8385 12.012c.0067 3.4032 2.7706 6.1557 6.173 6.1493 3.4026-.0065 6.157-2.7701 6.1506-6.1733-.0065-3.4032-2.771-6.1565-6.174-6.1498-3.403.0067-6.156 2.771-6.1496 6.1738M8 12.0077a4 4 0 1 1 4.008 3.9921A3.9996 3.9996 0 0 1 8 12.0077"/></svg>',
+  substack:
+    '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M22.539 8.242H1.46V5.406h21.08v2.836zM1.46 10.812V24L12 18.11 22.54 24V10.812H1.46zM22.54 0H1.46v2.836h21.08V0z"/></svg>',
   email: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M22 6l-10 7L2 6"/></svg>',
+  website: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   linkedin: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452z"/></svg>',
   github: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577v-2.04c-3.338.724-4.042-1.61-4.042-1.61-.546-1.385-1.335-1.755-1.335-1.755-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22v3.286c0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>',
   calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M3 10h18"/><path d="M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>',
   gift: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"/></svg>',
+  shoppingcart:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/></svg>',
+  graduationcap:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></svg>',
+  helpcircle:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>',
 };
 
 export async function generateSiteHtml(
@@ -314,7 +328,9 @@ function pageShell(
   const fontLinks = fontUrl
     ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="${escapeHtml(fontUrl)}">`
     : "";
-  const faviconPath = `${options.basePath}favicon.png`;
+  const faviconPath = profile.avatar
+    ? filePathForHtml(profile.avatar, options.basePath)
+    : `${options.basePath}favicon.png`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -323,8 +339,9 @@ function pageShell(
   <title>${escapeHtml(options.title)}</title>
   <meta name="description" content="${escapeHtml(options.description)}">
   <link rel="icon" href="${escapeHtml(faviconPath)}">
+  <link rel="apple-touch-icon" href="${escapeHtml(faviconPath)}">
   ${fontLinks}
-  <style>${siteCss(options.vibe, profile.links?._accent)}</style>
+  <style>${siteCss(options.vibe, profile.links?._accent)}${siteCssOverrides(options.vibe)}</style>
 </head>
 <body data-vibe="${escapeHtml(options.vibe)}">
   <div class="container">
@@ -357,12 +374,13 @@ function generateButtons(profile: Me3SiteProfile): string {
   if (buttons.length === 0 && !gift?.enabled) return "";
 
   const giftButton = gift?.enabled
-    ? `<a href="#gift" class="cta-button primary"><span class="btn-icon">${ICONS.gift}</span>${escapeHtml(gift.title || "Send a gift")}</a>`
+    ? `<a href="#gift" class="cta-button primary"><span class="btn-icon">${iconMarkup("gift")}</span>${escapeHtml(gift.title || "Send a gift")}</a>`
     : "";
   const buttonHtml = buttons
     .filter((button) => button.text && button.url)
     .map((button) => {
-      const icon = button.icon ? `<span class="btn-icon">${ICONS[button.icon] || escapeHtml(button.icon)}</span>` : "";
+      const iconHtml = iconMarkup(button.icon);
+      const icon = iconHtml ? `<span class="btn-icon">${iconHtml}</span>` : "";
       return `<a class="cta-button ${escapeHtml(button.style || "primary")}" href="${escapeHtml(formatHref(button.url || ""))}" target="_blank" rel="noopener">${icon}${escapeHtml(button.text || "")}</a>`;
     })
     .join("");
@@ -377,30 +395,108 @@ function generateLinks(profile: Me3SiteProfile): string {
   const items = entries
     .map(([key, value]) => {
       const label = profile.links?.[`${key}_label`] || titleFromSlug(key);
-      const icon = ICONS[key] || ICONS.link;
-      return `<a class="link-item" href="${escapeHtml(key === "email" ? `mailto:${value}` : formatHref(value || ""))}" target="_blank" rel="noopener" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><span class="link-icon">${icon}</span><span class="link-label">${escapeHtml(label)}</span></a>`;
+      const icon = platformIconMarkup(key);
+      return `<a class="link-item" href="${escapeHtml(formatLinkHref(key, value || ""))}" target="_blank" rel="noopener" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><span class="link-icon" aria-hidden="true">${icon}</span><span class="link-label">${escapeHtml(label)}</span></a>`;
     })
     .join("");
 
   return `<div class="links">${items}</div>`;
 }
 
+function platformIconMarkup(name: string): string {
+  const key = normalizeIconName(name);
+  const aliases: Record<string, string> = {
+    mail: "email",
+    envelope: "email",
+    x: "twitter",
+    xcom: "twitter",
+    twitterx: "twitter",
+    website: "link",
+    url: "link",
+  };
+  return ICONS[key] || ICONS[aliases[key]] || ICONS.link;
+}
+
+function iconMarkup(name?: string): string {
+  const key = (name || "").trim();
+  if (!key) return "";
+  const normalized = normalizeIconName(key);
+  const aliases: Record<string, string> = {
+    envelope: "email",
+    mail: "email",
+    cart: "shoppingcart",
+    x: "twitter",
+    xcom: "twitter",
+    twitterx: "twitter",
+  };
+  return ICONS[key] || ICONS[normalized] || ICONS[aliases[normalized]] || escapeHtml(key);
+}
+
+function normalizeIconName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 function generateTestimonials(profile: Me3SiteProfile): string {
   const testimonials = (profile.testimonials || []).filter((item) => item.name && item.quote);
   if (testimonials.length === 0 || profile.testimonialDisplay === "standalone") return "";
-  const cards = testimonials
-    .map((item) => {
-      const avatar = item.avatar
-        ? `<img class="testimonial-card__avatar" src="${escapeHtml(filePathForHtml(item.avatar))}" alt="${escapeHtml(item.name || "")}" loading="lazy" decoding="async">`
-        : `<span class="testimonial-card__avatar" aria-hidden="true">${escapeHtml(initialsForName(item.name || ""))}</span>`;
-      const profileLink = item.profileUrl
-        ? `<a class="testimonial-link" href="${escapeHtml(formatHref(item.profileUrl))}" target="_blank" rel="noopener">View site</a>`
-        : "";
-      const handle = item.handle ? `<span class="testimonial-card__handle">@${escapeHtml(item.handle.replace(/^@/, ""))}</span>` : "";
-      return `<article class="testimonial-card"><div class="testimonial-card__person">${avatar}<span class="testimonial-card__meta"><strong class="testimonial-card__name">${escapeHtml(item.name || "")}</strong>${handle}</span>${profileLink}</div><p class="testimonial-card__quote">&ldquo;${escapeHtml(item.quote || "")}&rdquo;</p></article>`;
-    })
+  const cards = testimonials.map((item) => {
+    const avatar = item.avatar
+      ? `<img class="testimonial-avatar" src="${escapeHtml(filePathForHtml(item.avatar))}" alt="${escapeHtml(item.name || "")}" loading="lazy" decoding="async">`
+      : `<div class="testimonial-avatar placeholder" aria-hidden="true"><span>${escapeHtml(initialsForName(item.name || ""))}</span></div>`;
+    const profileLink = item.profileUrl
+      ? `<a class="testimonial-link" href="${escapeHtml(formatHref(item.profileUrl))}" target="_blank" rel="noopener">View site</a>`
+      : "";
+    const handle = item.handle ? `<p class="testimonial-handle">@${escapeHtml(item.handle.replace(/^@/, ""))}</p>` : "";
+    return `<article class="testimonial-card"><header class="testimonial-header">${avatar}<div class="testimonial-meta"><p class="testimonial-name">${escapeHtml(item.name || "")}</p>${handle}</div>${profileLink}</header><p class="testimonial-quote">&ldquo;${escapeHtml(item.quote || "")}&rdquo;</p></article>`;
+  });
+
+  if (testimonials.length === 1) {
+    return `<section class="testimonials-section"><h3 class="section-title">${escapeHtml(profile.testimonialsTitle || "Testimonials")}</h3><div class="testimonials-single">${cards[0]}</div></section>`;
+  }
+
+  const slides = cards
+    .map((card) => `<div class="testimonials-slide">${card}</div>`)
     .join("");
-  return `<section class="testimonials"><h2>${escapeHtml(profile.testimonialsTitle || "Testimonials")}</h2><div class="testimonial-list">${cards}</div></section>`;
+  const dots = testimonials
+    .map((_, index) => `<button type="button" class="carousel-dot${index === 0 ? " active" : ""}" data-testimonial-dot="${index}" aria-label="Show testimonial ${index + 1}"></button>`)
+    .join("");
+
+  return `<section class="testimonials-section"><h3 class="section-title">${escapeHtml(profile.testimonialsTitle || "Testimonials")}</h3><div class="testimonials-carousel" data-testimonials-carousel><div class="testimonials-track">${slides}</div></div><div class="carousel-dots">${dots}</div></section><script src="https://unpkg.com/embla-carousel/embla-carousel.umd.js"></script><script>${testimonialCarouselScript()}</script>`;
+}
+
+function testimonialCarouselScript(): string {
+  return `(function(){
+  function init(){
+    document.querySelectorAll('[data-testimonials-carousel]').forEach(function(root){
+      var track=root.querySelector('.testimonials-track');
+      var slides=Array.prototype.slice.call(root.querySelectorAll('.testimonials-slide'));
+      var section=root.closest('.testimonials-section');
+      var dots=section?Array.prototype.slice.call(section.querySelectorAll('[data-testimonial-dot]')):[];
+      var index=0;
+      var embla=window.EmblaCarousel?window.EmblaCarousel(root,{loop:true,align:'center',dragFree:false}):null;
+      function updateDots(next){
+        index=typeof next==='number'?next:(embla?embla.selectedScrollSnap():index);
+        dots.forEach(function(dot,i){dot.classList.toggle('active',i===index);});
+      }
+      if(embla){
+        dots.forEach(function(dot,i){dot.addEventListener('click',function(){embla.scrollTo(i);});});
+        embla.on('select',updateDots);
+        updateDots(embla.selectedScrollSnap());
+        return;
+      }
+      function show(next){
+        if(!slides.length||!track)return;
+        index=Math.max(0,Math.min(slides.length-1,next));
+        track.style.transform='translateX(-'+slides[index].offsetLeft+'px)';
+        updateDots(index);
+      }
+      dots.forEach(function(dot,i){dot.addEventListener('click',function(){show(i);});});
+      window.addEventListener('resize',function(){show(index);});
+      show(0);
+    });
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+})();`;
 }
 
 function generateBooking(profile: Me3SiteProfile): string {
@@ -599,7 +695,12 @@ function generatePaidBookingWidget(input: {
       <script type="application/json" data-booking-config>${jsonForScript(config)}</script>
       <div class="booking-session-preview">${input.cards}</div>
       <p class="booking-selection-summary" data-booking-selection>${escapeHtml(firstOffer.title)} &bull; ${firstOffer.duration} min</p>
-      <label class="booking-field booking-date-field">Select a date:<input name="localDate" type="date" required></label>
+      <div class="booking-date-picker">
+        <label for="booking-date">Select a date:</label>
+        <div class="booking-date-input-wrap" data-booking-date-wrap>
+          <input id="booking-date" name="localDate" type="date" required>
+        </div>
+      </div>
       <div class="booking-slots" data-booking-slots role="group" aria-label="Available times"></div>
       <p class="booking-empty-times" data-booking-empty>No available times on this day.</p>
       <p class="booking-timezone">Slots are shown in ${escapeHtml(config.timezone)}.</p>
@@ -625,6 +726,7 @@ function paidBookingWidgetScript(): string {
   var form=root.querySelector('.booking-form');
   var statusEl=root.querySelector('.booking-status');
   var dateInput=root.querySelector('input[name="localDate"]');
+  var dateWrap=root.querySelector('[data-booking-date-wrap]');
   var timeInput=form.elements.localTime;
   var amountInput=form.elements.amount;
   var slotsEl=root.querySelector('[data-booking-slots]');
@@ -641,6 +743,13 @@ function paidBookingWidgetScript(): string {
   }
   function setDetailsVisible(visible){
     form.classList.toggle('is-visible',!!visible);
+  }
+  function openDatePicker(){
+    if(!dateInput)return;
+    dateInput.focus();
+    if(typeof dateInput.showPicker==='function'){
+      try{dateInput.showPicker();}catch(_error){}
+    }
   }
   function toMinutes(value){var parts=String(value||'').split(':').map(Number);if(parts.length!==2||parts.some(isNaN))return null;return parts[0]*60+parts[1];}
   function toTime(value){var h=Math.floor(value/60);var m=value%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');}
@@ -701,6 +810,12 @@ function paidBookingWidgetScript(): string {
   });
   dateInput.min=new Date().toISOString().slice(0,10);
   dateInput.addEventListener('change',populateSlots);
+  dateInput.addEventListener('click',openDatePicker);
+  if(dateWrap){
+    dateWrap.addEventListener('click',function(event){
+      if(event.target!==dateInput) openDatePicker();
+    });
+  }
   emptyEl.hidden=true;
   slotsEl.hidden=true;
   setDetailsVisible(false);
@@ -766,7 +881,10 @@ function slugify(value: string): string {
 function generateNewsletter(profile: Me3SiteProfile): string {
   const subscribe = profile.intents?.subscribe;
   if (!subscribe?.enabled) return "";
-  return `<section class="newsletter"><h2>${escapeHtml(subscribe.title || "Newsletter")}</h2>${subscribe.description ? `<p>${escapeHtml(subscribe.description)}</p>` : ""}<form><input type="email" placeholder="you@example.com" aria-label="Email address"><button type="submit">Subscribe</button></form></section>`;
+  const description = subscribe.description
+    ? `<p class="newsletter-desc">${escapeHtml(subscribe.description)}</p>`
+    : "";
+  return `<section class="newsletter" id="newsletter"><h2 class="newsletter-title">${escapeHtml(subscribe.title || "Newsletter")}</h2>${description}<form class="newsletter-form" action="/subscribe" method="POST"><input type="email" name="email" placeholder="Enter your email" required aria-label="Email address"><button type="submit">Subscribe</button></form><p class="newsletter-privacy">No spam. Unsubscribe anytime.</p></section>`;
 }
 
 function generateFooter(profile: Me3SiteProfile, allowCustom: boolean): string {
@@ -909,6 +1027,40 @@ function formatHref(value: string): string {
   return `https://${value}`;
 }
 
+function formatLinkHref(platform: string, value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "#";
+  const normalizedPlatform = normalizeIconName(platform);
+  const aliases: Record<string, string> = {
+    mail: "email",
+    envelope: "email",
+    x: "twitter",
+    xcom: "twitter",
+    twitterx: "twitter",
+    website: "link",
+    url: "link",
+  };
+  const linkType = aliases[normalizedPlatform] || normalizedPlatform;
+  if (linkType === "email") return trimmed.startsWith("mailto:") ? trimmed : `mailto:${trimmed}`;
+  if (/^(https?:|mailto:|tel:|#)/i.test(trimmed)) return trimmed;
+
+  const cleaned = trimmed.replace(/^@/, "").replace(/\/+$/, "");
+  switch (linkType) {
+    case "twitter":
+      return `https://x.com/${cleaned}`;
+    case "instagram":
+      return `https://instagram.com/${cleaned}`;
+    case "linkedin":
+      return `https://linkedin.com/in/${cleaned}`;
+    case "github":
+      return `https://github.com/${cleaned}`;
+    case "substack":
+      return `https://${cleaned}.substack.com/`;
+    default:
+      return formatHref(trimmed);
+  }
+}
+
 function getVibe(profile: Me3SiteProfile): string {
   return profile.links?._vibe || DEFAULT_VIBE;
 }
@@ -948,6 +1100,10 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function siteCssOverrides(vibe: string): string {
+  return `.name{font-size:28px;line-height:1.2;margin:18px 0 6px}.location,.bio{font-size:14px;line-height:1.5}.newsletter form{display:flex;flex-wrap:wrap;gap:10px;max-width:520px;margin:18px auto 10px}.newsletter input[type=email]{min-width:200px;flex:1;background:var(--bg);border:2px solid var(--border);color:var(--text);cursor:text}.newsletter input[type=email]::placeholder{color:var(--muted)}.booking-widget{max-width:520px;margin:0 auto}.booking-date-picker{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:0 auto 8px;width:100%;max-width:360px}.booking-date-picker label{text-align:center;font-weight:700;color:var(--text)}.booking-date-input-wrap{width:100%;overflow:hidden;border-radius:var(--radius);cursor:pointer}.booking-date-picker input[type=date]{display:block;width:100%;max-width:100%;min-width:0;margin:0;padding:14px 16px;border:2px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--text);box-sizing:border-box;cursor:pointer;color-scheme:light}.booking-date-picker input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer}.booking-date-picker input[type=date]::-webkit-date-and-time-value{text-align:left;min-width:0}.testimonials-section{padding:24px 0;margin:32px 0}.testimonials-section .section-title{font-size:18px;font-weight:700;text-align:center;margin:0 0 16px}.testimonials-carousel{overflow:hidden}.testimonials-track{display:flex;gap:12px;padding:15px;transition:transform .25s ease}.testimonials-slide{flex:0 0 85%}.testimonials-single{display:flex;justify-content:center}.carousel-dots{display:flex;justify-content:center;gap:6px;margin-top:12px}.carousel-dot{width:8px;height:8px;border-radius:999px;border:0;background:var(--border);cursor:pointer;padding:0}.carousel-dot.active{background:var(--text)}.testimonial-card{border:1px solid var(--border);border-radius:18px;background:var(--bg);padding:20px;box-shadow:0 12px 24px rgba(0,0,0,.05);margin:0;color:var(--text)}.testimonial-header{display:flex;align-items:center;gap:14px;margin-bottom:12px}.testimonial-avatar{width:52px;height:52px;border-radius:999px;object-fit:cover;border:1px solid var(--border);flex:0 0 auto}.testimonial-avatar.placeholder{display:flex;align-items:center;justify-content:center;background:var(--border);color:var(--text);font-weight:700}.testimonial-meta{flex:1;min-width:0}.testimonial-name{font-weight:700;font-size:16px;margin:0}.testimonial-handle{color:var(--muted);font-size:14px;margin:0}.testimonial-link{font-weight:700;font-size:13px;text-decoration:underline;color:var(--accent)}.testimonial-quote{font-size:16px;line-height:1.6;margin:0}@media(max-width:480px){.newsletter input[type=email]{min-width:100%}.newsletter button{width:100%}.testimonials-slide{flex-basis:100%}}${vibe === "tech" ? `body[data-vibe=tech]{font-size:14px;line-height:1.5}body[data-vibe=tech] .name{font-size:24px;line-height:1.2;font-weight:700;letter-spacing:0;margin:18px 0 4px}body[data-vibe=tech] .bio,body[data-vibe=tech] .location{font-size:14px}body[data-vibe=tech] .newsletter input[type=email],body[data-vibe=tech] .booking-date-picker input[type=date]{background:#0a0a0a;border-color:#2a2a2a;color:#e0e0e0;color-scheme:dark}body[data-vibe=tech] .testimonial-card{background:#050505;border-color:#2a2a2a;border-radius:24px;box-shadow:none}body[data-vibe=tech] .testimonial-avatar.placeholder{background:#242424}body[data-vibe=tech] .testimonials-section{background:transparent}` : ""}`;
 }
 
 function siteCss(vibe: string, accentOverride?: string): string {

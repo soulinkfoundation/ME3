@@ -95,6 +95,16 @@ describe("site generator", () => {
       {
         version: "0.1",
         name: "Booking Site",
+        avatar: "./files/avatar.jpg",
+        links: {
+          _vibe: "tech",
+          x: "kieranbutler",
+          instagram: "kieranbutler",
+          linkedin: "kieranbutler",
+          email: "hello@example.com",
+          substack: "soulink",
+        },
+        buttons: [{ text: "Join Soulink", url: "https://soulink.app", icon: "Infinity" }],
         testimonials: [
           {
             name: "Alie Rae",
@@ -102,6 +112,11 @@ describe("site generator", () => {
               "Kieran was a pleasure to work with. Incredibly talented in technology.",
             handle: "Author",
             profileUrl: "https://example.com",
+          },
+          {
+            name: "Jane Doe",
+            quote: "A grounded, generous collaborator.",
+            handle: "Founder",
           },
         ],
         intents: {
@@ -136,15 +151,33 @@ describe("site generator", () => {
 
     expect(files["index.html"]).toContain("<h2>Book a session</h2>");
     expect(files["index.html"]).not.toContain("<h2>Book a call</h2>");
+    expect(files["index.html"]).toContain('<link rel="icon" href="./files/avatar.jpg">');
+    expect(files["index.html"]).toContain('<link rel="apple-touch-icon" href="./files/avatar.jpg">');
+    expect(files["index.html"]).toContain('href="https://x.com/kieranbutler"');
+    expect(files["index.html"]).toContain('href="https://instagram.com/kieranbutler"');
+    expect(files["index.html"]).toContain('href="https://linkedin.com/in/kieranbutler"');
+    expect(files["index.html"]).toContain('href="mailto:hello@example.com"');
+    expect(files["index.html"]).toContain('href="https://soulink.substack.com/"');
+    expect(files["index.html"]).toContain('class="btn-icon"><svg');
+    expect(files["index.html"]).not.toContain(">Infinity</span>");
     expect(files["index.html"]).toContain("ME3 Setup");
     expect(files["index.html"]).toContain("Coaching call");
     expect(files["index.html"]).toContain("From €75");
     expect(files["index.html"]).toContain("Choose an offer");
     expect(files["index.html"]).toContain('type="date"');
+    expect(files["index.html"]).toContain("data-booking-date-wrap");
+    expect(files["index.html"]).toContain("showPicker");
+    expect(files["index.html"]).toContain("cursor:pointer");
     expect(files["index.html"]).toContain("No available times on this day.");
-    expect(files["index.html"]).toContain("<h2>Testimonials</h2>");
-    expect(files["index.html"]).toContain("testimonial-card__quote");
-    expect(files["index.html"]).toContain("<h2>Newsletter</h2>");
+    expect(files["index.html"]).toContain('<h3 class="section-title">Testimonials</h3>');
+    expect(files["index.html"]).toContain('class="testimonials-carousel"');
+    expect(files["index.html"]).toContain("EmblaCarousel");
+    expect(files["index.html"]).toContain("testimonial-quote");
+    expect(files["index.html"]).toContain('<h2 class="newsletter-title">Newsletter</h2>');
+    expect(files["index.html"]).toContain('class="newsletter-form"');
+    expect(files["index.html"]).toContain("No spam. Unsubscribe anytime.");
+    expect(files["index.html"]).toContain("body[data-vibe=tech] .name{font-size:24px");
+    expect(files["index.html"]).toContain("body[data-vibe=tech] .newsletter input[type=email]");
     expect(files["index.html"]).not.toContain("readonly");
   });
 });
