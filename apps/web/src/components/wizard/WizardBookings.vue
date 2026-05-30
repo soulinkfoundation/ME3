@@ -12,6 +12,7 @@ import {
   type WizardRetreatOffer,
 } from "../../stores/wizard";
 import BookingOfferDescriptionEditor from "./BookingOfferDescriptionEditor.vue";
+import StripePaymentSetupCallout from "./StripePaymentSetupCallout.vue";
 import UiIcon from "../UiIcon.vue";
 
 const wizard = useWizardStore();
@@ -917,6 +918,7 @@ onMounted(() => {
                     </select>
                   </div>
                 </div>
+                <StripePaymentSetupCallout compact />
               </div>
             </div>
           </div>
@@ -1254,6 +1256,7 @@ onMounted(() => {
                     </select>
                   </div>
                 </div>
+                <StripePaymentSetupCallout compact />
               </div>
             </div>
           </div>
@@ -1503,6 +1506,7 @@ onMounted(() => {
                     </select>
                   </div>
                 </div>
+                <StripePaymentSetupCallout compact />
               </div>
             </div>
           </div>

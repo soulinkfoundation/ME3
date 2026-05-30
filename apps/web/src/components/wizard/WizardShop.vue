@@ -4,6 +4,7 @@ import { useWizardStore, type WizardProduct } from "../../stores/wizard";
 import { useSitesStore } from "../../stores/sites";
 import { useAuthStore } from "../../stores/auth";
 import TiptapEditor from "../TiptapEditor.vue";
+import StripePaymentSetupCallout from "./StripePaymentSetupCallout.vue";
 import UiIcon from "../UiIcon.vue";
 import { api } from "../../api";
 import { useAppToast } from "../../composables/useAppToast";
@@ -210,6 +211,13 @@ const canSendConfirmationTest = computed(
 );
 
 const canAddMore = computed(() => wizard.products.length < 20);
+
+const selectedProductNeedsStripe = computed(
+  () =>
+    Boolean(selectedProduct.value) &&
+    productAvailable.value &&
+    priceDollars.value > 0,
+);
 
 const shopTitle = computed({
   get: () => wizard.shopTitle,
@@ -1204,6 +1212,11 @@ defineExpose({
             </select>
           </div>
         </div>
+
+        <StripePaymentSetupCallout
+          v-if="selectedProductNeedsStripe"
+          compact
+        />
 
         <div class="form-group">
           <label>Short description</label>
