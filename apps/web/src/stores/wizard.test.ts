@@ -430,6 +430,15 @@ describe("wizard store", () => {
       expect(store.products[0].slug).toBe("me3-setup-limited-offer");
       expect(store.products[0].slugCustomized).toBe(true);
     });
+
+    it("normalizes invalid product prices when updating a product", () => {
+      const store = useWizardStore();
+      store.addProduct("Setup");
+
+      store.updateProduct(0, { price: Number.NaN });
+
+      expect(store.products[0].price).toBe(0);
+    });
   });
 
   describe("page images", () => {
@@ -901,6 +910,25 @@ describe("wizard store", () => {
 
       expect(store.blogTitle).toBe("Articles");
       expect(store.shopTitle).toBe("Services");
+    });
+
+    it("normalizes invalid product prices loaded from site content", () => {
+      const store = useWizardStore();
+      const siteProfile = { name: "Existing User" };
+      const siteProducts = [
+        {
+          slug: "setup",
+          title: "Setup",
+          content: "<p>Setup details</p>",
+          price: Number.NaN,
+          currency: "EUR" as const,
+        },
+      ];
+
+      store.loadFromSiteContent(siteProfile, [], [], siteProducts, "existing");
+
+      expect(store.products[0].price).toBe(0);
+      expect(store.products[0].currency).toBe("EUR");
     });
 
     it("should preserve page order from site profile metadata", () => {

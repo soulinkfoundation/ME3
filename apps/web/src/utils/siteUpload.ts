@@ -66,7 +66,7 @@ function shouldIgnorePath(path: string): boolean {
   if (path.startsWith("__MACOSX/")) return true;
 
   const filename = path.split("/").pop()?.toLowerCase();
-  return filename === ".ds_store";
+  return filename === ".ds_store" || filename === "readme.md";
 }
 
 function stripSharedRootDirectory(paths: string[]): string[] {

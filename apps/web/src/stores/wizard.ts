@@ -330,6 +330,12 @@ export interface WizardProduct {
   confirmationEmail?: WizardProductConfirmationEmail;
 }
 
+function normalizeProductPriceCents(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return Math.round(numeric);
+}
+
 export interface WizardTestimonial {
   name: string;
   handle?: string;
@@ -2563,6 +2569,9 @@ export const useWizardStore = defineStore("wizard", () => {
     updatedProducts[index] = {
       ...current,
       ...updates,
+      ...(Object.prototype.hasOwnProperty.call(updates, "price")
+        ? { price: normalizeProductPriceCents(updates.price) }
+        : {}),
       slug: nextSlug,
       slugCustomized: nextSlugCustomized,
     };
@@ -2884,7 +2893,7 @@ export const useWizardStore = defineStore("wizard", () => {
             slug: p.slug,
             title: p.title,
             file: `shop/${p.slug}.md`,
-            price: p.price,
+            price: normalizeProductPriceCents(p.price),
             currency: p.currency,
             images: undefined,
             available: undefined,
@@ -4243,7 +4252,7 @@ export const useWizardStore = defineStore("wizard", () => {
         slugCustomized: inferSlugCustomized(p.title, p.slug, "product"),
         content: resolveLoadedContentAssetUrls(p.content),
         images: [],
-        price: p.price,
+        price: normalizeProductPriceCents(p.price),
         currency: p.currency,
         available: p.available ?? true,
         publishedAt: p.publishedAt,

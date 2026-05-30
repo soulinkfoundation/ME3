@@ -49,6 +49,7 @@ describe("prepareSiteUploadFiles", () => {
   it("ignores unsupported files and macOS metadata", async () => {
     const zip = new JSZip();
     zip.file("me.json", '{"name":"Example User"}');
+    zip.file("README.md", "# Export notes");
     zip.file("__MACOSX/._me.json", "ignored");
     zip.file("notes.txt", "ignored");
 
@@ -60,6 +61,10 @@ describe("prepareSiteUploadFiles", () => {
     const prepared = await prepareSiteUploadFiles([zipFile]);
 
     expect(prepared.files.map((file) => file.name)).toEqual(["me.json"]);
-    expect(prepared.ignored.sort()).toEqual(["__MACOSX/._me.json", "notes.txt"]);
+    expect(prepared.ignored.sort()).toEqual([
+      "README.md",
+      "__MACOSX/._me.json",
+      "notes.txt",
+    ]);
   });
 });

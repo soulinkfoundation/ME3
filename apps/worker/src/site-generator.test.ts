@@ -180,4 +180,37 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("body[data-vibe=tech] .newsletter input[type=email]");
     expect(files["index.html"]).not.toContain("readonly");
   });
+
+  it("uses title-derived blog and offerings paths in generated navigation", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Path Site",
+        pages: [{ slug: "writing", title: "Writing", file: "writing.md" }],
+        posts: [{ slug: "hello", title: "Hello", file: "blog/hello.md" }],
+        products: [
+          {
+            slug: "pai-setup",
+            title: "Pai Setup",
+            file: "shop/pai-setup.md",
+            price: 7500,
+            currency: "EUR",
+          },
+        ],
+        blogTitle: "Writing",
+        shopTitle: "Work With Me",
+      },
+      [
+        { name: "writing.md", content: "# Writing" },
+        { name: "blog/hello.md", content: "# Hello" },
+        { name: "shop/pai-setup.md", content: "# Pai Setup" },
+      ],
+    );
+
+    expect(files["work-with-me/index.html"]).toContain("Pai Setup");
+    expect(files["work-with-me/pai-setup.html"]).toContain("<h1>Pai Setup</h1>");
+    expect(files["writing-1/index.html"]).toContain("Hello");
+    expect(files["index.html"]).toContain('href="./work-with-me/"');
+    expect(files["index.html"]).not.toContain('href="./shop/"');
+  });
 });

@@ -2803,17 +2803,21 @@ app.post("/api/sites/:username/upload", async (c) => {
         continue;
       }
 
+      const sourceName = normalizeSiteFileName(file.name);
+      if (shouldIgnoreSiteSourceFile(sourceName)) continue;
       const content = await file.text();
       const contentType = file.type || getContentType(file.name);
-      const sourcePath = `src/${normalizeSiteFileName(file.name)}`;
+      const sourcePath = `src/${sourceName}`;
       await putSiteFile(c.env, site.id, sourcePath, content, contentType);
-      manifest.sourceFiles[file.name] = await sha256Text(content);
+      manifest.sourceFiles[sourceName] = await sha256Text(content);
     }
 
-    const sourceFiles = await loadSiteSourceFiles(c.env, site.id);
+    let sourceFiles = await loadSiteSourceFiles(c.env, site.id);
     const meJson = sourceFiles.get("me.json");
     if (meJson) {
       const profile = parseSiteProfile(meJson, site.username);
+      await pruneUnreferencedSiteSourceFiles(c.env, site.id, profile, manifest);
+      sourceFiles = await loadSiteSourceFiles(c.env, site.id);
       const generatedFiles = await generateSiteHtml(
         profile,
         Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
@@ -2827,6 +2831,7 @@ app.post("/api/sites/:username/upload", async (c) => {
           getGeneratedSiteContentType(name),
         );
       }
+      await pruneGeneratedPublicFiles(c.env, site.id, generatedFiles);
     }
 
     manifest.updatedAt = new Date().toISOString();
@@ -2941,26 +2946,59 @@ app.get("/api/sites/:username/content", async (c) => {
   }
 
   const sourceFiles = await listSiteFiles(c.env, site.id, "src/");
+  const profile = JSON.parse(meJson) as Me3SiteProfile;
+  const pageMetaBySource = buildContentMetaMap(profile.pages || [], "");
+  const postMetaBySource = buildContentMetaMap(profile.posts || [], "blog");
+  const productMetaBySource = buildContentMetaMap(profile.products || [], "shop");
   const pages: Array<{ slug: string; title: string; content: string }> = [];
-  const posts: Array<{ slug: string; title: string; content: string }> = [];
-  const products: Array<{ slug: string; title: string; content: string }> = [];
+  const posts: Array<Record<string, unknown>> = [];
+  const products: Array<Record<string, unknown>> = [];
 
   for (const file of sourceFiles) {
     if (!file.path.endsWith(".md")) continue;
-    const slug = file.path.slice("src/".length, -".md".length);
+    const sourceName = file.path.slice("src/".length);
+    if (shouldIgnoreSiteSourceFile(sourceName)) continue;
+    const slug = sourceName.slice(0, -".md".length);
+    const leafSlug = slug.split("/").pop() || slug;
+    const meta = slug.startsWith("blog/")
+      ? postMetaBySource.get(sourceName)
+      : slug.startsWith("shop/")
+        ? productMetaBySource.get(sourceName)
+        : pageMetaBySource.get(sourceName);
+    if (!meta) continue;
     const item = {
-      slug: slug.split("/").pop() || slug,
-      title: titleFromSlug(slug),
+      slug: leafSlug,
+      title: typeof meta?.title === "string" && meta.title.trim()
+        ? meta.title
+        : titleFromSlug(slug),
       content: markdownToHtml(await arrayBufferToText(file.content)),
     };
-    if (slug.startsWith("blog/")) posts.push(item);
-    else if (slug.startsWith("shop/")) products.push(item);
+    if (slug.startsWith("blog/")) {
+      posts.push({
+        ...item,
+        type: meta?.type,
+        media: meta?.media,
+        publishedAt: meta?.publishedAt,
+        excerpt: meta?.excerpt,
+        draft: meta?.draft,
+      });
+    } else if (slug.startsWith("shop/")) {
+      products.push({
+        ...item,
+        price: normalizeProductPriceCents(meta?.price),
+        currency: normalizeProductCurrency(meta?.currency),
+        available: typeof meta?.available === "boolean" ? meta.available : true,
+        publishedAt: meta?.publishedAt,
+        excerpt: meta?.excerpt,
+        confirmationEmail: meta?.confirmationEmail,
+      });
+    }
     else pages.push(item);
   }
 
   return c.json({
     ok: true,
-    profile: JSON.parse(meJson),
+    profile,
     pages,
     posts,
     products,
@@ -4324,6 +4362,99 @@ function parseSiteProfile(meJson: string, username: string): Me3SiteProfile {
   } catch {
     return { version: "0.1", handle: username, name: username };
   }
+}
+
+function shouldIgnoreSiteSourceFile(path: string): boolean {
+  const normalized = normalizeSiteFileName(path).toLowerCase();
+  const filename = normalized.split("/").pop() || normalized;
+  return filename === "readme.md" || filename === ".ds_store";
+}
+
+function buildContentMetaMap(
+  entries: Array<Record<string, unknown>>,
+  defaultPrefix: "blog" | "shop" | "",
+): Map<string, Record<string, unknown>> {
+  const map = new Map<string, Record<string, unknown>>();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const slug = typeof entry.slug === "string" ? normalizeSiteFileName(entry.slug) : "";
+    const fallbackFile = defaultPrefix && slug
+      ? `${defaultPrefix}/${slug}.md`
+      : slug
+        ? `${slug}.md`
+        : "";
+    const file = typeof entry.file === "string" && entry.file.trim()
+      ? normalizeSiteFileName(entry.file)
+      : fallbackFile;
+    if (file) map.set(file, entry);
+  }
+  return map;
+}
+
+function getReferencedSourceFiles(profile: Me3SiteProfile): Set<string> {
+  const keep = new Set<string>(["me.json"]);
+  const addEntry = (
+    entry: { slug?: string; file?: string },
+    defaultPrefix: "blog" | "shop" | "",
+  ) => {
+    const slug = entry.slug ? normalizeSiteFileName(entry.slug) : "";
+    const fallbackFile = defaultPrefix && slug
+      ? `${defaultPrefix}/${slug}.md`
+      : slug
+        ? `${slug}.md`
+        : "";
+    const file = entry.file ? normalizeSiteFileName(entry.file) : fallbackFile;
+    if (file && !shouldIgnoreSiteSourceFile(file)) keep.add(file);
+  };
+
+  for (const page of profile.pages || []) addEntry(page, "");
+  for (const post of profile.posts || []) addEntry(post, "blog");
+  for (const product of profile.products || []) addEntry(product, "shop");
+  return keep;
+}
+
+async function pruneUnreferencedSiteSourceFiles(
+  env: Env,
+  siteId: string,
+  profile: Me3SiteProfile,
+  manifest: PublishManifest,
+): Promise<void> {
+  const keep = getReferencedSourceFiles(profile);
+  const files = await listSiteFiles(env, siteId, "src/");
+  for (const file of files) {
+    const sourceName = file.path.replace(/^src\//, "");
+    if (keep.has(sourceName) && !shouldIgnoreSiteSourceFile(sourceName)) continue;
+    await deleteSiteFile(env, siteId, file.path);
+    delete manifest.sourceFiles[sourceName];
+  }
+}
+
+async function pruneGeneratedPublicFiles(
+  env: Env,
+  siteId: string,
+  generatedFiles: Record<string, string>,
+): Promise<void> {
+  const keep = new Set(Object.keys(generatedFiles).map(normalizeSiteFileName));
+  const files = await listSiteFiles(env, siteId, "public/");
+  for (const file of files) {
+    if (file.path.startsWith("public/files/") || file.path === "public/favicon.png") {
+      continue;
+    }
+    const publicName = file.path.replace(/^public\//, "");
+    if (keep.has(publicName)) continue;
+    if (!/\.(?:html|json)$/i.test(publicName)) continue;
+    await deleteSiteFile(env, siteId, file.path);
+  }
+}
+
+function normalizeProductPriceCents(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return Math.round(numeric);
+}
+
+function normalizeProductCurrency(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : "USD";
 }
 
 function getGeneratedSiteContentType(path: string): string {

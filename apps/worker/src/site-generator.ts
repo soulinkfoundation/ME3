@@ -34,6 +34,11 @@ type Me3Product = Me3Page & {
   available?: boolean;
 };
 
+type SiteSectionPaths = {
+  blog: string;
+  shop: string;
+};
+
 type Me3Testimonial = {
   name?: string;
   handle?: string;
@@ -182,6 +187,7 @@ export async function generateSiteHtml(
 ): Promise<Record<string, string>> {
   const output: Record<string, string> = {};
   const fileMap = new Map(files.map((file) => [normalizeSitePath(file.name), file.content]));
+  const sectionPaths = resolveSiteSectionPaths(profile);
   const access = { ...DEFAULT_CAPABILITIES, ...capabilities };
 
   output["index.html"] = generateIndexHtml(profile, access);
@@ -196,24 +202,24 @@ export async function generateSiteHtml(
 
   const posts = (profile.posts || []).filter((post) => !post.draft && post.slug);
   if (posts.length > 0) {
-    output["blog/index.html"] = generateCollectionIndex(profile, profile.blogTitle || "Blog", posts, "blog", access);
+    output[`${sectionPaths.blog}/index.html`] = generateCollectionIndex(profile, profile.blogTitle || "Blog", posts, "blog", access);
     for (const post of posts) {
       if (!post.file || !post.slug) continue;
       const markdown = fileMap.get(normalizeSitePath(post.file));
       if (markdown !== undefined) {
-        output[`blog/${normalizeSitePath(post.slug)}.html`] = generateContentPageHtml(profile, post.title || titleFromSlug(post.slug), markdown, "blog", "../", access);
+        output[`${sectionPaths.blog}/${normalizeSitePath(post.slug)}.html`] = generateContentPageHtml(profile, post.title || titleFromSlug(post.slug), markdown, "blog", "../", access);
       }
     }
   }
 
   const products = (profile.products || []).filter((product) => product.slug);
   if (products.length > 0) {
-    output["shop/index.html"] = generateCollectionIndex(profile, profile.shopTitle || "Shop", products, "shop", access);
+    output[`${sectionPaths.shop}/index.html`] = generateCollectionIndex(profile, profile.shopTitle || "Shop", products, "shop", access);
     for (const product of products) {
       if (!product.file || !product.slug) continue;
       const markdown = fileMap.get(normalizeSitePath(product.file));
       if (markdown !== undefined) {
-        output[`shop/${normalizeSitePath(product.slug)}.html`] = generateContentPageHtml(profile, product.title || titleFromSlug(product.slug), markdown, "shop", "../", access);
+        output[`${sectionPaths.shop}/${normalizeSitePath(product.slug)}.html`] = generateContentPageHtml(profile, product.title || titleFromSlug(product.slug), markdown, "shop", "../", access);
       }
     }
   }
@@ -353,6 +359,7 @@ function pageShell(
 }
 
 function generateNav(profile: Me3SiteProfile, activeSlug: string, basePath: string): string {
+  const sectionPaths = resolveSiteSectionPaths(profile);
   const pages = (profile.pages || []).filter((page) => page.visible !== false && page.slug);
   const hasPosts = (profile.posts || []).some((post) => !post.draft);
   const hasProducts = (profile.products || []).length > 0;
@@ -361,8 +368,8 @@ function generateNav(profile: Me3SiteProfile, activeSlug: string, basePath: stri
   const links = [
     `<a href="${basePath}" class="nav-link${activeSlug ? "" : " active"}">Home</a>`,
     ...pages.map((page) => `<a href="${basePath}${escapeHtml(normalizeSitePath(page.slug || ""))}" class="nav-link${page.slug === activeSlug ? " active" : ""}">${escapeHtml(page.title || titleFromSlug(page.slug || ""))}</a>`),
-    hasPosts ? `<a href="${basePath}blog/" class="nav-link${activeSlug === "blog" ? " active" : ""}">${escapeHtml(profile.blogTitle || "Blog")}</a>` : "",
-    hasProducts ? `<a href="${basePath}shop/" class="nav-link${activeSlug === "shop" ? " active" : ""}">${escapeHtml(profile.shopTitle || "Shop")}</a>` : "",
+    hasPosts ? `<a href="${basePath}${escapeHtml(sectionPaths.blog)}/" class="nav-link${activeSlug === "blog" ? " active" : ""}">${escapeHtml(profile.blogTitle || "Blog")}</a>` : "",
+    hasProducts ? `<a href="${basePath}${escapeHtml(sectionPaths.shop)}/" class="nav-link${activeSlug === "shop" ? " active" : ""}">${escapeHtml(profile.shopTitle || "Shop")}</a>` : "",
   ].join("");
 
   return `<nav class="nav">${links}</nav>`;
@@ -1063,6 +1070,40 @@ function formatLinkHref(platform: string, value: string): string {
 
 function getVibe(profile: Me3SiteProfile): string {
   return profile.links?._vibe || DEFAULT_VIBE;
+}
+
+function resolveSiteSectionPaths(profile: Me3SiteProfile): SiteSectionPaths {
+  const taken = new Set(
+    (profile.pages || [])
+      .map((page) => page.slug?.trim())
+      .filter((slug): slug is string => Boolean(slug)),
+  );
+  return {
+    blog: ensureUniqueSectionPath(slugifySectionPath(profile.blogTitle || "", "blog"), taken),
+    shop: ensureUniqueSectionPath(slugifySectionPath(profile.shopTitle || "", "shop"), taken),
+  };
+}
+
+function slugifySectionPath(value: string, fallback: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return slug || fallback;
+}
+
+function ensureUniqueSectionPath(basePath: string, taken: Set<string>): string {
+  let candidate = basePath;
+  let counter = 1;
+  while (taken.has(candidate)) {
+    candidate = `${basePath}-${counter++}`;
+  }
+  taken.add(candidate);
+  return candidate;
 }
 
 function normalizeSitePath(value: string): string {

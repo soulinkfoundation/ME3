@@ -86,13 +86,26 @@ const previewSlug = computed(() => {
 });
 
 const priceDollars = computed({
-  get: () => (selectedProduct.value ? selectedProduct.value.price / 100 : 0),
+  get: () => {
+    if (!selectedProduct.value) return 0;
+    const cents = Number(selectedProduct.value.price);
+    return Number.isFinite(cents) && cents >= 0 ? cents / 100 : 0;
+  },
   set: (val: number) => {
     if (selectedProductIndex.value === null) return;
-    const cents = Math.max(0, Math.round(val * 100));
+    const dollars = Number(val);
+    const cents = Number.isFinite(dollars)
+      ? Math.max(0, Math.round(dollars * 100))
+      : 0;
     wizard.updateProduct(selectedProductIndex.value, { price: cents });
   },
 });
+
+function formatProductPrice(product: WizardProduct): string {
+  const cents = Number(product.price);
+  const safeCents = Number.isFinite(cents) && cents >= 0 ? cents : 0;
+  return `${(safeCents / 100).toFixed(2)} ${product.currency}`;
+}
 
 const productCurrency = computed({
   get: () => selectedProduct.value?.currency || "USD",
@@ -1080,7 +1093,7 @@ defineExpose({
           <div class="product-details">
             <span class="product-title">{{ product.title }}</span>
             <span class="product-meta">
-              {{ (product.price / 100).toFixed(2) }} {{ product.currency }}
+              {{ formatProductPrice(product) }}
             </span>
           </div>
           <span v-if="!product.available" class="product-tag">Unavailable</span>
