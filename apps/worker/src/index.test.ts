@@ -57,6 +57,18 @@ type StoredAgentChannelEvent = {
   text_body: string | null;
   raw_json: string | null;
 };
+type TestForwardableEmailMessage = {
+  readonly from: string;
+  readonly to: string;
+  readonly headers: Headers;
+  readonly raw: ReadableStream<Uint8Array>;
+  readonly rawSize: number;
+  readonly canBeForwarded: boolean;
+  setReject(reason: string): void;
+  forward(rcptTo: string, headers?: Headers): Promise<void>;
+  rejectedWith: string | null;
+  forwardedTo: string[];
+};
 
 type StoredSocialAccount = {
   id: string;
@@ -638,7 +650,48 @@ function createEnv(): Env & {
                 });
               }
 
-              if (sql.includes("INSERT INTO mailbox_messages")) {
+              if (
+                sql.includes("INSERT INTO mailbox_messages") &&
+                sql.includes("'inbound'")
+              ) {
+                state.mailboxMessages.push({
+                  id: values[0] as string,
+                  mailbox_id: values[1] as string,
+                  direction: "inbound",
+                  message_kind: "email",
+                  status: values[2] as DbMailboxMessage["status"],
+                  thread_key: values[3] as string,
+                  provider_id: values[4] as string,
+                  provider_message_id: values[5] as string | null,
+                  from_address: values[6] as string,
+                  to_address: values[7] as string,
+                  subject: values[8] as string,
+                  text_body: values[9] as string,
+                  html_body: values[10] as string | null,
+                  raw_headers_json: values[11] as string,
+                  raw_message: values[12] as string,
+                  metadata_json: values[13] as string,
+                  source_id: null,
+                  folder: "inbox",
+                  read_at: null,
+                  agent_summary: null,
+                  agent_labels_json: null,
+                  forwarded_to: null,
+                  error_message: null,
+                  created_by: "cloudflare-email-routing",
+                  approved_by_user_id: null,
+                  received_at: values[14] as string,
+                  approved_at: null,
+                  sent_at: null,
+                  created_at: values[15] as string,
+                  updated_at: values[16] as string,
+                });
+              }
+
+              if (
+                sql.includes("INSERT INTO mailbox_messages") &&
+                sql.includes("'outbound'")
+              ) {
                 state.mailboxMessages.push({
                   id: values[0] as string,
                   mailbox_id: values[1] as string,
@@ -757,6 +810,22 @@ function createEnv(): Env & {
                   state.mailbox.status = "paused";
                   state.mailbox.updated_at = values[0] as string;
                 }
+              }
+
+              if (
+                sql.includes("UPDATE mailbox_messages") &&
+                sql.includes("status = 'forwarded'")
+              ) {
+                state.mailboxMessages = state.mailboxMessages.map((message) =>
+                  message.id === values[2] && message.mailbox_id === values[3]
+                    ? {
+                        ...message,
+                        status: "forwarded",
+                        forwarded_to: values[0] as string,
+                        updated_at: values[1] as string,
+                      }
+                    : message,
+                );
               }
 
               if (
@@ -938,6 +1007,9 @@ function createEnv(): Env & {
                 return state.owner as T;
               }
               if (sql.includes("FROM mailbox_aliases")) {
+                if (sql.includes("status = 'active'")) {
+                  return state.mailbox?.status === "active" ? (state.mailbox as T) : null;
+                }
                 return state.mailbox && values[0] === state.mailbox.user_id
                   ? (state.mailbox as T)
                   : null;
@@ -1242,6 +1314,39 @@ async function bootstrap(env: Env) {
     }),
     env,
   );
+}
+
+function createInboundEmailMessage(raw: string, init?: {
+  from?: string;
+  to?: string;
+  headers?: HeadersInit;
+  canBeForwarded?: boolean;
+}): TestForwardableEmailMessage {
+  const bytes = new TextEncoder().encode(raw);
+  const forwardedTo: string[] = [];
+  const message = {
+    from: init?.from || "client@example.com",
+    to: init?.to || "test@soulinkfoundation.org",
+    headers: new Headers(init?.headers),
+    raw: new Response(bytes).body!,
+    rawSize: bytes.byteLength,
+    canBeForwarded: init?.canBeForwarded ?? true,
+    rejectedWith: null as string | null,
+    forwardedTo,
+    setReject(reason: string) {
+      message.rejectedWith = reason;
+    },
+    async forward(rcptTo: string) {
+      forwardedTo.push(rcptTo);
+    },
+  };
+  return message;
+}
+
+function emailWorker() {
+  return app as typeof app & {
+    email(message: TestForwardableEmailMessage, env: Env): Promise<void>;
+  };
 }
 
 function cookieHeader(response: Response): string {
@@ -4087,6 +4192,110 @@ describe("ME3 Core Worker auth", () => {
     );
     expect(activateResponse.status).toBe(200);
     expect(env.mailbox?.status).toBe("active");
+  });
+
+  it("stores inbound Cloudflare Email Routing messages in the active mailbox", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/mailbox", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ aliasLocalPart: "test", forwardingEnabled: false }),
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/mailbox/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const inbound = createInboundEmailMessage(
+      [
+        "From: Client <client@example.com>",
+        "To: test@soulinkfoundation.org",
+        "Subject: Standalone test",
+        "Message-ID: <standalone-test@example.com>",
+        "Content-Type: text/plain; charset=utf-8",
+        "",
+        "Hello from Cloudflare Email Routing.",
+      ].join("\r\n"),
+    );
+    await emailWorker().email(inbound, env);
+
+    expect(inbound.rejectedWith).toBeNull();
+    expect(env.mailboxMessages).toEqual([
+      expect.objectContaining({
+        direction: "inbound",
+        message_kind: "email",
+        status: "received",
+        provider_id: "cloudflare-email-routing",
+        provider_message_id: "<standalone-test@example.com>",
+        from_address: "client@example.com",
+        to_address: "test@soulinkfoundation.org",
+        subject: "Standalone test",
+        text_body: "Hello from Cloudflare Email Routing.",
+        folder: "inbox",
+        created_by: "cloudflare-email-routing",
+      }),
+    ]);
+  });
+
+  it("forwards inbound mailbox copies when forwarding is enabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/mailbox", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          aliasLocalPart: "test",
+          forwardingEnabled: true,
+          forwardingEmail: "archive@example.com",
+        }),
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/mailbox/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const inbound = createInboundEmailMessage(
+      "Subject: Forward me\r\nMessage-ID: <forward-me@example.com>\r\n\r\nKeep a copy.",
+    );
+    await emailWorker().email(inbound, env);
+
+    expect(inbound.forwardedTo).toEqual(["archive@example.com"]);
+    expect(env.mailboxMessages[0]).toMatchObject({
+      status: "forwarded",
+      forwarded_to: "archive@example.com",
+    });
+  });
+
+  it("rejects inbound email when no mailbox is active", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+
+    const inbound = createInboundEmailMessage("Subject: No mailbox\r\n\r\nHello.");
+    await emailWorker().email(inbound, env);
+
+    expect(inbound.rejectedWith).toBe(
+      "ME3 Core mailbox is not active for this installation.",
+    );
+    expect(env.mailboxMessages).toEqual([]);
   });
 
   it("approves mailbox drafts through the active Postmark provider", async () => {

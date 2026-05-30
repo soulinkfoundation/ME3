@@ -170,6 +170,7 @@ import type {
   DbBooking,
   DbCalendarSource,
   DbCalendarSourceEvent,
+  DbMailboxAlias,
   DbSite,
   DbSubscriber,
   DbUserCalendarEvent,
@@ -219,6 +220,16 @@ type OwnerAuthState = {
 type ChatBody = { message?: string };
 type AgentSandboxBody = { messageText?: unknown; replyToMessageId?: unknown };
 type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
+type ForwardableEmailMessageLike = {
+  readonly from: string;
+  readonly to: string;
+  readonly headers: Headers;
+  readonly raw: ReadableStream<Uint8Array>;
+  readonly rawSize: number;
+  readonly canBeForwarded: boolean;
+  setReject(reason: string): void;
+  forward(rcptTo: string, headers?: Headers): Promise<void>;
+};
 type LandingPageGenerateBody = {
   username?: string;
   brief?: string;
@@ -321,6 +332,8 @@ const ME3_CORE_INSTALL_ID_REGEX =
   /^core_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const D1_SITE_FILE_MAX_BYTES = 1_900_000;
+const INBOUND_EMAIL_PROVIDER_ID = "cloudflare-email-routing";
+const MAX_INBOUND_EMAIL_BYTES = 1024 * 1024;
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -6049,9 +6062,280 @@ async function handleAssistantJobQueueBatch(
   }
 }
 
+async function handleInboundEmail(
+  message: ForwardableEmailMessageLike,
+  env: Env,
+): Promise<void> {
+  try {
+    const mailbox = await getActiveMailboxForInbound(env);
+    if (!mailbox) {
+      message.setReject("ME3 Core mailbox is not active for this installation.");
+      return;
+    }
+
+    if (message.rawSize > MAX_INBOUND_EMAIL_BYTES) {
+      message.setReject("Message is too large for this ME3 Core mailbox.");
+      return;
+    }
+
+    const rawMessage = await readEmailRawText(message.raw, MAX_INBOUND_EMAIL_BYTES);
+    const parsed = parseInboundEmail(rawMessage, message.headers);
+    const now = new Date().toISOString();
+    const providerMessageId =
+      normalizeEmailHeaderValue(parsed.headers["message-id"]) || crypto.randomUUID();
+    const threadKey =
+      normalizeEmailHeaderValue(parsed.headers.references) ||
+      normalizeEmailHeaderValue(parsed.headers["in-reply-to"]) ||
+      providerMessageId;
+    const rowId = crypto.randomUUID();
+
+    await env.DB.prepare(
+      `INSERT INTO mailbox_messages (
+         id, mailbox_id, direction, message_kind, status, thread_key,
+         provider_id, provider_message_id, from_address, to_address, subject,
+         text_body, html_body, raw_headers_json, raw_message, metadata_json,
+         folder, created_by, received_at, created_at, updated_at
+       )
+       VALUES (
+         ?, ?, 'inbound', 'email', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         'inbox', 'cloudflare-email-routing', ?, ?, ?
+       )`,
+    )
+      .bind(
+        rowId,
+        mailbox.id,
+        "received",
+        threadKey,
+        INBOUND_EMAIL_PROVIDER_ID,
+        providerMessageId,
+        normalizeEmail(message.from) || normalizeEmailHeaderValue(parsed.headers.from),
+        normalizeEmail(message.to) || normalizeEmailHeaderValue(parsed.headers.to),
+        parsed.subject || "(no subject)",
+        parsed.textBody || parsed.htmlBody || "",
+        parsed.htmlBody,
+        JSON.stringify(parsed.headers),
+        rawMessage,
+        JSON.stringify({
+          rawSize: message.rawSize,
+          envelopeFrom: message.from,
+          envelopeTo: message.to,
+        }),
+        now,
+        now,
+        now,
+      )
+      .run();
+
+    if (mailbox.forwarding_enabled && mailbox.forwarding_email && message.canBeForwarded) {
+      await message.forward(mailbox.forwarding_email);
+      await markInboundEmailForwarded(env, mailbox.id, rowId, mailbox.forwarding_email);
+    }
+  } catch (error) {
+    console.error("Inbound email processing failed", error);
+    message.setReject("ME3 Core could not process this email.");
+  }
+}
+
+async function getActiveMailboxForInbound(env: Env): Promise<DbMailboxAlias | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, alias_local_part, forwarding_email, forwarding_status,
+              forwarding_enabled, forwarding_mode, status, approval_policy,
+              daily_inbound_limit, daily_outbound_limit, activated_at,
+              cf_destination_id, cf_destination_verified_at, cf_rule_id,
+              cf_last_synced_at, cf_last_error, created_at, updated_at
+       FROM mailbox_aliases
+       WHERE status = 'active'
+       ORDER BY created_at ASC
+       LIMIT 1`,
+    )
+      .bind()
+      .first<DbMailboxAlias>()) || null
+  );
+}
+
+async function markInboundEmailForwarded(
+  env: Env,
+  mailboxId: string,
+  messageId: string,
+  forwardedTo: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET status = 'forwarded',
+         forwarded_to = ?,
+         updated_at = ?
+     WHERE id = ? AND mailbox_id = ?`,
+  )
+    .bind(forwardedTo, new Date().toISOString(), messageId, mailboxId)
+    .run();
+}
+
+async function readEmailRawText(
+  raw: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): Promise<string> {
+  const reader = raw.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    size += chunk.value.byteLength;
+    if (size > maxBytes) {
+      throw new Error("Inbound email exceeded ME3 Core raw message limit.");
+    }
+    chunks.push(chunk.value);
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function parseInboundEmail(
+  rawMessage: string,
+  envelopeHeaders: Headers,
+): {
+  headers: Record<string, string>;
+  subject: string;
+  textBody: string;
+  htmlBody: string | null;
+} {
+  const [rawHeaderText, ...bodyParts] = rawMessage.split(/\r?\n\r?\n/);
+  const headers = {
+    ...headersToRecord(envelopeHeaders),
+    ...parseRawEmailHeaders(rawHeaderText || ""),
+  };
+  const body = bodyParts.join("\n\n");
+  const contentType = headers["content-type"] || "";
+  const parsedBody = parseEmailBody(body, contentType, headers["content-transfer-encoding"]);
+
+  return {
+    headers,
+    subject: normalizeEmailHeaderValue(headers.subject) || "",
+    textBody: parsedBody.textBody,
+    htmlBody: parsedBody.htmlBody,
+  };
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const record: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    record[key.toLowerCase()] = value;
+  });
+  return record;
+}
+
+function parseRawEmailHeaders(rawHeaders: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  let currentHeader = "";
+
+  for (const line of rawHeaders.split(/\r?\n/)) {
+    if (/^\s/.test(line) && currentHeader) {
+      headers[currentHeader] = `${headers[currentHeader]} ${line.trim()}`;
+      continue;
+    }
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex <= 0) continue;
+    currentHeader = line.slice(0, separatorIndex).trim().toLowerCase();
+    headers[currentHeader] = line.slice(separatorIndex + 1).trim();
+  }
+
+  return headers;
+}
+
+function parseEmailBody(
+  body: string,
+  contentType: string,
+  transferEncoding: string | undefined,
+): { textBody: string; htmlBody: string | null } {
+  const boundary = extractMimeBoundary(contentType);
+  if (!boundary) {
+    const decoded = decodeEmailBody(body, transferEncoding);
+    if (/text\/html/i.test(contentType)) {
+      return { textBody: stripHtml(decoded), htmlBody: decoded.trim() || null };
+    }
+    return { textBody: decoded.trim(), htmlBody: null };
+  }
+
+  let textBody = "";
+  let htmlBody: string | null = null;
+  for (const part of body.split(`--${boundary}`)) {
+    if (!part.trim() || part.trim() === "--") continue;
+    const [partHeadersText, ...partBodyParts] = part
+      .replace(/^(\r?\n)/, "")
+      .split(/\r?\n\r?\n/);
+    const partHeaders = parseRawEmailHeaders(partHeadersText || "");
+    const partContentType = partHeaders["content-type"] || "";
+    const decoded = decodeEmailBody(
+      partBodyParts.join("\n\n").replace(/\r?\n--$/, ""),
+      partHeaders["content-transfer-encoding"],
+    ).trim();
+    if (!textBody && /^text\/plain\b/i.test(partContentType)) {
+      textBody = decoded;
+    } else if (!htmlBody && /^text\/html\b/i.test(partContentType)) {
+      htmlBody = decoded;
+    }
+  }
+
+  return {
+    textBody: textBody || (htmlBody ? stripHtml(htmlBody) : ""),
+    htmlBody,
+  };
+}
+
+function extractMimeBoundary(contentType: string): string | null {
+  const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  return (match?.[1] || match?.[2] || "").trim() || null;
+}
+
+function decodeEmailBody(body: string, transferEncoding: string | undefined): string {
+  const encoding = (transferEncoding || "").trim().toLowerCase();
+  if (encoding === "base64") {
+    try {
+      const binary = atob(body.replace(/\s/g, ""));
+      return new TextDecoder().decode(
+        Uint8Array.from(binary, (char) => char.charCodeAt(0)),
+      );
+    } catch {
+      return body;
+    }
+  }
+  if (encoding === "quoted-printable") {
+    return body
+      .replace(/=\r?\n/g, "")
+      .replace(/=([0-9a-f]{2})/gi, (_, hex: string) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      );
+  }
+  return body;
+}
+
+function stripHtml(value: string): string {
+  return value
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeEmailHeaderValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 const worker = {
   fetch(request: Request, env: Env, ctx?: ExecutionContext) {
     return app.fetch(request, env, ctx);
+  },
+  email(message: ForwardableEmailMessageLike, env: Env, _ctx?: ExecutionContext) {
+    return handleInboundEmail(message, env);
   },
   queue(batch: MessageBatch<AssistantJobEventQueueMessage>, env: Env) {
     return handleAssistantJobQueueBatch(batch, env);
