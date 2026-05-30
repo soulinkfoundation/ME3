@@ -49,6 +49,10 @@ git push origin main
 
 The updater adds the `upstream` remote if it is missing, fetches release tags, connects copied Deploy-button history to the installed upstream tag when needed, merges the latest stable release, then runs `pnpm install`, `pnpm update:doctor`, and `pnpm build`.
 
+New GitHub-based installs also include an **Update ME3 Core** GitHub Action. In the copied repository, open **Actions -> Update ME3 Core -> Run workflow**. The workflow runs the same updater, commits the result to `main`, and Cloudflare Workers Builds redeploys from that commit.
+
+The workflow also supports a future ME3 dashboard button through GitHub `repository_dispatch` using the `me3-core-update` event type. The dashboard should trigger the same workflow rather than trying to rewrite or redeploy Core from inside the running Worker.
+
 If your install predates `pnpm update:core`, update manually once to the release that adds it, or bootstrap the latest updater from Core:
 
 ```bash

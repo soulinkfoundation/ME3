@@ -1,0 +1,109 @@
+name: Update ME3 Core
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional Core release tag to install, such as v0.1.6. Leave blank for latest stable.
+        required: false
+        type: string
+  repository_dispatch:
+    types:
+      - me3-core-update
+
+permissions:
+  contents: write
+
+concurrency:
+  group: me3-core-update-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update Core
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout ME3 install
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Update ME3 Core
+        id: update
+        env:
+          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
+          args=(--yes)
+
+          if [ -n "$tag" ]; then
+            args+=(--tag "$tag")
+          fi
+
+          pnpm update:core -- "${args[@]}"
+
+          version="$(node -p "require('./me3-core.json').version")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Check for update changes
+        id: changes
+        run: |
+          set -euo pipefail
+
+          base_ref="origin/${GITHUB_REF_NAME}"
+          has_file_changes="false"
+          is_ahead="false"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            has_file_changes="true"
+          fi
+
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse "$base_ref")" ]; then
+            is_ahead="true"
+          fi
+
+          if [ "$has_file_changes" = "true" ] || [ "$is_ahead" = "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git status --short --branch
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push Core update
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "Update ME3 Core to v${{ steps.update.outputs.version }}"
+          fi
+
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: No update needed
+        if: steps.changes.outputs.changed != 'true'
+        run: echo "ME3 Core is already up to date."
