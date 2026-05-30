@@ -129,6 +129,7 @@ describe("site generator", () => {
             enabled: true,
             title: "Book a call",
             description: "Choose what fits.",
+            bufferTime: 15,
             availability: { timezone: "Europe/Dublin", windows: { monday: ["09:00"] } },
             offers: [
               { title: "ME3 Setup", duration: 60, pricing: { enabled: false } },
@@ -168,6 +169,8 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("data-booking-date-wrap");
     expect(files["index.html"]).toContain("showPicker");
     expect(files["index.html"]).toContain("cursor:pointer");
+    expect(files["index.html"]).toContain('"bufferTime":15');
+    expect(files["index.html"]).toContain("t+=slotStep");
     expect(files["index.html"]).toContain("No available times on this day.");
     expect(files["index.html"]).toContain('<h3 class="section-title">Testimonials</h3>');
     expect(files["index.html"]).toContain('class="testimonials-carousel"');

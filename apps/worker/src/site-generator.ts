@@ -770,13 +770,17 @@ function paidBookingWidgetScript(): string {
     var dateValue=dateInput.value;
     var windows=(config.windows&&config.windows[dayName(dateValue)])||[];
     var duration=Number(selected.duration||30);
+    if(!Number.isFinite(duration)||duration<=0)duration=30;
+    var bufferTime=Number(config.bufferTime||0);
+    if(!Number.isFinite(bufferTime)||bufferTime<0)bufferTime=0;
+    var slotStep=duration+bufferTime;
     var found=false;
     windows.forEach(function(windowValue){
       var parts=String(windowValue).split('-');
       var start=toMinutes((parts[0]||'').trim());
       var end=parts.length>1?toMinutes((parts[1]||'').trim()):start;
       if(start===null||end===null)return;
-      for(var t=start;t+(parts.length>1?duration:0)<=end;t+=15){
+      for(var t=start;t+(parts.length>1?duration:0)<=end;t+=slotStep){
         var value=toTime(t);
         var button=document.createElement('button');
         button.type='button';
