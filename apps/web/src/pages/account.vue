@@ -335,8 +335,13 @@ const deleteLoading = ref(false);
 const deleteError = ref<string | null>(null);
 const supportedTimeZones = listSupportedTimeZones();
 const mailboxLoading = ref(false);
+const mailboxSaving = ref(false);
+const mailboxActivating = ref(false);
 const mailboxAvailable = ref(false);
 const mailbox = ref<MailboxRecord | null>(null);
+const mailboxAliasInput = ref("");
+const mailboxForwardingEnabled = ref(false);
+const mailboxForwardingEmail = ref("");
 const mailboxMessage = ref<string | null>(null);
 const mailboxError = ref<string | null>(null);
 const pluginsLoading = ref(false);
@@ -453,19 +458,53 @@ const mailboxStatusLabel = computed(() => {
 
 const mailboxStatusHint = computed(() => {
   if (!mailbox.value) {
-    return "Set up domain routing for inbound mail.";
+    return "Create and activate a Core mailbox for inbound mail.";
   }
 
   if (mailbox.value.status === "active") {
-    return "Domain routing handles inbound mail.";
+    return "Ready for Cloudflare Email Routing.";
   }
 
   if (mailbox.value.status === "paused") {
     return "Mailbox paused.";
   }
 
-  return "Domain routing setup required.";
+  return "Activate the Core mailbox to receive routed mail.";
 });
+
+const mailboxAliasNormalized = computed(() =>
+  normalizeMailboxAlias(mailboxAliasInput.value),
+);
+
+const mailboxConfiguredSenderAddress = computed(() =>
+  activeEmailProviderInput.value.fromAddress.trim().toLowerCase(),
+);
+
+const mailboxRoutedAddress = computed(() => {
+  const localPart = mailboxAliasNormalized.value || mailbox.value?.aliasLocalPart || "";
+  const configuredSender = mailboxConfiguredSenderAddress.value;
+  const configuredDomain = configuredSender.split("@")[1] || "";
+  if (localPart && configuredDomain) return `${localPart}@${configuredDomain}`;
+  return "";
+});
+
+const mailboxSaveDisabled = computed(
+  () =>
+    mailboxSaving.value ||
+    mailboxLoading.value ||
+    !mailboxAliasNormalized.value ||
+    (mailboxForwardingEnabled.value &&
+      !isValidMailboxEmail(mailboxForwardingEmail.value)),
+);
+
+const mailboxActivateDisabled = computed(
+  () =>
+    mailboxActivating.value ||
+    mailboxSaving.value ||
+    mailboxLoading.value ||
+    !mailbox.value ||
+    mailbox.value.status === "active",
+);
 
 const telegramStatusLabel = computed(() => {
   const panel = telegramPanelRef.value;
@@ -822,6 +861,23 @@ function chooseThemePreference(nextTheme: ThemePreference) {
   setThemePreference(nextTheme);
 }
 
+function normalizeMailboxAlias(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "")
+    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+}
+
+function isValidMailboxEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim().toLowerCase());
+}
+
+function inferMailboxAliasFromAddress(value: string) {
+  const localPart = value.trim().toLowerCase().split("@")[0] || "";
+  return normalizeMailboxAlias(localPart);
+}
+
 function openAccountSection(section: AccountSection) {
   openSection.value[section] = true;
 }
@@ -907,6 +963,15 @@ async function saveSettings() {
 function syncMailboxInputs(response: MailboxResponse) {
   mailboxAvailable.value = response.available;
   mailbox.value = response.mailbox;
+  mailboxAliasInput.value =
+    response.mailbox?.aliasLocalPart ||
+    mailboxAliasInput.value ||
+    response.suggestedAliasLocalPart ||
+    inferMailboxAliasFromAddress(mailboxConfiguredSenderAddress.value) ||
+    "test";
+  mailboxForwardingEnabled.value = Boolean(response.mailbox?.forwardingEnabled);
+  mailboxForwardingEmail.value =
+    response.mailbox?.forwardingEmail || auth.user?.email || "";
 }
 
 async function loadMailbox() {
@@ -920,6 +985,61 @@ async function loadMailbox() {
     mailboxError.value = e.message || "Failed to load mailbox";
   } finally {
     mailboxLoading.value = false;
+  }
+}
+
+async function saveMailboxSettings() {
+  if (mailboxSaveDisabled.value) return;
+
+  mailboxSaving.value = true;
+  mailboxMessage.value = null;
+  mailboxError.value = null;
+
+  try {
+    const response = await api.put<{
+      mailbox: MailboxRecord | null;
+      sources: MailboxSource[];
+    }>("/mailbox", {
+      aliasLocalPart: mailboxAliasNormalized.value,
+      forwardingEnabled: mailboxForwardingEnabled.value,
+      forwardingEmail: mailboxForwardingEnabled.value
+        ? mailboxForwardingEmail.value.trim()
+        : "",
+    });
+    mailbox.value = response.mailbox;
+    mailboxAliasInput.value =
+      response.mailbox?.aliasLocalPart || mailboxAliasNormalized.value;
+    mailboxForwardingEnabled.value = Boolean(response.mailbox?.forwardingEnabled);
+    mailboxForwardingEmail.value =
+      response.mailbox?.forwardingEmail || mailboxForwardingEmail.value;
+    mailboxMessage.value =
+      response.mailbox?.status === "active"
+        ? "Core mailbox settings saved."
+        : "Core mailbox saved. Activate it before testing inbound mail.";
+  } catch (e: any) {
+    mailboxError.value = e.message || "Failed to save mailbox settings";
+  } finally {
+    mailboxSaving.value = false;
+  }
+}
+
+async function activateMailbox() {
+  if (mailboxActivateDisabled.value) return;
+
+  mailboxActivating.value = true;
+  mailboxMessage.value = null;
+  mailboxError.value = null;
+
+  try {
+    const response = await api.post<{ mailbox: MailboxRecord | null }>(
+      "/mailbox/activate",
+    );
+    mailbox.value = response.mailbox;
+    mailboxMessage.value = "Core mailbox activated. Send a fresh inbound test.";
+  } catch (e: any) {
+    mailboxError.value = e.message || "Failed to activate mailbox";
+  } finally {
+    mailboxActivating.value = false;
   }
 }
 
@@ -1193,6 +1313,15 @@ function syncEmailProviderSettings(response: EmailProviderSettingsResponse) {
       ...provider.config,
       apiToken: "",
     };
+  }
+
+  if (!mailbox.value) {
+    const inferredAlias = inferMailboxAliasFromAddress(
+      emailProviderInputs.value[selectedEmailProviderId.value].fromAddress,
+    );
+    if (inferredAlias) {
+      mailboxAliasInput.value = inferredAlias;
+    }
   }
 
   emailProviderTestTo.value = auth.user?.email || "";
@@ -1607,23 +1736,90 @@ onMounted(async () => {
 
             <template v-else-if="mailboxAvailable">
               <p class="hint">
-                Use the custom domain section to connect your domain, then
-                enable Cloudflare Email Routing for the mailbox addresses you
-                want ME3 to receive.
+                Use Cloudflare Email Routing with a routing rule that sends the
+                address to this Worker. Destination address verification is only
+                needed when Cloudflare forwards to another inbox.
               </p>
 
               <div class="mailbox-panel compact-mailbox-panel">
                 <div class="mailbox-panel-head">
-                  <h3>Mailbox address</h3>
-                  <span class="status-badge compact setup_required">
-                    Domain routing required
+                  <h3>Receive email at</h3>
+                  <span
+                    class="status-badge compact"
+                    :class="mailbox?.status || 'pending_setup'"
+                  >
+                    {{ mailboxStatusLabel }}
                   </span>
                 </div>
-                <p class="field-hint">
-                  Inbound mail uses Cloudflare Email Routing for an address on
-                  your domain, routed to this Worker. The domain itself is
-                  managed from Account.
-                </p>
+                <div class="mailbox-config-grid">
+                  <label class="field">
+                    <span>Mailbox local part</span>
+                    <input
+                      v-model="mailboxAliasInput"
+                      class="input"
+                      type="text"
+                      placeholder="test"
+                      spellcheck="false"
+                    />
+                    <p class="field-hint">
+                      Use <strong>{{ mailboxAliasNormalized || "test" }}</strong>
+                      for the Core mailbox, then route
+                      <strong>{{
+                        mailboxRoutedAddress || "test@yourdomain.com"
+                      }}</strong>
+                      to the Worker in Cloudflare.
+                    </p>
+                  </label>
+
+                  <label class="field">
+                    <span>Forward copy to</span>
+                    <input
+                      v-model="mailboxForwardingEmail"
+                      class="input"
+                      type="email"
+                      :disabled="!mailboxForwardingEnabled"
+                      placeholder="you@example.com"
+                    />
+                    <label class="checkbox-row mailbox-forwarding-toggle">
+                      <input v-model="mailboxForwardingEnabled" type="checkbox" />
+                      <span>Also forward inbound mail to this inbox</span>
+                    </label>
+                  </label>
+                </div>
+
+                <div class="mailbox-route-summary">
+                  <span>Cloudflare route</span>
+                  <strong>{{
+                    mailboxRoutedAddress || "test@yourdomain.com"
+                  }}</strong>
+                  <span>Action</span>
+                  <strong>Send to Worker</strong>
+                </div>
+
+                <div class="button-row">
+                  <button
+                    class="button primary"
+                    type="button"
+                    :disabled="mailboxSaveDisabled"
+                    @click="saveMailboxSettings"
+                  >
+                    {{ mailboxSaving ? "Saving..." : "Save mailbox" }}
+                  </button>
+                  <button
+                    class="button secondary"
+                    type="button"
+                    :disabled="mailboxActivateDisabled"
+                    @click="activateMailbox"
+                  >
+                    {{
+                      mailboxActivating
+                        ? "Activating..."
+                        : mailbox?.status === "active"
+                          ? "Mailbox active"
+                          : "Activate mailbox"
+                    }}
+                  </button>
+                </div>
               </div>
 
               <div class="mailbox-panel outbound-sender-panel">
@@ -2896,6 +3092,51 @@ h1 {
   gap: 12px;
 }
 
+.mailbox-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.mailbox-route-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 12px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.mailbox-route-summary span {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mailbox-route-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ui-text, var(--color-text));
+  font-size: 13px;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ui-text, var(--color-text));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mailbox-forwarding-toggle {
+  margin-top: 10px;
+}
+
 .connection-row {
   display: flex;
   align-items: center;
@@ -3554,6 +3795,7 @@ h1 {
 
   .plugin-meta-grid,
   .plugin-detail-grid,
+  .mailbox-config-grid,
   .email-provider-fields,
   .payment-summary-row {
     grid-template-columns: 1fr;
