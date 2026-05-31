@@ -315,7 +315,8 @@ type AccountSection =
   | "mailbox"
   | "ai"
   | "payments"
-  | "plugins";
+  | "plugins"
+  | "telegram";
 
 const auth = useAuthStore();
 const sites = useSitesStore();
@@ -393,6 +394,7 @@ const openSection = ref({
   ai: false,
   payments: false,
   plugins: false,
+  telegram: false,
 });
 const showAiModelSection = false;
 
@@ -1671,7 +1673,7 @@ onMounted(async () => {
     appConnectionsError.value = "ME3.app connection failed. Please try again.";
   }
   if (route.query.section === "telegram") {
-    openSection.value.advanced = true;
+    openSection.value.telegram = true;
   }
   if (route.query.section === "mailbox") {
     openSection.value.mailbox = true;
@@ -2451,6 +2453,47 @@ onMounted(async () => {
           </div>
         </section>
 
+        <section class="card accordion-card telegram-section">
+          <button
+            id="account-trigger-telegram"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.telegram"
+            aria-controls="account-panel-telegram"
+            @click="openSection.telegram = !openSection.telegram"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Telegram</h2>
+              <span
+                v-if="telegramPanelRef?.available"
+                class="status-badge"
+                :class="telegramStatusClass"
+              >
+                {{ telegramStatusLabel }}
+              </span>
+              <span class="accordion-header-hint">
+                Chat with your ME3 agent in Telegram
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-telegram"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-telegram"
+            :hidden="!openSection.telegram"
+          >
+            <TelegramConnectPanel
+              ref="telegramPanelRef"
+              variant="default"
+              :auto-prepare-when-not-connected="
+                route.query.section === 'telegram'
+              "
+            />
+          </div>
+        </section>
+
         <section class="card accordion-card advanced-section">
           <button
             id="account-trigger-advanced"
@@ -2463,7 +2506,7 @@ onMounted(async () => {
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Advanced</h2>
               <span class="accordion-header-hint">
-                App connections, timezone, custom domain, and Telegram
+                App connections, timezone, and custom domain
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -2642,26 +2685,6 @@ onMounted(async () => {
                 </p>
               </section>
 
-              <section class="advanced-subsection">
-                <div class="advanced-subsection__header">
-                  <h3>Telegram settings</h3>
-                  <span
-                    v-if="telegramPanelRef?.available"
-                    class="status-badge compact"
-                    :class="telegramStatusClass"
-                  >
-                    {{ telegramStatusLabel }}
-                  </span>
-                </div>
-
-                <TelegramConnectPanel
-                  ref="telegramPanelRef"
-                  variant="default"
-                  :auto-prepare-when-not-connected="
-                    route.query.section === 'telegram'
-                  "
-                />
-              </section>
             </div>
           </div>
         </section>

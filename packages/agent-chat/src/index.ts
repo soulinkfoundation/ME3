@@ -2272,16 +2272,21 @@ async function runOpenAi(
   });
 
   const payload = (await response.json().catch(() => null)) as
-    | { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }
+    | {
+        choices?: Array<{ message?: { content?: unknown; refusal?: unknown } }>;
+        error?: { message?: string };
+      }
     | null;
 
   if (!response.ok) {
     throw new Error(payload?.error?.message || `OpenAI request failed (${response.status})`);
   }
 
+  const message = payload?.choices?.[0]?.message;
   return (
-    payload?.choices?.[0]?.message?.content?.trim() ||
-    "I couldn't turn that into a useful reply just yet."
+    extractModelText(message?.content) ||
+    extractModelText(message?.refusal) ||
+    emptyModelReply(route)
   );
 }
 
@@ -2322,12 +2327,7 @@ async function runAnthropic(
     throw new Error(payload?.error?.message || `Anthropic request failed (${response.status})`);
   }
 
-  return (
-    payload?.content
-      ?.map((part) => (part.type === "text" ? part.text || "" : ""))
-      .join("")
-      .trim() || "I couldn't turn that into a useful reply just yet."
-  );
+  return extractModelText(payload?.content) || emptyModelReply(route);
 }
 
 async function runWorkersAi(
@@ -2340,12 +2340,32 @@ async function runWorkersAi(
     | string
     | null;
 
-  if (typeof result === "string") return result.trim();
+  if (typeof result === "string") return result.trim() || emptyModelReply(route);
   return (
-    result?.response?.trim() ||
-    result?.result?.response?.trim() ||
-    "I couldn't turn that into a useful reply just yet."
+    extractModelText(result?.response) ||
+    extractModelText(result?.result?.response) ||
+    emptyModelReply(route)
   );
+}
+
+function extractModelText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    return value.map((part) => extractModelText(part)).join("").trim();
+  }
+  if (!value || typeof value !== "object") return "";
+
+  const record = value as Record<string, unknown>;
+  return (
+    extractModelText(record.text) ||
+    extractModelText(record.output_text) ||
+    extractModelText(record.content) ||
+    extractModelText(record.response)
+  );
+}
+
+function emptyModelReply(route: AiRoute): string {
+  return `I reached ${route.providerId} (${route.model}), but it returned an empty reply. Check Account > AI model or try another model.`;
 }
 
 async function resolveAiRoute(

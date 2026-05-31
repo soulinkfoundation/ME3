@@ -103,11 +103,11 @@ const statusHint = computed(() => {
   }
 
   if (!configured.value) {
-    return "Finish the deployment setup below, then refresh this panel.";
+    return "Paste your BotFather details to connect Telegram.";
   }
 
   if (!connection.value) {
-    return "Generate a setup link, open Telegram, and tap Start to attach the chat to your ME3 account.";
+    return "Open the setup link, then tap Start in Telegram.";
   }
 
   if (connection.value.status === "active") {
@@ -128,6 +128,11 @@ const statusHint = computed(() => {
 
   return "";
 });
+
+const isConnected = computed(() => connection.value?.status === "active");
+const showSetupForm = computed(
+  () => props.variant === "default" && !isConnected.value,
+);
 
 const refreshButtonTooltip = computed(() => {
   if (!configured.value) {
@@ -156,23 +161,6 @@ const connectionDetails = computed(() => {
     if (value) details.push({ label, value });
   }
   return details;
-});
-
-const missingSetupItems = computed(() => {
-  const items: string[] = [];
-  if (!botUsername.value) items.push("Bot username");
-  if (!tokenConfigured.value) items.push("Bot token secret");
-  if (!webhookSecretConfigured.value) items.push("Webhook secret");
-  return items;
-});
-
-const telegramSettingsSaveDisabled = computed(() => {
-  return (
-    settingsSaving.value ||
-    !botUsernameInput.value.trim() ||
-    (!tokenConfigured.value && !botTokenInput.value.trim()) ||
-    (!webhookSecretConfigured.value && !webhookSecretInput.value.trim())
-  );
 });
 
 const telegramWebhookSyncDisabled = computed(
@@ -253,7 +241,7 @@ async function loadTelegram() {
 }
 
 async function saveTelegramSettings() {
-  if (telegramSettingsSaveDisabled.value) return;
+  if (telegramWebhookSyncDisabled.value) return;
   settingsSaving.value = true;
   error.value = null;
   notice.value = null;
@@ -291,7 +279,19 @@ async function saveAndSyncTelegramWebhook() {
       TelegramStatusResponse & { ok: boolean; webhookUrl: string }
     >("/telegram/webhook/sync", {});
     syncStatus(response);
-    notice.value = "Telegram webhook set.";
+    if (
+      available.value &&
+      configured.value &&
+      connection.value?.status !== "active"
+    ) {
+      await setupTelegram();
+    }
+    if (!error.value) {
+      notice.value =
+        connection.value?.status === "active"
+          ? "Telegram webhook set."
+          : "Telegram webhook set. Open the setup link to finish.";
+    }
   } catch (err: unknown) {
     error.value =
       err instanceof Error ? err.message : "Failed to set Telegram webhook";
@@ -433,11 +433,11 @@ defineExpose({
         {{ statusHint }}
       </p>
 
-      <div v-if="variant === 'default'" class="telegram-operator-note">
-        <strong>Standalone Core installs need their own Telegram bot.</strong>
+      <div v-if="showSetupForm" class="telegram-operator-note">
+        <h3>Bot setup</h3>
         <p>
-          Create one with @BotFather, paste the values here, then ME3 will set
-          the Telegram webhook for this install.
+          Paste the username and token from @BotFather. ME3 will save them and
+          set the webhook for this install.
         </p>
         <form class="telegram-settings-form" @submit.prevent="saveAndSyncTelegramWebhook">
           <label class="telegram-field">
@@ -480,53 +480,19 @@ defineExpose({
           </label>
           <div class="telegram-settings-actions">
             <Button
-              variant="secondary"
-              size="small"
-              type="button"
-              :disabled="telegramSettingsSaveDisabled"
-              @click="saveTelegramSettings"
-            >
-              {{ settingsSaving ? "Saving..." : "Save" }}
-            </Button>
-            <Button
               variant="primary"
               size="small"
               type="submit"
               :disabled="telegramWebhookSyncDisabled"
             >
-              {{ webhookSyncing ? "Setting webhook..." : "Save & set webhook" }}
+              {{
+                webhookSyncing || settingsSaving
+                  ? "Connecting..."
+                  : "Save & connect"
+              }}
             </Button>
           </div>
         </form>
-        <dl class="telegram-setup-checklist">
-          <div>
-            <dt>Required</dt>
-            <dd>
-              <template v-if="missingSetupItems.length">
-                {{ missingSetupItems.join(", ") }}
-              </template>
-              <template v-else>Ready</template>
-            </dd>
-          </div>
-          <div v-if="webhookUrl">
-            <dt>Webhook</dt>
-            <dd>{{ webhookUrl }}</dd>
-          </div>
-          <div v-if="botTokenHint">
-            <dt>Bot token</dt>
-            <dd>{{ botTokenSource === "environment" ? "Wrangler secret" : botTokenHint }}</dd>
-          </div>
-          <div v-if="webhookSecretHint">
-            <dt>Secret</dt>
-            <dd>
-              {{
-                webhookSecretSource === "environment"
-                  ? "Wrangler secret"
-                  : webhookSecretHint
-              }}
-            </dd>
-          </div>
-        </dl>
       </div>
 
       <div v-if="configured" class="telegram-qr-section">
@@ -545,7 +511,7 @@ defineExpose({
           </div>
         </dl>
 
-        <div class="telegram-qr-section__body">
+        <div v-if="startUrl && !isConnected" class="telegram-qr-section__body">
           <template v-if="startUrl">
             <p class="hint">
               Scan this QR code with your phone to connect via Telegram.
@@ -668,9 +634,9 @@ defineExpose({
   background: var(--color-surface-muted, rgba(0, 0, 0, 0.03));
 }
 
-.telegram-operator-note strong {
-  display: block;
-  font-size: 14px;
+.telegram-operator-note h3 {
+  margin: 0;
+  font-size: 16px;
 }
 
 .telegram-operator-note p {
@@ -725,31 +691,6 @@ defineExpose({
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
-}
-
-.telegram-setup-checklist {
-  display: grid;
-  gap: 8px;
-  margin: 12px 0 0;
-  padding: 0;
-  font-size: 13px;
-}
-
-.telegram-setup-checklist div {
-  display: grid;
-  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
-  gap: 12px;
-}
-
-.telegram-setup-checklist dt {
-  color: var(--color-text-muted);
-}
-
-.telegram-setup-checklist dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-weight: 600;
 }
 
 .telegram-qr-section {
