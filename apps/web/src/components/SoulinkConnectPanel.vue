@@ -56,6 +56,12 @@ const error = ref<string | null>(null);
 const notice = ref<string | null>(null);
 
 const isConnected = computed(() => connection.value?.status === "active");
+const isRuntimeCallbackLocal = computed(() =>
+  isLocalRuntimeCallback(runtimeCallbackUrl.value),
+);
+const canConnect = computed(
+  () => available.value && configured.value && !isRuntimeCallbackLocal.value,
+);
 
 const statusHint = computed(() => {
   if (!available.value) return "Soulink assistant chat is not available here yet.";
@@ -63,6 +69,9 @@ const statusHint = computed(() => {
     return "Soulink assistant chat is not configured for this Core install yet.";
   }
   if (isConnected.value) return "Soulink is connected as your primary assistant chat.";
+  if (isRuntimeCallbackLocal.value) {
+    return "Use your live ME3 Core URL to connect Soulink.";
+  }
   if (connection.value?.status === "disconnected") {
     return "Soulink assistant chat is disconnected.";
   }
@@ -71,32 +80,34 @@ const statusHint = computed(() => {
 
 const connectionDetails = computed<Array<[string, string]>>(() => {
   const current = connection.value;
-  if (!current) {
+  if (!current && !isRuntimeCallbackLocal.value) {
     return [
-      ["Runtime callback", runtimeCallbackUrl.value],
       ["Soulink origin", apiOrigin.value],
     ].filter((entry): entry is [string, string] => Boolean(entry[1]));
   }
+  if (isConnected.value) return [];
 
-  return [
-    ["Status", current.status],
-    ["Stream channel", current.streamChannelId],
-    ["Owner node", current.ownerNodeId],
-    ["Assistant node", current.assistantNodeId],
-    ["Connected", formatDateTime(current.connectedAt)],
-    ["Last inbound", formatDateTime(current.lastInboundAt)],
-    ["Last outbound", formatDateTime(current.lastOutboundAt)],
-  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+  return [["Status", current?.status || "not connected"]].filter(
+    (entry): entry is [string, string] => Boolean(entry[1]),
+  );
 });
 
-function formatDateTime(value: string | null) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+function isLocalRuntimeCallback(value: string) {
+  if (!value) return false;
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    if (host === "localhost" || host.endsWith(".localhost")) return true;
+    if (host === "127.0.0.1" || host === "::1" || host === "0.0.0.0") {
+      return true;
+    }
+    if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.")) {
+      return true;
+    }
+    const private172 = host.match(/^172\.(\d+)\./);
+    return Boolean(private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31);
+  } catch {
+    return false;
+  }
 }
 
 function syncStatus(response: SoulinkStatusResponse) {
@@ -123,7 +134,7 @@ async function loadSoulink() {
 }
 
 async function setupSoulink() {
-  if (setupLoading.value || !available.value || !configured.value) return;
+  if (setupLoading.value || !canConnect.value) return;
   setupLoading.value = true;
   error.value = null;
   notice.value = null;
@@ -134,7 +145,6 @@ async function setupSoulink() {
       {},
     );
     syncStatus(response);
-    notice.value = "Soulink assistant chat connected.";
   } catch (err: unknown) {
     error.value =
       err instanceof Error ? err.message : "Failed to connect Soulink";
@@ -173,8 +183,7 @@ onMounted(async () => {
   await loadSoulink();
   if (
     props.autoPrepareWhenNotConnected &&
-    available.value &&
-    configured.value &&
+    canConnect.value &&
     connection.value?.status !== "active"
   ) {
     await setupSoulink();
@@ -229,7 +238,7 @@ defineExpose({
           variant="primary"
           size="small"
           type="button"
-          :disabled="setupLoading || !configured"
+          :disabled="setupLoading || !canConnect"
           @click="setupSoulink"
         >
           <template #icon>
