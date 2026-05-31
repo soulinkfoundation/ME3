@@ -16,7 +16,14 @@ type AgentSandboxResponse = {
   specialist: string | null;
   replyText: string | null;
   model: string | null;
-  source: "openai" | "anthropic" | "workers-ai" | "workers-ai-gateway" | "fallback" | "tool" | null;
+  source:
+    | "openai"
+    | "anthropic"
+    | "workers-ai"
+    | "workers-ai-gateway"
+    | "fallback"
+    | "tool"
+    | null;
   fallbackReason?: string | null;
   debugError?: string | null;
   contextPacketId?: string | null;
@@ -221,11 +228,7 @@ onMounted(async () => {
         @click="closeChat"
       />
 
-      <section
-        v-if="chatOpen"
-        class="agent-panel"
-        aria-label="ME3 assistant"
-      >
+      <section v-if="chatOpen" class="agent-panel" aria-label="ME3 assistant">
         <header class="agent-header">
           <button
             type="button"
@@ -350,9 +353,6 @@ onMounted(async () => {
   border-radius: 999px;
   background: #fff;
   color: var(--color-text);
-  box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.08),
-    0 10px 28px rgba(0, 0, 0, 0.1);
   cursor: pointer;
   transition:
     transform 0.2s ease,

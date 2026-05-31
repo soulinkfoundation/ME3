@@ -50,8 +50,15 @@ results, drafts, approvals, setup, and history.
 | Mission Control | Good base workspace direction for results, approvals, memory, activity, projects, and run records. | Result surfaces and project-level job activity are still incomplete. | `me3-q6s.3`, `me3-wsn.14` |
 | Safety and audit | Assistant Jobs safety policy exists and should become the shared harness policy. | Enforcement is not yet uniformly shared by chat actions, jobs, plugins, events, and retries. | `me3-q6s.2` |
 | Scheduler and reliability | Heartbeat/reconciliation design exists. | Due jobs, stuck runs, missed events, provider-watch renewal, and DLQ surfacing are not implemented. | `me3-wsn.11`, `me3-wsn.22` |
-| Delivery channels | Soulink assistant chat spike exists; Assistant Jobs notification action is not implemented. | Daily Briefing cannot yet prove owner-message delivery through Soulink. | `me3-wsn.13`, Soulink follow-up |
+| Delivery channels | Soulink assistant chat can provision a stable Stream chat, send a welcome message, dispatch owner messages to ME3 Core, and post assistant replies. Assistant Jobs notification action is not implemented. | The chat transport is usable, but reply quality now depends on the agent harness and model/provider execution path. Daily Briefing cannot yet prove owner-message delivery through Soulink. | `me3-wsn.13`, agent harness follow-up |
 | Plugin expansion | Plugin manifests expose routes, UI slots, permissions, and `agentTools`. | Plugins need one capability contract plus optional skills/resources/recipes. | `me3-3ul`, `me3-q6s.2` |
+
+Soulink should now be treated as the primary portable assistant chat transport for harness work.
+The current milestone proves the channel plumbing: ME3 Core activation provisions one stable
+assistant Stream chat in Soulink, Soulink relays owner messages to
+`/api/agent/channels/soulink/dispatch`, and replies are posted back as the ME3 Assistant. The
+remaining reply failures seen in testing are harness/model-provider issues, not Soulink transport
+blockers.
 
 ## Roadmap
 
