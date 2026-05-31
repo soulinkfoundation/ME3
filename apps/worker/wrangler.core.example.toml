@@ -50,11 +50,13 @@ name = "EMAIL"
 ENVIRONMENT = "local"
 CORE_WEB_ORIGIN = "http://localhost:4000"
 CORE_API_ORIGIN = "http://localhost:8787"
-# Production two-host setup:
+# Production custom-domain setup. Core infers me3/api/www hosts from this root:
 # ME3_CUSTOM_DOMAIN = "yourdomain.com"
-# ME3_SITE_HOST = "yourdomain.com"
-# ME3_ADMIN_HOST = "me3.yourdomain.com"
-# CORE_WEB_ORIGIN = "https://me3.yourdomain.com"
-# CORE_API_ORIGIN = "https://me3.yourdomain.com"
+# Optional advanced overrides:
+# ME3_SITE_HOST = "custom-public-host.com"
+# ME3_ADMIN_HOST = "admin.custom-public-host.com"
+# ME3_API_HOST = "api.custom-public-host.com"
+# CORE_WEB_ORIGIN = "https://admin.custom-public-host.com"
+# CORE_API_ORIGIN = "https://api.custom-public-host.com"
 # ME3_SITE_USERNAME = "owner"
 ME3_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"

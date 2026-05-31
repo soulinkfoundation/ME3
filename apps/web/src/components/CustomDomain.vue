@@ -178,14 +178,10 @@ const adminHost = computed(() => {
 const setupDomain = computed(() => domainStatus.value?.domain || domainPreview.value);
 
 const wranglerSnippet = computed(() => {
-  if (!setupDomain.value || !rootDomain.value || !adminHost.value) return "";
+  if (!rootDomain.value) return "";
   return [
     `[vars]`,
     `ME3_CUSTOM_DOMAIN = "${rootDomain.value}"`,
-    `ME3_SITE_HOST = "${setupDomain.value}"`,
-    `ME3_ADMIN_HOST = "${adminHost.value}"`,
-    `CORE_WEB_ORIGIN = "https://${adminHost.value}"`,
-    `CORE_API_ORIGIN = "https://${adminHost.value}"`,
   ].join("\n");
 });
 
