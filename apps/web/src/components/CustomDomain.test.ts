@@ -76,4 +76,24 @@ describe("CustomDomain", () => {
     expect(sitesStore.connectDomain).toHaveBeenCalledWith("testuser", "example.com");
     expect(wrapper.emitted("domainStatusChanged")).toHaveLength(1);
   });
+
+  it("prefills the domain input from an onboarding suggestion", async () => {
+    const wrapper = mount(CustomDomain, {
+      props: {
+        username: "testuser",
+        showSettingsLink: false,
+        profilePublished: true,
+        initialDomain: "kieranbutler.com",
+      },
+      global: {
+        stubs: {
+          RouterLink: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    const input = wrapper.get("input.domain-input").element as HTMLInputElement;
+    expect(input.value).toBe("kieranbutler.com");
+  });
 });

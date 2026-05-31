@@ -102,7 +102,10 @@ test.describe("/start onboarding wizard", () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ ok: true, publishedAt: new Date().toISOString() }),
+        body: JSON.stringify({
+          ok: true,
+          publishedAt: new Date().toISOString(),
+        }),
       });
     });
 
@@ -214,11 +217,19 @@ test.describe("/start onboarding wizard", () => {
     });
   });
 
-  test("redirects authenticated first-time users to /start", async ({ page }) => {
+  test("redirects authenticated first-time users to /start", async ({
+    page,
+  }) => {
     await page.goto("/");
 
     await expect(page).toHaveURL(/\/start$/);
-    await expect(page.getByRole("heading", { name: "Create your ME3 profile" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "Let's get started with ME3",
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Exit" })).toHaveCount(0);
+    await expect(page.locator(".step-indicator")).toHaveCount(0);
   });
 
   test("validates profile step before allowing publish", async ({ page }) => {
@@ -228,7 +239,9 @@ test.describe("/start onboarding wizard", () => {
     await page.locator("#start-name").fill("A");
     await page.locator("#start-handle").fill("ab");
     await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
-    await expect(page.getByText("Handle must be at least 3 characters.")).toBeVisible();
+    await expect(
+      page.getByText("Handle must be at least 3 characters."),
+    ).toBeVisible();
   });
 
   test("publishes minimal profile and allows optional steps to be skipped", async ({
@@ -240,7 +253,10 @@ test.describe("/start onboarding wizard", () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ ok: true, publishedAt: new Date().toISOString() }),
+        body: JSON.stringify({
+          ok: true,
+          publishedAt: new Date().toISOString(),
+        }),
       });
     });
 
@@ -250,13 +266,18 @@ test.describe("/start onboarding wizard", () => {
     await expect(page.getByText("starter is available.")).toBeVisible();
 
     await page.getByRole("button", { name: "Continue" }).click();
-    await expect(page.getByRole("heading", { name: "Set up email" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Set up email" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Skip for now" })).toBeVisible();
     expect(uploadBody).toContain("me.json");
     expect(uploadBody).toContain("Starter User");
     expect(uploadBody).toContain("starter");
 
     await page.getByRole("button", { name: "Skip for now" }).click();
-    await expect(page.getByRole("heading", { name: "Connect Telegram" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Connect Telegram" }),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Finish" }).click();
     await expect(page).toHaveURL(/\/sites\/starter$/);
@@ -315,13 +336,22 @@ test.describe("/start onboarding wizard", () => {
     await expect(page.getByText("starter is available.")).toBeVisible();
     await page.getByRole("button", { name: "Continue" }).click();
 
-    await page.locator("#start-domain").fill("example.com");
-    await page.locator("#start-email").fill("starter@example.com");
+    await expect(
+      page.getByText(
+        "This address receives routed mail and sends with Cloudflare by default.",
+      ),
+    ).toHaveCount(0);
+    await page.locator("#start-domain").fill("kieranbutler.com");
+    await expect(page.locator("#start-domain")).toHaveValue("kieranbutler.com");
+    await expect(page.locator("#start-email")).toHaveValue("starter@kieranbutler.com");
     await page.getByRole("button", { name: "Save email" }).click();
 
-    await expect(page.getByRole("heading", { name: "Connect Telegram" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Connect Telegram" }),
+    ).toBeVisible();
     expect(mailboxPayload).toContain('"aliasLocalPart":"starter"');
     expect(providerPayload).toContain('"activeProviderId":"cloudflare-email"');
-    expect(providerPayload).toContain('"fromAddress":"starter@example.com"');
+    expect(providerPayload).toContain('"fromAddress":"starter@kieranbutler.com"');
+    expect(providerPayload).toContain('"sendingDomain":"kieranbutler.com"');
   });
 });

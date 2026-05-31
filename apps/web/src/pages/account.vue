@@ -312,6 +312,7 @@ type AssistantSetupItem = {
 
 type AccountSection =
   | "advanced"
+  | "domain"
   | "mailbox"
   | "ai"
   | "payments"
@@ -390,6 +391,7 @@ const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
 
 const openSection = ref({
   advanced: false,
+  domain: false,
   mailbox: false,
   ai: false,
   payments: false,
@@ -533,6 +535,10 @@ const mailboxRoutedAddress = computed(() => {
 
 const emailRouteAddress = computed(
   () => emailAddressNormalized.value || mailboxRoutedAddress.value || "name@your-domain.com",
+);
+
+const customDomainSuggestedDomain = computed(
+  () => customDomainSite.value?.custom_domain || emailAddressDomain.value || "",
 );
 
 const selectedProviderNeedsSecret = computed(() => {
@@ -1679,7 +1685,7 @@ onMounted(async () => {
     openSection.value.mailbox = true;
   }
   if (route.query.section === "domain" || route.query.section === "custom-domain") {
-    openSection.value.advanced = true;
+    openSection.value.domain = true;
   }
   if (route.query.section === "plugins") {
     openSection.value.plugins = true;
@@ -2494,6 +2500,59 @@ onMounted(async () => {
           </div>
         </section>
 
+        <section class="card accordion-card domain-section">
+          <button
+            id="account-trigger-domain"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.domain"
+            aria-controls="account-panel-domain"
+            @click="openSection.domain = !openSection.domain"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Custom domain</h2>
+              <span class="status-badge compact" :class="customDomainStatusClass">
+                {{ customDomainStatusLabel }}
+              </span>
+              <span class="accordion-header-hint">
+                Public profile domain and Cloudflare custom-domain setup
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-domain"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-domain"
+            :hidden="!openSection.domain"
+          >
+            <div class="domain-settings">
+              <p class="hint">
+                Your profile works on the Worker URL first. When you are ready,
+                choose the domain people should use for the public site and this
+                panel will generate the Cloudflare custom-domain steps.
+              </p>
+
+              <div v-if="sites.loading" class="status-row">
+                Loading site domain settings...
+              </div>
+              <template v-else-if="customDomainSite">
+                <CustomDomain
+                  :username="customDomainSite.username"
+                  :show-settings-link="false"
+                  :profile-published="Boolean(customDomainSite.published_at)"
+                  :initial-domain="customDomainSuggestedDomain"
+                  @domain-status-changed="() => void sites.fetchSites()"
+                />
+              </template>
+              <p v-else class="error">
+                Create a ME3 site before connecting a custom domain.
+              </p>
+            </div>
+          </div>
+        </section>
+
         <section class="card accordion-card advanced-section">
           <button
             id="account-trigger-advanced"
@@ -2506,7 +2565,7 @@ onMounted(async () => {
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Advanced</h2>
               <span class="accordion-header-hint">
-                App connections, timezone, and custom domain
+                App connections and timezone
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -2652,37 +2711,6 @@ onMounted(async () => {
 
                 <p v-if="message" class="success">{{ message }}</p>
                 <p v-if="error" class="error">{{ error }}</p>
-              </section>
-
-              <section class="advanced-subsection">
-                <div class="advanced-subsection__header">
-                  <h3>Custom domain</h3>
-                  <span class="status-badge compact" :class="customDomainStatusClass">
-                    {{ customDomainStatusLabel }}
-                  </span>
-                </div>
-
-                <p class="hint">
-                  Your profile works on the Worker URL first. When you are
-                  ready, choose the domain people should use for the public
-                  site and this panel will generate the Cloudflare custom-domain
-                  steps.
-                </p>
-
-                <div v-if="sites.loading" class="status-row">
-                  Loading site domain settings...
-                </div>
-                <template v-else-if="customDomainSite">
-                  <CustomDomain
-                    :username="customDomainSite.username"
-                    :show-settings-link="false"
-                    :profile-published="Boolean(customDomainSite.published_at)"
-                    @domain-status-changed="() => void sites.fetchSites()"
-                  />
-                </template>
-                <p v-else class="error">
-                  Create a ME3 site before connecting a custom domain.
-                </p>
               </section>
 
             </div>
@@ -2911,12 +2939,16 @@ h1 {
   order: 3;
 }
 
-.advanced-section {
+.domain-section {
   order: 4;
 }
 
-.danger-section.advanced-section {
+.advanced-section {
   order: 5;
+}
+
+.danger-section.advanced-section {
+  order: 6;
 }
 
 .card {
@@ -3041,6 +3073,11 @@ h1 {
 .advanced-settings {
   display: grid;
   gap: 20px;
+}
+
+.domain-settings {
+  display: grid;
+  gap: 14px;
 }
 
 .advanced-subsection {

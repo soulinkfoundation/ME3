@@ -13,7 +13,10 @@ const agentChatInstalled = ref(false);
 const pluginChangedEvent = "me3:plugins-changed";
 
 const showAppShell = computed(
-  () => auth.isAuthenticated && route.meta.requiresAuth === true,
+  () =>
+    auth.isAuthenticated &&
+    route.meta.requiresAuth === true &&
+    route.meta.hideAppShell !== true,
 );
 
 const showAgentLauncher = computed(

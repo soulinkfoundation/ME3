@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useSitesStore, type DomainStatus } from "../stores/sites";
 const props = defineProps<{
   username: string;
   showSettingsLink?: boolean;
   profilePublished?: boolean;
+  initialDomain?: string;
 }>();
 
 const emit = defineEmits<{
@@ -20,6 +21,7 @@ const showDisconnectConfirm = ref(false);
 const domainLoading = ref(false);
 const domainError = ref("");
 const copySuccess = ref<string | null>(null);
+const appliedInitialDomain = ref(false);
 
 const isConnected = computed(
   () => domainStatus.value?.connected && domainStatus.value?.domain,
@@ -32,11 +34,29 @@ const workerFallbackUrl = computed(() => {
 });
 onMounted(async () => {
   await loadDomainStatus();
+  applyInitialDomain();
 });
 
 async function loadDomainStatus(emitChange = false) {
   domainStatus.value = await sites.getDomainStatus(props.username);
   if (emitChange) emit("domainStatusChanged");
+  applyInitialDomain();
+}
+
+function applyInitialDomain() {
+  const suggestion = normalizeDomainInput(props.initialDomain || "");
+  if (
+    appliedInitialDomain.value ||
+    isConnected.value ||
+    !suggestion ||
+    newDomain.value
+  ) {
+    return;
+  }
+
+  newDomain.value = suggestion;
+  showDomainInput.value = true;
+  appliedInitialDomain.value = true;
 }
 
 async function connectDomain() {
@@ -181,6 +201,13 @@ const setupHostnames = computed(() =>
   [setupDomain.value, adminHost.value].filter(
     (hostname, index, all) => hostname && all.indexOf(hostname) === index,
   ),
+);
+
+watch(
+  () => props.initialDomain,
+  () => {
+    applyInitialDomain();
+  },
 );
 </script>
 
