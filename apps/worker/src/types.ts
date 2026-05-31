@@ -36,6 +36,9 @@ export interface Env {
   TELEGRAM_BOT_USERNAME?: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  SOULINK_API_ORIGIN?: string;
+  SOULINK_CONNECTOR_TOKEN?: string;
+  SOULINK_DISPATCH_TOKEN?: string;
 
   EMAIL?: {
     send(message: Record<string, unknown>): Promise<{ messageId?: string | null }>;
@@ -332,9 +335,14 @@ export interface DbAiModelDefault {
 export interface DbAgentChannelConnection {
   id: string;
   user_id: string;
-  channel: "telegram" | "sandbox";
+  channel: "telegram" | "sandbox" | "soulink";
   status: "pending" | "active" | "disconnected";
   setup_token: string;
+  provider_connection_id: string | null;
+  provider_user_id: string | null;
+  provider_thread_id: string | null;
+  provider_username: string | null;
+  provider_metadata_json: string | null;
   telegram_user_id: string | null;
   telegram_chat_id: string | null;
   telegram_username: string | null;
@@ -351,10 +359,12 @@ export interface DbAgentChannelConnection {
 export interface DbAgentChannelEvent {
   id: string;
   connection_id: string;
-  channel: "telegram" | "sandbox";
+  channel: "telegram" | "sandbox" | "soulink";
   direction: "inbound" | "outbound" | "system";
   event_type: "start" | "message" | "link" | "send" | "error";
   status: "received" | "pending" | "sent" | "failed" | "linked" | "skipped";
+  provider_event_id: string | null;
+  provider_message_id: string | null;
   telegram_message_id: string | null;
   reply_to_message_id: string | null;
   telegram_user_id: string | null;

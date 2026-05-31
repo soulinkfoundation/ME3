@@ -126,7 +126,7 @@ Email ingress can be event-safe only after provider setup, webhook verification,
 
 ## Messaging Capabilities
 
-Messaging includes Telegram/current client messaging and later provider channels.
+Messaging includes Soulink/current client messaging and later provider channels. Telegram remains a legacy connector while Soulink becomes the primary portable assistant chat surface.
 
 | ID | Purpose | Side effect | Approval |
 | --- | --- | --- | --- |

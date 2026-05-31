@@ -31,9 +31,14 @@ type StoredMailboxMessage = DbMailboxMessage & {
 type StoredTelegramConnection = {
   id: string;
   user_id: string;
-  channel: "telegram" | "sandbox";
+  channel: "telegram" | "sandbox" | "soulink";
   status: "pending" | "active" | "disconnected";
   setup_token: string;
+  provider_connection_id: string | null;
+  provider_user_id: string | null;
+  provider_thread_id: string | null;
+  provider_username: string | null;
+  provider_metadata_json: string | null;
   telegram_user_id: string | null;
   telegram_chat_id: string | null;
   telegram_username: string | null;
@@ -49,10 +54,12 @@ type StoredTelegramConnection = {
 type StoredAgentChannelEvent = {
   id: string;
   connection_id: string;
-  channel: "telegram" | "sandbox";
+  channel: "telegram" | "sandbox" | "soulink";
   direction: "inbound" | "outbound" | "system";
   event_type: "start" | "message" | "link" | "send" | "error";
   status: "received" | "pending" | "sent" | "failed" | "linked" | "skipped";
+  provider_event_id: string | null;
+  provider_message_id: string | null;
   reply_to_message_id: string | null;
   text_body: string | null;
   raw_json: string | null;
@@ -178,6 +185,7 @@ function createEnv(): Env & {
   contacts: DbContact[];
   telegramConnection: StoredTelegramConnection | null;
   sandboxConnection: StoredTelegramConnection | null;
+  soulinkConnection: StoredTelegramConnection | null;
   agentEvents: StoredAgentChannelEvent[];
   socialAccounts: StoredSocialAccount[];
   socialProviderSettings: StoredSocialProviderSetting[];
@@ -203,6 +211,7 @@ function createEnv(): Env & {
     contacts: [] as DbContact[],
     telegramConnection: null as StoredTelegramConnection | null,
     sandboxConnection: null as StoredTelegramConnection | null,
+    soulinkConnection: null as StoredTelegramConnection | null,
     agentEvents: [] as StoredAgentChannelEvent[],
     socialAccounts: [] as StoredSocialAccount[],
     socialProviderSettings: [] as StoredSocialProviderSetting[],
@@ -942,6 +951,32 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("INSERT INTO agent_channel_connections")) {
+                if (sql.includes("'soulink'")) {
+                  state.soulinkConnection = {
+                    id: (state.soulinkConnection?.id || values[0]) as string,
+                    user_id: values[1] as string,
+                    channel: "soulink",
+                    status: "active",
+                    setup_token: values[2] as string,
+                    provider_connection_id: values[3] as string | null,
+                    provider_user_id: values[4] as string | null,
+                    provider_thread_id: values[5] as string | null,
+                    provider_username: values[6] as string | null,
+                    provider_metadata_json: values[7] as string | null,
+                    telegram_user_id: null,
+                    telegram_chat_id: null,
+                    telegram_username: null,
+                    telegram_first_name: null,
+                    telegram_last_name: null,
+                    connected_at: "2026-05-11T10:00:00Z",
+                    disconnected_at: null,
+                    last_inbound_at: null,
+                    last_outbound_at: null,
+                    created_at: "2026-05-11T10:00:00Z",
+                    updated_at: "2026-05-11T10:00:00Z",
+                  };
+                  return { success: true };
+                }
                 const connection: StoredTelegramConnection = {
                   id: sql.includes("'sandbox'")
                     ? (values[0] as string)
@@ -950,6 +985,11 @@ function createEnv(): Env & {
                   channel: sql.includes("'sandbox'") ? "sandbox" : "telegram",
                   status: sql.includes("'sandbox'") ? "active" : "pending",
                   setup_token: values[2] as string,
+                  provider_connection_id: null,
+                  provider_user_id: null,
+                  provider_thread_id: null,
+                  provider_username: null,
+                  provider_metadata_json: null,
                   telegram_user_id: null,
                   telegram_chat_id: null,
                   telegram_username: null,
@@ -1001,6 +1041,16 @@ function createEnv(): Env & {
                     updated_at: "2026-05-11T10:06:00Z",
                   };
                 } else if (
+                  sql.includes("last_inbound_at = CURRENT_TIMESTAMP") &&
+                  state.soulinkConnection &&
+                  values[0] === state.soulinkConnection.id
+                ) {
+                  state.soulinkConnection = {
+                    ...state.soulinkConnection,
+                    last_inbound_at: "2026-05-11T10:06:00Z",
+                    updated_at: "2026-05-11T10:06:00Z",
+                  };
+                } else if (
                   sql.includes("last_outbound_at = CURRENT_TIMESTAMP") &&
                   state.telegramConnection &&
                   values[0] === state.telegramConnection.id
@@ -1010,10 +1060,27 @@ function createEnv(): Env & {
                     last_outbound_at: "2026-05-11T10:07:00Z",
                     updated_at: "2026-05-11T10:07:00Z",
                   };
+                } else if (
+                  sql.includes("last_outbound_at = CURRENT_TIMESTAMP") &&
+                  state.soulinkConnection &&
+                  values[0] === state.soulinkConnection.id
+                ) {
+                  state.soulinkConnection = {
+                    ...state.soulinkConnection,
+                    last_outbound_at: "2026-05-11T10:07:00Z",
+                    updated_at: "2026-05-11T10:07:00Z",
+                  };
                 } else if (sql.includes("status = 'active'") && state.sandboxConnection) {
                   state.sandboxConnection = {
                     ...state.sandboxConnection,
                     status: "active",
+                    updated_at: "2026-05-11T10:05:00Z",
+                  };
+                } else if (sql.includes("channel = 'soulink'") && state.soulinkConnection) {
+                  state.soulinkConnection = {
+                    ...state.soulinkConnection,
+                    status: "disconnected",
+                    disconnected_at: "2026-05-11T10:05:00Z",
                     updated_at: "2026-05-11T10:05:00Z",
                   };
                 } else if (state.telegramConnection) {
@@ -1040,9 +1107,25 @@ function createEnv(): Env & {
                     direction: "inbound",
                     event_type: "message",
                     status: "received",
+                    provider_event_id: null,
+                    provider_message_id: null,
                     reply_to_message_id: values[2] as string | null,
                     text_body: values[3] as string | null,
                     raw_json: values[4] as string | null,
+                  });
+                } else if (!sql.includes("'telegram'")) {
+                  state.agentEvents.push({
+                    id: values[0] as string,
+                    connection_id: values[1] as string,
+                    channel: values[2] as StoredAgentChannelEvent["channel"],
+                    direction: values[3] as StoredAgentChannelEvent["direction"],
+                    event_type: values[4] as StoredAgentChannelEvent["event_type"],
+                    status: values[5] as StoredAgentChannelEvent["status"],
+                    provider_event_id: values[6] as string | null,
+                    provider_message_id: values[7] as string | null,
+                    reply_to_message_id: values[8] as string | null,
+                    text_body: values[9] as string | null,
+                    raw_json: values[10] as string | null,
                   });
                 } else {
                   state.agentEvents.push({
@@ -1052,6 +1135,8 @@ function createEnv(): Env & {
                     direction: values[2] as StoredAgentChannelEvent["direction"],
                     event_type: values[3] as StoredAgentChannelEvent["event_type"],
                     status: values[4] as StoredAgentChannelEvent["status"],
+                    provider_event_id: null,
+                    provider_message_id: null,
                     reply_to_message_id: values[6] as string | null,
                     text_body: values[10] as string | null,
                     raw_json: values[11] as string | null,
@@ -1120,6 +1205,19 @@ function createEnv(): Env & {
                     ? (state.sandboxConnection as T)
                     : null;
                 }
+                if (sql.includes("provider_thread_id = ?")) {
+                  return state.soulinkConnection &&
+                    values[0] === state.soulinkConnection.provider_thread_id &&
+                    state.soulinkConnection.status === "active"
+                    ? (state.soulinkConnection as T)
+                    : null;
+                }
+                if (sql.includes("channel = 'soulink'")) {
+                  return state.soulinkConnection &&
+                    values[0] === state.soulinkConnection.user_id
+                    ? (state.soulinkConnection as T)
+                    : null;
+                }
                 if (sql.includes("setup_token = ?")) {
                   return state.telegramConnection &&
                     values[0] === state.telegramConnection.setup_token
@@ -1137,6 +1235,18 @@ function createEnv(): Env & {
                   values[0] === state.telegramConnection.user_id
                   ? (state.telegramConnection as T)
                   : null;
+              }
+              if (sql.includes("FROM agent_channel_events")) {
+                if (sql.includes("provider_event_id = ?")) {
+                  return (
+                    state.agentEvents.find(
+                      (event) =>
+                        event.connection_id === values[0] &&
+                        event.provider_event_id === values[1],
+                    ) || null
+                  ) as T | null;
+                }
+                return null;
               }
               if (sql.includes("FROM plugin_installations")) {
                 return (
@@ -1257,7 +1367,11 @@ function createEnv(): Env & {
                 };
               }
               if (sql.includes("FROM agent_channel_events")) {
-                return { results: [] as T[] };
+                return {
+                  results: state.agentEvents.filter(
+                    (event) => event.connection_id === values[0],
+                  ) as T[],
+                };
               }
               if (sql.includes("FROM social_accounts")) {
                 return {
@@ -1364,6 +1478,12 @@ function createEnv(): Env & {
     get sandboxConnection() {
       return state.sandboxConnection;
     },
+    get soulinkConnection() {
+      return state.soulinkConnection;
+    },
+    set soulinkConnection(value: StoredTelegramConnection | null) {
+      state.soulinkConnection = value;
+    },
     get agentEvents() {
       return state.agentEvents;
     },
@@ -1398,6 +1518,9 @@ function createEnv(): Env & {
     TELEGRAM_BOT_USERNAME: "me3_core_test_bot",
     TELEGRAM_BOT_TOKEN: "123:test-token",
     TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret",
+    SOULINK_API_ORIGIN: "https://soulink.test",
+    SOULINK_CONNECTOR_TOKEN: "soulink-connector-token",
+    SOULINK_DISPATCH_TOKEN: "soulink-dispatch-token",
     EMAIL: {
       async send(message) {
         state.emailSends.push(message as Record<string, unknown>);
@@ -5051,6 +5174,11 @@ describe("ME3 Core Worker auth", () => {
       channel: "telegram",
       status: "active",
       setup_token: "setup-token",
+      provider_connection_id: null,
+      provider_user_id: null,
+      provider_thread_id: null,
+      provider_username: null,
+      provider_metadata_json: null,
       telegram_user_id: "123",
       telegram_chat_id: "456",
       telegram_username: "owner",
@@ -5142,6 +5270,163 @@ describe("ME3 Core Worker auth", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("provisions Soulink as the primary assistant chat connector", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const provisionMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({
+        ok: true,
+        ownerNodeId: "node-owner",
+        assistantNodeId: "assistant-owner",
+        streamChannelType: "messaging",
+        streamChannelId: "assistant-channel",
+        soulinkChatUrl: "https://soulink.test/chats/assistant-channel",
+      }),
+    );
+    vi.stubGlobal("fetch", provisionMock);
+
+    try {
+      const response = await app.fetch(
+        new Request("http://localhost/api/soulink/setup", {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const body = (await response.json()) as {
+        ok: boolean;
+        configured: boolean;
+        connection: { status: string; streamChannelId: string };
+      };
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({
+        ok: true,
+        configured: true,
+        connection: {
+          status: "active",
+          streamChannelId: "assistant-channel",
+        },
+      });
+      expect(env.soulinkConnection).toMatchObject({
+        channel: "soulink",
+        status: "active",
+        provider_thread_id: "assistant-channel",
+        provider_user_id: "node-owner",
+        provider_username: "assistant-owner",
+      });
+      expect(provisionMock).toHaveBeenCalledOnce();
+      const init = provisionMock.mock.calls[0]?.[1] as RequestInit;
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer soulink-connector-token",
+      });
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        runtime: {
+          kind: "standalone-me3-core",
+          callbackUrl: "http://localhost:8787/api/agent/channels/soulink/dispatch",
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("dispatches Soulink messages through the agent runtime", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+    env.soulinkConnection = {
+      id: "soulink-connection",
+      user_id: "owner",
+      channel: "soulink",
+      status: "active",
+      setup_token: "setup-token",
+      provider_connection_id: "messaging",
+      provider_user_id: "node-owner",
+      provider_thread_id: "assistant-channel",
+      provider_username: "assistant-owner",
+      provider_metadata_json: JSON.stringify({
+        ownerNodeId: "node-owner",
+        assistantNodeId: "assistant-owner",
+      }),
+      telegram_user_id: null,
+      telegram_chat_id: null,
+      telegram_username: null,
+      telegram_first_name: null,
+      telegram_last_name: null,
+      connected_at: "2026-05-11T10:01:00Z",
+      disconnected_at: null,
+      last_inbound_at: null,
+      last_outbound_at: null,
+      created_at: "2026-05-11T10:00:00Z",
+      updated_at: "2026-05-11T10:00:00Z",
+    };
+
+    const runtimeFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        auditId: null,
+        turnId: "turn-1",
+        specialist: "core.agent-chat",
+        replyText: "Hello from Soulink Core.",
+        model: "test-model",
+        source: "fallback",
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      }),
+    );
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/agent/channels/soulink/dispatch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer soulink-dispatch-token",
+        },
+        body: JSON.stringify({
+          sourceEventId: "stream-message-1",
+          streamChannelType: "messaging",
+          streamChannelId: "assistant-channel",
+          messageText: "Hello from Soulink",
+        }),
+      }),
+      env,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      replyText: "Hello from Soulink Core.",
+      streamChannelId: "assistant-channel",
+    });
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+    expect(env.agentEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "soulink",
+          direction: "inbound",
+          provider_event_id: "stream-message-1",
+          text_body: "Hello from Soulink",
+        }),
+        expect.objectContaining({
+          channel: "soulink",
+          direction: "outbound",
+          provider_event_id: "stream-message-1:reply",
+          text_body: "Hello from Soulink Core.",
+        }),
+      ]),
+    );
   });
 
   it("disconnects an active Telegram account-level connection", async () => {

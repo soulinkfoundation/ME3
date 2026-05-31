@@ -14,7 +14,7 @@ definePage({
     requiresAuth: true,
     requiresWorkspace: true,
     title: "Email | ME3",
-    description: "Review email and Telegram with your ME3 assistant.",
+    description: "Review email and assistant chat with your ME3 assistant.",
     robots: "noindex,follow",
   },
 });
@@ -124,7 +124,7 @@ type TelegramStatusResponse = {
 
 type AgentTurn = {
   id: string;
-  channel: "telegram" | "sandbox";
+  channel: "telegram" | "sandbox" | "soulink";
   status: "pending" | "running" | "completed" | "failed";
   inputText: string | null;
   outputText: string | null;

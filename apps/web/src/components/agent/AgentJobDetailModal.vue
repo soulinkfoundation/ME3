@@ -226,11 +226,11 @@ async function saveSchedule() {
 
 const JOB_DESCRIPTIONS: Record<string, string> = {
   daily_briefing:
-    "Delivers a short summary every morning with key stats, recent emails handled, and today's upcoming bookings. Sent via Telegram (primary) or email.",
+    "Delivers a short summary every morning with key stats, recent emails handled, and today's upcoming bookings. Sent via Soulink (primary) or email.",
   weekly_review:
     "A digest of the past 7 days — bookings completed, emails handled, site activity, and notable events. Delivered weekly at your chosen time.",
   booking_reminders:
-    "Sends automated reminders 24 hours and 2 hours before each upcoming booking via email and Telegram (when connected).",
+    "Sends automated reminders 24 hours and 2 hours before each upcoming booking via email and Soulink (when connected).",
   invoice_triage:
     "Scans inbound mailbox messages for invoice and receipt emails, then files likely expenses into Accounts. Lower-confidence matches are marked for review.",
   relationship_scan:
@@ -265,9 +265,9 @@ const JOB_SCHEDULES_STATIC: Record<string, string> = {
 };
 
 const JOB_CHANNELS: Record<string, string> = {
-  daily_briefing: "Telegram, Email",
-  weekly_review: "Telegram, Email",
-  booking_reminders: "Email, Telegram",
+  daily_briefing: "Soulink, Email",
+  weekly_review: "Soulink, Email",
+  booking_reminders: "Email, Soulink",
   invoice_triage: "Accounts ledger",
   relationship_scan: "Relationship Builder",
   client_discovery: "Contacts (Prospects)",
@@ -533,7 +533,7 @@ async function triggerJob() {
         ? "Triggered — new suggestions should appear in Relationship Builder shortly."
         : job.value.jobType === "client_discovery"
           ? "Triggered — check the Prospects tab for new leads and the Scan history tab here for the run summary."
-          : "Triggered — check Telegram or your email.";
+          : "Triggered — check Soulink or your email.";
     setTimeout(async () => {
       await loadJob();
     }, 3000);

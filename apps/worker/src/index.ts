@@ -229,6 +229,27 @@ type OwnerAuthState = {
 };
 type ChatBody = { message?: string };
 type AgentSandboxBody = { messageText?: unknown; replyToMessageId?: unknown };
+type SoulinkDispatchBody = {
+  ownerSubject?: unknown;
+  ownerNodeId?: unknown;
+  assistantNodeId?: unknown;
+  connectionId?: unknown;
+  sourceEventId?: unknown;
+  streamChannelType?: unknown;
+  streamChannelId?: unknown;
+  messageText?: unknown;
+  replyToMessageId?: unknown;
+  createdAt?: unknown;
+};
+type SoulinkProvisionResponse = {
+  ok?: boolean;
+  ownerNodeId?: string;
+  assistantNodeId?: string;
+  streamChannelType?: string;
+  streamChannelId?: string;
+  soulinkChatUrl?: string;
+  error?: string;
+};
 type TelegramUser = {
   id?: unknown;
   is_bot?: unknown;
@@ -1214,6 +1235,127 @@ app.post("/api/agent/sandbox", async (c) => {
   }
 
   return c.json(payload);
+});
+
+app.post("/api/agent/channels/soulink/dispatch", async (c) => {
+  const authResult = verifySoulinkDispatchAuth(c.env, c.req.header("authorization"));
+  if (!authResult.ok) {
+    return c.json({ ok: false, error: authResult.error }, authResult.status as any);
+  }
+
+  if (!(await isCorePluginEnabled(c.env, "me3.agent-chat"))) {
+    return c.json({ ok: false, error: "Agent Chat plugin is disabled" }, 403);
+  }
+
+  const body = await c.req.json<SoulinkDispatchBody>().catch((): SoulinkDispatchBody => ({}));
+  const messageText = typeof body.messageText === "string" ? body.messageText.trim() : "";
+  const sourceEventId = typeof body.sourceEventId === "string" ? body.sourceEventId.trim() : "";
+  const streamChannelId = typeof body.streamChannelId === "string" ? body.streamChannelId.trim() : "";
+  const replyToMessageId =
+    typeof body.replyToMessageId === "string" || typeof body.replyToMessageId === "number"
+      ? body.replyToMessageId
+      : null;
+
+  if (!messageText) return c.json({ ok: false, error: "Message text is required" }, 400);
+  if (!sourceEventId) return c.json({ ok: false, error: "sourceEventId is required" }, 400);
+  if (!streamChannelId) return c.json({ ok: false, error: "streamChannelId is required" }, 400);
+
+  const connection = await getActiveSoulinkConnectionForThread(c.env, streamChannelId);
+  if (!connection) {
+    return c.json({ ok: false, error: "Soulink channel is not connected to this ME3 Core install" }, 404);
+  }
+
+  const duplicate = await getAgentChannelEventByProviderEventId(c.env, connection.id, sourceEventId);
+  if (duplicate) {
+    return c.json({
+      ok: true,
+      deduped: true,
+      auditId: null,
+      turnId: null,
+      specialist: "core.agent-chat",
+      replyText: null,
+      model: null,
+      source: null,
+    });
+  }
+
+  const eventId = await insertProviderChannelEvent(c.env, {
+    channel: "soulink",
+    connectionId: connection.id,
+    direction: "inbound",
+    eventType: "message",
+    status: "received",
+    providerEventId: sourceEventId,
+    providerMessageId: sourceEventId,
+    replyToMessageId,
+    textBody: messageText,
+    rawJson: body,
+    errorMessage: null,
+  });
+
+  await c.env.DB.prepare(
+    `UPDATE agent_channel_connections
+     SET last_inbound_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(connection.id)
+    .run();
+
+  const turnId = crypto.randomUUID();
+  const response = await dispatchAgentChannelTurn(c.env, {
+    userId: connection.user_id,
+    connectionId: connection.id,
+    sourceEventId: eventId,
+    turnId,
+    messageText,
+    replyToMessageId,
+  });
+
+  if (!response.ok) {
+    await insertProviderChannelEvent(c.env, {
+      channel: "soulink",
+      connectionId: connection.id,
+      direction: "system",
+      eventType: "error",
+      status: "failed",
+      providerEventId: `${sourceEventId}:dispatch-error`,
+      providerMessageId: null,
+      replyToMessageId,
+      textBody: messageText,
+      rawJson: response,
+      errorMessage: response.error || "Agent dispatch failed",
+    });
+    return c.json(response, 503 as any);
+  }
+
+  if (response.replyText) {
+    await insertProviderChannelEvent(c.env, {
+      channel: "soulink",
+      connectionId: connection.id,
+      direction: "outbound",
+      eventType: "send",
+      status: "pending",
+      providerEventId: `${sourceEventId}:reply`,
+      providerMessageId: null,
+      replyToMessageId,
+      textBody: response.replyText,
+      rawJson: response,
+      errorMessage: null,
+    });
+    await c.env.DB.prepare(
+      `UPDATE agent_channel_connections
+       SET last_outbound_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+      .bind(connection.id)
+      .run();
+  }
+
+  return c.json({
+    ...response,
+    streamChannelType: connection.provider_connection_id || "messaging",
+    streamChannelId,
+  });
 });
 
 app.get("/api/account", async (c) => {
@@ -2310,6 +2452,7 @@ app.get("/api/sites/quota", async (c) => {
       maxSites: 4,
       mailboxAlias: true,
       approvalFirstOutbound: true,
+      soulinkAgentAccess: true,
       telegramAgentAccess: true,
     },
     can_create: Number(count?.count || 0) < 4,
@@ -3779,6 +3922,127 @@ app.post("/api/telegram/webhook", async (c) => {
 
   const result = await handleTelegramWebhookUpdate(c.env, update);
   return c.json(result, (result.ok ? 200 : result.status) as any);
+});
+
+app.get("/api/soulink/status", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  return c.json(await buildSoulinkStatusPayload(c.env, ownerId, c.req.url));
+});
+
+app.post("/api/soulink/setup", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const config = getSoulinkConnectorConfig(c.env);
+  if (!config.configured) {
+    return c.json(
+      {
+        ok: false,
+        error: "Soulink connector is not configured for this Core install",
+        ...(await buildSoulinkStatusPayload(c.env, ownerId, c.req.url)),
+      },
+      503,
+    );
+  }
+
+  const owner = await getOwnerProfile(c.env, ownerId);
+  if (!owner) return c.json({ ok: false, error: "Account not found" }, 404);
+
+  const callbackUrl = `${getCoreApiOrigin(c.env, c.req.url)}/api/agent/channels/soulink/dispatch`;
+  const response = await fetch(`${config.apiOrigin}/api/me3/assistant-channel/provision`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.connectorToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      issuer: getCoreApiOrigin(c.env, c.req.url),
+      subject: owner.id,
+      owner: {
+        displayName: owner.name || owner.username || "ME3 Core Owner",
+        handle: owner.username || "owner",
+        me3Url: await getOwnerMe3Url(c.env, ownerId, c.req.url),
+        avatarUrl: owner.avatar_url || null,
+      },
+      assistant: {
+        displayName: "ME3 Assistant",
+        avatarUrl: null,
+      },
+      runtime: {
+        kind: "standalone-me3-core",
+        callbackUrl,
+      },
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as SoulinkProvisionResponse | null;
+  if (!response.ok || payload?.ok !== true || !payload.streamChannelId) {
+    return c.json(
+      {
+        ok: false,
+        error: payload?.error || `Soulink provisioning failed (${response.status})`,
+        ...(await buildSoulinkStatusPayload(c.env, ownerId, c.req.url)),
+      },
+      502,
+    );
+  }
+
+  const connection = await upsertActiveSoulinkConnection(c.env, ownerId, {
+    ownerNodeId: payload.ownerNodeId || null,
+    assistantNodeId: payload.assistantNodeId || null,
+    streamChannelType: payload.streamChannelType || "messaging",
+    streamChannelId: payload.streamChannelId,
+    soulinkChatUrl: payload.soulinkChatUrl || null,
+    runtimeCallbackUrl: callbackUrl,
+  });
+
+  await insertProviderChannelEvent(c.env, {
+    channel: "soulink",
+    connectionId: connection.id,
+    direction: "system",
+    eventType: "link",
+    status: "linked",
+    providerEventId: `setup:${payload.streamChannelId}`,
+    providerMessageId: null,
+    replyToMessageId: null,
+    textBody: "Soulink assistant chat connected.",
+    rawJson: payload,
+    errorMessage: null,
+  });
+
+  return c.json({
+    ok: true,
+    ...(await buildSoulinkStatusPayload(c.env, ownerId, c.req.url, connection)),
+  });
+});
+
+app.post("/api/soulink/disconnect", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const existing = await getSoulinkConnection(c.env, ownerId);
+  if (!existing) {
+    return c.json({ ok: true, disconnected: false, ...(await buildSoulinkStatusPayload(c.env, ownerId, c.req.url)) });
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE agent_channel_connections
+     SET status = 'disconnected',
+         disconnected_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE user_id = ? AND channel = 'soulink'`,
+  )
+    .bind(ownerId)
+    .run();
+
+  const connection = await getSoulinkConnection(c.env, ownerId);
+  return c.json({
+    ok: true,
+    disconnected: true,
+    ...(await buildSoulinkStatusPayload(c.env, ownerId, c.req.url, connection)),
+  });
 });
 
 app.get("/api/contacts", async (c) => {
@@ -5562,6 +5826,342 @@ function serializeImportedCalendarEvent(event: DbCalendarSourceEvent & { source_
   };
 }
 
+function getSoulinkConnectorConfig(env: Env) {
+  const apiOrigin = originFromUrl(env.SOULINK_API_ORIGIN);
+  const connectorToken = env.SOULINK_CONNECTOR_TOKEN?.trim() || "";
+  const dispatchToken = env.SOULINK_DISPATCH_TOKEN?.trim() || connectorToken || "";
+  return {
+    apiOrigin,
+    connectorToken,
+    dispatchToken,
+    configured: Boolean(apiOrigin && connectorToken && dispatchToken),
+  };
+}
+
+function verifySoulinkDispatchAuth(env: Env, authorization: string | undefined) {
+  const { dispatchToken } = getSoulinkConnectorConfig(env);
+  if (!dispatchToken) {
+    return { ok: false, status: 503, error: "Soulink dispatch token is not configured" };
+  }
+  const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || "";
+  if (!token || !constantTimeEqual(token, dispatchToken)) {
+    return { ok: false, status: 401, error: "Invalid Soulink dispatch token" };
+  }
+  return { ok: true as const };
+}
+
+function serializeSoulinkConnection(row: DbAgentChannelConnection | null) {
+  if (!row) return null;
+  const metadata = parseJsonRecord(row.provider_metadata_json);
+  return {
+    id: row.id,
+    channel: row.channel,
+    status: row.status,
+    ownerNodeId:
+      typeof metadata.ownerNodeId === "string" ? metadata.ownerNodeId : row.provider_user_id,
+    assistantNodeId:
+      typeof metadata.assistantNodeId === "string" ? metadata.assistantNodeId : null,
+    streamChannelType: row.provider_connection_id || "messaging",
+    streamChannelId: row.provider_thread_id,
+    soulinkChatUrl:
+      typeof metadata.soulinkChatUrl === "string" ? metadata.soulinkChatUrl : null,
+    connectedAt: row.connected_at,
+    disconnectedAt: row.disconnected_at,
+    lastInboundAt: row.last_inbound_at,
+    lastOutboundAt: row.last_outbound_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function buildSoulinkStatusPayload(
+  env: Env,
+  ownerId: string,
+  requestUrl: string,
+  currentConnection?: DbAgentChannelConnection | null,
+) {
+  const config = getSoulinkConnectorConfig(env);
+  const connection =
+    currentConnection === undefined
+      ? await getSoulinkConnection(env, ownerId)
+      : currentConnection;
+  const events = connection
+    ? await env.DB.prepare(
+        `SELECT id, connection_id, channel, direction, event_type, status,
+                provider_event_id, provider_message_id,
+                telegram_message_id, reply_to_message_id, telegram_user_id,
+                telegram_chat_id, telegram_username, text_body, raw_json,
+                error_message, created_at, updated_at
+         FROM agent_channel_events
+         WHERE connection_id = ?
+         ORDER BY created_at DESC
+         LIMIT 10`,
+      )
+        .bind(connection.id)
+        .all<DbAgentChannelEvent>()
+    : { results: [] };
+
+  return {
+    available: true,
+    configured: config.configured,
+    apiOrigin: config.apiOrigin,
+    connectorTokenConfigured: Boolean(config.connectorToken),
+    dispatchTokenConfigured: Boolean(config.dispatchToken),
+    runtimeCallbackUrl: `${getCoreApiOrigin(env, requestUrl)}/api/agent/channels/soulink/dispatch`,
+    connection: serializeSoulinkConnection(connection),
+    recentEvents: (events.results || []).map(serializeProviderChannelEvent),
+  };
+}
+
+function serializeProviderChannelEvent(row: DbAgentChannelEvent) {
+  return {
+    id: row.id,
+    channel: row.channel,
+    direction: row.direction,
+    eventType: row.event_type,
+    status: row.status,
+    providerEventId: row.provider_event_id,
+    providerMessageId: row.provider_message_id,
+    replyToMessageId: row.reply_to_message_id,
+    textBody: row.text_body,
+    rawJson: parseJsonRecord(row.raw_json),
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function getSoulinkConnection(env: Env, ownerId: string) {
+  return env.DB.prepare(
+    `SELECT id, user_id, channel, status, setup_token,
+            provider_connection_id, provider_user_id, provider_thread_id,
+            provider_username, provider_metadata_json,
+            telegram_user_id, telegram_chat_id, telegram_username,
+            telegram_first_name, telegram_last_name, connected_at,
+            disconnected_at, last_inbound_at, last_outbound_at, created_at,
+            updated_at
+     FROM agent_channel_connections
+     WHERE user_id = ? AND channel = 'soulink'`,
+  )
+    .bind(ownerId)
+    .first<DbAgentChannelConnection>();
+}
+
+async function getActiveSoulinkConnectionForThread(env: Env, streamChannelId: string) {
+  return env.DB.prepare(
+    `SELECT id, user_id, channel, status, setup_token,
+            provider_connection_id, provider_user_id, provider_thread_id,
+            provider_username, provider_metadata_json,
+            telegram_user_id, telegram_chat_id, telegram_username,
+            telegram_first_name, telegram_last_name, connected_at,
+            disconnected_at, last_inbound_at, last_outbound_at, created_at,
+            updated_at
+     FROM agent_channel_connections
+     WHERE provider_thread_id = ? AND channel = 'soulink' AND status = 'active'`,
+  )
+    .bind(streamChannelId)
+    .first<DbAgentChannelConnection>();
+}
+
+async function upsertActiveSoulinkConnection(
+  env: Env,
+  ownerId: string,
+  input: {
+    ownerNodeId: string | null;
+    assistantNodeId: string | null;
+    streamChannelType: string;
+    streamChannelId: string;
+    soulinkChatUrl: string | null;
+    runtimeCallbackUrl: string;
+  },
+) {
+  const existing = await getSoulinkConnection(env, ownerId);
+  const connectionId = existing?.id || crypto.randomUUID();
+  const setupToken = existing?.setup_token || crypto.randomUUID();
+  const metadata = JSON.stringify({
+    ownerNodeId: input.ownerNodeId,
+    assistantNodeId: input.assistantNodeId,
+    soulinkChatUrl: input.soulinkChatUrl,
+    runtimeCallbackUrl: input.runtimeCallbackUrl,
+  });
+
+  await env.DB.prepare(
+    `INSERT INTO agent_channel_connections
+       (id, user_id, channel, status, setup_token,
+        provider_connection_id, provider_user_id, provider_thread_id,
+        provider_username, provider_metadata_json,
+        connected_at, disconnected_at, last_inbound_at, last_outbound_at)
+     VALUES (?, ?, 'soulink', 'active', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, NULL, NULL)
+     ON CONFLICT(user_id, channel) DO UPDATE SET
+       status = 'active',
+       provider_connection_id = excluded.provider_connection_id,
+       provider_user_id = excluded.provider_user_id,
+       provider_thread_id = excluded.provider_thread_id,
+       provider_username = excluded.provider_username,
+       provider_metadata_json = excluded.provider_metadata_json,
+       connected_at = COALESCE(agent_channel_connections.connected_at, CURRENT_TIMESTAMP),
+       disconnected_at = NULL,
+       updated_at = CURRENT_TIMESTAMP`,
+  )
+    .bind(
+      connectionId,
+      ownerId,
+      setupToken,
+      input.streamChannelType,
+      input.ownerNodeId,
+      input.streamChannelId,
+      input.assistantNodeId,
+      metadata,
+    )
+    .run();
+
+  const row = await getSoulinkConnection(env, ownerId);
+  if (!row) throw new Error("Failed to create Soulink connection");
+  return row;
+}
+
+async function getAgentChannelEventByProviderEventId(
+  env: Env,
+  connectionId: string,
+  providerEventId: string,
+) {
+  return env.DB.prepare(
+    `SELECT id, connection_id, channel, direction, event_type, status,
+            provider_event_id, provider_message_id,
+            telegram_message_id, reply_to_message_id, telegram_user_id,
+            telegram_chat_id, telegram_username, text_body, raw_json,
+            error_message, created_at, updated_at
+     FROM agent_channel_events
+     WHERE connection_id = ? AND provider_event_id = ?`,
+  )
+    .bind(connectionId, providerEventId)
+    .first<DbAgentChannelEvent>();
+}
+
+async function insertProviderChannelEvent(
+  env: Env,
+  input: {
+    channel: "soulink";
+    connectionId: string;
+    direction: "inbound" | "outbound" | "system";
+    eventType: "start" | "message" | "link" | "send" | "error";
+    status: "received" | "pending" | "sent" | "failed" | "linked" | "skipped";
+    providerEventId: string | null;
+    providerMessageId: string | null;
+    replyToMessageId: string | number | null;
+    textBody: string | null;
+    rawJson: unknown;
+    errorMessage: string | null;
+  },
+) {
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO agent_channel_events
+       (id, connection_id, channel, direction, event_type, status,
+        provider_event_id, provider_message_id, reply_to_message_id,
+        text_body, raw_json, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      id,
+      input.connectionId,
+      input.channel,
+      input.direction,
+      input.eventType,
+      input.status,
+      input.providerEventId,
+      input.providerMessageId,
+      input.replyToMessageId === null ? null : String(input.replyToMessageId),
+      input.textBody,
+      JSON.stringify(input.rawJson),
+      input.errorMessage,
+    )
+    .run();
+  return id;
+}
+
+async function dispatchAgentChannelTurn(
+  env: Env,
+  input: {
+    userId: string;
+    connectionId: string;
+    sourceEventId: string;
+    turnId: string;
+    messageText: string;
+    replyToMessageId: unknown;
+  },
+): Promise<AgentSandboxDispatchResponse> {
+  const runtime = env.ME3_USER_AGENT;
+  if (!runtime) {
+    return {
+      ok: false,
+      auditId: null,
+      turnId: input.turnId,
+      specialist: "core.agent-chat",
+      replyText: null,
+      model: null,
+      source: null,
+      error: "Agent chat runtime is not configured",
+    };
+  }
+
+  const id = runtime.idFromName(input.userId);
+  const stub = runtime.get(id);
+  const response = await stub.fetch("https://me3-core-user-agent.internal/dispatch/sandbox", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: input.userId,
+      connectionId: input.connectionId,
+      sourceEventId: input.sourceEventId,
+      turnId: input.turnId,
+      messageText: input.messageText,
+      replyToMessageId:
+        typeof input.replyToMessageId === "string" ||
+        typeof input.replyToMessageId === "number"
+          ? input.replyToMessageId
+          : null,
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | AgentSandboxDispatchResponse
+    | null;
+
+  if (!response.ok || payload?.ok !== true) {
+    return {
+      ok: false,
+      auditId: null,
+      turnId: input.turnId,
+      specialist: "core.agent-chat",
+      replyText: null,
+      model: null,
+      source: null,
+      error:
+        typeof payload?.error === "string"
+          ? payload.error
+          : `Agent chat runtime request failed (${response.status})`,
+    };
+  }
+
+  return payload;
+}
+
+async function getOwnerMe3Url(env: Env, ownerId: string, requestUrl: string): Promise<string | null> {
+  const site = await env.DB.prepare(
+    `SELECT username, custom_domain
+     FROM sites
+     WHERE user_id = ? AND (site_type = 'profile' OR site_type IS NULL)
+     ORDER BY published_at DESC, created_at DESC
+     LIMIT 1`,
+  )
+    .bind(ownerId)
+    .first<{ username: string; custom_domain: string | null }>();
+  if (site?.custom_domain) return `https://${site.custom_domain}`;
+  if (site?.username) return `${getCoreWebOrigin(env, requestUrl)}/${site.username}`;
+  return getCoreWebOrigin(env, requestUrl);
+}
+
 function serializeTelegramConnection(row: DbAgentChannelConnection, botUsername: string | null) {
   return {
     id: row.id,
@@ -5845,60 +6445,7 @@ async function dispatchTelegramAgentTurn(
     replyToMessageId: unknown;
   },
 ): Promise<AgentSandboxDispatchResponse> {
-  const runtime = env.ME3_USER_AGENT;
-  if (!runtime) {
-    return {
-      ok: false,
-      auditId: null,
-      turnId: input.turnId,
-      specialist: "core.agent-chat",
-      replyText: null,
-      model: null,
-      source: null,
-      error: "Agent chat runtime is not configured",
-    };
-  }
-
-  const id = runtime.idFromName(input.userId);
-  const stub = runtime.get(id);
-  const response = await stub.fetch("https://me3-core-user-agent.internal/dispatch/sandbox", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      userId: input.userId,
-      connectionId: input.connectionId,
-      sourceEventId: input.sourceEventId,
-      turnId: input.turnId,
-      messageText: input.messageText,
-      replyToMessageId:
-        typeof input.replyToMessageId === "string" ||
-        typeof input.replyToMessageId === "number"
-          ? input.replyToMessageId
-          : null,
-    }),
-  });
-
-  const payload = (await response.json().catch(() => null)) as
-    | AgentSandboxDispatchResponse
-    | null;
-
-  if (!response.ok || payload?.ok !== true) {
-    return {
-      ok: false,
-      auditId: null,
-      turnId: input.turnId,
-      specialist: "core.agent-chat",
-      replyText: null,
-      model: null,
-      source: null,
-      error:
-        typeof payload?.error === "string"
-          ? payload.error
-          : `Agent chat runtime request failed (${response.status})`,
-    };
-  }
-
-  return payload;
+  return dispatchAgentChannelTurn(env, input);
 }
 
 async function activateTelegramConnectionFromStartToken(

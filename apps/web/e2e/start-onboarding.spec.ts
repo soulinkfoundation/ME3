@@ -191,26 +191,18 @@ test.describe("/start onboarding wizard", () => {
       });
     });
 
-    await page.route("**/api/telegram/status", async (route) => {
+    await page.route("**/api/soulink/status", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           available: true,
           configured: false,
-          encryptionConfigured: true,
-          botUsername: null,
-          botUsernameSource: "not_configured",
-          tokenConfigured: false,
-          botTokenSource: "not_configured",
-          botTokenHint: null,
-          botTokenUpdatedAt: null,
-          webhookSecretConfigured: false,
-          webhookSecretSource: "not_configured",
-          webhookSecretHint: null,
-          webhookSecretUpdatedAt: null,
-          webhookUrl: null,
-          startUrl: null,
+          apiOrigin: null,
+          connectorTokenConfigured: false,
+          dispatchTokenConfigured: false,
+          runtimeCallbackUrl:
+            "http://localhost:8787/api/agent/channels/soulink/dispatch",
           connection: null,
         }),
       });
@@ -276,7 +268,7 @@ test.describe("/start onboarding wizard", () => {
 
     await page.getByRole("button", { name: "Skip for now" }).click();
     await expect(
-      page.getByRole("heading", { name: "Connect Telegram" }),
+      page.getByRole("heading", { name: "Connect Soulink" }),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Finish" }).click();
@@ -347,7 +339,7 @@ test.describe("/start onboarding wizard", () => {
     await page.getByRole("button", { name: "Save email" }).click();
 
     await expect(
-      page.getByRole("heading", { name: "Connect Telegram" }),
+      page.getByRole("heading", { name: "Connect Soulink" }),
     ).toBeVisible();
     expect(mailboxPayload).toContain('"aliasLocalPart":"starter"');
     expect(providerPayload).toContain('"activeProviderId":"cloudflare-email"');

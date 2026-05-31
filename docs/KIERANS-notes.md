@@ -4,7 +4,7 @@
 2. Configure a custom domain (essential if you want full flexibility going forward.)
 3. Configure custom email i.e. yourname/me3/assistant@YOURDOMAIN.com
 4. Activate jobs for your assistant
-5. Configure telegram bot to communicate with your assistant
+5. Connect Soulink to communicate with your assistant
 6. Activate 'Mission Control' plugin
 7. Customise ME3 for your own needs.
 

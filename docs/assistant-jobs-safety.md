@@ -90,7 +90,7 @@ Any action that sends content outside the owner's private ME3 install is explici
 Explicit-send includes:
 
 - Sending email.
-- Sending a client or Telegram message to another person.
+- Sending a client, Soulink, or legacy Telegram message to another person.
 - Publishing a page or social post.
 - Booking, rescheduling, or cancelling a meeting with external attendees.
 - Submitting a payment, invoice, refund, or subscription change.

@@ -485,3 +485,18 @@ fallback/legacy channel during the transition.
 The first usable milestone should be text-only, one stable assistant chat per
 ME3 owner, Stream push/read/archive behavior through Soulink, and ME3 runtime
 continuity through the same agent chat boundary Core already uses.
+
+## Implementation Started
+
+Core now has the first implementation slice:
+
+- `soulink` is a first-class `agent_channel_connections` /
+  `agent_channel_events` channel alongside legacy `telegram` and `sandbox`.
+- Account settings and onboarding point owners at Soulink as the primary
+  assistant chat connector.
+- Core exposes `/api/soulink/status`, `/api/soulink/setup`, and
+  `/api/soulink/disconnect` for owner activation.
+- Core exposes `/api/agent/channels/soulink/dispatch` for Soulink's Stream
+  webhook bridge to deliver owner messages into the ME3 assistant runtime.
+- Telegram routes and settings remain in place as legacy compatibility while the
+  Soulink Worker-side provisioning and webhook bridge are built.

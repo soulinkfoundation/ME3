@@ -4,7 +4,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import CustomDomain from "../components/CustomDomain.vue";
-import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
+import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
 import {
   useTheme,
@@ -18,10 +18,6 @@ import {
   isValidTimeZone,
   listSupportedTimeZones,
 } from "../utils/timezone";
-import {
-  telegramAccordionStatusClass,
-  telegramAccordionStatusLabel,
-} from "../utils/telegram-connection-ui";
 import {
   AI_AGENT_MODEL_OPTIONS,
   type AiAgentModelOption,
@@ -317,7 +313,7 @@ type AccountSection =
   | "ai"
   | "payments"
   | "plugins"
-  | "telegram";
+  | "soulink";
 
 const auth = useAuthStore();
 const sites = useSitesStore();
@@ -385,7 +381,7 @@ const stripeSecretInput = ref("");
 const commerceMessage = ref<string | null>(null);
 const commerceError = ref<string | null>(null);
 
-const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
+const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
   null,
 );
 
@@ -396,7 +392,7 @@ const openSection = ref({
   ai: false,
   payments: false,
   plugins: false,
-  telegram: false,
+  soulink: false,
 });
 const showAiModelSection = false;
 
@@ -583,20 +579,23 @@ const unifiedEmailSaveDisabled = computed(
       !emailProviderEncryptionConfigured.value),
 );
 
-const telegramStatusLabel = computed(() => {
-  const panel = telegramPanelRef.value;
+const soulinkStatusLabel = computed(() => {
+  const panel = soulinkPanelRef.value;
   if (!panel) return "";
-  return telegramAccordionStatusLabel(
-    panel.available,
-    panel.configured,
-    panel.connection,
-  );
+  if (!panel.available) return "Not available";
+  if (!panel.configured) return "Needs setup";
+  if (!panel.connection) return "Not connected";
+  if (panel.connection.status === "active") return "Connected";
+  if (panel.connection.status === "disconnected") return "Disconnected";
+  return "Pending setup";
 });
 
-const telegramStatusClass = computed(() => {
-  const panel = telegramPanelRef.value;
+const soulinkStatusClass = computed(() => {
+  const panel = soulinkPanelRef.value;
   if (!panel) return "pending_setup";
-  return telegramAccordionStatusClass(panel.available, panel.connection);
+  if (!panel.available || !panel.connection) return "pending_setup";
+  if (panel.connection.status === "disconnected") return "paused";
+  return panel.connection.status;
 });
 
 const pluginSummaryLabel = computed(() => {
@@ -1678,8 +1677,8 @@ onMounted(async () => {
     openSection.value.advanced = true;
     appConnectionsError.value = "ME3.app connection failed. Please try again.";
   }
-  if (route.query.section === "telegram") {
-    openSection.value.telegram = true;
+  if (route.query.section === "soulink" || route.query.section === "telegram") {
+    openSection.value.soulink = true;
   }
   if (route.query.section === "mailbox") {
     openSection.value.mailbox = true;
@@ -2459,42 +2458,42 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card telegram-section">
+        <section class="card accordion-card soulink-section">
           <button
-            id="account-trigger-telegram"
+            id="account-trigger-soulink"
             class="accordion-trigger"
             type="button"
-            :aria-expanded="openSection.telegram"
-            aria-controls="account-panel-telegram"
-            @click="openSection.telegram = !openSection.telegram"
+            :aria-expanded="openSection.soulink"
+            aria-controls="account-panel-soulink"
+            @click="openSection.soulink = !openSection.soulink"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Telegram</h2>
+              <h2>Soulink</h2>
               <span
-                v-if="telegramPanelRef?.available"
+                v-if="soulinkPanelRef?.available"
                 class="status-badge"
-                :class="telegramStatusClass"
+                :class="soulinkStatusClass"
               >
-                {{ telegramStatusLabel }}
+                {{ soulinkStatusLabel }}
               </span>
               <span class="accordion-header-hint">
-                Chat with your ME3 agent in Telegram
+                Primary assistant chat on Soulink
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
           <div
-            id="account-panel-telegram"
+            id="account-panel-soulink"
             class="accordion-panel"
             role="region"
-            aria-labelledby="account-trigger-telegram"
-            :hidden="!openSection.telegram"
+            aria-labelledby="account-trigger-soulink"
+            :hidden="!openSection.soulink"
           >
-            <TelegramConnectPanel
-              ref="telegramPanelRef"
+            <SoulinkConnectPanel
+              ref="soulinkPanelRef"
               variant="default"
               :auto-prepare-when-not-connected="
-                route.query.section === 'telegram'
+                route.query.section === 'soulink' || route.query.section === 'telegram'
               "
             />
           </div>

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { RouterLink, useRouter } from "vue-router";
 import { api, getUsernameAvailability } from "../api";
-import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
+import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import { usePublish } from "../composables/usePublish";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
@@ -42,7 +42,7 @@ type EmailProviderSettingsResponse = {
   providers: Array<{ id: EmailProviderId }>;
 };
 
-const STEPS = ["Profile", "Email", "Telegram"] as const;
+const STEPS = ["Profile", "Email", "Soulink"] as const;
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
 
 const router = useRouter();
@@ -69,7 +69,7 @@ const emailSaving = ref(false);
 const emailMessage = ref("");
 const emailError = ref("");
 const mailboxAvailable = ref(true);
-const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
+const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
   null,
 );
 
@@ -625,21 +625,21 @@ onBeforeUnmount(clearUsernameCheck);
         </form>
       </section>
 
-      <section v-else class="start-step" aria-labelledby="telegram-title">
+      <section v-else class="start-step" aria-labelledby="soulink-title">
         <div class="step-copy">
-          <h1 id="telegram-title">Connect Telegram</h1>
+          <h1 id="soulink-title">Connect Soulink</h1>
           <p>
-            Telegram lets you chat with your ME3 agent from your phone. You can
-            finish this now or return from
-            <RouterLink to="/account?section=telegram"
+            Soulink creates a private chat with your ME3 assistant across web
+            and mobile. You can finish this now or return from
+            <RouterLink to="/account?section=soulink"
               >Account settings</RouterLink
             >.
           </p>
         </div>
 
-        <div class="telegram-panel-wrap">
-          <TelegramConnectPanel
-            ref="telegramPanelRef"
+        <div class="soulink-panel-wrap">
+          <SoulinkConnectPanel
+            ref="soulinkPanelRef"
             variant="default"
             :auto-prepare-when-not-connected="true"
           />
@@ -997,7 +997,7 @@ onBeforeUnmount(clearUsernameCheck);
   cursor: not-allowed;
 }
 
-.telegram-panel-wrap {
+.soulink-panel-wrap {
   padding: 18px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-md, 10px);
