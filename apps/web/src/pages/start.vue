@@ -458,7 +458,7 @@ onBeforeUnmount(clearUsernameCheck);
               to="/account?section=mailbox"
               target="_blank"
               rel="noopener noreferrer"
-              >ME3 site profile</RouterLink
+              >site profile</RouterLink
             >
             later.
           </p>
@@ -554,15 +554,14 @@ onBeforeUnmount(clearUsernameCheck);
         <div class="step-copy">
           <h1 id="email-title">Set up email</h1>
           <p>
-            ME3 uses Cloudflare Email by default. Custom senders such as
-            Postmark or Mailgun can be configured in
+            ME3 uses Cloudflare for email by default. Custom senders can be
+            configured in
             <RouterLink
               to="/account?section=mailbox"
               target="_blank"
               rel="noopener noreferrer"
-              >Account settings</RouterLink
+              >settings.</RouterLink
             >
-            later if you wish.
           </p>
         </div>
 
@@ -635,14 +634,13 @@ onBeforeUnmount(clearUsernameCheck);
         <div class="step-copy">
           <h1 id="soulink-title">Connect Soulink</h1>
           <p>
-            Soulink is a chat app built by the
+            Chat with your ME3 assistant on the go with
             <a
               href="https://soulinkfoundation.org"
               target="_blank"
               rel="noopener noreferrer"
-              >soulinkfoundation.org</a
-            >. You can use it to easily chat with your ME3 assistant from your
-            mobile.
+              >Soulink</a
+            >.
           </p>
         </div>
 
