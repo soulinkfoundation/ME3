@@ -55,6 +55,12 @@ max_retries = 0
 # ME3_ADMIN_HOST = "me3.yourdomain.com"
 # CORE_WEB_ORIGIN = "https://me3.yourdomain.com"
 # CORE_API_ORIGIN = "https://me3.yourdomain.com"
+# TELEGRAM_BOT_USERNAME = "your_me3_bot"
+
+# Optional Telegram agent channel. Store these with `wrangler secret put`,
+# not in this file:
+# - TELEGRAM_BOT_TOKEN
+# - TELEGRAM_WEBHOOK_SECRET
 
 [assets]
 directory = "apps/web/dist"

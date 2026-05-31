@@ -153,6 +153,12 @@ CORE_API_ORIGIN = "https://me3.customdomain.com"
 
 The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches the inferred or explicit public site host and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
 
+### Telegram Agent Channel
+
+Standalone Core installs need their own Telegram bot. See
+[`docs/standalone-telegram-setup.md`](./docs/standalone-telegram-setup.md) for
+the BotFather, Worker secret, webhook, and account-linking steps.
+
 ### Paid Bookings
 
 ME3 Core supports direct Stripe Checkout for paid 1:1 bookings. Payments use the Stripe account configured on your own Core Worker; this is separate from ME3 Cloud subscription billing.

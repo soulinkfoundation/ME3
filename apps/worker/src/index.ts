@@ -157,6 +157,7 @@ import {
   updateAgentContactOutreachStatus,
   updateAgentReminder,
   upsertAgentMailbox,
+  type AgentSandboxDispatchResponse,
   type AgentMailboxDraftInput,
   type AgentMailboxUpdateInput,
   type AgentReminderInput,
@@ -219,6 +220,28 @@ type OwnerAuthState = {
 };
 type ChatBody = { message?: string };
 type AgentSandboxBody = { messageText?: unknown; replyToMessageId?: unknown };
+type TelegramUser = {
+  id?: unknown;
+  is_bot?: unknown;
+  username?: unknown;
+  first_name?: unknown;
+  last_name?: unknown;
+};
+type TelegramChat = {
+  id?: unknown;
+  type?: unknown;
+};
+type TelegramMessage = {
+  message_id?: unknown;
+  text?: unknown;
+  chat?: TelegramChat;
+  from?: TelegramUser;
+  reply_to_message?: { message_id?: unknown };
+};
+type TelegramWebhookUpdate = {
+  update_id?: unknown;
+  message?: TelegramMessage;
+};
 type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
 type ForwardableEmailMessageLike = {
   readonly from: string;
@@ -3601,6 +3624,8 @@ app.get("/api/telegram/status", async (c) => {
   if (!ownerId) return unauthorized(c);
 
   const botUsername = c.env.TELEGRAM_BOT_USERNAME?.trim() || null;
+  const botToken = c.env.TELEGRAM_BOT_TOKEN?.trim() || null;
+  const webhookSecret = c.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
   const connection = await getTelegramConnection(c.env, ownerId);
   const events = connection
     ? await c.env.DB.prepare(
@@ -3619,8 +3644,11 @@ app.get("/api/telegram/status", async (c) => {
 
   return c.json({
     available: true,
-    configured: Boolean(botUsername),
+    configured: Boolean(botUsername && botToken && webhookSecret),
     botUsername,
+    tokenConfigured: Boolean(botToken),
+    webhookSecretConfigured: Boolean(webhookSecret),
+    webhookUrl: `${getCoreApiOrigin(c.env, c.req.url)}/api/telegram/webhook`,
     startUrl:
       connection?.status === "pending" && botUsername
         ? `https://t.me/${botUsername.replace(/^@/, "")}?start=${encodeURIComponent(connection.setup_token)}`
@@ -3638,6 +3666,12 @@ app.post("/api/telegram/setup", async (c) => {
   if (!botUsername) {
     return c.json({ error: "Telegram bot username is not configured" }, 503);
   }
+  if (!c.env.TELEGRAM_BOT_TOKEN?.trim()) {
+    return c.json({ error: "Telegram bot token is not configured" }, 503);
+  }
+  if (!c.env.TELEGRAM_WEBHOOK_SECRET?.trim()) {
+    return c.json({ error: "Telegram webhook secret is not configured" }, 503);
+  }
 
   const connection = await upsertPendingTelegramConnection(c.env, ownerId);
   return c.json({
@@ -3645,6 +3679,9 @@ app.post("/api/telegram/setup", async (c) => {
     available: true,
     configured: true,
     botUsername,
+    tokenConfigured: true,
+    webhookSecretConfigured: true,
+    webhookUrl: `${getCoreApiOrigin(c.env, c.req.url)}/api/telegram/webhook`,
     startUrl: `https://t.me/${botUsername.replace(/^@/, "")}?start=${encodeURIComponent(connection.setup_token)}`,
     connection: serializeTelegramConnection(connection, botUsername),
   });
@@ -3675,16 +3712,46 @@ app.post("/api/telegram/disconnect", async (c) => {
     .run();
 
   const botUsername = c.env.TELEGRAM_BOT_USERNAME?.trim() || null;
+  const botToken = c.env.TELEGRAM_BOT_TOKEN?.trim() || null;
+  const webhookSecret = c.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
   const connection = await getTelegramConnection(c.env, ownerId);
   return c.json({
     ok: true,
     disconnected: true,
     available: true,
-    configured: Boolean(botUsername),
+    configured: Boolean(botUsername && botToken && webhookSecret),
     botUsername,
+    tokenConfigured: Boolean(botToken),
+    webhookSecretConfigured: Boolean(webhookSecret),
+    webhookUrl: `${getCoreApiOrigin(c.env, c.req.url)}/api/telegram/webhook`,
     startUrl: null,
     connection: connection ? serializeTelegramConnection(connection, botUsername) : null,
   });
+});
+
+app.post("/api/telegram/webhook", async (c) => {
+  const configuredSecret = c.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+  if (!configuredSecret) {
+    return c.json({ ok: false, error: "Telegram webhook secret is not configured" }, 503);
+  }
+
+  const receivedSecret = c.req.header("X-Telegram-Bot-Api-Secret-Token");
+  if (receivedSecret !== configuredSecret) {
+    return c.json({ ok: false, error: "Invalid Telegram webhook secret" }, 401);
+  }
+
+  const botToken = c.env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!botToken) {
+    return c.json({ ok: false, error: "Telegram bot token is not configured" }, 503);
+  }
+
+  const update = await c.req.json<TelegramWebhookUpdate>().catch(() => null);
+  if (!update || typeof update !== "object") {
+    return c.json({ ok: false, error: "Invalid Telegram update" }, 400);
+  }
+
+  const result = await handleTelegramWebhookUpdate(c.env, update, botToken);
+  return c.json(result, (result.ok ? 200 : result.status) as any);
 });
 
 app.get("/api/contacts", async (c) => {
@@ -5541,6 +5608,335 @@ async function upsertPendingTelegramConnection(env: Env, ownerId: string) {
   const row = await getTelegramConnection(env, ownerId);
   if (!row) throw new Error("Failed to create Telegram connection");
   return row;
+}
+
+async function handleTelegramWebhookUpdate(
+  env: Env,
+  update: TelegramWebhookUpdate,
+  botToken: string,
+): Promise<{ ok: boolean; status: number; action: string; error?: string }> {
+  const message = update.message;
+  const text = typeof message?.text === "string" ? message.text.trim() : "";
+  const chatId = telegramIdToString(message?.chat?.id);
+  const telegramUserId = telegramIdToString(message?.from?.id);
+
+  if (!message || !chatId || !telegramUserId || !text) {
+    return { ok: true, status: 200, action: "skipped" };
+  }
+
+  const startToken = parseTelegramStartToken(text);
+  if (startToken) {
+    const linked = await activateTelegramConnectionFromStartToken(env, update, startToken);
+    const replyText = linked
+      ? "Telegram is connected to your ME3 agent. Send a message here whenever you want to talk to it."
+      : "I couldn't link this chat. Open Account -> Telegram in ME3 and generate a fresh setup link.";
+    await sendTelegramMessage(botToken, chatId, replyText, message.message_id);
+    return { ok: true, status: 200, action: linked ? "linked" : "link_failed" };
+  }
+
+  const connection = await getActiveTelegramConnectionForChat(env, chatId);
+  if (!connection) {
+    await sendTelegramMessage(
+      botToken,
+      chatId,
+      "Open Account -> Telegram in ME3 and use the setup link before chatting with this bot.",
+      message.message_id,
+    );
+    return { ok: true, status: 200, action: "unlinked_chat" };
+  }
+
+  const turnId = crypto.randomUUID();
+  const sourceEventId = await insertTelegramChannelEvent(env, {
+    connectionId: connection.id,
+    direction: "inbound",
+    eventType: "message",
+    status: "received",
+    message,
+    textBody: text,
+    rawJson: update,
+    errorMessage: null,
+  });
+
+  await env.DB.prepare(
+    `UPDATE agent_channel_connections
+     SET last_inbound_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(connection.id)
+    .run();
+
+  const response = await dispatchTelegramAgentTurn(env, {
+    userId: connection.user_id,
+    connectionId: connection.id,
+    sourceEventId,
+    turnId,
+    messageText: text,
+    replyToMessageId: message.message_id,
+  });
+
+  if (!response.ok) {
+    const fallback = response.error || "ME3 agent runtime is not available right now.";
+    await sendTelegramMessage(botToken, chatId, fallback, message.message_id);
+    await insertTelegramChannelEvent(env, {
+      connectionId: connection.id,
+      direction: "outbound",
+      eventType: "error",
+      status: "failed",
+      message,
+      textBody: fallback,
+      rawJson: response,
+      errorMessage: response.error || "Agent dispatch failed",
+    });
+    return { ok: true, status: 200, action: "agent_failed" };
+  }
+
+  if (response.replyText) {
+    await sendTelegramMessage(botToken, chatId, response.replyText, message.message_id);
+    await insertTelegramChannelEvent(env, {
+      connectionId: connection.id,
+      direction: "outbound",
+      eventType: "send",
+      status: "sent",
+      message,
+      textBody: response.replyText,
+      rawJson: response,
+      errorMessage: null,
+    });
+    await env.DB.prepare(
+      `UPDATE agent_channel_connections
+       SET last_outbound_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+      .bind(connection.id)
+      .run();
+  }
+
+  return { ok: true, status: 200, action: "agent_reply" };
+}
+
+async function dispatchTelegramAgentTurn(
+  env: Env,
+  input: {
+    userId: string;
+    connectionId: string;
+    sourceEventId: string;
+    turnId: string;
+    messageText: string;
+    replyToMessageId: unknown;
+  },
+): Promise<AgentSandboxDispatchResponse> {
+  const runtime = env.ME3_USER_AGENT;
+  if (!runtime) {
+    return {
+      ok: false,
+      auditId: null,
+      turnId: input.turnId,
+      specialist: "core.agent-chat",
+      replyText: null,
+      model: null,
+      source: null,
+      error: "Agent chat runtime is not configured",
+    };
+  }
+
+  const id = runtime.idFromName(input.userId);
+  const stub = runtime.get(id);
+  const response = await stub.fetch("https://me3-core-user-agent.internal/dispatch/sandbox", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: input.userId,
+      connectionId: input.connectionId,
+      sourceEventId: input.sourceEventId,
+      turnId: input.turnId,
+      messageText: input.messageText,
+      replyToMessageId:
+        typeof input.replyToMessageId === "string" ||
+        typeof input.replyToMessageId === "number"
+          ? input.replyToMessageId
+          : null,
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | AgentSandboxDispatchResponse
+    | null;
+
+  if (!response.ok || payload?.ok !== true) {
+    return {
+      ok: false,
+      auditId: null,
+      turnId: input.turnId,
+      specialist: "core.agent-chat",
+      replyText: null,
+      model: null,
+      source: null,
+      error:
+        typeof payload?.error === "string"
+          ? payload.error
+          : `Agent chat runtime request failed (${response.status})`,
+    };
+  }
+
+  return payload;
+}
+
+async function activateTelegramConnectionFromStartToken(
+  env: Env,
+  update: TelegramWebhookUpdate,
+  setupToken: string,
+) {
+  const message = update.message;
+  const connection = await getTelegramConnectionBySetupToken(env, setupToken);
+  if (!connection || connection.status !== "pending") return null;
+
+  await env.DB.prepare(
+    `UPDATE agent_channel_connections
+     SET status = 'active',
+         telegram_user_id = ?,
+         telegram_chat_id = ?,
+         telegram_username = ?,
+         telegram_first_name = ?,
+         telegram_last_name = ?,
+         connected_at = CURRENT_TIMESTAMP,
+         disconnected_at = NULL,
+         last_inbound_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND channel = 'telegram'`,
+  )
+    .bind(
+      telegramIdToString(message?.from?.id),
+      telegramIdToString(message?.chat?.id),
+      stringOrNull(message?.from?.username),
+      stringOrNull(message?.from?.first_name),
+      stringOrNull(message?.from?.last_name),
+      connection.id,
+    )
+    .run();
+
+  await insertTelegramChannelEvent(env, {
+    connectionId: connection.id,
+    direction: "inbound",
+    eventType: "start",
+    status: "linked",
+    message,
+    textBody: typeof message?.text === "string" ? message.text : null,
+    rawJson: update,
+    errorMessage: null,
+  });
+
+  return connection;
+}
+
+async function getTelegramConnectionBySetupToken(env: Env, setupToken: string) {
+  return env.DB.prepare(
+    `SELECT id, user_id, channel, status, setup_token, telegram_user_id, telegram_chat_id,
+            telegram_username, telegram_first_name, telegram_last_name, connected_at,
+            disconnected_at, last_inbound_at, last_outbound_at, created_at, updated_at
+     FROM agent_channel_connections
+     WHERE setup_token = ? AND channel = 'telegram'`,
+  )
+    .bind(setupToken)
+    .first<DbAgentChannelConnection>();
+}
+
+async function getActiveTelegramConnectionForChat(env: Env, chatId: string) {
+  return env.DB.prepare(
+    `SELECT id, user_id, channel, status, setup_token, telegram_user_id, telegram_chat_id,
+            telegram_username, telegram_first_name, telegram_last_name, connected_at,
+            disconnected_at, last_inbound_at, last_outbound_at, created_at, updated_at
+     FROM agent_channel_connections
+     WHERE telegram_chat_id = ? AND channel = 'telegram' AND status = 'active'`,
+  )
+    .bind(chatId)
+    .first<DbAgentChannelConnection>();
+}
+
+async function insertTelegramChannelEvent(
+  env: Env,
+  input: {
+    connectionId: string;
+    direction: "inbound" | "outbound" | "system";
+    eventType: "start" | "message" | "link" | "send" | "error";
+    status: "received" | "pending" | "sent" | "failed" | "linked" | "skipped";
+    message: TelegramMessage | undefined;
+    textBody: string | null;
+    rawJson: unknown;
+    errorMessage: string | null;
+  },
+) {
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO agent_channel_events
+       (id, connection_id, channel, direction, event_type, status,
+        telegram_message_id, reply_to_message_id, telegram_user_id,
+        telegram_chat_id, telegram_username, text_body, raw_json,
+        error_message, created_at, updated_at)
+     VALUES (?, ?, 'telegram', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      id,
+      input.connectionId,
+      input.direction,
+      input.eventType,
+      input.status,
+      telegramIdToString(input.message?.message_id),
+      telegramIdToString(input.message?.reply_to_message?.message_id),
+      telegramIdToString(input.message?.from?.id),
+      telegramIdToString(input.message?.chat?.id),
+      stringOrNull(input.message?.from?.username),
+      input.textBody,
+      JSON.stringify(input.rawJson),
+      input.errorMessage,
+    )
+    .run();
+  return id;
+}
+
+async function sendTelegramMessage(
+  botToken: string,
+  chatId: string,
+  text: string,
+  replyToMessageId?: unknown,
+) {
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    text: truncateTelegramMessage(text),
+  };
+  if (typeof replyToMessageId === "string" || typeof replyToMessageId === "number") {
+    body.reply_to_message_id = replyToMessageId;
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { description?: string }
+      | null;
+    throw new Error(payload?.description || `Telegram sendMessage failed (${response.status})`);
+  }
+}
+
+function parseTelegramStartToken(text: string) {
+  const match = text.match(/^\/start(?:@\w+)?(?:\s+(.+))?$/);
+  return match?.[1]?.trim() || null;
+}
+
+function telegramIdToString(value: unknown) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function stringOrNull(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function truncateTelegramMessage(value: string) {
+  return value.length > 4000 ? `${value.slice(0, 3997)}...` : value;
 }
 
 function parseJsonRecord(value: string | null): Record<string, unknown> {

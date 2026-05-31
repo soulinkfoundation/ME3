@@ -34,6 +34,8 @@ export interface Env {
   ME3_AI_EXTRACTION_MODEL?: string;
   ME3_EMAIL_DEFAULT_PROVIDER?: string;
   TELEGRAM_BOT_USERNAME?: string;
+  TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_WEBHOOK_SECRET?: string;
 
   EMAIL?: {
     send(message: Record<string, unknown>): Promise<{ messageId?: string | null }>;

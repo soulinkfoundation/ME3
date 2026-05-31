@@ -941,14 +941,52 @@ function createEnv(): Env & {
                 }
               }
 
-              if (sql.includes("UPDATE agent_channel_connections") && state.telegramConnection) {
-                if (sql.includes("status = 'active'") && state.sandboxConnection) {
+              if (sql.includes("UPDATE agent_channel_connections")) {
+                if (
+                  sql.includes("telegram_user_id = ?") &&
+                  state.telegramConnection &&
+                  values[5] === state.telegramConnection.id
+                ) {
+                  state.telegramConnection = {
+                    ...state.telegramConnection,
+                    status: "active",
+                    telegram_user_id: values[0] as string | null,
+                    telegram_chat_id: values[1] as string | null,
+                    telegram_username: values[2] as string | null,
+                    telegram_first_name: values[3] as string | null,
+                    telegram_last_name: values[4] as string | null,
+                    connected_at: "2026-05-11T10:05:00Z",
+                    disconnected_at: null,
+                    last_inbound_at: "2026-05-11T10:05:00Z",
+                    updated_at: "2026-05-11T10:05:00Z",
+                  };
+                } else if (
+                  sql.includes("last_inbound_at = CURRENT_TIMESTAMP") &&
+                  state.telegramConnection &&
+                  values[0] === state.telegramConnection.id
+                ) {
+                  state.telegramConnection = {
+                    ...state.telegramConnection,
+                    last_inbound_at: "2026-05-11T10:06:00Z",
+                    updated_at: "2026-05-11T10:06:00Z",
+                  };
+                } else if (
+                  sql.includes("last_outbound_at = CURRENT_TIMESTAMP") &&
+                  state.telegramConnection &&
+                  values[0] === state.telegramConnection.id
+                ) {
+                  state.telegramConnection = {
+                    ...state.telegramConnection,
+                    last_outbound_at: "2026-05-11T10:07:00Z",
+                    updated_at: "2026-05-11T10:07:00Z",
+                  };
+                } else if (sql.includes("status = 'active'") && state.sandboxConnection) {
                   state.sandboxConnection = {
                     ...state.sandboxConnection,
                     status: "active",
                     updated_at: "2026-05-11T10:05:00Z",
                   };
-                } else {
+                } else if (state.telegramConnection) {
                   state.telegramConnection = {
                     ...state.telegramConnection,
                     status: "disconnected",
@@ -964,17 +1002,31 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("INSERT INTO agent_channel_events")) {
-                state.agentEvents.push({
-                  id: values[0] as string,
-                  connection_id: values[1] as string,
-                  channel: sql.includes("'sandbox'") ? "sandbox" : "telegram",
-                  direction: "inbound",
-                  event_type: "message",
-                  status: "received",
-                  reply_to_message_id: values[2] as string | null,
-                  text_body: values[3] as string | null,
-                  raw_json: values[4] as string | null,
-                });
+                if (sql.includes("'sandbox'")) {
+                  state.agentEvents.push({
+                    id: values[0] as string,
+                    connection_id: values[1] as string,
+                    channel: "sandbox",
+                    direction: "inbound",
+                    event_type: "message",
+                    status: "received",
+                    reply_to_message_id: values[2] as string | null,
+                    text_body: values[3] as string | null,
+                    raw_json: values[4] as string | null,
+                  });
+                } else {
+                  state.agentEvents.push({
+                    id: values[0] as string,
+                    connection_id: values[1] as string,
+                    channel: "telegram",
+                    direction: values[2] as StoredAgentChannelEvent["direction"],
+                    event_type: values[3] as StoredAgentChannelEvent["event_type"],
+                    status: values[4] as StoredAgentChannelEvent["status"],
+                    reply_to_message_id: values[6] as string | null,
+                    text_body: values[10] as string | null,
+                    raw_json: values[11] as string | null,
+                  });
+                }
               }
 
               return { success: true };
@@ -1036,6 +1088,19 @@ function createEnv(): Env & {
                   return state.sandboxConnection &&
                     values[0] === state.sandboxConnection.user_id
                     ? (state.sandboxConnection as T)
+                    : null;
+                }
+                if (sql.includes("setup_token = ?")) {
+                  return state.telegramConnection &&
+                    values[0] === state.telegramConnection.setup_token
+                    ? (state.telegramConnection as T)
+                    : null;
+                }
+                if (sql.includes("telegram_chat_id = ?")) {
+                  return state.telegramConnection &&
+                    values[0] === state.telegramConnection.telegram_chat_id &&
+                    state.telegramConnection.status === "active"
+                    ? (state.telegramConnection as T)
                     : null;
                 }
                 return state.telegramConnection &&
@@ -1290,6 +1355,8 @@ function createEnv(): Env & {
     TOKEN_ENCRYPTION_KEY: "test-encryption-key",
     SETUP_PASSWORD: "owner-code",
     TELEGRAM_BOT_USERNAME: "me3_core_test_bot",
+    TELEGRAM_BOT_TOKEN: "123:test-token",
+    TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret",
     EMAIL: {
       async send(message) {
         state.emailSends.push(message as Record<string, unknown>);
@@ -4615,6 +4682,193 @@ describe("ME3 Core Worker auth", () => {
     expect(await response.json()).toMatchObject({
       error: "Telegram bot username is not configured",
     });
+  });
+
+  it("reports unavailable Telegram setup when the bot token is not configured", async () => {
+    const env = createEnv();
+    env.TELEGRAM_BOT_TOKEN = undefined;
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/telegram/setup", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: "Telegram bot token is not configured",
+    });
+  });
+
+  it("links Telegram webhook start messages to pending account connections", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/telegram/setup", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const sendMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ ok: true, result: {} }),
+    );
+    vi.stubGlobal("fetch", sendMock);
+
+    try {
+      const response = await app.fetch(
+        new Request("http://localhost/api/telegram/webhook", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Telegram-Bot-Api-Secret-Token": "test-webhook-secret",
+          },
+          body: JSON.stringify({
+            update_id: 1,
+            message: {
+              message_id: 10,
+              text: `/start ${env.telegramConnection?.setup_token}`,
+              chat: { id: 456, type: "private" },
+              from: {
+                id: 123,
+                username: "owner",
+                first_name: "Core",
+                last_name: "Owner",
+              },
+            },
+          }),
+        }),
+        env,
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({ ok: true, action: "linked" });
+      expect(env.telegramConnection).toMatchObject({
+        status: "active",
+        telegram_user_id: "123",
+        telegram_chat_id: "456",
+        telegram_username: "owner",
+      });
+      expect(env.agentEvents).toContainEqual(
+        expect.objectContaining({
+          channel: "telegram",
+          direction: "inbound",
+          event_type: "start",
+          status: "linked",
+        }),
+      );
+      expect(sendMock).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("dispatches active Telegram messages through the agent runtime and replies", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+    env.telegramConnection = {
+      id: "telegram-connection",
+      user_id: "owner",
+      channel: "telegram",
+      status: "active",
+      setup_token: "setup-token",
+      telegram_user_id: "123",
+      telegram_chat_id: "456",
+      telegram_username: "owner",
+      telegram_first_name: "Core",
+      telegram_last_name: "Owner",
+      connected_at: "2026-05-11T10:01:00Z",
+      disconnected_at: null,
+      last_inbound_at: null,
+      last_outbound_at: null,
+      created_at: "2026-05-11T10:00:00Z",
+      updated_at: "2026-05-11T10:00:00Z",
+    };
+
+    const runtimeFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        auditId: null,
+        turnId: "turn-1",
+        specialist: "core.agent-chat",
+        replyText: "Hello from Telegram Core.",
+        model: "test-model",
+        source: "fallback",
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      }),
+    );
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const sendMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ ok: true, result: {} }),
+    );
+    vi.stubGlobal("fetch", sendMock);
+
+    try {
+      const response = await app.fetch(
+        new Request("http://localhost/api/telegram/webhook", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Telegram-Bot-Api-Secret-Token": "test-webhook-secret",
+          },
+          body: JSON.stringify({
+            update_id: 2,
+            message: {
+              message_id: 11,
+              text: "Hello agent",
+              chat: { id: 456, type: "private" },
+              from: { id: 123, username: "owner" },
+            },
+          }),
+        }),
+        env,
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({ ok: true, action: "agent_reply" });
+      expect(runtimeFetch).toHaveBeenCalledOnce();
+      expect(env.agentEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            channel: "telegram",
+            direction: "inbound",
+            event_type: "message",
+            text_body: "Hello agent",
+          }),
+          expect.objectContaining({
+            channel: "telegram",
+            direction: "outbound",
+            event_type: "send",
+            text_body: "Hello from Telegram Core.",
+          }),
+        ]),
+      );
+      expect(sendMock).toHaveBeenCalledOnce();
+      const sendInit = sendMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(String(sendInit.body))).toMatchObject({
+        chat_id: "456",
+        text: "Hello from Telegram Core.",
+        reply_to_message_id: 11,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("disconnects an active Telegram account-level connection", async () => {

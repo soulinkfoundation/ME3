@@ -31,6 +31,9 @@ type TelegramStatusResponse = {
   available: boolean;
   configured: boolean;
   botUsername: string | null;
+  tokenConfigured: boolean;
+  webhookSecretConfigured: boolean;
+  webhookUrl: string | null;
   startUrl: string | null;
   connection: TelegramConnectionRecord | null;
 };
@@ -61,6 +64,9 @@ const disconnectLoading = ref(false);
 const available = ref(false);
 const configured = ref(false);
 const botUsername = ref<string | null>(null);
+const tokenConfigured = ref(false);
+const webhookSecretConfigured = ref(false);
+const webhookUrl = ref<string | null>(null);
 const startUrl = ref<string | null>(null);
 const connection = ref<TelegramConnectionRecord | null>(null);
 const error = ref<string | null>(null);
@@ -71,7 +77,7 @@ const statusHint = computed(() => {
   }
 
   if (!configured.value) {
-    return "Telegram linking is not available on this deployment right now.";
+    return "Finish the deployment setup below, then refresh this panel.";
   }
 
   if (!connection.value) {
@@ -99,7 +105,7 @@ const statusHint = computed(() => {
 
 const refreshButtonTooltip = computed(() => {
   if (!configured.value) {
-    return "Telegram linking is not available on this deployment right now.";
+    return "Telegram deployment setup is incomplete.";
   }
   if (connection.value?.status === "active") {
     return "Refresh Telegram connection status";
@@ -126,6 +132,14 @@ const connectionDetails = computed(() => {
   return details;
 });
 
+const missingSetupItems = computed(() => {
+  const items: string[] = [];
+  if (!botUsername.value) items.push("Bot username");
+  if (!tokenConfigured.value) items.push("Bot token secret");
+  if (!webhookSecretConfigured.value) items.push("Webhook secret");
+  return items;
+});
+
 function formatTelegramUser(current: TelegramConnectionRecord) {
   if (current.telegramUsername) return `@${current.telegramUsername}`;
   const name = [current.telegramFirstName, current.telegramLastName]
@@ -148,6 +162,9 @@ function syncStatus(response: TelegramStatusResponse) {
   available.value = response.available;
   configured.value = response.configured;
   botUsername.value = response.botUsername;
+  tokenConfigured.value = response.tokenConfigured;
+  webhookSecretConfigured.value = response.webhookSecretConfigured;
+  webhookUrl.value = response.webhookUrl;
   startUrl.value = response.startUrl;
   connection.value = response.connection;
   if (response.connection?.status === "active") {
@@ -298,10 +315,24 @@ defineExpose({
       <div v-if="variant === 'default'" class="telegram-operator-note">
         <strong>Standalone Core installs need their own Telegram bot.</strong>
         <p>
-          Create one with Telegram BotFather, then configure this ME3 Core
-          deployment with that bot username. Keep the bot token in local or
-          Cloudflare secrets, not in source control.
+          Create one with @BotFather, add the bot token and webhook secret to
+          Cloudflare secrets, then point Telegram at this Core webhook.
         </p>
+        <dl class="telegram-setup-checklist">
+          <div>
+            <dt>Required</dt>
+            <dd>
+              <template v-if="missingSetupItems.length">
+                {{ missingSetupItems.join(", ") }}
+              </template>
+              <template v-else>Ready</template>
+            </dd>
+          </div>
+          <div v-if="webhookUrl">
+            <dt>Webhook</dt>
+            <dd>{{ webhookUrl }}</dd>
+          </div>
+        </dl>
       </div>
 
       <div v-if="configured" class="telegram-qr-section">
@@ -452,6 +483,31 @@ defineExpose({
   color: var(--color-text-muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.telegram-setup-checklist {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  font-size: 13px;
+}
+
+.telegram-setup-checklist div {
+  display: grid;
+  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.telegram-setup-checklist dt {
+  color: var(--color-text-muted);
+}
+
+.telegram-setup-checklist dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
 }
 
 .telegram-qr-section {
