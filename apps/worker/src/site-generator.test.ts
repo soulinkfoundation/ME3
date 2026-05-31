@@ -196,6 +196,9 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain('pattern="[^\\s@]+@[^\\s@]+\\.[^\\s@]+"');
     expect(files["index.html"]).toContain("setCustomValidity(hasInvalidEmail?'Enter a valid email address.':'')");
     expect(files["index.html"]).toContain("if(!validateForm()) return;");
+    expect(files["index.html"]).toContain("'/free'");
+    expect(files["index.html"]).toContain("Your booking is confirmed.");
+    expect(files["index.html"]).not.toContain("Your booking request is ready.");
     expect(files["index.html"]).toContain('"bufferTime":15');
     expect(files["index.html"]).toContain("t+=slotStep");
     expect(files["index.html"]).toContain("No available times on this day.");

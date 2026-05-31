@@ -139,6 +139,31 @@ type AssistantJobActionResultRow = {
 
 type SerializedActionResult = ReturnType<typeof serializeActionResult>;
 
+type AgentChannelConnectionRow = {
+  id: string;
+  user_id: string;
+  channel: "telegram" | "sandbox" | "soulink";
+  status: "pending" | "active" | "disconnected";
+  setup_token: string;
+  provider_connection_id: string | null;
+  provider_thread_id: string | null;
+  last_outbound_at: string | null;
+};
+
+type AgentChannelEventRow = {
+  id: string;
+  connection_id: string;
+  provider_event_id: string | null;
+  status: string;
+};
+
+type OwnerNotificationResult = {
+  ok?: unknown;
+  messageId?: unknown;
+  eventId?: unknown;
+  error?: unknown;
+};
+
 type OwnerProfileContextRow = {
   id: string;
   name: string | null;
@@ -265,11 +290,41 @@ type UpdateAssistantJobIngressEventBody = {
   errorMessage?: unknown;
 };
 
-export function listAssistantJobRecipes() {
+export async function listAssistantJobRecipes(env: Env, userId: string) {
+  const readySetupRequirements = await getAssistantJobReadySetupRequirements(env, userId);
   return {
-    recipes: ASSISTANT_JOB_STARTER_RECIPES.map(serializeRecipe),
+    recipes: ASSISTANT_JOB_STARTER_RECIPES.map((recipe) => {
+      const serialized = serializeRecipe(recipe);
+      const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(recipe), {
+        readySetupRequirements,
+      });
+      return {
+        ...serialized,
+        state:
+          validation.status === "needs_setup"
+            ? "needs_setup"
+            : serialized.state,
+      };
+    }),
     capabilities: ASSISTANT_JOB_CAPABILITIES,
   };
+}
+
+async function getAssistantJobReadySetupRequirements(env: Env, userId: string) {
+  const ready = new Set<string>();
+  const ownerConnection = await getActiveOwnerNotificationConnection(env, userId);
+  if (ownerConnection) ready.add("owner_notifications");
+  return Array.from(ready);
+}
+
+async function validateAssistantJobDraftForUser(
+  env: Env,
+  userId: string,
+  draft: AssistantJobDraft,
+) {
+  return validateAssistantJobDraft(draft, {
+    readySetupRequirements: await getAssistantJobReadySetupRequirements(env, userId),
+  });
 }
 
 export async function listAssistantJobs(env: Env, userId: string, status?: string | null) {
@@ -524,7 +579,7 @@ export async function executeAssistantJobRun(env: Env, userId: string, runId: st
   const job = await requireAssistantJob(env, userId, run.job_id);
   const version = await requireAssistantJobVersion(env, userId, run.job_version_id);
   const draft = draftFromVersion(job, version);
-  const validation = validateAssistantJobDraft(draft);
+  const validation = await validateAssistantJobDraftForUser(env, userId, draft);
   const now = new Date().toISOString();
   const context = await loadAssistantJobRunContext(env, userId, { job, run, draft });
 
@@ -632,7 +687,7 @@ export async function createAssistantJob(env: Env, userId: string, body: CreateA
       throw new AssistantJobsInputError("That job has already been added.", 409);
     }
   }
-  const validation = validateAssistantJobDraft(draft);
+  const validation = await validateAssistantJobDraftForUser(env, userId, draft);
   const requestedStatus = normalizeJobStatus(body.status);
   const status = resolveInitialStatus(validation, requestedStatus);
   const jobId = crypto.randomUUID();
@@ -792,7 +847,7 @@ export async function runAssistantJobNow(env: Env, userId: string, jobId: string
 
   const version = await requireAssistantJobVersion(env, userId, job.current_version_id);
   const draft = draftFromVersion(job, version);
-  const validation = validateAssistantJobDraft(draft);
+  const validation = await validateAssistantJobDraftForUser(env, userId, draft);
   const runId = crypto.randomUUID();
   const now = new Date().toISOString();
   const blocked = validation.status !== "valid" || job.status === "needs_setup" || job.status === "draft";
@@ -860,7 +915,7 @@ async function createAssistantJobRunForEvent(
 ) {
   const version = candidateVersionFromRow(candidate);
   const draft = draftFromVersion(candidate, version);
-  const validation = validateAssistantJobDraft(draft);
+  const validation = await validateAssistantJobDraftForUser(env, candidate.user_id, draft);
   const runId = crypto.randomUUID();
   const now = new Date().toISOString();
   const blocked = validation.status !== "valid";
@@ -1010,7 +1065,147 @@ async function executeAssistantJobMissionOutputAction(
   if (input.capability.id === "mission.review_packet.create") {
     return createAssistantJobMissionActivity(env, input, "assistant_job.review_packet");
   }
+  if (input.capability.id === "message.owner.notify") {
+    return createAssistantJobOwnerNotification(env, input);
+  }
   return null;
+}
+
+async function createAssistantJobOwnerNotification(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+) {
+  const connection = await getActiveOwnerNotificationConnection(env, input.userId);
+  if (!connection) {
+    return insertAssistantJobActionResult(env, {
+      runId: input.run.id,
+      actionId: input.action.id,
+      capabilityId: input.capability.id,
+      idempotencyKey: input.idempotencyKey,
+      status: "failed",
+      errorMessage: "Owner notifications are not connected.",
+    });
+  }
+
+  const providerEventId = `${input.run.id}:${input.action.id}:owner-notify`;
+  const existingEvent = await getAgentChannelEventByProviderEventId(
+    env,
+    connection.id,
+    providerEventId,
+  );
+  if (existingEvent?.status === "sent" || existingEvent?.status === "pending") {
+    return insertAssistantJobActionResult(env, {
+      runId: input.run.id,
+      actionId: input.action.id,
+      capabilityId: input.capability.id,
+      idempotencyKey: input.idempotencyKey,
+      status: "succeeded",
+      externalRef: existingEvent.id,
+    });
+  }
+
+  const message =
+    missionTextInput(input.action, "message") ||
+    missionTextInput(input.action, "text") ||
+    `${input.job.name} is ready. I created a Mission Control result for you.`;
+  const eventId = await insertOwnerNotificationChannelEvent(env, {
+    connection,
+    providerEventId,
+    status: "pending",
+    message,
+    rawJson: {
+      assistantJobId: input.job.id,
+      assistantJobRunId: input.run.id,
+      assistantJobActionId: input.action.id,
+      idempotencyKey: input.idempotencyKey,
+    },
+  });
+
+  try {
+    const response = await fetch(`${getSoulinkApiOrigin(env)}/api/me3/assistant-channel/notify`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${connection.setup_token}`,
+        "Content-Type": "application/json",
+      },
+      body: stringifyJson({
+        streamChannelType: connection.provider_connection_id || "messaging",
+        streamChannelId: connection.provider_thread_id,
+        messageId: providerEventId,
+        messageText: message,
+        createdAt: new Date().toISOString(),
+      }),
+    });
+    const payload = await response.json().catch(() => null) as OwnerNotificationResult | null;
+    if (!response.ok || payload?.ok !== true) {
+      const errorMessage =
+        normalizeOptionalText(payload?.error) ||
+        `Soulink notification failed with ${response.status}`;
+      await updateOwnerNotificationChannelEvent(env, {
+        eventId,
+        status: "failed",
+        providerMessageId: normalizeOptionalText(payload?.messageId),
+        rawJson: payload,
+        errorMessage,
+      });
+      return insertAssistantJobActionResult(env, {
+        runId: input.run.id,
+        actionId: input.action.id,
+        capabilityId: input.capability.id,
+        idempotencyKey: input.idempotencyKey,
+        status: "failed",
+        externalRef: eventId,
+        errorMessage,
+      });
+    }
+
+    const providerMessageId =
+      normalizeOptionalText(payload.messageId) ||
+      normalizeOptionalText(payload.eventId) ||
+      providerEventId;
+    await updateOwnerNotificationChannelEvent(env, {
+      eventId,
+      status: "sent",
+      providerMessageId,
+      rawJson: payload,
+      errorMessage: null,
+    });
+    await updateOwnerNotificationConnectionSentAt(env, connection.id);
+    return insertAssistantJobActionResult(env, {
+      runId: input.run.id,
+      actionId: input.action.id,
+      capabilityId: input.capability.id,
+      idempotencyKey: input.idempotencyKey,
+      status: "succeeded",
+      externalRef: eventId,
+    });
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+    await updateOwnerNotificationChannelEvent(env, {
+      eventId,
+      status: "failed",
+      providerMessageId: null,
+      rawJson: { errorMessage },
+      errorMessage,
+    });
+    return insertAssistantJobActionResult(env, {
+      runId: input.run.id,
+      actionId: input.action.id,
+      capabilityId: input.capability.id,
+      idempotencyKey: input.idempotencyKey,
+      status: "failed",
+      externalRef: eventId,
+      errorMessage,
+    });
+  }
 }
 
 async function createAssistantJobMissionTask(
@@ -1689,6 +1884,116 @@ async function listEventTriggerCandidates(env: Env, userId: string) {
     .bind(userId)
     .all<AssistantJobMatchCandidateRow>();
   return rows.results;
+}
+
+async function getActiveOwnerNotificationConnection(env: Env, userId: string) {
+  return env.DB.prepare(
+    `SELECT id, user_id, channel, status, setup_token,
+            provider_connection_id, provider_thread_id, last_outbound_at
+     FROM agent_channel_connections
+     WHERE user_id = ?
+       AND status = 'active'
+       AND channel = 'soulink'
+       AND provider_thread_id IS NOT NULL
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+  )
+    .bind(userId)
+    .first<AgentChannelConnectionRow>();
+}
+
+async function getAgentChannelEventByProviderEventId(
+  env: Env,
+  connectionId: string,
+  providerEventId: string,
+) {
+  return env.DB.prepare(
+    `SELECT id, connection_id, provider_event_id, status
+     FROM agent_channel_events
+     WHERE connection_id = ? AND provider_event_id = ?
+     LIMIT 1`,
+  )
+    .bind(connectionId, providerEventId)
+    .first<AgentChannelEventRow>();
+}
+
+async function insertOwnerNotificationChannelEvent(
+  env: Env,
+  input: {
+    connection: AgentChannelConnectionRow;
+    providerEventId: string;
+    status: "pending" | "sent" | "failed";
+    message: string;
+    rawJson: unknown;
+  },
+) {
+  const existing = await getAgentChannelEventByProviderEventId(
+    env,
+    input.connection.id,
+    input.providerEventId,
+  );
+  if (existing) return existing.id;
+
+  const eventId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO agent_channel_events
+       (id, connection_id, channel, direction, event_type, status,
+        provider_event_id, provider_message_id, reply_to_message_id,
+        text_body, raw_json, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, 'outbound', 'send', ?, ?, NULL, NULL, ?, ?, NULL,
+             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      eventId,
+      input.connection.id,
+      input.connection.channel,
+      input.status,
+      input.providerEventId,
+      input.message,
+      stringifyJson(input.rawJson),
+    )
+    .run();
+  return eventId;
+}
+
+async function updateOwnerNotificationChannelEvent(
+  env: Env,
+  input: {
+    eventId: string;
+    status: "sent" | "failed";
+    providerMessageId: string | null;
+    rawJson: unknown;
+    errorMessage: string | null;
+  },
+) {
+  await env.DB.prepare(
+    `UPDATE agent_channel_events
+     SET status = ?,
+         provider_message_id = ?,
+         raw_json = ?,
+         error_message = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(
+      input.status,
+      input.providerMessageId,
+      stringifyJson(input.rawJson),
+      input.errorMessage,
+      input.eventId,
+    )
+    .run();
+}
+
+async function updateOwnerNotificationConnectionSentAt(env: Env, connectionId: string) {
+  await env.DB.prepare(
+    `UPDATE agent_channel_connections
+     SET last_outbound_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(connectionId)
+    .run();
 }
 
 async function loadAssistantJobOwnerContext(
@@ -2527,6 +2832,17 @@ function parseJson<T>(value: string, fallback: T): T {
 
 function stringifyJson(value: unknown) {
   return JSON.stringify(value);
+}
+
+function getSoulinkApiOrigin(env: Env) {
+  const configured = normalizeOptionalText(env.SOULINK_API_ORIGIN);
+  if (!configured) return "https://soulinkfoundation.org";
+  try {
+    const url = new URL(configured);
+    return url.origin;
+  } catch {
+    return "https://soulinkfoundation.org";
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

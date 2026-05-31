@@ -768,12 +768,13 @@ function action(
   capabilityId: string,
   label: string,
   approvalMode: AssistantJobApprovalMode,
+  inputs: Readonly<Record<string, unknown>> = {},
 ): AssistantJobAction {
   return {
     id,
     capabilityId,
     label,
-    inputs: {},
+    inputs,
     approvalMode,
     onFailure: "request_review",
     idempotencyScope: "run",
@@ -875,6 +876,7 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
       "mission.approval.read",
       "mission.review_packet.create",
       "mission.activity.create",
+      "message.owner.notify",
     ],
     optionalCapabilityIds: [],
     recommendedSkillIds: [],
@@ -893,6 +895,15 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
           "mission.review_packet.create",
           "Create daily briefing packet",
           "review_required",
+        ),
+        action(
+          "notify-owner",
+          "message.owner.notify",
+          "Send briefing notification",
+          "none",
+          {
+            message: "Daily Briefing is ready. I created a Mission Control result for you.",
+          },
         ),
       ],
     }),

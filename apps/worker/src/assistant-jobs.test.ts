@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveAssistantJob,
   createAssistantJob,
@@ -32,6 +32,18 @@ type IngressRow = Record<string, unknown> & {
   idempotency_key: string;
   status: string;
 };
+type ChannelConnectionRow = Record<string, unknown> & {
+  id: string;
+  user_id: string;
+  channel: string;
+  status: string;
+};
+type ChannelEventRow = Record<string, unknown> & {
+  id: string;
+  connection_id: string;
+  provider_event_id: string | null;
+  status: string;
+};
 
 type AssistantJobsDbState = {
   owner: Record<string, unknown> | null;
@@ -52,10 +64,16 @@ type AssistantJobsDbState = {
   events: Record<string, unknown>[];
   ingressEvents: IngressRow[];
   pluginActivities: Record<string, unknown>[];
+  channelConnections: ChannelConnectionRow[];
+  channelEvents: ChannelEventRow[];
   queueMessages: unknown[];
 };
 
 describe("assistant jobs persistence", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("creates, lists, pauses, duplicates, runs, and archives jobs", async () => {
     const env = createAssistantJobsEnv();
 
@@ -123,6 +141,60 @@ describe("assistant jobs persistence", () => {
     const run = await runAssistantJobNow(env, "owner", created.job.id);
     expect(run.run.status).toBe("blocked");
     expect(run.validation.status).toBe("needs_setup");
+  });
+
+  it("sends daily briefing notifications through the connected owner channel", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, messageId: "stream-message-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createAssistantJobsEnv({
+      channelConnections: [soulinkConnectionRow()],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "daily-briefing" });
+    expect(created.job.status).toBe("active");
+    expect(created.validation.status).toBe("valid");
+
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+
+    expect(run.run.status).toBe("succeeded");
+    expect(run.actionResults).toContainEqual(
+      expect.objectContaining({
+        actionId: "notify-owner",
+        capabilityId: "message.owner.notify",
+        status: "succeeded",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://soulink.test/api/me3/assistant-channel/notify",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer dispatch-token",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+    const notifyRequest = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1];
+    expect(JSON.parse(notifyRequest?.body as string)).toMatchObject({
+      streamChannelType: "messaging",
+      streamChannelId: "assistant-channel",
+      messageText: "Daily Briefing is ready. I created a Mission Control result for you.",
+    });
+    expect(env.__state.channelEvents).toHaveLength(1);
+    expect(env.__state.channelEvents[0]).toMatchObject({
+      connection_id: "soulink-connection",
+      channel: "soulink",
+      direction: "outbound",
+      event_type: "send",
+      status: "sent",
+      provider_message_id: "stream-message-1",
+      text_body: "Daily Briefing is ready. I created a Mission Control result for you.",
+    });
   });
 
   it("records assistant job ingress events idempotently", async () => {
@@ -577,6 +649,8 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
     pluginActivities: [],
     queueMessages: [],
     ...stateOverrides,
+    channelConnections: stateOverrides.channelConnections ?? [],
+    channelEvents: stateOverrides.channelEvents ?? [],
   };
 
   const db = {
@@ -601,7 +675,22 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
   return {
     DB: db as unknown as D1Database,
     ASSISTANT_JOB_EVENTS: useQueue ? (queue as unknown as Queue) : undefined,
+    SOULINK_API_ORIGIN: "https://soulink.test",
     __state: state,
+  };
+}
+
+function soulinkConnectionRow(): ChannelConnectionRow {
+  return {
+    id: "soulink-connection",
+    user_id: "owner",
+    channel: "soulink",
+    status: "active",
+    setup_token: "dispatch-token",
+    provider_connection_id: "messaging",
+    provider_thread_id: "assistant-channel",
+    last_outbound_at: null,
+    updated_at: "2026-05-31T12:00:00.000Z",
   };
 }
 
@@ -903,6 +992,54 @@ class FakeStatement {
       return { success: true };
     }
 
+    if (sql.includes("INSERT INTO agent_channel_events")) {
+      const exists = this.state.channelEvents.some(
+        (event) => event.connection_id === values[1] && event.provider_event_id === values[4],
+      );
+      if (!exists) {
+        this.state.channelEvents.push({
+          id: values[0] as string,
+          connection_id: values[1] as string,
+          channel: values[2] as string,
+          direction: "outbound",
+          event_type: "send",
+          status: values[3] as string,
+          provider_event_id: values[4] as string | null,
+          provider_message_id: null,
+          reply_to_message_id: null,
+          text_body: values[5] as string | null,
+          raw_json: values[6] as string,
+          error_message: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("UPDATE agent_channel_events")) {
+      const event = this.state.channelEvents.find((candidate) => candidate.id === values[4]);
+      if (event) {
+        event.status = values[0] as string;
+        event.provider_message_id = values[1] as string | null;
+        event.raw_json = values[2] as string;
+        event.error_message = values[3] as string | null;
+        event.updated_at = new Date().toISOString();
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("UPDATE agent_channel_connections")) {
+      const connection = this.state.channelConnections.find(
+        (candidate) => candidate.id === values[0],
+      );
+      if (connection) {
+        connection.last_outbound_at = new Date().toISOString();
+        connection.updated_at = new Date().toISOString();
+      }
+      return { success: true };
+    }
+
     if (sql.includes("UPDATE assistant_job_ingress_events")) {
       const event = this.findIngressEvent(values[2], values[3]);
       if (event) {
@@ -990,6 +1127,24 @@ class FakeStatement {
             result.run_id === values[0] &&
             result.action_id === values[1] &&
             result.idempotency_key === values[2],
+        ) || null
+      ) as T | null;
+    }
+    if (sql.includes("FROM agent_channel_connections")) {
+      return (
+        this.state.channelConnections.find(
+          (connection) =>
+            connection.user_id === values[0] &&
+            connection.status === "active" &&
+            connection.channel === "soulink" &&
+            connection.provider_thread_id,
+        ) || null
+      ) as T | null;
+    }
+    if (sql.includes("FROM agent_channel_events")) {
+      return (
+        this.state.channelEvents.find(
+          (event) => event.connection_id === values[0] && event.provider_event_id === values[1],
         ) || null
       ) as T | null;
     }

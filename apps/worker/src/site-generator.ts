@@ -909,7 +909,13 @@ function paidBookingWidgetScript(): string {
       amount:amountInput?Number(amountInput.value):selected.pricing.suggestedAmount,
       returnUrl:window.location.href.split('#')[0]
     };
-    if(!selected.pricing||!selected.pricing.enabled){setStatus('Your booking request is ready.');return;}
+    if(!selected.pricing||!selected.pricing.enabled){
+      fetch('/api/book/'+encodeURIComponent(config.username)+'/free',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+        .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Failed to confirm booking.');return data;});})
+        .then(function(){setStatus('Your booking is confirmed.');})
+        .catch(function(error){setStatus(error.message||'Failed to confirm booking.',true);});
+      return;
+    }
     fetch('/api/book/'+encodeURIComponent(config.username)+'/checkout-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
       .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Failed to create checkout.');return data;});})
       .then(function(data){if(data.url){window.location.href=data.url;return;}throw new Error('Stripe checkout URL missing.');})

@@ -11,6 +11,8 @@ import type {
   DbEmailSendAudit,
   DbMailboxAlias,
   DbMailboxMessage,
+  DbBooking,
+  DbSite,
   DbUserReminder,
   Env,
   OwnerProfile,
@@ -131,6 +133,15 @@ type StoredCommerceSettings = {
   created_at: string;
   updated_at: string;
 };
+type StoredSiteFile = {
+  site_id: string;
+  path: string;
+  content: Uint8Array;
+  content_type: string;
+  size: number;
+  sha256: string | null;
+  updated_at: string;
+};
 type StoredTelegramSettings = {
   user_id: string;
   bot_username: string | null;
@@ -194,6 +205,9 @@ function createEnv(): Env & {
   commerceSettings: StoredCommerceSettings | null;
   telegramSettings: StoredTelegramSettings | null;
   contentItems: StoredContentItem[];
+  sites: DbSite[];
+  siteFiles: StoredSiteFile[];
+  bookings: DbBooking[];
 } {
   const state = {
     owner: null as StoredOwner | null,
@@ -220,6 +234,9 @@ function createEnv(): Env & {
     commerceSettings: null as StoredCommerceSettings | null,
     telegramSettings: null as StoredTelegramSettings | null,
     contentItems: [] as StoredContentItem[],
+    sites: [] as DbSite[],
+    siteFiles: [] as StoredSiteFile[],
+    bookings: [] as DbBooking[],
   };
 
   const db = {
@@ -833,6 +850,33 @@ function createEnv(): Env & {
                 });
               }
 
+              if (sql.includes("INSERT INTO bookings")) {
+                const isFreeBooking = sql.includes("'not_required', 1");
+                state.bookings.push({
+                  id: values[0] as string,
+                  site_id: values[1] as string,
+                  offer_id: values[2] as string | null,
+                  booking_type: "one_to_one",
+                  guest_name: values[3] as string,
+                  guest_email: values[4] as string,
+                  starts_at: values[5] as string,
+                  ends_at: values[6] as string,
+                  duration_minutes: values[7] as number,
+                  calendar_event_id: null,
+                  status: "confirmed",
+                  notes: values[8] as string | null,
+                  created_at: "2026-05-31T22:30:00Z",
+                  cancelled_at: null,
+                  payment_intent_id: isFreeBooking ? null : (values[9] as string | null),
+                  amount_paid: isFreeBooking ? null : (values[10] as number | null),
+                  suggested_amount: isFreeBooking ? null : (values[11] as number | null),
+                  currency: isFreeBooking ? null : (values[12] as DbBooking["currency"]),
+                  payment_status: isFreeBooking ? "not_required" : "succeeded",
+                  is_free_booking: isFreeBooking ? 1 : 0,
+                  paid_at: isFreeBooking ? null : "2026-05-31T22:30:00Z",
+                });
+              }
+
               if (sql.includes("UPDATE mailbox_aliases") && state.mailbox) {
                 if (sql.includes("alias_local_part = ?")) {
                   state.mailbox.alias_local_part = values[0] as string;
@@ -1278,9 +1322,55 @@ function createEnv(): Env & {
                 ) as T | null;
               }
               if (sql.includes("FROM sites")) {
+                if (values.length === 1) {
+                  return (
+                    state.sites.find((site) => site.username === values[0]) ||
+                    (values[0] === "owner"
+                      ? ({ id: "site-1", user_id: "owner", username: "owner" } as DbSite)
+                      : null)
+                  ) as T | null;
+                }
+                const site = state.sites.find(
+                  (entry) => entry.user_id === values[0] && entry.username === values[1],
+                );
+                if (site) return site as T;
                 return values[0] === "site-1" && values[1] === "owner"
                   ? ({ id: "site-1", user_id: "owner", username: "owner" } as T)
                   : null;
+              }
+              if (sql.includes("FROM site_files")) {
+                return (
+                  state.siteFiles.find(
+                    (file) => file.site_id === values[0] && file.path === values[1],
+                  ) || null
+                ) as T | null;
+              }
+              if (sql.includes("FROM bookings")) {
+                if (sql.includes("WHERE id = ?")) {
+                  return (
+                    state.bookings.find((booking) => booking.id === values[0]) || null
+                  ) as T | null;
+                }
+                if (sql.includes("WHERE payment_intent_id = ?")) {
+                  return (
+                    state.bookings.find((booking) => booking.payment_intent_id === values[0]) ||
+                    null
+                  ) as T | null;
+                }
+                if (sql.includes("status = 'confirmed'")) {
+                  const [siteId, offerId, , endsAt, startsAt] = values as string[];
+                  return (
+                    state.bookings.find(
+                      (booking) =>
+                        booking.site_id === siteId &&
+                        booking.status === "confirmed" &&
+                        (!offerId || booking.offer_id === offerId) &&
+                        booking.starts_at < endsAt &&
+                        booking.ends_at > startsAt,
+                    ) || null
+                  ) as T | null;
+                }
+                return null;
               }
               if (sql.includes("FROM social_provider_settings")) {
                 return (
@@ -1508,6 +1598,15 @@ function createEnv(): Env & {
     get contentItems() {
       return state.contentItems;
     },
+    get sites() {
+      return state.sites;
+    },
+    get siteFiles() {
+      return state.siteFiles;
+    },
+    get bookings() {
+      return state.bookings;
+    },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
     CORE_WEB_ORIGIN: "http://localhost:4000",
@@ -1587,6 +1686,54 @@ function cookieHeader(response: Response): string {
 function responseCookieCleared(response: Response): boolean {
   const setCookie = response.headers.get("set-cookie") || "";
   return setCookie.includes("me3_core_session=") && setCookie.includes("Max-Age=0");
+}
+
+function addBookableSite(env: ReturnType<typeof createEnv>) {
+  env.sites.push({
+    id: "site-booking",
+    user_id: "owner",
+    username: "owner",
+    site_type: "profile",
+    template_id: "me3",
+    custom_domain: null,
+    custom_domain_status: null,
+    custom_domain_cf_id: null,
+    created_at: "2026-05-31T22:00:00Z",
+    updated_at: "2026-05-31T22:00:00Z",
+    published_at: "2026-05-31T22:00:00Z",
+  });
+  const meJson = {
+    version: "0.1",
+    name: "Booking Owner",
+    handle: "owner",
+    intents: {
+      book: {
+        enabled: true,
+        offers: [
+          {
+            id: "free-session",
+            title: "Free session",
+            duration: 60,
+            pricing: { enabled: false },
+          },
+        ],
+        availability: {
+          timezone: "Europe/Dublin",
+          windows: { tuesday: ["15:00-16:30"] },
+        },
+      },
+    },
+  };
+  const content = new TextEncoder().encode(JSON.stringify(meJson));
+  env.siteFiles.push({
+    site_id: "site-booking",
+    path: "public/me.json",
+    content,
+    content_type: "application/json",
+    size: content.byteLength,
+    sha256: null,
+    updated_at: "2026-05-31T22:00:00Z",
+  });
 }
 
 function createFakeSmtpConnect(): {
@@ -2785,6 +2932,107 @@ describe("ME3 Core Worker auth", () => {
       source: "not_configured",
       keyHint: null,
     });
+  });
+
+  it("creates confirmed free bookings from public generated sites", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/book/owner/free", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          localDate: "2026-06-02",
+          localTime: "15:15",
+          guestName: "Test Guest",
+          guestEmail: "guest@example.com",
+          notes: "Looking forward to it.",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      ok: boolean;
+      booking: { guestEmail: string; startsAt: string; paymentStatus: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.booking).toMatchObject({
+      guestEmail: "guest@example.com",
+      startsAt: "2026-06-02T14:15:00.000Z",
+      paymentStatus: "not_required",
+    });
+    expect(env.bookings).toHaveLength(1);
+    expect(env.bookings[0]).toMatchObject({
+      offer_id: "free-session",
+      guest_email: "guest@example.com",
+      payment_status: "not_required",
+      is_free_booking: 1,
+    });
+  });
+
+  it("rejects invalid and overlapping free public bookings", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+
+    const invalidEmailResponse = await app.fetch(
+      new Request("http://localhost/api/book/owner/free", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          localDate: "2026-06-02",
+          localTime: "15:15",
+          guestName: "Test Guest",
+          guestEmail: "test.com",
+        }),
+      }),
+      env,
+    );
+    const invalidEmailBody = (await invalidEmailResponse.json()) as { error: string };
+
+    expect(invalidEmailResponse.status).toBe(400);
+    expect(invalidEmailBody.error).toBe("Enter a valid email address");
+    expect(env.bookings).toHaveLength(0);
+
+    const firstResponse = await app.fetch(
+      new Request("http://localhost/api/book/owner/free", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          localDate: "2026-06-02",
+          localTime: "15:15",
+          guestName: "First Guest",
+          guestEmail: "first@example.com",
+        }),
+      }),
+      env,
+    );
+    expect(firstResponse.status).toBe(200);
+
+    const overlapResponse = await app.fetch(
+      new Request("http://localhost/api/book/owner/free", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          localDate: "2026-06-02",
+          localTime: "15:30",
+          guestName: "Second Guest",
+          guestEmail: "second@example.com",
+        }),
+      }),
+      env,
+    );
+    const overlapBody = (await overlapResponse.json()) as { error: string };
+
+    expect(overlapResponse.status).toBe(409);
+    expect(overlapBody.error).toBe("That time has already been booked");
+    expect(env.bookings).toHaveLength(1);
   });
 
   it("lists curated Core plugins for the signed-in owner", async () => {
