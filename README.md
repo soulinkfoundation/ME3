@@ -4,7 +4,7 @@ It's for those who want to take ownership of their digital life.
 
 With ME3, you can now own your email/calendar/website/AI assistant and more, all in one place for about $5/month.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Soulink-Foundation/me3)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
 
 ## Why ME3 Exists
 Someone once said: We need to reclaim the internet.
@@ -56,7 +56,7 @@ The workflow also supports a future ME3 dashboard button through GitHub `reposit
 If your install predates `pnpm update:core`, update manually once to the release that adds it, or bootstrap the latest updater from Core:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Soulink-Foundation/ME3/main/scripts/update-core.mjs -o /tmp/me3-update-core.mjs
+curl -fsSL https://raw.githubusercontent.com/soulinkfoundation/ME3/main/scripts/update-core.mjs -o /tmp/me3-update-core.mjs
 node /tmp/me3-update-core.mjs
 git push origin main
 ```
@@ -65,7 +65,7 @@ Manual update path:
 
 ```bash
 git status
-git remote add upstream https://github.com/Soulink-Foundation/ME3.git # only needed once
+git remote add upstream https://github.com/soulinkfoundation/ME3.git # only needed once
 git fetch upstream --tags
 git merge vX.Y.Z
 pnpm install

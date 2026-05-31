@@ -7,9 +7,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const defaultUpstreamName = "upstream";
-const defaultUpstreamUrl = "https://github.com/Soulink-Foundation/ME3.git";
+const defaultUpstreamUrl = "https://github.com/soulinkfoundation/ME3.git";
 const defaultManifestUrl =
-  "https://raw.githubusercontent.com/Soulink-Foundation/ME3/main/updates/stable.json";
+  "https://raw.githubusercontent.com/soulinkfoundation/ME3/main/updates/stable.json";
 
 const args = parseArgs(process.argv.slice(2));
 const rootDir = resolveRootDir();
