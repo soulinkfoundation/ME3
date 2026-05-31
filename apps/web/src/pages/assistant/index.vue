@@ -31,7 +31,11 @@ type AssistantJobRunStatus =
   | "cancelled"
   | "blocked";
 
-type AssistantRecipeState = "ready" | "needs_setup" | "manual_only" | "coming_later";
+type AssistantRecipeState =
+  | "ready"
+  | "needs_setup"
+  | "manual_only"
+  | "coming_later";
 
 type PermissionSummary = {
   reads?: string[];
@@ -93,7 +97,11 @@ type AssistantJobVersion = {
   }>;
   permissionSummary: PermissionSummary;
   validationStatus: "valid" | "invalid" | "needs_setup";
-  validationErrors: Array<{ message?: string; code?: string; blocking?: boolean }>;
+  validationErrors: Array<{
+    message?: string;
+    code?: string;
+    blocking?: boolean;
+  }>;
   createdAt: string;
 };
 
@@ -172,8 +180,11 @@ const suggestedRecipes = computed(() => {
     );
 });
 
-const selectedJob = computed(() =>
-  jobs.value.find((job) => job.id === selectedJobId.value) || selectedDetail.value?.job || null,
+const selectedJob = computed(
+  () =>
+    jobs.value.find((job) => job.id === selectedJobId.value) ||
+    selectedDetail.value?.job ||
+    null,
 );
 
 onMounted(() => {
@@ -195,7 +206,10 @@ async function loadJobs() {
   try {
     const data = await api.get<JobsResponse>("/assistant/jobs");
     jobs.value = data.jobs || [];
-    if (selectedJobId.value && !jobs.value.some((job) => job.id === selectedJobId.value)) {
+    if (
+      selectedJobId.value &&
+      !jobs.value.some((job) => job.id === selectedJobId.value)
+    ) {
       closeDetailModal();
     }
   } catch (err) {
@@ -273,7 +287,9 @@ async function toggleJob(job: AssistantJob) {
     const data = await api.post<{ job: AssistantJob }>(
       `/assistant/jobs/${encodeURIComponent(job.id)}/${endpoint}`,
     );
-    jobs.value = jobs.value.map((item) => (item.id === job.id ? data.job : item));
+    jobs.value = jobs.value.map((item) =>
+      item.id === job.id ? data.job : item,
+    );
     if (detailModalOpen.value && selectedJobId.value === job.id) {
       await openJob(job.id);
     }
@@ -294,7 +310,9 @@ async function duplicateJob(job: AssistantJob) {
 }
 
 async function archiveJob(job: AssistantJob) {
-  const confirmed = window.confirm(`Archive "${job.name}"? Results and run history stay in Mission Control.`);
+  const confirmed = window.confirm(
+    `Archive "${job.name}"? Results and run history stay in Mission Control.`,
+  );
   if (!confirmed) return;
 
   await withBusy(`archive:${job.id}`, async () => {
@@ -408,7 +426,6 @@ function actionStatusLabel(status: AssistantJobActionResult["status"]) {
 
 function recipeActionLabel(recipe: AssistantJobRecipe) {
   if (recipe.state === "coming_later") return "Later";
-  if (recipe.state === "needs_setup") return "Save";
   return "Add";
 }
 
@@ -421,7 +438,9 @@ function canRun(job: AssistantJob) {
 }
 
 function canToggle(job: AssistantJob) {
-  return job.status === "active" || job.status === "paused" || job.status === "draft";
+  return (
+    job.status === "active" || job.status === "paused" || job.status === "draft"
+  );
 }
 
 function toggleLabel(job: AssistantJob) {
@@ -462,10 +481,14 @@ function formatTrigger(summary: string) {
   const value = String(summary || "").trim();
   if (!value || value === "Manual") return "When you run it";
   if (/^Daily at /i.test(value)) return value.replace(/^Daily/i, "Every day");
-  if (/^Weekly at /i.test(value)) return value.replace(/^Weekly/i, "Every week");
-  if (value.includes("email.message.received")) return "When matching email arrives";
-  if (value.includes("calendar.event.upcoming")) return "Before matching calendar events";
-  if (value.includes("review_packet.created")) return "When Mission Control changes";
+  if (/^Weekly at /i.test(value))
+    return value.replace(/^Weekly/i, "Every week");
+  if (value.includes("email.message.received"))
+    return "When matching email arrives";
+  if (value.includes("calendar.event.upcoming"))
+    return "Before matching calendar events";
+  if (value.includes("review_packet.created"))
+    return "When Mission Control changes";
   if (/^When .+ happens$/i.test(value)) return "When something matches";
   return value;
 }
@@ -484,9 +507,18 @@ function setupMessageForJob(job: AssistantJob) {
   const error = job.setupState?.errors?.find((entry) => entry.message)?.message;
   if (!error) return "Setup is needed before this job can run.";
   return cleanPlainText(error)
-    .replace(/^Missing setup requirement:\s*email\.?$/i, "Email setup is needed.")
-    .replace(/^Missing setup requirement:\s*calendar\.?$/i, "Calendar setup is needed.")
-    .replace(/^Missing setup requirement:\s*owner_notifications\.?$/i, "Notifications setup is needed.");
+    .replace(
+      /^Missing setup requirement:\s*email\.?$/i,
+      "Email setup is needed.",
+    )
+    .replace(
+      /^Missing setup requirement:\s*calendar\.?$/i,
+      "Calendar setup is needed.",
+    )
+    .replace(
+      /^Missing setup requirement:\s*owner_notifications\.?$/i,
+      "Notifications setup is needed.",
+    );
 }
 
 function capabilityLabel(capabilityId: string) {
@@ -506,7 +538,9 @@ function capabilityLabel(capabilityId: string) {
     "email.reply.draft": "Draft email",
     "calendar.event.read": "Read calendar",
   };
-  return labels[capabilityId] || cleanPlainText(capabilityId.replace(/\./g, " "));
+  return (
+    labels[capabilityId] || cleanPlainText(capabilityId.replace(/\./g, " "))
+  );
 }
 
 function cleanPlainText(value: string) {
@@ -531,7 +565,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
       <div class="assistant-mobile-spacer" aria-hidden="true"></div>
     </Teleport>
 
-    <main class="assistant-main">
+    <main
+      class="assistant-main"
+      :class="{ 'assistant-main--empty': !loadingJobs && sortedJobs.length === 0 }"
+    >
       <section v-if="pageError" class="notice notice--error" role="alert">
         {{ pageError }}
       </section>
@@ -551,7 +588,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
           alt=""
           aria-hidden="true"
         />
-        <p>Create a job for your assistant</p>
+        <p>Create jobs for your assistant</p>
         <button type="button" class="primary-button" @click="openAddModal">
           <UiIcon name="Plus" :size="18" />
           Add Job
@@ -577,8 +614,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
               :key="job.id"
               class="job-row"
               :class="{
-                'job-row--selected': detailModalOpen && selectedJobId === job.id,
-                'job-row--muted': job.status === 'paused' || job.status === 'draft',
+                'job-row--selected':
+                  detailModalOpen && selectedJobId === job.id,
+                'job-row--muted':
+                  job.status === 'paused' || job.status === 'draft',
               }"
             >
               <button
@@ -672,7 +711,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </button>
           </header>
 
-          <div v-if="loadingRecipes" class="empty-row">Loading suggested jobs...</div>
+          <div v-if="loadingRecipes" class="empty-row">
+            Loading suggested jobs...
+          </div>
           <div v-else class="starter-list">
             <article
               v-for="recipe in suggestedRecipes"
@@ -694,7 +735,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <button
                 type="button"
                 class="secondary-button"
-                :disabled="!canCreateRecipe(recipe) || isBusy(`recipe:${recipe.id}`)"
+                :disabled="
+                  !canCreateRecipe(recipe) || isBusy(`recipe:${recipe.id}`)
+                "
                 @click="createStarterJob(recipe)"
               >
                 <UiIcon name="Plus" :size="16" />
@@ -750,10 +793,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </span>
             </div>
 
-            <div
-              v-if="selectedJob.status === 'needs_setup'"
-              class="notice"
-            >
+            <div v-if="selectedJob.status === 'needs_setup'" class="notice">
               {{ setupMessageForJob(selectedJob) }}
             </div>
 
@@ -768,7 +808,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </div>
               <div>
                 <dt>Last run</dt>
-                <dd>{{ runStatusLabel(selectedJob.lastRunStatus) }} · {{ formatDate(selectedJob.lastRunAt) }}</dd>
+                <dd>
+                  {{ runStatusLabel(selectedJob.lastRunStatus) }} ·
+                  {{ formatDate(selectedJob.lastRunAt) }}
+                </dd>
               </div>
               <div>
                 <dt>Next run</dt>
@@ -808,19 +851,29 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </button>
             </div>
 
-            <section class="detail-section" aria-labelledby="job-permissions-title">
+            <section
+              class="detail-section"
+              aria-labelledby="job-permissions-title"
+            >
               <h3 id="job-permissions-title">What This Job Can Do</h3>
               <div class="permission-grid">
                 <div>
                   <h4>Reads</h4>
                   <ul>
                     <li
-                      v-for="item in selectedDetail?.version?.permissionSummary.reads || []"
+                      v-for="item in selectedDetail?.version?.permissionSummary
+                        .reads || []"
                       :key="item"
                     >
                       {{ cleanPlainText(item) }}
                     </li>
-                    <li v-if="!(selectedDetail?.version?.permissionSummary.reads || []).length">
+                    <li
+                      v-if="
+                        !(
+                          selectedDetail?.version?.permissionSummary.reads || []
+                        ).length
+                      "
+                    >
                       Nothing listed yet.
                     </li>
                   </ul>
@@ -829,12 +882,20 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   <h4>Creates</h4>
                   <ul>
                     <li
-                      v-for="item in selectedDetail?.version?.permissionSummary.writes || []"
+                      v-for="item in selectedDetail?.version?.permissionSummary
+                        .writes || []"
                       :key="item"
                     >
                       {{ cleanPlainText(item) }}
                     </li>
-                    <li v-if="!(selectedDetail?.version?.permissionSummary.writes || []).length">
+                    <li
+                      v-if="
+                        !(
+                          selectedDetail?.version?.permissionSummary.writes ||
+                          []
+                        ).length
+                      "
+                    >
                       Nothing listed yet.
                     </li>
                   </ul>
@@ -843,12 +904,20 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   <h4>Needs You For</h4>
                   <ul>
                     <li
-                      v-for="item in selectedDetail?.version?.permissionSummary.approvalRequired || []"
+                      v-for="item in selectedDetail?.version?.permissionSummary
+                        .approvalRequired || []"
                       :key="item"
                     >
                       {{ cleanPlainText(item) }}
                     </li>
-                    <li v-if="!(selectedDetail?.version?.permissionSummary.approvalRequired || []).length">
+                    <li
+                      v-if="
+                        !(
+                          selectedDetail?.version?.permissionSummary
+                            .approvalRequired || []
+                        ).length
+                      "
+                    >
                       Nothing right now.
                     </li>
                   </ul>
@@ -858,7 +927,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
             <section class="detail-section" aria-labelledby="job-runs-title">
               <h3 id="job-runs-title">Recent Runs</h3>
-              <div v-if="!(selectedDetail?.runs || []).length" class="empty-row">
+              <div
+                v-if="!(selectedDetail?.runs || []).length"
+                class="empty-row"
+              >
                 No runs yet.
               </div>
               <div v-else class="run-list">
@@ -869,17 +941,27 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 >
                   <div class="run-row-top">
                     <strong>{{ runStatusLabel(run.status) }}</strong>
-                    <span>{{ formatDate(run.startedAt || run.createdAt) }}</span>
+                    <span>{{
+                      formatDate(run.startedAt || run.createdAt)
+                    }}</span>
                   </div>
-                  <p v-if="run.outputPreview">{{ cleanPlainText(run.outputPreview) }}</p>
-                  <p v-else-if="run.errorMessage">{{ cleanPlainText(run.errorMessage) }}</p>
-                  <div v-if="run.actionResults.length" class="action-result-list">
+                  <p v-if="run.outputPreview">
+                    {{ cleanPlainText(run.outputPreview) }}
+                  </p>
+                  <p v-else-if="run.errorMessage">
+                    {{ cleanPlainText(run.errorMessage) }}
+                  </p>
+                  <div
+                    v-if="run.actionResults.length"
+                    class="action-result-list"
+                  >
                     <span
                       v-for="action in run.actionResults"
                       :key="action.id"
                       class="action-result"
                     >
-                      {{ capabilityLabel(action.capabilityId) }}: {{ actionStatusLabel(action.status) }}
+                      {{ capabilityLabel(action.capabilityId) }}:
+                      {{ actionStatusLabel(action.status) }}
                     </span>
                   </div>
                 </article>
@@ -912,11 +994,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-main {
   display: grid;
   gap: 16px;
-  place-items: center;
+  justify-items: center;
+  align-content: start;
   min-height: calc(100vh - 32px);
   width: min(760px, 100%);
   margin: 0 auto;
   padding: 16px 18px 44px;
+}
+
+.assistant-main--empty {
+  place-items: center;
+  align-content: center;
 }
 
 .assistant-topbar {
@@ -1126,7 +1214,10 @@ button:focus-visible {
 
 .job-meta {
   display: grid;
-  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(120px, 1fr);
+  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(
+      120px,
+      1fr
+    );
   gap: 10px;
 }
 
