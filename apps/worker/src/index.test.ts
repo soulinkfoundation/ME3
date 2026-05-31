@@ -3950,6 +3950,98 @@ describe("ME3 Core Worker auth", () => {
     ]);
   });
 
+  it("approves Cloudflare Email Service drafts without platform-controlled headers", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/email-provider-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          activeProviderId: "cloudflare-email",
+          providers: [
+            {
+              id: "cloudflare-email",
+              transport: "binding",
+              fromAddress: "owner@example.com",
+              fromName: "ME3 Owner",
+              sendingDomain: "example.com",
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/mailbox", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          aliasLocalPart: "owner",
+          forwardingEnabled: false,
+        }),
+      }),
+      env,
+    );
+
+    const draftResponse = await app.fetch(
+      new Request("http://localhost/api/mailbox/drafts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          to: "client@example.com",
+          subject: "Hello",
+          textBody: "Approved send body",
+          source: "user",
+        }),
+      }),
+      env,
+    );
+    const draftBody = (await draftResponse.json()) as {
+      draft: { id: string; status: string };
+    };
+    expect(draftResponse.status).toBe(201);
+    expect(draftBody.draft.status).toBe("pending_approval");
+
+    const approveResponse = await app.fetch(
+      new Request(`http://localhost/api/mailbox/drafts/${draftBody.draft.id}/approve`, {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const approveBody = (await approveResponse.json()) as {
+      draft: { status: string; providerId: string; providerMessageId: string };
+    };
+
+    expect(approveResponse.status).toBe(200);
+    expect(approveBody.draft).toMatchObject({
+      status: "sent",
+      providerId: "cloudflare-email",
+      providerMessageId: "cf-1",
+    });
+    expect(env.emailSends[0]).toMatchObject({
+      from: { email: "owner@example.com", name: "ME3 Owner" },
+      to: "client@example.com",
+      subject: "Hello",
+    });
+    expect(env.emailSends[0].headers).toMatchObject({
+      "X-ME3-Provider": "cloudflare-email",
+    });
+    expect(env.emailSends[0].headers).not.toHaveProperty("Message-ID");
+    expect(env.emailSends[0].headers).toHaveProperty("X-ME3-Requested-Message-ID");
+  });
+
   it("sends a Postmark test message through the provider adapter", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

@@ -241,6 +241,7 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
     ];
   },
   async send(env, config, secret, message) {
+    const headers = cloudflareEmailHeaders(message);
     if (config.transport !== "rest" && env.EMAIL) {
       const result = await env.EMAIL.send({
         from: message.fromName
@@ -251,13 +252,7 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
         subject: message.subject,
         text: message.textBody,
         html: message.htmlBody || undefined,
-        headers: {
-          "X-ME3-Audit-ID": message.auditId,
-          "X-ME3-Provider": "cloudflare-email",
-          ...(message.messageIdHeader ? { "Message-ID": message.messageIdHeader } : {}),
-          ...(message.inReplyTo ? { "In-Reply-To": message.inReplyTo } : {}),
-          ...(message.referencesHeader ? { References: message.referencesHeader } : {}),
-        },
+        headers,
       });
       return {
         providerMessageId: result.messageId || null,
@@ -290,13 +285,7 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
           subject: message.subject,
           text: message.textBody,
           html: message.htmlBody || undefined,
-          headers: {
-            "X-ME3-Audit-ID": message.auditId,
-            "X-ME3-Provider": "cloudflare-email",
-            ...(message.messageIdHeader ? { "Message-ID": message.messageIdHeader } : {}),
-            ...(message.inReplyTo ? { "In-Reply-To": message.inReplyTo } : {}),
-            ...(message.referencesHeader ? { References: message.referencesHeader } : {}),
-          },
+          headers,
         }),
       },
     );
@@ -312,6 +301,18 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
     return { providerMessageId: null, providerStatus: "accepted", raw: body };
   },
 };
+
+function cloudflareEmailHeaders(message: EmailProviderSendMessage) {
+  return {
+    "X-ME3-Audit-ID": message.auditId,
+    "X-ME3-Provider": "cloudflare-email",
+    ...(message.messageIdHeader
+      ? { "X-ME3-Requested-Message-ID": message.messageIdHeader }
+      : {}),
+    ...(message.inReplyTo ? { "In-Reply-To": message.inReplyTo } : {}),
+    ...(message.referencesHeader ? { References: message.referencesHeader } : {}),
+  };
+}
 
 const POSTMARK_PROVIDER: EmailProviderAdapter = {
   id: "postmark",
