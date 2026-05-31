@@ -283,6 +283,38 @@ describe("Core chat native context", () => {
     });
   });
 
+  it("does not feed old provider setup fallbacks back into the model", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Yes, I am working through Qwen now.",
+    }));
+    const env = createEnv({
+      recentMessages: [
+        {
+          role: "assistant",
+          content:
+            "ME3 Core chat is connected. Add an AI provider in Account settings or bind Workers AI to turn this into a live model response.",
+        },
+      ],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput("Are you working now?"),
+    );
+
+    const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(response.replyText).toBe("Yes, I am working through Qwen now.");
+    expect(modelInput.messages).not.toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: expect.stringContaining("Add an AI provider"),
+      }),
+    );
+  });
+
   it("uses the default Workers AI backup when a configured model is empty", async () => {
     const aiRun = vi.fn(async (model: string) =>
       model === "@cf/qwen/qwen3-30b-a3b-fp8"
@@ -400,10 +432,7 @@ describe("Core chat native context", () => {
       source: "fallback",
       fallbackReason: "AI provider setup required",
     });
-    expect(env.state.persistedMessages.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-    ]);
+    expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
   });
 
   it("trims oversized native context before model calls", async () => {

@@ -2896,7 +2896,9 @@ async function loadRecentMessages(
     )
       .bind(ownerId)
       .all<{ role: "user" | "assistant"; content: string }>();
-    return (rows.results || []).reverse();
+    return (rows.results || [])
+      .reverse()
+      .filter((message) => !isProviderSetupFallbackMessage(message.content));
   } catch {
     return [];
   }
@@ -3314,6 +3316,8 @@ async function persistAssistantMessage(
   role: "user" | "assistant",
   content: string,
 ) {
+  if (role === "assistant" && isProviderSetupFallbackMessage(content)) return;
+
   try {
     await env.DB.prepare(
       "INSERT INTO assistant_messages (id, owner_id, role, content) VALUES (?, ?, ?, ?)",
@@ -3323,6 +3327,12 @@ async function persistAssistantMessage(
   } catch {
     // Conversation persistence is useful context, but chat turns should not fail on audit writes.
   }
+}
+
+function isProviderSetupFallbackMessage(content: string): boolean {
+  return /add an AI provider in Account settings|AI provider setup required|bind Workers AI/i.test(
+    content,
+  );
 }
 
 function normalizeProviderId(value: unknown): AiProviderId | null {

@@ -10,9 +10,10 @@ class_name = "Me3UserAgent"
 tag = "2026-05-11-me3-core-user-agent"
 new_sqlite_classes = ["Me3UserAgent"]
 
-# Local dev omits the optional Workers AI binding so `pnpm dev` does not require
-# a Cloudflare login for Wrangler's remote AI proxy. Keep/add the [ai] binding
-# in deploy configs when the install uses Workers AI.
+# Workers AI is the default Core chat provider. Wrangler connects this binding
+# to Cloudflare's remote AI runtime during local development.
+[ai]
+binding = "AI"
 
 [[d1_databases]]
 binding = "DB"
