@@ -30,9 +30,17 @@ type TelegramConnectionRecord = {
 type TelegramStatusResponse = {
   available: boolean;
   configured: boolean;
+  encryptionConfigured: boolean;
   botUsername: string | null;
+  botUsernameSource: "environment" | "stored" | "not_configured";
   tokenConfigured: boolean;
+  botTokenSource: "environment" | "stored" | "not_configured";
+  botTokenHint: string | null;
+  botTokenUpdatedAt: string | null;
   webhookSecretConfigured: boolean;
+  webhookSecretSource: "environment" | "stored" | "not_configured";
+  webhookSecretHint: string | null;
+  webhookSecretUpdatedAt: string | null;
   webhookUrl: string | null;
   startUrl: string | null;
   connection: TelegramConnectionRecord | null;
@@ -61,15 +69,33 @@ const qrCanvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);
 const setupLoading = ref(false);
 const disconnectLoading = ref(false);
+const settingsSaving = ref(false);
+const webhookSyncing = ref(false);
 const available = ref(false);
 const configured = ref(false);
+const encryptionConfigured = ref(false);
 const botUsername = ref<string | null>(null);
+const botUsernameSource = ref<"environment" | "stored" | "not_configured">(
+  "not_configured",
+);
 const tokenConfigured = ref(false);
+const botTokenSource = ref<"environment" | "stored" | "not_configured">(
+  "not_configured",
+);
+const botTokenHint = ref<string | null>(null);
 const webhookSecretConfigured = ref(false);
+const webhookSecretSource = ref<"environment" | "stored" | "not_configured">(
+  "not_configured",
+);
+const webhookSecretHint = ref<string | null>(null);
 const webhookUrl = ref<string | null>(null);
 const startUrl = ref<string | null>(null);
 const connection = ref<TelegramConnectionRecord | null>(null);
 const error = ref<string | null>(null);
+const notice = ref<string | null>(null);
+const botUsernameInput = ref("");
+const botTokenInput = ref("");
+const webhookSecretInput = ref("");
 
 const statusHint = computed(() => {
   if (!available.value) {
@@ -140,6 +166,36 @@ const missingSetupItems = computed(() => {
   return items;
 });
 
+const telegramSettingsSaveDisabled = computed(() => {
+  return (
+    settingsSaving.value ||
+    !botUsernameInput.value.trim() ||
+    (!tokenConfigured.value && !botTokenInput.value.trim()) ||
+    (!webhookSecretConfigured.value && !webhookSecretInput.value.trim())
+  );
+});
+
+const telegramWebhookSyncDisabled = computed(
+  () =>
+    webhookSyncing.value ||
+    settingsSaving.value ||
+    !botUsernameInput.value.trim() ||
+    (!tokenConfigured.value && !botTokenInput.value.trim()) ||
+    (!webhookSecretConfigured.value && !webhookSecretInput.value.trim()),
+);
+
+const botTokenPlaceholder = computed(() =>
+  botTokenHint.value
+    ? `Stored token ${botTokenHint.value}; paste a new token to replace`
+    : "Paste BotFather token",
+);
+
+const webhookSecretPlaceholder = computed(() =>
+  webhookSecretHint.value
+    ? `Stored secret ${webhookSecretHint.value}; paste a new secret to replace`
+    : "Generate or paste webhook secret",
+);
+
 function formatTelegramUser(current: TelegramConnectionRecord) {
   if (current.telegramUsername) return `@${current.telegramUsername}`;
   const name = [current.telegramFirstName, current.telegramLastName]
@@ -161,12 +217,21 @@ function formatDateTime(value: string | null) {
 function syncStatus(response: TelegramStatusResponse) {
   available.value = response.available;
   configured.value = response.configured;
+  encryptionConfigured.value = response.encryptionConfigured;
   botUsername.value = response.botUsername;
+  botUsernameSource.value = response.botUsernameSource;
   tokenConfigured.value = response.tokenConfigured;
+  botTokenSource.value = response.botTokenSource;
+  botTokenHint.value = response.botTokenHint;
   webhookSecretConfigured.value = response.webhookSecretConfigured;
+  webhookSecretSource.value = response.webhookSecretSource;
+  webhookSecretHint.value = response.webhookSecretHint;
   webhookUrl.value = response.webhookUrl;
   startUrl.value = response.startUrl;
   connection.value = response.connection;
+  botUsernameInput.value = response.botUsername || botUsernameInput.value;
+  botTokenInput.value = "";
+  webhookSecretInput.value = "";
   if (response.connection?.status === "active") {
     emit("connection-active");
   }
@@ -185,6 +250,62 @@ async function loadTelegram() {
   } finally {
     loading.value = false;
   }
+}
+
+async function saveTelegramSettings() {
+  if (telegramSettingsSaveDisabled.value) return;
+  settingsSaving.value = true;
+  error.value = null;
+  notice.value = null;
+
+  try {
+    const response = await api.put<TelegramStatusResponse & { ok: boolean }>(
+      "/telegram/settings",
+      {
+        botUsername: botUsernameInput.value,
+        botToken: botTokenInput.value.trim() || undefined,
+        webhookSecret: webhookSecretInput.value.trim() || undefined,
+      },
+    );
+    syncStatus(response);
+    notice.value = "Telegram settings saved.";
+  } catch (err: unknown) {
+    error.value =
+      err instanceof Error ? err.message : "Failed to save Telegram settings";
+  } finally {
+    settingsSaving.value = false;
+  }
+}
+
+async function saveAndSyncTelegramWebhook() {
+  if (telegramWebhookSyncDisabled.value) return;
+  await saveTelegramSettings();
+  if (error.value) return;
+
+  webhookSyncing.value = true;
+  error.value = null;
+  notice.value = null;
+
+  try {
+    const response = await api.post<
+      TelegramStatusResponse & { ok: boolean; webhookUrl: string }
+    >("/telegram/webhook/sync", {});
+    syncStatus(response);
+    notice.value = "Telegram webhook set.";
+  } catch (err: unknown) {
+    error.value =
+      err instanceof Error ? err.message : "Failed to set Telegram webhook";
+  } finally {
+    webhookSyncing.value = false;
+  }
+}
+
+function generateWebhookSecret() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  webhookSecretInput.value = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 async function setupTelegram() {
@@ -315,9 +436,68 @@ defineExpose({
       <div v-if="variant === 'default'" class="telegram-operator-note">
         <strong>Standalone Core installs need their own Telegram bot.</strong>
         <p>
-          Create one with @BotFather, add the bot token and webhook secret to
-          Cloudflare secrets, then point Telegram at this Core webhook.
+          Create one with @BotFather, paste the values here, then ME3 will set
+          the Telegram webhook for this install.
         </p>
+        <form class="telegram-settings-form" @submit.prevent="saveAndSyncTelegramWebhook">
+          <label class="telegram-field">
+            <span>Bot username</span>
+            <input
+              v-model="botUsernameInput"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              placeholder="your_me3_bot"
+            />
+          </label>
+          <label class="telegram-field">
+            <span>Bot token</span>
+            <input
+              v-model="botTokenInput"
+              type="password"
+              autocomplete="off"
+              :placeholder="botTokenPlaceholder"
+            />
+          </label>
+          <label class="telegram-field">
+            <span>Webhook secret</span>
+            <div class="telegram-secret-row">
+              <input
+                v-model="webhookSecretInput"
+                type="password"
+                autocomplete="off"
+                :placeholder="webhookSecretPlaceholder"
+              />
+              <Button
+                variant="secondary"
+                size="small"
+                type="button"
+                @click="generateWebhookSecret"
+              >
+                Generate
+              </Button>
+            </div>
+          </label>
+          <div class="telegram-settings-actions">
+            <Button
+              variant="secondary"
+              size="small"
+              type="button"
+              :disabled="telegramSettingsSaveDisabled"
+              @click="saveTelegramSettings"
+            >
+              {{ settingsSaving ? "Saving..." : "Save" }}
+            </Button>
+            <Button
+              variant="primary"
+              size="small"
+              type="submit"
+              :disabled="telegramWebhookSyncDisabled"
+            >
+              {{ webhookSyncing ? "Setting webhook..." : "Save & set webhook" }}
+            </Button>
+          </div>
+        </form>
         <dl class="telegram-setup-checklist">
           <div>
             <dt>Required</dt>
@@ -331,6 +511,20 @@ defineExpose({
           <div v-if="webhookUrl">
             <dt>Webhook</dt>
             <dd>{{ webhookUrl }}</dd>
+          </div>
+          <div v-if="botTokenHint">
+            <dt>Bot token</dt>
+            <dd>{{ botTokenSource === "environment" ? "Wrangler secret" : botTokenHint }}</dd>
+          </div>
+          <div v-if="webhookSecretHint">
+            <dt>Secret</dt>
+            <dd>
+              {{
+                webhookSecretSource === "environment"
+                  ? "Wrangler secret"
+                  : webhookSecretHint
+              }}
+            </dd>
           </div>
         </dl>
       </div>
@@ -414,6 +608,7 @@ defineExpose({
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="notice" class="success">{{ notice }}</p>
   </div>
 </template>
 
@@ -483,6 +678,53 @@ defineExpose({
   color: var(--color-text-muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.telegram-settings-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.telegram-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.telegram-field input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 500;
+}
+
+.telegram-field input:focus {
+  outline: 2px solid var(--ui-accent-soft, rgba(20, 184, 166, 0.28));
+  outline-offset: 1px;
+  border-color: var(--ui-accent, var(--color-border));
+}
+
+.telegram-secret-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.telegram-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .telegram-setup-checklist {
@@ -608,6 +850,25 @@ defineExpose({
   margin-top: 12px;
   color: var(--color-error, #c62828);
   font-size: 14px;
+}
+
+.success {
+  margin-top: 12px;
+  color: var(--ui-accent-strong, #047857);
+  font-size: 14px;
+}
+
+@media (max-width: 520px) {
+  .telegram-secret-row,
+  .telegram-settings-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .telegram-secret-row .me3-btn,
+  .telegram-settings-actions .me3-btn {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

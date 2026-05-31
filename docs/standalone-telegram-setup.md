@@ -15,7 +15,30 @@ https://core.telegram.org/bots/features#botfather
 
 ## 2. Configure ME3 Core
 
-Add the public username to `wrangler.toml`:
+Open ME3 Account -> Telegram and paste:
+
+- Bot username
+- Bot token
+- Webhook secret
+
+Use the Generate button for the webhook secret, then choose Save & set webhook.
+ME3 stores owner-supplied tokens encrypted in D1 and does not return them to the
+browser after saving.
+
+## 3. Link Your Account
+
+1. Open ME3 Account -> Telegram.
+2. Scan the QR code or open the setup link.
+3. Tap Start in Telegram.
+4. Send a test message to the bot.
+
+The bot should reply through the ME3 agent runtime. If it links but does not
+reply, check that `ME3_USER_AGENT` is bound and your AI provider is configured.
+
+## Advanced: Configure With Wrangler
+
+You can still configure Telegram outside the UI. Add the public username to
+`wrangler.toml`:
 
 ```toml
 [vars]
@@ -41,9 +64,8 @@ Deploy after changing config:
 pnpm deploy
 ```
 
-## 3. Point Telegram At ME3
+Then point Telegram at ME3. Replace the placeholders:
 
-Set the webhook after deploy. Replace the placeholders:
 
 ```bash
 curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
@@ -59,14 +81,3 @@ curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
 Telegram sends webhook updates as HTTPS POST requests and includes
 `X-Telegram-Bot-Api-Secret-Token` when `secret_token` is set:
 https://core.telegram.org/bots/api#setwebhook
-
-## 4. Link Your Account
-
-1. Open ME3 Account -> Telegram.
-2. Refresh the panel if needed.
-3. Scan the QR code or open the setup link.
-4. Tap Start in Telegram.
-5. Send a test message to the bot.
-
-The bot should reply through the ME3 agent runtime. If it links but does not
-reply, check that `ME3_USER_AGENT` is bound and your AI provider is configured.

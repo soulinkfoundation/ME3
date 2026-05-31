@@ -109,6 +109,15 @@ import {
   updateCommerceSettings,
 } from "./commerce-settings";
 import {
+  TelegramSettingsInputError,
+  getTelegramSettings,
+  resolveTelegramBotToken,
+  resolveTelegramBotTokenForInstall,
+  resolveTelegramWebhookSecret,
+  resolveTelegramWebhookSecretForInstall,
+  updateTelegramSettings,
+} from "./telegram-settings";
+import {
   buildLandingPageDocument,
   LANDING_PAGES_PLUGIN_ID,
   getLandingPageTemplateId,
@@ -3623,38 +3632,78 @@ app.get("/api/telegram/status", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const botUsername = c.env.TELEGRAM_BOT_USERNAME?.trim() || null;
-  const botToken = c.env.TELEGRAM_BOT_TOKEN?.trim() || null;
-  const webhookSecret = c.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
-  const connection = await getTelegramConnection(c.env, ownerId);
-  const events = connection
-    ? await c.env.DB.prepare(
-        `SELECT id, connection_id, channel, direction, event_type, status,
-                telegram_message_id, reply_to_message_id, telegram_user_id,
-                telegram_chat_id, telegram_username, text_body, raw_json,
-                error_message, created_at, updated_at
-         FROM agent_channel_events
-         WHERE connection_id = ?
-         ORDER BY created_at DESC
-         LIMIT 10`,
-      )
-        .bind(connection.id)
-        .all<DbAgentChannelEvent>()
-    : { results: [] };
+  return c.json(await buildTelegramStatusPayload(c.env, ownerId, c.req.url));
+});
+
+app.put("/api/telegram/settings", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  try {
+    await updateTelegramSettings(
+      c.env,
+      ownerId,
+      await c.req.json().catch(() => ({})),
+    );
+    return c.json({
+      ok: true,
+      ...(await buildTelegramStatusPayload(c.env, ownerId, c.req.url)),
+    });
+  } catch (error) {
+    if (error instanceof TelegramSettingsInputError) {
+      return c.json({ ok: false, error: error.message }, error.status as any);
+    }
+    throw error;
+  }
+});
+
+app.post("/api/telegram/webhook/sync", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const settings = await getTelegramSettings(c.env, ownerId);
+  const botToken = await resolveTelegramBotToken(c.env, ownerId);
+  const webhookSecret = await resolveTelegramWebhookSecret(c.env, ownerId);
+  const webhookUrl = `${getCoreApiOrigin(c.env, c.req.url)}/api/telegram/webhook`;
+
+  if (!settings.botUsername) {
+    return c.json({ ok: false, error: "Telegram bot username is not configured" }, 503);
+  }
+  if (!botToken) {
+    return c.json({ ok: false, error: "Telegram bot token is not configured" }, 503);
+  }
+  if (!webhookSecret) {
+    return c.json({ ok: false, error: "Telegram webhook secret is not configured" }, 503);
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: webhookUrl,
+      secret_token: webhookSecret,
+      allowed_updates: ["message"],
+      drop_pending_updates: true,
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { ok?: boolean; description?: string }
+    | null;
+
+  if (!response.ok || payload?.ok !== true) {
+    return c.json(
+      {
+        ok: false,
+        error:
+          payload?.description || `Telegram setWebhook failed (${response.status})`,
+      },
+      502,
+    );
+  }
 
   return c.json({
-    available: true,
-    configured: Boolean(botUsername && botToken && webhookSecret),
-    botUsername,
-    tokenConfigured: Boolean(botToken),
-    webhookSecretConfigured: Boolean(webhookSecret),
-    webhookUrl: `${getCoreApiOrigin(c.env, c.req.url)}/api/telegram/webhook`,
-    startUrl:
-      connection?.status === "pending" && botUsername
-        ? `https://t.me/${botUsername.replace(/^@/, "")}?start=${encodeURIComponent(connection.setup_token)}`
-        : null,
-    connection: connection ? serializeTelegramConnection(connection, botUsername) : null,
-    recentEvents: (events.results || []).map(serializeTelegramEvent),
+    ok: true,
+    ...(await buildTelegramStatusPayload(c.env, ownerId, c.req.url)),
   });
 });
 
@@ -3662,28 +3711,21 @@ app.post("/api/telegram/setup", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const botUsername = c.env.TELEGRAM_BOT_USERNAME?.trim() || null;
-  if (!botUsername) {
+  const settings = await getTelegramSettings(c.env, ownerId);
+  if (!settings.botUsername) {
     return c.json({ error: "Telegram bot username is not configured" }, 503);
   }
-  if (!c.env.TELEGRAM_BOT_TOKEN?.trim()) {
+  if (!settings.botTokenConfigured) {
     return c.json({ error: "Telegram bot token is not configured" }, 503);
   }
-  if (!c.env.TELEGRAM_WEBHOOK_SECRET?.trim()) {
+  if (!settings.webhookSecretConfigured) {
     return c.json({ error: "Telegram webhook secret is not configured" }, 503);
   }
 
   const connection = await upsertPendingTelegramConnection(c.env, ownerId);
   return c.json({
     ok: true,
-    available: true,
-    configured: true,
-    botUsername,
-    tokenConfigured: true,
-    webhookSecretConfigured: true,
-    webhookUrl: `${getCoreApiOrigin(c.env, c.req.url)}/api/telegram/webhook`,
-    startUrl: `https://t.me/${botUsername.replace(/^@/, "")}?start=${encodeURIComponent(connection.setup_token)}`,
-    connection: serializeTelegramConnection(connection, botUsername),
+    ...(await buildTelegramStatusPayload(c.env, ownerId, c.req.url, connection)),
   });
 });
 
@@ -3711,26 +3753,16 @@ app.post("/api/telegram/disconnect", async (c) => {
     .bind(ownerId)
     .run();
 
-  const botUsername = c.env.TELEGRAM_BOT_USERNAME?.trim() || null;
-  const botToken = c.env.TELEGRAM_BOT_TOKEN?.trim() || null;
-  const webhookSecret = c.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
   const connection = await getTelegramConnection(c.env, ownerId);
   return c.json({
     ok: true,
     disconnected: true,
-    available: true,
-    configured: Boolean(botUsername && botToken && webhookSecret),
-    botUsername,
-    tokenConfigured: Boolean(botToken),
-    webhookSecretConfigured: Boolean(webhookSecret),
-    webhookUrl: `${getCoreApiOrigin(c.env, c.req.url)}/api/telegram/webhook`,
-    startUrl: null,
-    connection: connection ? serializeTelegramConnection(connection, botUsername) : null,
+    ...(await buildTelegramStatusPayload(c.env, ownerId, c.req.url, connection)),
   });
 });
 
 app.post("/api/telegram/webhook", async (c) => {
-  const configuredSecret = c.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+  const configuredSecret = await resolveTelegramWebhookSecretForInstall(c.env);
   if (!configuredSecret) {
     return c.json({ ok: false, error: "Telegram webhook secret is not configured" }, 503);
   }
@@ -3740,17 +3772,12 @@ app.post("/api/telegram/webhook", async (c) => {
     return c.json({ ok: false, error: "Invalid Telegram webhook secret" }, 401);
   }
 
-  const botToken = c.env.TELEGRAM_BOT_TOKEN?.trim();
-  if (!botToken) {
-    return c.json({ ok: false, error: "Telegram bot token is not configured" }, 503);
-  }
-
   const update = await c.req.json<TelegramWebhookUpdate>().catch(() => null);
   if (!update || typeof update !== "object") {
     return c.json({ ok: false, error: "Invalid Telegram update" }, 400);
   }
 
-  const result = await handleTelegramWebhookUpdate(c.env, update, botToken);
+  const result = await handleTelegramWebhookUpdate(c.env, update);
   return c.json(result, (result.ok ? 200 : result.status) as any);
 });
 
@@ -5558,6 +5585,61 @@ function serializeTelegramEvent(row: DbAgentChannelEvent) {
   };
 }
 
+async function buildTelegramStatusPayload(
+  env: Env,
+  ownerId: string,
+  requestUrl: string,
+  currentConnection?: DbAgentChannelConnection | null,
+) {
+  const settings = await getTelegramSettings(env, ownerId);
+  const botUsername = settings.botUsername;
+  const connection =
+    currentConnection === undefined
+      ? await getTelegramConnection(env, ownerId)
+      : currentConnection;
+  const events = connection
+    ? await env.DB.prepare(
+        `SELECT id, connection_id, channel, direction, event_type, status,
+                telegram_message_id, reply_to_message_id, telegram_user_id,
+                telegram_chat_id, telegram_username, text_body, raw_json,
+                error_message, created_at, updated_at
+         FROM agent_channel_events
+         WHERE connection_id = ?
+         ORDER BY created_at DESC
+         LIMIT 10`,
+      )
+        .bind(connection.id)
+        .all<DbAgentChannelEvent>()
+    : { results: [] };
+
+  return {
+    available: true,
+    configured: Boolean(
+      botUsername &&
+        settings.botTokenConfigured &&
+        settings.webhookSecretConfigured,
+    ),
+    encryptionConfigured: settings.encryptionConfigured,
+    botUsername,
+    botUsernameSource: settings.botUsernameSource,
+    tokenConfigured: settings.botTokenConfigured,
+    botTokenSource: settings.botTokenSource,
+    botTokenHint: settings.botTokenHint,
+    botTokenUpdatedAt: settings.botTokenUpdatedAt,
+    webhookSecretConfigured: settings.webhookSecretConfigured,
+    webhookSecretSource: settings.webhookSecretSource,
+    webhookSecretHint: settings.webhookSecretHint,
+    webhookSecretUpdatedAt: settings.webhookSecretUpdatedAt,
+    webhookUrl: `${getCoreApiOrigin(env, requestUrl)}/api/telegram/webhook`,
+    startUrl:
+      connection?.status === "pending" && botUsername
+        ? `https://t.me/${botUsername.replace(/^@/, "")}?start=${encodeURIComponent(connection.setup_token)}`
+        : null,
+    connection: connection ? serializeTelegramConnection(connection, botUsername) : null,
+    recentEvents: (events.results || []).map(serializeTelegramEvent),
+  };
+}
+
 function clampNumber(value: string | null | undefined, fallback: number, min: number, max: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -5613,7 +5695,6 @@ async function upsertPendingTelegramConnection(env: Env, ownerId: string) {
 async function handleTelegramWebhookUpdate(
   env: Env,
   update: TelegramWebhookUpdate,
-  botToken: string,
 ): Promise<{ ok: boolean; status: number; action: string; error?: string }> {
   const message = update.message;
   const text = typeof message?.text === "string" ? message.text.trim() : "";
@@ -5627,6 +5708,17 @@ async function handleTelegramWebhookUpdate(
   const startToken = parseTelegramStartToken(text);
   if (startToken) {
     const linked = await activateTelegramConnectionFromStartToken(env, update, startToken);
+    const botToken = linked
+      ? await resolveTelegramBotToken(env, linked.user_id)
+      : await resolveTelegramBotTokenForInstall(env);
+    if (!botToken) {
+      return {
+        ok: false,
+        status: 503,
+        action: "missing_bot_token",
+        error: "Telegram bot token is not configured",
+      };
+    }
     const replyText = linked
       ? "Telegram is connected to your ME3 agent. Send a message here whenever you want to talk to it."
       : "I couldn't link this chat. Open Account -> Telegram in ME3 and generate a fresh setup link.";
@@ -5635,6 +5727,17 @@ async function handleTelegramWebhookUpdate(
   }
 
   const connection = await getActiveTelegramConnectionForChat(env, chatId);
+  const botToken = connection
+    ? await resolveTelegramBotToken(env, connection.user_id)
+    : await resolveTelegramBotTokenForInstall(env);
+  if (!botToken) {
+    return {
+      ok: false,
+      status: 503,
+      action: "missing_bot_token",
+      error: "Telegram bot token is not configured",
+    };
+  }
   if (!connection) {
     await sendTelegramMessage(
       botToken,

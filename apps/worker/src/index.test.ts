@@ -124,6 +124,18 @@ type StoredCommerceSettings = {
   created_at: string;
   updated_at: string;
 };
+type StoredTelegramSettings = {
+  user_id: string;
+  bot_username: string | null;
+  encrypted_bot_token: string | null;
+  bot_token_hint: string | null;
+  bot_token_updated_at: string | null;
+  encrypted_webhook_secret: string | null;
+  webhook_secret_hint: string | null;
+  webhook_secret_updated_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
 type StoredContentItem = {
   id: string;
   site_id: string;
@@ -172,6 +184,7 @@ function createEnv(): Env & {
   socialOauthStates: StoredSocialOauthState[];
   me3ClaimStates: StoredMe3ClaimState[];
   commerceSettings: StoredCommerceSettings | null;
+  telegramSettings: StoredTelegramSettings | null;
   contentItems: StoredContentItem[];
 } {
   const state = {
@@ -196,6 +209,7 @@ function createEnv(): Env & {
     socialOauthStates: [] as StoredSocialOauthState[],
     me3ClaimStates: [] as StoredMe3ClaimState[],
     commerceSettings: null as StoredCommerceSettings | null,
+    telegramSettings: null as StoredTelegramSettings | null,
     contentItems: [] as StoredContentItem[],
   };
 
@@ -482,6 +496,22 @@ function createEnv(): Env & {
                   stripe_key_updated_at: values[3] as string | null,
                   created_at: existing?.created_at || "2026-05-29T10:00:00Z",
                   updated_at: "2026-05-29T10:05:00Z",
+                };
+              }
+
+              if (sql.includes("INSERT INTO telegram_settings")) {
+                const existing = state.telegramSettings;
+                state.telegramSettings = {
+                  user_id: values[0] as string,
+                  bot_username: values[1] as string | null,
+                  encrypted_bot_token: values[2] as string | null,
+                  bot_token_hint: values[3] as string | null,
+                  bot_token_updated_at: values[4] as string | null,
+                  encrypted_webhook_secret: values[5] as string | null,
+                  webhook_secret_hint: values[6] as string | null,
+                  webhook_secret_updated_at: values[7] as string | null,
+                  created_at: existing?.created_at || "2026-05-31T10:00:00Z",
+                  updated_at: "2026-05-31T10:05:00Z",
                 };
               }
 
@@ -1172,6 +1202,14 @@ function createEnv(): Env & {
                   ? (state.commerceSettings as T)
                   : null;
               }
+              if (sql.includes("FROM telegram_settings")) {
+                if (sql.includes("LIMIT 1")) {
+                  return state.telegramSettings as T | null;
+                }
+                return state.telegramSettings?.user_id === values[0]
+                  ? (state.telegramSettings as T)
+                  : null;
+              }
               if (sql.includes("FROM contacts")) {
                 return (
                   state.contacts.find(
@@ -1343,6 +1381,9 @@ function createEnv(): Env & {
     },
     get commerceSettings() {
       return state.commerceSettings;
+    },
+    get telegramSettings() {
+      return state.telegramSettings;
     },
     get contentItems() {
       return state.contentItems;
@@ -4701,6 +4742,117 @@ describe("ME3 Core Worker auth", () => {
     expect(await response.json()).toMatchObject({
       error: "Telegram bot token is not configured",
     });
+  });
+
+  it("stores owner-managed Telegram bot settings without returning secrets", async () => {
+    const env = createEnv();
+    env.TELEGRAM_BOT_USERNAME = undefined;
+    env.TELEGRAM_BOT_TOKEN = undefined;
+    env.TELEGRAM_WEBHOOK_SECRET = undefined;
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/telegram/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          botUsername: "owner_me3_bot",
+          botToken: "123456:telegram-token-secret-1234",
+          webhookSecret: "webhook_secret_1234",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      configured: boolean;
+      botUsername: string;
+      tokenConfigured: boolean;
+      webhookSecretConfigured: boolean;
+      botTokenHint: string;
+      webhookSecretHint: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      configured: true,
+      botUsername: "owner_me3_bot",
+      tokenConfigured: true,
+      webhookSecretConfigured: true,
+      botTokenHint: "***1234",
+      webhookSecretHint: "***1234",
+    });
+    expect(JSON.stringify(body)).not.toContain("telegram-token-secret-1234");
+    expect(JSON.stringify(body)).not.toContain("webhook_secret_1234");
+    expect(env.telegramSettings?.encrypted_bot_token).toMatch(/^v1\./);
+    expect(env.telegramSettings?.encrypted_bot_token).not.toContain(
+      "telegram-token-secret-1234",
+    );
+    expect(env.telegramSettings?.encrypted_webhook_secret).toMatch(/^v1\./);
+    expect(env.telegramSettings?.encrypted_webhook_secret).not.toContain(
+      "webhook_secret_1234",
+    );
+  });
+
+  it("sets the Telegram webhook from owner-managed settings", async () => {
+    const env = createEnv();
+    env.TELEGRAM_BOT_USERNAME = undefined;
+    env.TELEGRAM_BOT_TOKEN = undefined;
+    env.TELEGRAM_WEBHOOK_SECRET = undefined;
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/telegram/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          botUsername: "owner_me3_bot",
+          botToken: "123456:telegram-token-secret-1234",
+          webhookSecret: "webhook_secret_1234",
+        }),
+      }),
+      env,
+    );
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ ok: true, result: true }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const response = await app.fetch(
+        new Request("http://localhost/api/telegram/webhook/sync", {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const body = (await response.json()) as { ok: boolean; webhookUrl: string };
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({
+        ok: true,
+        webhookUrl: "http://localhost:8787/api/telegram/webhook",
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+        "https://api.telegram.org/bot123456:telegram-token-secret-1234/setWebhook",
+      );
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        url: "http://localhost:8787/api/telegram/webhook",
+        secret_token: "webhook_secret_1234",
+        allowed_updates: ["message"],
+        drop_pending_updates: true,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("links Telegram webhook start messages to pending account connections", async () => {
