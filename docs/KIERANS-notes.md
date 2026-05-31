@@ -52,3 +52,14 @@ This is the place you capture everything:
 
 Projects can be used to organise tasks.
 The journal can be used for any notes which will be useful context for your assistant.
+
+## ME3 Assistant Agent
+
+Cloudflare has a skill called 'building-ai-agent-on-cloudflare' see https://github.com/cloudflare/skills
+
+- Default model:
+- Memory types
+  - working (context window)
+  - MD file i.e. AGENTS.md
+  - skills
+  - episodic = learnings from previous failures condensed somehow (tricky one)

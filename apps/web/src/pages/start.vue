@@ -248,7 +248,8 @@ function syncEmailForDomain(nextDomain: string) {
   const cleanedDomain = normalizeEmailDomain(nextDomain);
   if (!cleanedDomain) return;
 
-  const [currentLocalPart = "", currentDomain = ""] = normalizedEmail.value.split("@");
+  const [currentLocalPart = "", currentDomain = ""] =
+    normalizedEmail.value.split("@");
   const shouldUseSuggestedAddress =
     !emailAddress.value.trim() ||
     !currentDomain ||
@@ -256,9 +257,7 @@ function syncEmailForDomain(nextDomain: string) {
   if (!shouldUseSuggestedAddress) return;
 
   const localPart =
-    normalizeMailboxAlias(currentLocalPart) ||
-    normalizedHandle.value ||
-    "user";
+    normalizeMailboxAlias(currentLocalPart) || normalizedHandle.value || "user";
   emailAddress.value = `${localPart}@${cleanedDomain}`;
   lastSuggestedEmailDomain.value = cleanedDomain;
 }
@@ -636,14 +635,14 @@ onBeforeUnmount(clearUsernameCheck);
         <div class="step-copy">
           <h1 id="soulink-title">Connect Soulink</h1>
           <p>
-            Soulink creates a private chat with your ME3 assistant across web
-            and mobile. You can finish this now or return from
-            <RouterLink
-              to="/account?section=soulink"
+            Soulink is a chat app built by the
+            <a
+              href="https://soulinkfoundation.org"
               target="_blank"
               rel="noopener noreferrer"
-              >Account settings</RouterLink
-            >.
+              >soulinkfoundation.org</a
+            >. You can use it to easily chat with your ME3 assistant from your
+            mobile.
           </p>
         </div>
 
