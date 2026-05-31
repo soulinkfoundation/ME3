@@ -28,10 +28,10 @@ describe("assistant jobs package", () => {
   });
 
   it("marks provider-backed recipes as setup-gated", () => {
-    const emailWatch = getAssistantJobStarterRecipe("email-watch");
-    if (!emailWatch) throw new Error("Missing email-watch recipe");
+    const emailTriage = getAssistantJobStarterRecipe("email-triage");
+    if (!emailTriage) throw new Error("Missing email-triage recipe");
 
-    const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(emailWatch));
+    const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(emailTriage));
 
     expect(validation.status).toBe("needs_setup");
     expect(validation.errors.map((error) => error.code)).toContain("setup_missing");
@@ -90,15 +90,15 @@ describe("assistant jobs package", () => {
   });
 
   it("rejects event-triggered jobs with event-unsafe actions", () => {
-    const emailWatch = getAssistantJobStarterRecipe("email-watch");
-    if (!emailWatch) throw new Error("Missing email-watch recipe");
+    const bookingReminder = getAssistantJobStarterRecipe("booking-reminder");
+    if (!bookingReminder) throw new Error("Missing booking-reminder recipe");
     const draft: AssistantJobDraft = {
-      ...createAssistantJobDraftFromRecipe(emailWatch),
+      ...createAssistantJobDraftFromRecipe(bookingReminder),
       actions: [
         {
-          id: "send-email",
-          capabilityId: "email.message.send",
-          label: "Send email",
+          id: "create-calendar-event",
+          capabilityId: "calendar.event.create",
+          label: "Create calendar event",
           inputs: {},
           approvalMode: "approval_required",
           onFailure: "stop",
@@ -108,7 +108,7 @@ describe("assistant jobs package", () => {
     };
 
     const validation = validateAssistantJobDraft(draft, {
-      readySetupRequirements: ["email"],
+      readySetupRequirements: ["calendar"],
     });
 
     expect(validation.status).toBe("invalid");

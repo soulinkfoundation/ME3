@@ -1,6 +1,7 @@
 # Assistant Jobs Heartbeat and Reconciliation Loop
 
-Source of truth: bead `me3-wsn.22` under parent `me3-wsn`.
+Planning source of truth: [`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md).
+This document is the detailed heartbeat and reconciliation reference.
 
 The heartbeat is a reliability layer for Assistant Jobs.
 
@@ -168,7 +169,7 @@ Owner-facing copy examples:
 
 ```text
 Weekly Review missed its Friday run. I queued a catch-up run.
-Email Watch needs Email setup before it can resume.
+Email Triage needs Email setup before it can resume.
 Invoice Triage failed three times while reading Email. Review provider setup.
 ```
 

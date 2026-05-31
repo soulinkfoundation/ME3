@@ -1,5 +1,9 @@
 # Assistant Jobs and Agent Skills
 
+Planning source of truth: [`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md).
+This document is the detailed boundary reference for skills, recipes, jobs, capabilities,
+and runs.
+
 Assistant Jobs and Agent Skills are related, but they should not be the same thing.
 
 Agent Skills are portable instruction bundles for agents. The public Agent Skills format defines a skill as a directory with a required `SKILL.md`, metadata, instructions, and optional `scripts/`, `references/`, and `assets/`. Skills are loaded through progressive disclosure: first metadata, then full instructions when relevant, then resources as needed.

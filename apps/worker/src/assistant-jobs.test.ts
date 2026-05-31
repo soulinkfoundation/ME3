@@ -105,7 +105,7 @@ describe("assistant jobs persistence", () => {
   it("creates blocked run records for setup-gated jobs", async () => {
     const env = createAssistantJobsEnv();
 
-    const created = await createAssistantJob(env, "owner", { recipeId: "email-watch" });
+    const created = await createAssistantJob(env, "owner", { recipeId: "email-triage" });
     expect(created.job.status).toBe("needs_setup");
 
     const run = await runAssistantJobNow(env, "owner", created.job.id);

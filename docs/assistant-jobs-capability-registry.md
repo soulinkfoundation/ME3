@@ -1,6 +1,8 @@
 # Assistant Jobs Capability Registry
 
-Source of truth: bead `me3-wsn.3` under parent `me3-wsn`.
+Planning source of truth: [`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md).
+This document is the detailed capability registry reference for Assistant Jobs and the
+future shared agent harness.
 
 The capability registry tells Assistant Jobs what the assistant can do.
 
@@ -97,7 +99,7 @@ Mission Control should contribute the v1 workbench capabilities:
 
 | ID | Purpose | Side effect | Approval |
 | --- | --- | --- | --- |
-| `mission.review_packet.create` | Create a scan-friendly review packet. | `write_internal_draft` | `review_required` |
+| `mission.review_packet.create` | Create a scan-friendly Mission Control result. Internal legacy ID; user-facing copy should say result. | `write_internal_draft` | `review_required` |
 | `mission.task.create` | Create a Mission Control task. | `write_internal_active` | `none` or `review_required` by job |
 | `mission.capture.create` | Create a capture item. | `write_internal_active` | `none` |
 | `mission.approval.create` | Create an approval item. | `write_internal_active` | `none` |
@@ -208,7 +210,7 @@ The registry should help generate job permission copy:
 
 ```text
 This job can read tasks and captures in Mission Control.
-It can create review packets and draft tasks.
+It can create Mission Control results and draft tasks.
 It will ask before sending email or writing durable memory.
 It cannot delete provider data or change permissions.
 ```

@@ -1,6 +1,8 @@
 # ME3 Agent Custom Job Creation Capability
 
-Source of truth: bead `me3-wsn.4` under parent `me3-wsn`.
+Planning source of truth: [`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md).
+This document is the detailed custom job builder reference, and should not outrun the
+starter-job QA and capability-unification work tracked in the roadmap.
 
 Custom job creation should be a first-class ME3 agent capability.
 
@@ -169,7 +171,7 @@ Before saving, show a confirmation summary:
 Job: Weekly client review
 Runs: Fridays at 3:00 PM
 Reads: Mission Control tasks and project activity for client projects
-Creates: One review packet in Mission Control
+Creates: One result in Mission Control
 Asks before: Sending messages, writing durable memory, or changing external systems
 Destination: Mission Control -> Client Projects
 ```
@@ -187,7 +189,7 @@ Refuse or redirect requests to:
 - Make payments or account changes without approval.
 - Watch sources that are not connected or owner-authorized.
 
-When refusing, offer the nearest safe version, such as drafting for approval or creating a review packet.
+When refusing, offer the nearest safe version, such as drafting for approval or creating a Mission Control result.
 
 ## Example Conversations
 
@@ -201,20 +203,20 @@ Assistant:
 - Asks which project group if needed.
 - Drafts a scheduled job.
 - Reads Mission Control projects, tasks, approvals, and recent activity.
-- Creates a review packet.
+- Creates a Mission Control result.
 - Requires approval for external sends or durable memory writes.
 
-### Email Watch
+### Email Triage
 
-Owner: "When Sarah from Acme emails, make sure I see it."
+Owner: "Summarize my inbox every morning and draft replies when useful."
 
 Assistant:
 
-- Checks whether Email is installed and ready.
-- If ready, drafts an event job scoped to messages from Sarah or Acme.
-- Creates a Mission Control review item and optionally owner notification.
-- Does not auto-reply.
-- If not ready, offers a needs-setup draft or Core-only manual reminder.
+- Checks whether Email is connected and ready.
+- Drafts a scheduled job scoped to the connected mailbox.
+- Creates a Mission Control result and optional draft replies.
+- Does not send replies without approval.
+- If Email is not ready, offers a needs-setup draft.
 
 ### Invoice Triage
 
@@ -223,22 +225,22 @@ Owner: "Watch for invoices and receipts, pull out the amount, and remind me to p
 Assistant:
 
 - Checks Email and any Accounts capability.
-- Drafts extraction into a review packet.
+- Drafts extraction into a Mission Control result.
 - Creates tasks for likely payment follow-up.
 - Marks payment or accounting writes as approval-required.
 - Stores low-confidence matches for review.
 
-### Project Digest
+### Booking Reminder
 
-Owner: "Every Monday, summarize what changed on my website project."
+Owner: "Before bookings, remind me what I need to know and make a follow-up task."
 
 Assistant:
 
-- Uses Project digest recipe.
-- Scopes to the selected Mission Control project.
-- Reads project tasks, captures, approvals, and run activity.
-- Creates a review packet.
-- If local repo access is requested but daemon is not paired, marks that part needs setup.
+- Checks whether Calendar is connected and ready.
+- Drafts an event-triggered or scheduled job scoped to booking events.
+- Reads calendar context and creates a Mission Control result.
+- Creates follow-up tasks inside Mission Control.
+- Sends owner notifications only after the notification capability exists and is enabled.
 
 ## Allowed Tool Calls Later
 

@@ -2,6 +2,10 @@
 
 Date: 2026-05-16
 
+Planning source of truth for the broader agent harness:
+[`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md). This document remains the
+detailed native context and memory design reference.
+
 ## Plain-English Goal
 
 ME3 should make the assistant feel like it remembers useful things without adding a mysterious external brain first.
@@ -75,7 +79,7 @@ Initial targets:
 
 - Core sandbox chat.
 - Assistant Jobs runner.
-- Mission Control review packet jobs.
+- Mission Control result-producing jobs.
 
 Test gates:
 

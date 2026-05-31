@@ -1,6 +1,8 @@
 # Assistant Jobs Safety and Approval Policy
 
-Source of truth: bead `me3-wsn.17` under parent `me3-wsn`.
+Planning source of truth: [`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md).
+This document is the detailed safety and approval reference for Assistant Jobs and the
+future shared agent harness.
 
 Assistant Jobs run in the background, so the safety model has to be boring, visible, and conservative.
 
@@ -34,7 +36,7 @@ Non-goals for this bead:
 
 `none`: The action can complete without a separate owner decision when the job has permission. Use for reads, summaries, and low-risk internal records.
 
-`review_required`: The action creates or updates private workspace records that should be checked later but can be stored now. Use for review packets, draft tasks, suggested labels, and extracted metadata.
+`review_required`: The action creates or updates private workspace records that should be checked later but can be stored now. Use for Mission Control results, draft tasks, suggested labels, and extracted metadata.
 
 `approval_required`: The action cannot complete until the owner approves it. Use for sends, external writes, durable memory writes, local file writes, shell commands, publishing, booking, payments, deletes, and account changes.
 
@@ -70,7 +72,7 @@ Preview-only actions are allowed to prepare work but not commit it externally.
 Examples:
 
 - Draft an email reply in Mission Control.
-- Extract invoice fields into a review packet.
+- Extract invoice fields into a Mission Control result.
 - Suggest a calendar event without creating it.
 - Suggest a memory entry without activating it.
 - Prepare a public-site update without publishing it.
@@ -161,7 +163,7 @@ Audit records should be useful to owners and developers. The owner-facing summar
 Owners should see safety in direct language:
 
 - "This job can read Mission Control tasks in Project X."
-- "This job can create review packets and draft tasks."
+- "This job can create Mission Control results and draft tasks."
 - "This job will ask before sending email."
 - "This job cannot delete provider data."
 - "This job needs Email setup before it can run."
@@ -188,7 +190,7 @@ Failure should create a run event and, when owner action is needed, Mission Cont
 Implementation should add tests for:
 
 - A read-only job cannot write.
-- A review job creates review packets without sending externally.
+- A review job creates Mission Control results without sending externally.
 - Explicit-send actions create approvals and do not send before approval.
 - Denied approvals do not retry side effects.
 - Durable memory writes require approval.

@@ -1,6 +1,7 @@
 # Assistant Jobs Schema and Recipe Model
 
-Source of truth: bead `me3-wsn.2` under parent `me3-wsn`.
+Planning source of truth: [`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md).
+This document is the detailed persistence and run schema reference.
 
 Assistant Jobs should persist editable recipe instances, not fixed `job_type` rows.
 
@@ -17,7 +18,7 @@ This is a design spec. It is not a migration file.
 
 Core owns the Assistant Jobs model because `/assistant` is a Core surface and job execution crosses installed plugins.
 
-Mission Control owns the default destination records: review packets, tasks, captures, approvals, private memory suggestions, activity, and run summaries.
+Mission Control owns the default destination records: job results, tasks, captures, approvals, private memory suggestions, activity, and run summaries. Some internal schema fields still use the older `review_packet` identifier for compatibility; user-facing copy should say result.
 
 Plugins own provider-specific configuration and capabilities. Jobs store references to plugin capabilities but should not copy provider secrets, hosted-only subscription state, or plugin-private credentials.
 
