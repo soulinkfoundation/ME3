@@ -110,6 +110,17 @@ type FullMailboxResponse = {
   sources: MailboxSource[];
 };
 
+type EmailProviderSettingsResponse = {
+  activeProviderId: string;
+  providers: Array<{
+    id: string;
+    configured: boolean;
+    config: {
+      fromAddress: string;
+    };
+  }>;
+};
+
 type TelegramStatusResponse = {
   available: boolean;
   configured: boolean;
@@ -211,6 +222,7 @@ const { contacts } = storeToRefs(contactsStore);
 
 const mailboxMeta = ref<FullMailboxResponse["mailbox"] | null>(null);
 const mailboxSources = ref<MailboxSource[]>([]);
+const configuredEmailAddress = ref<string | null>(null);
 const telegramHealth = ref<{
   configured: boolean;
   connectionStatus: "pending" | "active" | "disconnected" | null;
@@ -229,6 +241,17 @@ function isInternalMailboxAddress(address: string | null | undefined) {
   return Boolean(address?.trim().toLowerCase().endsWith("@me3.local"));
 }
 
+function isPublicEmailAddress(
+  address: string | null | undefined,
+): address is string {
+  const normalized = address?.trim().toLowerCase() || "";
+  return Boolean(
+    normalized &&
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) &&
+      !isInternalMailboxAddress(normalized),
+  );
+}
+
 const visibleMailboxAddress = computed(() => {
   const activeSource = mailboxSources.value.find(
     (source) =>
@@ -237,15 +260,22 @@ const visibleMailboxAddress = computed(() => {
       !isInternalMailboxAddress(source.address),
   );
   if (activeSource) return activeSource.address;
-  return isInternalMailboxAddress(mailboxAddress.value) ? null : mailboxAddress.value;
+  const configuredAddress = configuredEmailAddress.value;
+  if (isPublicEmailAddress(configuredAddress)) {
+    return configuredAddress;
+  }
+  const aliasAddress = mailboxAddress.value;
+  return isPublicEmailAddress(aliasAddress) ? aliasAddress : null;
 });
 
 const outboundSenderOptions = computed(() => {
   const options: Array<{ address: string; label: string }> = [];
-  const aliasAddress = mailboxMeta.value?.aliasAddress || mailboxAddress.value;
+  const aliasAddress =
+    configuredEmailAddress.value || mailboxMeta.value?.aliasAddress || mailboxAddress.value;
 
-  if (aliasAddress && !isInternalMailboxAddress(aliasAddress)) {
-    options.push({ address: aliasAddress, label: aliasAddress });
+  if (isPublicEmailAddress(aliasAddress)) {
+    const address = aliasAddress.trim().toLowerCase();
+    options.push({ address, label: address });
   }
 
   for (const source of mailboxSources.value) {
@@ -764,13 +794,23 @@ async function markVisibleThreadRead() {
 
 async function loadChannelHealth() {
   try {
-    const [mailboxData, telegramData] = await Promise.all([
+    const [mailboxData, telegramData, providerData] = await Promise.all([
       api.get<FullMailboxResponse>("/mailbox"),
       api.get<TelegramStatusResponse>("/telegram/status"),
+      api
+        .get<EmailProviderSettingsResponse>("/email-provider-settings")
+        .catch(() => null),
     ]);
     mailboxAddress.value = mailboxData.mailbox?.aliasAddress || null;
     mailboxMeta.value = mailboxData.mailbox ?? null;
     mailboxSources.value = mailboxData.sources || [];
+    const activeProvider = providerData?.providers.find(
+      (provider) => provider.id === providerData.activeProviderId,
+    );
+    const activeFromAddress = activeProvider?.config.fromAddress || "";
+    configuredEmailAddress.value = isPublicEmailAddress(activeFromAddress)
+      ? activeFromAddress.trim().toLowerCase()
+      : null;
     telegramHealth.value = {
       configured: telegramData.configured,
       connectionStatus: telegramData.connection?.status ?? null,
@@ -779,6 +819,7 @@ async function loadChannelHealth() {
     mailboxAddress.value = null;
     mailboxMeta.value = null;
     mailboxSources.value = [];
+    configuredEmailAddress.value = null;
     telegramHealth.value = null;
   }
 }
