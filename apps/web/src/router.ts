@@ -62,9 +62,12 @@ async function resolveDefaultAppPathForSession(): Promise<string> {
   const sites = useSitesStore();
   try {
     await sites.fetchSites();
-    return sites.sites.some((site) => !!site.published_at)
+    return sites.sites.some(
+      (site) =>
+        (site.site_type || "profile") === "profile" && !!site.published_at,
+    )
       ? DEFAULT_APP_PATH
-      : "/create";
+      : "/start";
   } catch {
     return DEFAULT_APP_PATH;
   }
