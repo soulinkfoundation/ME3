@@ -177,14 +177,6 @@ const adminHost = computed(() => {
 
 const setupDomain = computed(() => domainStatus.value?.domain || domainPreview.value);
 
-const wranglerSnippet = computed(() => {
-  if (!rootDomain.value) return "";
-  return [
-    `[vars]`,
-    `ME3_CUSTOM_DOMAIN = "${rootDomain.value}"`,
-  ].join("\n");
-});
-
 const setupHostnames = computed(() =>
   [setupDomain.value, adminHost.value].filter(
     (hostname, index, all) => hostname && all.indexOf(hostname) === index,
@@ -236,21 +228,8 @@ const setupHostnames = computed(() =>
             Check Status.
           </p>
 
-          <div v-if="wranglerSnippet" class="setup-card">
-            <div class="setup-card__header">
-              <strong>1. Add these Worker vars</strong>
-              <button
-                class="copy-btn"
-                @click="copyToClipboard(wranglerSnippet, 'wrangler')"
-              >
-                {{ copySuccess === "wrangler" ? "✓" : "Copy" }}
-              </button>
-            </div>
-            <pre><code>{{ wranglerSnippet }}</code></pre>
-          </div>
-
           <div v-if="setupHostnames.length" class="setup-card">
-            <strong>2. Attach custom domains to this Worker</strong>
+            <strong>Attach custom domains to this Worker</strong>
             <ul class="hostname-list">
               <li v-for="hostname in setupHostnames" :key="hostname">
                 <code>{{ hostname }}</code>
@@ -425,25 +404,6 @@ const setupHostnames = computed(() =>
               Use the root domain you control, like
               <strong>kieranbutler.com</strong>.
             </span>
-          </div>
-          <div v-if="wranglerSnippet" class="setup-card">
-            <div class="setup-card__header">
-              <strong>Generated Worker vars</strong>
-              <button
-                class="copy-btn"
-                @click="copyToClipboard(wranglerSnippet, 'wrangler')"
-              >
-                {{ copySuccess === "wrangler" ? "✓" : "Copy" }}
-              </button>
-            </div>
-            <pre><code>{{ wranglerSnippet }}</code></pre>
-            <p>
-              Add these vars, redeploy, then in Cloudflare attach
-              <template v-for="(hostname, index) in setupHostnames" :key="hostname">
-                <code>{{ hostname }}</code>{{ index < setupHostnames.length - 1 ? " and " : "" }}
-              </template>
-              to this Worker in Cloudflare.
-            </p>
           </div>
           <p v-if="domainError" class="error">{{ domainError }}</p>
         </div>

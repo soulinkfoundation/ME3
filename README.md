@@ -105,41 +105,24 @@ ME3 Core can boot on the generated `workers.dev` URL without a custom domain. Do
 https://your-me3.your-account.workers.dev/me
 ```
 
-When an owner is ready to use their own domain, set one root domain:
-
-```toml
-ME3_CUSTOM_DOMAIN = "customdomain.com"
-```
-
-Core infers the hostnames from that one value:
+When an owner is ready to use their own domain, open Account -> Custom domain
+inside ME3 Core and enter the public site domain. Core uses that saved domain
+for public-site routing and infers the private ME3 host from it:
 
 - `me3.customdomain.com` serves the private admin app, login, API URLs, and `me.json` action links.
-- `www.customdomain.com` serves the public ME3 site.
+- `customdomain.com` serves the public ME3 site.
 
 Attach both hostnames to the same Worker as Cloudflare Worker custom domains:
 
 ```text
 me3.customdomain.com  -> me3 Worker
-www.customdomain.com  -> me3 Worker
+customdomain.com      -> me3 Worker
 ```
 
-Advanced installs may still override the inferred values if needed:
-
-```toml
-CORE_WEB_ORIGIN = "https://me3.customdomain.com"
-CORE_API_ORIGIN = "https://api.customdomain.com"
-ME3_ADMIN_HOST = "me3.customdomain.com"
-ME3_API_HOST = "api.customdomain.com"
-ME3_SITE_HOST = "www.customdomain.com"
-# Optional: force the public host to serve a specific claimed site username.
-# ME3_SITE_USERNAME = "owner"
-```
-
-If the owner wants the apex domain too, configure Cloudflare to redirect `customdomain.com` to `www.customdomain.com`. Core keeps the private app/API and public-site routing separate by hostname.
-
-To serve the public profile directly at the apex instead, set `ME3_SITE_HOST = "customdomain.com"` and attach that hostname to the same Worker. Keep the private admin app on a separate hostname such as `me3.customdomain.com`.
-
-The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches the inferred or explicit public site host and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
+The site settings page records a site's desired custom domain. In Core, this
+does not call the Cloudflare account API or mutate Worker custom domains
+automatically; attach the listed hostnames in Cloudflare, then check status in
+ME3.
 
 ### Telegram Agent Channel
 

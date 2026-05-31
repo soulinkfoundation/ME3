@@ -46,21 +46,10 @@ max_retries = 0
 [[send_email]]
 name = "EMAIL"
 
-[vars]
-# Optional custom-domain setup. Set this root domain after attaching
-# me3.yourdomain.com and www.yourdomain.com to this Worker.
-# ME3_CUSTOM_DOMAIN = "yourdomain.com"
-
-# TELEGRAM_BOT_USERNAME = "your_me3_bot"
-# Optional Telegram agent channel. Store these with `wrangler secret put`,
-# not in this file:
-# - TELEGRAM_BOT_TOKEN
-# - TELEGRAM_WEBHOOK_SECRET
-
 [assets]
 directory = "apps/web/dist"
 binding = "ASSETS"
 # The Worker must see every request so it can route by hostname:
-# inferred ME3_SITE_HOST serves the public site; admin/API hosts serve the SPA/API.
+# saved custom domains serve the public site; admin/API hosts serve the SPA/API.
 run_worker_first = ["/*"]
 not_found_handling = "single-page-application"

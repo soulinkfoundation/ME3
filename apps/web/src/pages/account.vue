@@ -2617,8 +2617,8 @@ onMounted(async () => {
                 <p class="hint">
                   Your profile works on the Worker URL first. When you are
                   ready, choose the domain people should use for the public
-                  site and this panel will generate the Worker vars and
-                  Cloudflare custom-domain steps.
+                  site and this panel will generate the Cloudflare custom-domain
+                  steps.
                 </p>
 
                 <div v-if="sites.loading" class="status-row">

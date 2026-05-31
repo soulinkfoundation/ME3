@@ -32,6 +32,7 @@ describe("CustomDomain", () => {
       props: {
         username: "testuser",
         showSettingsLink: false,
+        profilePublished: true,
       },
       global: {
         stubs: {
@@ -57,6 +58,7 @@ describe("CustomDomain", () => {
       props: {
         username: "testuser",
         showSettingsLink: false,
+        profilePublished: true,
       },
       global: {
         stubs: {
@@ -71,7 +73,7 @@ describe("CustomDomain", () => {
     await wrapper.get(".input-row .button.primary").trigger("click");
     await flushPromises();
 
-    expect(sitesStore.connectDomain).toHaveBeenCalledWith("testuser", "www.example.com");
+    expect(sitesStore.connectDomain).toHaveBeenCalledWith("testuser", "example.com");
     expect(wrapper.emitted("domainStatusChanged")).toHaveLength(1);
   });
 });

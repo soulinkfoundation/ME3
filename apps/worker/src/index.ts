@@ -403,7 +403,7 @@ app.use(
 
 app.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname;
-  if (!pathname.startsWith("/api/") && isPublicSiteHost(c.env, c.req.url)) {
+  if (!pathname.startsWith("/api/") && await isPublicSiteHost(c.env, c.req.url)) {
     return servePublicSiteRequest(c.env, c.req.raw);
   }
   await next();
@@ -3878,8 +3878,8 @@ app.get("/me/*", async (c) => {
   return serveDefaultPublicSitePath(c.env, c.req.raw, requestedPath);
 });
 
-app.notFound((c) => {
-  if (isPublicSiteHost(c.env, c.req.url)) {
+app.notFound(async (c) => {
+  if (await isPublicSiteHost(c.env, c.req.url)) {
     return servePublicSiteRequest(c.env, c.req.raw);
   }
   if (c.env.ASSETS) {
@@ -3954,8 +3954,15 @@ function originFromUrl(value: string | null | undefined): string {
   }
 }
 
-function getRootCustomDomain(env: Env): string {
-  return normalizeDomain(env.ME3_CUSTOM_DOMAIN);
+function getRootCustomDomain(env: Env, publicDomain?: string | null): string {
+  const configured = normalizeDomain(env.ME3_CUSTOM_DOMAIN);
+  if (configured) return configured;
+
+  const normalizedPublicDomain = normalizeDomain(publicDomain);
+  if (!normalizedPublicDomain) return "";
+  return normalizedPublicDomain.startsWith("www.")
+    ? normalizedPublicDomain.slice(4)
+    : normalizedPublicDomain;
 }
 
 function prefixedHost(prefix: string, domain: string): string {
@@ -3964,11 +3971,11 @@ function prefixedHost(prefix: string, domain: string): string {
   return `${prefix}.${domain}`;
 }
 
-function getAdminHost(env: Env, requestUrl?: string): string {
+function getAdminHost(env: Env, requestUrl?: string, publicDomain?: string | null): string {
   return (
     normalizeHost(env.ME3_ADMIN_HOST) ||
     hostnameFromUrl(env.CORE_WEB_ORIGIN) ||
-    prefixedHost("me3", getRootCustomDomain(env)) ||
+    prefixedHost("me3", getRootCustomDomain(env, publicDomain)) ||
     hostnameFromUrl(requestUrl)
   );
 }
@@ -3984,8 +3991,8 @@ function getApiHost(env: Env, requestUrl?: string): string {
   );
 }
 
-function getSiteHost(env: Env): string {
-  return normalizeHost(env.ME3_SITE_HOST) || prefixedHost("www", getRootCustomDomain(env));
+function getSiteHost(env: Env, publicDomain?: string | null): string {
+  return normalizeHost(env.ME3_SITE_HOST) || normalizeHost(publicDomain) || prefixedHost("www", getRootCustomDomain(env));
 }
 
 function getCoreWebOrigin(env: Env, requestUrl?: string): string {
@@ -4105,13 +4112,29 @@ function normalizeClaimRedirect(value: unknown): string {
   return "";
 }
 
-function isPublicSiteHost(env: Env, requestUrl: string): boolean {
-  const siteHost = getSiteHost(env);
-  if (!siteHost) return false;
+async function isPublicSiteHost(env: Env, requestUrl: string): Promise<boolean> {
   const requestHost = hostnameFromUrl(requestUrl);
-  const adminHost = getAdminHost(env, requestUrl);
-  const apiHost = getApiHost(env, requestUrl);
-  return requestHost === siteHost && requestHost !== adminHost && requestHost !== apiHost;
+  if (!requestHost) return false;
+  const configuredAdminHost = normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN);
+  const configuredApiHost = normalizeHost(env.ME3_API_HOST) || hostnameFromUrl(env.CORE_API_ORIGIN);
+  if (requestHost === configuredAdminHost || requestHost === configuredApiHost) return false;
+
+  const siteHost = getSiteHost(env);
+  if (siteHost && requestHost === siteHost) return true;
+
+  const site = await env.DB.prepare(
+    `SELECT custom_domain FROM sites
+     WHERE lower(custom_domain) = ?
+     LIMIT 1`,
+  )
+    .bind(requestHost)
+    .first<{ custom_domain: string | null }>();
+
+  if (!site) return false;
+
+  const inferredAdminHost = getAdminHost(env, undefined, site.custom_domain);
+  const inferredApiHost = getApiHost(env);
+  return requestHost !== inferredAdminHost && requestHost !== inferredApiHost;
 }
 
 function getCoreDomainState(
@@ -4120,7 +4143,7 @@ function getCoreDomainState(
   domain: string | null,
 ): "pending" | "active" | "failed" {
   const normalizedDomain = normalizeHost(domain);
-  const siteHost = getSiteHost(env);
+  const siteHost = getSiteHost(env, normalizedDomain);
   if (!normalizedDomain) return "pending";
   if (!siteHost) return "pending";
   if (normalizedDomain !== siteHost) return "pending";
@@ -4142,8 +4165,8 @@ function buildCoreDomainStatus(env: Env, site: DbSite) {
     domain: domain || undefined,
     status,
     ssl_status: status === "active" ? "active" : undefined,
-    expected_host: getSiteHost(env) || null,
-    admin_host: getAdminHost(env) || null,
+    expected_host: getSiteHost(env, domain) || null,
+    admin_host: getAdminHost(env, undefined, domain) || null,
     verification_records: getCoreDomainRecords(env, domain),
     registrar_guides: getRegistrarGuides(),
     url: status === "active" && domain ? `https://${domain}` : undefined,
@@ -4152,7 +4175,6 @@ function buildCoreDomainStatus(env: Env, site: DbSite) {
       : [
           "Publish your profile first so the custom domain has a live page to serve.",
           "Enter the root domain visitors should use for this ME3 site.",
-          "Set ME3_CUSTOM_DOMAIN to that root domain in this Worker deployment.",
           "Attach the public and me3 login hostnames to the Worker as Cloudflare custom domains.",
         ],
   };
@@ -4161,7 +4183,7 @@ function buildCoreDomainStatus(env: Env, site: DbSite) {
 function getCoreDomainRecords(env: Env, domain: string | null | undefined) {
   const normalizedDomain = normalizeHost(domain);
   if (!normalizedDomain) return [];
-  const adminHost = getAdminHost(env);
+  const adminHost = getAdminHost(env, undefined, normalizedDomain);
   if (!adminHost) return [];
   return [
     {
@@ -4173,18 +4195,14 @@ function getCoreDomainRecords(env: Env, domain: string | null | undefined) {
 }
 
 function getCoreDomainInstructions(env: Env, domain: string, username: string): string[] {
-  const siteHost = getSiteHost(env);
-  const rootDomain = getRootCustomDomain(env);
+  const siteHost = getSiteHost(env, domain);
   const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
-  const adminHost = getAdminHost(env);
+  const adminHost = getAdminHost(env, undefined, domain);
   const instructions = [
     `In Cloudflare, attach ${domain} to this same me3 Worker as a custom domain.`,
     adminHost
       ? `Attach ${adminHost} to the same Worker for ME3 login and account settings.`
       : `Attach me3.${domain} to the same Worker for ME3 login and account settings.`,
-    rootDomain
-      ? `ME3_CUSTOM_DOMAIN is ${rootDomain}, so Core expects the public site on ${siteHost}.`
-      : "Set ME3_CUSTOM_DOMAIN to the root domain, then redeploy.",
   ];
 
   if (configuredUsername && configuredUsername !== username) {
@@ -4193,7 +4211,7 @@ function getCoreDomainInstructions(env: Env, domain: string, username: string): 
     instructions.push("Optional: set ME3_SITE_USERNAME if this Worker will host more than one site record.");
   }
 
-  if (siteHost && siteHost !== domain) {
+  if (normalizeHost(env.ME3_SITE_HOST) && siteHost !== domain) {
     instructions.unshift(`Current ME3_SITE_HOST is ${siteHost}, so this domain will stay pending until the variable matches.`);
   }
 
