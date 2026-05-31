@@ -78,6 +78,9 @@ if (!args.skipR2) {
   console.log(`Configured SITE_ASSETS -> ${bucketName}`);
 }
 
+config = ensureEmailSendBinding(config);
+console.log("Configured EMAIL send binding for Cloudflare Email Service.");
+
 if (config !== originalConfig) {
   writeFileSync(configPath, config);
   console.log(`Updated ${configPath}.`);
@@ -250,6 +253,36 @@ function setR2BucketName(value, bucketName) {
   }
 
   return `${value.trimEnd()}${activeBlock}\n`;
+}
+
+function ensureEmailSendBinding(value) {
+  if (getSendEmailBinding(value, "EMAIL")) return value;
+
+  const block = [
+    "",
+    "# Cloudflare Email Service sender binding. Account -> Email stores the sender",
+    "# address; this deploy-time binding lets the Worker call env.EMAIL.send().",
+    "[[send_email]]",
+    'name = "EMAIL"',
+    "",
+  ].join("\n");
+
+  const varsIndex = value.indexOf("\n[vars]");
+  if (varsIndex !== -1) {
+    return `${value.slice(0, varsIndex)}${block}${value.slice(varsIndex)}`;
+  }
+
+  const assetsIndex = value.indexOf("\n[assets]");
+  if (assetsIndex !== -1) {
+    return `${value.slice(0, assetsIndex)}${block}${value.slice(assetsIndex)}`;
+  }
+
+  return `${value.trimEnd()}${block}`;
+}
+
+function getSendEmailBinding(value, name) {
+  const blocks = value.match(/\n\[\[send_email\]\]\n(?:(?!\n\[)[\s\S])*/g) || [];
+  return blocks.find((block) => block.match(/name\s*=\s*"([^"]+)"/)?.[1] === name) || "";
 }
 
 function setTomlString(block, key, value) {

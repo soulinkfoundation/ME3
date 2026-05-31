@@ -41,11 +41,10 @@ max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 0
 
-# Optional Cloudflare Email Service sender binding. ME3 Core can also send with
-# owner-configured SMTP or Postmark settings from Account -> Mailbox settings.
-# [[send_email]]
-# name = "EMAIL"
-# allowed_sender_addresses = ["hello@example.com"]
+# Cloudflare Email Service sender binding. Account -> Email stores the sender
+# address; this deploy-time binding lets the Worker call env.EMAIL.send().
+[[send_email]]
+name = "EMAIL"
 
 [vars]
 ENVIRONMENT = "local"

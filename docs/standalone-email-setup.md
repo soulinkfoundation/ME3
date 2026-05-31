@@ -48,27 +48,26 @@ Do not add `name@your-domain.com` as a Destination Address unless you want Cloud
 
 Cloudflare Email Sending is in public beta. It sends from Workers through a `send_email` binding.
 
+New ME3 Core installs include the Worker binding by default:
+
+```toml
+[[send_email]]
+name = "EMAIL"
+```
+
+This only gives the Worker permission to call Cloudflare Email Service. The
+sender address still comes from Account -> Email in ME3.
+
 In Cloudflare Email Service:
 
 1. Enable Email Sending for `your-domain.com`.
 2. Complete Cloudflare's sender/domain verification steps.
 3. Confirm the sender address or domain can send as `name@your-domain.com`.
 
-Then add the binding to the install's `wrangler.toml`:
-
-```toml
-[[send_email]]
-name = "EMAIL"
-allowed_sender_addresses = ["name@your-domain.com"]
-```
-
-Deploy the Worker after changing `wrangler.toml`.
-
 If ME3 says `Cloudflare Email Service is not ready to send yet`, it has not
 detected a ready outbound provider. For the Cloudflare provider, check that the
-deployed Worker has the `EMAIL` send binding above, the allowed sender matches
-the From address saved in ME3, and the Cloudflare sending domain or address has
-finished verification.
+deployed Worker has the `EMAIL` send binding above and the Cloudflare sending
+domain or address has finished verification.
 
 ## 4. Configure Outbound Mail In ME3
 

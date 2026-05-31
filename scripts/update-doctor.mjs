@@ -63,6 +63,13 @@ const r2Block = getTomlArrayBlock(config, "r2_buckets", "SITE_ASSETS");
 check("R2 SITE_ASSETS binding exists", Boolean(r2Block), 'Expected [[r2_buckets]] with binding = "SITE_ASSETS".');
 check("R2 bucket name is set", Boolean(getTomlString(r2Block, "bucket_name")), "Expected R2 bucket_name.");
 
+const emailSendBlock = getTomlNamedBlock(config, "send_email", "EMAIL");
+check(
+  "Cloudflare Email Service send binding exists",
+  Boolean(emailSendBlock),
+  'Expected [[send_email]] with name = "EMAIL". Account -> Email stores the sender address.',
+);
+
 const durableObjectBlock = getTomlArrayBlock(config, "durable_objects.bindings", "ME3_USER_AGENT");
 check(
   "ME3_USER_AGENT Durable Object binding exists",
@@ -148,6 +155,12 @@ function getTomlArrayBlock(value, blockName, bindingValue) {
   const key = blockName === "durable_objects.bindings" ? "name" : "binding";
   const blocks = value.match(blockPattern) || [];
   return blocks.find((block) => getTomlString(block, key) === bindingValue) || "";
+}
+
+function getTomlNamedBlock(value, blockName, nameValue) {
+  const blockPattern = new RegExp(`\\n\\[\\[${escapeRegExp(blockName)}\\]\\][\\s\\S]*?(?=\\n\\[|$)`, "g");
+  const blocks = value.match(blockPattern) || [];
+  return blocks.find((block) => getTomlString(block, "name") === nameValue) || "";
 }
 
 function getTomlString(block, key) {
