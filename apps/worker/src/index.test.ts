@@ -1326,7 +1326,7 @@ function createInboundEmailMessage(raw: string, init?: {
   const forwardedTo: string[] = [];
   const message = {
     from: init?.from || "client@example.com",
-    to: init?.to || "test@soulinkfoundation.org",
+    to: init?.to || "name@example.com",
     headers: new Headers(init?.headers),
     raw: new Response(bytes).body!,
     rawSize: bytes.byteLength,
@@ -4204,7 +4204,7 @@ describe("ME3 Core Worker auth", () => {
           "Content-Type": "application/json",
           Cookie: session,
         },
-        body: JSON.stringify({ aliasLocalPart: "test", forwardingEnabled: false }),
+        body: JSON.stringify({ aliasLocalPart: "name", forwardingEnabled: false }),
       }),
       env,
     );
@@ -4219,7 +4219,7 @@ describe("ME3 Core Worker auth", () => {
     const inbound = createInboundEmailMessage(
       [
         "From: Client <client@example.com>",
-        "To: test@soulinkfoundation.org",
+        "To: name@example.com",
         "Subject: Standalone test",
         "Message-ID: <standalone-test@example.com>",
         "Content-Type: text/plain; charset=utf-8",
@@ -4238,7 +4238,7 @@ describe("ME3 Core Worker auth", () => {
         provider_id: "cloudflare-email-routing",
         provider_message_id: "<standalone-test@example.com>",
         from_address: "client@example.com",
-        to_address: "test@soulinkfoundation.org",
+        to_address: "name@example.com",
         subject: "Standalone test",
         text_body: "Hello from Cloudflare Email Routing.",
         folder: "inbox",
@@ -4258,7 +4258,7 @@ describe("ME3 Core Worker auth", () => {
           Cookie: session,
         },
         body: JSON.stringify({
-          aliasLocalPart: "test",
+          aliasLocalPart: "name",
           forwardingEnabled: true,
           forwardingEmail: "archive@example.com",
         }),

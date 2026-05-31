@@ -476,15 +476,19 @@ const mailboxAliasNormalized = computed(() =>
   normalizeMailboxAlias(mailboxAliasInput.value),
 );
 
-const mailboxConfiguredSenderAddress = computed(() =>
-  activeEmailProviderInput.value.fromAddress.trim().toLowerCase(),
-);
+const installationEmailDomain = computed(() => {
+  const configuredDomain = customDomainSite.value?.custom_domain || "";
+  return (
+    normalizeEmailDomain(configuredDomain) ||
+    inferEmailDomainFromHost(window.location.hostname)
+  );
+});
 
 const mailboxRoutedAddress = computed(() => {
   const localPart = mailboxAliasNormalized.value || mailbox.value?.aliasLocalPart || "";
-  const configuredSender = mailboxConfiguredSenderAddress.value;
-  const configuredDomain = configuredSender.split("@")[1] || "";
-  if (localPart && configuredDomain) return `${localPart}@${configuredDomain}`;
+  if (localPart && installationEmailDomain.value) {
+    return `${localPart}@${installationEmailDomain.value}`;
+  }
   return "";
 });
 
@@ -873,9 +877,31 @@ function isValidMailboxEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim().toLowerCase());
 }
 
-function inferMailboxAliasFromAddress(value: string) {
-  const localPart = value.trim().toLowerCase().split("@")[0] || "";
-  return normalizeMailboxAlias(localPart);
+function normalizeEmailDomain(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .split("/")[0]
+    .replace(/^www\./, "")
+    .replace(/[^a-z0-9.-]/g, "")
+    .replace(/^[.-]+|[.-]+$/g, "");
+}
+
+function inferEmailDomainFromHost(hostname: string) {
+  const normalized = normalizeEmailDomain(hostname);
+  if (!normalized || normalized === "localhost" || normalized.endsWith(".workers.dev")) {
+    return "";
+  }
+  const parts = normalized.split(".");
+  if (parts.length > 2 && ["me3", "api", "www"].includes(parts[0])) {
+    return parts.slice(1).join(".");
+  }
+  return normalized;
+}
+
+function inferMailboxAlias() {
+  return normalizeMailboxAlias(auth.user?.username || auth.user?.email || "");
 }
 
 function openAccountSection(section: AccountSection) {
@@ -967,8 +993,7 @@ function syncMailboxInputs(response: MailboxResponse) {
     response.mailbox?.aliasLocalPart ||
     mailboxAliasInput.value ||
     response.suggestedAliasLocalPart ||
-    inferMailboxAliasFromAddress(mailboxConfiguredSenderAddress.value) ||
-    "test";
+    inferMailboxAlias();
   mailboxForwardingEnabled.value = Boolean(response.mailbox?.forwardingEnabled);
   mailboxForwardingEmail.value =
     response.mailbox?.forwardingEmail || auth.user?.email || "";
@@ -1313,15 +1338,6 @@ function syncEmailProviderSettings(response: EmailProviderSettingsResponse) {
       ...provider.config,
       apiToken: "",
     };
-  }
-
-  if (!mailbox.value) {
-    const inferredAlias = inferMailboxAliasFromAddress(
-      emailProviderInputs.value[selectedEmailProviderId.value].fromAddress,
-    );
-    if (inferredAlias) {
-      mailboxAliasInput.value = inferredAlias;
-    }
   }
 
   emailProviderTestTo.value = auth.user?.email || "";
@@ -1753,19 +1769,19 @@ onMounted(async () => {
                 </div>
                 <div class="mailbox-config-grid">
                   <label class="field">
-                    <span>Mailbox local part</span>
+                    <span>Email name</span>
                     <input
                       v-model="mailboxAliasInput"
                       class="input"
                       type="text"
-                      placeholder="test"
+                      placeholder="name"
                       spellcheck="false"
                     />
                     <p class="field-hint">
-                      Use <strong>{{ mailboxAliasNormalized || "test" }}</strong>
+                      Use <strong>{{ mailboxAliasNormalized || "name" }}</strong>
                       for the Core mailbox, then route
                       <strong>{{
-                        mailboxRoutedAddress || "test@yourdomain.com"
+                        mailboxRoutedAddress || "name@your-domain.com"
                       }}</strong>
                       to the Worker in Cloudflare.
                     </p>
@@ -1790,7 +1806,7 @@ onMounted(async () => {
                 <div class="mailbox-route-summary">
                   <span>Cloudflare route</span>
                   <strong>{{
-                    mailboxRoutedAddress || "test@yourdomain.com"
+                    mailboxRoutedAddress || "name@your-domain.com"
                   }}</strong>
                   <span>Action</span>
                   <strong>Send to Worker</strong>

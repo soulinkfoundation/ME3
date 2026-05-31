@@ -1,94 +1,93 @@
 # Standalone Email Setup
 
-This is the smallest setup path for a standalone ME3 Core install that wants to receive and send mail for one owned domain address.
+This is the simplest Cloudflare-native path for a standalone ME3 Core install running on a custom domain.
 
-## Recommended First Test
-
-Use one new address first:
+Assume the private app is available at:
 
 ```text
-test@soulinkfoundation.org
+https://me3.your-domain.com
 ```
 
-Use Cloudflare Email Routing for inbound mail and Postmark for outbound mail. This keeps setup close to what hosted ME3 already uses while avoiding new SMTP or Cloudflare Email Service sender setup.
-
-## 1. Configure Outbound Sending In ME3
-
-In ME3 Core, open Account -> Email -> Send email with.
-
-Choose Postmark and enter:
+The owner wants ME3 to manage:
 
 ```text
-Provider: Postmark
-From address: test@soulinkfoundation.org
+name@your-domain.com
+```
+
+Use Cloudflare Email Routing for inbound mail and Cloudflare Email Sending for outbound mail.
+
+## 1. Configure The ME3 Mailbox
+
+In ME3 Core, open Account -> Email.
+
+Under Receive email at:
+
+```text
+Email name: name
+Forward copy to: optional
+```
+
+Save the mailbox, then activate it.
+
+ME3 stores the local part, such as `name`, and expects Cloudflare to route `name@your-domain.com` to the same Worker that serves the Core install.
+
+## 2. Configure Inbound Mail In Cloudflare
+
+In Cloudflare for `your-domain.com`:
+
+1. Open Email Service or Email Routing.
+2. Onboard the domain if Cloudflare asks you to.
+3. Make sure the MX records are active.
+4. Create a routing rule for `name@your-domain.com`.
+5. Set the action to `Send to a Worker`.
+6. Choose the ME3 Core Worker.
+
+Do not add `name@your-domain.com` as a Destination Address unless you want Cloudflare to forward mail to a separate inbox. Worker delivery does not need destination-address verification.
+
+## 3. Configure Outbound Mail In Cloudflare
+
+Cloudflare Email Sending is in public beta. It sends from Workers through a `send_email` binding.
+
+In Cloudflare Email Service:
+
+1. Enable Email Sending for `your-domain.com`.
+2. Complete Cloudflare's sender/domain verification steps.
+3. Confirm the sender address or domain can send as `name@your-domain.com`.
+
+Then add the binding to the install's `wrangler.toml`:
+
+```toml
+[[send_email]]
+name = "EMAIL"
+allowed_sender_addresses = ["name@your-domain.com"]
+```
+
+Deploy the Worker after changing `wrangler.toml`.
+
+## 4. Configure Outbound Mail In ME3
+
+In Account -> Email -> Send email with:
+
+```text
+Provider: Cloudflare Email Service
+From address: name@your-domain.com
 Display name: ME3 Core
-Reply-to address: test@soulinkfoundation.org
-Server API token: Postmark Server API token for soulinkfoundation.org
-Message stream: outbound
+Reply-to address: name@your-domain.com
 ```
 
-Save the sender settings, then send a test email to a separate inbox.
+Save sender settings, then send a test email.
 
-Postmark must already have either `test@soulinkfoundation.org` as a confirmed sender signature or `soulinkfoundation.org` as a verified sender domain.
+## 5. Test The Full Loop
 
-## 2. Activate The ME3 Mailbox
+1. Send a message from another email account to `name@your-domain.com`.
+2. Open `/email` in ME3 and confirm the message appears.
+3. Draft a reply and approve it.
+4. Confirm the reply is delivered from `name@your-domain.com`.
 
-ME3 Core stores inbound messages only when the Core mailbox is active.
+## Notes
 
-From the app, the mailbox setup is currently shown as domain-routing driven. If needed, the API can create the mailbox with local part `test`, then activate it:
-
-```bash
-curl -X PUT "https://me3.kieranbutler.com/api/mailbox" \
-  -H "Content-Type: application/json" \
-  -H "Cookie: <owner session cookie>" \
-  --data '{"aliasLocalPart":"test","forwardingEnabled":false}'
-
-curl -X POST "https://me3.kieranbutler.com/api/mailbox/activate" \
-  -H "Cookie: <owner session cookie>"
-```
-
-## 3. Route Inbound Mail In Cloudflare
-
-In Cloudflare for `soulinkfoundation.org`:
-
-1. Open Email Routing.
-2. Make sure the domain is onboarded and MX records are active.
-3. Create a custom address for `test@soulinkfoundation.org`.
-4. Set the action/destination to the ME3 Core Worker, not a regular destination inbox.
-5. Save the route.
-
-Cloudflare routes each custom address to one destination or Email Worker. For testing, send mail from a different inbox than any forwarding destination.
-
-## 4. Test Inbound
-
-Send a message from an external account to:
-
-```text
-test@soulinkfoundation.org
-```
-
-Then open:
-
-```text
-https://me3.kieranbutler.com/email
-```
-
-The message should appear in the inbox with the original sender, recipient, subject, plain-text body, raw headers, and raw MIME stored in D1.
-
-## 5. Test Reply Flow
-
-From the ME3 email screen:
-
-1. Open the received message.
-2. Draft a reply.
-3. Approve/send it.
-
-The reply should go out through the active Postmark provider and preserve thread headers when available.
-
-## Notes For Other Users
-
-- Inbound and outbound are separate.
-- Cloudflare Email Routing receives mail only; it does not provide SMTP sending.
-- Postmark is currently the simplest outbound option for users who can verify a sender/domain.
-- SMTP is useful when users already have an authenticated relay, but Workers cannot use port 25.
-- Cloudflare Email Service outbound can be a future "all Cloudflare" path, but it needs sender verification and, for bindings, Worker configuration outside the Account UI.
+- Inbound and outbound setup are separate, even when both use Cloudflare.
+- Email Routing receives mail and routes it to the Worker.
+- Email Sending sends mail from the Worker through the `EMAIL` binding.
+- Destination Addresses are only for forwarding mail to existing external inboxes.
+- SMTP, Postmark, and Mailgun are still useful fallback outbound providers when Cloudflare Email Sending is unavailable for an install.
