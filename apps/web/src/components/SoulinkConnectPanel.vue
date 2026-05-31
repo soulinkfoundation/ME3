@@ -25,8 +25,6 @@ type SoulinkStatusResponse = {
   available: boolean;
   configured: boolean;
   apiOrigin: string | null;
-  connectorTokenConfigured: boolean;
-  dispatchTokenConfigured: boolean;
   runtimeCallbackUrl: string;
   connection: SoulinkConnectionRecord | null;
 };
@@ -52,8 +50,6 @@ const disconnectLoading = ref(false);
 const available = ref(false);
 const configured = ref(false);
 const apiOrigin = ref<string | null>(null);
-const connectorTokenConfigured = ref(false);
-const dispatchTokenConfigured = ref(false);
 const runtimeCallbackUrl = ref("");
 const connection = ref<SoulinkConnectionRecord | null>(null);
 const error = ref<string | null>(null);
@@ -64,7 +60,7 @@ const isConnected = computed(() => connection.value?.status === "active");
 const statusHint = computed(() => {
   if (!available.value) return "Soulink assistant chat is not available here yet.";
   if (!configured.value) {
-    return "Add Soulink connector settings to this Core install before connecting.";
+    return "Soulink assistant chat is not configured for this Core install yet.";
   }
   if (isConnected.value) return "Soulink is connected as your primary assistant chat.";
   if (connection.value?.status === "disconnected") {
@@ -107,8 +103,6 @@ function syncStatus(response: SoulinkStatusResponse) {
   available.value = response.available;
   configured.value = response.configured;
   apiOrigin.value = response.apiOrigin;
-  connectorTokenConfigured.value = response.connectorTokenConfigured;
-  dispatchTokenConfigured.value = response.dispatchTokenConfigured;
   runtimeCallbackUrl.value = response.runtimeCallbackUrl;
   connection.value = response.connection;
   if (response.connection?.status === "active") emit("connection-active");
@@ -268,9 +262,8 @@ defineExpose({
       </div>
 
       <p v-if="!configured" class="soulink-setup-note">
-        Configure `SOULINK_API_ORIGIN`, `SOULINK_CONNECTOR_TOKEN`, and
-        `SOULINK_DISPATCH_TOKEN` on the Worker. The dispatch callback is
-        <code>{{ runtimeCallbackUrl }}</code>.
+        Soulink is unavailable on this Core install. Check the configured
+        Soulink deployment and try again.
       </p>
     </template>
 

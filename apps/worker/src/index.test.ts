@@ -1519,8 +1519,6 @@ function createEnv(): Env & {
     TELEGRAM_BOT_TOKEN: "123:test-token",
     TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret",
     SOULINK_API_ORIGIN: "https://soulink.test",
-    SOULINK_CONNECTOR_TOKEN: "soulink-connector-token",
-    SOULINK_DISPATCH_TOKEN: "soulink-dispatch-token",
     EMAIL: {
       async send(message) {
         state.emailSends.push(message as Record<string, unknown>);
@@ -5327,13 +5325,11 @@ describe("ME3 Core Worker auth", () => {
       });
       expect(provisionMock).toHaveBeenCalledOnce();
       const init = provisionMock.mock.calls[0]?.[1] as RequestInit;
-      expect(init.headers).toMatchObject({
-        Authorization: "Bearer soulink-connector-token",
-      });
       expect(JSON.parse(String(init.body))).toMatchObject({
         runtime: {
           kind: "standalone-me3-core",
           callbackUrl: "http://localhost:8787/api/agent/channels/soulink/dispatch",
+          dispatchToken: env.soulinkConnection?.setup_token,
         },
       });
     } finally {
@@ -5398,7 +5394,7 @@ describe("ME3 Core Worker auth", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: "Bearer soulink-dispatch-token",
+          Authorization: "Bearer setup-token",
         },
         body: JSON.stringify({
           sourceEventId: "stream-message-1",

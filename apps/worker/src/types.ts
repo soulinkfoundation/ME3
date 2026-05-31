@@ -37,8 +37,6 @@ export interface Env {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   SOULINK_API_ORIGIN?: string;
-  SOULINK_CONNECTOR_TOKEN?: string;
-  SOULINK_DISPATCH_TOKEN?: string;
 
   EMAIL?: {
     send(message: Record<string, unknown>): Promise<{ messageId?: string | null }>;

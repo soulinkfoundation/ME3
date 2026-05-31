@@ -191,6 +191,8 @@ import type {
 
 export { Me3UserAgent };
 
+const DEFAULT_SOULINK_API_ORIGIN = "https://soulinkfoundation.org";
+
 type BootstrapBody = Partial<OwnerProfile> & { bootstrapCode?: string; password?: string };
 type LoginBody = { email?: string; password?: string };
 type BootstrapPasswordResetBody = {
@@ -1238,11 +1240,6 @@ app.post("/api/agent/sandbox", async (c) => {
 });
 
 app.post("/api/agent/channels/soulink/dispatch", async (c) => {
-  const authResult = verifySoulinkDispatchAuth(c.env, c.req.header("authorization"));
-  if (!authResult.ok) {
-    return c.json({ ok: false, error: authResult.error }, authResult.status as any);
-  }
-
   if (!(await isCorePluginEnabled(c.env, "me3.agent-chat"))) {
     return c.json({ ok: false, error: "Agent Chat plugin is disabled" }, 403);
   }
@@ -1263,6 +1260,11 @@ app.post("/api/agent/channels/soulink/dispatch", async (c) => {
   const connection = await getActiveSoulinkConnectionForThread(c.env, streamChannelId);
   if (!connection) {
     return c.json({ ok: false, error: "Soulink channel is not connected to this ME3 Core install" }, 404);
+  }
+
+  const authResult = verifySoulinkDispatchAuth(connection, c.req.header("authorization"));
+  if (!authResult.ok) {
+    return c.json({ ok: false, error: authResult.error }, authResult.status as any);
   }
 
   const duplicate = await getAgentChannelEventByProviderEventId(c.env, connection.id, sourceEventId);
@@ -3950,11 +3952,12 @@ app.post("/api/soulink/setup", async (c) => {
   const owner = await getOwnerProfile(c.env, ownerId);
   if (!owner) return c.json({ ok: false, error: "Account not found" }, 404);
 
+  const existingConnection = await getSoulinkConnection(c.env, ownerId);
+  const dispatchToken = existingConnection?.setup_token || crypto.randomUUID();
   const callbackUrl = `${getCoreApiOrigin(c.env, c.req.url)}/api/agent/channels/soulink/dispatch`;
   const response = await fetch(`${config.apiOrigin}/api/me3/assistant-channel/provision`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${config.connectorToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -3973,6 +3976,7 @@ app.post("/api/soulink/setup", async (c) => {
       runtime: {
         kind: "standalone-me3-core",
         callbackUrl,
+        dispatchToken,
       },
     }),
   });
@@ -3996,6 +4000,7 @@ app.post("/api/soulink/setup", async (c) => {
     streamChannelId: payload.streamChannelId,
     soulinkChatUrl: payload.soulinkChatUrl || null,
     runtimeCallbackUrl: callbackUrl,
+    dispatchToken,
   });
 
   await insertProviderChannelEvent(c.env, {
@@ -5827,22 +5832,19 @@ function serializeImportedCalendarEvent(event: DbCalendarSourceEvent & { source_
 }
 
 function getSoulinkConnectorConfig(env: Env) {
-  const apiOrigin = originFromUrl(env.SOULINK_API_ORIGIN);
-  const connectorToken = env.SOULINK_CONNECTOR_TOKEN?.trim() || "";
-  const dispatchToken = env.SOULINK_DISPATCH_TOKEN?.trim() || connectorToken || "";
+  const apiOrigin =
+    originFromUrl(env.SOULINK_API_ORIGIN) || DEFAULT_SOULINK_API_ORIGIN;
   return {
     apiOrigin,
-    connectorToken,
-    dispatchToken,
-    configured: Boolean(apiOrigin && connectorToken && dispatchToken),
+    configured: Boolean(apiOrigin),
   };
 }
 
-function verifySoulinkDispatchAuth(env: Env, authorization: string | undefined) {
-  const { dispatchToken } = getSoulinkConnectorConfig(env);
-  if (!dispatchToken) {
-    return { ok: false, status: 503, error: "Soulink dispatch token is not configured" };
-  }
+function verifySoulinkDispatchAuth(
+  connection: DbAgentChannelConnection,
+  authorization: string | undefined,
+) {
+  const dispatchToken = connection.setup_token;
   const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || "";
   if (!token || !constantTimeEqual(token, dispatchToken)) {
     return { ok: false, status: 401, error: "Invalid Soulink dispatch token" };
@@ -5905,8 +5907,6 @@ async function buildSoulinkStatusPayload(
     available: true,
     configured: config.configured,
     apiOrigin: config.apiOrigin,
-    connectorTokenConfigured: Boolean(config.connectorToken),
-    dispatchTokenConfigured: Boolean(config.dispatchToken),
     runtimeCallbackUrl: `${getCoreApiOrigin(env, requestUrl)}/api/agent/channels/soulink/dispatch`,
     connection: serializeSoulinkConnection(connection),
     recentEvents: (events.results || []).map(serializeProviderChannelEvent),
@@ -5973,11 +5973,12 @@ async function upsertActiveSoulinkConnection(
     streamChannelId: string;
     soulinkChatUrl: string | null;
     runtimeCallbackUrl: string;
+    dispatchToken: string;
   },
 ) {
   const existing = await getSoulinkConnection(env, ownerId);
   const connectionId = existing?.id || crypto.randomUUID();
-  const setupToken = existing?.setup_token || crypto.randomUUID();
+  const setupToken = input.dispatchToken;
   const metadata = JSON.stringify({
     ownerNodeId: input.ownerNodeId,
     assistantNodeId: input.assistantNodeId,

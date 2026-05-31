@@ -52,8 +52,6 @@ CORE_WEB_ORIGIN = "http://localhost:4000"
 CORE_API_ORIGIN = "http://localhost:8787"
 # ME3_SITE_USERNAME = "owner"
 ME3_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
-# Optional Soulink assistant chat connector. Set these as vars/secrets in a
-# deployed install before activating Soulink from Account settings.
-# SOULINK_API_ORIGIN = "https://soulink.example"
-# SOULINK_CONNECTOR_TOKEN = "replace-with-secret"
-# SOULINK_DISPATCH_TOKEN = "replace-with-secret"
+# Optional override for the hosted Soulink assistant chat connector.
+# Defaults to https://soulinkfoundation.org.
+# SOULINK_API_ORIGIN = "https://soulinkfoundation.org"

@@ -197,13 +197,43 @@ test.describe("/start onboarding wizard", () => {
         contentType: "application/json",
         body: JSON.stringify({
           available: true,
-          configured: false,
-          apiOrigin: null,
-          connectorTokenConfigured: false,
-          dispatchTokenConfigured: false,
+          configured: true,
+          apiOrigin: "https://soulinkfoundation.org",
           runtimeCallbackUrl:
             "http://localhost:8787/api/agent/channels/soulink/dispatch",
           connection: null,
+        }),
+      });
+    });
+
+    await page.route("**/api/soulink/setup", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          available: true,
+          configured: true,
+          apiOrigin: "https://soulinkfoundation.org",
+          runtimeCallbackUrl:
+            "http://localhost:8787/api/agent/channels/soulink/dispatch",
+          connection: {
+            id: "soulink-connection-1",
+            channel: "soulink",
+            status: "active",
+            ownerNodeId: "node-owner",
+            assistantNodeId: "node-assistant",
+            streamChannelType: "messaging",
+            streamChannelId: "assistant-channel",
+            soulinkChatUrl:
+              "https://soulinkfoundation.org/chats/assistant-channel",
+            connectedAt: new Date().toISOString(),
+            disconnectedAt: null,
+            lastInboundAt: null,
+            lastOutboundAt: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
         }),
       });
     });
