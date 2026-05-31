@@ -185,8 +185,8 @@ CREATE TABLE IF NOT EXISTS mailbox_aliases (
     CHECK (status IN ('pending_setup', 'active', 'paused')),
   approval_policy TEXT NOT NULL DEFAULT 'all'
     CHECK (approval_policy IN ('all')),
-  daily_inbound_limit INTEGER NOT NULL DEFAULT 25,
-  daily_outbound_limit INTEGER NOT NULL DEFAULT 25,
+  daily_inbound_limit INTEGER NOT NULL DEFAULT 200,
+  daily_outbound_limit INTEGER NOT NULL DEFAULT 200,
   activated_at TEXT,
   cf_destination_id TEXT,
   cf_destination_verified_at TEXT,

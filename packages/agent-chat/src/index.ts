@@ -37,6 +37,8 @@ export {
 } from "./content";
 
 export const AGENT_CHAT_PLUGIN_ID = "me3.agent-chat";
+export const CORE_MAILBOX_DAILY_INBOUND_LIMIT = 200;
+export const CORE_MAILBOX_DAILY_OUTBOUND_LIMIT = 200;
 
 export const AGENT_CHAT_RUNTIME = {
   id: AGENT_CHAT_PLUGIN_ID,
@@ -900,7 +902,7 @@ export async function upsertAgentMailbox(
            forwarding_enabled, forwarding_mode, status, approval_policy,
            daily_inbound_limit, daily_outbound_limit, created_at, updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_setup', 'all', 25, 25, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_setup', 'all', ?, ?, ?, ?)`,
       )
         .bind(
           crypto.randomUUID(),
@@ -910,6 +912,8 @@ export async function upsertAgentMailbox(
           forwardingStatus,
           forwardingEnabled ? 1 : 0,
           forwardingMode,
+          CORE_MAILBOX_DAILY_INBOUND_LIMIT,
+          CORE_MAILBOX_DAILY_OUTBOUND_LIMIT,
           now,
           now,
         )

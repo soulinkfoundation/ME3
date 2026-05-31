@@ -776,16 +776,16 @@ function createEnv(): Env & {
                   forwarding_mode: values[6] as DbMailboxAlias["forwarding_mode"],
                   status: "pending_setup",
                   approval_policy: "all",
-                  daily_inbound_limit: 25,
-                  daily_outbound_limit: 25,
+                  daily_inbound_limit: values[7] as number,
+                  daily_outbound_limit: values[8] as number,
                   activated_at: null,
                   cf_destination_id: null,
                   cf_destination_verified_at: null,
                   cf_rule_id: null,
                   cf_last_synced_at: null,
                   cf_last_error: null,
-                  created_at: values[7] as string,
-                  updated_at: values[8] as string,
+                  created_at: values[9] as string,
+                  updated_at: values[10] as string,
                 };
               }
 
@@ -4526,13 +4526,20 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const createBody = (await createResponse.json()) as {
-      mailbox: { aliasAddress: string; forwardingEnabled: boolean };
+      mailbox: {
+        aliasAddress: string;
+        forwardingEnabled: boolean;
+        dailyInboundLimit: number;
+        dailyOutboundLimit: number;
+      };
       sources: { address: string }[];
     };
 
     expect(createResponse.status).toBe(200);
     expect(createBody.mailbox.aliasAddress).toBe("owner.mail@me3.local");
     expect(createBody.mailbox.forwardingEnabled).toBe(true);
+    expect(createBody.mailbox.dailyInboundLimit).toBe(200);
+    expect(createBody.mailbox.dailyOutboundLimit).toBe(200);
     expect(createBody.sources).toMatchObject([{ address: "owner.mail@me3.local" }]);
 
     const activateResponse = await app.fetch(
