@@ -732,7 +732,7 @@ function generatePaidBookingWidget(input: {
         ${amountInput}
         <div class="booking-selected-time" data-booking-selected-time></div>
         <input name="guestName" type="text" autocomplete="name" required placeholder="Your name" aria-label="Your name">
-        <input name="guestEmail" type="email" autocomplete="email" required placeholder="Your email" aria-label="Your email">
+        <input name="guestEmail" type="email" autocomplete="email" inputmode="email" required pattern="[^\\s@]+@[^\\s@]+\\.[^\\s@]+" title="Enter a valid email address." placeholder="Your email" aria-label="Your email">
         <textarea name="notes" rows="3" placeholder="Notes (optional)" aria-label="Notes"></textarea>
         <div class="booking-actions">
           <button type="button" class="booking-back" data-booking-back>Back</button>
@@ -757,6 +757,7 @@ function paidBookingWidgetScript(): string {
   var dateWrap=root.querySelector('[data-booking-date-wrap]');
   var timeInput=form.elements.localTime;
   var amountInput=form.elements.amount;
+  var emailInput=form.elements.guestEmail;
   var slotsEl=root.querySelector('[data-booking-slots]');
   var emptyEl=root.querySelector('[data-booking-empty]');
   var summaryEl=root.querySelector('[data-booking-selection]');
@@ -766,6 +767,15 @@ function paidBookingWidgetScript(): string {
   var selectedTime='';
   var dayNames=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
   function setStatus(message,isError){statusEl.textContent=message||'';statusEl.classList.toggle('is-error',!!isError);}
+  function isValidEmail(value){return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value||'').trim().toLowerCase());}
+  function validateForm(){
+    var hasInvalidEmail=emailInput&&emailInput.value&&!isValidEmail(emailInput.value);
+    if(emailInput) emailInput.setCustomValidity(hasInvalidEmail?'Enter a valid email address.':'');
+    if(form.checkValidity()) return true;
+    setStatus(hasInvalidEmail?'Enter a valid email address.':'Fill in the required booking details.',true);
+    if(typeof form.reportValidity==='function') form.reportValidity();
+    return false;
+  }
   function offer(){return config.offers.find(function(item){return item.id===selectedOfferId;})||config.offers[0];}
   function updateSelection(){
     var selected=offer();
@@ -870,6 +880,12 @@ function paidBookingWidgetScript(): string {
   slotsEl.hidden=true;
   setDetailsVisible(false);
   updateSelection();
+  if(emailInput){
+    emailInput.addEventListener('input',function(){
+      emailInput.setCustomValidity('');
+      if(statusEl.classList.contains('is-error')) setStatus('');
+    });
+  }
   if(backButton){
     backButton.addEventListener('click',function(){
       selectedTime='';
@@ -880,6 +896,7 @@ function paidBookingWidgetScript(): string {
   }
   form.addEventListener('submit',function(event){
     event.preventDefault();
+    if(!validateForm()) return;
     setStatus('Confirming booking...');
     var selected=offer();
     var payload={

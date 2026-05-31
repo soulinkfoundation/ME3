@@ -526,8 +526,11 @@ app.post("/api/book/:username/checkout-session", async (c) => {
   const localDate = normalizeShortText(body.localDate, 20);
   const localTime = normalizeShortText(body.localTime, 20);
 
-  if (!guestName || !guestEmail || !localDate || !localTime) {
-    return c.json({ error: "Name, email, date, and time are required" }, 400);
+  if (!guestName || !localDate || !localTime) {
+    return c.json({ error: "Name, date, and time are required" }, 400);
+  }
+  if (!guestEmail) {
+    return c.json({ error: "Enter a valid email address" }, 400);
   }
 
   const profile = await loadSiteProfileForCommerce(c.env, site);

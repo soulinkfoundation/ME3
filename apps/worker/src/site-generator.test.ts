@@ -193,6 +193,9 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("data-booking-date-wrap");
     expect(files["index.html"]).toContain("showPicker");
     expect(files["index.html"]).toContain("cursor:pointer");
+    expect(files["index.html"]).toContain('pattern="[^\\s@]+@[^\\s@]+\\.[^\\s@]+"');
+    expect(files["index.html"]).toContain("setCustomValidity(hasInvalidEmail?'Enter a valid email address.':'')");
+    expect(files["index.html"]).toContain("if(!validateForm()) return;");
     expect(files["index.html"]).toContain('"bufferTime":15');
     expect(files["index.html"]).toContain("t+=slotStep");
     expect(files["index.html"]).toContain("No available times on this day.");
