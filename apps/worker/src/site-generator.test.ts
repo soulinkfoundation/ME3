@@ -53,13 +53,27 @@ describe("site generator", () => {
       {
         version: "0.1",
         name: "Markdown Site",
-        pages: [{ slug: "now", title: "Now", file: "now.md" }],
+        pages: [
+          { slug: "now", title: "Now", file: "now.md" },
+          { slug: "about", title: "About", file: "about.md" },
+        ],
+        posts: [{ slug: "hello", title: "Hello", file: "blog/hello.md" }],
       },
       [
         {
           name: "now.md",
           content:
             "### Work\n\n\\[\\*\\*ME3\\*\\*\\](https://me3.app)\n\n![Alt text](./files/now-1.webp)",
+        },
+        {
+          name: "about.md",
+          content:
+            '<figure><img src="https://example.com/preview/testuser/files/about-1.webp" alt="About"></figure>',
+        },
+        {
+          name: "blog/hello.md",
+          content:
+            '<figure><img src="/preview/testuser/files/post-1.webp" alt="Post"></figure>',
         },
       ],
     );
@@ -71,6 +85,8 @@ describe("site generator", () => {
     expect(files["now.html"]).toContain(
       '<img src="./files/now-1.webp" alt="Alt text"',
     );
+    expect(files["about.html"]).toContain('src="./files/about-1.webp"');
+    expect(files["blog/hello.html"]).toContain('src="../files/post-1.webp"');
     expect(files["now.html"]).not.toContain("\\[\\*\\*ME3");
   });
 

@@ -4575,9 +4575,13 @@ async function serveSiteFileResponse(
   }
 
   const requestedPath = normalizeSiteFileName(rawPath) || "index.html";
-  const publicPath = `public/${requestedPath.endsWith("/") ? `${requestedPath}index.html` : requestedPath}`;
+  const publicPath = `public/${requestedPath}`;
+  const indexPath =
+    requestedPath && !requestedPath.split("/").pop()?.includes(".")
+      ? `public/${requestedPath}/index.html`
+      : null;
   const htmlPath =
-    requestedPath && !requestedPath.endsWith("/") && !requestedPath.split("/").pop()?.includes(".")
+    requestedPath && !requestedPath.split("/").pop()?.includes(".")
       ? `public/${requestedPath}.html`
       : null;
   const isMediaPath = publicPath.startsWith("public/files/") || publicPath === "public/favicon.png";
@@ -4585,6 +4589,7 @@ async function serveSiteFileResponse(
   const file =
     r2File ||
     (await getSiteFile(env, site.id, publicPath)) ||
+    (indexPath ? await getSiteFile(env, site.id, indexPath) : null) ||
     (htmlPath ? await getSiteFile(env, site.id, htmlPath) : null) ||
     (requestedPath === "index.html" ? await getSiteFile(env, site.id, "landing/index.html") : null);
   if (!file) {

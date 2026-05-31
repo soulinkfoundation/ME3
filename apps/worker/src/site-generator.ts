@@ -284,7 +284,7 @@ function generateContentPageHtml(
     basePath,
     body: `<header class="page-header"><a class="back-link" href="${basePath}">${profile.avatar ? `<img src="${escapeHtml(filePathForHtml(profile.avatar, basePath))}" alt="" class="avatar-small">` : ""}<span>${escapeHtml(profile.name || "Home")}</span></a></header>
       ${generateNav(profile, activeSlug, basePath)}
-      <main class="content"><h1>${escapeHtml(title)}</h1>${markdownToHtml(markdown)}</main>`,
+      <main class="content"><h1>${escapeHtml(title)}</h1>${markdownToHtml(markdown, basePath)}</main>`,
     footer: generateFooter(profile, capabilities.footerCustomization),
     vibe: getVibe(profile),
   });
@@ -935,20 +935,20 @@ function generateFooter(profile: Me3SiteProfile, allowCustom: boolean): string {
   return `<footer class="footer"><p>Powered by <a href="https://me3.app">me3</a></p></footer>`;
 }
 
-export function markdownToHtml(markdown: string): string {
-  if (looksLikeHtml(markdown)) return markdown;
+export function markdownToHtml(markdown: string, basePath = "./"): string {
+  if (looksLikeHtml(markdown)) return rewriteContentAssetPaths(markdown, basePath);
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const html: string[] = [];
   let paragraph: string[] = [];
   let list: { type: "ul" | "ol"; items: string[] } | null = null;
   const flushParagraph = () => {
     if (paragraph.length === 0) return;
-    html.push(`<p>${parseInlineMarkdown(unescapeMarkdownPunctuation(paragraph.join(" ")))}</p>`);
+    html.push(`<p>${parseInlineMarkdown(unescapeMarkdownPunctuation(paragraph.join(" ")), basePath)}</p>`);
     paragraph = [];
   };
   const flushList = () => {
     if (!list) return;
-    html.push(`<${list.type}>${list.items.map((item) => `<li>${parseInlineMarkdown(unescapeMarkdownPunctuation(item))}</li>`).join("")}</${list.type}>`);
+    html.push(`<${list.type}>${list.items.map((item) => `<li>${parseInlineMarkdown(unescapeMarkdownPunctuation(item), basePath)}</li>`).join("")}</${list.type}>`);
     list = null;
   };
 
@@ -964,21 +964,21 @@ export function markdownToHtml(markdown: string): string {
       flushParagraph();
       flushList();
       const level = heading[1].length;
-      html.push(`<h${level}>${parseInlineMarkdown(unescapeMarkdownPunctuation(heading[2]))}</h${level}>`);
+      html.push(`<h${level}>${parseInlineMarkdown(unescapeMarkdownPunctuation(heading[2]), basePath)}</h${level}>`);
       continue;
     }
     const image = trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)$/);
     if (image) {
       flushParagraph();
       flushList();
-      html.push(`<figure><img src="${escapeHtml(image[2])}" alt="${escapeHtml(unescapeMarkdownPunctuation(image[1] || ""))}" loading="lazy" decoding="async">${image[3] ? `<figcaption>${escapeHtml(unescapeMarkdownPunctuation(image[3]))}</figcaption>` : ""}</figure>`);
+      html.push(`<figure><img src="${escapeHtml(contentAssetPathForHtml(image[2], basePath))}" alt="${escapeHtml(unescapeMarkdownPunctuation(image[1] || ""))}" loading="lazy" decoding="async">${image[3] ? `<figcaption>${escapeHtml(unescapeMarkdownPunctuation(image[3]))}</figcaption>` : ""}</figure>`);
       continue;
     }
     const blockquote = trimmed.match(/^>\s+(.+)$/);
     if (blockquote) {
       flushParagraph();
       flushList();
-      html.push(`<blockquote>${parseInlineMarkdown(unescapeMarkdownPunctuation(blockquote[1]))}</blockquote>`);
+      html.push(`<blockquote>${parseInlineMarkdown(unescapeMarkdownPunctuation(blockquote[1]), basePath)}</blockquote>`);
       continue;
     }
     const unordered = trimmed.match(/^[-*]\s+(.+)$/);
@@ -1009,12 +1009,12 @@ export function markdownToHtml(markdown: string): string {
   return html.join("\n");
 }
 
-function parseInlineMarkdown(value: string): string {
+function parseInlineMarkdown(value: string, basePath = "./"): string {
   const escaped = escapeHtml(value);
   return escaped
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|\.?\/[^)\s]+|files\/[^)\s]+)\)/g, '<img src="$2" alt="$1" loading="lazy" decoding="async">')
+    .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|\.?\/[^)\s]+|files\/[^)\s]+)\)/g, (_match, alt, src) => `<img src="${escapeHtml(contentAssetPathForHtml(src, basePath))}" alt="${alt}" loading="lazy" decoding="async">`)
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
@@ -1024,6 +1024,29 @@ function unescapeMarkdownPunctuation(value: string): string {
 
 function looksLikeHtml(value: string): boolean {
   return /<\/?[a-z][\s\S]*>/i.test(value.trim());
+}
+
+function rewriteContentAssetPaths(html: string, basePath: string): string {
+  return html.replace(
+    /\b(src|href)=("([^"]+)"|'([^']+)')/gi,
+    (match, attr: string, quoted: string, doubleQuoted?: string, singleQuoted?: string) => {
+      const value = doubleQuoted ?? singleQuoted ?? "";
+      const normalized = contentAssetPathForHtml(value, basePath);
+      if (normalized === value) return match;
+      const quote = quoted.startsWith("'") ? "'" : '"';
+      return `${attr}=${quote}${escapeHtml(normalized)}${quote}`;
+    },
+  );
+}
+
+function contentAssetPathForHtml(url: string, basePath = "./"): string {
+  const trimmed = url.trim();
+  const previewAsset = trimmed.match(
+    /^(?:https?:\/\/[^/]+)?\/?preview\/[^/]+\/(files\/[^?#\s)]+)([?#][^\s)]*)?$/i,
+  );
+  if (previewAsset) return `${basePath}${previewAsset[1]}${previewAsset[2] || ""}`;
+  if (trimmed.startsWith("/files/")) return `${basePath}${trimmed.slice(1)}`;
+  return trimmed;
 }
 
 function markdownToText(markdown: string): string {
