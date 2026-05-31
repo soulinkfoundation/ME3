@@ -4003,7 +4003,7 @@ app.post("/api/soulink/setup", async (c) => {
     dispatchToken,
   });
 
-  await insertProviderChannelEvent(c.env, {
+  await insertProviderChannelEventOnce(c.env, {
     channel: "soulink",
     connectionId: connection.id,
     direction: "system",
@@ -6039,21 +6039,36 @@ async function getAgentChannelEventByProviderEventId(
     .first<DbAgentChannelEvent>();
 }
 
+type ProviderChannelEventInput = {
+  channel: "soulink";
+  connectionId: string;
+  direction: "inbound" | "outbound" | "system";
+  eventType: "start" | "message" | "link" | "send" | "error";
+  status: "received" | "pending" | "sent" | "failed" | "linked" | "skipped";
+  providerEventId: string | null;
+  providerMessageId: string | null;
+  replyToMessageId: string | number | null;
+  textBody: string | null;
+  rawJson: unknown;
+  errorMessage: string | null;
+};
+
+async function insertProviderChannelEventOnce(env: Env, input: ProviderChannelEventInput) {
+  if (input.providerEventId) {
+    const existing = await getAgentChannelEventByProviderEventId(
+      env,
+      input.connectionId,
+      input.providerEventId,
+    );
+    if (existing) return existing.id;
+  }
+
+  return insertProviderChannelEvent(env, input);
+}
+
 async function insertProviderChannelEvent(
   env: Env,
-  input: {
-    channel: "soulink";
-    connectionId: string;
-    direction: "inbound" | "outbound" | "system";
-    eventType: "start" | "message" | "link" | "send" | "error";
-    status: "received" | "pending" | "sent" | "failed" | "linked" | "skipped";
-    providerEventId: string | null;
-    providerMessageId: string | null;
-    replyToMessageId: string | number | null;
-    textBody: string | null;
-    rawJson: unknown;
-    errorMessage: string | null;
-  },
+  input: ProviderChannelEventInput,
 ) {
   const id = crypto.randomUUID();
   await env.DB.prepare(

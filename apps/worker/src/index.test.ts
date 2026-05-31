@@ -5337,6 +5337,53 @@ describe("ME3 Core Worker auth", () => {
     }
   });
 
+  it("keeps Soulink setup event logging idempotent on reconnect", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const provisionMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({
+        ok: true,
+        ownerNodeId: "node-owner",
+        assistantNodeId: "assistant-owner",
+        streamChannelType: "messaging",
+        streamChannelId: "assistant-channel",
+        soulinkChatUrl: "https://soulink.test/chats/assistant-channel",
+      }),
+    );
+    vi.stubGlobal("fetch", provisionMock);
+
+    try {
+      const firstResponse = await app.fetch(
+        new Request("http://localhost/api/soulink/setup", {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const secondResponse = await app.fetch(
+        new Request("http://localhost/api/soulink/setup", {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+
+      expect(firstResponse.status).toBe(200);
+      expect(secondResponse.status).toBe(200);
+      expect(provisionMock).toHaveBeenCalledTimes(2);
+      expect(
+        env.agentEvents.filter(
+          (event) =>
+            event.connection_id === env.soulinkConnection?.id &&
+            event.provider_event_id === "setup:assistant-channel",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("dispatches Soulink messages through the agent runtime", async () => {
     const env = createEnv();
     await bootstrap(env);
