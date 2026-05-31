@@ -184,6 +184,34 @@ describe("site generator", () => {
     expect(files["index.html"]).not.toContain("readonly");
   });
 
+  it("publishes me3 vibe with rounded green CTAs and rounded blocks", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "ME3 Site",
+        links: { _vibe: "me3" },
+        buttons: [{ text: "Personal AI Assistant", url: "https://example.com" }],
+        intents: {
+          subscribe: { enabled: true, title: "Newsletter" },
+          book: {
+            enabled: true,
+            title: "Book a call",
+            offers: [{ title: "ME3 Setup", duration: 60, pricing: { enabled: false } }],
+          },
+        },
+      },
+      [],
+    );
+
+    expect(files["index.html"]).toContain('body data-vibe="me3"');
+    expect(files["index.html"]).toContain("--accent:#3d9b7c");
+    expect(files["index.html"]).toContain(".cta-button.primary{background:var(--accent);color:#ffffff}");
+    expect(files["index.html"]).toContain(".cta-button{display:flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:14px 18px;border-radius:var(--radius-md)");
+    expect(files["index.html"]).toContain(".testimonials,.booking,.newsletter,.content{margin:32px 0;padding:24px;border-radius:var(--radius);background:rgba(0,0,0,.055)}");
+    expect(files["index.html"]).toContain(".booking-card{border:2px solid var(--border);border-radius:var(--radius-md)");
+    expect(files["index.html"]).toContain(".newsletter button{font:inherit;font-weight:800;border:0;border-radius:var(--radius-md);background:var(--accent);color:#ffffff");
+  });
+
   it("uses title-derived blog and offerings paths in generated navigation", async () => {
     const files = await generateSiteHtml(
       {
