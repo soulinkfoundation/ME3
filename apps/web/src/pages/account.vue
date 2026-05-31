@@ -458,7 +458,7 @@ const mailboxStatusLabel = computed(() => {
 
 const mailboxStatusHint = computed(() => {
   if (!mailbox.value) {
-    return "Create and activate a Core mailbox for inbound mail.";
+    return "Create a custom-domain mailbox for inbound mail.";
   }
 
   if (mailbox.value.status === "active") {
@@ -470,6 +470,16 @@ const mailboxStatusHint = computed(() => {
   }
 
   return "Activate the Core mailbox to receive routed mail.";
+});
+
+const mailboxRoutingBadgeLabel = computed(() => {
+  if (!mailbox.value) return "";
+  if (mailbox.value.forwardingEnabled) {
+    return mailbox.value.forwardingStatus === "verified"
+      ? "Forwarding verified"
+      : "Forwarding pending";
+  }
+  return "Worker route";
 });
 
 const mailboxAliasNormalized = computed(() =>
@@ -704,7 +714,7 @@ const emailProviderHelpText = computed(() => {
   if (selectedEmailProviderId.value === "postmark") {
     return "Send through Postmark with a Server API token and a confirmed sender signature or verified domain.";
   }
-  return "Send with Cloudflare Email Service using a verified sending address or domain.";
+  return "Send with Cloudflare Email Service using a verified sending address or domain and a deployed EMAIL binding.";
 });
 
 const emailProviderSecretPlaceholder = computed(() => {
@@ -1706,12 +1716,8 @@ onMounted(async () => {
                 >
                   {{ mailboxStatusLabel }}
                 </span>
-                <span v-if="mailbox" class="status-pill">
-                  {{
-                    mailbox.forwardingStatus === "verified"
-                      ? "Verified"
-                      : "Local"
-                  }}
+                <span v-if="mailboxRoutingBadgeLabel" class="status-pill">
+                  {{ mailboxRoutingBadgeLabel }}
                 </span>
                 <span class="accordion-header-hint">
                   {{ mailboxStatusHint }}

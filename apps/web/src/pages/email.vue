@@ -225,11 +225,26 @@ const telegramNotice = ref("");
 const turns = ref<AgentTurn[]>([]);
 const telegramTotal = ref(0);
 
+function isInternalMailboxAddress(address: string | null | undefined) {
+  return Boolean(address?.trim().toLowerCase().endsWith("@me3.local"));
+}
+
+const visibleMailboxAddress = computed(() => {
+  const activeSource = mailboxSources.value.find(
+    (source) =>
+      source.status === "active" &&
+      source.inboundEnabled &&
+      !isInternalMailboxAddress(source.address),
+  );
+  if (activeSource) return activeSource.address;
+  return isInternalMailboxAddress(mailboxAddress.value) ? null : mailboxAddress.value;
+});
+
 const outboundSenderOptions = computed(() => {
   const options: Array<{ address: string; label: string }> = [];
   const aliasAddress = mailboxMeta.value?.aliasAddress || mailboxAddress.value;
 
-  if (aliasAddress) {
+  if (aliasAddress && !isInternalMailboxAddress(aliasAddress)) {
     options.push({ address: aliasAddress, label: aliasAddress });
   }
 
@@ -237,6 +252,7 @@ const outboundSenderOptions = computed(() => {
     if (
       source.status === "active" &&
       source.outboundEnabled &&
+      !isInternalMailboxAddress(source.address) &&
       !options.some((option) => option.address === source.address)
     ) {
       options.push({ address: source.address, label: source.address });
@@ -319,9 +335,9 @@ const emailTabOrder: EmailTab[] = [
 
 /** Show setup hint in empty states (not the top status strip). */
 const mailNeedsSetupHint = computed(() => {
-  if (!mailboxMeta.value && !mailboxAddress.value) return true;
+  if (!mailboxMeta.value && !visibleMailboxAddress.value) return true;
   const s = mailboxMeta.value?.status;
-  return s === "pending_setup";
+  return s === "pending_setup" || !visibleMailboxAddress.value;
 });
 
 const telegramNeedsSetupHint = computed(() => {
@@ -2010,16 +2026,16 @@ onBeforeUnmount(() => {
                     <template v-if="activeTab === 'inbox'">
                       <p>No inbound email yet.</p>
                       <p v-if="mailNeedsSetupHint" class="empty-hint">
-                        Mail is not set up.
+                        Mail needs a custom-domain address routed to this Worker.
                         <router-link to="/account" class="empty-hint-link">
                           Configure in account settings
                         </router-link>
                       </p>
-                      <p v-else-if="mailboxAddress" class="empty-state__sub">
-                        Messages sent to {{ mailboxAddress }} will appear here.
+                      <p v-else-if="visibleMailboxAddress" class="empty-state__sub">
+                        Messages sent to {{ visibleMailboxAddress }} will appear here.
                       </p>
                       <p v-else class="empty-state__sub">
-                        Messages sent to your example.com address will appear here.
+                        Messages sent to your custom-domain address will appear here.
                       </p>
                     </template>
                     <template v-else-if="activeTab === 'drafts'">

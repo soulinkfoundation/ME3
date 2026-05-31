@@ -4360,7 +4360,6 @@ describe("ME3 Core Worker auth", () => {
             Cookie: session,
           },
           body: JSON.stringify({
-            fromAddress: "hello@example.com",
             to: "client@example.com",
             subject: "Hello",
             textBody: "Approved send body",
@@ -4410,6 +4409,7 @@ describe("ME3 Core Worker auth", () => {
       );
       const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
       expect(JSON.parse(String(init?.body))).toMatchObject({
+        From: "ME3 Mail <hello@example.com>",
         To: "client@example.com",
         Subject: "Hello",
         MessageStream: "outbound",

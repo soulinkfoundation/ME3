@@ -3521,11 +3521,15 @@ app.post("/api/mailbox/drafts/:draftId/approve", async (c) => {
   try {
     const { mailbox, draft } = approval;
     const outboundHeaders = getAgentMailboxOutboundHeaders(draft);
+    const draftFromAddress =
+      draft.fromAddress && !draft.fromAddress.toLowerCase().endsWith("@me3.local")
+        ? draft.fromAddress
+        : null;
     const result = await sendEmailWithProvider(c.env, ownerId, {
       purpose: draft.sourceId ? "reply" : "draft",
       mailboxId: mailbox.id,
       mailboxMessageId: draft.id,
-      fromAddress: draft.fromAddress || mailbox.aliasAddress,
+      fromAddress: draftFromAddress,
       toAddress: draft.toAddress || "",
       subject: draft.subject || "(no subject)",
       textBody: draft.body || "",
