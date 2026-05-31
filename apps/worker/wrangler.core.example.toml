@@ -51,7 +51,7 @@ ENVIRONMENT = "local"
 CORE_WEB_ORIGIN = "http://localhost:4000"
 CORE_API_ORIGIN = "http://localhost:8787"
 # Production custom-domain setup. Set this root domain after attaching
-# me3.yourdomain.com, api.yourdomain.com, and www.yourdomain.com to this Worker.
+# me3.yourdomain.com and www.yourdomain.com to this Worker.
 # ME3_CUSTOM_DOMAIN = "yourdomain.com"
 # ME3_SITE_USERNAME = "owner"
 ME3_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"

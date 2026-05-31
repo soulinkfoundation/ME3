@@ -1861,6 +1861,35 @@ describe("ME3 Core Worker auth", () => {
     );
   });
 
+  it("uses the inferred admin host for ME3 claim callbacks from a single custom-domain var", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.ME3_CUSTOM_DOMAIN = "kieranbutler.com";
+    env.CORE_WEB_ORIGIN = undefined;
+    env.CORE_API_ORIGIN = undefined;
+    env.ME3_ADMIN_HOST = undefined;
+    env.ME3_API_HOST = undefined;
+
+    const response = await app.fetch(
+      new Request("https://me3.kieranbutler.com/api/auth/me3/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirect: "/account" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; url: string };
+    const claimUrl = new URL(body.url);
+
+    expect(response.status).toBe(200);
+    expect(claimUrl.searchParams.get("core_origin")).toBe(
+      "https://me3.kieranbutler.com",
+    );
+    expect(claimUrl.searchParams.get("callback_url")).toBe(
+      "https://me3.kieranbutler.com/api/auth/me3/callback",
+    );
+  });
+
   it("accepts a verified ME3 Cloud install claim callback", async () => {
     const env = createEnv();
     env.TOKEN_ENCRYPTION_KEY = undefined;

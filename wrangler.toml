@@ -48,7 +48,7 @@ name = "EMAIL"
 
 [vars]
 # Optional custom-domain setup. Set this root domain after attaching
-# me3.yourdomain.com, api.yourdomain.com, and www.yourdomain.com to this Worker.
+# me3.yourdomain.com and www.yourdomain.com to this Worker.
 # ME3_CUSTOM_DOMAIN = "yourdomain.com"
 
 # TELEGRAM_BOT_USERNAME = "your_me3_bot"

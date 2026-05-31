@@ -3980,7 +3980,6 @@ function getApiHost(env: Env, requestUrl?: string): string {
     normalizeHost(env.ME3_API_HOST) ||
     hostnameFromUrl(env.CORE_API_ORIGIN) ||
     explicitAdminHost ||
-    prefixedHost("api", getRootCustomDomain(env)) ||
     getAdminHost(env, requestUrl)
   );
 }

@@ -113,15 +113,13 @@ ME3_CUSTOM_DOMAIN = "customdomain.com"
 
 Core infers the hostnames from that one value:
 
-- `me3.customdomain.com` serves the private admin app and login.
-- `api.customdomain.com` serves API URLs and `me.json` action links.
+- `me3.customdomain.com` serves the private admin app, login, API URLs, and `me.json` action links.
 - `www.customdomain.com` serves the public ME3 site.
 
-Attach all three hostnames to the same Worker as Cloudflare Worker custom domains:
+Attach both hostnames to the same Worker as Cloudflare Worker custom domains:
 
 ```text
 me3.customdomain.com  -> me3 Worker
-api.customdomain.com  -> me3 Worker
 www.customdomain.com  -> me3 Worker
 ```
 
@@ -137,19 +135,9 @@ ME3_SITE_HOST = "www.customdomain.com"
 # ME3_SITE_USERNAME = "owner"
 ```
 
-If the owner wants the apex domain too, configure Cloudflare to redirect `customdomain.com` to `www.customdomain.com`. Core keeps admin, API, and public-site routing separate by hostname.
+If the owner wants the apex domain too, configure Cloudflare to redirect `customdomain.com` to `www.customdomain.com`. Core keeps the private app/API and public-site routing separate by hostname.
 
 To serve the public profile directly at the apex instead, set `ME3_SITE_HOST = "customdomain.com"` and attach that hostname to the same Worker. Keep the private admin app on a separate hostname such as `me3.customdomain.com`.
-
-For a simpler two-host setup where the private app and API share the same host, set both origins to the admin host:
-
-```toml
-ME3_CUSTOM_DOMAIN = "customdomain.com"
-ME3_SITE_HOST = "customdomain.com"
-ME3_ADMIN_HOST = "me3.customdomain.com"
-CORE_WEB_ORIGIN = "https://me3.customdomain.com"
-CORE_API_ORIGIN = "https://me3.customdomain.com"
-```
 
 The site settings page can record a site's desired custom domain. In Core, this does not call the Cloudflare account API or mutate Worker custom domains automatically. The domain shows as active when the recorded domain matches the inferred or explicit public site host and, if set, `ME3_SITE_USERNAME` points at that site. Otherwise it stays pending with the Cloudflare setup steps.
 
