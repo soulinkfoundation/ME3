@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { dispatchAgentSandboxTurn } from "./agent-chat";
 
 type FakeDbState = {
@@ -11,6 +11,8 @@ type FakeDbState = {
   tasks: Array<Record<string, unknown>>;
   calendarEvents: Array<Record<string, unknown>>;
   memory: Array<Record<string, unknown>>;
+  reminders: Array<Record<string, unknown>>;
+  bookings: Array<Record<string, unknown>>;
   persistedMessages: Array<{ ownerId: string; role: string; content: string }>;
   failContextLookup?: boolean;
 };
@@ -45,6 +47,8 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     tasks: [],
     calendarEvents: [],
     memory: [],
+    reminders: [],
+    bookings: [],
     persistedMessages: [],
     ...state,
   };
@@ -86,6 +90,12 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("FROM user_calendar_events")) {
             return { results: dbState.calendarEvents as T[] };
           }
+          if (sql.includes("FROM user_reminders")) {
+            return { results: dbState.reminders as T[] };
+          }
+          if (sql.includes("FROM bookings b")) {
+            return { results: dbState.bookings as T[] };
+          }
           if (sql.includes("FROM mission_private_memory")) {
             return { results: dbState.memory as T[] };
           }
@@ -97,6 +107,19 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               ownerId: values[1] as string,
               role: values[2] as string,
               content: values[3] as string,
+            });
+          }
+          if (sql.includes("INSERT INTO user_reminders")) {
+            dbState.reminders.push({
+              id: values[0],
+              user_id: values[1],
+              title: values[2],
+              notes: values[3],
+              remind_at: values[4],
+              timezone: values[5],
+              recurrence_rule: values[6],
+              status: "pending",
+              created_at: new Date().toISOString(),
             });
           }
           return { meta: { changes: 1 } };
@@ -123,6 +146,10 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     state: dbState,
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function dispatchInput(messageText: string) {
   return {
@@ -251,7 +278,7 @@ describe("Core chat native context", () => {
 
     expect(response).toMatchObject({
       replyText: "Choice-shaped reply.",
-      model: "@cf/zai-org/glm-4.7-flash",
+      model: "@cf/qwen/qwen3-30b-a3b-fp8",
       source: "workers-ai",
     });
   });
@@ -283,6 +310,78 @@ describe("Core chat native context", () => {
       model: "@cf/zai-org/glm-4.7-flash",
       source: "workers-ai",
     });
+  });
+
+  it("creates reminders directly from sandbox chat", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      env as never,
+      createStorage(),
+      dispatchInput("Remind me to follow up with Sam tomorrow at 9am"),
+    );
+
+    expect(response).toMatchObject({
+      source: "tool",
+      specialist: "core.reminders.create",
+      reminderAction: {
+        kind: "created",
+        title: "follow up with Sam",
+      },
+    });
+    expect(response.replyText).toContain("Done. I set a reminder");
+    expect(env.state.reminders).toHaveLength(1);
+    expect(env.state.reminders[0]).toMatchObject({
+      title: "follow up with Sam",
+      remind_at: "2026-06-01T08:00:00.000Z",
+      timezone: "Europe/Dublin",
+      status: "pending",
+    });
+    expect(env.state.persistedMessages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+  });
+
+  it("answers upcoming booking questions through the tool layer", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
+    const env = createEnv({
+      bookings: [
+        {
+          id: "booking-1",
+          site_id: "site-1",
+          site_username: "kieran",
+          offer_id: "strategy",
+          booking_type: "one_to_one",
+          guest_name: "Ada Lovelace",
+          guest_email: "ada@example.com",
+          starts_at: "2026-06-02T10:00:00.000Z",
+          ends_at: "2026-06-02T10:30:00.000Z",
+          duration_minutes: 30,
+          status: "confirmed",
+          notes: null,
+          payment_status: "not_required",
+          is_free_booking: 1,
+          created_at: "2026-05-30T10:00:00.000Z",
+        },
+      ],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      env as never,
+      createStorage(),
+      dispatchInput("Can you check my upcoming bookings this week?"),
+    );
+
+    expect(response).toMatchObject({
+      source: "tool",
+      specialist: "core.bookings.lookup",
+    });
+    expect(response.replyText).toContain("Ada Lovelace");
+    expect(response.replyText).toContain("30 min");
   });
 
   it("keeps the no-provider fallback working", async () => {

@@ -85,7 +85,12 @@ export type AgentSandboxDispatchResponse = {
   contextManifest?: Me3AgentContextManifest | null;
   contextSummary?: string | null;
   emailAction?: null;
-  reminderAction?: null;
+  reminderAction?: {
+    kind: "created" | "updated" | "cancelled" | "dismissed" | "listed";
+    reminderId?: string;
+    title?: string;
+    remindAt?: string;
+  } | null;
   contentAction?: null;
   contactsChanged?: boolean;
   error?: string;
@@ -348,6 +353,24 @@ type DbReminderRow = {
   created_at?: string;
 };
 
+type DbBookingRow = {
+  id: string;
+  site_id: string;
+  site_username: string | null;
+  offer_id: string | null;
+  booking_type: "one_to_one" | "class" | "retreat" | null;
+  guest_name: string;
+  guest_email: string;
+  starts_at: string;
+  ends_at: string;
+  duration_minutes: number;
+  status: "confirmed" | "cancelled";
+  notes: string | null;
+  payment_status?: string | null;
+  is_free_booking?: number | null;
+  created_at: string;
+};
+
 type DbContactRow = {
   id: string;
   user_id: string;
@@ -514,7 +537,8 @@ type AiRoute = {
   configured: boolean;
 };
 
-const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-4.7-flash";
+const DEFAULT_WORKERS_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
+const DEFAULT_WORKERS_AI_BACKUP_MODEL = "@cf/zai-org/glm-4.7-flash";
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest";
 const INSTALL_ENCRYPTION_KEY_NAME = "TOKEN_ENCRYPTION_KEY";
@@ -1428,6 +1452,16 @@ export async function dispatchAgentSandboxTurn(
   await storage.put("lastSandboxTurnAt", new Date().toISOString());
 
   const owner = await getOwnerProfile(env, input.userId);
+  const toolResponse = await maybeHandleCoreToolTurn(env, input, owner);
+  if (toolResponse) {
+    await persistAssistantMessage(env, input.userId, "user", input.messageText);
+    if (toolResponse.replyText) {
+      await persistAssistantMessage(env, input.userId, "assistant", toolResponse.replyText);
+    }
+    await storage.put(resultKey, toolResponse);
+    return toolResponse;
+  }
+
   const route = await resolveAiRoute(env, input.userId);
   const recent = await loadRecentMessages(env, input.userId);
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
@@ -1475,6 +1509,302 @@ export async function dispatchAgentSandboxTurn(
 
   await storage.put(resultKey, response);
   return response;
+}
+
+async function maybeHandleCoreToolTurn(
+  env: CoreAgentChatEnv,
+  input: AgentSandboxDispatchInput,
+  owner: OwnerProfileRow | null,
+): Promise<AgentSandboxDispatchResponse | null> {
+  const messageText = input.messageText.trim();
+
+  if (isReminderListRequest(messageText)) {
+    const reminders = await listPendingAgentReminders(env, input.userId);
+    const replyText = reminders.length
+      ? [
+          `You have ${reminders.length} pending reminder${reminders.length === 1 ? "" : "s"}:`,
+          ...reminders.map(
+            (reminder) =>
+              `- ${reminder.title} at ${formatAgentDateTime(reminder.remindAt, owner?.timezone || reminder.timezone)}`,
+          ),
+        ].join("\n")
+      : "You do not have any pending reminders right now.";
+
+    return toolResponse(input.turnId, "core.reminders.list", replyText, {
+      reminderAction: { kind: "listed" },
+    });
+  }
+
+  const reminderPlan = parseReminderChatRequest(messageText, owner);
+  if (reminderPlan) {
+    if ("error" in reminderPlan) {
+      return toolResponse(input.turnId, "core.reminders.create", reminderPlan.error, {
+        fallbackReason: "Reminder details required",
+      });
+    }
+
+    const reminder = await createAgentReminder(env, input.userId, reminderPlan.input);
+    if ("error" in reminder) {
+      return toolResponse(input.turnId, "core.reminders.create", reminder.error, {
+        fallbackReason: "Reminder could not be created",
+      });
+    }
+
+    return toolResponse(
+      input.turnId,
+      "core.reminders.create",
+      `Done. I set a reminder for ${formatAgentDateTime(reminder.remindAt, reminder.timezone)}: ${reminder.title}.`,
+      {
+        reminderAction: {
+          kind: "created",
+          reminderId: reminder.id,
+          title: reminder.title,
+          remindAt: reminder.remindAt,
+        },
+      },
+    );
+  }
+
+  if (isBookingLookupRequest(messageText)) {
+    const bookings = await listUpcomingBookings(env, input.userId);
+    const replyText = bookings.length
+      ? [
+          `You have ${bookings.length} upcoming booking${bookings.length === 1 ? "" : "s"}:`,
+          ...bookings.map(
+            (booking) =>
+              `- ${booking.guest_name} at ${formatAgentDateTime(booking.starts_at, owner?.timezone)} (${booking.duration_minutes} min)`,
+          ),
+        ].join("\n")
+      : "I could not find any upcoming confirmed bookings.";
+
+    return toolResponse(input.turnId, "core.bookings.lookup", replyText);
+  }
+
+  return null;
+}
+
+function toolResponse(
+  turnId: string,
+  specialist: string,
+  replyText: string,
+  options: Partial<
+    Pick<AgentSandboxDispatchResponse, "fallbackReason" | "debugError" | "reminderAction">
+  > = {},
+): AgentSandboxDispatchResponse {
+  return {
+    ok: true,
+    auditId: null,
+    turnId,
+    specialist,
+    replyText,
+    model: null,
+    source: "tool",
+    fallbackReason: options.fallbackReason ?? null,
+    debugError: options.debugError ?? null,
+    emailAction: null,
+    reminderAction: options.reminderAction ?? null,
+    contentAction: null,
+    contactsChanged: false,
+  };
+}
+
+function isReminderListRequest(messageText: string): boolean {
+  return /\b(reminders?|todo|todos|nudges?)\b/i.test(messageText) &&
+    /\b(list|show|what|which|any|pending|upcoming|due)\b/i.test(messageText) &&
+    !isReminderCreateRequest(messageText);
+}
+
+function isReminderCreateRequest(messageText: string): boolean {
+  return /\b(remind me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder|don't let me forget|dont let me forget)\b/i.test(
+    messageText,
+  );
+}
+
+function parseReminderChatRequest(
+  messageText: string,
+  owner: OwnerProfileRow | null,
+): { input: AgentReminderInput } | { error: string } | null {
+  if (!isReminderCreateRequest(messageText)) return null;
+
+  const timezone = normalizeTimeZone(owner?.timezone) || "UTC";
+  const explicitDate = parseExplicitDate(messageText);
+  const relativeMs = parseRelativeReminderOffsetMs(messageText);
+  const dayOffset = /\btomorrow\b/i.test(messageText) ? 1 : 0;
+  const time = parseExplicitReminderTime(messageText) || "09:00";
+  const recurrence = parseReminderRecurrenceInput(messageText);
+  let date: string;
+  let parsedTime = time;
+
+  if (relativeMs !== null) {
+    const parts = dateTimePartsForInstant(new Date(Date.now() + relativeMs), timezone);
+    date = parts.date;
+    parsedTime = parts.time;
+  } else {
+    date = explicitDate || addDaysToDate(localDateForTimezone(timezone), dayOffset);
+  }
+
+  const title = extractReminderTitle(messageText);
+  if (!title) {
+    return {
+      error:
+        "I can set that reminder, but I need what you want to be reminded about.",
+    };
+  }
+
+  if (!explicitDate && relativeMs === null && !/\btoday|tomorrow\b/i.test(messageText)) {
+    return {
+      error:
+        "I can set that reminder. Please include a date, or say today/tomorrow or in a few hours.",
+    };
+  }
+
+  return {
+    input: {
+      title,
+      date,
+      time: parsedTime,
+      timezone,
+      recurrence,
+    },
+  };
+}
+
+function parseExplicitDate(messageText: string): string | null {
+  const match = messageText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  return match?.[1] || null;
+}
+
+function parseRelativeReminderOffsetMs(messageText: string): number | null {
+  const match = messageText.match(/\bin\s+(\d+)\s+(minutes?|mins?|hours?|hrs?|days?)\b/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const unit = match[2].toLowerCase();
+  if (unit.startsWith("min")) return amount * 60 * 1000;
+  if (unit.startsWith("hour") || unit.startsWith("hr")) return amount * 60 * 60 * 1000;
+  return amount * 24 * 60 * 60 * 1000;
+}
+
+function parseExplicitReminderTime(messageText: string): string | null {
+  const match = messageText.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || "0");
+  const meridiem = match[3]?.toLowerCase();
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return null;
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  if (hour > 23) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function parseReminderRecurrenceInput(messageText: string): string | null {
+  if (/\bevery day|daily\b/i.test(messageText)) return "daily";
+  if (/\bevery week|weekly\b/i.test(messageText)) return "weekly";
+  if (/\bevery month|monthly\b/i.test(messageText)) return "monthly";
+  return null;
+}
+
+function extractReminderTitle(messageText: string): string | null {
+  const stripped = messageText
+    .replace(/^(?:please\s+)?/i, "")
+    .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
+    .replace(/^(?:remind me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder)\s+(?:to|for|about|that)?\s*/i, "")
+    .replace(/^(?:don't|dont) let me forget\s+(?:to|about|that)?\s*/i, "")
+    .replace(/\b(?:today|tomorrow)\b/gi, "")
+    .replace(/\bon\s+20\d{2}-\d{2}-\d{2}\b/gi, "")
+    .replace(/\bin\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?)\b/gi, "")
+    .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/gi, "")
+    .replace(/\b(?:every day|daily|every week|weekly|every month|monthly)\b/gi, "")
+    .replace(/[.?!]+$/g, "")
+    .trim();
+  return stripped || null;
+}
+
+async function listPendingAgentReminders(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+): Promise<AgentReminder[]> {
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT id, title, notes, remind_at, timezone, recurrence_rule, context_type,
+              context_id, context_label, status, delivered_at, dismissed_at, created_at
+       FROM user_reminders
+       WHERE user_id = ? AND status IN ('pending', 'failed')
+       ORDER BY remind_at ASC
+       LIMIT 8`,
+    )
+      .bind(userId)
+      .all<DbReminderRow>();
+    return (rows.results || []).map(serializeAgentReminder);
+  } catch {
+    return [];
+  }
+}
+
+function isBookingLookupRequest(messageText: string): boolean {
+  return /\b(bookings?|appointments?|calls?|sessions?)\b/i.test(messageText) &&
+    /\b(check|show|list|what|when|any|upcoming|today|week|schedule)\b/i.test(messageText);
+}
+
+async function listUpcomingBookings(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+): Promise<DbBookingRow[]> {
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT b.id, b.site_id, s.username AS site_username, b.offer_id,
+              b.booking_type, b.guest_name, b.guest_email, b.starts_at, b.ends_at,
+              b.duration_minutes, b.status, b.notes, b.payment_status,
+              b.is_free_booking, b.created_at
+       FROM bookings b
+       JOIN sites s ON s.id = b.site_id
+       WHERE s.user_id = ? AND b.status = 'confirmed' AND b.starts_at >= ?
+       ORDER BY b.starts_at ASC
+       LIMIT 8`,
+    )
+      .bind(userId, new Date().toISOString())
+      .all<DbBookingRow>();
+    return rows.results || [];
+  } catch {
+    return [];
+  }
+}
+
+function formatAgentDateTime(iso: string, timezone: string | null | undefined): string {
+  const normalizedTimezone = normalizeTimeZone(timezone) || "UTC";
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: normalizedTimezone,
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+function dateTimePartsForInstant(date: Date, timezone: string): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return {
+    date: `${value("year")}-${value("month")}-${value("day")}`,
+    time: `${value("hour")}:${value("minute")}`,
+  };
+}
+
+function addDaysToDate(date: string, days: number): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + days, 12, 0, 0));
+  return next.toISOString().slice(0, 10);
 }
 
 function parseReminderRecurrenceRule(recurrence: unknown, date: string): string | null {
@@ -2414,7 +2744,7 @@ async function resolveAiRoute(
   const backupModel =
     providerId === "workers-ai"
       ? normalizeModel(env.ME3_AI_CHAT_BACKUP_MODEL) ||
-        (model !== DEFAULT_WORKERS_AI_MODEL ? DEFAULT_WORKERS_AI_MODEL : null)
+        (model !== DEFAULT_WORKERS_AI_BACKUP_MODEL ? DEFAULT_WORKERS_AI_BACKUP_MODEL : null)
       : null;
   const apiKey =
     providerId === "openai"
