@@ -54,21 +54,29 @@ In Cloudflare Email Service:
 2. Complete Cloudflare's sender/domain verification steps.
 3. Confirm the sender address or domain can send as `name@your-domain.com`.
 
-Then add the binding to the install's `wrangler.toml`:
+Then add the binding to the install's `wrangler.toml`. This gives the Worker
+permission to send through Cloudflare; ME3's Account UI remains the source of
+truth for the From and Reply-to addresses.
 
 ```toml
 [[send_email]]
 name = "EMAIL"
-allowed_sender_addresses = ["name@your-domain.com"]
+remote = true
 ```
+
+You can also add `allowed_sender_addresses = ["name@your-domain.com"]` if you
+want Wrangler to hard-limit the Worker to that sender. That is safer, but it
+means the deployed config must be updated whenever the ME3 sender address
+changes.
 
 Deploy the Worker after changing `wrangler.toml`.
 
 If ME3 says `Cloudflare Email Service is not ready to send yet`, it has not
 detected a ready outbound provider. For the Cloudflare provider, check that the
-deployed Worker has the `EMAIL` send binding above, the allowed sender matches
-the From address saved in ME3, and the Cloudflare sending domain or address has
-finished verification.
+deployed Worker has the `EMAIL` send binding above and the Cloudflare sending
+domain or address has finished verification. If you use
+`allowed_sender_addresses`, also check that it matches the From address saved in
+ME3.
 
 ## 4. Configure Outbound Mail In ME3
 
