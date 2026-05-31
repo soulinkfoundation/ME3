@@ -200,9 +200,11 @@ export async function generateSiteHtml(
     }
   }
 
-  const posts = (profile.posts || []).filter((post) => !post.draft && post.slug);
+  const posts = (profile.posts || [])
+    .filter((post) => !post.draft && post.slug)
+    .sort((a, b) => timestampForSort(b.publishedAt) - timestampForSort(a.publishedAt));
   if (posts.length > 0) {
-    output[`${sectionPaths.blog}/index.html`] = generateCollectionIndex(profile, profile.blogTitle || "Blog", posts, "blog", access);
+    output[`${sectionPaths.blog}/index.html`] = generateCollectionIndex(profile, profile.blogTitle || "Blog", posts, "blog", access, fileMap);
     for (const post of posts) {
       if (!post.file || !post.slug) continue;
       const markdown = fileMap.get(normalizeSitePath(post.file));
@@ -214,7 +216,7 @@ export async function generateSiteHtml(
 
   const products = (profile.products || []).filter((product) => product.slug);
   if (products.length > 0) {
-    output[`${sectionPaths.shop}/index.html`] = generateCollectionIndex(profile, profile.shopTitle || "Shop", products, "shop", access);
+    output[`${sectionPaths.shop}/index.html`] = generateCollectionIndex(profile, profile.shopTitle || "Shop", products, "shop", access, fileMap);
     for (const product of products) {
       if (!product.file || !product.slug) continue;
       const markdown = fileMap.get(normalizeSitePath(product.file));
@@ -296,14 +298,12 @@ function generateCollectionIndex(
   items: Array<Me3Post | Me3Product>,
   activeSlug: string,
   capabilities: SiteRenderCapabilities,
+  fileMap: Map<string, string>,
 ): string {
   const cards = items
-    .map((item) => {
-      const slug = normalizeSitePath(item.slug || "");
-      const excerpt = "excerpt" in item && item.excerpt ? `<p>${escapeHtml(item.excerpt)}</p>` : "";
-      return `<a class="collection-card" href="./${escapeHtml(slug)}"><strong>${escapeHtml(item.title || titleFromSlug(slug))}</strong>${excerpt}</a>`;
-    })
+    .map((item) => generateCollectionCard(item, activeSlug, fileMap))
     .join("");
+  const listClass = activeSlug === "shop" ? "shop-items" : "blog-items";
 
   return pageShell(profile, {
     title: `${title} | ${profile.name || "ME3"}`,
@@ -312,10 +312,32 @@ function generateCollectionIndex(
     basePath: "../",
     body: `<header class="page-header"><a class="back-link" href="../">${profile.avatar ? `<img src="${escapeHtml(filePathForHtml(profile.avatar, "../"))}" alt="" class="avatar-small">` : ""}<span>${escapeHtml(profile.name || "Home")}</span></a></header>
       ${generateNav(profile, activeSlug, "../")}
-      <main class="content"><h1>${escapeHtml(title)}</h1><div class="collection-list">${cards}</div></main>`,
+      <main class="content"><h1>${escapeHtml(title)}</h1><div class="${listClass}">${cards}</div></main>`,
     footer: generateFooter(profile, capabilities.footerCustomization),
     vibe: getVibe(profile),
   });
+}
+
+function generateCollectionCard(
+  item: Me3Post | Me3Product,
+  activeSlug: string,
+  fileMap: Map<string, string>,
+): string {
+  const slug = normalizeSitePath(item.slug || "");
+  const title = escapeHtml(item.title || titleFromSlug(slug));
+  const markdown = item.file ? fileMap.get(normalizeSitePath(item.file)) || "" : "";
+  if (activeSlug === "shop") {
+    const product = item as Me3Product;
+    const price = formatProductPrice(product);
+    const excerpt = getCollectionExcerpt(product.excerpt, markdown, 140);
+    return `<a class="shop-item" href="./${escapeHtml(slug)}"><div class="shop-item-title">${title}</div>${price ? `<div class="shop-item-price">${escapeHtml(price)}</div>` : ""}${excerpt ? `<div class="shop-item-excerpt">${escapeHtml(excerpt)}</div>` : ""}</a>`;
+  }
+
+  const post = item as Me3Post;
+  const date = formatPostDate(post.publishedAt);
+  const excerpt = getCollectionExcerpt(post.excerpt, markdown, 160);
+  const type = post.type === "video" ? ` <span class="post-type">Video</span>` : "";
+  return `<a class="blog-item" href="./${escapeHtml(slug)}"><div class="blog-item-title">${title}${type}</div>${date ? `<div class="blog-item-date">${escapeHtml(date)}</div>` : ""}${excerpt ? `<div class="blog-item-excerpt">${escapeHtml(excerpt)}</div>` : ""}</a>`;
 }
 
 function pageShell(
@@ -1125,6 +1147,42 @@ function getVibe(profile: Me3SiteProfile): string {
   return profile.links?._vibe || DEFAULT_VIBE;
 }
 
+function timestampForSort(value?: string): number {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatPostDate(value?: string): string {
+  if (!value) return "";
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return "";
+  return new Intl.DateTimeFormat("en-US").format(new Date(parsed));
+}
+
+function formatProductPrice(product: Me3Product): string {
+  if (typeof product.price !== "number" || !Number.isFinite(product.price)) return "";
+  return `${(product.price / 100).toFixed(2)} ${product.currency || "USD"}`;
+}
+
+function getCollectionExcerpt(explicitExcerpt: string | undefined, source: string, limit: number): string {
+  const text = explicitExcerpt?.trim() || contentToPlainText(source);
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
+}
+
+function contentToPlainText(value: string): string {
+  if (!value) return "";
+  return markdownToText(stripHtmlTags(value));
+}
+
+function stripHtmlTags(value: string): string {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+}
+
 function resolveSiteSectionPaths(profile: Me3SiteProfile): SiteSectionPaths {
   const taken = new Set(
     (profile.pages || [])
@@ -1202,7 +1260,7 @@ function siteCssOverrides(vibe: string): string {
 
 function siteCss(vibe: string, accentOverride?: string): string {
   const theme = siteThemeTokens(vibe, accentOverride);
-  return `:root{--bg:${theme.bg};--surface:${theme.surface};--text:${theme.text};--muted:${theme.muted};--border:${theme.border};--accent:${theme.accent};--radius-sm:8px;--radius-md:12px;--radius:16px;--radius-full:9999px;--font:${theme.font};--mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55}.container{width:min(640px,100%);margin:0 auto;min-height:100vh;background:var(--surface)}.banner{position:relative;height:190px;overflow:hidden;border-radius:0 0 var(--radius) var(--radius);background:#ddd}.banner img{width:100%;height:100%;object-fit:cover;display:block}.link-icon svg{width:28px;height:28px}.btn-icon svg{width:16px;height:16px}.btn-icon{display:inline-flex;align-items:center;justify-content:center;line-height:1}.main{padding:0 32px 36px}.profile-header{text-align:center;margin-top:-56px;position:relative}.banner+.main .profile-header{margin-top:-56px}.avatar{width:120px;height:120px;border-radius:999px;object-fit:cover;border:5px solid var(--surface);background:var(--surface)}.name{font-size:clamp(2rem,7vw,3rem);line-height:1.05;margin:22px 0 8px;font-weight:800;letter-spacing:0}.location,.bio{color:var(--muted);margin:8px auto;max-width:38rem}.nav{display:flex;gap:8px;justify-content:center;margin:28px 0 24px;flex-wrap:wrap}.nav-link{border-radius:var(--radius-full);padding:9px 16px;text-decoration:none;color:var(--muted);font-weight:700}.nav-link.active{background:var(--text);color:var(--surface)}.buttons{display:grid;gap:8px;margin:20px 0}.cta-button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:12px 16px;border-radius:var(--radius-md);text-decoration:none;font-weight:700;font-size:14px;letter-spacing:0;background:var(--accent);color:${theme.accentText}}.cta-button.primary{background:var(--accent);color:${theme.accentText}}.cta-button.secondary{background:var(--text);color:var(--surface)}.cta-button.outline{background:transparent;color:var(--text);border:2px solid var(--text)}.links{display:flex;justify-content:center;align-items:center;gap:16px;flex-wrap:wrap;margin:22px 0}.link-item{width:56px;height:56px;border-radius:999px;display:grid;place-items:center;color:var(--text);background:rgba(0,0,0,.06);padding:0;line-height:1}.link-label{display:none}.testimonials,.booking,.newsletter{margin:32px 0;padding:40px 48px;border-radius:24px;background:var(--border)}.booking,.newsletter{text-align:center}.booking h2,.newsletter h2,.testimonials h2{margin:0 0 14px;line-height:1.2}.booking>p,.newsletter>p{max-width:36rem;margin:0 auto 24px;color:var(--muted);font-size:1.1rem;line-height:1.55}.booking-subtitle{font-size:1.1rem;margin:22px 0 18px}.booking-session-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:16px 0 24px}.booking-session-preview:has(.booking-card:only-child){grid-template-columns:1fr}.booking-card{border:0;border-radius:16px;padding:20px 24px;margin:0;display:grid;gap:12px;text-align:left;background:transparent;cursor:pointer}.booking-card.active{border:2px solid var(--text);background:var(--surface)}.booking-card span,.booking-card small{color:var(--muted)}.booking-widget{display:grid;gap:18px;max-width:760px;margin:0 auto}.booking-selection-summary{margin:0;font-weight:800}.booking-form{display:none;gap:16px;margin:8px auto 0;text-align:left;max-width:520px;width:100%}.booking-form.is-visible{display:grid}.booking-actions{display:grid;grid-template-columns:minmax(120px,1fr) minmax(180px,2fr);gap:16px}.booking-back,.booking-submit{font:inherit;font-weight:800;border:0;border-radius:18px;padding:18px 22px;cursor:pointer}.booking-back{background:var(--surface);color:var(--text)}.booking-submit{background:var(--accent);color:${theme.accentText}}.booking-status{min-height:1.4em;color:var(--muted);margin:0}.booking-status.is-error{color:#b42318}.booking-timezone,.booking-empty-times{color:var(--muted);font-size:1rem;margin:8px 0 0}.booking-selected-time{padding:18px 22px;border-radius:18px;background:var(--surface);text-align:center;font-weight:800;font-size:1.1rem}.booking label{display:grid;gap:8px;color:var(--muted);text-align:left}.booking-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;justify-content:center;max-width:520px;margin:0 auto}.booking-slot{font:inherit;border:0;border-radius:16px;background:var(--surface);color:inherit;padding:18px 20px;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:1.1rem}.booking-slot.active{outline:2px solid var(--text);outline-offset:0;background:var(--surface)}input,select,textarea{font:inherit;padding:18px 22px;border:0;border-radius:18px;background:var(--surface);color:inherit;box-sizing:border-box;width:100%}input::placeholder,textarea::placeholder{color:var(--muted);font-weight:700}textarea{resize:vertical}.booking-note{font-style:italic;color:var(--muted);text-align:center}.testimonial-list{display:grid;gap:16px}.testimonials h2{text-align:center}.testimonial-card{display:grid;gap:20px;padding:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);margin:0}.testimonial-card__person{display:flex;align-items:center;gap:14px}.testimonial-card__avatar{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;flex:0 0 auto;border-radius:999px;background:rgba(0,0,0,.08);color:var(--text);font-weight:800;object-fit:cover}.testimonial-card__meta{display:grid;gap:2px;min-width:0}.testimonial-card__name{color:var(--text)}.testimonial-card__handle{color:var(--muted);font-size:.9rem}.testimonial-link{margin-left:auto;color:var(--accent);font-weight:700}.testimonial-card__quote{font-size:1.05rem;line-height:1.55;margin:0}.newsletter form{display:flex;gap:10px;max-width:520px;margin:18px auto 10px}.newsletter input{min-width:0;flex:1}.newsletter button{font:inherit;font-weight:800;border:0;border-radius:var(--radius-md);background:var(--accent);color:${theme.accentText};padding:0 22px;cursor:pointer}.footer{text-align:center;color:var(--muted);padding:24px 32px}.footer a{color:inherit}.page-header{padding:28px 32px 0}.back-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;font-weight:800}.avatar-small{width:42px;height:42px;border-radius:999px;object-fit:cover}.content{margin:32px 0;padding:32px;background:transparent;border-radius:0}.content h1{font-size:2.2rem;line-height:1.1}.content img{max-width:100%;height:auto}.collection-list{display:grid;gap:12px}.collection-card{display:grid;gap:8px;text-decoration:none;color:inherit;padding:18px;border:2px solid var(--border);border-radius:var(--radius-md)}@media (max-width:560px){.main{padding:0 20px 28px}.testimonials,.booking,.newsletter{padding:28px}.newsletter form{display:grid}.booking-session-preview,.booking-slots,.booking-actions{grid-template-columns:1fr}}${vibe === "tech" ? `:root{--radius-sm:0;--radius-md:0;--radius:0}.name{text-transform:lowercase;font-family:var(--font)}.name:before{content:"> ";color:var(--accent)}.banner{border-radius:0}.nav-link{border-radius:0}.nav-link.active{background:var(--text);color:#111}.links{background:#242424;padding:16px}.link-item{border-radius:0;background:transparent}.booking,.newsletter{background:#242424}.content{background:transparent}.testimonials{background:transparent;padding-left:0;padding-right:0}.testimonial-card{background:#050505;border-color:#2a2a2a;border-radius:24px}.testimonial-card__avatar{background:#242424}.booking-card{background:#050505}.booking-slot.active{background:#050505}.cta-button{border-radius:0}` : ""}`;
+  return `:root{--bg:${theme.bg};--surface:${theme.surface};--text:${theme.text};--muted:${theme.muted};--border:${theme.border};--accent:${theme.accent};--radius-sm:8px;--radius-md:12px;--radius:16px;--radius-full:9999px;--font:${theme.font};--mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55}.container{width:min(640px,100%);margin:0 auto;min-height:100vh;background:var(--surface)}.banner{position:relative;height:190px;overflow:hidden;border-radius:0 0 var(--radius) var(--radius);background:#ddd}.banner img{width:100%;height:100%;object-fit:cover;display:block}.link-icon svg{width:28px;height:28px}.btn-icon svg{width:16px;height:16px}.btn-icon{display:inline-flex;align-items:center;justify-content:center;line-height:1}.main{padding:0 32px 36px}.profile-header{text-align:center;margin-top:-56px;position:relative}.banner+.main .profile-header{margin-top:-56px}.avatar{width:120px;height:120px;border-radius:999px;object-fit:cover;border:5px solid var(--surface);background:var(--surface)}.name{font-size:clamp(2rem,7vw,3rem);line-height:1.05;margin:22px 0 8px;font-weight:800;letter-spacing:0}.location,.bio{color:var(--muted);margin:8px auto;max-width:38rem}.nav{display:flex;gap:8px;justify-content:center;margin:28px 0 24px;flex-wrap:wrap}.nav-link{border-radius:var(--radius-full);padding:9px 16px;text-decoration:none;color:var(--muted);font-weight:700}.nav-link.active{background:var(--text);color:var(--surface)}.buttons{display:grid;gap:8px;margin:20px 0}.cta-button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:12px 16px;border-radius:var(--radius-md);text-decoration:none;font-weight:700;font-size:14px;letter-spacing:0;background:var(--accent);color:${theme.accentText}}.cta-button.primary{background:var(--accent);color:${theme.accentText}}.cta-button.secondary{background:var(--text);color:var(--surface)}.cta-button.outline{background:transparent;color:var(--text);border:2px solid var(--text)}.links{display:flex;justify-content:center;align-items:center;gap:16px;flex-wrap:wrap;margin:22px 0}.link-item{width:56px;height:56px;border-radius:999px;display:grid;place-items:center;color:var(--text);background:rgba(0,0,0,.06);padding:0;line-height:1}.link-label{display:none}.testimonials,.booking,.newsletter{margin:32px 0;padding:40px 48px;border-radius:24px;background:var(--border)}.booking,.newsletter{text-align:center}.booking h2,.newsletter h2,.testimonials h2{margin:0 0 14px;line-height:1.2}.booking>p,.newsletter>p{max-width:36rem;margin:0 auto 24px;color:var(--muted);font-size:1.1rem;line-height:1.55}.booking-subtitle{font-size:1.1rem;margin:22px 0 18px}.booking-session-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:16px 0 24px}.booking-session-preview:has(.booking-card:only-child){grid-template-columns:1fr}.booking-card{border:0;border-radius:16px;padding:20px 24px;margin:0;display:grid;gap:12px;text-align:left;background:transparent;cursor:pointer}.booking-card.active{border:2px solid var(--text);background:var(--surface)}.booking-card span,.booking-card small{color:var(--muted)}.booking-widget{display:grid;gap:18px;max-width:760px;margin:0 auto}.booking-selection-summary{margin:0;font-weight:800}.booking-form{display:none;gap:16px;margin:8px auto 0;text-align:left;max-width:520px;width:100%}.booking-form.is-visible{display:grid}.booking-actions{display:grid;grid-template-columns:minmax(120px,1fr) minmax(180px,2fr);gap:16px}.booking-back,.booking-submit{font:inherit;font-weight:800;border:0;border-radius:18px;padding:18px 22px;cursor:pointer}.booking-back{background:var(--surface);color:var(--text)}.booking-submit{background:var(--accent);color:${theme.accentText}}.booking-status{min-height:1.4em;color:var(--muted);margin:0}.booking-status.is-error{color:#b42318}.booking-timezone,.booking-empty-times{color:var(--muted);font-size:1rem;margin:8px 0 0}.booking-selected-time{padding:18px 22px;border-radius:18px;background:var(--surface);text-align:center;font-weight:800;font-size:1.1rem}.booking label{display:grid;gap:8px;color:var(--muted);text-align:left}.booking-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;justify-content:center;max-width:520px;margin:0 auto}.booking-slot{font:inherit;border:0;border-radius:16px;background:var(--surface);color:inherit;padding:18px 20px;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:1.1rem}.booking-slot.active{outline:2px solid var(--text);outline-offset:0;background:var(--surface)}input,select,textarea{font:inherit;padding:18px 22px;border:0;border-radius:18px;background:var(--surface);color:inherit;box-sizing:border-box;width:100%}input::placeholder,textarea::placeholder{color:var(--muted);font-weight:700}textarea{resize:vertical}.booking-note{font-style:italic;color:var(--muted);text-align:center}.testimonial-list{display:grid;gap:16px}.testimonials h2{text-align:center}.testimonial-card{display:grid;gap:20px;padding:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);margin:0}.testimonial-card__person{display:flex;align-items:center;gap:14px}.testimonial-card__avatar{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;flex:0 0 auto;border-radius:999px;background:rgba(0,0,0,.08);color:var(--text);font-weight:800;object-fit:cover}.testimonial-card__meta{display:grid;gap:2px;min-width:0}.testimonial-card__name{color:var(--text)}.testimonial-card__handle{color:var(--muted);font-size:.9rem}.testimonial-link{margin-left:auto;color:var(--accent);font-weight:700}.testimonial-card__quote{font-size:1.05rem;line-height:1.55;margin:0}.newsletter form{display:flex;gap:10px;max-width:520px;margin:18px auto 10px}.newsletter input{min-width:0;flex:1}.newsletter button{font:inherit;font-weight:800;border:0;border-radius:var(--radius-md);background:var(--accent);color:${theme.accentText};padding:0 22px;cursor:pointer}.footer{text-align:center;color:var(--muted);padding:24px 32px}.footer a{color:inherit}.page-header{padding:28px 32px 0}.back-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;font-weight:800}.avatar-small{width:42px;height:42px;border-radius:999px;object-fit:cover}.content{margin:32px 0;padding:32px;background:transparent;border-radius:0}.content h1{font-size:2.2rem;line-height:1.1}.content img{max-width:100%;height:auto}.collection-list,.blog-items,.shop-items{display:grid;gap:12px}.collection-card,.blog-item,.shop-item{display:grid;gap:8px;text-decoration:none;color:inherit;padding:18px;border:2px solid var(--border);border-radius:var(--radius-md);background:transparent}.blog-item-title,.shop-item-title{font-weight:800;color:var(--text);line-height:1.25}.blog-item-date,.shop-item-price,.blog-item-excerpt,.shop-item-excerpt{color:var(--muted);line-height:1.45}.post-type{display:inline-flex;margin-left:8px;padding:2px 8px;border-radius:999px;background:rgba(0,0,0,.08);font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;vertical-align:middle}@media (max-width:560px){.main{padding:0 20px 28px}.testimonials,.booking,.newsletter{padding:28px}.newsletter form{display:grid}.booking-session-preview,.booking-slots,.booking-actions{grid-template-columns:1fr}}${vibe === "tech" ? `:root{--radius-sm:0;--radius-md:0;--radius:0}.name{text-transform:lowercase;font-family:var(--font)}.name:before{content:"> ";color:var(--accent)}.banner{border-radius:0}.nav-link{border-radius:0}.nav-link.active{background:var(--text);color:#111}.links{background:#242424;padding:16px}.link-item{border-radius:0;background:transparent}.booking,.newsletter{background:#242424}.content{background:transparent}.testimonials{background:transparent;padding-left:0;padding-right:0}.testimonial-card{background:#050505;border-color:#2a2a2a;border-radius:24px}.testimonial-card__avatar{background:#242424}.booking-card{background:#050505}.booking-slot.active{background:#050505}.cta-button{border-radius:0}` : ""}`;
 }
 
 function siteThemeTokens(vibe: string, accentOverride?: string): {

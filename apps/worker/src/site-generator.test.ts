@@ -57,7 +57,15 @@ describe("site generator", () => {
           { slug: "now", title: "Now", file: "now.md" },
           { slug: "about", title: "About", file: "about.md" },
         ],
-        posts: [{ slug: "hello", title: "Hello", file: "blog/hello.md" }],
+        posts: [
+          {
+            slug: "hello",
+            title: "Hello",
+            file: "blog/hello.md",
+            publishedAt: "2026-02-03",
+            excerpt: "A short hello from the blog.",
+          },
+        ],
       },
       [
         {
@@ -239,7 +247,15 @@ describe("site generator", () => {
         version: "0.1",
         name: "Path Site",
         pages: [{ slug: "writing", title: "Writing", file: "writing.md" }],
-        posts: [{ slug: "hello", title: "Hello", file: "blog/hello.md" }],
+        posts: [
+          {
+            slug: "hello",
+            title: "Hello",
+            file: "blog/hello.md",
+            publishedAt: "2026-02-03",
+            excerpt: "A short hello from the blog.",
+          },
+        ],
         products: [
           {
             slug: "pai-setup",
@@ -247,6 +263,7 @@ describe("site generator", () => {
             file: "shop/pai-setup.md",
             price: 7500,
             currency: "EUR",
+            excerpt: "Get help setting up a personal AI assistant.",
           },
         ],
         blogTitle: "Writing",
@@ -260,8 +277,12 @@ describe("site generator", () => {
     );
 
     expect(files["work-with-me/index.html"]).toContain("Pai Setup");
+    expect(files["work-with-me/index.html"]).toContain("75.00 EUR");
+    expect(files["work-with-me/index.html"]).toContain("Get help setting up a personal AI assistant.");
     expect(files["work-with-me/pai-setup.html"]).toContain("<h1>Pai Setup</h1>");
     expect(files["writing-1/index.html"]).toContain("Hello");
+    expect(files["writing-1/index.html"]).toContain("2/3/2026");
+    expect(files["writing-1/index.html"]).toContain("A short hello from the blog.");
     expect(files["index.html"]).toContain('href="./work-with-me/"');
     expect(files["index.html"]).not.toContain('href="./shop/"');
   });
