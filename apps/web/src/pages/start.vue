@@ -194,6 +194,46 @@ function clearUsernameCheck() {
   }
 }
 
+function queueUsernameAvailabilityCheck(value: string) {
+  const cleaned = normalizeUsername(value);
+  if (cleaned !== value) {
+    handle.value = cleaned;
+    return;
+  }
+
+  usernameMessage.value = "";
+  isUsernameAvailable.value = null;
+  isCheckingUsername.value = false;
+  clearUsernameCheck();
+
+  if (cleaned.length === 0) return;
+  if (cleaned.length < 3 || !USERNAME_PATTERN.test(cleaned)) {
+    usernameMessage.value =
+      cleaned.length < 3
+        ? "Handle must be at least 3 characters."
+        : "Use letters, numbers, underscores, or hyphens.";
+    return;
+  }
+
+  isCheckingUsername.value = true;
+  usernameCheckTimeout = setTimeout(async () => {
+    try {
+      const available = await getUsernameAvailability(cleaned);
+      if (normalizedHandle.value === cleaned) {
+        isUsernameAvailable.value = available;
+      }
+    } catch {
+      if (normalizedHandle.value === cleaned) {
+        isUsernameAvailable.value = true;
+      }
+    } finally {
+      if (normalizedHandle.value === cleaned) {
+        isCheckingUsername.value = false;
+      }
+    }
+  }, 400);
+}
+
 function goToStep(step: number) {
   if (step < 1 || step > STEPS.length || step > furthestStep.value) return;
   currentStep.value = step;
@@ -348,37 +388,7 @@ async function finish() {
   await router.push(finishDestination.value);
 }
 
-watch(handle, (value) => {
-  const cleaned = normalizeUsername(value);
-  if (cleaned !== value) {
-    handle.value = cleaned;
-    return;
-  }
-
-  usernameMessage.value = "";
-  isUsernameAvailable.value = null;
-  clearUsernameCheck();
-
-  if (cleaned.length === 0) return;
-  if (cleaned.length < 3 || !USERNAME_PATTERN.test(cleaned)) {
-    usernameMessage.value =
-      cleaned.length < 3
-        ? "Handle must be at least 3 characters."
-        : "Use letters, numbers, underscores, or hyphens.";
-    return;
-  }
-
-  isCheckingUsername.value = true;
-  usernameCheckTimeout = setTimeout(async () => {
-    try {
-      isUsernameAvailable.value = await getUsernameAvailability(cleaned);
-    } catch {
-      isUsernameAvailable.value = true;
-    } finally {
-      isCheckingUsername.value = false;
-    }
-  }, 400);
-});
+watch(handle, queueUsernameAvailabilityCheck, { immediate: true });
 
 watch(domain, (value) => {
   syncEmailForDomain(value);
@@ -393,11 +403,6 @@ watch(currentStep, (step) => {
 onMounted(() => {
   const inferred = inferDomainFromHost(window.location.hostname);
   if (inferred) domain.value = inferred;
-  if (handle.value) {
-    const currentHandle = handle.value;
-    handle.value = "";
-    handle.value = currentHandle;
-  }
 });
 
 onBeforeUnmount(clearUsernameCheck);
@@ -450,7 +455,10 @@ onBeforeUnmount(clearUsernameCheck);
           <h1 id="profile-title">Let's get started with ME3</h1>
           <p>
             Configure the essentials now, complete your full
-            <RouterLink to="/account?section=mailbox"
+            <RouterLink
+              to="/account?section=mailbox"
+              target="_blank"
+              rel="noopener noreferrer"
               >ME3 site profile</RouterLink
             >
             later.
@@ -549,7 +557,10 @@ onBeforeUnmount(clearUsernameCheck);
           <p>
             ME3 uses Cloudflare Email by default. Custom senders such as
             Postmark or Mailgun can be configured in
-            <RouterLink to="/account?section=mailbox"
+            <RouterLink
+              to="/account?section=mailbox"
+              target="_blank"
+              rel="noopener noreferrer"
               >Account settings</RouterLink
             >
             later if you wish.
@@ -627,7 +638,10 @@ onBeforeUnmount(clearUsernameCheck);
           <p>
             Soulink creates a private chat with your ME3 assistant across web
             and mobile. You can finish this now or return from
-            <RouterLink to="/account?section=soulink"
+            <RouterLink
+              to="/account?section=soulink"
+              target="_blank"
+              rel="noopener noreferrer"
               >Account settings</RouterLink
             >.
           </p>

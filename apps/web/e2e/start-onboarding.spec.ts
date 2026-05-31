@@ -223,6 +223,10 @@ test.describe("/start onboarding wizard", () => {
     await expect(page.getByRole("button", { name: "Exit" })).toHaveCount(0);
     await expect(page.locator(".step-indicator")).toHaveCount(0);
     await expect(page.locator(".progress-step")).toHaveCount(3);
+    await expect(page.getByRole("link", { name: "ME3 site profile" })).toHaveAttribute(
+      "target",
+      "_blank",
+    );
 
     await page.locator(".progress-step").first().hover();
     const tooltipBox = await page
@@ -232,6 +236,41 @@ test.describe("/start onboarding wizard", () => {
       .boundingBox();
     expect(tooltipBox).not.toBeNull();
     expect(tooltipBox?.y).toBeGreaterThanOrEqual(0);
+  });
+
+  test("checks persisted handle availability on refresh", async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        "me3_wizard_state",
+        JSON.stringify({
+          ownerUserId: "owner-1",
+          currentStep: 1,
+          furthestStep: 1,
+          profile: {
+            name: "Refresh User",
+            handle: "refreshhandle",
+            location: "",
+            bio: "",
+            avatar: null,
+            banner: null,
+            links: {},
+            linkOrder: [],
+            buttons: [],
+          },
+          pages: [],
+          posts: [],
+          products: [],
+          testimonials: [],
+          username: "refreshhandle",
+        }),
+      );
+    });
+
+    await page.goto("/start");
+
+    await expect(page.locator("#start-handle")).toHaveValue("refreshhandle");
+    await expect(page.getByText("refreshhandle is available.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
   });
 
   test("validates profile step before allowing publish", async ({ page }) => {
@@ -272,6 +311,10 @@ test.describe("/start onboarding wizard", () => {
       page.getByRole("heading", { name: "Set up email" }),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Skip for now" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Account settings" })).toHaveAttribute(
+      "target",
+      "_blank",
+    );
     expect(uploadBody).toContain("me.json");
     expect(uploadBody).toContain("Starter User");
     expect(uploadBody).toContain("starter");
@@ -280,6 +323,10 @@ test.describe("/start onboarding wizard", () => {
     await expect(
       page.getByRole("heading", { name: "Connect Soulink" }),
     ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Account settings" })).toHaveAttribute(
+      "target",
+      "_blank",
+    );
 
     await page.getByRole("button", { name: "Finish" }).click();
     await expect(page).toHaveURL(/\/sites\/starter$/);
