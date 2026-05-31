@@ -68,7 +68,7 @@ const statusHint = computed(() => {
   if (!configured.value) {
     return "Soulink assistant chat is not configured for this Core install yet.";
   }
-  if (isConnected.value) return "Soulink is connected as your primary assistant chat.";
+  if (isConnected.value) return "Connected";
   if (isRuntimeCallbackLocal.value) {
     return "Use your live ME3 Core URL to connect Soulink.";
   }
@@ -205,9 +205,48 @@ defineExpose({
 
     <template v-else>
       <div
-        v-if="variant === 'default'"
+        v-if="variant === 'default' && isConnected"
+        class="soulink-connected-row"
+      >
+        <div class="soulink-connected-state">
+          <span class="status-pill">
+            <UiIcon name="MessagesSquare" :size="15" aria-hidden="true" />
+            Soulink
+          </span>
+          <span class="connected-pill">
+            <UiIcon name="Check" :size="14" aria-hidden="true" />
+            Connected
+          </span>
+        </div>
+
+        <div class="soulink-actions">
+          <a
+            v-if="connection?.soulinkChatUrl"
+            class="soulink-chat-link"
+            :href="connection.soulinkChatUrl"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open chat
+          </a>
+          <Button
+            variant="outline"
+            size="small"
+            type="button"
+            :disabled="disconnectLoading"
+            @click="disconnectSoulink"
+          >
+            <template #icon>
+              <UiIcon name="Unplug" :size="17" aria-hidden="true" />
+            </template>
+            {{ disconnectLoading ? "Disconnecting..." : "Disconnect" }}
+          </Button>
+        </div>
+      </div>
+
+      <div
+        v-else-if="variant === 'default'"
         class="status-row"
-        :class="{ verified: connection?.status === 'active' }"
       >
         <span class="status-pill">
           <UiIcon name="MessagesSquare" :size="15" aria-hidden="true" />
@@ -232,9 +271,8 @@ defineExpose({
         </div>
       </dl>
 
-      <div class="soulink-actions">
+      <div v-if="!isConnected" class="soulink-actions">
         <Button
-          v-if="!isConnected"
           variant="primary"
           size="small"
           type="button"
@@ -245,28 +283,6 @@ defineExpose({
             <UiIcon name="PlugZap" :size="17" aria-hidden="true" />
           </template>
           {{ setupLoading ? "Connecting..." : "Connect Soulink" }}
-        </Button>
-        <a
-          v-if="connection?.soulinkChatUrl"
-          class="soulink-chat-link"
-          :href="connection.soulinkChatUrl"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Open chat
-        </a>
-        <Button
-          v-if="isConnected"
-          variant="outline"
-          size="small"
-          type="button"
-          :disabled="disconnectLoading"
-          @click="disconnectSoulink"
-        >
-          <template #icon>
-            <UiIcon name="Unplug" :size="17" aria-hidden="true" />
-          </template>
-          {{ disconnectLoading ? "Disconnecting..." : "Disconnect" }}
         </Button>
       </div>
 
@@ -287,7 +303,8 @@ defineExpose({
   gap: 14px;
 }
 
-.status-row {
+.status-row,
+.soulink-connected-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -295,11 +312,19 @@ defineExpose({
   margin-top: 12px;
 }
 
-.status-row.verified {
-  color: var(--ui-text, var(--color-text));
+.soulink-connected-row {
+  justify-content: space-between;
 }
 
-.status-pill {
+.soulink-connected-state {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-pill,
+.connected-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -309,6 +334,12 @@ defineExpose({
   font-weight: 600;
   border: 1px solid var(--ui-border, var(--color-border));
   background: var(--ui-surface-muted, var(--color-surface-muted));
+}
+
+.connected-pill {
+  color: var(--ui-accent-strong, #047857);
+  border-color: color-mix(in srgb, var(--ui-accent, #10b981) 28%, transparent);
+  background: var(--ui-accent-soft, rgba(16, 185, 129, 0.1));
 }
 
 .soulink-compact-hint {
