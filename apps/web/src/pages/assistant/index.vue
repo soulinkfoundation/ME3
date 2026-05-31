@@ -156,10 +156,17 @@ const suggestedRecipeOrder = [
   "weekly-review",
   "email-triage",
   "invoice-receipt-triage",
-  "booking-reminder",
 ];
 
 const suggestedRecipeIds = new Set(suggestedRecipeOrder);
+const addedRecipeIds = computed(
+  () =>
+    new Set(
+      jobs.value
+        .map((job) => job.recipeId)
+        .filter((recipeId): recipeId is string => Boolean(recipeId)),
+    ),
+);
 
 const sortedJobs = computed(() =>
   [...jobs.value].sort((a, b) => {
@@ -172,7 +179,11 @@ const sortedJobs = computed(() =>
 const suggestedRecipes = computed(() => {
   const order = new Map(suggestedRecipeOrder.map((id, index) => [id, index]));
   return recipes.value
-    .filter((recipe) => suggestedRecipeIds.has(recipe.id))
+    .filter(
+      (recipe) =>
+        suggestedRecipeIds.has(recipe.id) &&
+        !addedRecipeIds.value.has(recipe.id),
+    )
     .sort(
       (a, b) =>
         (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999) ||
@@ -311,7 +322,7 @@ async function duplicateJob(job: AssistantJob) {
 
 async function archiveJob(job: AssistantJob) {
   const confirmed = window.confirm(
-    `Archive "${job.name}"? Results and run history stay in Mission Control.`,
+    `Remove "${job.name}"? Results and run history stay in Mission Control.`,
   );
   if (!confirmed) return;
 
@@ -321,7 +332,7 @@ async function archiveJob(job: AssistantJob) {
     if (selectedJobId.value === job.id) {
       closeDetailModal();
     }
-    toastSuccess("Job archived.");
+    toastSuccess("Job removed.");
   });
 }
 
@@ -714,6 +725,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
           <div v-if="loadingRecipes" class="empty-row">
             Loading suggested jobs...
           </div>
+          <div v-else-if="!suggestedRecipes.length" class="empty-row">
+            All suggested jobs have been added.
+          </div>
           <div v-else class="starter-list">
             <article
               v-for="recipe in suggestedRecipes"
@@ -974,8 +988,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
               :disabled="isBusy(`archive:${selectedJob.id}`)"
               @click="archiveJob(selectedJob)"
             >
-              <UiIcon name="Archive" :size="17" />
-              Archive job
+              <UiIcon name="Trash2" :size="17" />
+              Remove job
             </button>
           </template>
         </section>

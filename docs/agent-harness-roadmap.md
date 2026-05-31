@@ -75,7 +75,6 @@ Test only the current visible starter set:
 2. Weekly Review
 3. Email Triage
 4. Invoice and Receipt Triage
-5. Booking Reminder
 
 For each starter, record whether it can be added, opened, run, blocked with a clear reason,
 and surfaced in Mission Control. Do not start the custom builder until this pass is complete.
@@ -134,11 +133,10 @@ These are the only starter jobs that should appear in the Add Job UI for now.
 | Weekly Review | Summarize the week and carry-over choices. | Needs full QA and result surface review. |
 | Email Triage | Summarize inbox messages and draft useful replies. | Setup readiness and concrete email adapter work. |
 | Invoice and Receipt Triage | Find likely invoices/receipts and create review tasks. | Setup readiness and concrete email extraction path. |
-| Booking Reminder | Prepare meeting/booking context and follow-up tasks. | Calendar/event adapter and notification delivery. |
 
 Do not reintroduce standalone starters such as Project Digest, Approval Sweep, Memory Review,
-Setup Health Check, Relationship Follow-Up, Source Monitor, or Email Watch until they have a
-clear owner-facing reason and concrete execution path.
+Setup Health Check, Relationship Follow-Up, Source Monitor, Email Watch, or Booking Reminder
+until they have a clear owner-facing reason and concrete execution path.
 
 ## Documentation Map
 

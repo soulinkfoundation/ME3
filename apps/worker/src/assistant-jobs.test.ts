@@ -66,6 +66,12 @@ describe("assistant jobs persistence", () => {
     const listed = await listAssistantJobs(env, "owner");
     expect(listed.jobs).toHaveLength(1);
     expect(listed.jobs[0]?.name).toBe("Weekly Review");
+    await expect(
+      createAssistantJob(env, "owner", { recipeId: "weekly-review" }),
+    ).rejects.toMatchObject({
+      message: "That job has already been added.",
+      status: 409,
+    });
 
     const detail = await getAssistantJob(env, "owner", created.job.id);
     expect(detail.version?.validationStatus).toBe("valid");
@@ -96,6 +102,12 @@ describe("assistant jobs persistence", () => {
         packetId: `agent-context:owner:job-run:${run.run.id}`,
       },
     });
+    expect(env.__state.missionAgentRuns[0]?.prompt_summary).toBe(
+      "Weekly Review ran successfully and created a Mission Control result.",
+    );
+    expect(env.__state.missionAgentRuns[0]?.prompt_summary).not.toContain(
+      "ME3 agent context packet",
+    );
 
     await archiveAssistantJob(env, "owner", created.job.id);
     const afterArchive = await listAssistantJobs(env, "owner");
@@ -978,6 +990,16 @@ class FakeStatement {
             result.run_id === values[0] &&
             result.action_id === values[1] &&
             result.idempotency_key === values[2],
+        ) || null
+      ) as T | null;
+    }
+    if (sql.includes("FROM assistant_jobs") && sql.includes("recipe_id = ?")) {
+      return (
+        this.state.jobs.find(
+          (job) =>
+            job.user_id === values[0] &&
+            job.recipe_id === values[1] &&
+            job.status !== "archived",
         ) || null
       ) as T | null;
     }

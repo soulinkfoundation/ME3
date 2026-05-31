@@ -592,7 +592,7 @@ export async function executeAssistantJobRun(env: Env, userId: string, runId: st
   await setAssistantJobRunStatus(env, userId, run.id, {
     status: finalStatus,
     finishedAt,
-    outputPreview: summarizeAssistantJobRunOutput(actionResults),
+    outputPreview: summarizeAssistantJobRunOutput(job, draft, actionResults),
     errorCode: hasFailure ? "action_failed" : null,
     errorMessage: hasFailure ? "One or more Assistant Job actions failed" : null,
     eventType: finalStatus,
@@ -613,7 +613,7 @@ export async function executeAssistantJobRun(env: Env, userId: string, runId: st
     finishedAt,
     context,
     actionResults,
-    outputPreview: summarizeAssistantJobRunOutput(actionResults),
+    outputPreview: summarizeAssistantJobRunOutput(job, draft, actionResults),
   });
 
   return {
@@ -626,6 +626,12 @@ export async function executeAssistantJobRun(env: Env, userId: string, runId: st
 
 export async function createAssistantJob(env: Env, userId: string, body: CreateAssistantJobBody) {
   const draft = normalizeAssistantJobDraft(body);
+  if (normalizeOptionalText(body.recipeId) && !body.draft) {
+    const existing = await findExistingAssistantJobForRecipe(env, userId, draft.recipeId);
+    if (existing) {
+      throw new AssistantJobsInputError("That job has already been added.", 409);
+    }
+  }
   const validation = validateAssistantJobDraft(draft);
   const requestedStatus = normalizeJobStatus(body.status);
   const status = resolveInitialStatus(validation, requestedStatus);
@@ -1138,10 +1144,15 @@ async function createAssistantJobMissionActivity(
   const activityId = missionOutputId(input.run, input.action, "activity");
   const title = missionTextInput(input.action, "title")
     || (defaultActivityType === "assistant_job.review_packet"
-      ? `Review packet: ${input.job.name}`
+      ? `Result: ${input.job.name}`
       : input.action.label)
     || input.job.name;
-  const summary = missionTextInput(input.action, "summary") || input.job.purpose || null;
+  const summary =
+    missionTextInput(input.action, "summary") ||
+    (defaultActivityType === "assistant_job.review_packet"
+      ? `Created a Mission Control result for ${input.job.name}.`
+      : input.job.purpose) ||
+    null;
   const status = missionTextInput(input.action, "status") || "succeeded";
 
   await env.DB.prepare(
@@ -1407,7 +1418,10 @@ async function upsertAssistantJobMissionAgentRun(
         contextPacketId: null,
         contextManifest: null,
       };
-  const promptSummary = input.context?.prompt.text.slice(0, 2000) || input.job.purpose;
+  const promptSummary =
+    input.outputPreview ||
+    input.run.output_preview ||
+    `Ran ${input.job.name}.`;
   const projectId = input.draft.destination.projectId || input.draft.scope.projectId || input.job.project_id;
   const now = new Date().toISOString();
 
@@ -1559,6 +1573,22 @@ function buildInsertVersionStatement(
 async function getAssistantJobRow(env: Env, userId: string, jobId: string) {
   return env.DB.prepare("SELECT * FROM assistant_jobs WHERE id = ? AND user_id = ?")
     .bind(jobId, userId)
+    .first<AssistantJobRow>();
+}
+
+async function findExistingAssistantJobForRecipe(
+  env: Env,
+  userId: string,
+  recipeId: string | null,
+) {
+  if (!recipeId) return null;
+  return env.DB.prepare(
+    `SELECT * FROM assistant_jobs
+     WHERE user_id = ? AND recipe_id = ? AND status != 'archived'
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+  )
+    .bind(userId, recipeId)
     .first<AssistantJobRow>();
 }
 
@@ -2233,7 +2263,11 @@ function failedContextSource(
   });
 }
 
-function summarizeAssistantJobRunOutput(actionResults: SerializedActionResult[]) {
+function summarizeAssistantJobRunOutput(
+  job: AssistantJobRow,
+  draft: AssistantJobDraft,
+  actionResults: SerializedActionResult[],
+) {
   const pending = actionResults.filter((result) => result.status === "pending_approval").length;
   const succeeded = actionResults.filter((result) => result.status === "succeeded").length;
   const failed = actionResults.filter(
@@ -2241,7 +2275,20 @@ function summarizeAssistantJobRunOutput(actionResults: SerializedActionResult[])
   ).length;
   if (pending > 0) return `${pending} action${pending === 1 ? "" : "s"} waiting for approval`;
   if (failed > 0) return `${failed} action${failed === 1 ? "" : "s"} failed`;
-  return `${succeeded} action${succeeded === 1 ? "" : "s"} completed`;
+  const createdResult = draft.actions.some(
+    (action) => action.capabilityId === "mission.review_packet.create",
+  );
+  const createdTask = draft.actions.some(
+    (action) => action.capabilityId === "mission.task.create",
+  );
+  const createdParts = [
+    createdResult ? "created a Mission Control result" : null,
+    createdTask ? "created follow-up tasks" : null,
+  ].filter(Boolean);
+  if (createdParts.length > 0) {
+    return `${job.name} ran successfully and ${createdParts.join(" and ")}.`;
+  }
+  return `${job.name} ran successfully. ${succeeded} action${succeeded === 1 ? "" : "s"} completed.`;
 }
 
 function resolveInitialStatus(
