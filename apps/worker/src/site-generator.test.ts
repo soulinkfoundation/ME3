@@ -207,7 +207,8 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("--accent:#3d9b7c");
     expect(files["index.html"]).toContain(".cta-button.primary{background:var(--accent);color:#ffffff}");
     expect(files["index.html"]).toContain(".cta-button{display:flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:14px 18px;border-radius:var(--radius-md)");
-    expect(files["index.html"]).toContain(".testimonials,.booking,.newsletter,.content{margin:32px 0;padding:24px;border-radius:var(--radius);background:rgba(0,0,0,.055)}");
+    expect(files["index.html"]).toContain(".testimonials,.booking,.newsletter{margin:32px 0;padding:24px;border-radius:var(--radius);background:rgba(0,0,0,.055)}");
+    expect(files["index.html"]).toContain(".content{margin:32px 0;padding:32px;background:transparent;border-radius:0}");
     expect(files["index.html"]).toContain(".booking-card{border:2px solid var(--border);border-radius:var(--radius-md)");
     expect(files["index.html"]).toContain(".newsletter button{font:inherit;font-weight:800;border:0;border-radius:var(--radius-md);background:var(--accent);color:#ffffff");
   });
