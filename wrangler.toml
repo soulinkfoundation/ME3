@@ -47,19 +47,9 @@ max_retries = 0
 name = "EMAIL"
 
 [vars]
-# Optional custom-domain setup. Leave these commented until you attach the
-# matching hostnames to this Worker in Cloudflare. Core infers:
-# - me3.yourdomain.com for the private app/login
-# - api.yourdomain.com for API URLs and me.json action links
-# - www.yourdomain.com for the public site
+# Optional custom-domain setup. Set this root domain after attaching
+# me3.yourdomain.com, api.yourdomain.com, and www.yourdomain.com to this Worker.
 # ME3_CUSTOM_DOMAIN = "yourdomain.com"
-
-# Advanced installs can override inferred hosts/origins when needed:
-# ME3_SITE_HOST = "custom-public-host.com"
-# ME3_ADMIN_HOST = "admin.custom-public-host.com"
-# ME3_API_HOST = "api.custom-public-host.com"
-# CORE_WEB_ORIGIN = "https://admin.custom-public-host.com"
-# CORE_API_ORIGIN = "https://api.custom-public-host.com"
 
 # TELEGRAM_BOT_USERNAME = "your_me3_bot"
 # Optional Telegram agent channel. Store these with `wrangler secret put`,
