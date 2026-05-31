@@ -143,10 +143,6 @@ const progressSteps = computed(() =>
   }),
 );
 
-const visibleSteps = computed(() =>
-  currentStep.value === 1 ? [progressSteps.value[0]] : progressSteps.value,
-);
-
 function normalizeUsername(value: string): string {
   return value
     .trim()
@@ -415,7 +411,7 @@ onBeforeUnmount(clearUsernameCheck);
       </div>
       <div class="progress-steps">
         <button
-          v-for="step in visibleSteps"
+          v-for="step in progressSteps"
           :key="step.name"
           type="button"
           class="progress-step"
@@ -677,7 +673,8 @@ onBeforeUnmount(clearUsernameCheck);
   position: relative;
   width: 100%;
   box-sizing: border-box;
-  padding: 24px 24px 6px;
+  padding: 24px 24px 34px;
+  overflow: visible;
 }
 
 .progress-track {
@@ -715,6 +712,7 @@ onBeforeUnmount(clearUsernameCheck);
   background: none;
   color: var(--ui-text-muted, var(--color-text-muted));
   cursor: default;
+  overflow: visible;
 }
 
 .progress-step.is-jumpable {
@@ -771,8 +769,8 @@ onBeforeUnmount(clearUsernameCheck);
 .progress-step-tooltip {
   position: absolute;
   left: 50%;
-  bottom: calc(100% + 10px);
-  transform: translate(-50%, 8px);
+  top: calc(100% + 8px);
+  transform: translate(-50%, -4px);
   padding: 6px 10px;
   border-radius: 999px;
   background: var(--ui-text, var(--color-text));
@@ -793,7 +791,7 @@ onBeforeUnmount(clearUsernameCheck);
   content: "";
   position: absolute;
   left: 50%;
-  top: calc(100% - 2px);
+  top: -3px;
   width: 8px;
   height: 8px;
   background: var(--ui-text, var(--color-text));
@@ -1006,7 +1004,7 @@ onBeforeUnmount(clearUsernameCheck);
 
 @media (max-width: 640px) {
   .progress-bar {
-    padding: 18px 14px 4px;
+    padding: 18px 14px 30px;
   }
 
   .progress-track {

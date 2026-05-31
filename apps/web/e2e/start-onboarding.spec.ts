@@ -222,6 +222,16 @@ test.describe("/start onboarding wizard", () => {
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Exit" })).toHaveCount(0);
     await expect(page.locator(".step-indicator")).toHaveCount(0);
+    await expect(page.locator(".progress-step")).toHaveCount(3);
+
+    await page.locator(".progress-step").first().hover();
+    const tooltipBox = await page
+      .locator(".progress-step")
+      .first()
+      .locator(".progress-step-tooltip")
+      .boundingBox();
+    expect(tooltipBox).not.toBeNull();
+    expect(tooltipBox?.y).toBeGreaterThanOrEqual(0);
   });
 
   test("validates profile step before allowing publish", async ({ page }) => {
