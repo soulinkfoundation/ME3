@@ -269,6 +269,7 @@ type CoreAgentChatEnv = {
   ME3_AI_DEFAULT_MODEL?: string;
   ME3_AI_CHAT_PROVIDER?: string;
   ME3_AI_CHAT_MODEL?: string;
+  ME3_AI_CHAT_BACKUP_MODEL?: string;
   CORE_API_ORIGIN?: string;
   CORE_WEB_ORIGIN?: string;
 };
@@ -507,12 +508,13 @@ type AiProviderId = "workers-ai" | "openai" | "anthropic";
 type AiRoute = {
   providerId: AiProviderId;
   model: string;
+  backupModel: string | null;
   apiKey: string | null;
   ai: CoreAgentChatEnv["AI"] | null;
   configured: boolean;
 };
 
-const DEFAULT_WORKERS_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
+const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-4.7-flash";
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest";
 const INSTALL_ENCRYPTION_KEY_NAME = "TOKEN_ENCRYPTION_KEY";
@@ -2212,29 +2214,47 @@ async function runModelTurn(
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
   turnId: string,
 ): Promise<AgentSandboxDispatchResponse> {
-  try {
-    const replyText =
-      route.providerId === "openai"
-        ? await runOpenAi(route, messages)
-        : route.providerId === "anthropic"
-          ? await runAnthropic(route, messages)
-        : await runWorkersAi(route, messages);
+  const attempts =
+    route.providerId === "workers-ai" && route.backupModel && route.backupModel !== route.model
+      ? [route.model, route.backupModel]
+      : [route.model];
+  let lastError: unknown = null;
 
-    return {
-      ok: true,
-      auditId: null,
-      turnId,
-      specialist: "core.agent-chat",
-      replyText,
-      model: route.model,
-      source: route.providerId,
-      fallbackReason: null,
-      debugError: null,
-      emailAction: null,
-      reminderAction: null,
-      contentAction: null,
-      contactsChanged: false,
-    };
+  try {
+    for (const model of attempts) {
+      try {
+        const attemptRoute = { ...route, model };
+        const replyText =
+          route.providerId === "openai"
+            ? await runOpenAi(attemptRoute, messages)
+            : route.providerId === "anthropic"
+              ? await runAnthropic(attemptRoute, messages)
+              : await runWorkersAi(attemptRoute, messages);
+
+        if (!isEmptyModelReply(replyText, attemptRoute)) {
+          return {
+            ok: true,
+            auditId: null,
+            turnId,
+            specialist: "core.agent-chat",
+            replyText,
+            model,
+            source: route.providerId,
+            fallbackReason: null,
+            debugError: null,
+            emailAction: null,
+            reminderAction: null,
+            contentAction: null,
+            contactsChanged: false,
+          };
+        }
+
+        lastError = new Error(replyText);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("Model request failed");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Model request failed";
     return {
@@ -2339,37 +2359,37 @@ async function runWorkersAi(
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
 ): Promise<string> {
   if (!route.ai) throw new Error("Workers AI binding is not configured");
-  const result = (await route.ai.run(route.model, { messages })) as
-    | { response?: string; result?: { response?: string } }
-    | string
-    | null;
-
-  if (typeof result === "string") return result.trim() || emptyModelReply(route);
-  return (
-    extractModelText(result?.response) ||
-    extractModelText(result?.result?.response) ||
-    emptyModelReply(route)
-  );
+  const result = await route.ai.run(route.model, { messages });
+  return extractModelText(result) || emptyModelReply(route);
 }
 
 function extractModelText(value: unknown): string {
   if (typeof value === "string") return value.trim();
-  if (Array.isArray(value)) {
-    return value.map((part) => extractModelText(part)).join("").trim();
-  }
+  if (Array.isArray(value)) return value.map((part) => extractModelText(part)).join("").trim();
   if (!value || typeof value !== "object") return "";
 
   const record = value as Record<string, unknown>;
   return (
     extractModelText(record.text) ||
     extractModelText(record.output_text) ||
+    extractModelText(record.response) ||
     extractModelText(record.content) ||
-    extractModelText(record.response)
+    extractModelText(record.parsed) ||
+    extractModelText(record.data) ||
+    extractModelText(record.message) ||
+    extractModelText(record.choices) ||
+    extractModelText(record.delta) ||
+    extractModelText(record.result) ||
+    extractModelText(record.output)
   );
 }
 
 function emptyModelReply(route: AiRoute): string {
   return `I reached ${route.providerId} (${route.model}), but it returned an empty reply. Check Account > AI model or try another model.`;
+}
+
+function isEmptyModelReply(replyText: string, route: AiRoute): boolean {
+  return replyText === emptyModelReply(route);
 }
 
 async function resolveAiRoute(
@@ -2391,6 +2411,11 @@ async function resolveAiRoute(
     normalizeModel(stored?.model) ||
     envModel ||
     defaultModelForProvider(providerId);
+  const backupModel =
+    providerId === "workers-ai"
+      ? normalizeModel(env.ME3_AI_CHAT_BACKUP_MODEL) ||
+        (model !== DEFAULT_WORKERS_AI_MODEL ? DEFAULT_WORKERS_AI_MODEL : null)
+      : null;
   const apiKey =
     providerId === "openai"
       ? env.OPENAI_API_KEY || (await getStoredApiKey(env, ownerId, providerId))
@@ -2401,6 +2426,7 @@ async function resolveAiRoute(
   return {
     providerId,
     model,
+    backupModel,
     apiKey,
     ai: env.AI || null,
     configured:
@@ -2562,7 +2588,7 @@ function buildChatMessages(
     knowledgeContext,
     agentContextPrompt,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
-    "This first Core chat slice can converse and reason, but richer plugin tools are still being wired in.",
+    "Core can converse with the owner and can use bundled first-party API surfaces for reminders, contacts, mailbox, content, calendar, and site workflows as they are routed by the host.",
   ]
     .filter(Boolean)
     .join("\n");

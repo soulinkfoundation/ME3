@@ -237,6 +237,54 @@ describe("Core chat native context", () => {
     expect(modelInput.messages[0]?.content).not.toContain("ME3 agent context packet:");
   });
 
+  it("extracts Workers AI chat-completion shaped replies", async () => {
+    const aiRun = vi.fn(async () => ({
+      choices: [{ message: { content: "Choice-shaped reply." } }],
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput("Are you working?"),
+    );
+
+    expect(response).toMatchObject({
+      replyText: "Choice-shaped reply.",
+      model: "@cf/zai-org/glm-4.7-flash",
+      source: "workers-ai",
+    });
+  });
+
+  it("uses the default Workers AI backup when a configured model is empty", async () => {
+    const aiRun = vi.fn(async (model: string) =>
+      model === "@cf/qwen/qwen3-30b-a3b-fp8"
+        ? { response: "" }
+        : { response: "Backup model reply." },
+    );
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_AI_CHAT_MODEL: "@cf/qwen/qwen3-30b-a3b-fp8",
+      } as never,
+      createStorage(),
+      dispatchInput("Are you working?"),
+    );
+
+    expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
+      "@cf/qwen/qwen3-30b-a3b-fp8",
+      "@cf/zai-org/glm-4.7-flash",
+    ]);
+    expect(response).toMatchObject({
+      replyText: "Backup model reply.",
+      model: "@cf/zai-org/glm-4.7-flash",
+      source: "workers-ai",
+    });
+  });
+
   it("keeps the no-provider fallback working", async () => {
     const env = createEnv({
       contacts: [contactRow("contact-ada", "Ada Lovelace", "ada@example.com", "client")],

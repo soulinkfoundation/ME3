@@ -77,10 +77,10 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     secretLabel: null,
     bindingEnv: "AI",
     recommendedModels: {
-      default: "@cf/qwen/qwen3-30b-a3b-fp8",
-      chat: "@cf/qwen/qwen3-30b-a3b-fp8",
-      reasoning: "@cf/qwen/qwen3-30b-a3b-fp8",
-      extraction: "@cf/qwen/qwen3-30b-a3b-fp8",
+      default: "@cf/zai-org/glm-4.7-flash",
+      chat: "@cf/zai-org/glm-4.7-flash",
+      reasoning: "@cf/zai-org/glm-4.7-flash",
+      extraction: "@cf/zai-org/glm-4.7-flash",
     },
   },
   {

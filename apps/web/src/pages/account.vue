@@ -394,7 +394,7 @@ const openSection = ref({
   plugins: false,
   soulink: false,
 });
-const showAiModelSection = false;
+const showAiModelSection = true;
 
 const customDomainSiteUsername = computed(() => {
   const accountUsername = auth.user?.username || "";

@@ -3692,7 +3692,7 @@ describe("ME3 Core Worker auth", () => {
         expect.objectContaining({
           id: "chat",
           providerId: "workers-ai",
-          model: "@cf/qwen/qwen3-30b-a3b-fp8",
+          model: "@cf/zai-org/glm-4.7-flash",
         }),
       ]),
     );

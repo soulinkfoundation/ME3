@@ -37,6 +37,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/zai-org/glm-4.7-flash",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Cheap",
+    badge: "Default",
     description: "Fast long-context Workers AI model for multilingual chat and summaries.",
   },
   {
@@ -46,7 +47,6 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/qwen/qwen3-30b-a3b-fp8",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Low cost",
-    badge: "Default",
     description: "Friendly first-install default for everyday chat, writing, and light planning.",
   },
   {
