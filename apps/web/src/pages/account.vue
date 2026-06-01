@@ -1229,6 +1229,15 @@ function isPluginEnabled(plugin: PluginRecord) {
   return !canActivatePlugin(plugin);
 }
 
+function hasPluginSetupPanel(plugin: PluginRecord) {
+  return plugin.id === "me3.local-executor";
+}
+
+function localExecutorSetupStatus(plugin: PluginRecord) {
+  if (!isPluginEnabled(plugin)) return "Enable this plugin to start setup.";
+  return "Pair a local runner, add one project policy, then run a safe report-only test.";
+}
+
 async function togglePlugin(plugin: PluginRecord, enabled: boolean) {
   if (enabled) {
     await activatePlugin(plugin);
@@ -2148,6 +2157,23 @@ onMounted(async () => {
                       <span class="plugin-toggle__track" aria-hidden="true" />
                     </label>
                   </div>
+
+                  <section
+                    v-if="hasPluginSetupPanel(plugin)"
+                    class="plugin-setup-panel"
+                    aria-label="Local Executor setup"
+                  >
+                    <div class="plugin-setup-panel__copy">
+                      <h4>Setup</h4>
+                      <p>{{ localExecutorSetupStatus(plugin) }}</p>
+                    </div>
+                    <router-link
+                      class="plugin-setup-panel__link"
+                      to="/mission-control?section=setup"
+                    >
+                      Open Mission Control setup
+                    </router-link>
+                  </section>
                 </article>
               </div>
 
@@ -3408,6 +3434,51 @@ h1 {
   opacity: 0.55;
 }
 
+.plugin-setup-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.plugin-setup-panel__copy {
+  min-width: 0;
+}
+
+.plugin-setup-panel h4 {
+  margin: 0;
+  color: var(--ui-text, var(--color-text));
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.plugin-setup-panel p {
+  margin: 2px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-line-clamp: unset;
+}
+
+.plugin-setup-panel__link {
+  flex-shrink: 0;
+  color: var(--ui-accent-strong, var(--color-accent));
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.plugin-setup-panel__link:hover,
+.plugin-setup-panel__link:focus-visible {
+  text-decoration: underline;
+}
+
 .plugin-meta-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3769,6 +3840,11 @@ h1 {
   .mailbox-config-grid,
   .email-provider-fields {
     grid-template-columns: 1fr;
+  }
+
+  .plugin-setup-panel {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .email-row .button,
