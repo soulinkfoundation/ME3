@@ -210,6 +210,10 @@ describe("assistant jobs persistence", () => {
     const run = await runAssistantJobNow(env, "owner", created.job.id);
 
     expect(run.run.status).toBe("succeeded");
+    expect(run.run.outputPreview).toBe(
+      "Email Triage reviewed 2 inbox messages across 2 threads; 1 needs a reply and 1 flagged important.",
+    );
+    expect(env.__state.missionAgentRuns[0]?.prompt_summary).toBe(run.run.outputPreview);
     expect(run.actionResults).toContainEqual(
       expect.objectContaining({
         actionId: "read-email",

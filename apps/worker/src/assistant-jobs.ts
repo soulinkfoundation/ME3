@@ -724,10 +724,11 @@ export async function executeAssistantJobRun(env: Env, userId: string, runId: st
       ? "failed"
       : "succeeded";
   const finishedAt = finalStatus === "waiting_for_approval" ? null : new Date().toISOString();
+  const outputPreview = await summarizeAssistantJobRunOutput(env, userId, job, draft, actionResults);
   await setAssistantJobRunStatus(env, userId, run.id, {
     status: finalStatus,
     finishedAt,
-    outputPreview: summarizeAssistantJobRunOutput(job, draft, actionResults),
+    outputPreview,
     errorCode: hasFailure ? "action_failed" : null,
     errorMessage: hasFailure ? "One or more Assistant Job actions failed" : null,
     eventType: finalStatus,
@@ -748,7 +749,7 @@ export async function executeAssistantJobRun(env: Env, userId: string, runId: st
     finishedAt,
     context,
     actionResults,
-    outputPreview: summarizeAssistantJobRunOutput(job, draft, actionResults),
+    outputPreview,
   });
 
   return {
@@ -2846,7 +2847,9 @@ function failedContextSource(
   });
 }
 
-function summarizeAssistantJobRunOutput(
+async function summarizeAssistantJobRunOutput(
+  env: Env,
+  userId: string,
   job: AssistantJobRow,
   draft: AssistantJobDraft,
   actionResults: SerializedActionResult[],
@@ -2858,6 +2861,14 @@ function summarizeAssistantJobRunOutput(
   ).length;
   if (pending > 0) return `${pending} action${pending === 1 ? "" : "s"} waiting for approval`;
   if (failed > 0) return `${failed} action${failed === 1 ? "" : "s"} failed`;
+  if (
+    job.recipe_id === "email-triage" ||
+    draft.recipeId === "email-triage" ||
+    draft.actions.some((action) => action.capabilityId === "email.message.read")
+  ) {
+    const triage = await buildEmailTriageResult(env, userId);
+    return `Email Triage reviewed ${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"} across ${triage.threadCount} thread${triage.threadCount === 1 ? "" : "s"}; ${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply and ${triage.importantCount} flagged important.`;
+  }
   const createdResult = draft.actions.some(
     (action) => action.capabilityId === "mission.review_packet.create",
   );
