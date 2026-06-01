@@ -273,7 +273,13 @@ async function provisionCloudflareQueues() {
   if (queueNames.length === 0) return;
 
   printHeader("Provisioning Cloudflare queues");
+  const existingQueueNames = getExistingCloudflareQueueNames();
   for (const queueName of queueNames) {
+    if (existingQueueNames.has(queueName)) {
+      console.log(`OK existing ${queueName}`);
+      continue;
+    }
+
     const result = run("pnpm", ["exec", "wrangler", "queues", "create", queueName], {
       allowFailure: true,
       quiet: true,
@@ -295,6 +301,16 @@ async function provisionCloudflareQueues() {
   }
 }
 
+function getExistingCloudflareQueueNames() {
+  const result = run("pnpm", ["exec", "wrangler", "queues", "list"], {
+    allowFailure: true,
+    quiet: true,
+  });
+  if (result.status !== 0) return new Set();
+
+  return parseQueueListOutput(`${result.stdout || ""}\n${result.stderr || ""}`);
+}
+
 function parseQueueNames(config) {
   const queueNames = new Set();
   const queuePattern = /^\s*(?:queue|dead_letter_queue)\s*=\s*"([^"]+)"\s*$/gm;
@@ -305,6 +321,22 @@ function parseQueueNames(config) {
     match = queuePattern.exec(config);
   }
   return [...queueNames].sort();
+}
+
+function parseQueueListOutput(output) {
+  const names = new Set();
+  for (const line of output.split(/\r?\n/)) {
+    const columns = line
+      .split(/[│|]/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (columns.length < 2 || columns[0] === "id" || /^[-─]+$/.test(columns[0])) {
+      continue;
+    }
+    const name = columns[1];
+    if (/^[a-z0-9][a-z0-9-]{0,62}$/.test(name)) names.add(name);
+  }
+  return names;
 }
 
 function resolveRootDir() {

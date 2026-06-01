@@ -82,7 +82,13 @@ config = ensureEmailSendBinding(config);
 console.log("Configured EMAIL send binding for Cloudflare Email Service.");
 
 if (!args.skipQueues) {
+  const existingQueueNames = getExistingCloudflareQueueNames();
   for (const queueName of parseQueueNames(config)) {
+    if (existingQueueNames.has(queueName)) {
+      console.log(`Configured queue already present -> ${queueName}`);
+      continue;
+    }
+
     runWrangler(["queues", "create", queueName], {
       allowAlreadyExists: true,
       failureMessage: `Could not create Cloudflare queue ${queueName}.`,
@@ -187,6 +193,30 @@ function parseQueueNames(value) {
   return [...queueNames].sort();
 }
 
+function getExistingCloudflareQueueNames() {
+  const output = runWrangler(["queues", "list"], {
+    quiet: true,
+    failureMessage: "Could not list Cloudflare queues.",
+  });
+  return parseQueueListOutput(output);
+}
+
+function parseQueueListOutput(output) {
+  const names = new Set();
+  for (const line of output.split(/\r?\n/)) {
+    const columns = line
+      .split(/[│|]/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (columns.length < 2 || columns[0] === "id" || /^[-─]+$/.test(columns[0])) {
+      continue;
+    }
+    const name = columns[1];
+    if (/^[a-z0-9][a-z0-9-]{0,62}$/.test(name)) names.add(name);
+  }
+  return names;
+}
+
 function printHelp() {
   console.log(`Usage: pnpm init:cloudflare -- [options]
 
@@ -225,8 +255,8 @@ function runWrangler(commandArgs, options = {}) {
     input: options.input,
   });
 
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (!options.quiet && result.stdout) process.stdout.write(result.stdout);
+  if (!options.quiet && result.stderr) process.stderr.write(result.stderr);
 
   const text = `${result.stdout || ""}\n${result.stderr || ""}`;
   if (result.status === 0 || (options.allowAlreadyExists && /already exists/i.test(text))) {
