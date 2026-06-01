@@ -188,6 +188,13 @@ type MissionDaemonStatus = {
   }>;
 };
 
+type LocalExecutorPairingInstructions = {
+  code: string;
+  installCommand: string;
+  sourceCommand: string;
+  expiresAt: string | null;
+};
+
 type CorePluginRecord = {
   id: string;
   enabled: boolean;
@@ -334,6 +341,8 @@ const memory = ref<MissionMemory[]>([]);
 const sources = ref<MissionContextSource[]>([]);
 const setupItems = ref<MissionSetupItem[]>([]);
 const daemon = ref<MissionDaemonStatus | null>(null);
+const localExecutorPairing = ref<LocalExecutorPairingInstructions | null>(null);
+const localExecutorPairingBusy = ref(false);
 const activity = ref<MissionActivity[]>([]);
 const latestBriefing = ref<MissionDailyBriefing | null>(null);
 const loading = ref(false);
@@ -450,6 +459,12 @@ const capturePlaceholder = computed(() => {
 });
 const schedulePickerTitle = computed(() =>
   captureType.value === "event" ? "Schedule event" : "Schedule reminder",
+);
+const localExecutorSetupItem = computed(
+  () => setupItems.value.find((item) => item.id === "local-executor") || null,
+);
+const visibleSetupItems = computed(() =>
+  setupItems.value.filter((item) => item.id !== "local-executor"),
 );
 const scheduledDate = computed(() => {
   const [date] = scheduleDateTime.value.split("T");
@@ -1530,19 +1545,36 @@ async function addSource() {
   }
 }
 
-async function startDaemonPairing() {
+async function startLocalExecutorPairing() {
+  localExecutorPairingBusy.value = true;
   try {
     const response = await api.post<{
       code: string;
       installCommand: string;
-    }>("/mission-control/daemon/pairing/start", {
-      displayName: "Local daemon",
+      expiresAt?: string | null;
+    }>("/local-executor/pairing/start", {
+      displayName: "Local runner",
     });
-    toastSuccess(`Pairing code ${response.code}`);
+    localExecutorPairing.value = {
+      code: response.code,
+      installCommand: response.installCommand,
+      sourceCommand: sourceLocalExecutorCommand(response.installCommand),
+      expiresAt: response.expiresAt || null,
+    };
+    toastSuccess("Local Executor pairing code created.");
     await loadOverview();
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : "Could not start pairing";
+    error.value = e instanceof ApiError ? e.message : "Could not start Local Executor pairing";
+  } finally {
+    localExecutorPairingBusy.value = false;
   }
+}
+
+function sourceLocalExecutorCommand(command: string) {
+  return command.replace(
+    /^me3-local-executor\b/,
+    "node packages/local-executor/bin/me3-local-executor.mjs",
+  );
 }
 
 function captureTypeLabel(type: MissionCaptureType): string {
@@ -2696,11 +2728,55 @@ onBeforeUnmount(() => {
       <div class="simple-sheet">
         <div class="simple-sheet__header">
           <h1>Setup</h1>
-          <button type="button" class="text-button" @click="startDaemonPairing">
-            Pair daemon
+          <button
+            type="button"
+            class="text-button"
+            :disabled="
+              localExecutorPairingBusy ||
+              localExecutorSetupItem?.status === 'optional'
+            "
+            @click="startLocalExecutorPairing"
+          >
+            {{ localExecutorPairingBusy ? "Pairing..." : "Pair local runner" }}
           </button>
         </div>
-        <article v-for="item in setupItems" :key="item.id" class="detail-row">
+        <section class="local-executor-setup">
+          <div class="local-executor-setup__header">
+            <div>
+              <h2>Local Executor</h2>
+              <p>
+                {{
+                  localExecutorSetupItem?.detail ||
+                  "Enable Local Executor from Account plugins, then pair a local runner."
+                }}
+              </p>
+            </div>
+            <router-link
+              v-if="localExecutorSetupItem?.status === 'optional'"
+              class="text-button"
+              to="/account?section=plugins&blocked=me3.local-executor"
+            >
+              Enable plugin
+            </router-link>
+          </div>
+          <div v-if="localExecutorPairing" class="local-executor-command">
+            <p>
+              Pairing code
+              <strong>{{ localExecutorPairing.code }}</strong>
+              <span v-if="localExecutorPairing.expiresAt">
+                expires {{ formatDateTime(localExecutorPairing.expiresAt) }}
+              </span>
+            </p>
+            <pre><code>{{ localExecutorPairing.sourceCommand }}</code></pre>
+            <p>
+              Run this from a ME3 Core checkout on the local computer. After it
+              pairs, add a project policy and run
+              <code>node packages/local-executor/bin/me3-local-executor.mjs once</code>
+              to claim an approved job.
+            </p>
+          </div>
+        </section>
+        <article v-for="item in visibleSetupItems" :key="item.id" class="detail-row">
           <div>
             <h2>{{ item.label }}</h2>
             <p>{{ item.detail }}</p>
@@ -2709,7 +2785,7 @@ onBeforeUnmount(() => {
         </article>
         <section class="daemon-summary">
           <div>
-            <h2>Local daemon</h2>
+            <h2>Legacy local bridge</h2>
             <p>{{ daemon?.connected ? "Connected" : "Not paired" }}</p>
           </div>
           <div class="daemon-summary__paths">
@@ -4067,6 +4143,62 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, #b91c1c, transparent 92%);
 }
 
+.local-executor-setup {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.local-executor-setup__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.local-executor-setup h2 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 15px;
+}
+
+.local-executor-setup p {
+  margin: 4px 0 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.local-executor-command {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.local-executor-command strong,
+.local-executor-command code {
+  color: var(--ui-text);
+}
+
+.local-executor-command pre {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .daemon-summary {
   display: flex;
   justify-content: space-between;
@@ -4287,7 +4419,8 @@ onBeforeUnmount(() => {
   }
 
   .detail-row,
-  .daemon-summary {
+  .daemon-summary,
+  .local-executor-setup__header {
     flex-direction: column;
   }
 
