@@ -70,7 +70,7 @@ describe("CustomDomain", () => {
 
     await wrapper.get(".domain-actions .button.primary").trigger("click");
     await wrapper.get("input.domain-input").setValue("www.example.com");
-    await wrapper.get(".input-row .button.primary").trigger("click");
+    await wrapper.get("form.domain-input-wrapper").trigger("submit");
     await flushPromises();
 
     expect(sitesStore.connectDomain).toHaveBeenCalledWith("testuser", "example.com");

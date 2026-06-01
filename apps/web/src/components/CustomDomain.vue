@@ -6,6 +6,7 @@ const props = defineProps<{
   showSettingsLink?: boolean;
   profilePublished?: boolean;
   initialDomain?: string;
+  embedded?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -41,6 +42,9 @@ async function loadDomainStatus(emitChange = false) {
   domainStatus.value = await sites.getDomainStatus(props.username);
   if (emitChange) emit("domainStatusChanged");
   applyInitialDomain();
+  if (props.embedded && !isConnected.value) {
+    showDomainInput.value = true;
+  }
 }
 
 function applyInitialDomain() {
@@ -374,7 +378,7 @@ watch(
         </div>
 
         <!-- Connect existing domain -->
-        <div v-if="!showDomainInput" class="domain-actions">
+        <div v-if="!showDomainInput && !embedded" class="domain-actions">
           <p v-if="!isProfilePublished" class="domain-requirement">
             Publish your profile before connecting a custom domain.
           </p>
@@ -395,28 +399,37 @@ watch(
         </div>
 
         <!-- Domain input -->
-        <div v-if="showDomainInput" class="domain-input-wrapper">
+        <form
+          v-if="showDomainInput"
+          class="domain-input-wrapper"
+          @submit.prevent="connectDomain"
+        >
           <div class="input-row">
             <input
               v-model="newDomain"
               type="text"
               placeholder="yourdomain.com"
               class="domain-input"
-              @keyup.enter="connectDomain"
             />
             <button
+              v-if="!embedded"
               class="button primary"
+              type="submit"
               :disabled="
                 domainLoading ||
                 !isProfilePublished ||
                 !normalizedDomainInput ||
                 !isValidDomain
               "
-              @click="connectDomain"
             >
               {{ domainLoading ? "Connecting..." : "Connect" }}
             </button>
-            <button class="button text" @click="showDomainInput = false">
+            <button
+              v-if="!embedded"
+              class="button text"
+              type="button"
+              @click="showDomainInput = false"
+            >
               Cancel
             </button>
           </div>
@@ -433,7 +446,7 @@ watch(
             </span>
           </div>
           <p v-if="domainError" class="error">{{ domainError }}</p>
-        </div>
+        </form>
       </div>
     </div>
 

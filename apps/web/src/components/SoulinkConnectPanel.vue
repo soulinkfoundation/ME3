@@ -31,7 +31,7 @@ type SoulinkStatusResponse = {
 
 const props = withDefaults(
   defineProps<{
-    variant?: "default" | "compact";
+    variant?: "default" | "compact" | "inline";
     autoPrepareWhenNotConnected?: boolean;
   }>(),
   {
@@ -194,14 +194,65 @@ defineExpose({
   available,
   configured,
   connection,
+  error,
+  loading,
+  notice,
   loadSoulink,
   setupSoulink,
 });
 </script>
 
 <template>
-  <div class="soulink-connect-panel">
-    <div v-if="loading" class="status-row">Loading Soulink...</div>
+  <div
+    class="soulink-connect-panel"
+    :class="{ 'soulink-connect-panel--inline': variant === 'inline' }"
+  >
+    <div
+      v-if="loading && variant !== 'inline'"
+      class="status-row"
+    >
+      Loading Soulink...
+    </div>
+
+    <template v-else-if="variant === 'inline'">
+      <div class="soulink-inline-actions">
+        <a
+          v-if="isConnected && connection?.soulinkChatUrl"
+          class="soulink-chat-link"
+          :href="connection.soulinkChatUrl"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open chat
+        </a>
+        <Button
+          v-if="isConnected"
+          variant="outline"
+          size="compact"
+          type="button"
+          :disabled="disconnectLoading"
+          @click="disconnectSoulink"
+        >
+          {{ disconnectLoading ? "Disconnecting..." : "Disconnect" }}
+        </Button>
+        <Button
+          v-else
+          variant="primary"
+          size="compact"
+          type="button"
+          :disabled="loading || setupLoading || !canConnect"
+          @click="setupSoulink"
+        >
+          {{
+            loading
+              ? "Loading..."
+              : setupLoading
+                ? "Connecting..."
+                : "Connect"
+          }}
+        </Button>
+      </div>
+    </template>
 
     <template v-else>
       <div
@@ -292,8 +343,18 @@ defineExpose({
       </p>
     </template>
 
-    <p v-if="error" class="error">{{ error }}</p>
-    <p v-if="notice" class="success">{{ notice }}</p>
+    <p
+      v-if="error && variant !== 'inline'"
+      class="error"
+    >
+      {{ error }}
+    </p>
+    <p
+      v-if="notice && variant !== 'inline'"
+      class="success"
+    >
+      {{ notice }}
+    </p>
   </div>
 </template>
 
@@ -301,6 +362,16 @@ defineExpose({
 .soulink-connect-panel {
   display: grid;
   gap: 14px;
+}
+
+.soulink-connect-panel--inline {
+  display: contents;
+}
+
+.soulink-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .status-row,

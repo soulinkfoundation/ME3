@@ -4,7 +4,9 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import CustomDomain from "../components/CustomDomain.vue";
+import Button from "../components/Button.vue";
 import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
+import StatusBadge from "../components/StatusBadge.vue";
 import UiIcon from "../components/UiIcon.vue";
 import {
   useTheme,
@@ -308,12 +310,9 @@ type AssistantSetupItem = {
 
 type AccountSection =
   | "advanced"
-  | "domain"
   | "mailbox"
-  | "ai"
   | "payments"
-  | "plugins"
-  | "soulink";
+  | "plugins";
 
 const auth = useAuthStore();
 const sites = useSitesStore();
@@ -387,12 +386,10 @@ const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
 
 const openSection = ref({
   advanced: false,
-  domain: false,
   mailbox: false,
-  ai: false,
   payments: false,
   plugins: false,
-  soulink: false,
+  signin: false,
 });
 const showAiModelSection = true;
 
@@ -457,32 +454,6 @@ const mailboxStatusLabel = computed(() => {
   }
 });
 
-const mailboxStatusHint = computed(() => {
-  if (!mailbox.value) {
-    return "Create a custom-domain mailbox for inbound mail.";
-  }
-
-  if (mailbox.value.status === "active") {
-    return "Ready for Cloudflare Email Routing.";
-  }
-
-  if (mailbox.value.status === "paused") {
-    return "Mailbox paused.";
-  }
-
-  return "Activate the Core mailbox to receive routed mail.";
-});
-
-const mailboxRoutingBadgeLabel = computed(() => {
-  if (!mailbox.value) return "";
-  if (mailbox.value.forwardingEnabled) {
-    return mailbox.value.forwardingStatus === "verified"
-      ? "Forwarding verified"
-      : "Forwarding pending";
-  }
-  return "Worker route";
-});
-
 const mailboxAliasNormalized = computed(() =>
   normalizeMailboxAlias(mailboxAliasInput.value),
 );
@@ -528,10 +499,6 @@ const mailboxRoutedAddress = computed(() => {
   }
   return "";
 });
-
-const emailRouteAddress = computed(
-  () => emailAddressNormalized.value || mailboxRoutedAddress.value || "name@your-domain.com",
-);
 
 const customDomainSuggestedDomain = computed(
   () => customDomainSite.value?.custom_domain || emailAddressDomain.value || "",
@@ -600,19 +567,8 @@ const soulinkStatusClass = computed(() => {
 
 const pluginSummaryLabel = computed(() => {
   if (pluginsLoading.value) return "Loading";
-  if (plugins.value.length === 0) return "No plugins";
-  const setupRequired = plugins.value.filter(
-    (plugin) => plugin.status === "setup_required",
-  ).length;
-  if (setupRequired > 0) {
-    return `${setupRequired} needs setup`;
-  }
-  const enabled = plugins.value.filter((plugin) => plugin.enabled).length;
-  const comingSoon = plugins.value.filter(isPluginComingSoon).length;
-  if (enabled > 0 && comingSoon > 0) return `${enabled} on, ${comingSoon} soon`;
-  if (enabled > 0) return `${enabled} on`;
-  if (comingSoon > 0) return `${comingSoon} soon`;
-  return `${plugins.value.length} off`;
+  const activeCount = plugins.value.filter((plugin) => plugin.enabled).length;
+  return `${activeCount} active`;
 });
 
 const pluginSummaryStatusClass = computed(() => {
@@ -813,18 +769,6 @@ const paymentsStatusLabel = computed(() => {
 const paymentsStatusClass = computed(() =>
   commerceSettings.value?.stripe.configured ? "active" : "setup_required",
 );
-
-const stripeSourceLabel = computed(() => {
-  const source = commerceSettings.value?.stripe.source;
-  if (source === "environment") return "Wrangler secret";
-  if (source === "stored") return "Account settings";
-  return "Not configured";
-});
-
-const stripeKeyHintLabel = computed(() => {
-  const hint = commerceSettings.value?.stripe.keyHint;
-  return hint ? `Stored key ${hint}` : "No Stripe key saved";
-});
 
 const stripeSecretPlaceholder = computed(() => {
   const hint = commerceSettings.value?.stripe.keyHint;
@@ -1678,13 +1622,16 @@ onMounted(async () => {
     appConnectionsError.value = "ME3.app connection failed. Please try again.";
   }
   if (route.query.section === "soulink" || route.query.section === "telegram") {
-    openSection.value.soulink = true;
+    openSection.value.advanced = true;
   }
   if (route.query.section === "mailbox") {
     openSection.value.mailbox = true;
   }
   if (route.query.section === "domain" || route.query.section === "custom-domain") {
-    openSection.value.domain = true;
+    openSection.value.advanced = true;
+  }
+  if (route.query.section === "ai" || route.query.section === "providers") {
+    openSection.value.advanced = true;
   }
   if (route.query.section === "plugins") {
     openSection.value.plugins = true;
@@ -1698,16 +1645,38 @@ onMounted(async () => {
 <template>
   <div class="account-page">
     <Teleport to="#app-side-nav-mobile-page-controls">
-      <div class="account-mobile-title">Account</div>
+      <div class="account-mobile-nav">
+        <h1 class="account-mobile-nav__title">Account</h1>
+        <div
+          class="theme-segmented account-theme-switch account-mobile-nav__actions"
+          role="radiogroup"
+          aria-label="Interface theme"
+        >
+          <button
+            v-for="option in themeOptions"
+            :key="option.value"
+            type="button"
+            class="theme-segmented__option"
+            :class="{
+              'theme-segmented__option--active':
+                themePreference === option.value,
+            }"
+            role="radio"
+            :aria-checked="themePreference === option.value"
+            :aria-label="`${option.label} theme`"
+            :title="`${option.label} theme`"
+            @click="chooseThemePreference(option.value)"
+          >
+            <UiIcon :name="option.icon" :size="16" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
     </Teleport>
 
     <main class="main">
       <header class="account-header">
         <div>
           <h1>Account</h1>
-          <p class="account-header__subtitle">
-            Set up ME3 so your assistant can understand you and start doing real work.
-          </p>
         </div>
         <div
           class="theme-segmented account-theme-switch"
@@ -1739,12 +1708,7 @@ onMounted(async () => {
       <template v-else>
         <section class="setup-checklist" aria-labelledby="assistant-setup-title">
           <div class="setup-checklist__header">
-            <div>
-              <h2 id="assistant-setup-title">Assistant setup</h2>
-            </div>
-            <router-link class="button secondary link-button-inline" to="/mission-control">
-              First job
-            </router-link>
+            <h2 id="assistant-setup-title">Setup</h2>
           </div>
 
           <div class="setup-checklist__items">
@@ -1766,24 +1730,50 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card account-signin-card primary-section">
-          <div>
-            <h2>Account email</h2>
-            <p class="hint">Used for signing in to this ME3 Core account.</p>
-          </div>
-          <div class="email-row account-email-row">
-            <label class="field account-email-field">
-              <span>Email</span>
-              <input
-                class="input"
-                type="email"
-                :value="auth.user?.email || ''"
-                disabled
-              />
-            </label>
-            <button class="button secondary" type="button" @click="logout">
-              Sign out
-            </button>
+        <section class="card accordion-card signin-section primary-section">
+          <button
+            id="account-trigger-signin"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.signin"
+            aria-controls="account-panel-signin"
+            @click="openSection.signin = !openSection.signin"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Account email</h2>
+              <span class="accordion-header-hint">
+                {{
+                  auth.user?.email ||
+                  "Used for signing in to this ME3 Core account."
+                }}
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-signin"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-signin"
+            :hidden="!openSection.signin"
+          >
+            <p class="hint account-signin-hint">
+              Used for signing in to this ME3 Core account.
+            </p>
+            <div class="email-row account-email-row">
+              <label class="field account-email-field">
+                <span>Email</span>
+                <input
+                  class="input"
+                  type="email"
+                  :value="auth.user?.email || ''"
+                  disabled
+                />
+              </label>
+              <button class="button secondary" type="button" @click="logout">
+                Sign out
+              </button>
+            </div>
           </div>
         </section>
 
@@ -1797,25 +1787,15 @@ onMounted(async () => {
             @click="openSection.mailbox = !openSection.mailbox"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Email</h2>
+              <h2>Mailbox settings</h2>
               <template v-if="mailboxAvailable">
-                <span
-                  class="status-badge"
-                  :class="mailbox?.status || 'pending_setup'"
-                >
-                  {{ mailboxStatusLabel }}
-                </span>
-                <span v-if="mailboxRoutingBadgeLabel" class="status-pill">
-                  {{ mailboxRoutingBadgeLabel }}
-                </span>
-                <span class="accordion-header-hint">
-                  {{ mailboxStatusHint }}
-                </span>
-                <span
-                  class="status-badge compact"
-                  :class="emailProviderSummaryStatusClass"
-                >
-                  Sender: {{ emailProviderSummaryLabel }}
+                <span class="accordion-status-badges">
+                  <StatusBadge :tone="mailbox?.status || 'pending_setup'">
+                    {{ mailboxStatusLabel }}
+                  </StatusBadge>
+                  <StatusBadge :tone="emailProviderSummaryStatusClass">
+                    Sender: {{ emailProviderSummaryLabel }}
+                  </StatusBadge>
                 </span>
               </template>
             </span>
@@ -1847,10 +1827,6 @@ onMounted(async () => {
                     autocomplete="email"
                     spellcheck="false"
                   />
-                  <p class="field-hint">
-                    ME3 receives and sends with this address. Sender name uses
-                    your profile name when available.
-                  </p>
                   <p
                     v-if="emailAddressInput.trim() && !emailAddressIsValid"
                     class="error compact-error"
@@ -1860,50 +1836,27 @@ onMounted(async () => {
                   </p>
                 </label>
 
-                <div class="email-route-summary">
-                  <div>
-                    <span>Cloudflare route</span>
-                    <strong>{{ emailRouteAddress }}</strong>
-                  </div>
-                  <div>
-                    <span>Inbound action</span>
-                    <strong>Send to Worker</strong>
-                  </div>
-                  <div>
-                    <span>Outbound sender</span>
-                    <strong>{{ emailProviderSummaryLabel }}</strong>
-                  </div>
-                </div>
-
                 <details class="email-disclosure">
                   <summary>Forward a copy</summary>
-                  <div class="email-disclosure-body">
-                    <label class="checkbox-row">
+                  <div class="email-disclosure-body email-forwarding-row">
+                    <label class="checkbox-row email-forwarding-row__toggle">
                       <input v-model="mailboxForwardingEnabled" type="checkbox" />
-                      <span>Also forward inbound mail to another inbox</span>
+                      <span>Turn on forwarding</span>
                     </label>
-                    <label class="field">
-                      <span>Forward copy to</span>
-                      <input
-                        v-model="mailboxForwardingEmail"
-                        class="input"
-                        type="email"
-                        :disabled="!mailboxForwardingEnabled"
-                        placeholder="you@example.com"
-                      />
-                    </label>
+                    <input
+                      v-model="mailboxForwardingEmail"
+                      class="input email-forwarding-row__input"
+                      type="email"
+                      :disabled="!mailboxForwardingEnabled"
+                      placeholder="you@example.com"
+                      aria-label="Forward copy to"
+                    />
                   </div>
                 </details>
 
                 <details class="email-disclosure">
                   <summary>Advanced sending</summary>
                   <div class="email-disclosure-body">
-                    <p class="hint">
-                      Cloudflare Email Service is the default. Use another
-                      sender only when this install cannot send through
-                      Cloudflare.
-                    </p>
-
                     <p v-if="!emailProviderEncryptionConfigured" class="error">
                       Install encryption is required before provider tokens can
                       be saved.
@@ -2001,20 +1954,6 @@ onMounted(async () => {
                       </template>
 
                       <label
-                        v-if="selectedEmailProviderId === 'postmark'"
-                        class="field"
-                      >
-                        <span>Message stream</span>
-                        <input
-                          v-model="emailProviderInputs[selectedEmailProviderId].messageStream"
-                          class="input"
-                          type="text"
-                          placeholder="outbound"
-                          spellcheck="false"
-                        />
-                      </label>
-
-                      <label
                         v-if="
                           activeEmailProvider.secretLabel &&
                           selectedEmailProviderId !== 'cloudflare-email'
@@ -2030,18 +1969,15 @@ onMounted(async () => {
                           spellcheck="false"
                           :placeholder="emailProviderSecretPlaceholder"
                         />
-                        <p class="field-hint">
-                          Existing secrets are encrypted at rest and never
-                          returned to the browser.
-                        </p>
                       </label>
                     </div>
                   </div>
                 </details>
 
-                <div class="button-row">
-                  <button
-                    class="button primary"
+                <div class="button-row email-settings__actions">
+                  <Button
+                    tone="green"
+                    size="compact"
                     type="button"
                     :disabled="unifiedEmailSaveDisabled"
                     @click="saveUnifiedEmailSettings"
@@ -2051,15 +1987,16 @@ onMounted(async () => {
                         ? "Saving..."
                         : "Save email"
                     }}
-                  </button>
-                  <button
-                    class="button secondary"
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="compact"
                     type="button"
                     :disabled="emailProviderTestDisabled"
                     @click="sendEmailProviderTestMessage"
                   >
                     {{ emailProviderTesting ? "Sending..." : "Send test email" }}
-                  </button>
+                  </Button>
                 </div>
 
                 <p v-if="activeEmailProvider?.lastTestError" class="error">
@@ -2094,12 +2031,9 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Payments</h2>
-              <span class="status-badge" :class="paymentsStatusClass">
+              <StatusBadge :tone="paymentsStatusClass">
                 {{ paymentsStatusLabel }}
-              </span>
-              <span class="accordion-header-hint">
-                Stripe Checkout for paid bookings
-              </span>
+              </StatusBadge>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -2117,20 +2051,8 @@ onMounted(async () => {
             <template v-else>
               <p class="hint">
                 Add your Stripe secret key here to accept direct paid bookings
-                from your ME3 site. Existing keys are encrypted at rest and
-                never returned to the browser.
+                from your ME3 site.
               </p>
-
-              <div class="payment-summary-row">
-                <div>
-                  <span>Stripe source</span>
-                  <strong>{{ stripeSourceLabel }}</strong>
-                </div>
-                <div>
-                  <span>Key</span>
-                  <strong>{{ stripeKeyHintLabel }}</strong>
-                </div>
-              </div>
 
               <p
                 v-if="
@@ -2195,150 +2117,6 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section
-          v-if="showAiModelSection"
-          class="card accordion-card primary-section"
-        >
-          <button
-            id="account-trigger-ai"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.ai"
-            aria-controls="account-panel-ai"
-            @click="openSection.ai = !openSection.ai"
-          >
-            <span class="accordion-title-wrap accordion-title-flex">
-              <h2>AI model</h2>
-              <span class="status-badge" :class="aiSettingsSummaryStatusClass">
-                {{ aiSettingsSummaryLabel }}
-              </span>
-              <span class="accordion-header-hint">
-                One model for the agent
-              </span>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-ai"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-ai"
-            :hidden="!openSection.ai"
-          >
-            <div v-if="aiSettingsLoading" class="status-row">
-              Loading AI provider settings...
-            </div>
-
-            <template v-else>
-              <p v-if="aiSettingsError" class="error">
-                {{ aiSettingsError }}
-              </p>
-
-              <p class="hint">
-                Choose how smart the ME3 agent should be. The default is free
-                to run with Cloudflare Workers AI; paid models need your own API key.
-              </p>
-
-              <p
-                v-if="!aiEncryptionConfigured"
-                class="error"
-              >
-                Install encryption is created automatically during owner setup.
-                If this remains visible, run the latest migrations and sign in
-                or bootstrap again.
-              </p>
-
-              <div class="ai-routes-panel compact-ai-model-panel">
-                <div class="ai-route-fields">
-                  <label class="field">
-                    <span>Provider</span>
-                    <select
-                      class="input"
-                      :value="aiDefaultRouteInput.providerId"
-                      @change="
-                        handleAgentProviderChange(
-                          ($event.target as HTMLSelectElement).value,
-                        )
-                      "
-                    >
-                      <option
-                        v-for="provider in visibleAiProviders"
-                        :key="provider.id"
-                        :value="provider.id"
-                      >
-                        {{ provider.label }}
-                      </option>
-                    </select>
-                  </label>
-
-                  <label class="field">
-                    <span>Model</span>
-                    <select
-                      class="input"
-                      :value="aiDefaultRouteInput.model"
-                      @change="
-                        handleAgentModelChange(
-                          ($event.target as HTMLSelectElement).value,
-                        )
-                      "
-                    >
-                      <option
-                        v-for="option in visibleAgentModelOptions"
-                        :key="option.id"
-                        :value="option.model"
-                      >
-                        {{ option.label }} · {{ option.costLabel }}
-                      </option>
-                    </select>
-                  </label>
-                </div>
-
-                <p class="selected-model-note">
-                  <strong>{{ selectedAgentModelCostLabel }}</strong>
-                  {{ selectedAgentModelDescription }}
-                </p>
-
-                <label
-                  v-if="selectedAgentProvider?.supportsApiKey"
-                  class="field"
-                >
-                  <span>{{ selectedAgentProvider.label }} API key</span>
-                  <input
-                    v-model="selectedProviderKeyInput"
-                    class="input"
-                    type="password"
-                    autocomplete="off"
-                    spellcheck="false"
-                    :placeholder="
-                      selectedAgentProvider.configured
-                        ? 'Stored key available. Paste a new key to replace it.'
-                        : 'Paste API key'
-                    "
-                  />
-                  <p class="field-hint">
-                    Required for paid models. Existing keys are never shown again.
-                  </p>
-                </label>
-              </div>
-
-              <div class="button-row">
-                <button
-                  class="button primary"
-                  type="button"
-                  :disabled="aiSettingsSaveDisabled"
-                  @click="saveAiSettings"
-                >
-                  {{ aiSettingsSaving ? "Saving..." : "Save AI settings" }}
-                </button>
-              </div>
-
-              <p v-if="aiSettingsMessage" class="success">
-                {{ aiSettingsMessage }}
-              </p>
-            </template>
-          </div>
-        </section>
-
         <section class="card accordion-card plugins-section">
           <button
             id="account-trigger-plugins"
@@ -2350,9 +2128,9 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Plugins</h2>
-              <span class="status-badge" :class="pluginSummaryStatusClass">
+              <StatusBadge :tone="pluginSummaryStatusClass">
                 {{ pluginSummaryLabel }}
-              </span>
+              </StatusBadge>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -2381,9 +2159,9 @@ onMounted(async () => {
                       <p>{{ pluginInfoText(plugin) }}</p>
                     </div>
                     <div class="plugin-row__actions">
-                      <span class="status-badge compact" :class="plugin.status">
+                      <StatusBadge :tone="plugin.status">
                         {{ pluginStatusLabel(plugin) }}
-                      </span>
+                      </StatusBadge>
                       <button
                         v-if="isPluginComingSoon(plugin)"
                         type="button"
@@ -2458,100 +2236,6 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card soulink-section">
-          <button
-            id="account-trigger-soulink"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.soulink"
-            aria-controls="account-panel-soulink"
-            @click="openSection.soulink = !openSection.soulink"
-          >
-            <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Soulink</h2>
-              <span
-                v-if="soulinkPanelRef?.available"
-                class="status-badge"
-                :class="soulinkStatusClass"
-              >
-                {{ soulinkStatusLabel }}
-              </span>
-              <span class="accordion-header-hint">
-                Primary assistant chat on Soulink
-              </span>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-soulink"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-soulink"
-            :hidden="!openSection.soulink"
-          >
-            <SoulinkConnectPanel
-              ref="soulinkPanelRef"
-              variant="default"
-              :auto-prepare-when-not-connected="
-                route.query.section === 'soulink' || route.query.section === 'telegram'
-              "
-            />
-          </div>
-        </section>
-
-        <section class="card accordion-card domain-section">
-          <button
-            id="account-trigger-domain"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.domain"
-            aria-controls="account-panel-domain"
-            @click="openSection.domain = !openSection.domain"
-          >
-            <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Custom domain</h2>
-              <span class="status-badge compact" :class="customDomainStatusClass">
-                {{ customDomainStatusLabel }}
-              </span>
-              <span class="accordion-header-hint">
-                Public profile domain and Cloudflare custom-domain setup
-              </span>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-domain"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-domain"
-            :hidden="!openSection.domain"
-          >
-            <div class="domain-settings">
-              <p class="hint">
-                Your profile works on the Worker URL first. When you are ready,
-                choose the domain people should use for the public site and this
-                panel will generate the Cloudflare custom-domain steps.
-              </p>
-
-              <div v-if="sites.loading" class="status-row">
-                Loading site domain settings...
-              </div>
-              <template v-else-if="customDomainSite">
-                <CustomDomain
-                  :username="customDomainSite.username"
-                  :show-settings-link="false"
-                  :profile-published="Boolean(customDomainSite.published_at)"
-                  :initial-domain="customDomainSuggestedDomain"
-                  @domain-status-changed="() => void sites.fetchSites()"
-                />
-              </template>
-              <p v-else class="error">
-                Create a ME3 site before connecting a custom domain.
-              </p>
-            </div>
-          </div>
-        </section>
-
         <section class="card accordion-card advanced-section">
           <button
             id="account-trigger-advanced"
@@ -2564,7 +2248,7 @@ onMounted(async () => {
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Advanced</h2>
               <span class="accordion-header-hint">
-                App connections and timezone
+                App connections, domain, AI, and timezone
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -2580,69 +2264,90 @@ onMounted(async () => {
               <section class="advanced-subsection">
                 <div class="advanced-subsection__header">
                   <h3>App connections</h3>
-                  <span class="status-badge compact" :class="me3ConnectionStatusClass">
-                    {{ me3ConnectionStatusLabel }}
-                  </span>
                 </div>
 
-                <div v-if="appConnectionsLoading" class="status-row">
-                  Loading app connections...
-                </div>
-
-                <template v-else>
+                <div class="connection-lines">
                   <div
-                    class="connection-row"
-                    :class="{ 'connection-row--connected': me3Connection?.connected }"
+                    v-if="appConnectionsLoading"
+                    class="connection-line connection-line--loading"
                   >
-                    <div class="connection-row__body">
-                      <span
-                        class="status-badge compact"
-                        :class="me3ConnectionStatusClass"
-                      >
+                    <span class="connection-line__title">ME3.app</span>
+                    <span class="connection-line__meta">Loading...</span>
+                  </div>
+                  <div
+                    v-else
+                    class="connection-line"
+                    :class="{
+                      'connection-line--connected': me3Connection?.connected,
+                    }"
+                  >
+                    <span class="connection-line__title">ME3.app</span>
+                    <div class="connection-line__end">
+                      <StatusBadge :tone="me3ConnectionStatusClass">
                         {{ me3ConnectionStatusLabel }}
-                      </span>
-                      <div>
-                        <h3>ME3.app</h3>
-                        <p>
-                          {{
-                            me3Connection?.connected
-                              ? "ME3.app can be used to sign in to this Core install."
-                              : "Link your ME3 account before ME3.app appears on the sign-in screen."
-                          }}
-                        </p>
-                        <p v-if="me3Connection?.origin" class="field-hint">
-                          Identity provider: {{ me3Connection.origin }}
-                        </p>
-                      </div>
+                      </StatusBadge>
+                      <Button
+                        v-if="me3Connection?.connected"
+                        variant="outline"
+                        size="compact"
+                        type="button"
+                        :disabled="
+                          appConnectionsSaving ||
+                          !me3Connection.disconnectAvailable
+                        "
+                        @click="disconnectMe3App"
+                      >
+                        {{
+                          appConnectionsSaving ? "Disconnecting..." : "Disconnect"
+                        }}
+                      </Button>
+                      <Button
+                        v-else
+                        tone="green"
+                        size="compact"
+                        type="button"
+                        :disabled="appConnectionsSaving"
+                        @click="connectMe3App"
+                      >
+                        {{ appConnectionsSaving ? "Opening..." : "Connect" }}
+                      </Button>
                     </div>
-
-                    <button
-                      v-if="me3Connection?.connected"
-                      class="button secondary connection-row__action"
-                      type="button"
-                      :disabled="
-                        appConnectionsSaving || !me3Connection.disconnectAvailable
-                      "
-                      @click="disconnectMe3App"
-                    >
-                      {{ appConnectionsSaving ? "Disconnecting..." : "Disconnect" }}
-                    </button>
-                    <button
-                      v-else
-                      class="button primary connection-row__action"
-                      type="button"
-                      :disabled="appConnectionsSaving"
-                      @click="connectMe3App"
-                    >
-                      {{ appConnectionsSaving ? "Opening..." : "Connect" }}
-                    </button>
                   </div>
 
+                  <div
+                    class="connection-line"
+                    :class="{
+                      'connection-line--connected':
+                        soulinkPanelRef?.connection?.status === 'active',
+                    }"
+                  >
+                    <span class="connection-line__title">Soulink</span>
+                    <div class="connection-line__end">
+                      <StatusBadge
+                        v-if="soulinkPanelRef?.available"
+                        :tone="soulinkStatusClass"
+                      >
+                        {{ soulinkStatusLabel }}
+                      </StatusBadge>
+                      <SoulinkConnectPanel
+                        ref="soulinkPanelRef"
+                        variant="inline"
+                        :auto-prepare-when-not-connected="
+                          route.query.section === 'soulink' ||
+                          route.query.section === 'telegram'
+                        "
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <template v-if="!appConnectionsLoading">
                   <p
                     v-if="
-                      me3Connection?.connected && !me3Connection.disconnectAvailable
+                      me3Connection?.connected &&
+                      !me3Connection.disconnectAvailable
                     "
-                    class="field-hint"
+                    class="field-hint connection-lines__hint"
                   >
                     Add password authentication before disconnecting ME3.app.
                   </p>
@@ -2653,28 +2358,163 @@ onMounted(async () => {
                     {{ appConnectionsError }}
                   </p>
                 </template>
+                <p v-if="soulinkPanelRef?.error" class="error">
+                  {{ soulinkPanelRef.error }}
+                </p>
+                <p v-if="soulinkPanelRef?.notice" class="success">
+                  {{ soulinkPanelRef.notice }}
+                </p>
               </section>
 
               <section class="advanced-subsection">
                 <div class="advanced-subsection__header">
-                  <h3>Regional settings</h3>
+                  <h3>Custom domain</h3>
+                  <StatusBadge :tone="customDomainStatusClass">
+                    {{ customDomainStatusLabel }}
+                  </StatusBadge>
+                </div>
+
+                <div v-if="sites.loading" class="status-row">
+                  Loading site domain settings...
+                </div>
+                <template v-else-if="customDomainSite">
+                  <CustomDomain
+                    embedded
+                    :username="customDomainSite.username"
+                    :show-settings-link="false"
+                    :profile-published="Boolean(customDomainSite.published_at)"
+                    :initial-domain="customDomainSuggestedDomain"
+                    @domain-status-changed="() => void sites.fetchSites()"
+                  />
+                </template>
+                <p v-else class="error">
+                  Create a ME3 site before connecting a custom domain.
+                </p>
+              </section>
+
+              <section v-if="showAiModelSection" class="advanced-subsection">
+                <div class="advanced-subsection__header">
+                  <h3>AI model</h3>
+                  <StatusBadge :tone="aiSettingsSummaryStatusClass">
+                    {{ aiSettingsSummaryLabel }}
+                  </StatusBadge>
+                </div>
+
+                <div v-if="aiSettingsLoading" class="status-row">
+                  Loading AI provider settings...
+                </div>
+
+                <template v-else>
+                  <p v-if="aiSettingsError" class="error">
+                    {{ aiSettingsError }}
+                  </p>
+
+                  <p v-if="!aiEncryptionConfigured" class="error">
+                    Install encryption is created automatically during owner
+                    setup. If this remains visible, run the latest migrations
+                    and sign in or bootstrap again.
+                  </p>
+
+                  <div class="ai-model-row">
+                    <label class="field ai-model-row__field">
+                      <span class="ai-model-row__label">Provider</span>
+                      <select
+                        class="input ai-model-row__input"
+                        :value="aiDefaultRouteInput.providerId"
+                        @change="
+                          handleAgentProviderChange(
+                            ($event.target as HTMLSelectElement).value,
+                          )
+                        "
+                      >
+                        <option
+                          v-for="provider in visibleAiProviders"
+                          :key="provider.id"
+                          :value="provider.id"
+                        >
+                          {{ provider.label }}
+                        </option>
+                      </select>
+                    </label>
+
+                    <label class="field ai-model-row__field">
+                      <span class="ai-model-row__label">Model</span>
+                      <select
+                        class="input ai-model-row__input"
+                        :value="aiDefaultRouteInput.model"
+                        @change="
+                          handleAgentModelChange(
+                            ($event.target as HTMLSelectElement).value,
+                          )
+                        "
+                      >
+                        <option
+                          v-for="option in visibleAgentModelOptions"
+                          :key="option.id"
+                          :value="option.model"
+                        >
+                          {{ option.label }} · {{ option.costLabel }}
+                        </option>
+                      </select>
+                    </label>
+
+                    <Button
+                      tone="green"
+                      size="compact"
+                      type="button"
+                      :disabled="aiSettingsSaveDisabled"
+                      @click="saveAiSettings"
+                    >
+                      {{ aiSettingsSaving ? "Saving..." : "Save" }}
+                    </Button>
+                  </div>
+
+                  <p class="selected-model-note selected-model-note--compact">
+                    <strong>{{ selectedAgentModelCostLabel }}</strong>
+                    {{ selectedAgentModelDescription }}
+                  </p>
+
+                  <label
+                    v-if="selectedAgentProvider?.supportsApiKey"
+                    class="field ai-model-key-field"
+                  >
+                    <span>{{ selectedAgentProvider.label }} API key</span>
+                    <input
+                      v-model="selectedProviderKeyInput"
+                      class="input ai-model-row__input"
+                      type="password"
+                      autocomplete="off"
+                      spellcheck="false"
+                      :placeholder="
+                        selectedAgentProvider.configured
+                          ? 'Paste a new key to replace stored key'
+                          : 'Paste API key'
+                      "
+                    />
+                  </label>
+
+                  <p v-if="aiSettingsMessage" class="success">
+                    {{ aiSettingsMessage }}
+                  </p>
+                </template>
+              </section>
+
+              <section class="advanced-subsection">
+                <div class="advanced-subsection__header">
+                  <h3>Set Timezone</h3>
                   <span class="accordion-header-hint">
                     {{ timezoneDisplay }}
                   </span>
                 </div>
 
-                <p class="hint">
-                  Agent replies follow your locale preference, and scheduled jobs,
-                  briefings, and account-level dates use your timezone.
-                </p>
-                <div class="timezone-grid">
-                  <label class="field">
-                    <span>Timezone</span>
+                <div class="timezone-row">
+                  <label class="field timezone-row__field">
                     <input
                       v-model="timezoneInput"
-                      class="input"
+                      class="input timezone-row__input"
                       type="text"
                       list="account-timezone-options"
+                      aria-label="Timezone"
                       placeholder="Start typing a timezone"
                       spellcheck="false"
                     />
@@ -2688,24 +2528,25 @@ onMounted(async () => {
                       </option>
                     </datalist>
                   </label>
-                </div>
-
-                <div class="button-row">
-                  <button
-                    class="button secondary"
-                    type="button"
-                    @click="detectTimezoneValue"
-                  >
-                    Detect from browser
-                  </button>
-                  <button
-                    class="button primary"
-                    type="button"
-                    :disabled="saveDisabled"
-                    @click="saveSettings"
-                  >
-                    {{ saving ? "Saving..." : "Save regional settings" }}
-                  </button>
+                  <div class="timezone-row__actions">
+                    <Button
+                      variant="outline"
+                      size="compact"
+                      type="button"
+                      @click="detectTimezoneValue"
+                    >
+                      Detect from browser
+                    </Button>
+                    <Button
+                      tone="green"
+                      size="compact"
+                      type="button"
+                      :disabled="saveDisabled"
+                      @click="saveSettings"
+                    >
+                      {{ saving ? "Saving..." : "Save" }}
+                    </Button>
+                  </div>
                 </div>
 
                 <p v-if="message" class="success">{{ message }}</p>
@@ -2814,7 +2655,6 @@ onMounted(async () => {
 }
 
 .account-header {
-  order: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -2828,24 +2668,24 @@ h1 {
   line-height: 1.1;
 }
 
-.account-header__subtitle {
-  max-width: 520px;
-  margin: 8px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 14px;
-  line-height: 1.5;
-}
-
 .account-theme-switch {
   flex: 0 0 auto;
 }
 
-.account-mobile-title {
+.account-mobile-nav {
   display: none;
 }
 
+.account-mobile-nav__title {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+}
+
 .setup-checklist {
-  order: 1;
   display: grid;
   gap: 14px;
   margin-bottom: 28px;
@@ -2938,16 +2778,12 @@ h1 {
   order: 3;
 }
 
-.domain-section {
+.advanced-section {
   order: 4;
 }
 
-.advanced-section {
-  order: 5;
-}
-
 .danger-section.advanced-section {
-  order: 6;
+  order: 5;
 }
 
 .card {
@@ -2998,6 +2834,13 @@ h1 {
   min-width: 0;
 }
 
+.accordion-status-badges {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .accordion-header-hint {
   flex: 1 1 200px;
   min-width: 0;
@@ -3021,15 +2864,8 @@ h1 {
   padding: 10px 16px 16px;
 }
 
-.account-signin-card {
-  display: grid;
-  gap: 14px;
-  padding: 18px 20px;
-}
-
-.account-signin-card h2 {
-  margin: 0;
-  font-size: 18px;
+.account-signin-hint {
+  margin: 0 0 14px;
 }
 
 .email-row {
@@ -3064,19 +2900,68 @@ h1 {
   font-size: 14px;
 }
 
-.timezone-grid {
-  display: grid;
-  gap: 16px;
+.timezone-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.timezone-row__field {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+}
+
+.timezone-row__input {
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.timezone-row__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ai-model-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-model-row__field {
+  flex: 1 1 180px;
+  min-width: 0;
+  gap: 4px;
+  margin: 0;
+}
+
+.ai-model-row__label {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ai-model-row__input {
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.ai-model-key-field {
+  gap: 6px;
+}
+
+.selected-model-note--compact {
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .advanced-settings {
   display: grid;
   gap: 20px;
-}
-
-.domain-settings {
-  display: grid;
-  gap: 14px;
 }
 
 .advanced-subsection {
@@ -3169,6 +3054,11 @@ h1 {
   gap: 16px;
 }
 
+.email-settings__actions {
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .email-address-field {
   max-width: 680px;
 }
@@ -3179,36 +3069,6 @@ h1 {
 
 .compact-error {
   margin: 0;
-  font-size: 13px;
-}
-
-.email-route-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.email-route-summary div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 8px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-}
-
-.email-route-summary span {
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.email-route-summary strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--ui-text, var(--color-text));
   font-size: 13px;
 }
 
@@ -3229,6 +3089,24 @@ h1 {
   display: grid;
   gap: 14px;
   padding-top: 14px;
+}
+
+.email-forwarding-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.email-forwarding-row__toggle {
+  flex-shrink: 0;
+}
+
+.email-forwarding-row__input {
+  flex: 1 1 200px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 12px;
 }
 
 .mailbox-panel {
@@ -3300,18 +3178,24 @@ h1 {
   margin-top: 10px;
 }
 
-.connection-row {
+.connection-lines {
+  display: grid;
+  gap: 8px;
+}
+
+.connection-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px;
+  gap: 12px;
+  min-height: 40px;
+  padding: 8px 12px;
   border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 12px);
+  border-radius: var(--ui-radius-sm, 8px);
   background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
-.connection-row--connected {
+.connection-line--connected {
   border-color: color-mix(
     in oklab,
     var(--ui-accent, #4caf50) 34%,
@@ -3324,59 +3208,29 @@ h1 {
   );
 }
 
-.connection-row__body {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+.connection-line__title {
   min-width: 0;
-}
-
-.connection-row h3 {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 16px;
-}
-
-.connection-row p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.connection-row__action {
-  flex: 0 0 auto;
-}
-
-.payment-summary-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 16px;
-}
-
-.payment-summary-row div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 8px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-}
-
-.payment-summary-row span {
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.payment-summary-row strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
   color: var(--ui-text, var(--color-text));
   font-size: 14px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.connection-line__meta {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+}
+
+.connection-line__end {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.connection-lines__hint {
+  margin: 8px 0 0;
 }
 
 .payment-key-field {
@@ -3601,27 +3455,6 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.ai-routes-panel h3 {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 16px;
-}
-
-.ai-routes-panel {
-  display: grid;
-  gap: 14px;
-  margin-top: 16px;
-  padding: 16px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 12px);
-}
-
-.ai-route-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 10px;
-}
-
 .selected-model-note {
   margin: 0;
   color: var(--ui-text-muted, var(--color-text-muted));
@@ -3637,10 +3470,6 @@ h1 {
   background: var(--ui-accent-soft, rgba(76, 175, 80, 0.1));
   color: var(--ui-accent-strong, #2e7d32);
   font-size: 12px;
-}
-
-.compact-ai-model-panel {
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
 .recommended-card {
@@ -3740,76 +3569,6 @@ h1 {
   border-radius: 12px;
   background: var(--color-border);
   color: var(--color-text-muted);
-}
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(128, 128, 128, 0.14);
-  color: var(--color-text);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: capitalize;
-}
-
-.status-badge.active {
-  background: rgba(76, 175, 80, 0.14);
-  color: #2e7d32;
-}
-
-.status-badge.installed {
-  background: rgba(76, 175, 80, 0.14);
-  color: #2e7d32;
-}
-
-.status-badge.forwarded,
-.status-badge.sent,
-.status-badge.approved,
-.status-badge.received {
-  background: rgba(76, 175, 80, 0.14);
-  color: #2e7d32;
-}
-
-.status-badge.pending_setup,
-.status-badge.setup_required,
-.status-badge.pending,
-.status-badge.pending_approval {
-  background: rgba(255, 179, 0, 0.16);
-  color: #9a6700;
-}
-
-.status-badge.coming_soon {
-  background: rgba(90, 101, 116, 0.14);
-  color: var(--color-text-muted);
-}
-
-.status-badge.paused,
-.status-badge.disconnected,
-.status-badge.rejected,
-.status-badge.failed,
-.status-badge.dropped {
-  background: rgba(229, 57, 53, 0.14);
-  color: #c62828;
-}
-
-.status-badge.compact {
-  padding: 4px 8px;
-  font-size: 11px;
-}
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--color-text);
-  color: var(--color-bg);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .success {
@@ -3917,39 +3676,63 @@ h1 {
   gap: 12px;
 }
 
+@media (max-width: 959px) {
+  .account-header {
+    display: none;
+  }
+
+  .account-mobile-nav {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+  }
+
+  .account-mobile-nav__actions {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+  }
+}
+
 @media (max-width: 720px) {
   .main {
     padding: 16px;
   }
 
-  .account-header {
-    align-items: center;
-    justify-content: flex-end;
-    margin-bottom: 16px;
-  }
-
-  .account-header > div:first-child {
-    display: none;
-  }
-
-  .account-mobile-title {
-    display: block;
-    min-width: 0;
-    overflow: hidden;
-    color: var(--color-text);
-    font-size: 15px;
-    font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .danger-card,
   .email-row,
-  .connection-row,
-  .connection-row__body,
+  .connection-line,
   .plugin-row__header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .connection-line__end {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .timezone-row {
+    align-items: stretch;
+  }
+
+  .timezone-row__actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .ai-model-row {
+    align-items: stretch;
+  }
+
+  .ai-model-row__field {
+    flex-basis: 100%;
   }
 
   .plugin-row__badges {
@@ -3959,18 +3742,11 @@ h1 {
   .plugin-meta-grid,
   .plugin-detail-grid,
   .mailbox-config-grid,
-  .email-provider-fields,
-  .email-route-summary,
-  .payment-summary-row {
-    grid-template-columns: 1fr;
-  }
-
-  .ai-route-fields {
+  .email-provider-fields {
     grid-template-columns: 1fr;
   }
 
   .email-row .button,
-  .connection-row__action,
   .danger-card .button {
     width: 100%;
   }
