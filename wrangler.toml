@@ -83,6 +83,9 @@ crons = ["* * * * *"]
 [[send_email]]
 name = "EMAIL"
 
+[vars]
+ME3_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app"
+
 [assets]
 directory = "apps/web/dist"
 binding = "ASSETS"

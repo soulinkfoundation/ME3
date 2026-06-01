@@ -77,3 +77,4 @@ ME3_AI_CHAT_BACKUP_MODEL = "@cf/zai-org/glm-4.7-flash"
 # Optional override for the hosted Soulink assistant chat connector.
 # Defaults to https://soulinkfoundation.org.
 # SOULINK_API_ORIGIN = "https://soulinkfoundation.org"
+ME3_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app"
