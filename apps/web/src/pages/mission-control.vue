@@ -380,6 +380,7 @@ const accountsLoading = ref(false);
 const accountsSaving = ref(false);
 const accountsImporting = ref(false);
 const accountsSyncing = ref(false);
+const accountsModalOpen = ref(false);
 const accountsError = ref("");
 const accountsMessage = ref("");
 const accountsTotal = ref(0);
@@ -525,7 +526,7 @@ const accountsFormDisabled = computed(
     accountsSaving.value ||
     !accountsForm.value.date ||
     !accountsForm.value.description.trim() ||
-    !accountsForm.value.amount.trim(),
+    !normalizeAccountsAmountInput(accountsForm.value.amount),
 );
 const selectedArchiveEntry = computed(
   () =>
@@ -673,6 +674,11 @@ async function loadAccounts() {
 
 async function saveAccountEntry() {
   if (accountsFormDisabled.value) return;
+  const amountValue = Number(normalizeAccountsAmountInput(accountsForm.value.amount));
+  if (!Number.isFinite(amountValue) || amountValue <= 0) {
+    accountsError.value = "Amount must be greater than zero";
+    return;
+  }
   accountsSaving.value = true;
   accountsError.value = "";
   accountsMessage.value = "";
@@ -682,12 +688,13 @@ async function saveAccountEntry() {
       date: accountsForm.value.date,
       description: accountsForm.value.description.trim(),
       categoryId: accountsForm.value.categoryId || null,
-      amountCents: Math.round(Number(accountsForm.value.amount) * 100),
+      amountCents: Math.round(amountValue * 100),
       currency: accountsForm.value.currency.trim().toUpperCase() || "USD",
       status: accountsForm.value.status,
       notes: accountsForm.value.notes.trim() || null,
     });
     accountsForm.value = emptyAccountsForm(accountsType.value);
+    accountsModalOpen.value = false;
     accountsOffset.value = 0;
     accountsMessage.value = "Entry added.";
     await loadAccounts();
@@ -696,6 +703,17 @@ async function saveAccountEntry() {
   } finally {
     accountsSaving.value = false;
   }
+}
+
+function openAccountsModal() {
+  accountsForm.value = emptyAccountsForm(accountsType.value);
+  accountsError.value = "";
+  accountsModalOpen.value = true;
+}
+
+function closeAccountsModal() {
+  if (accountsSaving.value) return;
+  accountsModalOpen.value = false;
 }
 
 async function deleteAccountEntry(entry: FinancialEntry) {
@@ -1499,6 +1517,11 @@ function emptyAccountsForm(type: FinancialEntryType): AccountsEntryForm {
   };
 }
 
+function normalizeAccountsAmountInput(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
 function accountStatusLabel(status: FinancialEntryStatus): string {
   if (status === "needs_review") return "Needs review";
   return status.charAt(0).toUpperCase() + status.slice(1);
@@ -1667,6 +1690,10 @@ function handleWindowKeydown(event: KeyboardEvent) {
   }
   if (event.key === "Escape" && projectModalOpen.value) {
     closeProjectModal();
+    return;
+  }
+  if (event.key === "Escape" && accountsModalOpen.value) {
+    closeAccountsModal();
     return;
   }
   if (event.key === "Escape") settingsMenuOpen.value = false;
@@ -2353,6 +2380,14 @@ onBeforeUnmount(() => {
               <UiIcon name="RefreshCw" :size="15" />
               {{ accountsSyncing ? "Syncing..." : "Sync Stripe" }}
             </button>
+            <button
+              type="button"
+              class="text-button text-button--primary"
+              @click="openAccountsModal"
+            >
+              <UiIcon name="Plus" :size="15" />
+              Add entry
+            </button>
             <input
               ref="accountsImportInput"
               type="file"
@@ -2373,54 +2408,10 @@ onBeforeUnmount(() => {
             <strong>{{ formatMoney(accountsStats?.lastMonthCents || 0, accountsForm.currency) }}</strong>
           </div>
           <div>
-            <span>Top category</span>
-            <strong>{{ accountsStats?.topCategoryName || "Uncategorized" }}</strong>
-          </div>
-          <div>
             <span>Stripe</span>
             <strong>{{ accountsStripeConfigured ? accountsStripeStatus || "Configured" : "Not configured" }}</strong>
           </div>
         </div>
-
-        <form class="accounts-entry-form" @submit.prevent="saveAccountEntry">
-          <input v-model="accountsForm.date" type="date" aria-label="Date" />
-          <input
-            v-model="accountsForm.description"
-            type="text"
-            placeholder="Vendor, client, or description"
-            autocomplete="off"
-            aria-label="Description"
-          />
-          <select v-model="accountsForm.categoryId" aria-label="Category">
-            <option value="">Uncategorized</option>
-            <option v-for="category in accountCategoryOptions" :key="category.id" :value="category.id">
-              {{ category.name }}
-            </option>
-          </select>
-          <input
-            v-model="accountsForm.amount"
-            type="number"
-            min="0"
-            step="0.01"
-            placeholder="0.00"
-            aria-label="Amount"
-          />
-          <select v-model="accountsForm.status" aria-label="Status">
-            <option value="pending">Pending</option>
-            <option value="paid">Paid</option>
-            <option value="overdue">Overdue</option>
-            <option value="needs_review">Needs review</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
-          <button
-            type="submit"
-            class="icon-button"
-            :disabled="accountsFormDisabled"
-            aria-label="Add account entry"
-          >
-            <UiIcon name="Plus" :size="18" />
-          </button>
-        </form>
 
         <div class="accounts-filters">
           <input
@@ -2736,6 +2727,118 @@ onBeforeUnmount(() => {
               :disabled="projectCreateDisabled"
             >
               {{ projectSaving ? "Adding..." : "Add project" }}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div
+        v-if="accountsModalOpen"
+        class="mission-modal"
+        role="presentation"
+        @click.self="closeAccountsModal"
+      >
+        <form
+          class="mission-modal__dialog accounts-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="accounts-modal-title"
+          @submit.prevent="saveAccountEntry"
+        >
+          <div class="mission-modal__header">
+            <h2 id="accounts-modal-title">Add account entry</h2>
+            <button
+              type="button"
+              class="icon-button quiet"
+              aria-label="Close"
+              @click="closeAccountsModal"
+            >
+              <UiIcon name="X" :size="18" />
+            </button>
+          </div>
+
+          <div class="accounts-modal__grid">
+            <label class="field">
+              <span>Date</span>
+              <input v-model="accountsForm.date" type="date" autofocus />
+            </label>
+
+            <label class="field">
+              <span>Amount</span>
+              <input
+                v-model="accountsForm.amount"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+              />
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Description</span>
+            <input
+              v-model="accountsForm.description"
+              type="text"
+              placeholder="Vendor, client, or description"
+              autocomplete="off"
+            />
+          </label>
+
+          <div class="accounts-modal__grid">
+            <label class="field">
+              <span>Category</span>
+              <select v-model="accountsForm.categoryId">
+                <option value="">Uncategorized</option>
+                <option
+                  v-for="category in accountCategoryOptions"
+                  :key="category.id"
+                  :value="category.id"
+                >
+                  {{ category.name }}
+                </option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Status</span>
+              <select v-model="accountsForm.status">
+                <option value="pending">Pending</option>
+                <option value="paid">Paid</option>
+                <option value="overdue">Overdue</option>
+                <option value="needs_review">Needs review</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Currency</span>
+            <input
+              v-model="accountsForm.currency"
+              type="text"
+              maxlength="3"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="field">
+            <span>Notes</span>
+            <textarea v-model="accountsForm.notes" rows="3" />
+          </label>
+
+          <p v-if="accountsError" class="mission-modal__error">{{ accountsError }}</p>
+
+          <div class="mission-modal__actions">
+            <button type="button" class="text-button" @click="closeAccountsModal">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="text-button text-button--primary"
+              :disabled="accountsFormDisabled"
+            >
+              {{ accountsSaving ? "Adding..." : "Add entry" }}
             </button>
           </div>
         </form>
@@ -3553,7 +3656,7 @@ onBeforeUnmount(() => {
 
 .accounts-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
   gap: 1px;
   overflow: hidden;
   border: 1px solid var(--ui-border);
@@ -3583,22 +3686,13 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.accounts-entry-form,
 .accounts-filters {
   display: grid;
-  grid-template-columns:
-    minmax(128px, 0.8fr) minmax(180px, 1.8fr) minmax(140px, 1fr)
-    minmax(100px, 0.8fr) minmax(128px, 0.9fr) 40px;
+  grid-template-columns: minmax(180px, 1fr) minmax(136px, 0.45fr) minmax(136px, 0.45fr) auto;
   gap: 8px;
   min-width: 0;
 }
 
-.accounts-filters {
-  grid-template-columns: minmax(180px, 1fr) minmax(136px, 0.45fr) minmax(136px, 0.45fr) auto;
-}
-
-.accounts-entry-form input,
-.accounts-entry-form select,
 .accounts-filters input,
 .accounts-filters select {
   min-width: 0;
@@ -3612,8 +3706,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
-.accounts-entry-form input:focus,
-.accounts-entry-form select:focus,
 .accounts-filters input:focus,
 .accounts-filters select:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
@@ -3661,6 +3753,17 @@ onBeforeUnmount(() => {
 .accounts-table__row .icon-button {
   width: 30px;
   height: 30px;
+}
+
+.accounts-modal {
+  width: min(520px, 100%);
+}
+
+.accounts-modal__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
 }
 
 .visually-hidden {
@@ -3910,6 +4013,7 @@ onBeforeUnmount(() => {
 }
 
 .field input,
+.field select,
 .field textarea {
   width: 100%;
   min-width: 0;
@@ -3920,7 +4024,8 @@ onBeforeUnmount(() => {
   font: inherit;
 }
 
-.field input {
+.field input,
+.field select {
   min-height: 38px;
   padding: 0 10px;
 }
@@ -3940,6 +4045,7 @@ onBeforeUnmount(() => {
 }
 
 .field input:focus,
+.field select:focus,
 .field textarea:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
@@ -4067,16 +4173,15 @@ onBeforeUnmount(() => {
   }
 
   .accounts-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
-  .accounts-entry-form,
   .accounts-filters {
     grid-template-columns: 1fr;
   }
 
-  .accounts-entry-form .icon-button {
-    width: 100%;
+  .accounts-modal__grid {
+    grid-template-columns: 1fr;
   }
 
   .journal-archive {
