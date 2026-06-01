@@ -1,6 +1,7 @@
 import {
   ASSISTANT_JOB_CAPABILITIES,
   ASSISTANT_JOB_STARTER_RECIPES,
+  DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE,
   attachAssistantJobContextToRunResult,
   createAssistantJobContext,
   createAssistantJobDraftFromRecipe,
@@ -208,6 +209,25 @@ type OwnerNotificationResult = {
   error?: unknown;
 };
 
+type DailyBriefingReminderRow = {
+  id: string;
+  title: string;
+  notes: string | null;
+  remind_at: string;
+  timezone: string | null;
+  status: string;
+};
+
+type DailyBriefingRenderContext = {
+  ownerName: string;
+  dateKey: string;
+  dateLabel: string;
+  calendarSummary: string;
+  calendarEvents: string;
+  calendarReminders: string;
+  missionTasks: string;
+};
+
 type OwnerProfileContextRow = {
   id: string;
   name: string | null;
@@ -317,6 +337,7 @@ type UpdateAssistantJobBody = {
   purpose?: unknown;
   status?: unknown;
   projectId?: unknown;
+  dailyBriefingMessageTemplate?: unknown;
 };
 
 type CreateAssistantJobIngressEventBody = {
@@ -831,18 +852,60 @@ export async function updateAssistantJob(
   const purpose = normalizeOptionalText(body.purpose) ?? existing.purpose;
   const projectId = normalizeNullableText(body.projectId) ?? existing.project_id;
   const status = normalizeJobStatus(body.status) ?? existing.status;
+  const dailyBriefingMessageTemplate =
+    typeof body.dailyBriefingMessageTemplate === "string"
+      ? body.dailyBriefingMessageTemplate.trim()
+      : null;
 
   if (status === "archived") {
     throw new AssistantJobsInputError("Use DELETE to archive a job");
   }
 
-  await env.DB.prepare(
-    `UPDATE assistant_jobs
-     SET name = ?, purpose = ?, project_id = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND user_id = ?`,
-  )
-    .bind(name, purpose, projectId, status, jobId, userId)
-    .run();
+  const version = existing.current_version_id
+    ? await requireAssistantJobVersion(env, userId, existing.current_version_id)
+    : null;
+  let nextVersionId: string | null = null;
+  let setupState: Record<string, unknown> | null = null;
+
+  if (dailyBriefingMessageTemplate !== null) {
+    if (existing.recipe_id !== "daily-briefing") {
+      throw new AssistantJobsInputError("Daily briefing message can only be set on Daily Briefing jobs", 409);
+    }
+    if (!version) throw new AssistantJobsInputError("Job version not found", 404);
+    const draft = draftFromVersion(existing, version);
+    const nextDraft = withDailyBriefingMessageTemplate(draft, dailyBriefingMessageTemplate);
+    const validation = await validateAssistantJobDraftForUser(env, userId, nextDraft);
+    nextVersionId = crypto.randomUUID();
+    setupState = { validationStatus: validation.status, errors: validation.errors };
+    await buildInsertVersionStatement(env, {
+      versionId: nextVersionId,
+      jobId,
+      userId,
+      versionNumber: version.version_number + 1,
+      draft: nextDraft,
+      validation,
+      createdAt: new Date().toISOString(),
+    }).run();
+  }
+
+  if (nextVersionId && setupState) {
+    await env.DB.prepare(
+      `UPDATE assistant_jobs
+       SET name = ?, purpose = ?, project_id = ?, status = ?, current_version_id = ?,
+           setup_state_json = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(name, purpose, projectId, status, nextVersionId, stringifyJson(setupState), jobId, userId)
+      .run();
+  } else {
+    await env.DB.prepare(
+      `UPDATE assistant_jobs
+       SET name = ?, purpose = ?, project_id = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(name, purpose, projectId, status, jobId, userId)
+      .run();
+  }
 
   return { job: serializeJob(await requireAssistantJob(env, userId, jobId)) };
 }
@@ -1240,10 +1303,7 @@ async function createAssistantJobOwnerNotification(
     });
   }
 
-  const message =
-    missionTextInput(input.action, "message") ||
-    missionTextInput(input.action, "text") ||
-    `${input.job.name} is ready. I created a Mission Control result for you.`;
+  const message = await resolveOwnerNotificationMessage(env, input);
   const eventId = await insertOwnerNotificationChannelEvent(env, {
     connection,
     providerEventId,
@@ -1334,6 +1394,31 @@ async function createAssistantJobOwnerNotification(
       errorMessage,
     });
   }
+}
+
+async function resolveOwnerNotificationMessage(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+  },
+) {
+  if (input.job.recipe_id === "daily-briefing" || input.draft.recipeId === "daily-briefing") {
+    const template =
+      missionTextInput(input.action, "messageTemplate") ||
+      missionTextInput(input.action, "message") ||
+      DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE;
+    return renderDailyBriefingMessage(await buildDailyBriefingRenderContext(env, input.userId), template);
+  }
+
+  return (
+    missionTextInput(input.action, "message") ||
+    missionTextInput(input.action, "text") ||
+    `${input.job.name} is ready. I created a Mission Control result for you.`
+  );
 }
 
 async function createAssistantJobMissionTask(
@@ -1532,6 +1617,33 @@ async function buildGeneratedMissionActivity(
       title: `${jobName}: ${triage.messageCount} message${triage.messageCount === 1 ? "" : "s"} reviewed`,
       summary: formatEmailTriageMissionSummary(triage),
       metadata: { emailTriage: triage },
+    };
+  }
+
+  if (
+    defaultActivityType === "assistant_job.review_packet" &&
+    (input.job.recipe_id === "daily-briefing" || input.draft.recipeId === "daily-briefing")
+  ) {
+    const notifyAction =
+      input.draft.actions.find((action) => action.capabilityId === "message.owner.notify") ||
+      input.action;
+    const template =
+      missionTextInput(notifyAction, "messageTemplate") ||
+      missionTextInput(notifyAction, "message") ||
+      DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE;
+    const context = await buildDailyBriefingRenderContext(env, input.userId);
+    const message = renderDailyBriefingMessage(context, template);
+    return {
+      title: `Daily Briefing: ${context.dateLabel}`,
+      summary: message,
+      metadata: {
+        dailyBriefing: {
+          date: context.dateKey,
+          message,
+          template,
+          soulinkPrimary: true,
+        },
+      },
     };
   }
 
@@ -1881,6 +1993,26 @@ function normalizeDraftRecord(
     projectId: normalizeNullableText(rawDraft.projectId) ?? fallback?.projectId ?? null,
     recommendedSkillIds: normalizeStringArray(rawDraft.recommendedSkillIds) ?? fallback?.recommendedSkillIds ?? [],
     requiredSkillIds: normalizeStringArray(rawDraft.requiredSkillIds) ?? fallback?.requiredSkillIds ?? [],
+  };
+}
+
+function withDailyBriefingMessageTemplate(
+  draft: AssistantJobDraft,
+  messageTemplate: string,
+): AssistantJobDraft {
+  return {
+    ...draft,
+    actions: draft.actions.map((action) =>
+      action.capabilityId === "message.owner.notify"
+        ? {
+            ...action,
+            inputs: {
+              ...action.inputs,
+              messageTemplate: messageTemplate || DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE,
+            },
+          }
+        : action,
+    ),
   };
 }
 
@@ -2621,6 +2753,214 @@ function missionTextInput(action: AssistantJobAction, key: string) {
   return normalizeNullableText(action.inputs[key]);
 }
 
+async function buildDailyBriefingRenderContext(
+  env: Env,
+  userId: string,
+): Promise<DailyBriefingRenderContext> {
+  const owner = await env.DB.prepare(
+    "SELECT id, name, username, bio, timezone FROM owner_profile WHERE id = ?",
+  )
+    .bind(userId)
+    .first<OwnerProfileContextRow>()
+    .catch(() => null);
+  const timezone = owner?.timezone || "UTC";
+  const now = new Date();
+  const dateKey = dateKeyInTimezone(now, timezone);
+  const dateLabel = formatFriendlyDate(dateKey, timezone);
+  const { start, end } = utcWindowForLocalDate(dateKey, timezone);
+  const [events, reminders, tasks] = await Promise.all([
+    loadDailyBriefingEvents(env, userId, start, end),
+    loadDailyBriefingReminders(env, userId, start, end),
+    loadDailyBriefingTasks(env, userId),
+  ]);
+
+  return {
+    ownerName: owner?.name || owner?.username || "there",
+    dateKey,
+    dateLabel,
+    calendarSummary: formatDailyCalendarSummary(events, dateLabel),
+    calendarEvents: formatDailyCalendarEvents(events, timezone),
+    calendarReminders: formatDailyReminders(reminders, timezone),
+    missionTasks: formatDailyTasks(tasks, dateKey),
+  };
+}
+
+function renderDailyBriefingMessage(context: DailyBriefingRenderContext, template: string) {
+  const values: Record<string, string> = {
+    "owner.name": context.ownerName,
+    "today.date": context.dateLabel,
+    "calendar.summary": context.calendarSummary,
+    "calendar.events": context.calendarEvents,
+    "calendar.reminders": context.calendarReminders,
+    "mission.tasks": context.missionTasks,
+  };
+  const rendered = template.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, key: string) => {
+    return values[key] ?? "";
+  });
+  return rendered
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function loadDailyBriefingEvents(
+  env: Env,
+  userId: string,
+  start: string,
+  end: string,
+) {
+  const rows = await env.DB.prepare(
+    `SELECT id, title, notes, starts_at, ends_at, timezone, created_at, updated_at
+     FROM user_calendar_events
+     WHERE user_id = ? AND starts_at < ? AND ends_at > ?
+     ORDER BY starts_at ASC
+     LIMIT 12`,
+  )
+    .bind(userId, end, start)
+    .all<CalendarEventContextRow>()
+    .catch(() => ({ results: [] as CalendarEventContextRow[] }));
+  return (rows.results || []).filter((event) => event.starts_at < end && event.ends_at > start);
+}
+
+async function loadDailyBriefingReminders(
+  env: Env,
+  userId: string,
+  start: string,
+  end: string,
+) {
+  const rows = await env.DB.prepare(
+    `SELECT id, title, notes, remind_at, timezone, status
+     FROM user_reminders
+     WHERE user_id = ? AND status = 'pending' AND remind_at >= ? AND remind_at < ?
+     ORDER BY remind_at ASC
+     LIMIT 12`,
+  )
+    .bind(userId, start, end)
+    .all<DailyBriefingReminderRow>()
+    .catch(() => ({ results: [] as DailyBriefingReminderRow[] }));
+  return (rows.results || []).filter(
+    (reminder) => reminder.status === "pending" && reminder.remind_at >= start && reminder.remind_at < end,
+  );
+}
+
+async function loadDailyBriefingTasks(env: Env, userId: string) {
+  const failedSources: Me3AgentContextSource[] = [];
+  return loadAssistantJobTasksContext(env, userId, failedSources);
+}
+
+function formatDailyCalendarSummary(events: CalendarEventContextRow[], dateLabel: string) {
+  if (events.length === 0) return `Your calendar is clear for ${dateLabel}.`;
+  if (events.length === 1) return `You have 1 calendar event for ${dateLabel}.`;
+  return `You have ${events.length} calendar events for ${dateLabel}.`;
+}
+
+function formatDailyCalendarEvents(events: CalendarEventContextRow[], fallbackTimezone: string) {
+  if (events.length === 0) return "";
+  return [
+    "Calendar:",
+    ...events.slice(0, 4).map((event) => {
+      const time = formatTimeInTimezone(event.starts_at, event.timezone || fallbackTimezone);
+      return `- ${time} ${event.title}`;
+    }),
+  ].join("\n");
+}
+
+function formatDailyReminders(reminders: DailyBriefingReminderRow[], fallbackTimezone: string) {
+  if (reminders.length === 0) return "";
+  const count = reminders.length;
+  return [
+    `Reminders: ${count} due today.`,
+    ...reminders.slice(0, 4).map((reminder) => {
+      const time = formatTimeInTimezone(reminder.remind_at, reminder.timezone || fallbackTimezone);
+      return `- ${time} ${reminder.title}`;
+    }),
+  ].join("\n");
+}
+
+function formatDailyTasks(tasks: Me3AgentContextTask[], dateKey: string) {
+  const due = tasks.filter((task) => {
+    const dueAt = task.dueAt;
+    return dueAt?.slice(0, 10) === dateKey;
+  });
+  if (due.length === 0) return "";
+  return [
+    `Mission Control: ${due.length} task${due.length === 1 ? "" : "s"} due today.`,
+    ...due.slice(0, 4).map((task) => `- ${task.title}`),
+  ].join("\n");
+}
+
+function dateKeyInTimezone(date: Date, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value || "1970";
+  const month = parts.find((part) => part.type === "month")?.value || "01";
+  const day = parts.find((part) => part.type === "day")?.value || "01";
+  return `${year}-${month}-${day}`;
+}
+
+function formatFriendlyDate(dateKey: string, timezone: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(new Date(`${dateKey}T12:00:00.000Z`));
+}
+
+function utcWindowForLocalDate(dateKey: string, timezone: string) {
+  const start = zonedLocalTimeToUtc(dateKey, "00:00", timezone);
+  const end = zonedLocalTimeToUtc(dateKey, "24:00", timezone);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function zonedLocalTimeToUtc(dateKey: string, time: string, timezone: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const guess = Date.UTC(year, month - 1, day, hour, minute || 0, 0);
+  const offset = timezoneOffsetMs(new Date(guess), timezone);
+  return new Date(guess - offset);
+}
+
+function timezoneOffsetMs(date: Date, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const map = new Map(parts.map((part) => [part.type, part.value]));
+  const asUtc = Date.UTC(
+    Number(map.get("year")),
+    Number(map.get("month")) - 1,
+    Number(map.get("day")),
+    Number(map.get("hour")) % 24,
+    Number(map.get("minute")),
+    Number(map.get("second")),
+  );
+  return asUtc - date.getTime();
+}
+
+function formatTimeInTimezone(value: string, timezone: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 function resolveMissionOutputProjectId(
   job: AssistantJobRow,
   draft: AssistantJobDraft,
@@ -2868,6 +3208,15 @@ async function summarizeAssistantJobRunOutput(
     const triage = await buildEmailTriageResult(env, userId);
     const jobName = job.name || draft.name || "Inbox Watch";
     return `${jobName} reviewed ${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"} across ${triage.threadCount} thread${triage.threadCount === 1 ? "" : "s"}; ${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply and ${triage.importantCount} flagged important.`;
+  }
+  if (job.recipe_id === "daily-briefing" || draft.recipeId === "daily-briefing") {
+    const context = await buildDailyBriefingRenderContext(env, userId);
+    const bits = [
+      context.calendarSummary,
+      context.calendarReminders ? "included reminders" : null,
+      context.missionTasks ? "included Mission Control tasks" : null,
+    ].filter(Boolean);
+    return `Daily Briefing ready: ${bits.join("; ")}.`;
   }
   const createdResult = draft.actions.some(
     (action) => action.capabilityId === "mission.review_packet.create",

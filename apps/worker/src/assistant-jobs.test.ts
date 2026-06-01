@@ -13,6 +13,7 @@ import {
   recordAssistantJobIngressEvent,
   runAssistantJobNow,
   setAssistantJobPaused,
+  updateAssistantJob,
   updateAssistantJobIngressEvent,
 } from "./assistant-jobs";
 import type { Env } from "./types";
@@ -65,6 +66,13 @@ type PluginInstallationRow = Record<string, unknown> & {
   enabled: number;
   status: string;
 };
+type ReminderRow = Record<string, unknown> & {
+  id: string;
+  user_id: string;
+  title: string;
+  remind_at: string;
+  status: string;
+};
 
 type AssistantJobsDbState = {
   owner: Record<string, unknown> | null;
@@ -80,6 +88,7 @@ type AssistantJobsDbState = {
   captures: Record<string, unknown>[];
   memory: Record<string, unknown>[];
   calendarEvents: Record<string, unknown>[];
+  reminders: ReminderRow[];
   recentMessages: Record<string, unknown>[];
   failMemoryLookup?: boolean;
   events: Record<string, unknown>[];
@@ -311,11 +320,13 @@ describe("assistant jobs persistence", () => {
       }),
     );
     const notifyRequest = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1];
-    expect(JSON.parse(notifyRequest?.body as string)).toMatchObject({
+    const notifyBody = JSON.parse(notifyRequest?.body as string);
+    expect(notifyBody).toMatchObject({
       streamChannelType: "messaging",
       streamChannelId: "assistant-channel",
-      messageText: "Daily Briefing is ready. I created a Mission Control result for you.",
     });
+    expect(notifyBody.messageText).toContain("☀️ Good morning, Kieran.");
+    expect(notifyBody.messageText).toContain("Your calendar is clear");
     expect(env.__state.channelEvents).toHaveLength(1);
     expect(env.__state.channelEvents[0]).toMatchObject({
       connection_id: "soulink-connection",
@@ -324,8 +335,43 @@ describe("assistant jobs persistence", () => {
       event_type: "send",
       status: "sent",
       provider_message_id: "stream-message-1",
-      text_body: "Daily Briefing is ready. I created a Mission Control result for you.",
     });
+    expect(env.__state.channelEvents[0]?.text_body).toContain("☀️ Good morning, Kieran.");
+    expect(env.__state.pluginActivities[0]).toMatchObject({
+      activity_type: "assistant_job.review_packet",
+      title: expect.stringContaining("Daily Briefing"),
+    });
+    expect(JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)).toMatchObject({
+      dailyBriefing: {
+        message: expect.stringContaining("☀️ Good morning, Kieran."),
+      },
+    });
+  });
+
+  it("customizes the daily briefing notification template", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, messageId: "stream-message-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createAssistantJobsEnv({
+      channelConnections: [soulinkConnectionRow()],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "daily-briefing" });
+    const updated = await updateAssistantJob(env, "owner", created.job.id, {
+      dailyBriefingMessageTemplate: "Morning {{owner.name}}. {{calendar.summary}}",
+    });
+    const detail = await getAssistantJob(env, "owner", updated.job.id);
+
+    expect(detail.version?.versionNumber).toBe(2);
+
+    await runAssistantJobNow(env, "owner", updated.job.id);
+
+    const notifyRequest = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1];
+    expect(JSON.parse(notifyRequest?.body as string).messageText).toContain("Morning Kieran.");
   });
 
   it("records assistant job ingress events idempotently", async () => {
@@ -774,6 +820,7 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
     captures: [],
     memory: [],
     calendarEvents: [],
+    reminders: [],
     recentMessages: [],
     events: [],
     ingressEvents: [],
@@ -1249,6 +1296,19 @@ class FakeStatement {
       return { success: true };
     }
 
+    if (sql.includes("current_version_id = ?")) {
+      const job = this.findJob(values[6], values[7]);
+      if (job) {
+        job.name = values[0] as string;
+        job.purpose = values[1] as string;
+        job.project_id = values[2] as string | null;
+        job.status = values[3] as string;
+        job.current_version_id = values[4] as string;
+        job.setup_state_json = values[5] as string;
+      }
+      return { success: true };
+    }
+
     if (sql.includes("SET name = ?")) {
       const job = this.findJob(values[4], values[5]);
       if (job) {
@@ -1405,6 +1465,13 @@ class FakeStatement {
     if (sql.includes("FROM user_calendar_events")) {
       return {
         results: this.state.calendarEvents.filter((event) => event.user_id === values[0]) as T[],
+      };
+    }
+    if (sql.includes("FROM user_reminders")) {
+      return {
+        results: this.state.reminders.filter(
+          (reminder) => reminder.user_id === values[0] && reminder.status === "pending",
+        ) as T[],
       };
     }
     if (sql.includes("FROM assistant_messages")) {

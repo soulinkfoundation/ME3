@@ -819,6 +819,9 @@ const dailySchedule: AssistantJobTrigger = {
   nextRunAt: null,
 };
 
+export const DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE =
+  "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
+
 const weeklySchedule: AssistantJobTrigger = {
   kind: "schedule",
   timezone: "owner",
@@ -903,7 +906,7 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
           "Send briefing notification",
           "none",
           {
-            message: "Daily Briefing is ready. I created a Mission Control result for you.",
+            messageTemplate: DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE,
           },
         ),
       ],

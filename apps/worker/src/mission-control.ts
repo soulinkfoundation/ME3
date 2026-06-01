@@ -169,6 +169,10 @@ type MissionPluginActivityRow = {
   created_at: string;
 };
 
+type AgentChannelConnectionRow = {
+  id: string;
+};
+
 type MissionMemoryRow = {
   id: string;
   user_id: string;
@@ -302,13 +306,14 @@ export async function getMissionControlOverview(
     getMissionSetup(env, userId),
   ]);
 
-  const [tasksDueToday, pendingApprovals, recentRuns, activity, daemon] =
+  const [tasksDueToday, pendingApprovals, recentRuns, activity, daemon, latestBriefing] =
     await Promise.all([
       listMissionTasks(env, userId, { dueDate: date, activeOnly: true, limit: 8 }),
       listMissionApprovals(env, userId, "pending", 8),
       listMissionAgentRuns(env, userId, 8),
       listMissionPluginActivity(env, userId, 8),
       getMissionDaemonStatus(env, userId),
+      getMissionControlDailyBriefing(env, userId, date),
     ]);
 
   return {
@@ -321,6 +326,7 @@ export async function getMissionControlOverview(
     setup,
     daemon,
     activity,
+    latestBriefing,
   };
 }
 
@@ -955,6 +961,55 @@ export async function listMissionPluginActivity(env: Env, userId: string, limitI
     .bind(userId, limit)
     .all<MissionPluginActivityRow>();
   return (rows.results || []).map(serializePluginActivity);
+}
+
+async function getMissionControlDailyBriefing(env: Env, userId: string, date: string) {
+  const soulinkConnection = await env.DB.prepare(
+    `SELECT id
+     FROM agent_channel_connections
+     WHERE user_id = ?
+       AND channel = 'soulink'
+       AND status = 'active'
+       AND provider_thread_id IS NOT NULL
+     LIMIT 1`,
+  )
+    .bind(userId)
+    .first<AgentChannelConnectionRow>()
+    .catch(() => null);
+
+  const row = await env.DB.prepare(
+    `SELECT id, user_id, plugin_id, activity_type, title, summary, status,
+            related_id, metadata_json, created_at
+     FROM mission_plugin_activity
+     WHERE user_id = ?
+       AND activity_type = 'assistant_job.review_packet'
+     ORDER BY created_at DESC
+     LIMIT 20`,
+  )
+    .bind(userId)
+    .all<MissionPluginActivityRow>()
+    .catch(() => ({ results: [] as MissionPluginActivityRow[] }));
+
+  const activity = (row.results || [])
+    .map(serializePluginActivity)
+    .find((item) => {
+      const briefing = parseDailyBriefingMetadata(item.metadata);
+      return briefing?.date === date;
+    });
+  if (!activity) return null;
+
+  const briefing = parseDailyBriefingMetadata(activity.metadata);
+  if (!briefing) return null;
+
+  return {
+    id: activity.id,
+    title: activity.title,
+    message: briefing.message,
+    date: briefing.date,
+    createdAt: activity.createdAt,
+    showInJournal: !soulinkConnection,
+    deliveryHint: soulinkConnection ? "soulink" : "mission_control",
+  };
 }
 
 export async function clearMissionActivity(env: Env, userId: string) {
@@ -2081,6 +2136,15 @@ function parseJsonRecord(raw: string | null): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function parseDailyBriefingMetadata(metadata: Record<string, unknown>) {
+  const dailyBriefing = metadata.dailyBriefing;
+  if (!isRecord(dailyBriefing)) return null;
+  const message = typeof dailyBriefing.message === "string" ? dailyBriefing.message : null;
+  const date = typeof dailyBriefing.date === "string" ? dailyBriefing.date : null;
+  if (!message || !date) return null;
+  return { message, date };
 }
 
 function parseJsonArray(raw: string | null): unknown[] {

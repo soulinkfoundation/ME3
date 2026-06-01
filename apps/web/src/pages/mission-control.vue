@@ -159,6 +159,16 @@ type MissionActivity = {
   createdAt: string;
 };
 
+type MissionDailyBriefing = {
+  id: string;
+  title: string;
+  message: string;
+  date: string;
+  createdAt: string;
+  showInJournal: boolean;
+  deliveryHint: "soulink" | "mission_control";
+};
+
 type MissionDaemonStatus = {
   enabled: boolean;
   connected: boolean;
@@ -240,6 +250,7 @@ type MissionOverviewResponse = {
   };
   daemon: MissionDaemonStatus;
   activity: MissionActivity[];
+  latestBriefing: MissionDailyBriefing | null;
 };
 
 type PluginsResponse = { plugins: CorePluginRecord[] };
@@ -323,6 +334,7 @@ const sources = ref<MissionContextSource[]>([]);
 const setupItems = ref<MissionSetupItem[]>([]);
 const daemon = ref<MissionDaemonStatus | null>(null);
 const activity = ref<MissionActivity[]>([]);
+const latestBriefing = ref<MissionDailyBriefing | null>(null);
 const loading = ref(false);
 const error = ref("");
 const clearingActivity = ref(false);
@@ -472,6 +484,12 @@ const activityItems = computed<ActivityViewItem[]>(() => [
     createdAt: item.createdAt,
   })),
 ]);
+const visibleDailyBriefing = computed(() => {
+  const briefing = latestBriefing.value;
+  if (!briefing || !briefing.showInJournal || briefing.date !== selectedDate.value) return null;
+  if (isDailyBriefingDismissed(briefing)) return null;
+  return briefing;
+});
 const settingsSectionActive = computed(() =>
   settingsSections.includes(activeSection.value as SettingsMissionSection),
 );
@@ -580,6 +598,7 @@ function applyOverview(response: MissionOverviewResponse) {
   setupItems.value = response.setup?.items || [];
   daemon.value = response.daemon;
   activity.value = response.activity || [];
+  latestBriefing.value = response.latestBriefing || null;
   journalDraft.value = response.day?.journalText || "";
   journalState.value = "idle";
   if (!selectedProjectId.value && projects.value[0]) {
@@ -614,6 +633,20 @@ async function clearActivity() {
   } finally {
     clearingActivity.value = false;
   }
+}
+
+function dailyBriefingDismissKey(briefing: MissionDailyBriefing) {
+  return `mission-daily-briefing-dismissed:${briefing.date}:${briefing.id}`;
+}
+
+function isDailyBriefingDismissed(briefing: MissionDailyBriefing) {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(dailyBriefingDismissKey(briefing)) === "1";
+}
+
+function dismissDailyBriefing(briefing: MissionDailyBriefing) {
+  window.localStorage.setItem(dailyBriefingDismissKey(briefing), "1");
+  latestBriefing.value = { ...briefing, showInJournal: false };
 }
 
 async function loadMemoryAndSources() {
@@ -1991,6 +2024,25 @@ onBeforeUnmount(() => {
 
     <section v-show="activeSection === 'today'" class="mission-page">
       <div class="daily-sheet">
+        <section
+          v-if="visibleDailyBriefing"
+          class="daily-briefing-panel"
+          aria-label="Daily briefing"
+        >
+          <div class="daily-briefing-panel__copy">
+            <h2>{{ visibleDailyBriefing.title }}</h2>
+            <p>{{ visibleDailyBriefing.message }}</p>
+          </div>
+          <button
+            type="button"
+            class="icon-button quiet"
+            aria-label="Dismiss daily briefing"
+            @click="dismissDailyBriefing(visibleDailyBriefing)"
+          >
+            <UiIcon name="X" :size="16" />
+          </button>
+        </section>
+
         <form class="capture-row" @submit.prevent="submitCapture">
           <input
             v-model="captureText"
@@ -3202,6 +3254,36 @@ onBeforeUnmount(() => {
 
 .simple-sheet--wide {
   width: min(920px, 100%);
+}
+
+.daily-briefing-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--ui-border);
+  padding: 0 0 16px;
+}
+
+.daily-briefing-panel__copy {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.daily-briefing-panel h2 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.daily-briefing-panel p {
+  margin: 0;
+  white-space: pre-line;
+  color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1.5;
 }
 
 .capture-row,

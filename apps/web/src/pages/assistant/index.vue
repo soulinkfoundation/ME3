@@ -95,6 +95,7 @@ type AssistantJobVersion = {
     capabilityId: string;
     label: string;
     approvalMode: string;
+    inputs?: Record<string, unknown>;
   }>;
   permissionSummary: PermissionSummary;
   validationStatus: "valid" | "invalid" | "needs_setup";
@@ -151,6 +152,20 @@ const pageError = ref("");
 const addModalOpen = ref(false);
 const detailModalOpen = ref(false);
 const busyKeys = ref(new Set<string>());
+const dailyBriefingTemplateDraft = ref("");
+const dailyBriefingTemplateNotice = ref("");
+
+const defaultDailyBriefingTemplate =
+  "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
+
+const dailyBriefingVariables = [
+  { label: "Name", value: "{{owner.name}}" },
+  { label: "Date", value: "{{today.date}}" },
+  { label: "Calendar summary", value: "{{calendar.summary}}" },
+  { label: "Events", value: "{{calendar.events}}" },
+  { label: "Reminders", value: "{{calendar.reminders}}" },
+  { label: "Tasks", value: "{{mission.tasks}}" },
+];
 
 const suggestedRecipeOrder = [
   "daily-briefing",
@@ -197,6 +212,28 @@ const selectedJob = computed(
     jobs.value.find((job) => job.id === selectedJobId.value) ||
     selectedDetail.value?.job ||
     null,
+);
+
+const selectedJobIsDailyBriefing = computed(
+  () => selectedDetail.value?.job.recipeId === "daily-briefing",
+);
+
+const savedDailyBriefingTemplate = computed(() => {
+  const notifyAction = selectedDetail.value?.version?.actions.find(
+    (action) => action.capabilityId === "message.owner.notify",
+  );
+  const template = notifyAction?.inputs?.messageTemplate;
+  return typeof template === "string" && template.trim()
+    ? template
+    : defaultDailyBriefingTemplate;
+});
+
+const dailyBriefingTemplateChanged = computed(
+  () => dailyBriefingTemplateDraft.value.trim() !== savedDailyBriefingTemplate.value.trim(),
+);
+
+const dailyBriefingPreview = computed(() =>
+  renderDailyBriefingPreview(dailyBriefingTemplateDraft.value || defaultDailyBriefingTemplate),
 );
 
 onMounted(() => {
@@ -251,6 +288,8 @@ async function openJob(jobId: string) {
     selectedDetail.value = await api.get<AssistantJobDetail>(
       `/assistant/jobs/${encodeURIComponent(jobId)}`,
     );
+    dailyBriefingTemplateDraft.value = savedDailyBriefingTemplate.value;
+    dailyBriefingTemplateNotice.value = "";
   } catch (err) {
     closeDetailModal();
     toastFromUnknown(err, "Could not load job details.");
@@ -335,6 +374,38 @@ async function archiveJob(job: AssistantJob) {
     }
     toastSuccess("Job removed.");
   });
+}
+
+async function saveDailyBriefingTemplate() {
+  const job = selectedDetail.value?.job;
+  if (!job || !selectedJobIsDailyBriefing.value || !dailyBriefingTemplateChanged.value) return;
+
+  await withBusy(`briefing-template:${job.id}`, async () => {
+    const response = await api.patch<{ job: AssistantJob }>(
+      `/assistant/jobs/${encodeURIComponent(job.id)}`,
+      {
+        dailyBriefingMessageTemplate:
+          dailyBriefingTemplateDraft.value.trim() || defaultDailyBriefingTemplate,
+      },
+    );
+    jobs.value = jobs.value.map((item) => (item.id === job.id ? response.job : item));
+    await openJob(job.id);
+    dailyBriefingTemplateNotice.value = "Message saved.";
+  });
+}
+
+function resetDailyBriefingTemplate() {
+  dailyBriefingTemplateDraft.value = defaultDailyBriefingTemplate;
+  dailyBriefingTemplateNotice.value = "";
+}
+
+function insertDailyBriefingVariable(value: string) {
+  const separator =
+    dailyBriefingTemplateDraft.value && !dailyBriefingTemplateDraft.value.endsWith(" ")
+      ? " "
+      : "";
+  dailyBriefingTemplateDraft.value = `${dailyBriefingTemplateDraft.value}${separator}${value}`;
+  dailyBriefingTemplateNotice.value = "";
 }
 
 function openAddModal() {
@@ -529,6 +600,24 @@ function cleanPlainText(value: string) {
     .replace(/review packets?/gi, "results")
     .replace(/durable private memory/gi, "saved memory")
     .replace(/\s+/g, " ")
+    .trim();
+}
+
+function renderDailyBriefingPreview(template: string) {
+  const values: Record<string, string> = {
+    "owner.name": "Kieran Butler",
+    "today.date": "Monday 1 June",
+    "calendar.summary": "Your calendar is clear for Monday 1 June.",
+    "calendar.events": "",
+    "calendar.reminders": "Reminders: 1 due today.\n- 10:00 Follow up with Ben Hyneck",
+    "mission.tasks": "Mission Control: 1 task due today.\n- Review launch notes",
+  };
+  return template
+    .replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, key: string) => values[key] ?? "")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -819,6 +908,73 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <dd>{{ formatNextRun(selectedJob) }}</dd>
               </div>
             </dl>
+
+            <section
+              v-if="selectedJobIsDailyBriefing"
+              class="detail-section briefing-settings"
+              aria-labelledby="daily-briefing-message-title"
+            >
+              <div class="briefing-settings__header">
+                <div>
+                  <h3 id="daily-briefing-message-title">Daily message</h3>
+                  <p>
+                    Soulink gets this message when connected. Mission Control keeps it in history.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="text-button"
+                  @click="resetDailyBriefingTemplate"
+                >
+                  Restore default
+                </button>
+              </div>
+
+              <label class="briefing-template-field">
+                <span>Template</span>
+                <textarea
+                  v-model="dailyBriefingTemplateDraft"
+                  rows="7"
+                  class="briefing-template-field__textarea"
+                />
+              </label>
+
+              <div class="briefing-variable-list" aria-label="Template variables">
+                <button
+                  v-for="variable in dailyBriefingVariables"
+                  :key="variable.value"
+                  type="button"
+                  class="briefing-variable-chip"
+                  @click="insertDailyBriefingVariable(variable.value)"
+                >
+                  {{ variable.label }}
+                </button>
+              </div>
+
+              <div class="briefing-preview" aria-label="Message preview">
+                <h4>Preview</h4>
+                <p>{{ dailyBriefingPreview }}</p>
+              </div>
+
+              <div class="briefing-settings__actions">
+                <span v-if="dailyBriefingTemplateNotice" class="inline-notice">
+                  {{ dailyBriefingTemplateNotice }}
+                </span>
+                <Button
+                  tone="green"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="
+                    !dailyBriefingTemplateChanged ||
+                    isBusy(`briefing-template:${selectedJob.id}`)
+                  "
+                  @click="saveDailyBriefingTemplate"
+                >
+                  Save message
+                </Button>
+              </div>
+            </section>
 
             <section
               class="detail-section"
@@ -1326,6 +1482,100 @@ button:disabled {
   gap: 12px;
   border-top: 1px solid var(--ui-border);
   padding-top: 16px;
+}
+
+.briefing-settings__header,
+.briefing-settings__actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.briefing-settings__header p {
+  margin: 4px 0 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.text-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ui-accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.briefing-template-field {
+  display: grid;
+  gap: 7px;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.briefing-template-field__textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 10px 12px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.briefing-variable-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.briefing-variable-chip {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 6px 9px;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.briefing-preview {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 12px;
+  background: var(--ui-surface-muted);
+}
+
+.briefing-preview h4 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.briefing-preview p {
+  margin: 0;
+  white-space: pre-line;
+  color: var(--ui-text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.inline-notice {
+  align-self: center;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .permission-grid {
