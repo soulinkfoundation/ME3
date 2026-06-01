@@ -43,7 +43,16 @@ export type CorePluginManifestSummary = {
   agentTools: { id: string; label: string; sideEffect: string; approvalMode: string }[];
   secrets: { name: string; label: string; required: boolean }[];
   migrations: { id: string; path: string; destructive: false }[];
-  queuesAndCrons: { id: string; kind: "queue" | "cron"; binding?: string; schedule?: string }[];
+  queuesAndCrons: {
+    id: string;
+    kind: "queue" | "cron";
+    binding?: string;
+    queueName?: string;
+    schedule?: string;
+    producerEntrypoint?: string;
+    consumerEntrypoint?: string;
+    maxRetries?: number;
+  }[];
   notes: string[];
 };
 
@@ -194,23 +203,12 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       destructive: false,
     },
   ],
-  queuesAndCrons: [
-    {
-      id: "social.publish-queue",
-      kind: "queue",
-      binding: "SOCIAL_PUBLISH_QUEUE",
-    },
-    {
-      id: "social.scheduled-dispatch",
-      kind: "cron",
-      schedule: "* * * * *",
-    },
-  ],
+  queuesAndCrons: [...SOCIAL_PUBLISHING_RUNTIME.queuesAndCrons],
   notes: [
     "Bundled through @me3-core/plugin-social-publishing as a first-party Core package.",
-    "Current runtime exposes owner-only content bank, OAuth account connection, account inventory reads, and approval-first queue state when installed.",
+    "Current runtime exposes owner-only content bank, OAuth account connection, account inventory reads, and approval-first queue dispatch when installed.",
     "ME3-hosted provider OAuth should supply social app credentials; Core installs should only connect their own social accounts.",
-    "External publishing workers and cron dispatch remain approval-first follow-up work.",
+    "External publishing workers and cron dispatch are package-owned and remain gated by plugin readiness, approval, and account state.",
   ],
 };
 

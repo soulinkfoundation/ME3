@@ -1,16 +1,40 @@
+import { adapterFor } from "./adapters";
+
 export const SOCIAL_PUBLISHING_PLUGIN_ID = "me3.social-publishing";
+export const SOCIAL_PUBLISH_QUEUE_NAME = "me3-social-publish";
+export const SOCIAL_PUBLISH_QUEUE_BINDING = "SOCIAL_PUBLISH_QUEUE";
 
 export const SOCIAL_PUBLISHING_RUNTIME = {
   id: SOCIAL_PUBLISHING_PLUGIN_ID,
   packageName: "@me3-core/plugin-social-publishing",
   bundled: true,
-  runtimeStatus: "oauth_setup_runtime",
+  runtimeStatus: "approval_first_publish_runtime",
   supportedPlatforms: ["x", "linkedin", "instagram", "instagram_business"],
   excludedProviders: ["youtube"],
+  queuesAndCrons: [
+    {
+      id: "social.publish-queue",
+      kind: "queue",
+      binding: SOCIAL_PUBLISH_QUEUE_BINDING,
+      queueName: SOCIAL_PUBLISH_QUEUE_NAME,
+      producerEntrypoint:
+        "@me3-core/plugin-social-publishing#createQueuedContentPublicationAndEnqueue",
+      consumerEntrypoint:
+        "@me3-core/plugin-social-publishing#processSocialPublishBatch",
+      maxRetries: 2,
+    },
+    {
+      id: "social.scheduled-dispatch",
+      kind: "cron",
+      schedule: "* * * * *",
+      consumerEntrypoint:
+        "@me3-core/plugin-social-publishing#dispatchDueSocialPublications",
+    },
+  ],
   notes: [
     "Core bundles the plugin runtime through an explicit workspace package.",
-    "This slice exposes owner-only status, provider setup, OAuth account connection, and account inventory reads.",
-    "Queue consumers, cron dispatch, and live provider publishing writes remain outside Core for now.",
+    "This slice exposes owner-only status, provider setup, OAuth account connection, account inventory reads, and approval-first queue dispatch.",
+    "Live provider writes are disabled unless the plugin is installed, enabled, the content item is human-approved, and a matching active account is connected.",
   ],
 } as const;
 
@@ -233,6 +257,37 @@ type ContentQueueRow = {
   queue_position: number | null;
 };
 
+type SocialPublicationEventType =
+  | "generated"
+  | "approved"
+  | "queued"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "retried";
+
+type SocialPublicationRow = {
+  publication_id: string;
+  variant_id: string;
+  site_id: string;
+  platform: SocialPlatform;
+  pub_status: "queued" | "publishing" | "published" | "failed" | "cancelled";
+  body: string;
+  media_manifest_json: string;
+  platforms_json: string;
+  approved_by_human: number;
+  user_id: string;
+  account_id: string | null;
+  platform_account_id: string | null;
+  access_token_ciphertext: string | null;
+  token_expires_at: string | null;
+  account_status: string | null;
+};
+
+export type SocialPublishQueueMessage = {
+  publicationId: string;
+};
+
 type D1StatementLike = {
   bind(...values: unknown[]): {
     first<T = unknown>(): Promise<T | null>;
@@ -245,6 +300,15 @@ type SocialPublishingEnv = {
   DB: {
     prepare(sql: string): D1StatementLike;
   };
+  SOCIAL_PUBLISH_QUEUE?: {
+    send(message: SocialPublishQueueMessage): Promise<unknown>;
+  };
+  CORE_API_ORIGIN?: string;
+  CORE_WEB_ORIGIN?: string;
+  ME3_API_HOST?: string;
+  ME3_SITE_HOST?: string;
+  ME3_CUSTOM_DOMAIN?: string;
+  TOKEN_ENCRYPTION_KEY?: string;
 };
 
 export class SocialPublishingGateError extends Error {
@@ -943,6 +1007,262 @@ export async function markContentItemPublishing(
   return item;
 }
 
+export async function createQueuedContentPublicationAndEnqueue(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  idInput: unknown,
+): Promise<{ item: ContentItem; publicationIds: string[] } | null> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) throw new SocialPublishingGateError(gate);
+  if (!env.SOCIAL_PUBLISH_QUEUE) {
+    throw new SocialPublishingInputError("Social publish queue is not configured", 424);
+  }
+
+  const id = normalizeId(idInput);
+  if (!id) throw new SocialPublishingInputError("Content item id is required");
+  const existing = await getOwnedContentItem(env, ownerId, id);
+  if (!existing) return null;
+  if (existing.approved_by_human !== 1) {
+    throw new SocialPublishingInputError("Content item must be approved before publishing", 403);
+  }
+  if (existing.status === "publishing") {
+    throw new SocialPublishingInputError("This item is already publishing");
+  }
+
+  const platforms = normalizeContentPlatforms(parseJsonArray(existing.platforms_json));
+  if (platforms.length === 0) {
+    throw new SocialPublishingInputError("Choose at least one platform");
+  }
+
+  const accounts = await listActiveAccountsByPlatform(env, ownerId, existing.site_id, platforms);
+  const missing = platforms.filter((platform) => !accounts.has(platform));
+  if (missing.length > 0) {
+    throw new SocialPublishingInputError(
+      `Connect ${missing.map(platformLabel).join(", ")} before publishing`,
+      424,
+    );
+  }
+
+  const publicationIds: string[] = [];
+  for (const platform of platforms) {
+    const existingPublication = await env.DB.prepare(
+      `SELECT id, status
+       FROM social_publications
+       WHERE variant_id = ? AND platform = ? AND status IN ('queued', 'publishing')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+      .bind(existing.id, platform)
+      .first<{ id: string; status: string }>();
+
+    if (existingPublication) {
+      publicationIds.push(existingPublication.id);
+      continue;
+    }
+
+    const publicationId = randomToken("socpub");
+    publicationIds.push(publicationId);
+    await env.DB.prepare(
+      `INSERT INTO social_publications (
+         id, variant_id, site_id, platform, status, queued_at, created_at, updated_at
+       )
+       VALUES (?, ?, ?, ?, 'queued', ?, datetime('now'), datetime('now'))`,
+    )
+      .bind(publicationId, existing.id, existing.site_id, platform, new Date().toISOString())
+      .run();
+    await insertSocialPublicationEvent(env, {
+      publicationId,
+      variantId: existing.id,
+      eventType: "queued",
+      payload: { platform, contentItemId: existing.id },
+    });
+    await env.SOCIAL_PUBLISH_QUEUE.send({ publicationId });
+  }
+
+  await setContentQueueState(env, ownerId, existing.id, "publishing");
+  const updated = await getOwnedContentItem(env, ownerId, existing.id);
+  if (!updated) throw new SocialPublishingInputError("Could not update content item", 500);
+  return { item: serializeContentItem(updated), publicationIds };
+}
+
+export async function dispatchDueSocialPublications(
+  env: SocialPublishingEnv,
+): Promise<{ queued: number; skipped: number }> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready || !env.SOCIAL_PUBLISH_QUEUE) return { queued: 0, skipped: 0 };
+
+  const rows = await env.DB.prepare(
+    `SELECT c.*, s.username AS site_username
+     FROM content_bank_items c
+     JOIN sites s ON s.id = c.site_id
+     WHERE c.status = 'scheduled'
+       AND c.approved_by_human = 1
+       AND c.scheduled_for IS NOT NULL
+       AND datetime(c.scheduled_for) <= datetime('now')
+     ORDER BY c.scheduled_for ASC
+     LIMIT 20`,
+  )
+    .bind()
+    .all<ContentItemRow>();
+
+  let queued = 0;
+  let skipped = 0;
+  for (const row of rows.results || []) {
+    try {
+      const result = await createQueuedContentPublicationAndEnqueue(env, row.user_id, row.id);
+      queued += result?.publicationIds.length || 0;
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { queued, skipped };
+}
+
+export async function processSocialPublishBatch(
+  batch: {
+    messages: ReadonlyArray<{
+      body: SocialPublishQueueMessage;
+      ack(): void;
+      retry(): void;
+    }>;
+  },
+  env: SocialPublishingEnv,
+): Promise<void> {
+  for (const message of batch.messages) {
+    try {
+      await publishQueuedContentPublication(env, message.body.publicationId, fetch);
+      message.ack();
+    } catch (error) {
+      console.error("social publish job failed", message.body.publicationId, error);
+      message.retry();
+    }
+  }
+}
+
+export async function publishQueuedContentPublication(
+  env: SocialPublishingEnv,
+  publicationIdInput: unknown,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  const publicationId = normalizeId(publicationIdInput);
+  if (!publicationId) throw new SocialPublishingInputError("publicationId is required");
+
+  const row = await getQueuedPublicationRow(env, publicationId);
+  if (!row) return;
+  if (row.pub_status === "published" || row.pub_status === "cancelled") return;
+
+  if (!gate.ready) {
+    await failContentPublication(env, row, gate.status, gateErrorMessage(gate));
+    return;
+  }
+
+  if (row.approved_by_human !== 1) {
+    await failContentPublication(
+      env,
+      row,
+      "not_approved",
+      "Content item must be approved before publishing.",
+    );
+    return;
+  }
+
+  if (!row.account_id || !row.platform_account_id || !row.access_token_ciphertext) {
+    await failContentPublication(
+      env,
+      row,
+      "no_account",
+      `Connect ${platformLabel(row.platform)} before publishing.`,
+    );
+    return;
+  }
+
+  if (row.account_status !== "active" || tokenLooksExpired(row.token_expires_at)) {
+    await failContentPublication(
+      env,
+      row,
+      "account_not_ready",
+      `${platformLabel(row.platform)} connection is not ready.`,
+    );
+    return;
+  }
+
+  const assets = absolutizeContentAssets(env, normalizeMediaManifest(parseJsonArray(row.media_manifest_json)));
+  const adapter = adapterFor(row.platform);
+  const validation = adapter.validateDraft({ bodyText: row.body, assets });
+  if (!validation.ok) {
+    await failContentPublication(env, row, "validation_failed", validation.error);
+    return;
+  }
+
+  await env.DB.prepare(
+    `UPDATE social_publications
+     SET status = 'publishing', updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(row.publication_id)
+    .run();
+  await insertSocialPublicationEvent(env, {
+    publicationId: row.publication_id,
+    variantId: row.variant_id,
+    eventType: "publishing",
+    payload: { platform: row.platform, contentItemId: row.variant_id },
+  });
+
+  const accessToken = await decryptSecret(row.access_token_ciphertext, await resolveInstallKey(env));
+  const result = await adapter.publish({
+    accessToken,
+    accountId: row.platform_account_id,
+    bodyText: row.body,
+    assets,
+    fetcher,
+  });
+
+  if (!result.ok) {
+    await failContentPublication(
+      env,
+      row,
+      result.errorCode || "provider_failed",
+      result.errorMessage || "Social provider publish failed.",
+      result.providerResponse,
+    );
+    return;
+  }
+
+  await env.DB.prepare(
+    `UPDATE social_publications
+     SET status = 'published',
+         platform_post_id = ?,
+         platform_post_url = ?,
+         provider_response_json = ?,
+         published_at = datetime('now'),
+         error_code = NULL,
+         error_message = NULL,
+         updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(
+      result.platformPostId || null,
+      result.platformPostUrl || null,
+      result.providerResponse !== undefined ? JSON.stringify(result.providerResponse) : null,
+      row.publication_id,
+    )
+    .run();
+
+  await insertSocialPublicationEvent(env, {
+    publicationId: row.publication_id,
+    variantId: row.variant_id,
+    eventType: "published",
+    payload: {
+      platform: row.platform,
+      contentItemId: row.variant_id,
+      platformPostId: result.platformPostId,
+      platformPostUrl: result.platformPostUrl,
+    },
+  });
+  await syncContentItemStatusFromPublications(env, row.variant_id);
+}
+
 export async function reorderContentQueue(
   env: SocialPublishingEnv,
   ownerId: string,
@@ -1238,6 +1558,217 @@ async function getOwnedSite(
   return env.DB.prepare("SELECT id, user_id, username FROM sites WHERE id = ? AND user_id = ?")
     .bind(siteId, ownerId)
     .first<Required<Pick<SiteRow, "id" | "user_id" | "username">>>();
+}
+
+async function listActiveAccountsByPlatform(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  siteId: string,
+  platforms: SocialPlatform[],
+): Promise<Map<SocialPlatform, SocialAccountRow>> {
+  const rows = await env.DB.prepare(
+    `SELECT id, site_id, platform, platform_account_id, platform_handle, display_name,
+            status, scopes_json, last_verified_at, created_at, updated_at
+     FROM social_accounts
+     WHERE user_id = ?
+       AND site_id = ?
+       AND status = 'active'`,
+  )
+    .bind(ownerId, siteId)
+    .all<SocialAccountRow>();
+  const wanted = new Set(platforms);
+  return new Map(
+    (rows.results || [])
+      .map((row) => [normalizePlatform(row.platform), row] as const)
+      .filter((entry): entry is [SocialPlatform, SocialAccountRow] =>
+        Boolean(entry[0] && wanted.has(entry[0])),
+      ),
+  );
+}
+
+async function getQueuedPublicationRow(
+  env: SocialPublishingEnv,
+  publicationId: string,
+): Promise<SocialPublicationRow | null> {
+  return env.DB.prepare(
+    `SELECT pub.id AS publication_id,
+            pub.variant_id,
+            pub.site_id,
+            pub.platform,
+            pub.status AS pub_status,
+            c.body,
+            c.media_manifest_json,
+            c.platforms_json,
+            c.approved_by_human,
+            c.user_id,
+            acct.id AS account_id,
+            acct.platform_account_id,
+            acct.access_token_ciphertext,
+            acct.token_expires_at,
+            acct.status AS account_status
+     FROM social_publications pub
+     JOIN content_bank_items c ON c.id = pub.variant_id
+     LEFT JOIN social_accounts acct
+       ON acct.site_id = pub.site_id
+      AND acct.platform = pub.platform
+      AND acct.status = 'active'
+     WHERE pub.id = ?
+     LIMIT 1`,
+  )
+    .bind(publicationId)
+    .first<SocialPublicationRow>();
+}
+
+async function insertSocialPublicationEvent(
+  env: SocialPublishingEnv,
+  input: {
+    publicationId: string | null;
+    variantId: string;
+    eventType: SocialPublicationEventType;
+    payload?: unknown;
+  },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO social_publication_events (
+       id, publication_id, variant_id, event_type, payload_json, created_at
+     )
+     VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+  )
+    .bind(
+      randomToken("socevt"),
+      input.publicationId,
+      input.variantId,
+      input.eventType,
+      input.payload === undefined ? null : JSON.stringify(input.payload),
+    )
+    .run();
+}
+
+async function failContentPublication(
+  env: SocialPublishingEnv,
+  row: Pick<SocialPublicationRow, "publication_id" | "variant_id">,
+  code: string,
+  message: string,
+  providerResponse?: unknown,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE social_publications
+     SET status = 'failed',
+         error_code = ?,
+         error_message = ?,
+         provider_response_json = ?,
+         updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(
+      code,
+      message,
+      providerResponse === undefined ? null : JSON.stringify(providerResponse),
+      row.publication_id,
+    )
+    .run();
+  await insertSocialPublicationEvent(env, {
+    publicationId: row.publication_id,
+    variantId: row.variant_id,
+    eventType: "failed",
+    payload: { code, message },
+  });
+  await syncContentItemStatusFromPublications(env, row.variant_id);
+}
+
+async function syncContentItemStatusFromPublications(
+  env: SocialPublishingEnv,
+  contentItemId: string,
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT status, published_at
+     FROM social_publications
+     WHERE variant_id = ?
+     ORDER BY created_at DESC`,
+  )
+    .bind(contentItemId)
+    .all<{ status: string; published_at: string | null }>();
+
+  const publications = rows.results || [];
+  if (publications.length === 0) return;
+  const hasPending = publications.some(
+    (row) => row.status === "queued" || row.status === "publishing",
+  );
+  const hasPublished = publications.some((row) => row.status === "published");
+  const hasFailed = publications.some((row) => row.status === "failed");
+  if (hasPending) return;
+
+  if (hasPublished) {
+    const latestPublishedAt =
+      publications
+        .map((row) => row.published_at)
+        .filter((value): value is string => Boolean(value))
+        .sort()
+        .at(-1) || null;
+    await env.DB.prepare(
+      `UPDATE content_bank_items
+       SET status = 'posted',
+           queue_position = NULL,
+           scheduled_for = NULL,
+           times_posted = times_posted + 1,
+           last_posted_at = COALESCE(?, last_posted_at, datetime('now')),
+           updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+      .bind(latestPublishedAt, contentItemId)
+      .run();
+    return;
+  }
+
+  if (hasFailed) {
+    await env.DB.prepare(
+      `UPDATE content_bank_items
+       SET status = 'failed',
+           queue_position = NULL,
+           scheduled_for = NULL,
+           updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+      .bind(contentItemId)
+      .run();
+  }
+}
+
+function absolutizeContentAssets(
+  env: SocialPublishingEnv,
+  assets: ContentMediaAsset[],
+): ContentMediaAsset[] {
+  const origin = getPublicAssetOrigin(env);
+  return assets.map((asset) => {
+    if (!asset.url.startsWith("/") || !origin) return asset;
+    return { ...asset, url: `${origin}${asset.url}` };
+  });
+}
+
+function getPublicAssetOrigin(env: SocialPublishingEnv): string | null {
+  const origin =
+    env.CORE_API_ORIGIN ||
+    env.CORE_WEB_ORIGIN ||
+    (env.ME3_API_HOST ? `https://${env.ME3_API_HOST}` : null) ||
+    (env.ME3_CUSTOM_DOMAIN ? `https://${env.ME3_CUSTOM_DOMAIN}` : null);
+  return origin ? origin.replace(/\/$/, "") : null;
+}
+
+function tokenLooksExpired(expiresAt: string | null): boolean {
+  if (!expiresAt) return false;
+  const time = Date.parse(expiresAt);
+  return Number.isFinite(time) && time < Date.now() - 60_000;
+}
+
+async function resolveInstallKey(env: SocialPublishingEnv): Promise<string> {
+  if (env.TOKEN_ENCRYPTION_KEY) return env.TOKEN_ENCRYPTION_KEY;
+  const row = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
+    .bind("TOKEN_ENCRYPTION_KEY")
+    .first<{ value: string }>();
+  if (!row?.value) {
+    throw new SocialPublishingInputError("Token encryption key is not configured", 424);
+  }
+  return row.value;
 }
 
 async function getOwnedContentItem(

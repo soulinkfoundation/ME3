@@ -6,6 +6,7 @@ export interface Env {
   SITE_ASSETS?: R2Bucket;
   ASSISTANT_JOB_EVENTS?: Queue<AssistantJobEventQueueMessage>;
   BOOKING_REMINDER_QUEUE?: Queue<BookingReminderQueueMessage>;
+  SOCIAL_PUBLISH_QUEUE?: Queue<SocialPublishQueueMessage>;
 
   ENVIRONMENT?: string;
   CORE_WEB_ORIGIN?: string;
@@ -61,6 +62,10 @@ export type AssistantJobEventQueueMessage = {
 
 export type BookingReminderQueueMessage = {
   reminderId: string;
+};
+
+export type SocialPublishQueueMessage = {
+  publicationId: string;
 };
 
 export interface OwnerProfile {

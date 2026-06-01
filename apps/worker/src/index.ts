@@ -98,9 +98,13 @@ import {
   SocialPublishingInputError,
   appendContentItemMedia,
   completeSocialOAuth,
+  createQueuedContentPublicationAndEnqueue,
+  dispatchDueSocialPublications,
   getSocialPublishingRuntimeStatus,
   listSocialProviderSettings,
   listSocialPublishingAccounts,
+  processSocialPublishBatch,
+  SOCIAL_PUBLISH_QUEUE_NAME,
   startSocialOAuth,
   updateSocialProviderSettings,
 } from "./social-publishing";
@@ -156,7 +160,6 @@ import {
   listAgentContacts,
   markAgentMailboxDraftFailed,
   markAgentMailboxDraftSent,
-  markAgentContentItemPublishing,
   moveAgentMailboxMessage,
   pauseAgentMailbox,
   queueAgentContentItem,
@@ -194,6 +197,7 @@ import type {
   DbUserReminder,
   Env,
   OwnerProfile,
+  SocialPublishQueueMessage,
 } from "./types";
 
 export { Me3UserAgent };
@@ -2441,9 +2445,13 @@ app.post("/api/content/items/:id/publish", async (c) => {
   if (!ownerId) return unauthorized(c);
 
   try {
-    const item = await markAgentContentItemPublishing(c.env, ownerId, c.req.param("id"));
-    if (!item) return c.json({ error: "Content item not found" }, 404);
-    return c.json({ ok: true, item, publicationIds: [] });
+    const result = await createQueuedContentPublicationAndEnqueue(
+      c.env,
+      ownerId,
+      c.req.param("id"),
+    );
+    if (!result) return c.json({ error: "Content item not found" }, 404);
+    return c.json({ ok: true, item: result.item, publicationIds: result.publicationIds });
   } catch (error) {
     return socialPublishingErrorResponse(c, error);
   }
@@ -7595,11 +7603,14 @@ const worker = {
   email(message: ForwardableEmailMessageLike, env: Env, _ctx?: ExecutionContext) {
     return handleInboundEmail(message, env);
   },
-  scheduled(_event: ScheduledEvent, env: Env, _ctx?: ExecutionContext) {
-    return dispatchDueBookingReminders(env).then(() => undefined);
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx?: ExecutionContext) {
+    await dispatchDueBookingReminders(env);
+    await dispatchDueSocialPublications(env);
   },
   queue(
-    batch: MessageBatch<AssistantJobEventQueueMessage | BookingReminderQueueMessage>,
+    batch: MessageBatch<
+      AssistantJobEventQueueMessage | BookingReminderQueueMessage | SocialPublishQueueMessage
+    >,
     env: Env,
   ) {
     if (batch.queue === BOOKING_REMINDER_QUEUE_NAME || batch.queue.includes("booking-reminders")) {
@@ -7607,6 +7618,9 @@ const worker = {
         batch as MessageBatch<BookingReminderQueueMessage>,
         env,
       );
+    }
+    if (batch.queue === SOCIAL_PUBLISH_QUEUE_NAME || batch.queue.includes("social-publish")) {
+      return processSocialPublishBatch(batch as MessageBatch<SocialPublishQueueMessage>, env);
     }
     return handleAssistantJobQueueBatch(batch as MessageBatch<AssistantJobEventQueueMessage>, env);
   },

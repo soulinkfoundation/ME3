@@ -18,6 +18,7 @@ const props = withDefaults(
     shape?: ButtonShape;
     iconOnly?: boolean;
     ariaLabel?: string;
+    title?: string;
     /** When set, renders as `RouterLink`. */
     to?: RouteLocationRaw;
     /** When set (and `to` is not), renders as `<a>`. */
@@ -48,6 +49,7 @@ const rootAttrs = computed(() => {
   return {
     type: props.type,
     disabled: props.disabled,
+    title: props.title,
     "aria-label": props.iconOnly ? props.ariaLabel : undefined,
   };
 });
@@ -117,12 +119,17 @@ button.me3-btn {
 .me3-btn--green {
   background: var(--ui-accent, var(--color-accent));
   border-color: var(--ui-accent, var(--color-accent));
-  color: var(--ui-accent-contrast, var(--color-accent-contrast));
+  color: var(--ui-accent-contrast, #fff);
 }
 
 .me3-btn--green:hover:not(:disabled) {
   background: var(--ui-accent-strong, var(--color-accent));
   border-color: var(--ui-accent-strong, var(--color-accent));
+  color: var(--ui-accent-contrast, #fff);
+}
+
+.me3-btn--green .me3-btn__icon {
+  color: inherit;
 }
 
 .me3-btn--black {

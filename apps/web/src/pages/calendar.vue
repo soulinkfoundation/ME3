@@ -1503,7 +1503,7 @@ function handleWindowClick() {
 }
 
 onMounted(async () => {
-  mobileMediaQuery = window.matchMedia("(max-width: 760px)");
+  mobileMediaQuery = window.matchMedia("(max-width: 959px)");
   applyCalendarViewportDefaults(mobileMediaQuery.matches);
   mobileMediaQuery.addEventListener("change", onMobileCalendarChange);
   window.addEventListener("keydown", handleWindowKeydown);
@@ -1564,24 +1564,35 @@ onBeforeUnmount(() => {
             @today="pickCalendarToday"
           />
         </div>
-        <button
+        <Button
+          tone="outline"
+          shape="soft"
+          size="compact"
+          icon-only
           type="button"
-          class="cal-icon-button cal-mobile-view-cycle"
           :aria-label="mobileRangeCycleLabel"
           :title="mobileRangeCycleLabel"
           @click="cycleRangeMode"
         >
-          <UiIcon :name="mobileRangeIcon" :size="18" aria-hidden="true" />
-        </button>
+          <template #icon>
+            <UiIcon :name="mobileRangeIcon" :size="18" aria-hidden="true" />
+          </template>
+        </Button>
         <div class="cal-mobile-create-wrap">
-          <button
+          <Button
+            tone="green"
+            shape="soft"
+            size="compact"
+            icon-only
             type="button"
-            class="cal-icon-button cal-create-mobile"
             aria-label="Create calendar item"
+            title="Create calendar item"
             @click="toggleCreateMenu"
           >
-            <UiIcon name="Plus" :size="18" aria-hidden="true" />
-          </button>
+            <template #icon>
+              <UiIcon name="Plus" :size="18" aria-hidden="true" />
+            </template>
+          </Button>
           <div v-if="showCreateMenu" class="cal-create-menu cal-create-menu--mobile-nav">
             <button type="button" @click="openCreateMode('booking')">
               New booking
@@ -1663,10 +1674,18 @@ onBeforeUnmount(() => {
         </div>
         <div class="cal-toolbar-actions">
           <div class="cal-create-wrap">
-            <button type="button" class="cal-create" @click="toggleCreateMenu">
-              <UiIcon name="Plus" :size="16" aria-hidden="true" />
+            <Button
+              tone="green"
+              shape="soft"
+              size="compact"
+              type="button"
+              @click="toggleCreateMenu"
+            >
+              <template #icon>
+                <UiIcon name="Plus" :size="16" aria-hidden="true" />
+              </template>
               Create
-            </button>
+            </Button>
             <div v-if="showCreateMenu" class="cal-create-menu cal-create-menu--toolbar">
               <button type="button" @click="openCreateMode('booking')">
                 New booking
@@ -2633,23 +2652,6 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.cal-icon-button {
-  display: inline-grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  cursor: pointer;
-}
-
-.cal-icon-button:hover {
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-contrast);
-}
-
 .cal-loading,
 .cal-error-banner,
 .cal-status-banner {
@@ -2684,29 +2686,6 @@ onBeforeUnmount(() => {
 
 .cal-create-wrap {
   position: relative;
-}
-
-.cal-create {
-  display: inline-flex;
-  min-height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-text);
-  color: var(--ui-bg);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  cursor: pointer;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.cal-create:hover {
-  opacity: 0.92;
 }
 
 .cal-create-menu {
@@ -3060,7 +3039,7 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 959px) {
   :global(#app-side-nav-mobile-page-controls:has(.cal-mobile-nav-controls)) {
     min-height: 64px;
     padding-top: 10px;
@@ -3089,8 +3068,10 @@ onBeforeUnmount(() => {
   }
 
   .cal-period-switcher--mobile {
-    grid-template-columns: 32px minmax(0, 1fr) 32px;
-    justify-self: stretch;
+    grid-template-columns: 32px auto 32px;
+    justify-self: start;
+    width: max-content;
+    max-width: 100%;
     min-width: 0;
   }
 
@@ -3103,26 +3084,13 @@ onBeforeUnmount(() => {
 
   .cal-period-switcher--mobile .cal-period-title {
     min-height: 32px;
+    max-width: min(220px, calc(100vw - 180px));
     padding-inline: 6px;
     font-size: 14px;
   }
 
   .cal-mobile-create-wrap {
     position: relative;
-  }
-
-  .cal-create-mobile {
-    width: 36px;
-    height: 36px;
-    border: 0;
-    background: var(--ui-text);
-    color: var(--ui-bg);
-  }
-
-  .cal-create-mobile:hover {
-    background: var(--ui-text);
-    color: var(--ui-bg);
-    opacity: 0.92;
   }
 
   .cal-create-menu--mobile-nav {
