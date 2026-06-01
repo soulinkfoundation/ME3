@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../../api";
+import Button from "../../components/Button.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import { useAppToast } from "../../composables/useAppToast";
 
@@ -424,17 +425,6 @@ function runStatusLabel(status: AssistantJobRunStatus | null) {
   return labels[status] || status;
 }
 
-function actionStatusLabel(status: AssistantJobActionResult["status"]) {
-  const labels: Record<AssistantJobActionResult["status"], string> = {
-    skipped: "Skipped",
-    blocked: "Blocked",
-    pending_approval: "Needs you",
-    succeeded: "Done",
-    failed: "Failed",
-  };
-  return labels[status] || status;
-}
-
 function recipeActionLabel(recipe: AssistantJobRecipe) {
   if (recipe.state === "coming_later") return "Later";
   return "Add";
@@ -532,28 +522,6 @@ function setupMessageForJob(job: AssistantJob) {
     );
 }
 
-function capabilityLabel(capabilityId: string) {
-  const labels: Record<string, string> = {
-    "assistant.job.validate": "Check jobs",
-    "mission.project.read": "Read projects",
-    "mission.task.read": "Read tasks",
-    "mission.approval.read": "Read approvals",
-    "mission.review_packet.create": "Create result",
-    "mission.activity.create": "Record activity",
-    "mission.task.create": "Create task",
-    "mission.capture.create": "Create capture",
-    "mission.memory.suggest": "Suggest memory",
-    "message.owner.notify": "Notify you",
-    "email.message.read": "Read email",
-    "email.thread.summarize": "Summarize email",
-    "email.reply.draft": "Draft email",
-    "calendar.event.read": "Read calendar",
-  };
-  return (
-    labels[capabilityId] || cleanPlainText(capabilityId.replace(/\./g, " "))
-  );
-}
-
 function cleanPlainText(value: string) {
   return String(value || "")
     .replace(/Mission Control review packets?/gi, "Mission Control results")
@@ -573,8 +541,50 @@ function messageFromUnknown(err: unknown, fallback: string) {
 <template>
   <div class="assistant-page">
     <Teleport to="#app-side-nav-mobile-page-controls">
-      <div class="assistant-mobile-spacer" aria-hidden="true"></div>
+      <div v-if="!loadingJobs" class="assistant-mobile-nav">
+        <h1 class="assistant-mobile-nav__title">Assistant jobs</h1>
+        <div
+          v-if="sortedJobs.length > 0"
+          class="assistant-mobile-nav__actions"
+        >
+          <Button
+            tone="green"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Add job"
+            type="button"
+            @click="openAddModal"
+          >
+            <template #icon>
+              <UiIcon name="Plus" :size="18" />
+            </template>
+          </Button>
+        </div>
+      </div>
     </Teleport>
+
+    <header
+      v-if="!loadingJobs && sortedJobs.length > 0"
+      class="assistant-topbar"
+    >
+      <div aria-hidden="true"></div>
+      <h1>Assistant jobs</h1>
+      <div class="assistant-topbar__actions">
+        <Button
+          tone="green"
+          shape="soft"
+          size="compact"
+          type="button"
+          @click="openAddModal"
+        >
+          <template #icon>
+            <UiIcon name="Plus" :size="18" />
+          </template>
+          Add job
+        </Button>
+      </div>
+    </header>
 
     <main
       class="assistant-main"
@@ -600,24 +610,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
           aria-hidden="true"
         />
         <p>Create jobs for your assistant</p>
-        <button type="button" class="primary-button" @click="openAddModal">
-          <UiIcon name="Plus" :size="18" />
+        <Button
+          tone="green"
+          shape="soft"
+          size="compact"
+          type="button"
+          @click="openAddModal"
+        >
+          <template #icon>
+            <UiIcon name="Plus" :size="18" />
+          </template>
           Add Job
-        </button>
+        </Button>
       </section>
 
       <template v-else>
-        <header class="assistant-topbar">
-          <div aria-hidden="true"></div>
-          <h1>Assistant Jobs</h1>
-          <div class="assistant-topbar__actions">
-            <button type="button" class="primary-button" @click="openAddModal">
-              <UiIcon name="Plus" :size="18" />
-              Add job
-            </button>
-          </div>
-        </header>
-
         <section class="panel jobs-panel" aria-label="Assistant jobs">
           <div class="job-list">
             <article
@@ -638,59 +645,35 @@ function messageFromUnknown(err: unknown, fallback: string) {
               >
                 <span class="job-title-block">
                   <strong>{{ job.name }}</strong>
-                  <span>{{ cleanPlainText(job.purpose) }}</span>
+                  <span
+                    class="status-badge"
+                    :class="`status-badge--${job.status}`"
+                  >
+                    {{ statusLabel(job.status) }}
+                  </span>
                 </span>
                 <span class="job-meta">
-                  <span>{{ formatTrigger(job.triggerSummary) }}</span>
-                  <span>{{ formatDate(job.lastRunAt) }}</span>
-                  <span>{{ formatNextRun(job) }}</span>
+                  <span>Runs: {{ formatTrigger(job.triggerSummary) }}</span>
+                  <span>Last run: {{ formatDate(job.lastRunAt) }}</span>
                 </span>
               </button>
 
               <div class="job-row-side">
-                <span
-                  class="status-badge"
-                  :class="`status-badge--${job.status}`"
-                >
-                  {{ statusLabel(job.status) }}
-                </span>
                 <span
                   v-if="job.lastRunStatus === 'waiting_for_approval'"
                   class="needs-you"
                 >
                   Needs you
                 </span>
-                <div class="row-actions">
-                  <button
-                    v-if="canRun(job)"
-                    type="button"
-                    class="icon-button"
-                    title="Run now"
-                    aria-label="Run now"
-                    :disabled="isBusy(`run:${job.id}`)"
-                    @click="runJob(job)"
-                  >
-                    <UiIcon name="Play" :size="16" />
-                  </button>
-                  <button
-                    v-if="canToggle(job)"
-                    type="button"
-                    class="icon-button"
-                    :title="toggleLabel(job)"
-                    :aria-label="toggleLabel(job)"
-                    :disabled="isBusy(toggleBusyKey(job))"
-                    @click="toggleJob(job)"
-                  >
-                    <UiIcon :name="toggleIcon(job)" :size="16" />
-                  </button>
-                  <button
-                    type="button"
-                    class="text-button"
-                    @click="openJob(job.id)"
-                  >
-                    Details
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  class="icon-button"
+                  title="Edit job"
+                  aria-label="Edit job"
+                  @click.stop="openJob(job.id)"
+                >
+                  <UiIcon name="Pencil" :size="16" />
+                </button>
               </div>
             </article>
           </div>
@@ -746,17 +729,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </div>
                 <p>{{ cleanPlainText(recipe.outcome) }}</p>
               </div>
-              <button
+              <Button
+                tone="outline"
+                shape="soft"
+                size="compact"
                 type="button"
-                class="secondary-button"
                 :disabled="
                   !canCreateRecipe(recipe) || isBusy(`recipe:${recipe.id}`)
                 "
                 @click="createStarterJob(recipe)"
               >
-                <UiIcon name="Plus" :size="16" />
+                <template #icon>
+                  <UiIcon name="Plus" :size="16" />
+                </template>
                 {{ recipeActionLabel(recipe) }}
-              </button>
+              </Button>
             </article>
           </div>
         </section>
@@ -778,8 +765,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
           <div v-if="loadingDetail" class="empty-row">Loading details...</div>
           <template v-else-if="selectedJob">
             <header class="assistant-modal__header">
-              <div>
-                <h2 id="job-detail-title">{{ selectedJob.name }}</h2>
+              <div class="assistant-modal__header-copy">
+                <div class="assistant-modal__title-row">
+                  <h2 id="job-detail-title">{{ selectedJob.name }}</h2>
+                  <span
+                    class="status-badge"
+                    :class="`status-badge--${selectedJob.status}`"
+                  >
+                    {{ statusLabel(selectedJob.status) }}
+                  </span>
+                  <span
+                    v-if="selectedJob.lastRunStatus === 'waiting_for_approval'"
+                    class="needs-you"
+                  >
+                    Needs you
+                  </span>
+                </div>
                 <p>{{ cleanPlainText(selectedJob.purpose) }}</p>
               </div>
               <button
@@ -791,21 +792,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <UiIcon name="X" :size="20" />
               </button>
             </header>
-
-            <div class="modal-status-line">
-              <span
-                class="status-badge"
-                :class="`status-badge--${selectedJob.status}`"
-              >
-                {{ statusLabel(selectedJob.status) }}
-              </span>
-              <span
-                v-if="selectedJob.lastRunStatus === 'waiting_for_approval'"
-                class="needs-you"
-              >
-                Needs you
-              </span>
-            </div>
 
             <div v-if="selectedJob.status === 'needs_setup'" class="notice">
               {{ setupMessageForJob(selectedJob) }}
@@ -832,38 +818,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <dd>{{ formatNextRun(selectedJob) }}</dd>
               </div>
             </dl>
-
-            <div class="detail-actions">
-              <button
-                v-if="canRun(selectedJob)"
-                type="button"
-                class="primary-button"
-                :disabled="isBusy(`run:${selectedJob.id}`)"
-                @click="runJob(selectedJob)"
-              >
-                <UiIcon name="Play" :size="17" />
-                Run now
-              </button>
-              <button
-                v-if="canToggle(selectedJob)"
-                type="button"
-                class="secondary-button"
-                :disabled="isBusy(toggleBusyKey(selectedJob))"
-                @click="toggleJob(selectedJob)"
-              >
-                <UiIcon :name="toggleIcon(selectedJob)" :size="17" />
-                {{ toggleLabel(selectedJob) }}
-              </button>
-              <button
-                type="button"
-                class="secondary-button"
-                :disabled="isBusy(`duplicate:${selectedJob.id}`)"
-                @click="duplicateJob(selectedJob)"
-              >
-                <UiIcon name="Copy" :size="17" />
-                Duplicate
-              </button>
-            </div>
 
             <section
               class="detail-section"
@@ -939,58 +893,62 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </div>
             </section>
 
-            <section class="detail-section" aria-labelledby="job-runs-title">
-              <h3 id="job-runs-title">Recent Runs</h3>
-              <div
-                v-if="!(selectedDetail?.runs || []).length"
-                class="empty-row"
+            <footer class="assistant-modal__footer">
+              <Button
+                v-if="canRun(selectedJob)"
+                tone="green"
+                shape="soft"
+                size="compact"
+                type="button"
+                :disabled="isBusy(`run:${selectedJob.id}`)"
+                @click="runJob(selectedJob)"
               >
-                No runs yet.
-              </div>
-              <div v-else class="run-list">
-                <article
-                  v-for="run in selectedDetail?.runs || []"
-                  :key="run.id"
-                  class="run-row"
-                >
-                  <div class="run-row-top">
-                    <strong>{{ runStatusLabel(run.status) }}</strong>
-                    <span>{{
-                      formatDate(run.startedAt || run.createdAt)
-                    }}</span>
-                  </div>
-                  <p v-if="run.outputPreview">
-                    {{ cleanPlainText(run.outputPreview) }}
-                  </p>
-                  <p v-else-if="run.errorMessage">
-                    {{ cleanPlainText(run.errorMessage) }}
-                  </p>
-                  <div
-                    v-if="run.actionResults.length"
-                    class="action-result-list"
-                  >
-                    <span
-                      v-for="action in run.actionResults"
-                      :key="action.id"
-                      class="action-result"
-                    >
-                      {{ capabilityLabel(action.capabilityId) }}:
-                      {{ actionStatusLabel(action.status) }}
-                    </span>
-                  </div>
-                </article>
-              </div>
-            </section>
-
-            <button
-              type="button"
-              class="danger-button"
-              :disabled="isBusy(`archive:${selectedJob.id}`)"
-              @click="archiveJob(selectedJob)"
-            >
-              <UiIcon name="Trash2" :size="17" />
-              Remove job
-            </button>
+                <template #icon>
+                  <UiIcon name="Play" :size="17" />
+                </template>
+                Run now
+              </Button>
+              <Button
+                v-if="canToggle(selectedJob)"
+                tone="outline"
+                shape="soft"
+                size="compact"
+                type="button"
+                :disabled="isBusy(toggleBusyKey(selectedJob))"
+                @click="toggleJob(selectedJob)"
+              >
+                <template #icon>
+                  <UiIcon :name="toggleIcon(selectedJob)" :size="17" />
+                </template>
+                {{ toggleLabel(selectedJob) }}
+              </Button>
+              <Button
+                tone="outline"
+                shape="soft"
+                size="compact"
+                type="button"
+                :disabled="isBusy(`duplicate:${selectedJob.id}`)"
+                @click="duplicateJob(selectedJob)"
+              >
+                <template #icon>
+                  <UiIcon name="Copy" :size="17" />
+                </template>
+                Duplicate
+              </Button>
+              <Button
+                tone="red"
+                shape="soft"
+                size="compact"
+                type="button"
+                :disabled="isBusy(`archive:${selectedJob.id}`)"
+                @click="archiveJob(selectedJob)"
+              >
+                <template #icon>
+                  <UiIcon name="Trash2" :size="17" />
+                </template>
+                Remove job
+              </Button>
+            </footer>
           </template>
         </section>
       </div>
@@ -1000,7 +958,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 <style scoped>
 .assistant-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
   min-height: 100vh;
+  padding: 0 24px 40px;
   background: var(--ui-bg);
   color: var(--ui-text);
 }
@@ -1008,12 +970,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-main {
   display: grid;
   gap: 16px;
-  justify-items: center;
+  justify-items: stretch;
   align-content: start;
-  min-height: calc(100vh - 32px);
+  flex: 1;
+  min-height: 0;
   width: min(760px, 100%);
   margin: 0 auto;
-  padding: 16px 18px 44px;
+  padding: 0 0 4px;
 }
 
 .assistant-main--empty {
@@ -1026,15 +989,34 @@ function messageFromUnknown(err: unknown, fallback: string) {
   top: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(44px, 1fr);
   align-items: center;
   gap: 16px;
+  width: 100%;
   min-height: 64px;
   min-width: 0;
   padding: 12px 0;
   border-bottom: 1px solid var(--ui-border);
   background: color-mix(in oklab, var(--ui-bg), transparent 4%);
   backdrop-filter: blur(16px);
+}
+
+.assistant-mobile-nav {
+  display: none;
+}
+
+.assistant-mobile-nav__title {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.assistant-mobile-nav__actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .assistant-topbar h1 {
@@ -1052,20 +1034,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-modal__header p,
-.starter-main p,
-.run-row p {
+.starter-main p {
   margin: 6px 0 0;
   color: var(--ui-text-muted);
   font-size: 14px;
   line-height: 1.5;
 }
 
-.assistant-mobile-spacer {
-  display: none;
-}
-
-.needs-you,
-.action-result {
+.needs-you {
   display: inline-flex;
   align-items: center;
   min-height: 26px;
@@ -1131,21 +1107,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
   box-shadow: var(--ui-shadow-md, 0 22px 70px rgba(15, 23, 42, 0.14));
 }
 
-.assistant-placeholder .primary-button {
+.assistant-placeholder :deep(.me3-btn--compact) {
   min-height: 44px;
   padding: 0 18px;
   font-size: 14px;
 }
 
 .starter-list,
-.job-list,
-.run-list {
+.job-list {
   display: grid;
 }
 
 .starter-row,
-.job-row,
-.run-row {
+.job-row {
   display: grid;
   gap: 12px;
   padding: 14px 16px;
@@ -1153,8 +1127,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .starter-row:last-child,
-.job-row:last-child,
-.run-row:last-child {
+.job-row:last-child {
   border-bottom: 0;
 }
 
@@ -1208,8 +1181,10 @@ button:focus-visible {
 }
 
 .job-title-block {
-  display: grid;
-  gap: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -1219,7 +1194,6 @@ button:focus-visible {
   line-height: 1.35;
 }
 
-.job-title-block span,
 .job-meta span {
   color: var(--ui-text-muted);
   font-size: 13px;
@@ -1228,21 +1202,11 @@ button:focus-visible {
 
 .job-meta {
   display: grid;
-  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(
-      120px,
-      1fr
-    );
+  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr);
   gap: 10px;
 }
 
 .job-row-side {
-  display: grid;
-  justify-items: end;
-  gap: 8px;
-}
-
-.row-actions,
-.detail-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1250,67 +1214,22 @@ button:focus-visible {
   gap: 8px;
 }
 
-.detail-actions {
-  justify-content: flex-start;
-}
-
-.primary-button,
-.secondary-button,
-.danger-button,
-.text-button,
 .icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  min-height: 36px;
-  border-radius: var(--ui-radius-md);
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
   cursor: pointer;
 }
 
-.primary-button,
-.secondary-button,
-.danger-button {
-  padding: 0 12px;
-}
-
-.primary-button {
-  border: 1px solid var(--ui-accent);
-  background: var(--ui-accent);
-  color: #fff;
-}
-
-.secondary-button {
-  border: 1px solid var(--ui-border);
-  background: var(--ui-surface);
-  color: var(--ui-text);
-}
-
-.danger-button {
-  width: fit-content;
-  border: 1px solid color-mix(in oklab, #e53935 45%, var(--ui-border));
-  background: transparent;
-  color: var(--ui-text);
-}
-
-.text-button,
-.icon-button {
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--ui-text);
-}
-
-.text-button {
-  padding: 0 6px;
-}
-
-.icon-button {
-  width: 36px;
-  padding: 0;
+.icon-button:hover {
+  background: var(--ui-surface-muted);
 }
 
 button:disabled {
@@ -1321,13 +1240,13 @@ button:disabled {
 .status-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
+  min-height: 22px;
   border-radius: var(--ui-radius-sm);
-  padding: 4px 8px;
+  padding: 3px 7px;
   background: var(--ui-surface-muted);
   color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 11px;
+  font-weight: 600;
   line-height: 1.1;
   white-space: nowrap;
 }
@@ -1376,34 +1295,29 @@ button:disabled {
 
 .detail-facts {
   display: grid;
-  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+  row-gap: 10px;
   margin: 0;
-  border-bottom: 1px solid var(--ui-border);
 }
 
 .detail-facts div {
   display: grid;
-  grid-template-columns: 130px minmax(0, 1fr);
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.detail-facts div:last-child {
-  border-bottom: 0;
+  gap: 2px;
+  min-width: 0;
 }
 
 .detail-facts dt {
   color: var(--ui-text-muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
 }
 
 .detail-facts dd {
   margin: 0;
   color: var(--ui-text);
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .detail-section {
@@ -1441,30 +1355,6 @@ button:disabled {
   line-height: 1.4;
 }
 
-.run-row {
-  padding-inline: 0;
-}
-
-.run-row-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--ui-text);
-  font-size: 13px;
-}
-
-.run-row-top span {
-  color: var(--ui-text-muted);
-  white-space: nowrap;
-}
-
-.action-result-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-
 .assistant-modal {
   position: fixed;
   inset: 0;
@@ -1500,6 +1390,17 @@ button:disabled {
   gap: 12px;
 }
 
+.assistant-modal__header-copy {
+  min-width: 0;
+}
+
+.assistant-modal__title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .assistant-modal__header h2 {
   margin: 0;
   font-size: 17px;
@@ -1520,39 +1421,76 @@ button:disabled {
   cursor: pointer;
 }
 
-.modal-status-line {
+.assistant-modal__footer {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-border);
+}
+
+@media (max-width: 959px) {
+  .assistant-page {
+    gap: 0;
+    padding: 0 14px 32px;
+  }
+
+  .assistant-main:not(.assistant-main--empty) {
+    padding-top: 16px;
+  }
+
+  .assistant-topbar {
+    display: none;
+  }
+
+  .assistant-mobile-nav {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+  }
+
+  .assistant-mobile-nav__actions {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+  }
+
+  .assistant-mobile-nav :deep(.me3-btn--icon-only.me3-btn--compact) {
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+  }
 }
 
 @media (max-width: 760px) {
   .assistant-main {
-    padding: 14px 14px 28px;
-  }
-
-  .assistant-mobile-spacer {
-    display: block;
-    min-height: 36px;
-  }
-
-  .assistant-topbar {
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    gap: 10px;
-  }
-
-  .assistant-topbar .primary-button {
-    min-width: 36px;
-    padding: 0 10px;
+    padding-bottom: 24px;
   }
 
   .starter-row,
   .job-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .job-row {
+    position: relative;
+    padding-right: 56px;
   }
 
   .job-row-side {
-    justify-items: start;
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: flex-start;
+    gap: 6px;
   }
 
   .job-meta {
@@ -1560,14 +1498,9 @@ button:disabled {
     gap: 4px;
   }
 
-  .row-actions,
-  .detail-actions {
-    justify-content: flex-start;
-  }
-
-  .detail-facts div {
+  .detail-facts {
     grid-template-columns: 1fr;
-    gap: 4px;
+    row-gap: 8px;
   }
 
   .assistant-modal {
