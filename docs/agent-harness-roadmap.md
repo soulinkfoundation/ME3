@@ -42,9 +42,9 @@ results, drafts, approvals, setup, and history.
 | Area | State | Main Risk | Tracking |
 | --- | --- | --- | --- |
 | Core chat actions | Partial parity. Reminder create/list and booking lookup have started. | Hosted actions could be ported unevenly without shared capability/audit policy. | `me3-tlt` |
-| Assistant Jobs | Schema, API, UI, starter recipes, runner lifecycle, Mission Control activity writes, Daily Briefing owner notification, and Email Triage mailbox-backed execution exist. | Jobs still look more complete than they are: schedules, heartbeat, richer model/provider adapters, and QA remain unfinished. | `me3-wsn` |
+| Assistant Jobs | Schema, API, UI, starter recipes, runner lifecycle, Mission Control activity writes, Daily Briefing owner notification, and Inbox Watch mailbox-backed execution exist. | Jobs still look more complete than they are: schedules, heartbeat, richer model/provider adapters, and QA remain unfinished. | `me3-wsn` |
 | Setup readiness | Validation supports setup requirements. Owner notifications resolve from active Soulink, email resolves from an active mailbox, and calendar resolves from the enabled Calendar plugin. | Future plugin-owned capabilities need the same resolver pattern so job setup does not drift from Account/Plugins state. | `me3-wsn.26` |
-| Starter job QA | In progress. Daily Briefing, Weekly Review, and Email Triage can be added/run as active jobs and write Mission Control activity. Daily Briefing delivers a Soulink owner notification; Email Triage reads active mailbox messages, writes message summaries/labels, and surfaces message/thread counts in Mission Control. | Custom builder would expose unfinished behavior if started before starter QA. | `me3-wsn.25` |
+| Starter job QA | In progress. Daily Briefing, Weekly Review, and Inbox Watch can be added/run as active jobs and write Mission Control activity. Daily Briefing delivers a Soulink owner notification; Inbox Watch reads active mailbox messages, writes message summaries/labels, and surfaces message/thread counts in Mission Control. | Custom builder would expose unfinished behavior if started before starter QA. | `me3-wsn.25` |
 | Context and memory | Native context packet contract, resolvers, manifests, chat wiring, memory review, and job-run wiring exist. | Scheduled jobs and model-backed job outputs still need richer context use. | `me3-ctx.8` |
 | Capability model | Assistant Jobs capabilities and plugin `agentTools` both exist. | Two registries can drift and weaken safety/setup behavior. | `me3-q6s.2`, new capability-unification work |
 | Mission Control | Good base workspace direction for results, approvals, memory, activity, projects, and run records. Activity now has a testing clear action for run/plugin activity. | Result surfaces and project-level job activity are still incomplete. | `me3-q6s.3`, `me3-wsn.14` |
@@ -81,7 +81,7 @@ Test only the current visible starter set:
 
 1. Daily Briefing - added, run, Mission Control activity written, Soulink notification delivered.
 2. Weekly Review - added, run, Mission Control activity written.
-3. Email Triage - added, run, reads active mailbox messages, writes mailbox summaries/labels, and creates Mission Control activity/run summaries with message and thread counts.
+3. Inbox Watch - added, run, reads active mailbox messages, writes mailbox summaries/labels, and creates Mission Control activity/run summaries with message and thread counts.
 4. Invoice and Receipt Triage
 
 For each starter, record whether it can be added, opened, run, blocked with a clear reason,
@@ -107,7 +107,7 @@ Primary bead: `me3-tlt`.
 - Implement scheduled/manual/event trigger behavior.
 - Implement heartbeat and reconciliation.
 - Add owner notification delivery through the current client/Soulink channel.
-- Expand concrete email/calendar adapters beyond the first mailbox-backed Email Triage path.
+- Expand concrete email/calendar adapters beyond the first mailbox-backed Inbox Watch path.
 - Add scheduled-job dispatch and plugin delivery queues where the side effect must survive retries
   or outlive the HTTP request. Current gaps: Core booking reminders (`me3-tlt.1`) and Social
   Publishing external publish dispatch (`me3-1dr.1`).
@@ -144,8 +144,8 @@ These are the only starter jobs that should appear in the Add Job UI for now.
 | --- | --- | --- |
 | Daily Briefing | Prepare a daily Mission Control briefing and notify the owner through Soulink. | Proven manually for add/run/activity/Soulink notification; needs richer result content. |
 | Weekly Review | Summarize the week and carry-over choices. | Proven manually for add/run/activity; needs richer result content. |
-| Email Triage | Summarize inbox messages and draft useful replies. | First mailbox-backed path landed: reads active inbox messages, writes summaries/labels, and surfaces counts in Mission Control. Draft replies still pending. |
-| Invoice and Receipt Triage | Find likely invoices/receipts and create review tasks. | Setup readiness and concrete email extraction path. |
+| Inbox Watch | Get notified or take action when specific people email you. | First mailbox-backed path landed: reads active inbox messages, writes summaries/labels, and surfaces counts in Mission Control. People/topic rules, notifications, and draft replies still pending. |
+| Invoice and Receipt Triage | Extract receipts and invoices and add them to an accounts ledger. | Destination now points at Mission Control Accounts; concrete financial email extraction path still pending. |
 
 Do not reintroduce standalone starters such as Project Digest, Approval Sweep, Memory Review,
 Setup Health Check, Relationship Follow-Up, Source Monitor, Email Watch, or Booking Reminder

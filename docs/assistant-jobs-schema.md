@@ -234,7 +234,7 @@ Jobs default to Mission Control.
 type JobDestination = {
   kind: "mission_control";
   projectId: string | null;
-  landing: "review_packet" | "task" | "capture" | "approval" | "memory_review" | "activity";
+  landing: "review_packet" | "task" | "capture" | "approval" | "memory_review" | "activity" | "accounts";
   quietIfNoChanges: boolean;
 };
 ```

@@ -211,7 +211,7 @@ describe("assistant jobs persistence", () => {
 
     expect(run.run.status).toBe("succeeded");
     expect(run.run.outputPreview).toBe(
-      "Email Triage reviewed 2 inbox messages across 2 threads; 1 needs a reply and 1 flagged important.",
+      "Inbox Watch reviewed 2 inbox messages across 2 threads; 1 needs a reply and 1 flagged important.",
     );
     expect(env.__state.missionAgentRuns[0]?.prompt_summary).toBe(run.run.outputPreview);
     expect(run.actionResults).toContainEqual(
@@ -238,7 +238,7 @@ describe("assistant jobs persistence", () => {
     expect(env.__state.pluginActivities).toHaveLength(1);
     expect(env.__state.pluginActivities[0]).toMatchObject({
       activity_type: "assistant_job.review_packet",
-      title: "Email Triage: 2 messages reviewed",
+      title: "Inbox Watch: 2 messages reviewed",
       status: "succeeded",
     });
     expect(env.__state.pluginActivities[0]?.summary).toContain(

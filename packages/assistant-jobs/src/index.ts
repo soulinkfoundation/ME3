@@ -161,7 +161,8 @@ export type AssistantJobDestination = {
     | "capture"
     | "approval"
     | "memory_review"
-    | "activity";
+    | "activity"
+    | "accounts";
   quietIfNoChanges: boolean;
 };
 
@@ -910,8 +911,8 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
   },
   {
     id: "email-triage",
-    name: "Email Triage",
-    outcome: "Summarize inbox messages that need the owner and draft replies where useful.",
+    name: "Inbox Watch",
+    outcome: "Get notified or take action when specific people email you.",
     firstVersion: "later_provider_adapter",
     state: "needs_setup",
     requiredCapabilityIds: [
@@ -923,8 +924,8 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
     recommendedSkillIds: [],
     requiredSkillIds: [],
     defaultDraft: draft({
-      name: "Email Triage",
-      purpose: "Summarize important email into Mission Control.",
+      name: "Inbox Watch",
+      purpose: "Get notified or take action when specific people email you.",
       recipeId: "email-triage",
       trigger: dailySchedule,
       destination: missionDestination("review_packet"),
@@ -943,7 +944,7 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
   {
     id: "invoice-receipt-triage",
     name: "Invoice and Receipt Triage",
-    outcome: "Find likely invoices and receipts, extract useful fields, and create review tasks.",
+    outcome: "Extract receipts and invoices and add them to an accounts ledger.",
     firstVersion: "later_provider_adapter",
     state: "needs_setup",
     requiredCapabilityIds: ["email.message.read", "mission.review_packet.create", "mission.task.create"],
@@ -952,10 +953,10 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
     requiredSkillIds: [],
     defaultDraft: draft({
       name: "Invoice and Receipt Triage",
-      purpose: "Extract likely invoice and receipt details for review.",
+      purpose: "Extract receipts and invoices and add them to an accounts ledger.",
       recipeId: "invoice-receipt-triage",
       trigger: dailySchedule,
-      destination: missionDestination("review_packet"),
+      destination: missionDestination("accounts"),
       actions: [
         action("read-email", "email.message.read", "Read scoped email", "none"),
         action(

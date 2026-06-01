@@ -115,7 +115,7 @@ V1 starter jobs should be possible with these capabilities alone.
 ## Email Capabilities
 
 Email is a provider adapter surface, not Core v1 required infrastructure.
-The first Core-hosted path is mailbox-backed Email Triage: it reads active `mailbox_messages`,
+The first Core-hosted path is mailbox-backed Inbox Watch: it reads active `mailbox_messages`,
 derives simple summaries/labels, and writes Mission Control run/activity summaries with message
 and thread counts. This is useful for QA and owner visibility, but it is not yet a full
 model-backed provider adapter or reply-drafting path.

@@ -206,9 +206,9 @@ Assistant:
 - Creates a Mission Control result.
 - Requires approval for external sends or durable memory writes.
 
-### Email Triage
+### Inbox Watch
 
-Owner: "Summarize my inbox every morning and draft replies when useful."
+Owner: "Get notified or take action when specific people email me."
 
 Assistant:
 

@@ -501,6 +501,7 @@ function formatDestination(detail: AssistantJobDetail | null) {
   if (landing === "approval") return "Mission Control approvals";
   if (landing === "memory_review") return "Mission Control memory review";
   if (landing === "activity") return "Mission Control activity";
+  if (landing === "accounts") return "Mission Control → Accounts tab";
   return "Mission Control results";
 }
 

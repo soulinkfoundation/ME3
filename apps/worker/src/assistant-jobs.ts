@@ -1524,12 +1524,12 @@ async function buildGeneratedMissionActivity(
   if (
     defaultActivityType === "assistant_job.review_packet" &&
     (input.job.recipe_id === "email-triage" ||
-      input.draft.recipeId === "email-triage" ||
-      input.draft.actions.some((action) => action.capabilityId === "email.message.read"))
+      input.draft.recipeId === "email-triage")
   ) {
     const triage = await buildEmailTriageResult(env, input.userId);
+    const jobName = input.job.name || input.draft.name || "Inbox Watch";
     return {
-      title: `Email Triage: ${triage.messageCount} message${triage.messageCount === 1 ? "" : "s"} reviewed`,
+      title: `${jobName}: ${triage.messageCount} message${triage.messageCount === 1 ? "" : "s"} reviewed`,
       summary: formatEmailTriageMissionSummary(triage),
       metadata: { emailTriage: triage },
     };
@@ -2863,11 +2863,11 @@ async function summarizeAssistantJobRunOutput(
   if (failed > 0) return `${failed} action${failed === 1 ? "" : "s"} failed`;
   if (
     job.recipe_id === "email-triage" ||
-    draft.recipeId === "email-triage" ||
-    draft.actions.some((action) => action.capabilityId === "email.message.read")
+    draft.recipeId === "email-triage"
   ) {
     const triage = await buildEmailTriageResult(env, userId);
-    return `Email Triage reviewed ${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"} across ${triage.threadCount} thread${triage.threadCount === 1 ? "" : "s"}; ${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply and ${triage.importantCount} flagged important.`;
+    const jobName = job.name || draft.name || "Inbox Watch";
+    return `${jobName} reviewed ${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"} across ${triage.threadCount} thread${triage.threadCount === 1 ? "" : "s"}; ${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply and ${triage.importantCount} flagged important.`;
   }
   const createdResult = draft.actions.some(
     (action) => action.capabilityId === "mission.review_packet.create",
