@@ -6,7 +6,7 @@ import {
   inferMissionCaptureType,
   type MissionCaptureType,
 } from "@me3-core/plugin-mission-control";
-import { ApiError, api } from "../api";
+import { API_BASE, ApiError, api } from "../api";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
@@ -27,11 +27,12 @@ type MissionSection =
   | "today"
   | "journalArchive"
   | "projects"
+  | "accounts"
   | "activity"
   | "memory"
   | "sources"
   | "setup";
-type PrimaryMissionSection = "today" | "projects";
+type PrimaryMissionSection = "today" | "projects" | "accounts";
 type SettingsMissionSection =
   | "journalArchive"
   | "activity"
@@ -176,6 +177,54 @@ type MissionDaemonStatus = {
   }>;
 };
 
+type CorePluginRecord = {
+  id: string;
+  enabled: boolean;
+  status: string;
+};
+
+type FinancialEntryType = "income" | "expense";
+type FinancialEntryStatus = "pending" | "paid" | "overdue" | "cancelled" | "needs_review";
+type FinancialEntrySource = "manual" | "email_triage" | "stripe" | "csv_import";
+
+type FinancialCategory = {
+  id: string;
+  name: string;
+  entryType: FinancialEntryType;
+};
+
+type FinancialEntry = {
+  id: string;
+  entryType: FinancialEntryType;
+  date: string;
+  description: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  amountCents: number;
+  currency: string;
+  status: FinancialEntryStatus;
+  source: FinancialEntrySource;
+  notes: string | null;
+};
+
+type AccountsStats = {
+  thisMonthCents: number;
+  lastMonthCents: number;
+  topCategoryName: string | null;
+  topCategoryTotalCents: number;
+  entriesCount: number;
+};
+
+type AccountsEntryForm = {
+  date: string;
+  description: string;
+  categoryId: string;
+  amount: string;
+  currency: string;
+  status: FinancialEntryStatus;
+  notes: string;
+};
+
 type MissionOverviewResponse = {
   day: MissionDay;
   captures: MissionCapture[];
@@ -193,6 +242,7 @@ type MissionOverviewResponse = {
   activity: MissionActivity[];
 };
 
+type PluginsResponse = { plugins: CorePluginRecord[] };
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
 type MissionJournalArchiveResponse = { entries: MissionJournalArchiveEntry[] };
@@ -222,7 +272,7 @@ const route = useRoute();
 const router = useRouter();
 const { toastSuccess } = useAppToast();
 
-const primarySections: PrimaryMissionSection[] = ["today", "projects"];
+const basePrimarySections: PrimaryMissionSection[] = ["today", "projects"];
 const settingsSections: SettingsMissionSection[] = [
   "journalArchive",
   "activity",
@@ -230,11 +280,12 @@ const settingsSections: SettingsMissionSection[] = [
   "sources",
   "setup",
 ];
-const sectionIds: MissionSection[] = [...primarySections, ...settingsSections];
+const sectionIds: MissionSection[] = [...basePrimarySections, "accounts", ...settingsSections];
 const sectionLabels: Record<MissionSection, string> = {
   today: "Journal",
   journalArchive: "Archive",
   projects: "Projects",
+  accounts: "Accounts",
   activity: "Activity",
   memory: "Memory",
   sources: "Sources",
@@ -256,9 +307,11 @@ const projectBoardStatuses: Array<{ id: MissionTask["status"]; label: string }> 
   { id: "done", label: "Done" },
 ];
 const PROJECT_TASK_PAGE_SIZE = 50;
+const ACCOUNTS_PAGE_SIZE = 50;
 
 const selectedDate = ref(todayKey());
 const activeSection = ref<MissionSection>(normalizeSection(route.query.section));
+const accountsEnabled = ref(false);
 const day = ref<MissionDay | null>(null);
 const captures = ref<MissionCapture[]>([]);
 const projects = ref<MissionProject[]>([]);
@@ -319,8 +372,31 @@ const projectTaskActionId = ref("");
 const projectTaskComposerStatus = ref<ProjectBoardStatus | "">("");
 const draggedProjectTaskId = ref("");
 const projectTaskDropStatus = ref<ProjectBoardStatus | "">("");
+const accountsType = ref<FinancialEntryType>("expense");
+const accountsEntries = ref<FinancialEntry[]>([]);
+const accountsCategories = ref<FinancialCategory[]>([]);
+const accountsStats = ref<AccountsStats | null>(null);
+const accountsLoading = ref(false);
+const accountsSaving = ref(false);
+const accountsImporting = ref(false);
+const accountsSyncing = ref(false);
+const accountsError = ref("");
+const accountsMessage = ref("");
+const accountsTotal = ref(0);
+const accountsOffset = ref(0);
+const accountsSearch = ref("");
+const accountsStatusFilter = ref("");
+const accountsSourceFilter = ref("");
+const accountsStripeConfigured = ref(false);
+const accountsStripeStatus = ref("");
+const accountsStripeLastSyncedAt = ref<string | null>(null);
+const accountsImportInput = ref<HTMLInputElement | null>(null);
+const accountsForm = ref<AccountsEntryForm>(emptyAccountsForm("expense"));
 let journalSaveTimer: number | null = null;
 
+const primarySections = computed<PrimaryMissionSection[]>(() =>
+  accountsEnabled.value ? [...basePrimarySections, "accounts"] : basePrimarySections,
+);
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
 const selectedDateLabel = computed(() =>
   currentDateIsToday.value ? "Today" : formatDaySwitcherDate(selectedDate.value),
@@ -435,6 +511,22 @@ const projectTaskCreateDisabled = computed(
     !projectTaskDraft.value.trim() ||
     !selectedProjectDetail.value,
 );
+const accountsPage = computed(() => Math.floor(accountsOffset.value / ACCOUNTS_PAGE_SIZE) + 1);
+const accountsHasPrevious = computed(() => accountsOffset.value > 0);
+const accountsHasNext = computed(() => accountsOffset.value + ACCOUNTS_PAGE_SIZE < accountsTotal.value);
+const accountsEntryCountLabel = computed(() =>
+  accountsTotal.value === 1 ? "1 entry" : `${accountsTotal.value} entries`,
+);
+const accountCategoryOptions = computed(() =>
+  accountsCategories.value.filter((category) => category.entryType === accountsType.value),
+);
+const accountsFormDisabled = computed(
+  () =>
+    accountsSaving.value ||
+    !accountsForm.value.date ||
+    !accountsForm.value.description.trim() ||
+    !accountsForm.value.amount.trim(),
+);
 const selectedArchiveEntry = computed(
   () =>
     journalArchiveEntries.value.find((entry) => entry.date === selectedArchiveDate.value) ||
@@ -511,6 +603,189 @@ async function loadMemoryAndSources() {
   } catch {
     memory.value = [];
     sources.value = [];
+  }
+}
+
+async function loadPluginCapabilities() {
+  try {
+    const response = await api.get<PluginsResponse>("/plugins");
+    accountsEnabled.value =
+      response.plugins?.some(
+        (plugin) =>
+          plugin.id === "me3.accounts" &&
+          plugin.enabled &&
+          plugin.status === "installed",
+      ) || false;
+    if (accountsEnabled.value && activeSection.value === "accounts") {
+      await loadAccounts();
+    }
+  } catch {
+    accountsEnabled.value = false;
+  }
+}
+
+async function loadAccounts() {
+  if (!accountsEnabled.value) return;
+  accountsLoading.value = true;
+  accountsError.value = "";
+  try {
+    const query = new URLSearchParams({
+      entryType: accountsType.value,
+      limit: String(ACCOUNTS_PAGE_SIZE),
+      offset: String(accountsOffset.value),
+    });
+    if (accountsSearch.value.trim()) query.set("search", accountsSearch.value.trim());
+    if (accountsStatusFilter.value) query.set("status", accountsStatusFilter.value);
+    if (accountsSourceFilter.value) query.set("source", accountsSourceFilter.value);
+
+    const [entriesResponse, categoriesResponse, statsResponse, stripeResponse] =
+      await Promise.all([
+        api.get<{
+          entries: FinancialEntry[];
+          total: number;
+        }>(`/accounts/entries?${query.toString()}`),
+        api.get<{ categories: FinancialCategory[] }>(
+          `/accounts/categories?entryType=${encodeURIComponent(accountsType.value)}`,
+        ),
+        api.get<{ stats: AccountsStats }>(
+          `/accounts/stats?entryType=${encodeURIComponent(accountsType.value)}`,
+        ),
+        api.get<{
+          connected: boolean;
+          status: string;
+          lastSyncedAt: string | null;
+        }>("/accounts/stripe/status"),
+      ]);
+
+    accountsEntries.value = entriesResponse.entries || [];
+    accountsTotal.value = entriesResponse.total || 0;
+    accountsCategories.value = categoriesResponse.categories || [];
+    accountsStats.value = statsResponse.stats || null;
+    accountsStripeConfigured.value = stripeResponse.connected;
+    accountsStripeStatus.value = stripeResponse.status;
+    accountsStripeLastSyncedAt.value = stripeResponse.lastSyncedAt;
+  } catch (e) {
+    accountsError.value = e instanceof ApiError ? e.message : "Accounts could not load";
+  } finally {
+    accountsLoading.value = false;
+  }
+}
+
+async function saveAccountEntry() {
+  if (accountsFormDisabled.value) return;
+  accountsSaving.value = true;
+  accountsError.value = "";
+  accountsMessage.value = "";
+  try {
+    await api.post("/accounts/entries", {
+      entryType: accountsType.value,
+      date: accountsForm.value.date,
+      description: accountsForm.value.description.trim(),
+      categoryId: accountsForm.value.categoryId || null,
+      amountCents: Math.round(Number(accountsForm.value.amount) * 100),
+      currency: accountsForm.value.currency.trim().toUpperCase() || "USD",
+      status: accountsForm.value.status,
+      notes: accountsForm.value.notes.trim() || null,
+    });
+    accountsForm.value = emptyAccountsForm(accountsType.value);
+    accountsOffset.value = 0;
+    accountsMessage.value = "Entry added.";
+    await loadAccounts();
+  } catch (e) {
+    accountsError.value = e instanceof ApiError ? e.message : "Could not add account entry";
+  } finally {
+    accountsSaving.value = false;
+  }
+}
+
+async function deleteAccountEntry(entry: FinancialEntry) {
+  accountsError.value = "";
+  accountsMessage.value = "";
+  try {
+    await api.delete(`/accounts/entries/${encodeURIComponent(entry.id)}`);
+    accountsMessage.value = "Entry deleted.";
+    await loadAccounts();
+  } catch (e) {
+    accountsError.value = e instanceof ApiError ? e.message : "Could not delete account entry";
+  }
+}
+
+function setAccountsType(type: FinancialEntryType) {
+  if (accountsType.value === type) return;
+  accountsType.value = type;
+  accountsOffset.value = 0;
+  accountsForm.value = emptyAccountsForm(type);
+  void loadAccounts();
+}
+
+function applyAccountsFilters() {
+  accountsOffset.value = 0;
+  void loadAccounts();
+}
+
+function pageAccounts(delta: number) {
+  accountsOffset.value = Math.max(0, accountsOffset.value + delta * ACCOUNTS_PAGE_SIZE);
+  void loadAccounts();
+}
+
+function chooseAccountsImportFile() {
+  accountsImportInput.value?.click();
+}
+
+async function importAccountsCsv(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  accountsImporting.value = true;
+  accountsError.value = "";
+  accountsMessage.value = "";
+  try {
+    const form = new FormData();
+    form.append("entryType", accountsType.value);
+    form.append("file", file);
+    const response = await api.upload<{
+      imported: number;
+      skipped: number;
+      total: number;
+    }>("/accounts/import", form);
+    accountsMessage.value = `Imported ${response.imported} of ${response.total}; skipped ${response.skipped}.`;
+    accountsOffset.value = 0;
+    await loadAccounts();
+  } catch (e) {
+    accountsError.value = e instanceof ApiError ? e.message : "Could not import CSV";
+  } finally {
+    accountsImporting.value = false;
+    input.value = "";
+  }
+}
+
+function exportAccountsCsv() {
+  const query = new URLSearchParams({ entryType: accountsType.value });
+  if (accountsSearch.value.trim()) query.set("search", accountsSearch.value.trim());
+  if (accountsStatusFilter.value) query.set("status", accountsStatusFilter.value);
+  if (accountsSourceFilter.value) query.set("source", accountsSourceFilter.value);
+  window.location.href = `${API_BASE}/accounts/export?${query.toString()}`;
+}
+
+async function syncAccountsStripe() {
+  accountsSyncing.value = true;
+  accountsError.value = "";
+  accountsMessage.value = "";
+  try {
+    const response = await api.post<{
+      chargesImported: number;
+      chargesUpdated: number;
+      chargesProcessed: number;
+    }>("/accounts/stripe/sync", {});
+    accountsType.value = "income";
+    accountsMessage.value = `Stripe sync processed ${response.chargesProcessed}; added ${response.chargesImported}, updated ${response.chargesUpdated}.`;
+    accountsOffset.value = 0;
+    await loadAccounts();
+  } catch (e) {
+    accountsError.value =
+      e instanceof ApiError ? e.message : "Could not sync Stripe charges";
+  } finally {
+    accountsSyncing.value = false;
   }
 }
 
@@ -1212,6 +1487,36 @@ function taskStatusLabel(status: MissionTask["status"]): string {
   return "Backlog";
 }
 
+function emptyAccountsForm(type: FinancialEntryType): AccountsEntryForm {
+  return {
+    date: todayKey(),
+    description: "",
+    categoryId: "",
+    amount: "",
+    currency: "USD",
+    status: type === "income" ? "paid" : "pending",
+    notes: "",
+  };
+}
+
+function accountStatusLabel(status: FinancialEntryStatus): string {
+  if (status === "needs_review") return "Needs review";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function accountSourceLabel(source: FinancialEntrySource): string {
+  if (source === "email_triage") return "Email triage";
+  if (source === "csv_import") return "CSV import";
+  return source.charAt(0).toUpperCase() + source.slice(1);
+}
+
+function formatMoney(cents: number, currency: string): string {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: currency || "USD",
+  }).format((cents || 0) / 100);
+}
+
 function formatDateTime(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -1412,6 +1717,7 @@ watch(activeSection, (section) => {
     else void loadJournalArchive();
   }
   if (section === "projects") void loadProjectTasks();
+  if (section === "accounts") void loadAccounts();
 });
 
 watch(selectedProjectDetailId, (next, previous) => {
@@ -1421,6 +1727,7 @@ watch(selectedProjectDetailId, (next, previous) => {
 
 onMounted(() => {
   void loadOverview();
+  void loadPluginCapabilities();
   if (activeSection.value === "journalArchive") {
     if (selectedArchiveProjectId.value) void loadProjectArchive();
     else void loadJournalArchive();
@@ -1992,6 +2299,205 @@ onBeforeUnmount(() => {
             </button>
           </template>
         </template>
+      </div>
+    </section>
+
+    <section v-show="activeSection === 'accounts'" class="mission-page">
+      <div v-if="!accountsEnabled" class="simple-sheet">
+        <div class="simple-sheet__header">
+          <div>
+            <h1>Accounts</h1>
+            <p>Enable the Accounts plugin to add ledger context for invoice and receipt triage.</p>
+          </div>
+        </div>
+        <router-link class="text-button text-button--primary" to="/account?section=plugins&blocked=me3.accounts">
+          Open plugin settings
+        </router-link>
+      </div>
+
+      <div v-else class="accounts-workspace">
+        <div class="accounts-toolbar">
+          <div class="accounts-tabs" role="tablist" aria-label="Account entry type">
+            <button
+              type="button"
+              class="mission-control__section-tab"
+              :class="{ 'is-active': accountsType === 'expense' }"
+              @click="setAccountsType('expense')"
+            >
+              Expenses
+            </button>
+            <button
+              type="button"
+              class="mission-control__section-tab"
+              :class="{ 'is-active': accountsType === 'income' }"
+              @click="setAccountsType('income')"
+            >
+              Income
+            </button>
+          </div>
+          <div class="accounts-toolbar__actions">
+            <button type="button" class="text-button" @click="chooseAccountsImportFile">
+              <UiIcon name="Upload" :size="15" />
+              {{ accountsImporting ? "Importing..." : "Import CSV" }}
+            </button>
+            <button type="button" class="text-button" @click="exportAccountsCsv">
+              <UiIcon name="Download" :size="15" />
+              Export CSV
+            </button>
+            <button
+              type="button"
+              class="text-button text-button--primary"
+              :disabled="accountsSyncing || !accountsStripeConfigured"
+              @click="syncAccountsStripe"
+            >
+              <UiIcon name="RefreshCw" :size="15" />
+              {{ accountsSyncing ? "Syncing..." : "Sync Stripe" }}
+            </button>
+            <input
+              ref="accountsImportInput"
+              type="file"
+              accept=".csv,text/csv"
+              class="visually-hidden"
+              @change="importAccountsCsv"
+            />
+          </div>
+        </div>
+
+        <div class="accounts-summary">
+          <div>
+            <span>This month</span>
+            <strong>{{ formatMoney(accountsStats?.thisMonthCents || 0, accountsForm.currency) }}</strong>
+          </div>
+          <div>
+            <span>Last month</span>
+            <strong>{{ formatMoney(accountsStats?.lastMonthCents || 0, accountsForm.currency) }}</strong>
+          </div>
+          <div>
+            <span>Top category</span>
+            <strong>{{ accountsStats?.topCategoryName || "Uncategorized" }}</strong>
+          </div>
+          <div>
+            <span>Stripe</span>
+            <strong>{{ accountsStripeConfigured ? accountsStripeStatus || "Configured" : "Not configured" }}</strong>
+          </div>
+        </div>
+
+        <form class="accounts-entry-form" @submit.prevent="saveAccountEntry">
+          <input v-model="accountsForm.date" type="date" aria-label="Date" />
+          <input
+            v-model="accountsForm.description"
+            type="text"
+            placeholder="Vendor, client, or description"
+            autocomplete="off"
+            aria-label="Description"
+          />
+          <select v-model="accountsForm.categoryId" aria-label="Category">
+            <option value="">Uncategorized</option>
+            <option v-for="category in accountCategoryOptions" :key="category.id" :value="category.id">
+              {{ category.name }}
+            </option>
+          </select>
+          <input
+            v-model="accountsForm.amount"
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="0.00"
+            aria-label="Amount"
+          />
+          <select v-model="accountsForm.status" aria-label="Status">
+            <option value="pending">Pending</option>
+            <option value="paid">Paid</option>
+            <option value="overdue">Overdue</option>
+            <option value="needs_review">Needs review</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <button
+            type="submit"
+            class="icon-button"
+            :disabled="accountsFormDisabled"
+            aria-label="Add account entry"
+          >
+            <UiIcon name="Plus" :size="18" />
+          </button>
+        </form>
+
+        <div class="accounts-filters">
+          <input
+            v-model="accountsSearch"
+            type="search"
+            placeholder="Search accounts"
+            aria-label="Search accounts"
+            @keydown.enter.prevent="applyAccountsFilters"
+          />
+          <select v-model="accountsStatusFilter" aria-label="Filter by status" @change="applyAccountsFilters">
+            <option value="">Any status</option>
+            <option value="pending">Pending</option>
+            <option value="paid">Paid</option>
+            <option value="overdue">Overdue</option>
+            <option value="needs_review">Needs review</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <select v-model="accountsSourceFilter" aria-label="Filter by source" @change="applyAccountsFilters">
+            <option value="">Any source</option>
+            <option value="manual">Manual</option>
+            <option value="csv_import">CSV import</option>
+            <option value="stripe">Stripe</option>
+            <option value="email_triage">Email triage</option>
+          </select>
+          <button type="button" class="text-button" @click="applyAccountsFilters">
+            Search
+          </button>
+        </div>
+
+        <p v-if="accountsError" class="mission-control__message is-error">{{ accountsError }}</p>
+        <p v-else-if="accountsMessage" class="mission-control__message">{{ accountsMessage }}</p>
+
+        <div class="accounts-table" aria-label="Payment log">
+          <div class="accounts-table__head">
+            <span>Date</span>
+            <span>Description</span>
+            <span>Category</span>
+            <span>Amount</span>
+            <span>Status</span>
+            <span>Source</span>
+            <span></span>
+          </div>
+          <div v-if="accountsLoading" class="empty-row">Loading accounts...</div>
+          <div v-else-if="accountsEntries.length === 0" class="empty-row">
+            No {{ accountsType }} entries yet.
+          </div>
+          <template v-else>
+            <article v-for="entry in accountsEntries" :key="entry.id" class="accounts-table__row">
+              <span>{{ formatShortDate(entry.date) }}</span>
+              <strong>{{ entry.description }}</strong>
+              <span>{{ entry.categoryName || "Uncategorized" }}</span>
+              <span>{{ formatMoney(entry.amountCents, entry.currency) }}</span>
+              <span class="status-badge">{{ accountStatusLabel(entry.status) }}</span>
+              <span>{{ accountSourceLabel(entry.source) }}</span>
+              <button
+                type="button"
+                class="icon-button quiet"
+                aria-label="Delete entry"
+                @click="deleteAccountEntry(entry)"
+              >
+                <UiIcon name="Trash2" :size="15" />
+              </button>
+            </article>
+          </template>
+        </div>
+
+        <div class="accounts-pagination">
+          <span>{{ accountsEntryCountLabel }} - page {{ accountsPage }}</span>
+          <div>
+            <button type="button" class="icon-button quiet" :disabled="!accountsHasPrevious" aria-label="Previous page" @click="pageAccounts(-1)">
+              <UiIcon name="ChevronLeft" :size="18" />
+            </button>
+            <button type="button" class="icon-button quiet" :disabled="!accountsHasNext" aria-label="Next page" @click="pageAccounts(1)">
+              <UiIcon name="ChevronRight" :size="18" />
+            </button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -3012,6 +3518,160 @@ onBeforeUnmount(() => {
   color: var(--ui-text);
 }
 
+.accounts-workspace {
+  display: grid;
+  width: min(1120px, 100%);
+  gap: 14px;
+}
+
+.accounts-toolbar,
+.accounts-toolbar__actions,
+.accounts-filters,
+.accounts-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.accounts-toolbar,
+.accounts-pagination {
+  justify-content: space-between;
+}
+
+.accounts-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.accounts-toolbar__actions .text-button,
+.accounts-pagination .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.accounts-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-border);
+}
+
+.accounts-summary div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  background: var(--ui-surface);
+}
+
+.accounts-summary span,
+.accounts-pagination span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+.accounts-summary strong {
+  overflow: hidden;
+  font-size: 15px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accounts-entry-form,
+.accounts-filters {
+  display: grid;
+  grid-template-columns:
+    minmax(128px, 0.8fr) minmax(180px, 1.8fr) minmax(140px, 1fr)
+    minmax(100px, 0.8fr) minmax(128px, 0.9fr) 40px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.accounts-filters {
+  grid-template-columns: minmax(180px, 1fr) minmax(136px, 0.45fr) minmax(136px, 0.45fr) auto;
+}
+
+.accounts-entry-form input,
+.accounts-entry-form select,
+.accounts-filters input,
+.accounts-filters select {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.accounts-entry-form input:focus,
+.accounts-entry-form select:focus,
+.accounts-filters input:focus,
+.accounts-filters select:focus {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 1px;
+}
+
+.accounts-table {
+  display: grid;
+  min-width: 0;
+  overflow-x: auto;
+  border-top: 1px solid var(--ui-border);
+}
+
+.accounts-table__head,
+.accounts-table__row {
+  display: grid;
+  grid-template-columns: 96px minmax(180px, 1.7fr) minmax(128px, 1fr) 112px 118px 118px 40px;
+  align-items: center;
+  gap: 10px;
+  min-width: 820px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.accounts-table__head {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.accounts-table__row {
+  color: var(--ui-text-muted);
+  font-size: 13px;
+}
+
+.accounts-table__row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accounts-table__row .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .load-more-row {
   display: inline-flex;
   align-items: center;
@@ -3404,6 +4064,19 @@ onBeforeUnmount(() => {
 
   .project-board__column {
     min-width: 0;
+  }
+
+  .accounts-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .accounts-entry-form,
+  .accounts-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .accounts-entry-form .icon-button {
+    width: 100%;
   }
 
   .journal-archive {

@@ -1,6 +1,7 @@
 import type { Env } from "./types";
 import { AGENT_CHAT_RUNTIME } from "./agent-chat";
 import { CALENDAR_RUNTIME } from "./calendar";
+import { ACCOUNTS_PLUGIN_ID } from "./accounts";
 import { LANDING_PAGES_RUNTIME } from "@me3-core/plugin-landing-pages";
 import { MISSION_CONTROL_RUNTIME } from "@me3-core/plugin-mission-control";
 import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
@@ -563,6 +564,119 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
   ],
 };
 
+const ACCOUNTS_PLUGIN: CorePluginManifestSummary = {
+  schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
+  id: ACCOUNTS_PLUGIN_ID,
+  name: "ME3 Accounts",
+  version: "0.1.0",
+  description:
+    "Optional first-party ledger for manual, CSV, Stripe, and future invoice or receipt triage records.",
+  trustTier: "first_party",
+  distribution: "workspace_package",
+  installMode: "enabled_by_owner_config",
+  defaultEnabled: false,
+  implementationStatus: "bundled",
+  capabilityIds: ["workspace.accounts", "finance.ledger", "finance.invoice_receipt_triage_context"],
+  permissions: [
+    {
+      id: "accounts.entries.manage",
+      label: "Create and manage account ledger entries",
+    },
+    {
+      id: "accounts.csv.import_export",
+      label: "Import and export account CSV files",
+    },
+    {
+      id: "accounts.stripe.sync",
+      label: "Sync Stripe charges using the owner-stored Stripe key",
+    },
+  ],
+  routes: [
+    {
+      id: "accounts.entries.api",
+      path: "/api/accounts/entries",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "accounts.entry.api",
+      path: "/api/accounts/entries/:id",
+      methods: ["PUT", "DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "accounts.categories.api",
+      path: "/api/accounts/categories",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "accounts.category.api",
+      path: "/api/accounts/categories/:id",
+      methods: ["DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "accounts.csv.api",
+      path: "/api/accounts/import",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
+      id: "accounts.export.api",
+      path: "/api/accounts/export",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "accounts.stripe.api",
+      path: "/api/accounts/stripe/*",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+  ],
+  uiSlots: [
+    {
+      id: "accounts.mission-control.tab",
+      slot: "mission-control.primary-tab",
+      label: "Accounts",
+    },
+    {
+      id: "accounts.setup.panel",
+      slot: "account.plugins.setup",
+      label: "Accounts setup",
+    },
+  ],
+  agentTools: [
+    {
+      id: "accounts.entry.create",
+      label: "Create account entry",
+      sideEffect: "money_or_account",
+      approvalMode: "approval_required",
+    },
+    {
+      id: "accounts.entry.review",
+      label: "Mark account entry for review",
+      sideEffect: "internal_write",
+      approvalMode: "approval_required",
+    },
+  ],
+  secrets: [],
+  migrations: [
+    {
+      id: "accounts.0024",
+      path: "./apps/worker/migrations/0024_core_accounts.sql",
+      destructive: false,
+    },
+  ],
+  queuesAndCrons: [],
+  notes: [
+    "Accounts is optional because not every Core owner wants finance records in their install.",
+    "The plugin stores only owner-scoped ledger and category rows; Stripe secrets stay in Account commerce settings.",
+    "Invoice and receipt triage jobs should write low-confidence items as needs_review entries.",
+  ],
+};
+
 const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
   id: "me3.agent-chat",
@@ -716,6 +830,7 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
 export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   AGENT_CHAT_PLUGIN,
   MISSION_CONTROL_PLUGIN,
+  ACCOUNTS_PLUGIN,
   CALENDAR_PLUGIN,
   LANDING_PAGES_PLUGIN,
   SOCIAL_PUBLISHING_PLUGIN,

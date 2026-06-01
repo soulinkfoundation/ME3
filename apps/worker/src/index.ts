@@ -4,6 +4,22 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import Stripe from "stripe";
 import { Me3UserAgent } from "./user-agent";
 import {
+  ACCOUNTS_PLUGIN_ID,
+  AccountsInputError,
+  createFinancialCategory,
+  createFinancialEntry,
+  deleteFinancialCategory,
+  deleteFinancialEntry,
+  exportFinancialEntriesCsv,
+  getAccountsStripeStatus,
+  getFinancialStats,
+  importFinancialEntriesCsv,
+  listFinancialCategories,
+  listFinancialEntries,
+  syncAccountsStripe,
+  updateFinancialEntry,
+} from "./accounts";
+import {
   AiSettingsInputError,
   getAiRoutingSummary,
   getAiSettings,
@@ -1617,6 +1633,165 @@ app.post("/api/plugins/:pluginId/deactivate", async (c) => {
       return c.json({ error: error.message }, error.status as any);
     }
     throw error;
+  }
+});
+
+app.get("/api/accounts/entries", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await listFinancialEntries(c.env, ownerId, new URL(c.req.url).searchParams));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.post("/api/accounts/entries", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+    return c.json(await createFinancialEntry(c.env, ownerId, body), 201);
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.put("/api/accounts/entries/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+    return c.json(await updateFinancialEntry(c.env, ownerId, c.req.param("id"), body));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.delete("/api/accounts/entries/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await deleteFinancialEntry(c.env, ownerId, c.req.param("id")));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.get("/api/accounts/categories", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await listFinancialCategories(c.env, ownerId, c.req.query("entryType")));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.post("/api/accounts/categories", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+    return c.json(await createFinancialCategory(c.env, ownerId, body), 201);
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.delete("/api/accounts/categories/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await deleteFinancialCategory(c.env, ownerId, c.req.param("id")));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.get("/api/accounts/export", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return exportFinancialEntriesCsv(c.env, ownerId, new URL(c.req.url).searchParams);
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.post("/api/accounts/import", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await importFinancialEntriesCsv(c.env, ownerId, await c.req.formData()));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.get("/api/accounts/stats", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await getFinancialStats(c.env, ownerId, c.req.query("entryType") || null));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.get("/api/accounts/stripe/status", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await getAccountsStripeStatus(c.env, ownerId));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
+  }
+});
+
+app.post("/api/accounts/stripe/sync", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireAccountsPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await syncAccountsStripe(c.env, ownerId));
+  } catch (error) {
+    return accountsErrorResponse(c, error);
   }
 });
 
@@ -5361,6 +5536,18 @@ function socialPublishingErrorResponse(c: AppContext, error: unknown) {
 
 function commerceSettingsErrorResponse(c: AppContext, error: unknown) {
   if (error instanceof CommerceSettingsInputError) {
+    return c.json({ ok: false, error: error.message }, error.status as any);
+  }
+  throw error;
+}
+
+async function requireAccountsPlugin(c: AppContext) {
+  if (await isCorePluginEnabled(c.env, ACCOUNTS_PLUGIN_ID)) return null;
+  return c.json({ ok: false, error: "ME3 Accounts is disabled" }, 403);
+}
+
+function accountsErrorResponse(c: AppContext, error: unknown) {
+  if (error instanceof AccountsInputError) {
     return c.json({ ok: false, error: error.message }, error.status as any);
   }
   throw error;
