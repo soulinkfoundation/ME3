@@ -1298,7 +1298,7 @@ export async function getMissionSetup(env: Env, userId: string) {
       detail: daemon.connected
         ? "A local daemon bridge is paired."
         : "Optional. Pair a local daemon only when you want approved local file or repo access.",
-      actionPath: "/mission-control?section=setup",
+      actionPath: null,
     },
     {
       id: "local-executor",
@@ -1314,7 +1314,7 @@ export async function getMissionSetup(env: Env, userId: string) {
           ? "Pair a local runner and add a project policy before coding runs can start."
           : "Optional. Enable Local Executor when you want approved coding runs on a local computer.",
       actionPath: localExecutor.pluginEnabled
-        ? "/mission-control?section=setup"
+        ? "/account?section=plugins"
         : "/account?section=plugins&blocked=me3.local-executor",
     },
   ];

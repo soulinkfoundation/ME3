@@ -165,6 +165,14 @@ type PluginsResponse = {
   plugins: PluginRecord[];
 };
 
+type LocalExecutorPairingInstructions = {
+  code: string;
+  installCommand: string;
+  sourceCommand: string;
+  onceCommand: string;
+  expiresAt: string | null;
+};
+
 type AiRouteId = "default" | "chat" | "reasoning" | "extraction";
 
 type AiProviderRecord = {
@@ -339,6 +347,11 @@ const pluginsLoading = ref(false);
 const plugins = ref<PluginRecord[]>([]);
 const pluginActionLoading = ref<string | null>(null);
 const pluginsError = ref<string | null>(null);
+const localExecutorSetupOpen = ref(false);
+const localExecutorPairing = ref<LocalExecutorPairingInstructions | null>(null);
+const localExecutorPairingBusy = ref(false);
+const localExecutorPairingError = ref<string | null>(null);
+const localExecutorCopiedCommand = ref<string | null>(null);
 const aiSettingsLoading = ref(false);
 const aiSettingsSaving = ref(false);
 const aiProviders = ref<AiProviderRecord[]>([]);
@@ -589,6 +602,21 @@ const pluginSummaryStatusClass = computed(() => {
 
 const visibleAccountPlugins = computed(() =>
   plugins.value.filter((plugin) => !isPluginComingSoon(plugin)),
+);
+
+const localExecutorPlugin = computed(
+  () =>
+    plugins.value.find((plugin) => plugin.id === "me3.local-executor") || null,
+);
+
+const localExecutorPluginEnabled = computed(() =>
+  Boolean(
+    localExecutorPlugin.value && isPluginEnabled(localExecutorPlugin.value),
+  ),
+);
+
+const localExecutorPairingExpiryLabel = computed(() =>
+  formatLocalExecutorExpiry(localExecutorPairing.value?.expiresAt),
 );
 
 const missionControlPlugin = computed(
@@ -1217,6 +1245,10 @@ const pluginNavEmojis: Record<string, string> = {
   "me3.landing-pages": "🌐",
 };
 
+const LOCAL_EXECUTOR_SOURCE_BIN =
+  "node packages/local-executor/bin/me3-local-executor.mjs";
+const LOCAL_EXECUTOR_ONCE_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} once`;
+
 function pluginNavEmoji(plugin: PluginRecord) {
   return pluginNavEmojis[plugin.id] || "🧩";
 }
@@ -1229,13 +1261,79 @@ function isPluginEnabled(plugin: PluginRecord) {
   return !canActivatePlugin(plugin);
 }
 
-function hasPluginSetupPanel(plugin: PluginRecord) {
+function isLocalExecutorPlugin(plugin: PluginRecord) {
   return plugin.id === "me3.local-executor";
 }
 
-function localExecutorSetupStatus(plugin: PluginRecord) {
-  if (!isPluginEnabled(plugin)) return "Enable this plugin to start setup.";
-  return "Pair a local runner, add one project policy, then run a safe report-only test.";
+function openLocalExecutorSetup() {
+  localExecutorSetupOpen.value = true;
+  localExecutorPairingError.value = null;
+}
+
+function closeLocalExecutorSetup() {
+  if (localExecutorPairingBusy.value) return;
+  localExecutorSetupOpen.value = false;
+  localExecutorCopiedCommand.value = null;
+}
+
+async function startLocalExecutorPairing() {
+  if (!localExecutorPluginEnabled.value) {
+    localExecutorPairingError.value =
+      "Turn on Local Executor in the plugin row first.";
+    return;
+  }
+
+  localExecutorPairingBusy.value = true;
+  localExecutorPairingError.value = null;
+  localExecutorCopiedCommand.value = null;
+
+  try {
+    const response = await api.post<{
+      code: string;
+      installCommand: string;
+      expiresAt?: string | null;
+    }>("/local-executor/pairing/start", {
+      displayName: "Local runner",
+    });
+    localExecutorPairing.value = {
+      code: response.code,
+      installCommand: response.installCommand,
+      sourceCommand: sourceLocalExecutorCommand(response.installCommand),
+      onceCommand: LOCAL_EXECUTOR_ONCE_COMMAND,
+      expiresAt: response.expiresAt || null,
+    };
+  } catch (e: any) {
+    localExecutorPairingError.value =
+      e.message || "Could not create a pairing command.";
+  } finally {
+    localExecutorPairingBusy.value = false;
+  }
+}
+
+function sourceLocalExecutorCommand(command: string) {
+  return command.replace(/^me3-local-executor\b/, LOCAL_EXECUTOR_SOURCE_BIN);
+}
+
+function formatLocalExecutorExpiry(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+async function copyLocalExecutorCommand(command: string, key: string) {
+  localExecutorPairingError.value = null;
+  try {
+    await navigator.clipboard.writeText(command);
+    localExecutorCopiedCommand.value = key;
+  } catch {
+    localExecutorPairingError.value =
+      "Copy did not work. Select the command and copy it manually.";
+  }
 }
 
 async function togglePlugin(plugin: PluginRecord, enabled: boolean) {
@@ -2133,47 +2231,45 @@ onMounted(async () => {
                       <h3>{{ plugin.name }}</h3>
                       <p>{{ pluginInfoText(plugin) }}</p>
                     </div>
-                    <label
-                      class="plugin-toggle"
-                      :class="{ 'is-busy': isPluginBusy(plugin) }"
-                    >
-                      <input
-                        type="checkbox"
-                        class="plugin-toggle__input"
-                        :checked="isPluginEnabled(plugin)"
-                        :disabled="isPluginBusy(plugin)"
-                        :aria-label="
-                          isPluginEnabled(plugin)
-                            ? `Disable ${plugin.name}`
-                            : `Enable ${plugin.name}`
-                        "
-                        @change="
-                          togglePlugin(
-                            plugin,
-                            ($event.target as HTMLInputElement).checked,
-                          )
-                        "
-                      />
-                      <span class="plugin-toggle__track" aria-hidden="true" />
-                    </label>
-                  </div>
-
-                  <section
-                    v-if="hasPluginSetupPanel(plugin)"
-                    class="plugin-setup-panel"
-                    aria-label="Local Executor setup"
-                  >
-                    <div class="plugin-setup-panel__copy">
-                      <h4>Setup</h4>
-                      <p>{{ localExecutorSetupStatus(plugin) }}</p>
+                    <div class="plugin-row__actions">
+                      <Button
+                        v-if="isLocalExecutorPlugin(plugin)"
+                        variant="outline"
+                        size="small"
+                        shape="soft"
+                        type="button"
+                        @click="openLocalExecutorSetup"
+                      >
+                        Configure
+                      </Button>
+                      <label
+                        class="plugin-toggle"
+                        :class="{ 'is-busy': isPluginBusy(plugin) }"
+                      >
+                        <input
+                          type="checkbox"
+                          class="plugin-toggle__input"
+                          :checked="isPluginEnabled(plugin)"
+                          :disabled="isPluginBusy(plugin)"
+                          :aria-label="
+                            isPluginEnabled(plugin)
+                              ? `Disable ${plugin.name}`
+                              : `Enable ${plugin.name}`
+                          "
+                          @change="
+                            togglePlugin(
+                              plugin,
+                              ($event.target as HTMLInputElement).checked,
+                            )
+                          "
+                        />
+                        <span
+                          class="plugin-toggle__track"
+                          aria-hidden="true"
+                        />
+                      </label>
                     </div>
-                    <router-link
-                      class="plugin-setup-panel__link"
-                      to="/mission-control?section=setup"
-                    >
-                      Open Mission Control setup
-                    </router-link>
-                  </section>
+                  </div>
                 </article>
               </div>
 
@@ -2610,6 +2706,148 @@ onMounted(async () => {
         </section>
       </template>
     </main>
+
+    <Teleport to="body">
+      <div
+        v-if="localExecutorSetupOpen"
+        class="modal-overlay local-executor-modal-overlay"
+        @click.self="closeLocalExecutorSetup"
+      >
+        <section
+          class="modal local-executor-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="local-executor-modal-title"
+        >
+          <div class="modal-header local-executor-modal__header">
+            <div>
+              <p class="local-executor-modal__eyebrow">Local Executor</p>
+              <h2 id="local-executor-modal-title">Connect this computer</h2>
+            </div>
+            <button
+              class="modal-close"
+              type="button"
+              aria-label="Close Local Executor setup"
+              :disabled="localExecutorPairingBusy"
+              @click="closeLocalExecutorSetup"
+            >
+              ×
+            </button>
+          </div>
+
+          <p class="local-executor-modal__intro">
+            Local Executor lets ME3 send an approved coding job to a computer
+            you control. That computer is the local runner.
+          </p>
+
+          <p v-if="!localExecutorPluginEnabled" class="local-executor-note">
+            First, turn on Local Executor in the plugin row. Then come back here
+            and create the pairing command.
+          </p>
+
+          <ol class="local-executor-steps">
+            <li>
+              <strong>Choose a folder.</strong>
+              <span>
+                Use the ME3 Core folder on the computer that should do the
+                work.
+              </span>
+            </li>
+            <li>
+              <strong>Open Terminal.</strong>
+              <span>Terminal is where you paste the command.</span>
+            </li>
+            <li>
+              <strong>Go to the folder.</strong>
+              <span>
+                Type <code>cd </code>, drag the ME3 folder into Terminal, then
+                press Return.
+              </span>
+            </li>
+            <li>
+              <strong>Create the pairing command.</strong>
+              <span>
+                Click the button below. The temporary pairing code is already
+                inside the command, so you do not type the code separately.
+              </span>
+              <Button
+                tone="green"
+                size="compact"
+                shape="soft"
+                type="button"
+                :disabled="
+                  localExecutorPairingBusy || !localExecutorPluginEnabled
+                "
+                @click="startLocalExecutorPairing"
+              >
+                {{
+                  localExecutorPairingBusy
+                    ? "Creating..."
+                    : localExecutorPairing
+                      ? "Create fresh command"
+                      : "Create pairing command"
+                }}
+              </Button>
+            </li>
+            <li v-if="localExecutorPairing">
+              <strong>Paste this command into Terminal.</strong>
+              <span v-if="localExecutorPairingExpiryLabel">
+                It expires {{ localExecutorPairingExpiryLabel }}.
+              </span>
+              <div class="local-executor-command">
+                <pre><code>{{ localExecutorPairing.sourceCommand }}</code></pre>
+                <Button
+                  variant="outline"
+                  size="small"
+                  shape="soft"
+                  type="button"
+                  @click="
+                    copyLocalExecutorCommand(
+                      localExecutorPairing.sourceCommand,
+                      'pair',
+                    )
+                  "
+                >
+                  {{
+                    localExecutorCopiedCommand === "pair" ? "Copied" : "Copy"
+                  }}
+                </Button>
+              </div>
+            </li>
+            <li v-if="localExecutorPairing">
+              <strong>Run jobs when you are ready.</strong>
+              <span>
+                After pairing, keep using the same folder. Paste this command
+                whenever you want this computer to claim one approved job.
+              </span>
+              <div class="local-executor-command">
+                <pre><code>{{ localExecutorPairing.onceCommand }}</code></pre>
+                <Button
+                  variant="outline"
+                  size="small"
+                  shape="soft"
+                  type="button"
+                  @click="
+                    copyLocalExecutorCommand(
+                      localExecutorPairing.onceCommand,
+                      'once',
+                    )
+                  "
+                >
+                  {{
+                    localExecutorCopiedCommand === "once" ? "Copied" : "Copy"
+                  }}
+                </Button>
+              </div>
+            </li>
+          </ol>
+
+          <p v-if="localExecutorPairingError" class="error">
+            {{ localExecutorPairingError }}
+          </p>
+        </section>
+      </div>
+    </Teleport>
 
     <div
       v-if="showDeleteModal"
@@ -3357,6 +3595,13 @@ h1 {
   min-width: 0;
 }
 
+.plugin-row__actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
 .plugin-row h3 {
   margin: 0;
   color: var(--color-text);
@@ -3432,51 +3677,6 @@ h1 {
 
 .plugin-toggle__input:disabled + .plugin-toggle__track {
   opacity: 0.55;
-}
-
-.plugin-setup-panel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 10px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-}
-
-.plugin-setup-panel__copy {
-  min-width: 0;
-}
-
-.plugin-setup-panel h4 {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.3;
-}
-
-.plugin-setup-panel p {
-  margin: 2px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-  line-height: 1.4;
-  -webkit-line-clamp: unset;
-}
-
-.plugin-setup-panel__link {
-  flex-shrink: 0;
-  color: var(--ui-accent-strong, var(--color-accent));
-  font-size: 12px;
-  font-weight: 700;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.plugin-setup-panel__link:hover,
-.plugin-setup-panel__link:focus-visible {
-  text-decoration: underline;
 }
 
 .plugin-meta-grid {
@@ -3772,6 +3972,98 @@ h1 {
   gap: 12px;
 }
 
+.local-executor-modal {
+  display: grid;
+  gap: 16px;
+  width: min(680px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow-y: auto;
+}
+
+.local-executor-modal__header {
+  margin-bottom: 0;
+}
+
+.local-executor-modal__eyebrow {
+  margin: 0 0 4px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.local-executor-modal__intro,
+.local-executor-note,
+.local-executor-steps span {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.local-executor-modal__intro,
+.local-executor-note {
+  margin: 0;
+}
+
+.local-executor-note {
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.local-executor-steps {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.local-executor-steps li {
+  display: grid;
+  gap: 7px;
+  padding-left: 4px;
+}
+
+.local-executor-steps strong {
+  color: var(--ui-text, var(--color-text));
+  font-size: 15px;
+}
+
+.local-executor-steps code,
+.local-executor-command code {
+  color: var(--ui-text, var(--color-text));
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono",
+    monospace;
+}
+
+.local-executor-command {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.local-executor-command pre {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 10px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @media (max-width: 959px) {
   .account-header {
     display: none;
@@ -3842,9 +4134,20 @@ h1 {
     grid-template-columns: 1fr;
   }
 
-  .plugin-setup-panel {
-    align-items: flex-start;
-    flex-direction: column;
+  .plugin-row__actions {
+    justify-content: flex-end;
+  }
+
+  .local-executor-modal {
+    max-height: calc(100vh - 32px);
+  }
+
+  .local-executor-command {
+    grid-template-columns: 1fr;
+  }
+
+  .local-executor-command :deep(.me3-btn) {
+    width: 100%;
   }
 
   .email-row .button,

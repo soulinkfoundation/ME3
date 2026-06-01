@@ -912,11 +912,6 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
       label: "Run a coding task",
     },
     {
-      id: "local-executor.mission-control.setup",
-      slot: "mission-control.setup",
-      label: "Local Executor setup",
-    },
-    {
       id: "local-executor.account.setup",
       slot: "account.plugins.setup",
       label: "Local Executor setup",

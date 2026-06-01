@@ -30,15 +30,13 @@ type MissionSection =
   | "accounts"
   | "activity"
   | "memory"
-  | "sources"
-  | "setup";
+  | "sources";
 type PrimaryMissionSection = "today" | "projects" | "accounts";
 type SettingsMissionSection =
   | "journalArchive"
   | "activity"
   | "memory"
-  | "sources"
-  | "setup";
+  | "sources";
 
 type MissionProject = {
   id: string;
@@ -143,14 +141,6 @@ type MissionContextSource = {
   sourceRef: string | null;
 };
 
-type MissionSetupItem = {
-  id: string;
-  label: string;
-  status: "ready" | "setup_required" | "optional" | "disabled";
-  detail: string;
-  actionPath: string | null;
-};
-
 type MissionActivity = {
   id: string;
   title: string;
@@ -168,31 +158,6 @@ type MissionDailyBriefing = {
   createdAt: string;
   showInJournal: boolean;
   deliveryHint: "soulink" | "mission_control";
-};
-
-type MissionDaemonStatus = {
-  enabled: boolean;
-  connected: boolean;
-  pairings: Array<{
-    id: string;
-    displayName: string;
-    status: string;
-    lastSeenAt: string | null;
-  }>;
-  allowlist: Array<{
-    id: string;
-    label: string;
-    pathHint: string;
-    permissionTier: string;
-    status: string;
-  }>;
-};
-
-type LocalExecutorPairingInstructions = {
-  code: string;
-  installCommand: string;
-  sourceCommand: string;
-  expiresAt: string | null;
 };
 
 type CorePluginRecord = {
@@ -250,13 +215,6 @@ type MissionOverviewResponse = {
   tasksDueToday: MissionTask[];
   pendingApprovals: MissionApproval[];
   recentRuns: MissionRun[];
-  setup: {
-    calendarEnabled: boolean;
-    aiConfigured: boolean;
-    daemonConnected: boolean;
-    items: MissionSetupItem[];
-  };
-  daemon: MissionDaemonStatus;
   activity: MissionActivity[];
   latestBriefing: MissionDailyBriefing | null;
 };
@@ -297,7 +255,6 @@ const settingsSections: SettingsMissionSection[] = [
   "activity",
   "memory",
   "sources",
-  "setup",
 ];
 const sectionIds: MissionSection[] = [...basePrimarySections, "accounts", ...settingsSections];
 const sectionLabels: Record<MissionSection, string> = {
@@ -308,7 +265,6 @@ const sectionLabels: Record<MissionSection, string> = {
   activity: "Activity",
   memory: "Memory",
   sources: "Sources",
-  setup: "Setup",
 };
 const captureTypeOptions: Array<{
   id: MissionCaptureType;
@@ -339,10 +295,6 @@ const pendingApprovals = ref<MissionApproval[]>([]);
 const recentRuns = ref<MissionRun[]>([]);
 const memory = ref<MissionMemory[]>([]);
 const sources = ref<MissionContextSource[]>([]);
-const setupItems = ref<MissionSetupItem[]>([]);
-const daemon = ref<MissionDaemonStatus | null>(null);
-const localExecutorPairing = ref<LocalExecutorPairingInstructions | null>(null);
-const localExecutorPairingBusy = ref(false);
 const activity = ref<MissionActivity[]>([]);
 const latestBriefing = ref<MissionDailyBriefing | null>(null);
 const loading = ref(false);
@@ -459,12 +411,6 @@ const capturePlaceholder = computed(() => {
 });
 const schedulePickerTitle = computed(() =>
   captureType.value === "event" ? "Schedule event" : "Schedule reminder",
-);
-const localExecutorSetupItem = computed(
-  () => setupItems.value.find((item) => item.id === "local-executor") || null,
-);
-const visibleSetupItems = computed(() =>
-  setupItems.value.filter((item) => item.id !== "local-executor"),
 );
 const scheduledDate = computed(() => {
   const [date] = scheduleDateTime.value.split("T");
@@ -621,8 +567,6 @@ function applyOverview(response: MissionOverviewResponse) {
   tasksDueToday.value = response.tasksDueToday || [];
   pendingApprovals.value = response.pendingApprovals || [];
   recentRuns.value = response.recentRuns || [];
-  setupItems.value = response.setup?.items || [];
-  daemon.value = response.daemon;
   activity.value = response.activity || [];
   latestBriefing.value = response.latestBriefing || null;
   journalDraft.value = response.day?.journalText || "";
@@ -1543,38 +1487,6 @@ async function addSource() {
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "Could not save source";
   }
-}
-
-async function startLocalExecutorPairing() {
-  localExecutorPairingBusy.value = true;
-  try {
-    const response = await api.post<{
-      code: string;
-      installCommand: string;
-      expiresAt?: string | null;
-    }>("/local-executor/pairing/start", {
-      displayName: "Local runner",
-    });
-    localExecutorPairing.value = {
-      code: response.code,
-      installCommand: response.installCommand,
-      sourceCommand: sourceLocalExecutorCommand(response.installCommand),
-      expiresAt: response.expiresAt || null,
-    };
-    toastSuccess("Local Executor pairing code created.");
-    await loadOverview();
-  } catch (e) {
-    error.value = e instanceof ApiError ? e.message : "Could not start Local Executor pairing";
-  } finally {
-    localExecutorPairingBusy.value = false;
-  }
-}
-
-function sourceLocalExecutorCommand(command: string) {
-  return command.replace(
-    /^me3-local-executor\b/,
-    "node packages/local-executor/bin/me3-local-executor.mjs",
-  );
 }
 
 function captureTypeLabel(type: MissionCaptureType): string {
@@ -2724,79 +2636,6 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section v-show="activeSection === 'setup'" class="mission-page">
-      <div class="simple-sheet">
-        <div class="simple-sheet__header">
-          <h1>Setup</h1>
-          <button
-            type="button"
-            class="text-button"
-            :disabled="
-              localExecutorPairingBusy ||
-              localExecutorSetupItem?.status === 'optional'
-            "
-            @click="startLocalExecutorPairing"
-          >
-            {{ localExecutorPairingBusy ? "Pairing..." : "Pair local runner" }}
-          </button>
-        </div>
-        <section class="local-executor-setup">
-          <div class="local-executor-setup__header">
-            <div>
-              <h2>Local Executor</h2>
-              <p>
-                {{
-                  localExecutorSetupItem?.detail ||
-                  "Enable Local Executor from Account plugins, then pair a local runner."
-                }}
-              </p>
-            </div>
-            <router-link
-              v-if="localExecutorSetupItem?.status === 'optional'"
-              class="text-button"
-              to="/account?section=plugins&blocked=me3.local-executor"
-            >
-              Enable plugin
-            </router-link>
-          </div>
-          <div v-if="localExecutorPairing" class="local-executor-command">
-            <p>
-              Pairing code
-              <strong>{{ localExecutorPairing.code }}</strong>
-              <span v-if="localExecutorPairing.expiresAt">
-                expires {{ formatDateTime(localExecutorPairing.expiresAt) }}
-              </span>
-            </p>
-            <pre><code>{{ localExecutorPairing.sourceCommand }}</code></pre>
-            <p>
-              Run this from a ME3 Core checkout on the local computer. After it
-              pairs, add a project policy and run
-              <code>node packages/local-executor/bin/me3-local-executor.mjs once</code>
-              to claim an approved job.
-            </p>
-          </div>
-        </section>
-        <article v-for="item in visibleSetupItems" :key="item.id" class="detail-row">
-          <div>
-            <h2>{{ item.label }}</h2>
-            <p>{{ item.detail }}</p>
-          </div>
-          <span class="status-badge">{{ item.status }}</span>
-        </article>
-        <section class="daemon-summary">
-          <div>
-            <h2>Legacy local bridge</h2>
-            <p>{{ daemon?.connected ? "Connected" : "Not paired" }}</p>
-          </div>
-          <div class="daemon-summary__paths">
-            <span v-for="entry in daemon?.allowlist || []" :key="entry.id">
-              {{ entry.label }} - {{ entry.permissionTier }}
-            </span>
-          </div>
-        </section>
-      </div>
-    </section>
-
     <Teleport to="body">
       <div
         v-if="schedulePickerOpen && captureType !== 'task'"
@@ -3160,7 +2999,6 @@ onBeforeUnmount(() => {
 
 .capture-item__meta,
 .detail-row p,
-.daemon-summary p,
 .simple-sheet__header span,
 .journal-editor__status,
 .detail-row__aside {
@@ -3458,8 +3296,7 @@ onBeforeUnmount(() => {
 
 .capture-list__header h1,
 .simple-sheet__header h1,
-.detail-row h2,
-.daemon-summary h2 {
+.detail-row h2 {
   margin: 0;
   font-size: 15px;
   line-height: 1.25;
@@ -3515,8 +3352,7 @@ onBeforeUnmount(() => {
 }
 
 .capture-item__body p,
-.detail-row p,
-.daemon-summary p {
+.detail-row p {
   margin: 0;
 }
 
@@ -4143,85 +3979,6 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, #b91c1c, transparent 92%);
 }
 
-.local-executor-setup {
-  display: grid;
-  gap: 12px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.local-executor-setup__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.local-executor-setup h2 {
-  margin: 0;
-  color: var(--ui-text);
-  font-size: 15px;
-}
-
-.local-executor-setup p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.local-executor-command {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-}
-
-.local-executor-command strong,
-.local-executor-command code {
-  color: var(--ui-text);
-}
-
-.local-executor-command pre {
-  margin: 0;
-  max-width: 100%;
-  overflow-x: auto;
-  padding: 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface);
-  color: var(--ui-text);
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.daemon-summary {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.daemon-summary__paths {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.daemon-summary__paths span {
-  padding: 4px 7px;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-
 .mission-modal {
   position: fixed;
   inset: 0;
@@ -4418,9 +4175,7 @@ onBeforeUnmount(() => {
     grid-row: 2;
   }
 
-  .detail-row,
-  .daemon-summary,
-  .local-executor-setup__header {
+  .detail-row {
     flex-direction: column;
   }
 

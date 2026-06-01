@@ -24,7 +24,8 @@ Default install state: available but off. The owner activates it from Account an
 Primary surfaces:
 
 - `/assistant`: shows a Local Executor job starter when the plugin is active.
-- `/mission-control`: shows executor setup, approvals, run history, audit, and results.
+- `/account`: the Local Executor plugin row shows the setup/configure flow.
+- `/mission-control`: shows approvals, run history, audit, and results.
 - Soulink assistant chat: can create owner-directed manual runs and receive concise
   result notifications, but does not become the durable run record.
 
@@ -57,7 +58,7 @@ Mission Control owns:
 - The canonical owner-facing view for results, approvals, run history, and audit.
 - Linked `mission_agent_runs`, `mission_agent_run_events`, `mission_approvals`, and
   `mission_plugin_activity` records created by Local Executor runs.
-- Display of daemon health and policy summaries supplied by the Local Executor plugin.
+- Display of executor results and activity supplied by the Local Executor plugin.
 
 Local daemon owns:
 
@@ -120,9 +121,9 @@ Default draft:
 - Default landing policy: report-only. The executor may change local files if the policy
   allows it, but it should not commit or push unless the repo policy explicitly enables that.
 
-The starter should appear in `/assistant` only when the plugin is active. If no daemon is
-paired or no project policy exists, the job can be saved as `needs_setup` and should point
-the owner to Mission Control setup.
+The starter should appear in `/assistant` only when the plugin is active. If no local runner
+is paired or no project policy exists, the job can be saved as `needs_setup` and should point
+the owner to the Local Executor plugin row in Account.
 
 ## Data Model
 
