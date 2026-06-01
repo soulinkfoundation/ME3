@@ -157,6 +157,16 @@ type AgentChannelEventRow = {
   status: string;
 };
 
+type MailboxSetupRow = {
+  id: string;
+};
+
+type PluginInstallationSetupRow = {
+  plugin_id: string;
+  enabled: number;
+  status: "installed" | "setup_required" | "disabled";
+};
+
 type OwnerNotificationResult = {
   ok?: unknown;
   messageId?: unknown;
@@ -303,7 +313,7 @@ export async function listAssistantJobRecipes(env: Env, userId: string) {
         state:
           validation.status === "needs_setup"
             ? "needs_setup"
-            : serialized.state,
+            : "ready",
       };
     }),
     capabilities: ASSISTANT_JOB_CAPABILITIES,
@@ -312,9 +322,45 @@ export async function listAssistantJobRecipes(env: Env, userId: string) {
 
 async function getAssistantJobReadySetupRequirements(env: Env, userId: string) {
   const ready = new Set<string>();
-  const ownerConnection = await getActiveOwnerNotificationConnection(env, userId);
+  const [ownerConnection, emailReady, calendarReady] = await Promise.all([
+    getActiveOwnerNotificationConnection(env, userId),
+    isEmailSetupReady(env, userId),
+    isCalendarSetupReady(env),
+  ]);
   if (ownerConnection) ready.add("owner_notifications");
+  if (emailReady) ready.add("email");
+  if (calendarReady) ready.add("calendar");
   return Array.from(ready);
+}
+
+async function isEmailSetupReady(env: Env, userId: string) {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id
+       FROM mailbox_aliases
+       WHERE user_id = ? AND status = 'active'
+       LIMIT 1`,
+    )
+      .bind(userId)
+      .first<MailboxSetupRow>();
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
+
+async function isCalendarSetupReady(env: Env) {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT plugin_id, enabled, status
+       FROM plugin_installations
+       WHERE plugin_id = 'me3.calendar'
+       LIMIT 1`,
+    ).first<PluginInstallationSetupRow>();
+    return Boolean(row && row.enabled !== 0 && row.status === "installed");
+  } catch {
+    return false;
+  }
 }
 
 async function validateAssistantJobDraftForUser(

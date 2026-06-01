@@ -42,15 +42,15 @@ results, drafts, approvals, setup, and history.
 | Area | State | Main Risk | Tracking |
 | --- | --- | --- | --- |
 | Core chat actions | Partial parity. Reminder create/list and booking lookup have started. | Hosted actions could be ported unevenly without shared capability/audit policy. | `me3-tlt` |
-| Assistant Jobs | Schema, API, UI, starter recipes, runner lifecycle, Mission Control activity writes, and Daily Briefing owner notification action exist. | Jobs still look more complete than they are: email/calendar setup readiness, schedules, heartbeat, adapters, and QA remain unfinished. | `me3-wsn` |
-| Setup readiness | Validation supports setup requirements. Owner notification readiness now resolves from an active Soulink channel. | Email and calendar-backed jobs can still show `Needs setup` even when Account or plugin setup is ready. | `me3-wsn.26` |
-| Starter job QA | In progress. Daily Briefing can now test Core-to-Soulink owner notification once the updated Core install is deployed. | Custom builder would expose unfinished behavior if started before starter QA. | `me3-wsn.25` |
+| Assistant Jobs | Schema, API, UI, starter recipes, runner lifecycle, Mission Control activity writes, and Daily Briefing owner notification action exist. | Jobs still look more complete than they are: schedules, heartbeat, concrete provider adapters, and QA remain unfinished. | `me3-wsn` |
+| Setup readiness | Validation supports setup requirements. Owner notifications resolve from active Soulink, email resolves from an active mailbox, and calendar resolves from the enabled Calendar plugin. | Future plugin-owned capabilities need the same resolver pattern so job setup does not drift from Account/Plugins state. | `me3-wsn.26` |
+| Starter job QA | In progress. Daily Briefing Run now has been proven to deliver a Soulink owner notification and write Mission Control activity. | Custom builder would expose unfinished behavior if started before starter QA. | `me3-wsn.25` |
 | Context and memory | Native context packet contract, resolvers, manifests, chat wiring, memory review, and job-run wiring exist. | Scheduled jobs and model-backed job outputs still need richer context use. | `me3-ctx.8` |
 | Capability model | Assistant Jobs capabilities and plugin `agentTools` both exist. | Two registries can drift and weaken safety/setup behavior. | `me3-q6s.2`, new capability-unification work |
 | Mission Control | Good base workspace direction for results, approvals, memory, activity, projects, and run records. | Result surfaces and project-level job activity are still incomplete. | `me3-q6s.3`, `me3-wsn.14` |
 | Safety and audit | Assistant Jobs safety policy exists and should become the shared harness policy. | Enforcement is not yet uniformly shared by chat actions, jobs, plugins, events, and retries. | `me3-q6s.2` |
 | Scheduler and reliability | Assistant Job event ingress uses Cloudflare Queues and a DLQ. Heartbeat/reconciliation design exists. | Manual runs are synchronous, due scheduled jobs are not dispatched yet, and plugin queues such as booking reminders/social publishing are not wired in Core. | `me3-wsn.11`, `me3-wsn.22`, `me3-tlt.1`, `me3-1dr.1` |
-| Delivery channels | Soulink assistant chat can provision a stable Stream chat, send a welcome message, dispatch owner messages to ME3 Core, post assistant replies, and accept Core job notifications through `/api/me3/assistant-channel/notify`. | End-to-end hosted QA still needs to prove Daily Briefing Run now delivers to the owner's Soulink chat after the Core install is updated. | `me3-wsn.13`, `me3-wsn.25` |
+| Delivery channels | Soulink assistant chat can provision a stable Stream chat, send a welcome message, dispatch owner messages to ME3 Core, post assistant replies, and accept Core job notifications through `/api/me3/assistant-channel/notify`. Daily Briefing Run now delivers to the owner's Soulink chat. | Remaining delivery QA should focus on provider-backed jobs and failure visibility. | `me3-wsn.13`, `me3-wsn.25` |
 | Plugin expansion | Plugin manifests expose routes, UI slots, permissions, and `agentTools`. | Plugins need one capability contract plus optional skills/resources/recipes. | `me3-3ul`, `me3-q6s.2` |
 
 Soulink should now be treated as the primary portable assistant chat transport for harness work.
@@ -69,8 +69,8 @@ transport error.
 - Keep detailed implementation specs as references, not competing product roadmaps.
 - Unify Assistant Jobs capabilities and plugin `agentTools` into one internal capability
   contract.
-- Add setup-readiness resolvers for email, calendar, owner notifications, local daemon,
-  and plugin-owned providers.
+- Extend the setup-readiness resolver pattern from owner notifications, email, and calendar
+  to local daemon and future plugin-owned providers.
 - Route chat actions and job actions through the same capability, approval, and audit policy.
 
 Primary beads: `me3-q6s.2`, `me3-wsn.26`, `me3-3ul`.
@@ -79,7 +79,7 @@ Primary beads: `me3-q6s.2`, `me3-wsn.26`, `me3-3ul`.
 
 Test only the current visible starter set:
 
-1. Daily Briefing
+1. Daily Briefing - added, run, Mission Control activity written, Soulink notification delivered.
 2. Weekly Review
 3. Email Triage
 4. Invoice and Receipt Triage

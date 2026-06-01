@@ -6,6 +6,7 @@ import {
   executeAssistantJobRun,
   getAssistantJob,
   listAssistantJobIngressEvents,
+  listAssistantJobRecipes,
   listAssistantJobs,
   markAssistantJobIngressQueueMessageFailed,
   processAssistantJobIngressQueueMessage,
@@ -44,6 +45,16 @@ type ChannelEventRow = Record<string, unknown> & {
   provider_event_id: string | null;
   status: string;
 };
+type MailboxRow = Record<string, unknown> & {
+  id: string;
+  user_id: string;
+  status: string;
+};
+type PluginInstallationRow = Record<string, unknown> & {
+  plugin_id: string;
+  enabled: number;
+  status: string;
+};
 
 type AssistantJobsDbState = {
   owner: Record<string, unknown> | null;
@@ -66,6 +77,8 @@ type AssistantJobsDbState = {
   pluginActivities: Record<string, unknown>[];
   channelConnections: ChannelConnectionRow[];
   channelEvents: ChannelEventRow[];
+  mailbox: MailboxRow | null;
+  pluginInstallations: PluginInstallationRow[];
   queueMessages: unknown[];
 };
 
@@ -141,6 +154,43 @@ describe("assistant jobs persistence", () => {
     const run = await runAssistantJobNow(env, "owner", created.job.id);
     expect(run.run.status).toBe("blocked");
     expect(run.validation.status).toBe("needs_setup");
+  });
+
+  it("uses mailbox readiness for email-backed starter jobs", async () => {
+    const missingEnv = createAssistantJobsEnv();
+    const missingRecipes = await listAssistantJobRecipes(missingEnv, "owner");
+    expect(missingRecipes.recipes.find((recipe) => recipe.id === "email-triage")?.state).toBe(
+      "needs_setup",
+    );
+
+    const readyEnv = createAssistantJobsEnv({ mailbox: activeMailboxRow() });
+    const readyRecipes = await listAssistantJobRecipes(readyEnv, "owner");
+    expect(readyRecipes.recipes.find((recipe) => recipe.id === "email-triage")?.state).toBe(
+      "ready",
+    );
+
+    const created = await createAssistantJob(readyEnv, "owner", { recipeId: "email-triage" });
+    expect(created.job.status).toBe("active");
+    expect(created.validation.status).toBe("valid");
+  });
+
+  it("uses calendar plugin readiness for calendar-backed starter jobs", async () => {
+    const missingEnv = createAssistantJobsEnv();
+    const missing = await createAssistantJob(missingEnv, "owner", { recipeId: "booking-reminder" });
+    expect(missing.job.status).toBe("needs_setup");
+    expect(missing.validation.status).toBe("needs_setup");
+
+    const readyEnv = createAssistantJobsEnv({
+      pluginInstallations: [calendarPluginInstallationRow()],
+    });
+    const readyRecipes = await listAssistantJobRecipes(readyEnv, "owner");
+    expect(readyRecipes.recipes.find((recipe) => recipe.id === "booking-reminder")?.state).toBe(
+      "ready",
+    );
+
+    const created = await createAssistantJob(readyEnv, "owner", { recipeId: "booking-reminder" });
+    expect(created.job.status).toBe("active");
+    expect(created.validation.status).toBe("valid");
   });
 
   it("sends daily briefing notifications through the connected owner channel", async () => {
@@ -648,6 +698,8 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
     ingressEvents: [],
     pluginActivities: [],
     queueMessages: [],
+    mailbox: null,
+    pluginInstallations: [],
     ...stateOverrides,
     channelConnections: stateOverrides.channelConnections ?? [],
     channelEvents: stateOverrides.channelEvents ?? [],
@@ -691,6 +743,22 @@ function soulinkConnectionRow(): ChannelConnectionRow {
     provider_thread_id: "assistant-channel",
     last_outbound_at: null,
     updated_at: "2026-05-31T12:00:00.000Z",
+  };
+}
+
+function activeMailboxRow(): MailboxRow {
+  return {
+    id: "mailbox-1",
+    user_id: "owner",
+    status: "active",
+  };
+}
+
+function calendarPluginInstallationRow(): PluginInstallationRow {
+  return {
+    plugin_id: "me3.calendar",
+    enabled: 1,
+    status: "installed",
   };
 }
 
@@ -1138,6 +1206,20 @@ class FakeStatement {
             connection.status === "active" &&
             connection.channel === "soulink" &&
             connection.provider_thread_id,
+        ) || null
+      ) as T | null;
+    }
+    if (sql.includes("FROM mailbox_aliases")) {
+      const mailbox = this.state.mailbox;
+      if (!mailbox) return null as T | null;
+      return (mailbox.user_id === values[0] && mailbox.status === "active" ? mailbox : null) as
+        | T
+        | null;
+    }
+    if (sql.includes("FROM plugin_installations")) {
+      return (
+        this.state.pluginInstallations.find(
+          (installation) => installation.plugin_id === "me3.calendar",
         ) || null
       ) as T | null;
     }
