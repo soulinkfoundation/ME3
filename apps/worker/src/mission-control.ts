@@ -15,7 +15,7 @@ import {
 import { getUtcMsForLocalTime, normalizeTimeZone } from "./calendar";
 import { hasConfiguredAiProvider } from "./ai-providers";
 import { isCorePluginEnabled } from "./plugins";
-import { getLocalExecutorSetupState } from "./local-executor";
+import { createLocalExecutorPolicy, getLocalExecutorSetupState } from "./local-executor";
 import type { Env } from "./types";
 
 export class MissionControlInputError extends Error {
@@ -630,13 +630,52 @@ export async function createMissionProject(env: Env, userId: string, input: unkn
   const slug = slugifyMissionProjectName(
     normalizeNullableText(body.slug) || name,
   );
+  const projectKind = normalizeProjectCreateKind(
+    body.projectType ?? body.type ?? body.sourceKind,
+  );
+  const localPath = normalizeNullableText(body.localPath ?? body.pathHint);
+  if (projectKind === "local" && !localPath) {
+    throw new MissionControlInputError("Paste the local folder path for this project");
+  }
+  if (projectKind === "local" && !(await isCorePluginEnabled(env, "me3.local-executor"))) {
+    throw new MissionControlInputError("Turn on Local Executor before adding a local project", 409);
+  }
+  const duplicate = await env.DB.prepare(
+    `SELECT id FROM mission_projects WHERE user_id = ? AND slug = ? LIMIT 1`,
+  )
+    .bind(userId, slug)
+    .first<{ id: string }>();
+  if (duplicate) throw new MissionControlInputError("A project with that name already exists", 409);
+
   const id = crypto.randomUUID();
+  let sourceKind: MissionProjectRow["source_kind"] = "manual";
+  let sourceRef: string | null = null;
+  let metadata: Record<string, unknown> = {};
+
+  if (projectKind === "local") {
+    const { policy } = await createLocalExecutorPolicy(env, userId, {
+      projectLabel: name,
+      pathHint: localPath,
+      providerPreset: "opencode",
+      resourceKind: "repo",
+      allowedGitTarget: "none",
+      landingPolicy: "report_only",
+      dirtyRepo: "block",
+    });
+    sourceKind = "daemon_repo";
+    sourceRef = String(policy.id);
+    metadata = {
+      localExecutorPolicyId: policy.id,
+      localPath,
+    };
+  }
 
   try {
     await env.DB.prepare(
       `INSERT INTO mission_projects
-         (id, user_id, name, slug, description, status, color, icon, source_kind)
-       VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 'manual')`,
+         (id, user_id, name, slug, description, status, color, icon, source_kind,
+          source_ref, metadata_json)
+       VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`,
     )
       .bind(
         id,
@@ -646,6 +685,9 @@ export async function createMissionProject(env: Env, userId: string, input: unkn
         normalizeNullableText(body.description),
         normalizeNullableText(body.color),
         normalizeNullableText(body.icon),
+        sourceKind,
+        sourceRef,
+        JSON.stringify(metadata),
       )
       .run();
   } catch {
@@ -654,6 +696,46 @@ export async function createMissionProject(env: Env, userId: string, input: unkn
 
   return {
     project: serializeProject((await getMissionProject(env, userId, id)) as MissionProjectRow),
+  };
+}
+
+export async function getMissionTaskLocalExecutorRunInput(
+  env: Env,
+  userId: string,
+  taskId: string,
+) {
+  const task = await getMissionTask(env, userId, taskId);
+  if (!task || task.archived_at) throw new MissionControlInputError("Task not found", 404);
+  if (!task.project_id) {
+    throw new MissionControlInputError("Move this task into a local project first", 409);
+  }
+  const project = await getMissionProject(env, userId, task.project_id);
+  if (!project || project.source_kind !== "daemon_repo") {
+    throw new MissionControlInputError("Choose a local project before running this task locally", 409);
+  }
+
+  const projectMetadata = parseJsonRecord(project.metadata_json);
+  const projectPolicyId =
+    normalizeNullableText(projectMetadata.localExecutorPolicyId) ||
+    normalizeNullableText(project.source_ref);
+  if (!projectPolicyId) {
+    throw new MissionControlInputError("This local project is missing its runner policy", 409);
+  }
+
+  const prompt = [
+    `Project: ${project.name}`,
+    `Task: ${task.title}`,
+    task.description ? `Notes:\n${task.description}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    projectPolicyId,
+    prompt,
+    promptSummary: task.title,
+    sourceKind: "manual",
+    ownerDirected: true,
   };
 }
 
@@ -1988,6 +2070,10 @@ function normalizeNullableText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeProjectCreateKind(value: unknown): "standard" | "local" {
+  return value === "local" || value === "daemon_repo" ? "local" : "standard";
 }
 
 function normalizePriority(value: unknown, fallback = 3): number {

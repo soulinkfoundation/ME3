@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -41,10 +48,14 @@ type SettingsMissionSection =
 type MissionProject = {
   id: string;
   name: string;
+  slug: string;
   status: "active" | "paused" | "archived";
   description: string | null;
   color: string | null;
   icon: string | null;
+  sourceKind: "manual" | "daemon_repo" | "beads" | "import";
+  sourceRef: string | null;
+  metadata: Record<string, unknown>;
 };
 
 type MissionCapture = {
@@ -167,7 +178,12 @@ type CorePluginRecord = {
 };
 
 type FinancialEntryType = "income" | "expense";
-type FinancialEntryStatus = "pending" | "paid" | "overdue" | "cancelled" | "needs_review";
+type FinancialEntryStatus =
+  | "pending"
+  | "paid"
+  | "overdue"
+  | "cancelled"
+  | "needs_review";
 type FinancialEntrySource = "manual" | "email_triage" | "stripe" | "csv_import";
 
 type FinancialCategory = {
@@ -256,7 +272,11 @@ const settingsSections: SettingsMissionSection[] = [
   "memory",
   "sources",
 ];
-const sectionIds: MissionSection[] = [...basePrimarySections, "accounts", ...settingsSections];
+const sectionIds: MissionSection[] = [
+  ...basePrimarySections,
+  "accounts",
+  ...settingsSections,
+];
 const sectionLabels: Record<MissionSection, string> = {
   today: "Journal",
   journalArchive: "Archive",
@@ -275,7 +295,10 @@ const captureTypeOptions: Array<{
   { id: "reminder", icon: "Clock", label: "Reminder" },
   { id: "event", icon: "CalendarDays", label: "Event" },
 ];
-const projectBoardStatuses: Array<{ id: MissionTask["status"]; label: string }> = [
+const projectBoardStatuses: Array<{
+  id: MissionTask["status"];
+  label: string;
+}> = [
   { id: "backlog", label: "Backlog" },
   { id: "in_progress", label: "Doing" },
   { id: "review", label: "Review" },
@@ -285,7 +308,9 @@ const PROJECT_TASK_PAGE_SIZE = 50;
 const ACCOUNTS_PAGE_SIZE = 50;
 
 const selectedDate = ref(todayKey());
-const activeSection = ref<MissionSection>(normalizeSection(route.query.section));
+const activeSection = ref<MissionSection>(
+  normalizeSection(route.query.section),
+);
 const accountsEnabled = ref(false);
 const day = ref<MissionDay | null>(null);
 const captures = ref<MissionCapture[]>([]);
@@ -332,6 +357,8 @@ const settingsMenuOpen = ref(false);
 const projectModalOpen = ref(false);
 const projectTitle = ref("");
 const projectDescription = ref("");
+const projectType = ref<"standard" | "local">("standard");
+const projectLocalPath = ref("");
 const projectLogoData = ref("");
 const projectLogoName = ref("");
 const projectSaving = ref(false);
@@ -344,6 +371,7 @@ const projectTasksNextCursor = ref<string | null>(null);
 const projectTaskDraft = ref("");
 const projectTaskSaving = ref(false);
 const projectTaskActionId = ref("");
+const projectTaskLocalRunId = ref("");
 const projectTaskComposerStatus = ref<ProjectBoardStatus | "">("");
 const draggedProjectTaskId = ref("");
 const projectTaskDropStatus = ref<ProjectBoardStatus | "">("");
@@ -371,11 +399,15 @@ const accountsForm = ref<AccountsEntryForm>(emptyAccountsForm("expense"));
 let journalSaveTimer: number | null = null;
 
 const primarySections = computed<PrimaryMissionSection[]>(() =>
-  accountsEnabled.value ? [...basePrimarySections, "accounts"] : basePrimarySections,
+  accountsEnabled.value
+    ? [...basePrimarySections, "accounts"]
+    : basePrimarySections,
 );
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
 const selectedDateLabel = computed(() =>
-  currentDateIsToday.value ? "Today" : formatDaySwitcherDate(selectedDate.value),
+  currentDateIsToday.value
+    ? "Today"
+    : formatDaySwitcherDate(selectedDate.value),
 );
 const activeProjectOptions = computed(() =>
   projects.value.filter((project) => project.status === "active"),
@@ -389,8 +421,12 @@ const doneCaptures = computed(() =>
 const visibleScheduledTasks = computed(() =>
   tasksDueToday.value.filter((task) => task.sourceKind !== "capture"),
 );
-const openItemCount = computed(() => openCaptures.value.length + visibleScheduledTasks.value.length);
-const selectedDayIsLoaded = computed(() => day.value?.date === selectedDate.value && !loading.value);
+const openItemCount = computed(
+  () => openCaptures.value.length + visibleScheduledTasks.value.length,
+);
+const selectedDayIsLoaded = computed(
+  () => day.value?.date === selectedDate.value && !loading.value,
+);
 const showCaptureList = computed(
   () =>
     selectedDayIsLoaded.value &&
@@ -405,7 +441,8 @@ const journalStatusText = computed(() => {
   return "";
 });
 const capturePlaceholder = computed(() => {
-  if (captureType.value === "reminder") return "Remind me to take a break tomorrow at 3pm";
+  if (captureType.value === "reminder")
+    return "Remind me to take a break tomorrow at 3pm";
   if (captureType.value === "event") return "Coffee with Alex tomorrow at 10am";
   return "Fix login redirect";
 });
@@ -422,10 +459,14 @@ const scheduledTime = computed(() => {
 });
 const activityItems = computed<ActivityViewItem[]>(() => {
   const visibleRunIds = new Set(
-    recentRuns.value.flatMap((run) => [
-      run.id,
-      typeof run.result?.assistantJobRunId === "string" ? run.result.assistantJobRunId : null,
-    ]).filter(Boolean),
+    recentRuns.value
+      .flatMap((run) => [
+        run.id,
+        typeof run.result?.assistantJobRunId === "string"
+          ? run.result.assistantJobRunId
+          : null,
+      ])
+      .filter(Boolean),
   );
   return [
     ...pendingApprovals.value.map((approval) => ({
@@ -447,18 +488,23 @@ const activityItems = computed<ActivityViewItem[]>(() => {
     ...activity.value
       .filter((item) => !item.relatedId || !visibleRunIds.has(item.relatedId))
       .map((item) => ({
-      id: `activity:${item.id}`,
-      kind: "Activity",
-      title: item.title,
-      summary: item.summary,
-      status: item.status,
-      createdAt: item.createdAt,
+        id: `activity:${item.id}`,
+        kind: "Activity",
+        title: item.title,
+        summary: item.summary,
+        status: item.status,
+        createdAt: item.createdAt,
       })),
   ];
 });
 const visibleDailyBriefing = computed(() => {
   const briefing = latestBriefing.value;
-  if (!briefing || !briefing.showInJournal || briefing.date !== selectedDate.value) return null;
+  if (
+    !briefing ||
+    !briefing.showInJournal ||
+    briefing.date !== selectedDate.value
+  )
+    return null;
   if (isDailyBriefingDismissed(briefing)) return null;
   return briefing;
 });
@@ -472,13 +518,22 @@ const mobilePrimarySectionIcon = computed<UiIconName>(() =>
   activeSection.value === "today" ? "LayoutGrid" : "CalendarDays",
 );
 const projectCreateDisabled = computed(
-  () => projectSaving.value || projectTitle.value.trim().length === 0,
+  () =>
+    projectSaving.value ||
+    projectTitle.value.trim().length === 0 ||
+    (projectType.value === "local" &&
+      projectLocalPath.value.trim().length === 0),
 );
 const selectedProjectDetail = computed(
   () =>
-    projects.value.find((project) => project.id === selectedProjectDetailId.value) ||
+    projects.value.find(
+      (project) => project.id === selectedProjectDetailId.value,
+    ) ||
     projects.value[0] ||
     null,
+);
+const selectedProjectIsLocal = computed(() =>
+  isLocalProject(selectedProjectDetail.value),
 );
 const selectedProjectTasks = computed(() => {
   const projectId = selectedProjectDetail.value?.id;
@@ -490,7 +545,9 @@ const selectedProjectTasks = computed(() => {
 const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
   projectBoardStatuses.map((column) => ({
     ...column,
-    tasks: selectedProjectTasks.value.filter((task) => task.status === column.id),
+    tasks: selectedProjectTasks.value.filter(
+      (task) => task.status === column.id,
+    ),
   })),
 );
 const selectedProjectDetailLabel = computed(
@@ -503,14 +560,20 @@ const projectTaskCreateDisabled = computed(
     !projectTaskDraft.value.trim() ||
     !selectedProjectDetail.value,
 );
-const accountsPage = computed(() => Math.floor(accountsOffset.value / ACCOUNTS_PAGE_SIZE) + 1);
+const accountsPage = computed(
+  () => Math.floor(accountsOffset.value / ACCOUNTS_PAGE_SIZE) + 1,
+);
 const accountsHasPrevious = computed(() => accountsOffset.value > 0);
-const accountsHasNext = computed(() => accountsOffset.value + ACCOUNTS_PAGE_SIZE < accountsTotal.value);
+const accountsHasNext = computed(
+  () => accountsOffset.value + ACCOUNTS_PAGE_SIZE < accountsTotal.value,
+);
 const accountsEntryCountLabel = computed(() =>
   accountsTotal.value === 1 ? "1 entry" : `${accountsTotal.value} entries`,
 );
 const accountCategoryOptions = computed(() =>
-  accountsCategories.value.filter((category) => category.entryType === accountsType.value),
+  accountsCategories.value.filter(
+    (category) => category.entryType === accountsType.value,
+  ),
 );
 const accountsFormDisabled = computed(
   () =>
@@ -521,14 +584,17 @@ const accountsFormDisabled = computed(
 );
 const selectedArchiveEntry = computed(
   () =>
-    journalArchiveEntries.value.find((entry) => entry.date === selectedArchiveDate.value) ||
+    journalArchiveEntries.value.find(
+      (entry) => entry.date === selectedArchiveDate.value,
+    ) ||
     journalArchiveEntries.value[0] ||
     null,
 );
 const selectedArchiveProject = computed(
   () =>
-    projects.value.find((project) => project.id === selectedArchiveProjectId.value) ||
-    null,
+    projects.value.find(
+      (project) => project.id === selectedArchiveProjectId.value,
+    ) || null,
 );
 const selectedArchiveLabel = computed(() =>
   selectedArchiveProject.value
@@ -537,7 +603,9 @@ const selectedArchiveLabel = computed(() =>
 );
 const selectedProjectArchiveTask = computed(
   () =>
-    projectArchiveTasks.value.find((task) => task.id === selectedProjectArchiveTaskId.value) ||
+    projectArchiveTasks.value.find(
+      (task) => task.id === selectedProjectArchiveTaskId.value,
+    ) ||
     projectArchiveTasks.value[0] ||
     null,
 );
@@ -554,7 +622,8 @@ async function loadOverview() {
     applyOverview(response);
   } catch (e) {
     if (selectedDate.value !== requestDate) return;
-    error.value = e instanceof ApiError ? e.message : "Mission Control could not load";
+    error.value =
+      e instanceof ApiError ? e.message : "Mission Control could not load";
   } finally {
     if (selectedDate.value === requestDate) loading.value = false;
   }
@@ -576,7 +645,9 @@ function applyOverview(response: MissionOverviewResponse) {
   }
   if (
     !selectedProjectDetailId.value ||
-    !projects.value.some((project) => project.id === selectedProjectDetailId.value)
+    !projects.value.some(
+      (project) => project.id === selectedProjectDetailId.value,
+    )
   ) {
     selectedProjectDetailId.value = projects.value[0]?.id || "";
   }
@@ -592,9 +663,9 @@ async function clearActivity() {
 
   clearingActivity.value = true;
   try {
-    await api.delete<{ cleared: { agentRuns: number; pluginActivity: number } }>(
-      "/mission-control/activity",
-    );
+    await api.delete<{
+      cleared: { agentRuns: number; pluginActivity: number };
+    }>("/mission-control/activity");
     recentRuns.value = [];
     activity.value = [];
     toastSuccess("Activity cleared");
@@ -661,9 +732,12 @@ async function loadAccounts() {
       limit: String(ACCOUNTS_PAGE_SIZE),
       offset: String(accountsOffset.value),
     });
-    if (accountsSearch.value.trim()) query.set("search", accountsSearch.value.trim());
-    if (accountsStatusFilter.value) query.set("status", accountsStatusFilter.value);
-    if (accountsSourceFilter.value) query.set("source", accountsSourceFilter.value);
+    if (accountsSearch.value.trim())
+      query.set("search", accountsSearch.value.trim());
+    if (accountsStatusFilter.value)
+      query.set("status", accountsStatusFilter.value);
+    if (accountsSourceFilter.value)
+      query.set("source", accountsSourceFilter.value);
 
     const [entriesResponse, categoriesResponse, statsResponse, stripeResponse] =
       await Promise.all([
@@ -692,7 +766,8 @@ async function loadAccounts() {
     accountsStripeStatus.value = stripeResponse.status;
     accountsStripeLastSyncedAt.value = stripeResponse.lastSyncedAt;
   } catch (e) {
-    accountsError.value = e instanceof ApiError ? e.message : "Accounts could not load";
+    accountsError.value =
+      e instanceof ApiError ? e.message : "Accounts could not load";
   } finally {
     accountsLoading.value = false;
   }
@@ -700,7 +775,9 @@ async function loadAccounts() {
 
 async function saveAccountEntry() {
   if (accountsFormDisabled.value) return;
-  const amountValue = Number(normalizeAccountsAmountInput(accountsForm.value.amount));
+  const amountValue = Number(
+    normalizeAccountsAmountInput(accountsForm.value.amount),
+  );
   if (!Number.isFinite(amountValue) || amountValue <= 0) {
     accountsError.value = "Amount must be greater than zero";
     return;
@@ -725,7 +802,8 @@ async function saveAccountEntry() {
     accountsMessage.value = "Entry added.";
     await loadAccounts();
   } catch (e) {
-    accountsError.value = e instanceof ApiError ? e.message : "Could not add account entry";
+    accountsError.value =
+      e instanceof ApiError ? e.message : "Could not add account entry";
   } finally {
     accountsSaving.value = false;
   }
@@ -750,7 +828,8 @@ async function deleteAccountEntry(entry: FinancialEntry) {
     accountsMessage.value = "Entry deleted.";
     await loadAccounts();
   } catch (e) {
-    accountsError.value = e instanceof ApiError ? e.message : "Could not delete account entry";
+    accountsError.value =
+      e instanceof ApiError ? e.message : "Could not delete account entry";
   }
 }
 
@@ -768,7 +847,10 @@ function applyAccountsFilters() {
 }
 
 function pageAccounts(delta: number) {
-  accountsOffset.value = Math.max(0, accountsOffset.value + delta * ACCOUNTS_PAGE_SIZE);
+  accountsOffset.value = Math.max(
+    0,
+    accountsOffset.value + delta * ACCOUNTS_PAGE_SIZE,
+  );
   void loadAccounts();
 }
 
@@ -796,7 +878,8 @@ async function importAccountsCsv(event: Event) {
     accountsOffset.value = 0;
     await loadAccounts();
   } catch (e) {
-    accountsError.value = e instanceof ApiError ? e.message : "Could not import CSV";
+    accountsError.value =
+      e instanceof ApiError ? e.message : "Could not import CSV";
   } finally {
     accountsImporting.value = false;
     input.value = "";
@@ -805,9 +888,12 @@ async function importAccountsCsv(event: Event) {
 
 function exportAccountsCsv() {
   const query = new URLSearchParams({ entryType: accountsType.value });
-  if (accountsSearch.value.trim()) query.set("search", accountsSearch.value.trim());
-  if (accountsStatusFilter.value) query.set("status", accountsStatusFilter.value);
-  if (accountsSourceFilter.value) query.set("source", accountsSourceFilter.value);
+  if (accountsSearch.value.trim())
+    query.set("search", accountsSearch.value.trim());
+  if (accountsStatusFilter.value)
+    query.set("status", accountsStatusFilter.value);
+  if (accountsSourceFilter.value)
+    query.set("source", accountsSourceFilter.value);
   window.location.href = `${API_BASE}/accounts/export?${query.toString()}`;
 }
 
@@ -843,7 +929,9 @@ async function loadJournalArchive() {
     journalArchiveEntries.value = response.entries || [];
     if (
       selectedArchiveDate.value &&
-      journalArchiveEntries.value.some((entry) => entry.date === selectedArchiveDate.value)
+      journalArchiveEntries.value.some(
+        (entry) => entry.date === selectedArchiveDate.value,
+      )
     ) {
       return;
     }
@@ -876,7 +964,9 @@ async function loadProjectArchive(projectId = selectedArchiveProjectId.value) {
     projectArchiveNextCursor.value = response.nextCursor || null;
     if (
       selectedProjectArchiveTaskId.value &&
-      projectArchiveTasks.value.some((task) => task.id === selectedProjectArchiveTaskId.value)
+      projectArchiveTasks.value.some(
+        (task) => task.id === selectedProjectArchiveTaskId.value,
+      )
     ) {
       return;
     }
@@ -916,7 +1006,9 @@ async function loadMoreProjectArchive() {
   }
 }
 
-async function loadProjectTasks(projectId = selectedProjectDetail.value?.id || "") {
+async function loadProjectTasks(
+  projectId = selectedProjectDetail.value?.id || "",
+) {
   if (!projectId) {
     projectTasks.value = [];
     projectTasksNextCursor.value = null;
@@ -952,7 +1044,10 @@ async function loadMoreProjectTasks() {
       missionTasksUrl({ projectId, cursor }),
     );
     if (selectedProjectDetail.value?.id !== projectId) return;
-    projectTasks.value = appendUniqueTasks(projectTasks.value, response.tasks || []);
+    projectTasks.value = appendUniqueTasks(
+      projectTasks.value,
+      response.tasks || [],
+    );
     projectTasksNextCursor.value = response.nextCursor || null;
   } catch (e) {
     projectTasksError.value =
@@ -967,7 +1062,8 @@ async function submitCapture() {
   if (!text || savingCapture.value) return;
   savingCapture.value = true;
   error.value = "";
-  const hasPickedSchedule = captureType.value !== "task" && scheduledDate.value && scheduledTime.value;
+  const hasPickedSchedule =
+    captureType.value !== "task" && scheduledDate.value && scheduledTime.value;
   try {
     const response = await api.post<{ capture: MissionCapture }>(
       "/mission-control/capture",
@@ -978,7 +1074,9 @@ async function submitCapture() {
         projectId: selectedProjectId.value || undefined,
         scheduledDate: hasPickedSchedule ? scheduledDate.value : undefined,
         scheduledTime: hasPickedSchedule ? scheduledTime.value : undefined,
-        timezone: hasPickedSchedule ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined,
+        timezone: hasPickedSchedule
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone
+          : undefined,
       },
     );
     captureText.value = "";
@@ -995,7 +1093,10 @@ async function submitCapture() {
   }
 }
 
-async function setCaptureStatus(capture: MissionCapture, status: "open" | "done") {
+async function setCaptureStatus(
+  capture: MissionCapture,
+  status: "open" | "done",
+) {
   try {
     const response = await api.patch<{ capture: MissionCapture }>(
       `/mission-control/capture/${encodeURIComponent(capture.id)}`,
@@ -1003,7 +1104,8 @@ async function setCaptureStatus(capture: MissionCapture, status: "open" | "done"
     );
     replaceCapture(response.capture);
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : "Could not update capture";
+    error.value =
+      e instanceof ApiError ? e.message : "Could not update capture";
   }
 }
 
@@ -1014,14 +1116,17 @@ async function archiveCapture(capture: MissionCapture) {
     );
     captures.value = captures.value.filter((item) => item.id !== capture.id);
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : "Could not archive capture";
+    error.value =
+      e instanceof ApiError ? e.message : "Could not archive capture";
   }
 }
 
 async function archiveTask(task: MissionTask) {
   try {
     await api.delete(`/mission-control/tasks/${encodeURIComponent(task.id)}`);
-    tasksDueToday.value = tasksDueToday.value.filter((item) => item.id !== task.id);
+    tasksDueToday.value = tasksDueToday.value.filter(
+      (item) => item.id !== task.id,
+    );
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "Could not remove task";
   }
@@ -1068,7 +1173,10 @@ async function flushPendingJournalSave() {
   }
 }
 
-async function selectJournalDate(date: string, options: { openToday?: boolean } = {}) {
+async function selectJournalDate(
+  date: string,
+  options: { openToday?: boolean } = {},
+) {
   const normalizedDate = normalizeLocalDateInput(date);
   if (!normalizedDate) return;
   await flushPendingJournalSave();
@@ -1135,7 +1243,10 @@ function toggleArchivePicker() {
 function selectJournalArchive() {
   selectedArchiveProjectId.value = "";
   archivePickerOpen.value = false;
-  if (journalArchiveEntries.value.length === 0 && !journalArchiveLoading.value) {
+  if (
+    journalArchiveEntries.value.length === 0 &&
+    !journalArchiveLoading.value
+  ) {
     void loadJournalArchive();
   }
 }
@@ -1171,6 +1282,8 @@ function openProjectModal() {
   archivePickerOpen.value = false;
   projectTitle.value = "";
   projectDescription.value = "";
+  projectType.value = "standard";
+  projectLocalPath.value = "";
   projectLogoData.value = "";
   projectLogoName.value = "";
   projectError.value = "";
@@ -1200,7 +1313,8 @@ function chooseProjectLogo(event: Event) {
 
   const reader = new FileReader();
   reader.onload = () => {
-    projectLogoData.value = typeof reader.result === "string" ? reader.result : "";
+    projectLogoData.value =
+      typeof reader.result === "string" ? reader.result : "";
     projectLogoName.value = file.name;
   };
   reader.onerror = () => {
@@ -1225,6 +1339,11 @@ async function addProject() {
       {
         name,
         description: projectDescription.value.trim() || undefined,
+        projectType: projectType.value,
+        localPath:
+          projectType.value === "local"
+            ? projectLocalPath.value.trim()
+            : undefined,
         icon: projectLogoData.value || undefined,
       },
     );
@@ -1238,7 +1357,8 @@ async function addProject() {
     toastSuccess("Project added");
     projectModalOpen.value = false;
   } catch (e) {
-    projectError.value = e instanceof ApiError ? e.message : "Could not create project";
+    projectError.value =
+      e instanceof ApiError ? e.message : "Could not create project";
   } finally {
     projectSaving.value = false;
   }
@@ -1254,7 +1374,9 @@ function openProjectTaskComposer(status: ProjectBoardStatus) {
   projectTaskComposerStatus.value = status;
   projectTaskDraft.value = "";
   void nextTick(() => {
-    document.querySelector<HTMLInputElement>(".project-task-composer__input")?.focus();
+    document
+      .querySelector<HTMLInputElement>(".project-task-composer__input")
+      ?.focus();
   });
 }
 
@@ -1270,11 +1392,14 @@ async function addProjectTask(status: ProjectBoardStatus) {
   projectTaskSaving.value = true;
   projectTasksError.value = "";
   try {
-    const response = await api.post<{ task: MissionTask }>("/mission-control/tasks", {
-      title,
-      projectId: project.id,
-      status,
-    });
+    const response = await api.post<{ task: MissionTask }>(
+      "/mission-control/tasks",
+      {
+        title,
+        projectId: project.id,
+        status,
+      },
+    );
     projectTasks.value = [response.task, ...projectTasks.value];
     resetProjectTaskComposer();
   } catch (e) {
@@ -1285,7 +1410,31 @@ async function addProjectTask(status: ProjectBoardStatus) {
   }
 }
 
-async function setProjectTaskStatus(task: MissionTask, status: MissionTask["status"]) {
+async function runProjectTaskLocally(task: MissionTask) {
+  if (!selectedProjectIsLocal.value || projectTaskLocalRunId.value) return;
+  projectTaskLocalRunId.value = task.id;
+  projectTasksError.value = "";
+  try {
+    const response = await api.post<{
+      run: { id: string; status: string; promptSummary: string | null };
+    }>(`/mission-control/tasks/${encodeURIComponent(task.id)}/local-run`, {});
+    toastSuccess(
+      response.run.status === "queued"
+        ? "Local run queued"
+        : "Local run requested",
+    );
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not queue local run";
+  } finally {
+    projectTaskLocalRunId.value = "";
+  }
+}
+
+async function setProjectTaskStatus(
+  task: MissionTask,
+  status: MissionTask["status"],
+) {
   if (task.status === status || projectTaskActionId.value) return;
   projectTaskActionId.value = task.id;
   projectTasksError.value = "";
@@ -1326,7 +1475,10 @@ function endProjectTaskDrag() {
   projectTaskDropStatus.value = "";
 }
 
-function handleProjectColumnDragOver(event: DragEvent, status: ProjectBoardStatus) {
+function handleProjectColumnDragOver(
+  event: DragEvent,
+  status: ProjectBoardStatus,
+) {
   if (!draggedProjectTaskId.value) return;
   event.preventDefault();
   projectTaskDropStatus.value = status;
@@ -1335,17 +1487,23 @@ function handleProjectColumnDragOver(event: DragEvent, status: ProjectBoardStatu
   }
 }
 
-function handleProjectColumnDragLeave(event: DragEvent, status: ProjectBoardStatus) {
+function handleProjectColumnDragLeave(
+  event: DragEvent,
+  status: ProjectBoardStatus,
+) {
   const currentTarget = event.currentTarget as HTMLElement | null;
   const relatedTarget = event.relatedTarget as Node | null;
-  if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget)) return;
+  if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget))
+    return;
   if (projectTaskDropStatus.value === status) projectTaskDropStatus.value = "";
 }
 
 async function dropProjectTask(event: DragEvent, status: ProjectBoardStatus) {
   event.preventDefault();
   const taskId =
-    draggedProjectTaskId.value || event.dataTransfer?.getData("text/plain") || "";
+    draggedProjectTaskId.value ||
+    event.dataTransfer?.getData("text/plain") ||
+    "";
   endProjectTaskDrag();
   const task = projectTasks.value.find((item) => item.id === taskId);
   if (!task) return;
@@ -1358,8 +1516,12 @@ async function archiveProjectTask(task: MissionTask) {
   projectTasksError.value = "";
   try {
     await api.delete(`/mission-control/tasks/${encodeURIComponent(task.id)}`);
-    projectTasks.value = projectTasks.value.filter((item) => item.id !== task.id);
-    tasksDueToday.value = tasksDueToday.value.filter((item) => item.id !== task.id);
+    projectTasks.value = projectTasks.value.filter(
+      (item) => item.id !== task.id,
+    );
+    tasksDueToday.value = tasksDueToday.value.filter(
+      (item) => item.id !== task.id,
+    );
   } catch (e) {
     projectTasksError.value =
       e instanceof ApiError ? e.message : "Could not archive task";
@@ -1374,7 +1536,10 @@ function replaceProjectTask(next: MissionTask) {
   else projectTasks.value.unshift(next);
 }
 
-function appendUniqueTasks(current: MissionTask[], next: MissionTask[]): MissionTask[] {
+function appendUniqueTasks(
+  current: MissionTask[],
+  next: MissionTask[],
+): MissionTask[] {
   const seen = new Set(current.map((task) => task.id));
   return [
     ...current,
@@ -1428,7 +1593,10 @@ async function addMemory() {
   const body = memoryDraft.value.trim();
   if (!body) return;
   try {
-    await api.post("/mission-control/memory", { body, memoryKind: "owner_note" });
+    await api.post("/mission-control/memory", {
+      body,
+      memoryKind: "owner_note",
+    });
     memoryDraft.value = "";
     await loadMemoryAndSources();
   } catch (e) {
@@ -1447,7 +1615,8 @@ async function approveMemory(item: MissionMemory) {
     replaceMemory(response.memory);
     toastSuccess("Memory approved");
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : "Could not approve memory";
+    error.value =
+      e instanceof ApiError ? e.message : "Could not approve memory";
   } finally {
     memoryActionId.value = "";
   }
@@ -1457,7 +1626,9 @@ async function forgetMemory(item: MissionMemory) {
   memoryActionId.value = item.id;
   error.value = "";
   try {
-    await api.delete<{ ok: true }>(`/mission-control/memory/${encodeURIComponent(item.id)}`);
+    await api.delete<{ ok: true }>(
+      `/mission-control/memory/${encodeURIComponent(item.id)}`,
+    );
     memory.value = memory.value.filter((entry) => entry.id !== item.id);
     toastSuccess("Memory forgotten");
   } catch (e) {
@@ -1505,7 +1676,19 @@ function syncLabel(capture: MissionCapture): string {
 
 function projectName(projectId: string | null): string {
   if (!projectId) return "Personal";
-  return projects.value.find((project) => project.id === projectId)?.name || "Personal";
+  return (
+    projects.value.find((project) => project.id === projectId)?.name ||
+    "Personal"
+  );
+}
+
+function isLocalProject(project: MissionProject | null | undefined): boolean {
+  return project?.sourceKind === "daemon_repo";
+}
+
+function localProjectPath(project: MissionProject | null | undefined): string {
+  const value = project?.metadata?.localPath;
+  return typeof value === "string" ? value : "";
 }
 
 function taskStatusLabel(status: MissionTask["status"]): string {
@@ -1614,10 +1797,14 @@ function memoryStatusLabel(status: MissionMemory["reviewStatus"]): string {
 
 function memorySourceLabel(item: MissionMemory): string {
   if (item.sourceKind === "agent") {
-    return item.sourceRef ? `Agent suggestion: ${item.sourceRef}` : "Agent suggestion";
+    return item.sourceRef
+      ? `Agent suggestion: ${item.sourceRef}`
+      : "Agent suggestion";
   }
-  if (item.sourceKind === "daemon") return item.sourceRef ? `Daemon: ${item.sourceRef}` : "Daemon";
-  if (item.sourceKind === "import") return item.sourceRef ? `Import: ${item.sourceRef}` : "Import";
+  if (item.sourceKind === "daemon")
+    return item.sourceRef ? `Daemon: ${item.sourceRef}` : "Daemon";
+  if (item.sourceKind === "import")
+    return item.sourceRef ? `Import: ${item.sourceRef}` : "Import";
   return item.sourceRef ? `Manual: ${item.sourceRef}` : "Manual";
 }
 
@@ -1679,7 +1866,9 @@ function normalizeSection(value: unknown): MissionSection {
   if (raw === "journal") return "today";
   if (raw === "archive" || raw === "journal-archive") return "journalArchive";
   if (raw === "approvals" || raw === "runs") return "activity";
-  return sectionIds.includes(raw as MissionSection) ? (raw as MissionSection) : "today";
+  return sectionIds.includes(raw as MissionSection)
+    ? (raw as MissionSection)
+    : "today";
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
@@ -1785,7 +1974,10 @@ onBeforeUnmount(() => {
 <template>
   <main class="mission-control">
     <header class="mission-control__topbar">
-      <nav class="mission-control__sections" aria-label="Mission Control primary sections">
+      <nav
+        class="mission-control__sections"
+        aria-label="Mission Control primary sections"
+      >
         <button
           v-for="section in primarySections"
           :key="section"
@@ -1804,7 +1996,12 @@ onBeforeUnmount(() => {
         aria-label="Selected day"
         @click.stop
       >
-        <button type="button" class="icon-button" aria-label="Previous day" @click="moveDay(-1)">
+        <button
+          type="button"
+          class="icon-button"
+          aria-label="Previous day"
+          @click="moveDay(-1)"
+        >
           <UiIcon name="ChevronLeft" :size="18" />
         </button>
         <button
@@ -1817,7 +2014,12 @@ onBeforeUnmount(() => {
         >
           <strong>{{ selectedDateLabel }}</strong>
         </button>
-        <button type="button" class="icon-button" aria-label="Next day" @click="moveDay(1)">
+        <button
+          type="button"
+          class="icon-button"
+          aria-label="Next day"
+          @click="moveDay(1)"
+        >
           <UiIcon name="ChevronRight" :size="18" />
         </button>
         <DatePickerPopover
@@ -1848,6 +2050,9 @@ onBeforeUnmount(() => {
           @click="toggleProjectPicker"
         >
           <strong>{{ selectedProjectDetailLabel }}</strong>
+          <span v-if="selectedProjectIsLocal" class="local-project-badge"
+            >Local</span
+          >
           <UiIcon
             name="ChevronDown"
             :size="15"
@@ -1868,9 +2073,15 @@ onBeforeUnmount(() => {
             :class="{ 'is-active': selectedProjectDetail?.id === project.id }"
             @click="selectProjectDetail(project.id)"
           >
-            {{ project.name }}
+            <span>{{ project.name }}</span>
+            <span v-if="isLocalProject(project)" class="local-project-badge"
+              >Local</span
+            >
           </button>
-          <div v-if="projects.length === 0" class="project-picker-popover__empty">
+          <div
+            v-if="projects.length === 0"
+            class="project-picker-popover__empty"
+          >
             No projects yet.
           </div>
           <button
@@ -1928,7 +2139,10 @@ onBeforeUnmount(() => {
           >
             {{ project.name }} archive
           </button>
-          <div v-if="projects.length === 0" class="archive-picker-popover__empty">
+          <div
+            v-if="projects.length === 0"
+            class="archive-picker-popover__empty"
+          >
             No projects yet.
           </div>
         </div>
@@ -1955,11 +2169,20 @@ onBeforeUnmount(() => {
           aria-label="Mission Control settings"
           :aria-expanded="settingsMenuOpen"
           aria-haspopup="menu"
-          @click="settingsMenuOpen = !settingsMenuOpen; datePickerOpen = false; projectPickerOpen = false; archivePickerOpen = false"
+          @click="
+            settingsMenuOpen = !settingsMenuOpen;
+            datePickerOpen = false;
+            projectPickerOpen = false;
+            archivePickerOpen = false;
+          "
         >
           <UiIcon name="Settings" :size="18" />
         </button>
-        <div v-if="settingsMenuOpen" class="settings-menu__dropdown" role="menu">
+        <div
+          v-if="settingsMenuOpen"
+          class="settings-menu__dropdown"
+          role="menu"
+        >
           <button
             v-for="section in settingsSections"
             :key="section"
@@ -2006,8 +2229,16 @@ onBeforeUnmount(() => {
             :placeholder="capturePlaceholder"
             autocomplete="off"
           />
-          <select v-model="selectedProjectId" class="capture-row__project" aria-label="Project">
-            <option v-for="project in activeProjectOptions" :key="project.id" :value="project.id">
+          <select
+            v-model="selectedProjectId"
+            class="capture-row__project"
+            aria-label="Project"
+          >
+            <option
+              v-for="project in activeProjectOptions"
+              :key="project.id"
+              :value="project.id"
+            >
               {{ project.name }}
             </option>
           </select>
@@ -2035,7 +2266,11 @@ onBeforeUnmount(() => {
           </button>
         </form>
 
-        <section v-if="showCaptureList" class="capture-list" aria-label="Today list">
+        <section
+          v-if="showCaptureList"
+          class="capture-list"
+          aria-label="Today list"
+        >
           <div class="capture-list__header">
             <div>
               <h1>{{ selectedDateLabel }}</h1>
@@ -2097,7 +2332,9 @@ onBeforeUnmount(() => {
               <div class="capture-item__meta">
                 <span>Scheduled</span>
                 <span>{{ projectName(task.projectId) }}</span>
-                <span>{{ formatShortDate(task.dueAt || task.scheduledFor) }}</span>
+                <span>{{
+                  formatShortDate(task.dueAt || task.scheduledFor)
+                }}</span>
               </div>
             </div>
             <button
@@ -2153,7 +2390,9 @@ onBeforeUnmount(() => {
     <section v-show="activeSection === 'journalArchive'" class="mission-page">
       <div class="archive-sheet">
         <template v-if="!selectedArchiveProject">
-          <div v-if="journalArchiveLoading" class="empty-row">Loading archive...</div>
+          <div v-if="journalArchiveLoading" class="empty-row">
+            Loading archive...
+          </div>
           <div v-else-if="journalArchiveError" class="empty-row is-error">
             {{ journalArchiveError }}
           </div>
@@ -2175,7 +2414,10 @@ onBeforeUnmount(() => {
               </button>
             </div>
 
-            <article v-if="selectedArchiveEntry" class="journal-archive__preview">
+            <article
+              v-if="selectedArchiveEntry"
+              class="journal-archive__preview"
+            >
               <div class="journal-archive__preview-header">
                 <h2>{{ formatArchiveDate(selectedArchiveEntry.date) }}</h2>
                 <button
@@ -2192,7 +2434,9 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-else>
-          <div v-if="projectArchiveLoading" class="empty-row">Loading archive...</div>
+          <div v-if="projectArchiveLoading" class="empty-row">
+            Loading archive...
+          </div>
           <div v-else-if="projectArchiveError" class="empty-row is-error">
             {{ projectArchiveError }}
           </div>
@@ -2200,13 +2444,18 @@ onBeforeUnmount(() => {
             No archived tasks for {{ selectedArchiveProject.name }} yet.
           </div>
           <div v-else class="journal-archive">
-            <div class="journal-archive__list" aria-label="Archived project tasks">
+            <div
+              class="journal-archive__list"
+              aria-label="Archived project tasks"
+            >
               <button
                 v-for="task in projectArchiveTasks"
                 :key="task.id"
                 type="button"
                 class="journal-archive__row"
-                :class="{ 'is-active': selectedProjectArchiveTask?.id === task.id }"
+                :class="{
+                  'is-active': selectedProjectArchiveTask?.id === task.id,
+                }"
                 @click="selectedProjectArchiveTaskId = task.id"
               >
                 <strong>{{ task.title }}</strong>
@@ -2224,7 +2473,10 @@ onBeforeUnmount(() => {
               </button>
             </div>
 
-            <article v-if="selectedProjectArchiveTask" class="journal-archive__preview">
+            <article
+              v-if="selectedProjectArchiveTask"
+              class="journal-archive__preview"
+            >
               <div class="journal-archive__preview-header">
                 <h2>{{ selectedProjectArchiveTask.title }}</h2>
                 <span class="status-badge">
@@ -2232,7 +2484,10 @@ onBeforeUnmount(() => {
                 </span>
               </div>
               <p>
-                {{ selectedProjectArchiveTask.description || "No notes for this task." }}
+                {{
+                  selectedProjectArchiveTask.description ||
+                  "No notes for this task."
+                }}
               </p>
             </article>
           </div>
@@ -2242,21 +2497,34 @@ onBeforeUnmount(() => {
 
     <section v-show="activeSection === 'projects'" class="mission-page">
       <div class="projects-workspace">
-        <div v-if="!selectedProjectDetail" class="empty-row">No projects yet.</div>
+        <div v-if="!selectedProjectDetail" class="empty-row">
+          No projects yet.
+        </div>
 
         <template v-else>
+          <div v-if="selectedProjectIsLocal" class="local-project-summary">
+            <div>
+              <strong>Local project</strong>
+              <span>{{ localProjectPath(selectedProjectDetail) }}</span>
+            </div>
+          </div>
+
           <p v-if="projectTasksError" class="mission-control__message is-error">
             {{ projectTasksError }}
           </p>
 
-          <div v-if="projectTasksLoading" class="empty-row">Loading project tasks...</div>
+          <div v-if="projectTasksLoading" class="empty-row">
+            Loading project tasks...
+          </div>
           <template v-else>
             <div class="project-board" aria-label="Project board">
               <section
                 v-for="column in projectBoardColumns"
                 :key="column.id"
                 class="project-board__column"
-                :class="{ 'is-drop-target': projectTaskDropStatus === column.id }"
+                :class="{
+                  'is-drop-target': projectTaskDropStatus === column.id,
+                }"
                 :aria-label="column.label"
                 @dragover="handleProjectColumnDragOver($event, column.id)"
                 @dragleave="handleProjectColumnDragLeave($event, column.id)"
@@ -2267,7 +2535,10 @@ onBeforeUnmount(() => {
                   <span>{{ column.tasks.length }}</span>
                 </div>
 
-                <div v-if="column.tasks.length === 0" class="project-board__empty">
+                <div
+                  v-if="column.tasks.length === 0"
+                  class="project-board__empty"
+                >
                   No tasks
                 </div>
                 <article
@@ -2276,7 +2547,9 @@ onBeforeUnmount(() => {
                   class="project-task-card"
                   :class="{
                     'is-dragging': draggedProjectTaskId === task.id,
-                    'is-updating': projectTaskActionId === task.id,
+                    'is-updating':
+                      projectTaskActionId === task.id ||
+                      projectTaskLocalRunId === task.id,
                   }"
                   draggable="true"
                   @dragstart="startProjectTaskDrag($event, task)"
@@ -2288,10 +2561,27 @@ onBeforeUnmount(() => {
                   </span>
                   <div class="project-task-card__actions">
                     <button
+                      v-if="selectedProjectIsLocal"
+                      type="button"
+                      class="project-task-card__run"
+                      :disabled="Boolean(projectTaskLocalRunId)"
+                      @click="runProjectTaskLocally(task)"
+                    >
+                      <UiIcon name="Play" :size="14" />
+                      {{
+                        projectTaskLocalRunId === task.id
+                          ? "Queuing..."
+                          : "Run locally"
+                      }}
+                    </button>
+                    <button
                       type="button"
                       class="icon-button quiet"
                       aria-label="Archive task"
-                      :disabled="projectTaskActionId === task.id"
+                      :disabled="
+                        projectTaskActionId === task.id ||
+                        projectTaskLocalRunId === task.id
+                      "
                       @click="archiveProjectTask(task)"
                     >
                       <UiIcon name="X" :size="15" />
@@ -2352,7 +2642,11 @@ onBeforeUnmount(() => {
               @click="loadMoreProjectTasks"
             >
               <UiIcon name="ChevronDown" :size="15" />
-              {{ projectTasksLoadingMore ? "Loading more tasks..." : "Load more tasks" }}
+              {{
+                projectTasksLoadingMore
+                  ? "Loading more tasks..."
+                  : "Load more tasks"
+              }}
             </button>
           </template>
         </template>
@@ -2364,17 +2658,27 @@ onBeforeUnmount(() => {
         <div class="simple-sheet__header">
           <div>
             <h1>Accounts</h1>
-            <p>Enable the Accounts plugin to add ledger context for invoice and receipt triage.</p>
+            <p>
+              Enable the Accounts plugin to add ledger context for invoice and
+              receipt triage.
+            </p>
           </div>
         </div>
-        <router-link class="text-button text-button--primary" to="/account?section=plugins&blocked=me3.accounts">
+        <router-link
+          class="text-button text-button--primary"
+          to="/account?section=plugins&blocked=me3.accounts"
+        >
           Open plugin settings
         </router-link>
       </div>
 
       <div v-else class="accounts-workspace">
         <div class="accounts-toolbar">
-          <div class="accounts-tabs" role="tablist" aria-label="Account entry type">
+          <div
+            class="accounts-tabs"
+            role="tablist"
+            aria-label="Account entry type"
+          >
             <button
               type="button"
               class="mission-control__section-tab"
@@ -2393,11 +2697,19 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div class="accounts-toolbar__actions">
-            <button type="button" class="text-button" @click="chooseAccountsImportFile">
+            <button
+              type="button"
+              class="text-button"
+              @click="chooseAccountsImportFile"
+            >
               <UiIcon name="Upload" :size="15" />
               {{ accountsImporting ? "Importing..." : "Import CSV" }}
             </button>
-            <button type="button" class="text-button" @click="exportAccountsCsv">
+            <button
+              type="button"
+              class="text-button"
+              @click="exportAccountsCsv"
+            >
               <UiIcon name="Download" :size="15" />
               Export CSV
             </button>
@@ -2431,15 +2743,29 @@ onBeforeUnmount(() => {
         <div class="accounts-summary">
           <div>
             <span>This month</span>
-            <strong>{{ formatMoney(accountsStats?.thisMonthCents || 0, accountsForm.currency) }}</strong>
+            <strong>{{
+              formatMoney(
+                accountsStats?.thisMonthCents || 0,
+                accountsForm.currency,
+              )
+            }}</strong>
           </div>
           <div>
             <span>Last month</span>
-            <strong>{{ formatMoney(accountsStats?.lastMonthCents || 0, accountsForm.currency) }}</strong>
+            <strong>{{
+              formatMoney(
+                accountsStats?.lastMonthCents || 0,
+                accountsForm.currency,
+              )
+            }}</strong>
           </div>
           <div>
             <span>Stripe</span>
-            <strong>{{ accountsStripeConfigured ? accountsStripeStatus || "Configured" : "Not configured" }}</strong>
+            <strong>{{
+              accountsStripeConfigured
+                ? accountsStripeStatus || "Configured"
+                : "Not configured"
+            }}</strong>
           </div>
         </div>
 
@@ -2451,7 +2777,11 @@ onBeforeUnmount(() => {
             aria-label="Search accounts"
             @keydown.enter.prevent="applyAccountsFilters"
           />
-          <select v-model="accountsStatusFilter" aria-label="Filter by status" @change="applyAccountsFilters">
+          <select
+            v-model="accountsStatusFilter"
+            aria-label="Filter by status"
+            @change="applyAccountsFilters"
+          >
             <option value="">Any status</option>
             <option value="pending">Pending</option>
             <option value="paid">Paid</option>
@@ -2459,20 +2789,32 @@ onBeforeUnmount(() => {
             <option value="needs_review">Needs review</option>
             <option value="cancelled">Cancelled</option>
           </select>
-          <select v-model="accountsSourceFilter" aria-label="Filter by source" @change="applyAccountsFilters">
+          <select
+            v-model="accountsSourceFilter"
+            aria-label="Filter by source"
+            @change="applyAccountsFilters"
+          >
             <option value="">Any source</option>
             <option value="manual">Manual</option>
             <option value="csv_import">CSV import</option>
             <option value="stripe">Stripe</option>
             <option value="email_triage">Email triage</option>
           </select>
-          <button type="button" class="text-button" @click="applyAccountsFilters">
+          <button
+            type="button"
+            class="text-button"
+            @click="applyAccountsFilters"
+          >
             Search
           </button>
         </div>
 
-        <p v-if="accountsError" class="mission-control__message is-error">{{ accountsError }}</p>
-        <p v-else-if="accountsMessage" class="mission-control__message">{{ accountsMessage }}</p>
+        <p v-if="accountsError" class="mission-control__message is-error">
+          {{ accountsError }}
+        </p>
+        <p v-else-if="accountsMessage" class="mission-control__message">
+          {{ accountsMessage }}
+        </p>
 
         <div class="accounts-table" aria-label="Payment log">
           <div class="accounts-table__head">
@@ -2484,17 +2826,25 @@ onBeforeUnmount(() => {
             <span>Source</span>
             <span></span>
           </div>
-          <div v-if="accountsLoading" class="empty-row">Loading accounts...</div>
+          <div v-if="accountsLoading" class="empty-row">
+            Loading accounts...
+          </div>
           <div v-else-if="accountsEntries.length === 0" class="empty-row">
             No {{ accountsType }} entries yet.
           </div>
           <template v-else>
-            <article v-for="entry in accountsEntries" :key="entry.id" class="accounts-table__row">
+            <article
+              v-for="entry in accountsEntries"
+              :key="entry.id"
+              class="accounts-table__row"
+            >
               <span>{{ formatShortDate(entry.date) }}</span>
               <strong>{{ entry.description }}</strong>
               <span>{{ entry.categoryName || "Uncategorized" }}</span>
               <span>{{ formatMoney(entry.amountCents, entry.currency) }}</span>
-              <span class="status-badge">{{ accountStatusLabel(entry.status) }}</span>
+              <span class="status-badge">{{
+                accountStatusLabel(entry.status)
+              }}</span>
               <span>{{ accountSourceLabel(entry.source) }}</span>
               <button
                 type="button"
@@ -2511,10 +2861,22 @@ onBeforeUnmount(() => {
         <div class="accounts-pagination">
           <span>{{ accountsEntryCountLabel }} - page {{ accountsPage }}</span>
           <div>
-            <button type="button" class="icon-button quiet" :disabled="!accountsHasPrevious" aria-label="Previous page" @click="pageAccounts(-1)">
+            <button
+              type="button"
+              class="icon-button quiet"
+              :disabled="!accountsHasPrevious"
+              aria-label="Previous page"
+              @click="pageAccounts(-1)"
+            >
               <UiIcon name="ChevronLeft" :size="18" />
             </button>
-            <button type="button" class="icon-button quiet" :disabled="!accountsHasNext" aria-label="Next page" @click="pageAccounts(1)">
+            <button
+              type="button"
+              class="icon-button quiet"
+              :disabled="!accountsHasNext"
+              aria-label="Next page"
+              @click="pageAccounts(1)"
+            >
               <UiIcon name="ChevronRight" :size="18" />
             </button>
           </div>
@@ -2541,15 +2903,23 @@ onBeforeUnmount(() => {
             <span>{{ activityItems.length }}</span>
           </div>
         </div>
-        <div v-if="activityItems.length === 0" class="empty-row">No activity yet.</div>
-        <article v-for="item in activityItems" :key="item.id" class="detail-row activity-row">
+        <div v-if="activityItems.length === 0" class="empty-row">
+          No activity yet.
+        </div>
+        <article
+          v-for="item in activityItems"
+          :key="item.id"
+          class="detail-row activity-row"
+        >
           <div>
             <span class="activity-row__kind">{{ item.kind }}</span>
             <h2>{{ item.title }}</h2>
             <p>{{ item.summary || "No summary yet" }}</p>
           </div>
           <div class="detail-row__aside">
-            <span v-if="item.status" class="status-badge">{{ item.status }}</span>
+            <span v-if="item.status" class="status-badge">{{
+              item.status
+            }}</span>
             <span>{{ formatDateTime(item.createdAt) }}</span>
           </div>
         </article>
@@ -2563,22 +2933,33 @@ onBeforeUnmount(() => {
           <span>{{ memory.length }}</span>
         </div>
         <form class="inline-form" @submit.prevent="addMemory">
-          <input v-model="memoryDraft" type="text" placeholder="Private memory" />
+          <input
+            v-model="memoryDraft"
+            type="text"
+            placeholder="Private memory"
+          />
           <button type="submit" class="icon-button" aria-label="Add memory">
             <UiIcon name="Plus" :size="18" />
           </button>
         </form>
-        <div v-if="memory.length === 0" class="empty-row">No private memory yet.</div>
+        <div v-if="memory.length === 0" class="empty-row">
+          No private memory yet.
+        </div>
         <article
           v-for="item in memory"
           :key="item.id"
           class="detail-row memory-row"
-          :class="{ 'memory-row--pending': item.reviewStatus === 'needs_review' }"
+          :class="{
+            'memory-row--pending': item.reviewStatus === 'needs_review',
+          }"
         >
           <div>
             <div class="memory-row__heading">
               <h2>{{ item.title || memoryKindLabel(item.memoryKind) }}</h2>
-              <span class="status-badge" :class="`status-badge--${item.reviewStatus}`">
+              <span
+                class="status-badge"
+                :class="`status-badge--${item.reviewStatus}`"
+              >
                 {{ memoryStatusLabel(item.reviewStatus) }}
               </span>
             </div>
@@ -2621,7 +3002,11 @@ onBeforeUnmount(() => {
           <span>{{ sources.length }}</span>
         </div>
         <form class="inline-form" @submit.prevent="addSource">
-          <input v-model="sourceDraft" type="text" placeholder="Source name or URL" />
+          <input
+            v-model="sourceDraft"
+            type="text"
+            placeholder="Source name or URL"
+          />
           <button type="submit" class="icon-button" aria-label="Add source">
             <UiIcon name="Plus" :size="18" />
           </button>
@@ -2629,7 +3014,9 @@ onBeforeUnmount(() => {
         <article v-for="source in sources" :key="source.id" class="detail-row">
           <div>
             <h2>{{ source.label }}</h2>
-            <p>{{ source.description || source.sourceRef || source.sourceKind }}</p>
+            <p>
+              {{ source.description || source.sourceRef || source.sourceKind }}
+            </p>
           </div>
           <span class="status-badge">{{ source.status }}</span>
         </article>
@@ -2668,10 +3055,18 @@ onBeforeUnmount(() => {
           </label>
 
           <div class="mission-modal__actions">
-            <button type="button" class="text-button" @click="clearSchedulePicker">
+            <button
+              type="button"
+              class="text-button"
+              @click="clearSchedulePicker"
+            >
               Clear
             </button>
-            <button type="button" class="text-button text-button--primary" @click="closeSchedulePicker">
+            <button
+              type="button"
+              class="text-button text-button--primary"
+              @click="closeSchedulePicker"
+            >
               Done
             </button>
           </div>
@@ -2705,13 +3100,44 @@ onBeforeUnmount(() => {
 
           <label class="field">
             <span>Title</span>
-            <input v-model="projectTitle" type="text" autocomplete="off" autofocus />
+            <input
+              v-model="projectTitle"
+              type="text"
+              autocomplete="off"
+              autofocus
+            />
           </label>
 
           <label class="field">
             <span>Description</span>
             <textarea v-model="projectDescription" rows="4" />
           </label>
+
+          <label class="field">
+            <span>Type</span>
+            <select v-model="projectType">
+              <option value="standard">Standard</option>
+              <option value="local">Local</option>
+            </select>
+          </label>
+
+          <template v-if="projectType === 'local'">
+            <label class="field">
+              <span>Local folder path</span>
+              <input
+                v-model="projectLocalPath"
+                type="text"
+                autocomplete="off"
+                placeholder="e.g. /Users/yourusername/Projects/projectName"
+              />
+            </label>
+
+            <p class="project-modal__hint">
+              Provider setup lives on the local computer. Use the Local
+              Executor plugin Configure button to create or edit
+              <code>~/.me3/local-executor/config.json</code>.
+            </p>
+          </template>
 
           <label class="field">
             <span>Logo</span>
@@ -2721,15 +3147,25 @@ onBeforeUnmount(() => {
           <div v-if="projectLogoData" class="project-logo-preview">
             <img :src="projectLogoData" alt="" />
             <span>{{ projectLogoName }}</span>
-            <button type="button" class="text-button" @click="removeProjectLogo">
+            <button
+              type="button"
+              class="text-button"
+              @click="removeProjectLogo"
+            >
               Remove
             </button>
           </div>
 
-          <p v-if="projectError" class="mission-modal__error">{{ projectError }}</p>
+          <p v-if="projectError" class="mission-modal__error">
+            {{ projectError }}
+          </p>
 
           <div class="mission-modal__actions">
-            <button type="button" class="text-button" @click="closeProjectModal">
+            <button
+              type="button"
+              class="text-button"
+              @click="closeProjectModal"
+            >
               Cancel
             </button>
             <button
@@ -2838,10 +3274,16 @@ onBeforeUnmount(() => {
             <textarea v-model="accountsForm.notes" rows="3" />
           </label>
 
-          <p v-if="accountsError" class="mission-modal__error">{{ accountsError }}</p>
+          <p v-if="accountsError" class="mission-modal__error">
+            {{ accountsError }}
+          </p>
 
           <div class="mission-modal__actions">
-            <button type="button" class="text-button" @click="closeAccountsModal">
+            <button
+              type="button"
+              class="text-button"
+              @click="closeAccountsModal"
+            >
               Cancel
             </button>
             <button
@@ -2992,8 +3434,10 @@ onBeforeUnmount(() => {
   transition: transform 0.16s ease;
 }
 
-.mission-control__project-label[aria-expanded="true"] .mission-control__project-caret,
-.mission-control__archive-label[aria-expanded="true"] .mission-control__project-caret {
+.mission-control__project-label[aria-expanded="true"]
+  .mission-control__project-caret,
+.mission-control__archive-label[aria-expanded="true"]
+  .mission-control__project-caret {
   transform: rotate(180deg);
 }
 
@@ -3097,6 +3541,10 @@ onBeforeUnmount(() => {
 
 .project-picker-popover__item,
 .archive-picker-popover__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
   min-width: 0;
   min-height: 38px;
@@ -3108,11 +3556,16 @@ onBeforeUnmount(() => {
   font: inherit;
   font-size: 13px;
   font-weight: 650;
-  overflow: hidden;
   text-align: left;
+  cursor: pointer;
+}
+
+.project-picker-popover__item > span:first-child,
+.archive-picker-popover__item > span:first-child {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
 }
 
 .project-picker-popover__item:hover,
@@ -3391,6 +3844,20 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
+.local-project-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 20px;
+  padding: 2px 6px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
 .sync-pill--synced,
 .status-badge.ready {
   color: var(--ui-accent);
@@ -3563,6 +4030,37 @@ onBeforeUnmount(() => {
   padding: 10px 0;
 }
 
+.local-project-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.local-project-summary div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.local-project-summary strong {
+  color: var(--ui-text);
+  font-size: 13px;
+}
+
+.local-project-summary span:not(.status-badge) {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .project-task-card {
   display: grid;
   gap: 8px;
@@ -3601,8 +4099,37 @@ onBeforeUnmount(() => {
 
 .project-task-card__actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 2px;
+  gap: 6px;
+  min-width: 0;
+}
+
+.project-task-card__run {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.project-task-card__run:hover {
+  border-color: color-mix(in oklab, var(--ui-accent), var(--ui-border) 40%);
+  color: var(--ui-accent);
+}
+
+.project-task-card__run:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .project-task-card__actions .icon-button {
@@ -3733,7 +4260,10 @@ onBeforeUnmount(() => {
 
 .accounts-filters {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(136px, 0.45fr) minmax(136px, 0.45fr) auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(136px, 0.45fr) minmax(
+      136px,
+      0.45fr
+    ) auto;
   gap: 8px;
   min-width: 0;
 }
@@ -3767,7 +4297,10 @@ onBeforeUnmount(() => {
 .accounts-table__head,
 .accounts-table__row {
   display: grid;
-  grid-template-columns: 96px minmax(180px, 1.7fr) minmax(128px, 1fr) 112px 118px 118px 40px;
+  grid-template-columns: 96px minmax(180px, 1.7fr) minmax(
+      128px,
+      1fr
+    ) 112px 118px 118px 40px;
   align-items: center;
   gap: 10px;
   min-width: 820px;
@@ -4071,6 +4604,20 @@ onBeforeUnmount(() => {
 .field textarea:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
+}
+
+.project-modal__hint {
+  margin: -6px 0 0;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.project-modal__hint code {
+  color: var(--ui-text);
+  font-family:
+    ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.95em;
 }
 
 .project-logo-preview {

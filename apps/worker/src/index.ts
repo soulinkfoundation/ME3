@@ -91,6 +91,7 @@ import {
   getMissionDaemonStatus,
   getMissionDay,
   getMissionSetup,
+  getMissionTaskLocalExecutorRunInput,
   listMissionAgentRuns,
   listMissionApprovals,
   listMissionContextSources,
@@ -2028,6 +2029,29 @@ app.post("/api/mission-control/tasks", async (c) => {
     );
   } catch (error) {
     return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/tasks/:id/local-run", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const missionBlocked = await requireMissionControlPlugin(c);
+  if (missionBlocked) return missionBlocked;
+  const localExecutorBlocked = await requireLocalExecutorPlugin(c);
+  if (localExecutorBlocked) return localExecutorBlocked;
+
+  try {
+    const runInput = await getMissionTaskLocalExecutorRunInput(
+      c.env,
+      ownerId,
+      c.req.param("id"),
+    );
+    return c.json(await createLocalExecutorRun(c.env, ownerId, runInput), 201);
+  } catch (error) {
+    if (error instanceof MissionControlInputError) {
+      return missionControlErrorResponse(c, error);
+    }
+    return localExecutorErrorResponse(c, error);
   }
 });
 

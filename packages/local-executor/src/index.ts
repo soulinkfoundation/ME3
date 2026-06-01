@@ -147,6 +147,7 @@ export const DEFAULT_LOCAL_EXECUTOR_CONFIG = {
   logDir: "~/.me3/local-executor/runs",
   pollIntervalSeconds: 20,
   maxConcurrentRuns: 1,
+  defaultProviderPreset: "opencode",
   providers: LOCAL_EXECUTOR_PROVIDER_PRESETS,
 } as const;
 

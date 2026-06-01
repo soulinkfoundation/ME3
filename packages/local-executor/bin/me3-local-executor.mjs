@@ -27,6 +27,7 @@ const defaultConfig = {
   logDir: "~/.me3/local-executor/runs",
   pollIntervalSeconds: 20,
   maxConcurrentRuns: 1,
+  defaultProviderPreset: "opencode",
   providers: providerPresets,
 };
 
@@ -65,8 +66,11 @@ Commands:
   once                   Heartbeat, claim one approved run, execute it, and report completion
 
 Options:
+  config init --provider <opencode|codex|claude>
+                          Create local config with a default provider
   pair --api <url>       ME3 Core Local Executor API URL
   once --api <url>       Override the saved API URL
+  once --provider <id>   Override the local default provider for this run
 `);
 }
 
@@ -78,8 +82,14 @@ async function handleConfig(argv) {
     return;
   }
   if (action !== "init") throw new Error("Usage: me3-local-executor config show|init");
+  const provider = normalizeProviderId(readFlag(argv, "--provider") || defaultConfig.defaultProviderPreset);
+  if (!provider) throw new Error("Unknown provider preset. Use opencode, codex, or claude.");
   await mkdir(dirname(configPath), { recursive: true });
-  await writeFile(configPath, `${JSON.stringify(defaultConfig, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(
+    configPath,
+    `${JSON.stringify({ ...defaultConfig, defaultProviderPreset: provider }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
   console.log(`Wrote ${configPath}`);
 }
 
@@ -179,9 +189,18 @@ async function handleOnce(argv) {
   }
 
   const run = claim.run;
+  const providerOverride = readFlag(argv, "--provider");
+  const providerId =
+    normalizeProviderId(providerOverride) ||
+    normalizeProviderId(config.defaultProviderPreset) ||
+    normalizeProviderId(run.provider) ||
+    defaultConfig.defaultProviderPreset;
+  if (providerOverride && !normalizeProviderId(providerOverride)) {
+    throw new Error("Unknown provider preset. Use opencode, codex, or claude.");
+  }
   const provider =
-    config.providers?.[run.provider] ||
-    providerPresets[run.provider] ||
+    config.providers?.[providerId] ||
+    providerPresets[providerId] ||
     providerPresets.opencode;
   const rendered = renderProviderCommand(provider, run.policy.pathHint, run.prompt);
   const logDir = expandPath(config.logDir || defaultConfig.logDir);
@@ -236,6 +255,10 @@ function renderProviderCommand(provider, repo, prompt) {
     args: preset.args.map((arg) => renderTemplate(arg, input)),
     cwd: renderTemplate(preset.cwd || repo, input),
   };
+}
+
+function normalizeProviderId(value) {
+  return value === "opencode" || value === "codex" || value === "claude" ? value : null;
 }
 
 function executeBounded(command, timeoutSeconds) {

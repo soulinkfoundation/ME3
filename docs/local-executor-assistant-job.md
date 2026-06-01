@@ -3,8 +3,8 @@
 Last updated: 2026-06-01
 
 Planning source of truth: [`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md).
-This document is the detailed reference for a future local executor plugin and should not
-be treated as implemented behavior until the plugin, daemon, routes, and tests land.
+This document is the detailed reference for the Local Executor plugin. Use the progress
+section below to distinguish the current MVP from follow-up daemon/job work.
 
 The goal is an optional first-party plugin that lets an owner ask ME3 to run bounded work
 on an always-on local computer. ME3 remains the owner-facing orchestrator and approval
@@ -72,6 +72,26 @@ MVP note: the local runner is currently the `packages/local-executor/bin/me3-loc
 script inside a ME3 Core checkout. Pairing stores the daemon token and API URL in
 `~/.me3/local-executor/token.json`. The `once` command is a one-shot claim/execute/report
 cycle; a long-running daemon mode is intentionally still follow-up work.
+
+## MVP Progress
+
+Landed in the current Core line:
+
+- Local Executor plugin activation and Account row Configure modal.
+- Pairing code creation, daemon token exchange, heartbeat, one-shot claim, and completion.
+- Local project creation from Mission Control Projects. Local projects store a folder path
+  and create a conservative Local Executor project policy behind the scenes.
+- Project task `Run locally` action for tasks inside local projects.
+- Linked Local Executor runs write Mission Control run/activity records.
+- Local runner config lives on the user's computer at
+  `~/.me3/local-executor/config.json`; provider choice is not project-specific UI.
+
+Still follow-up:
+
+- Long-running daemon/poll mode.
+- Richer result panels, changed-file detection, quality-gate execution, and artifacts.
+- Assistant starter recipe and scheduled/event-triggered job approvals.
+- Friendlier local runner packaging outside a source checkout.
 
 ## Capability Contract
 
@@ -195,6 +215,7 @@ Default config path:
   "logDir": "~/.me3/local-executor/runs",
   "pollIntervalSeconds": 20,
   "maxConcurrentRuns": 1,
+  "defaultProviderPreset": "opencode",
   "providers": {
     "opencode": {
       "command": "opencode",
@@ -213,10 +234,11 @@ Default config path:
 }
 ```
 
-Provider presets should be editable locally, but the daemon must validate the final command
-against the active project policy before spawning a process. OpenCode is the default because
-it can route to multiple model providers; Codex and Claude are first-class presets for users
-who already prefer those local CLIs.
+Provider presets are configured locally, not per project in the Mission Control UI. OpenCode
+is the default because it can route to multiple model providers; users who prefer Codex or
+Claude can set `defaultProviderPreset` in `~/.me3/local-executor/config.json` or pass
+`once --provider codex` for a one-off run. The daemon must still validate the final command
+against the active project policy before spawning a process.
 
 The daemon should store full local logs only under the local log directory. Core receives
 bounded summaries, structured events, and selected artifacts only when the run policy allows it.
@@ -227,7 +249,8 @@ Each project policy should include:
 
 - Project label and path hint.
 - Resource kind: `repo` first; directories can come later.
-- Provider preset id and optional model/agent/profile value.
+- Internal provider preset default. Owner-facing provider selection belongs in the local
+  runner config, not in each project form.
 - Default branch and allowed git target: `none`, `branch`, or `main`.
 - Landing policy:
   - `report_only` by default.
@@ -314,17 +337,16 @@ Audit must record:
 
 ## Implementation Order
 
-1. Add this doc and link it from the harness roadmap.
-2. Add a follow-up bead for the Local Executor plugin implementation.
-3. Register catalog placeholder `me3.local-executor` as coming soon or available when ready.
-4. Add plugin-owned types/constants for provider presets, project policies, runs, and result shape.
-5. Add D1 migration and owner/daemon route skeletons.
-6. Wire setup readiness into Assistant Jobs validation as `local_executor`.
-7. Add `local_executor.run` capability and Local Coding Task starter recipe.
-8. Build the daemon CLI with pair, doctor, run-once, and daemon modes.
-9. Add Mission Control display panels for executor setup, runs, and audit.
-10. Add Soulink/chat manual-run handoff and concise result notification.
-11. Add tests and a local end-to-end dry run against a sample repo.
+1. Done: Add this doc and link it from the harness roadmap.
+2. Done: Register `me3.local-executor` as an optional first-party plugin.
+3. Done: Add plugin-owned types/constants for provider presets, project policies, runs, and result shape.
+4. Done: Add D1 migration and owner/daemon route skeletons.
+5. Done: Build the source-checkout local runner CLI with pair, config, run-once, and provider render commands.
+6. Done: Add Account plugin Configure flow, Mission Control local projects, and task-level Run locally.
+7. Next: Add a long-running daemon mode and local runner packaging.
+8. Next: Add Local Coding Task starter recipe and scheduled/event-triggered approval flow.
+9. Next: Add richer Mission Control result panels for artifacts, changed files, gates, and local logs.
+10. Next: Add Soulink/chat manual-run handoff and concise result notification.
 
 ## Test Plan
 

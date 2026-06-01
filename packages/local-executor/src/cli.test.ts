@@ -94,6 +94,107 @@ describe("me3-local-executor CLI", () => {
       await close(server);
     }
   });
+
+  it("uses the local config default provider instead of project-specific provider UI", async () => {
+    const requests: string[] = [];
+    let completionBody: Record<string, unknown> | null = null;
+    const server = createServer((request, response) => {
+      requests.push(`${request.method} ${request.url}`);
+      response.setHeader("Content-Type", "application/json");
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/heartbeat"
+      ) {
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/claim"
+      ) {
+        response.end(
+          JSON.stringify({
+            ok: true,
+            run: {
+              id: "run-1",
+              provider: "opencode",
+              prompt: "Use the local default provider",
+              policy: {
+                pathHint: tmpdir(),
+                caps: { maxRuntimeSeconds: 30, maxOutputChars: 24000 },
+              },
+            },
+          }),
+        );
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/run-1/complete"
+      ) {
+        let body = "";
+        request.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        request.on("end", () => {
+          completionBody = JSON.parse(body);
+          response.end(
+            JSON.stringify({
+              ok: true,
+              run: { id: "run-1", status: completionBody?.status || "succeeded" },
+            }),
+          );
+        });
+        return;
+      }
+
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: "Not found" }));
+    });
+
+    try {
+      const apiBase = await listen(server);
+      const dir = await mkdtemp(join(tmpdir(), "me3-local-executor-provider-"));
+      const tokenStore = join(dir, "token.json");
+      const configPath = join(dir, "config.json");
+
+      await writeFile(
+        tokenStore,
+        JSON.stringify({
+          token: "daemon-token",
+          apiBase: `${apiBase}/api/local-executor`,
+        }),
+      );
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          tokenStore,
+          logDir: join(dir, "runs"),
+          defaultProviderPreset: "codex",
+          providers: {
+            codex: {
+              command: process.execPath,
+              args: ["-e", "process.stdout.write('codex-provider')"],
+            },
+          },
+        }),
+      );
+
+      const once = await runCli(["once", "--config", configPath]);
+      expect(once.stderr).toBe("");
+      expect(once.stdout).toContain('"id": "run-1"');
+      expect(requests).toContain("POST /api/local-executor/daemon/runs/run-1/complete");
+      expect(completionBody).toMatchObject({
+        status: "succeeded",
+        outputPreview: "codex-provider",
+      });
+    } finally {
+      await close(server);
+    }
+  });
 });
 
 function runCli(args: string[]) {

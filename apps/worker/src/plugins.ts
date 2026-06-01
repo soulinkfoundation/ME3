@@ -887,6 +887,12 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
       auth: "owner",
     },
     {
+      id: "local-executor.mission-task-run.api",
+      path: "/api/mission-control/tasks/:id/local-run",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
       id: "local-executor.run.api",
       path: "/api/local-executor/runs/:id",
       methods: ["GET"],

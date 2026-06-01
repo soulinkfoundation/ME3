@@ -1247,6 +1247,7 @@ const pluginNavEmojis: Record<string, string> = {
 
 const LOCAL_EXECUTOR_SOURCE_BIN =
   "node packages/local-executor/bin/me3-local-executor.mjs";
+const LOCAL_EXECUTOR_CONFIG_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} config init --provider opencode`;
 const LOCAL_EXECUTOR_ONCE_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} once`;
 
 function pluginNavEmoji(plugin: PluginRecord) {
@@ -2742,6 +2743,14 @@ onMounted(async () => {
             installed globally.
           </p>
 
+          <router-link
+            class="local-executor-project-link"
+            to="/mission-control?section=projects"
+            @click="closeLocalExecutorSetup"
+          >
+            Create a local project in Mission Control
+          </router-link>
+
           <p v-if="!localExecutorPluginEnabled" class="local-executor-note">
             First, turn on Local Executor in the plugin row. Then come back here
             and create the pairing command.
@@ -2766,6 +2775,35 @@ onMounted(async () => {
                 Type <code>cd </code>, drag the ME3 folder into Terminal, then
                 press Return.
               </span>
+            </li>
+            <li>
+              <strong>Make sure your coding tool works.</strong>
+              <span>
+                OpenCode is the default. Run this once to create
+                <code>~/.me3/local-executor/config.json</code>, then edit
+                <code>defaultProviderPreset</code> to <code>codex</code> or
+                <code>claude</code> if that is your local tool. ME3 does not
+                store the provider API key.
+              </span>
+              <div class="local-executor-command">
+                <pre><code>{{ LOCAL_EXECUTOR_CONFIG_COMMAND }}</code></pre>
+                <Button
+                  variant="outline"
+                  size="small"
+                  shape="soft"
+                  type="button"
+                  @click="
+                    copyLocalExecutorCommand(
+                      LOCAL_EXECUTOR_CONFIG_COMMAND,
+                      'config',
+                    )
+                  "
+                >
+                  {{
+                    localExecutorCopiedCommand === "config" ? "Copied" : "Copy"
+                  }}
+                </Button>
+              </div>
             </li>
             <li>
               <strong>Create the pairing command.</strong>
@@ -4013,6 +4051,25 @@ h1 {
 .local-executor-modal__intro,
 .local-executor-note {
   margin: 0;
+}
+
+.local-executor-project-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-accent-soft, var(--color-bg-subtle));
+  color: var(--ui-accent, var(--color-primary));
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.local-executor-project-link:hover {
+  background: color-mix(in oklab, var(--ui-accent, var(--color-primary)), transparent 88%);
 }
 
 .local-executor-note {
