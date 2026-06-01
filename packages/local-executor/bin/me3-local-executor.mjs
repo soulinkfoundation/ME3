@@ -63,6 +63,10 @@ Commands:
   render                 Render a provider command for inspection
   pair                   Complete pairing with ME3 Core and store the daemon token
   once                   Heartbeat, claim one approved run, execute it, and report completion
+
+Options:
+  pair --api <url>       ME3 Core Local Executor API URL
+  once --api <url>       Override the saved API URL
 `);
 }
 
@@ -87,12 +91,12 @@ function handleRender(argv) {
 }
 
 async function handlePair(argv) {
-  const apiBase = requiredFlag(argv, "--api");
+  const apiBase = requiredFlag(argv, "--api").replace(/\/$/, "");
   const code = requiredFlag(argv, "--code");
   const runnerId = readFlag(argv, "--runner-id") || defaultConfig.runnerId;
   const displayName = readFlag(argv, "--name") || runnerId;
   const tokenStore = expandPath(readFlag(argv, "--token-store") || defaultConfig.tokenStore);
-  const response = await fetch(`${apiBase.replace(/\/$/, "")}/daemon/pairing/complete`, {
+  const response = await fetch(`${apiBase}/daemon/pairing/complete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -106,8 +110,19 @@ async function handlePair(argv) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Pairing failed with ${response.status}`);
   await mkdir(dirname(tokenStore), { recursive: true });
-  await writeFile(tokenStore, `${JSON.stringify(payload.token, null, 2)}\n`, { mode: 0o600 });
+  const savedToken = {
+    ...payload.token,
+    apiBase,
+    pairedAt: new Date().toISOString(),
+  };
+  await writeFile(
+    tokenStore,
+    `${JSON.stringify(savedToken, null, 2)}\n`,
+    { mode: 0o600 },
+  );
   console.log(`Paired ${payload.runner?.displayName || displayName}`);
+  console.log(`Saved runner token to ${tokenStore}`);
+  console.log(`Run one approved job with: ${selfCommand("once")}`);
 }
 
 async function handleOnce(argv) {
@@ -115,13 +130,24 @@ async function handleOnce(argv) {
   const config = await readJson(configPath).catch(() => defaultConfig);
   const tokenStore = expandPath(config.tokenStore || defaultConfig.tokenStore);
   const tokenRecord = await readJson(tokenStore);
-  const apiBase = String(config.apiBase || defaultConfig.apiBase).replace(/\/$/, "");
+  const apiBase = String(
+    readFlag(argv, "--api") ||
+      tokenRecord.apiBase ||
+      config.apiBase ||
+      defaultConfig.apiBase,
+  ).replace(/\/$/, "");
+  if (apiBase.includes("example.com")) {
+    throw new Error(
+      "No ME3 Core API URL is configured. Pair again from Account > Plugins > Local Executor, " +
+        "or run once with --api http://localhost:8787/api/local-executor.",
+    );
+  }
   const authHeaders = {
     Authorization: `Bearer ${tokenRecord.token}`,
     "Content-Type": "application/json",
   };
 
-  await fetch(`${apiBase}/daemon/heartbeat`, {
+  const heartbeatResponse = await fetch(`${apiBase}/daemon/heartbeat`, {
     method: "POST",
     headers: authHeaders,
     body: JSON.stringify({
@@ -131,6 +157,12 @@ async function handleOnce(argv) {
       activePolicies: [],
     }),
   });
+  const heartbeat = await heartbeatResponse.json().catch(() => ({}));
+  if (!heartbeatResponse.ok) {
+    throw new Error(
+      heartbeat.error || `Heartbeat failed with ${heartbeatResponse.status}`,
+    );
+  }
 
   const claimResponse = await fetch(`${apiBase}/daemon/runs/claim`, {
     method: "POST",
@@ -138,14 +170,19 @@ async function handleOnce(argv) {
     body: JSON.stringify({ maxRuns: 1 }),
   });
   const claim = await claimResponse.json().catch(() => ({}));
-  if (!claimResponse.ok) throw new Error(claim.error || `Claim failed with ${claimResponse.status}`);
+  if (!claimResponse.ok) {
+    throw new Error(claim.error || `Claim failed with ${claimResponse.status}`);
+  }
   if (!claim.run) {
     console.log("No approved Local Executor runs to claim.");
     return;
   }
 
   const run = claim.run;
-  const provider = config.providers?.[run.provider] || providerPresets[run.provider] || providerPresets.opencode;
+  const provider =
+    config.providers?.[run.provider] ||
+    providerPresets[run.provider] ||
+    providerPresets.opencode;
   const rendered = renderProviderCommand(provider, run.policy.pathHint, run.prompt);
   const logDir = expandPath(config.logDir || defaultConfig.logDir);
   await mkdir(logDir, { recursive: true });
@@ -160,23 +197,33 @@ async function handleOnce(argv) {
     { mode: 0o600 },
   );
 
-  const completeResponse = await fetch(`${apiBase}/daemon/runs/${encodeURIComponent(run.id)}/complete`, {
-    method: "POST",
-    headers: authHeaders,
-    body: JSON.stringify({
-      status,
-      summary: status === "succeeded" ? "Local run completed." : "Local run failed.",
-      outputPreview: boundedOutput,
-      errorCode: status === "failed" ? "process_failed" : null,
-      errorMessage: status === "failed" ? output.stderr.slice(0, 2000) : null,
-      runtimeSeconds: Math.ceil((Date.now() - startedAt) / 1000),
-      changedFiles: [],
-      qualityGates: [],
-      artifacts: [{ kind: "local_log", path: `${run.id}.log`, bytes: boundedOutput.length }],
-    }),
-  });
+  const completeResponse = await fetch(
+    `${apiBase}/daemon/runs/${encodeURIComponent(run.id)}/complete`,
+    {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        status,
+        summary:
+          status === "succeeded" ? "Local run completed." : "Local run failed.",
+        outputPreview: boundedOutput,
+        errorCode: status === "failed" ? "process_failed" : null,
+        errorMessage: status === "failed" ? output.stderr.slice(0, 2000) : null,
+        runtimeSeconds: Math.ceil((Date.now() - startedAt) / 1000),
+        changedFiles: [],
+        qualityGates: [],
+        artifacts: [
+          { kind: "local_log", path: `${run.id}.log`, bytes: boundedOutput.length },
+        ],
+      }),
+    },
+  );
   const complete = await completeResponse.json().catch(() => ({}));
-  if (!completeResponse.ok) throw new Error(complete.error || `Complete failed with ${completeResponse.status}`);
+  if (!completeResponse.ok) {
+    throw new Error(
+      complete.error || `Complete failed with ${completeResponse.status}`,
+    );
+  }
   console.log(JSON.stringify(complete.run, null, 2));
 }
 
@@ -237,6 +284,13 @@ function requiredFlag(argv, flag) {
   const value = readFlag(argv, flag);
   if (!value) throw new Error(`Missing ${flag}`);
   return value;
+}
+
+function selfCommand(subcommand) {
+  const nodePath = process.argv[0] || "node";
+  const scriptPath =
+    process.argv[1] || "packages/local-executor/bin/me3-local-executor.mjs";
+  return `${nodePath} ${scriptPath} ${subcommand}`;
 }
 
 function expandPath(path) {

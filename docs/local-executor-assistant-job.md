@@ -68,6 +68,11 @@ Local daemon owns:
   timeout enforcement, and changed-file detection.
 - Polling Core for approved runs. Core never needs inbound access to the user's machine.
 
+MVP note: the local runner is currently the `packages/local-executor/bin/me3-local-executor.mjs`
+script inside a ME3 Core checkout. Pairing stores the daemon token and API URL in
+`~/.me3/local-executor/token.json`. The `once` command is a one-shot claim/execute/report
+cycle; a long-running daemon mode is intentionally still follow-up work.
+
 ## Capability Contract
 
 V1 should expose one public capability:

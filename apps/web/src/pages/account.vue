@@ -2737,7 +2737,9 @@ onMounted(async () => {
 
           <p class="local-executor-modal__intro">
             Local Executor lets ME3 send an approved coding job to a computer
-            you control. That computer is the local runner.
+            you control. That computer is the local runner. For now, the runner
+            is the command-line script inside your ME3 Core folder; nothing is
+            installed globally.
           </p>
 
           <p v-if="!localExecutorPluginEnabled" class="local-executor-note">
@@ -2749,8 +2751,9 @@ onMounted(async () => {
             <li>
               <strong>Choose a folder.</strong>
               <span>
-                Use the ME3 Core folder on the computer that should do the
-                work.
+                Use the ME3 Core folder on the computer that should do the work.
+                It is the folder with <code>packages/local-executor</code>
+                inside it.
               </span>
             </li>
             <li>
@@ -2791,8 +2794,12 @@ onMounted(async () => {
             </li>
             <li v-if="localExecutorPairing">
               <strong>Paste this command into Terminal.</strong>
-              <span v-if="localExecutorPairingExpiryLabel">
-                It expires {{ localExecutorPairingExpiryLabel }}.
+              <span>
+                <template v-if="localExecutorPairingExpiryLabel">
+                  It expires {{ localExecutorPairingExpiryLabel }}.
+                </template>
+                It saves a small runner token at
+                <code>~/.me3/local-executor/token.json</code>.
               </span>
               <div class="local-executor-command">
                 <pre><code>{{ localExecutorPairing.sourceCommand }}</code></pre>
@@ -2817,8 +2824,10 @@ onMounted(async () => {
             <li v-if="localExecutorPairing">
               <strong>Run jobs when you are ready.</strong>
               <span>
-                After pairing, keep using the same folder. Paste this command
-                whenever you want this computer to claim one approved job.
+                This is a one-shot check, not a background service yet. Keep
+                using the same folder and run this whenever you want this
+                computer to claim one approved job. If there is no approved job,
+                it exits.
               </span>
               <div class="local-executor-command">
                 <pre><code>{{ localExecutorPairing.onceCommand }}</code></pre>
