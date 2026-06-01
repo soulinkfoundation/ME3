@@ -50,6 +50,16 @@ type MailboxRow = Record<string, unknown> & {
   user_id: string;
   status: string;
 };
+type MailboxMessageRow = Record<string, unknown> & {
+  id: string;
+  mailbox_id: string;
+  thread_key: string | null;
+  from_address: string | null;
+  subject: string | null;
+  text_body: string | null;
+  agent_summary: string | null;
+  agent_labels_json: string | null;
+};
 type PluginInstallationRow = Record<string, unknown> & {
   plugin_id: string;
   enabled: number;
@@ -78,6 +88,7 @@ type AssistantJobsDbState = {
   channelConnections: ChannelConnectionRow[];
   channelEvents: ChannelEventRow[];
   mailbox: MailboxRow | null;
+  mailboxMessages: MailboxMessageRow[];
   pluginInstallations: PluginInstallationRow[];
   queueMessages: unknown[];
 };
@@ -172,6 +183,72 @@ describe("assistant jobs persistence", () => {
     const created = await createAssistantJob(readyEnv, "owner", { recipeId: "email-triage" });
     expect(created.job.status).toBe("active");
     expect(created.validation.status).toBe("valid");
+  });
+
+  it("triages mailbox messages into a useful Mission Control result", async () => {
+    const env = createAssistantJobsEnv({
+      mailbox: activeMailboxRow(),
+      mailboxMessages: [
+        mailboxMessageRow({
+          id: "message-1",
+          thread_key: "thread-client",
+          from_address: "ada@example.com",
+          subject: "Urgent launch question",
+          text_body: "Can you confirm the launch copy today? We are blocked until you reply.",
+        }),
+        mailboxMessageRow({
+          id: "message-2",
+          thread_key: "thread-receipt",
+          from_address: "billing@example.com",
+          subject: "Receipt for May",
+          text_body: "Your payment receipt is attached.",
+        }),
+      ],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "email-triage" });
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+
+    expect(run.run.status).toBe("succeeded");
+    expect(run.actionResults).toContainEqual(
+      expect.objectContaining({
+        actionId: "read-email",
+        capabilityId: "email.message.read",
+        status: "succeeded",
+        externalRef: "mailbox:2:messages",
+      }),
+    );
+    expect(run.actionResults).toContainEqual(
+      expect.objectContaining({
+        actionId: "summarize-thread",
+        capabilityId: "email.thread.summarize",
+        status: "succeeded",
+        externalRef: "mailbox:2:threads",
+      }),
+    );
+    expect(env.__state.mailboxMessages[0]?.agent_summary).toContain("Urgent launch question");
+    expect(JSON.parse(env.__state.mailboxMessages[0]?.agent_labels_json as string)).toEqual([
+      "needs_reply",
+      "important",
+    ]);
+    expect(env.__state.pluginActivities).toHaveLength(1);
+    expect(env.__state.pluginActivities[0]).toMatchObject({
+      activity_type: "assistant_job.review_packet",
+      title: "Email Triage: 2 messages reviewed",
+      status: "succeeded",
+    });
+    expect(env.__state.pluginActivities[0]?.summary).toContain(
+      "2 inbox messages across 2 threads.",
+    );
+    expect(env.__state.pluginActivities[0]?.summary).toContain("ada@example.com");
+    expect(JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)).toMatchObject({
+      emailTriage: {
+        messageCount: 2,
+        threadCount: 2,
+        needsReplyCount: 1,
+        importantCount: 1,
+      },
+    });
   });
 
   it("uses calendar plugin readiness for calendar-backed starter jobs", async () => {
@@ -703,6 +780,7 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
     ...stateOverrides,
     channelConnections: stateOverrides.channelConnections ?? [],
     channelEvents: stateOverrides.channelEvents ?? [],
+    mailboxMessages: stateOverrides.mailboxMessages ?? [],
   };
 
   const db = {
@@ -751,6 +829,29 @@ function activeMailboxRow(): MailboxRow {
     id: "mailbox-1",
     user_id: "owner",
     status: "active",
+  };
+}
+
+function mailboxMessageRow(overrides: Partial<MailboxMessageRow>): MailboxMessageRow {
+  return {
+    id: "message",
+    mailbox_id: "mailbox-1",
+    direction: "inbound",
+    message_kind: "email",
+    status: "received",
+    folder: "inbox",
+    thread_key: null,
+    provider_id: "cloudflare-email-routing",
+    provider_message_id: null,
+    from_address: "sender@example.com",
+    to_address: "owner@example.com",
+    subject: "Hello",
+    text_body: "Hello from the inbox.",
+    agent_summary: null,
+    agent_labels_json: null,
+    received_at: "2026-06-01T08:00:00.000Z",
+    created_at: "2026-06-01T08:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -1108,6 +1209,16 @@ class FakeStatement {
       return { success: true };
     }
 
+    if (sql.includes("UPDATE mailbox_messages")) {
+      const message = this.state.mailboxMessages.find((candidate) => candidate.id === values[3]);
+      if (message) {
+        message.agent_summary = values[0] as string;
+        message.agent_labels_json = values[1] as string;
+        message.updated_at = values[2] as string;
+      }
+      return { success: true };
+    }
+
     if (sql.includes("UPDATE assistant_job_ingress_events")) {
       const event = this.findIngressEvent(values[2], values[3]);
       if (event) {
@@ -1295,6 +1406,23 @@ class FakeStatement {
     if (sql.includes("FROM assistant_messages")) {
       return {
         results: this.state.recentMessages.filter((message) => message.owner_id === values[0]) as T[],
+      };
+    }
+    if (sql.includes("FROM mailbox_messages")) {
+      const mailbox = this.state.mailbox;
+      return {
+        results: mailbox && mailbox.user_id === values[0] && mailbox.status === "active"
+          ? this.state.mailboxMessages
+              .filter(
+                (message) =>
+                  message.mailbox_id === mailbox.id &&
+                  message.direction === "inbound" &&
+                  message.message_kind === "email" &&
+                  message.folder === "inbox" &&
+                  (message.status === "received" || message.status === "forwarded"),
+              )
+              .slice(0, values[1] as number) as T[]
+          : [],
       };
     }
     if (sql.includes("FROM assistant_jobs j")) {

@@ -161,6 +161,40 @@ type MailboxSetupRow = {
   id: string;
 };
 
+type MailboxMessageRow = {
+  id: string;
+  mailbox_id: string;
+  thread_key: string | null;
+  provider_id: string | null;
+  provider_message_id: string | null;
+  from_address: string | null;
+  to_address: string | null;
+  subject: string | null;
+  text_body: string | null;
+  agent_summary: string | null;
+  agent_labels_json: string | null;
+  received_at: string | null;
+  created_at: string;
+};
+
+type EmailTriageItem = {
+  id: string;
+  threadKey: string | null;
+  from: string;
+  subject: string;
+  summary: string;
+  labels: string[];
+  receivedAt: string | null;
+};
+
+type EmailTriageResult = {
+  messageCount: number;
+  threadCount: number;
+  needsReplyCount: number;
+  importantCount: number;
+  items: EmailTriageItem[];
+};
+
 type PluginInstallationSetupRow = {
   plugin_id: string;
   enabled: number;
@@ -1070,6 +1104,13 @@ async function executeAssistantJobAction(
     });
   }
 
+  const providerBackedResult = await executeAssistantJobProviderBackedAction(env, {
+    ...input,
+    capability,
+    idempotencyKey,
+  });
+  if (providerBackedResult) return providerBackedResult;
+
   const missionOutputResult = await executeAssistantJobMissionOutputAction(env, {
     ...input,
     capability,
@@ -1085,6 +1126,46 @@ async function executeAssistantJobAction(
     status: "succeeded",
     externalRef: `${capability.auditEventKind}:${input.run.id}:${input.action.id}`,
   });
+}
+
+async function executeAssistantJobProviderBackedAction(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+) {
+  if (input.capability.id === "email.message.read") {
+    const triage = await buildEmailTriageResult(env, input.userId);
+    return insertAssistantJobActionResult(env, {
+      runId: input.run.id,
+      actionId: input.action.id,
+      capabilityId: input.capability.id,
+      idempotencyKey: input.idempotencyKey,
+      status: "succeeded",
+      externalRef: `mailbox:${triage.messageCount}:messages`,
+    });
+  }
+
+  if (input.capability.id === "email.thread.summarize") {
+    const triage = await buildEmailTriageResult(env, input.userId);
+    await persistEmailTriageSummaries(env, triage.items);
+    return insertAssistantJobActionResult(env, {
+      runId: input.run.id,
+      actionId: input.action.id,
+      capabilityId: input.capability.id,
+      idempotencyKey: input.idempotencyKey,
+      status: "succeeded",
+      externalRef: `mailbox:${triage.threadCount}:threads`,
+    });
+  }
+
+  return null;
 }
 
 async function executeAssistantJobMissionOutputAction(
@@ -1383,13 +1464,16 @@ async function createAssistantJobMissionActivity(
   defaultActivityType: string,
 ) {
   const activityId = missionOutputId(input.run, input.action, "activity");
+  const generated = await buildGeneratedMissionActivity(env, input, defaultActivityType);
   const title = missionTextInput(input.action, "title")
+    || generated.title
     || (defaultActivityType === "assistant_job.review_packet"
       ? `Result: ${input.job.name}`
       : input.action.label)
     || input.job.name;
   const summary =
     missionTextInput(input.action, "summary") ||
+    generated.summary ||
     (defaultActivityType === "assistant_job.review_packet"
       ? `Created a Mission Control result for ${input.job.name}.`
       : input.job.purpose) ||
@@ -1409,7 +1493,7 @@ async function createAssistantJobMissionActivity(
       summary,
       status,
       input.run.id,
-      stringifyJson(missionOutputMetadata(input)),
+      stringifyJson(missionOutputMetadata(input, generated.metadata)),
     )
     .run();
 
@@ -1421,6 +1505,36 @@ async function createAssistantJobMissionActivity(
     status: "succeeded",
     externalRef: activityId,
   });
+}
+
+async function buildGeneratedMissionActivity(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+  defaultActivityType: string,
+): Promise<{ title: string | null; summary: string | null; metadata?: Record<string, unknown> }> {
+  if (
+    defaultActivityType === "assistant_job.review_packet" &&
+    (input.job.recipe_id === "email-triage" ||
+      input.draft.recipeId === "email-triage" ||
+      input.draft.actions.some((action) => action.capabilityId === "email.message.read"))
+  ) {
+    const triage = await buildEmailTriageResult(env, input.userId);
+    return {
+      title: `Email Triage: ${triage.messageCount} message${triage.messageCount === 1 ? "" : "s"} reviewed`,
+      summary: formatEmailTriageMissionSummary(triage),
+      metadata: { emailTriage: triage },
+    };
+  }
+
+  return { title: null, summary: null };
 }
 
 async function createAssistantJobActionApproval(
@@ -2519,13 +2633,130 @@ function resolveMissionOutputProjectId(
     || null;
 }
 
+async function buildEmailTriageResult(env: Env, userId: string): Promise<EmailTriageResult> {
+  const messages = await loadAssistantJobMailboxMessages(env, userId);
+  const items = messages.map(summarizeMailboxMessageForTriage);
+  const threadKeys = new Set(items.map((item) => item.threadKey || item.id));
+  return {
+    messageCount: items.length,
+    threadCount: threadKeys.size,
+    needsReplyCount: items.filter((item) => item.labels.includes("needs_reply")).length,
+    importantCount: items.filter((item) => item.labels.includes("important")).length,
+    items,
+  };
+}
+
+async function loadAssistantJobMailboxMessages(
+  env: Env,
+  userId: string,
+  limit = 12,
+): Promise<MailboxMessageRow[]> {
+  const rows = await env.DB.prepare(
+    `SELECT m.id, m.mailbox_id, m.thread_key, m.provider_id, m.provider_message_id,
+            m.from_address, m.to_address, m.subject, m.text_body, m.agent_summary,
+            m.agent_labels_json, m.received_at, m.created_at
+     FROM mailbox_messages m
+     INNER JOIN mailbox_aliases a ON a.id = m.mailbox_id
+     WHERE a.user_id = ?
+       AND a.status = 'active'
+       AND m.direction = 'inbound'
+       AND m.message_kind = 'email'
+       AND m.folder = 'inbox'
+       AND m.status IN ('received', 'forwarded')
+     ORDER BY COALESCE(m.received_at, m.created_at) DESC, m.created_at DESC
+     LIMIT ?`,
+  )
+    .bind(userId, limit)
+    .all<MailboxMessageRow>();
+  return rows.results || [];
+}
+
+async function persistEmailTriageSummaries(env: Env, items: EmailTriageItem[]) {
+  const now = new Date().toISOString();
+  for (const item of items.slice(0, 12)) {
+    await env.DB.prepare(
+      `UPDATE mailbox_messages
+       SET agent_summary = ?,
+           agent_labels_json = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    )
+      .bind(item.summary, stringifyJson(item.labels), now, item.id)
+      .run();
+  }
+}
+
+function summarizeMailboxMessageForTriage(row: MailboxMessageRow): EmailTriageItem {
+  const subject = normalizeOptionalText(row.subject) || "(no subject)";
+  const from = normalizeOptionalText(row.from_address) || "Unknown sender";
+  const body = normalizeWhitespace(row.text_body || "");
+  const existingSummary = normalizeOptionalText(row.agent_summary);
+  const labels = inferEmailTriageLabels(subject, body);
+  const summary =
+    existingSummary ||
+    `${from} - ${subject}${body ? `: ${truncateText(body, 180)}` : ""}`;
+  return {
+    id: row.id,
+    threadKey: row.thread_key,
+    from,
+    subject,
+    summary,
+    labels,
+    receivedAt: row.received_at || row.created_at || null,
+  };
+}
+
+function inferEmailTriageLabels(subject: string, body: string): string[] {
+  const text = `${subject}\n${body}`.toLowerCase();
+  const labels = new Set<string>();
+  if (
+    text.includes("?") ||
+    /\b(reply|respond|thoughts|can you|could you|please|need your|let me know)\b/.test(text)
+  ) {
+    labels.add("needs_reply");
+  }
+  if (/\b(urgent|asap|important|deadline|blocked|overdue|today|tomorrow)\b/.test(text)) {
+    labels.add("important");
+  }
+  if (/\b(invoice|receipt|payment|paid|due|statement)\b/.test(text)) labels.add("finance");
+  if (/\b(meeting|calendar|schedule|reschedule|call|zoom)\b/.test(text)) labels.add("scheduling");
+  if (labels.size === 0) labels.add("review");
+  return Array.from(labels);
+}
+
+function formatEmailTriageMissionSummary(triage: EmailTriageResult) {
+  if (triage.messageCount === 0) {
+    return "No new inbox messages were ready for triage.";
+  }
+
+  const header = [
+    `${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"} across ${triage.threadCount} thread${triage.threadCount === 1 ? "" : "s"}.`,
+    `${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply; ${triage.importantCount} flagged important.`,
+  ].join(" ");
+  const lines = triage.items.slice(0, 5).map((item) => {
+    const labels = item.labels.length ? ` [${item.labels.join(", ")}]` : "";
+    return `- ${item.from}: ${item.subject}${labels}. ${truncateText(item.summary, 180)}`;
+  });
+  return [header, ...lines].join("\n");
+}
+
+function normalizeWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateText(value: string, maxLength: number) {
+  const text = normalizeWhitespace(value);
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...`;
+}
+
 function missionOutputMetadata(input: {
   job: AssistantJobRow;
   run: AssistantJobRunRow;
   action: AssistantJobAction;
   capability: AssistantCapability;
   idempotencyKey: string;
-}) {
+}, extra: Record<string, unknown> = {}) {
   return {
     assistantJobId: input.job.id,
     assistantJobName: input.job.name,
@@ -2534,6 +2765,7 @@ function missionOutputMetadata(input: {
     capabilityId: input.capability.id,
     idempotencyKey: input.idempotencyKey,
     inputs: input.action.inputs,
+    ...extra,
   };
 }
 
