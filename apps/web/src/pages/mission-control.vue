@@ -4213,7 +4213,7 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 959px) {
   .mission-control {
     padding: 0 14px 32px;
   }

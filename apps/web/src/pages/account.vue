@@ -308,11 +308,7 @@ type AssistantSetupItem = {
   optional?: boolean;
 };
 
-type AccountSection =
-  | "advanced"
-  | "mailbox"
-  | "payments"
-  | "plugins";
+type AccountSection = "advanced" | "mailbox" | "plugins";
 
 const auth = useAuthStore();
 const sites = useSitesStore();
@@ -345,7 +341,6 @@ const mailboxError = ref<string | null>(null);
 const pluginsLoading = ref(false);
 const plugins = ref<PluginRecord[]>([]);
 const pluginActionLoading = ref<string | null>(null);
-const pluginMessage = ref<string | null>(null);
 const pluginsError = ref<string | null>(null);
 const aiSettingsLoading = ref(false);
 const aiSettingsSaving = ref(false);
@@ -387,7 +382,6 @@ const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
 const openSection = ref({
   advanced: false,
   mailbox: false,
-  payments: false,
   plugins: false,
   signin: false,
 });
@@ -578,11 +572,12 @@ const pluginSummaryStatusClass = computed(() => {
   if (plugins.value.some((plugin) => plugin.status === "installed")) {
     return "active";
   }
-  if (plugins.value.some(isPluginComingSoon)) {
-    return "coming_soon";
-  }
   return "available";
 });
+
+const visibleAccountPlugins = computed(() =>
+  plugins.value.filter((plugin) => !isPluginComingSoon(plugin)),
+);
 
 const missionControlPlugin = computed(() =>
   plugins.value.find((plugin) => plugin.id === "me3.mission-control") || null,
@@ -709,17 +704,6 @@ const activeEmailProvider = computed(
 
 const activeEmailProviderInput = computed(
   () => emailProviderInputs.value[selectedEmailProviderId.value],
-);
-
-const emailProviderSummaryLabel = computed(() => {
-  if (emailProviderLoading.value) return "Loading";
-  const active = activeEmailProvider.value;
-  if (active?.configured) return active.label;
-  return "Setup required";
-});
-
-const emailProviderSummaryStatusClass = computed(() =>
-  activeEmailProvider.value?.configured ? "active" : "setup_required",
 );
 
 const emailProviderSecretPlaceholder = computed(() => {
@@ -1127,7 +1111,6 @@ async function saveUnifiedEmailSettings() {
 async function loadPlugins() {
   pluginsLoading.value = true;
   pluginsError.value = null;
-  pluginMessage.value = null;
 
   try {
     const response = await api.get<PluginsResponse>("/plugins");
@@ -1154,21 +1137,10 @@ function pluginActionKey(plugin: PluginRecord, action: "activate" | "deactivate"
 }
 
 function pluginInfoText(plugin: PluginRecord) {
-  if (isPluginComingSoon(plugin)) {
-    return `${plugin.description} This plugin is hidden for launch and will be available in a later release.`;
-  }
   if (plugin.id === "me3.social-publishing") {
     return "Adds social account connection and approval-first publishing.";
   }
   return plugin.description;
-}
-
-function pluginStatusLabel(plugin: PluginRecord) {
-  if (isPluginComingSoon(plugin)) return "Coming soon";
-  if (plugin.status === "installed") return "On";
-  if (plugin.status === "setup_required") return "Needs setup";
-  if (plugin.status === "disabled") return "Off";
-  return "Off";
 }
 
 function isPluginComingSoon(plugin: PluginRecord) {
@@ -1186,28 +1158,41 @@ function canActivatePlugin(plugin: PluginRecord) {
   );
 }
 
-function canDeactivatePlugin(plugin: PluginRecord) {
-  return !isPluginComingSoon(plugin) && !canActivatePlugin(plugin);
+const pluginNavEmojis: Record<string, string> = {
+  "me3.mission-control": "🚀",
+  "me3.calendar": "🗓️",
+  "me3.agent-chat": "🤖",
+  "me3.social-publishing": "📣",
+  "me3.accounts": "💰",
+  "me3.landing-pages": "🌐",
+};
+
+function pluginNavEmoji(plugin: PluginRecord) {
+  return pluginNavEmojis[plugin.id] || "🧩";
 }
 
-function visiblePluginSetupRequirements(plugin: PluginRecord) {
-  return plugin.setupRequirements.filter(
-    (requirement) => requirement.required || !requirement.configured,
+function isPluginBusy(plugin: PluginRecord) {
+  return Boolean(
+    pluginActionLoading.value?.startsWith(`${plugin.id}:`),
   );
 }
 
-function isPluginActionLoading(
-  plugin: PluginRecord,
-  action: "activate" | "deactivate",
-) {
-  return pluginActionLoading.value === pluginActionKey(plugin, action);
+function isPluginEnabled(plugin: PluginRecord) {
+  return !canActivatePlugin(plugin);
+}
+
+async function togglePlugin(plugin: PluginRecord, enabled: boolean) {
+  if (enabled) {
+    await activatePlugin(plugin);
+    return;
+  }
+  await deactivatePlugin(plugin);
 }
 
 async function activatePlugin(plugin: PluginRecord) {
   const key = pluginActionKey(plugin, "activate");
   pluginActionLoading.value = key;
   pluginsError.value = null;
-  pluginMessage.value = null;
 
   try {
     const response = await api.post<{ plugin: PluginRecord }>(
@@ -1215,10 +1200,6 @@ async function activatePlugin(plugin: PluginRecord) {
       {},
     );
     syncPlugin(response.plugin);
-    pluginMessage.value =
-      response.plugin.status === "setup_required"
-        ? `${response.plugin.name} activated. Setup is still required.`
-        : `${response.plugin.name} activated.`;
   } catch (e: any) {
     pluginsError.value = e.message || "Failed to activate plugin";
   } finally {
@@ -1230,7 +1211,6 @@ async function deactivatePlugin(plugin: PluginRecord) {
   const key = pluginActionKey(plugin, "deactivate");
   pluginActionLoading.value = key;
   pluginsError.value = null;
-  pluginMessage.value = null;
 
   try {
     const response = await api.post<{ plugin: PluginRecord }>(
@@ -1238,7 +1218,6 @@ async function deactivatePlugin(plugin: PluginRecord) {
       {},
     );
     syncPlugin(response.plugin);
-    pluginMessage.value = `${response.plugin.name} disabled.`;
   } catch (e: any) {
     pluginsError.value = e.message || "Failed to deactivate plugin";
   } finally {
@@ -1637,7 +1616,7 @@ onMounted(async () => {
     openSection.value.plugins = true;
   }
   if (route.query.section === "payments" || route.query.section === "commerce") {
-    openSection.value.payments = true;
+    openSection.value.advanced = true;
   }
 });
 </script>
@@ -1792,9 +1771,6 @@ onMounted(async () => {
                 <span class="accordion-status-badges">
                   <StatusBadge :tone="mailbox?.status || 'pending_setup'">
                     {{ mailboxStatusLabel }}
-                  </StatusBadge>
-                  <StatusBadge :tone="emailProviderSummaryStatusClass">
-                    Sender: {{ emailProviderSummaryLabel }}
                   </StatusBadge>
                 </span>
               </template>
@@ -2020,103 +1996,6 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card primary-section">
-          <button
-            id="account-trigger-payments"
-            class="accordion-trigger"
-            type="button"
-            :aria-expanded="openSection.payments"
-            aria-controls="account-panel-payments"
-            @click="openSection.payments = !openSection.payments"
-          >
-            <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Payments</h2>
-              <StatusBadge :tone="paymentsStatusClass">
-                {{ paymentsStatusLabel }}
-              </StatusBadge>
-            </span>
-            <span class="accordion-chevron" aria-hidden="true">▼</span>
-          </button>
-          <div
-            id="account-panel-payments"
-            class="accordion-panel"
-            role="region"
-            aria-labelledby="account-trigger-payments"
-            :hidden="!openSection.payments"
-          >
-            <div v-if="commerceLoading" class="status-row">
-              Loading payment settings...
-            </div>
-
-            <template v-else>
-              <p class="hint">
-                Add your Stripe secret key here to accept direct paid bookings
-                from your ME3 site.
-              </p>
-
-              <p
-                v-if="
-                  commerceSettings?.stripe.source === 'environment' &&
-                  commerceSettings?.stripe.keyHint
-                "
-                class="field-hint"
-              >
-                A configured Wrangler secret takes priority over any stored
-                account key.
-              </p>
-
-              <p
-                v-if="commerceSettings && !commerceSettings.encryptionConfigured"
-                class="field-hint"
-              >
-                A local encryption key will be initialized before this Stripe
-                key is stored.
-              </p>
-
-              <label class="field payment-key-field">
-                <span>Stripe secret key</span>
-                <input
-                  v-model="stripeSecretInput"
-                  class="input"
-                  type="password"
-                  autocomplete="off"
-                  spellcheck="false"
-                  :placeholder="stripeSecretPlaceholder"
-                  @keydown.enter.prevent="saveCommerceSettings"
-                />
-                <p class="field-hint">
-                  Use a Stripe key that starts with sk_test_ or sk_live_.
-                </p>
-              </label>
-
-              <div class="button-row">
-                <button
-                  class="button primary"
-                  type="button"
-                  :disabled="commerceSaveDisabled"
-                  @click="saveCommerceSettings"
-                >
-                  {{ commerceSaving ? "Saving..." : "Save Stripe key" }}
-                </button>
-                <button
-                  v-if="commerceSettings?.stripe.source === 'stored'"
-                  class="button secondary"
-                  type="button"
-                  :disabled="commerceClearDisabled"
-                  @click="clearCommerceStripeKey"
-                >
-                  Remove stored key
-                </button>
-              </div>
-
-              <p v-if="commerceMessage" class="success">
-                {{ commerceMessage }}
-              </p>
-              <p v-if="commerceError" class="error">{{ commerceError }}</p>
-            </template>
-          </div>
-        </section>
-
         <section class="card accordion-card plugins-section">
           <button
             id="account-trigger-plugins"
@@ -2145,91 +2024,48 @@ onMounted(async () => {
             <p v-else-if="pluginsError" class="error">{{ pluginsError }}</p>
 
             <template v-else>
-              <p v-if="pluginMessage" class="success">{{ pluginMessage }}</p>
-
-              <div v-if="plugins.length" class="plugin-list">
+              <div v-if="visibleAccountPlugins.length" class="plugin-list">
                 <article
-                  v-for="plugin in plugins"
+                  v-for="plugin in visibleAccountPlugins"
                   :key="plugin.id"
                   class="plugin-row"
                 >
-                  <div class="plugin-row__header">
-                    <div class="plugin-row__title">
+                  <div class="plugin-row__main">
+                    <span class="plugin-row__emoji" aria-hidden="true">
+                      {{ pluginNavEmoji(plugin) }}
+                    </span>
+                    <div class="plugin-row__copy">
                       <h3>{{ plugin.name }}</h3>
                       <p>{{ pluginInfoText(plugin) }}</p>
                     </div>
-                    <div class="plugin-row__actions">
-                      <StatusBadge :tone="plugin.status">
-                        {{ pluginStatusLabel(plugin) }}
-                      </StatusBadge>
-                      <button
-                        v-if="isPluginComingSoon(plugin)"
-                        type="button"
-                        class="button secondary plugin-action-button"
-                        disabled
-                      >
-                        Coming soon
-                      </button>
-                      <button
-                        v-else-if="canActivatePlugin(plugin)"
-                        type="button"
-                        class="button primary plugin-action-button"
-                        :disabled="pluginActionLoading !== null"
-                        @click="activatePlugin(plugin)"
-                      >
-                        {{
-                          isPluginActionLoading(plugin, "activate")
-                            ? "Activating..."
-                            : "Activate"
-                        }}
-                      </button>
-                      <button
-                        v-else-if="canDeactivatePlugin(plugin)"
-                        type="button"
-                        class="button secondary plugin-action-button"
-                        :disabled="pluginActionLoading !== null"
-                        @click="deactivatePlugin(plugin)"
-                      >
-                        {{
-                          isPluginActionLoading(plugin, "deactivate")
-                            ? "Deactivating..."
-                            : "Deactivate"
-                        }}
-                      </button>
-                    </div>
+                    <label
+                      class="plugin-toggle"
+                      :class="{ 'is-busy': isPluginBusy(plugin) }"
+                    >
+                      <input
+                        type="checkbox"
+                        class="plugin-toggle__input"
+                        :checked="isPluginEnabled(plugin)"
+                        :disabled="isPluginBusy(plugin)"
+                        :aria-label="
+                          isPluginEnabled(plugin)
+                            ? `Disable ${plugin.name}`
+                            : `Enable ${plugin.name}`
+                        "
+                        @change="
+                          togglePlugin(
+                            plugin,
+                            ($event.target as HTMLInputElement).checked,
+                          )
+                        "
+                      />
+                      <span class="plugin-toggle__track" aria-hidden="true" />
+                    </label>
                   </div>
-
-                  <details
-                    v-if="visiblePluginSetupRequirements(plugin).length"
-                    class="plugin-setup-details"
-                  >
-                    <summary>Setup</summary>
-                    <ul class="plugin-setup-list">
-                      <li
-                        v-for="requirement in visiblePluginSetupRequirements(plugin)"
-                        :key="requirement.id"
-                      >
-                        <span
-                          class="setup-dot"
-                          :class="{
-                            configured: requirement.configured,
-                            optional: !requirement.required,
-                          }"
-                          aria-hidden="true"
-                        />
-                        <span>
-                          {{ requirement.label }}
-                          <small v-if="requirement.note">
-                            {{ requirement.note }}
-                          </small>
-                        </span>
-                      </li>
-                    </ul>
-                  </details>
                 </article>
               </div>
 
-              <p v-else class="field-hint">
+              <p v-else-if="plugins.length === 0" class="field-hint">
                 No curated plugins are registered in this Core build.
               </p>
             </template>
@@ -2248,7 +2084,7 @@ onMounted(async () => {
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Advanced</h2>
               <span class="accordion-header-hint">
-                App connections, domain, AI, and timezone
+                App connections, domain, payments, AI, and timezone
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -2496,6 +2332,88 @@ onMounted(async () => {
                   <p v-if="aiSettingsMessage" class="success">
                     {{ aiSettingsMessage }}
                   </p>
+                </template>
+              </section>
+
+              <section id="account-payments" class="advanced-subsection">
+                <div class="advanced-subsection__header">
+                  <h3>Payments</h3>
+                  <StatusBadge :tone="paymentsStatusClass">
+                    {{ paymentsStatusLabel }}
+                  </StatusBadge>
+                </div>
+
+                <div v-if="commerceLoading" class="status-row">
+                  Loading payment settings...
+                </div>
+
+                <template v-else>
+                  <p class="hint">
+                    Add your Stripe secret key here to accept direct paid bookings
+                    from your ME3 site.
+                  </p>
+
+                  <p
+                    v-if="
+                      commerceSettings?.stripe.source === 'environment' &&
+                      commerceSettings?.stripe.keyHint
+                    "
+                    class="field-hint"
+                  >
+                    A configured Wrangler secret takes priority over any stored
+                    account key.
+                  </p>
+
+                  <p
+                    v-if="commerceSettings && !commerceSettings.encryptionConfigured"
+                    class="field-hint"
+                  >
+                    A local encryption key will be initialized before this Stripe
+                    key is stored.
+                  </p>
+
+                  <label class="field payment-key-field">
+                    <span>Stripe secret key</span>
+                    <div class="payment-key-row">
+                      <input
+                        v-model="stripeSecretInput"
+                        class="input payment-key-row__input"
+                        type="password"
+                        autocomplete="off"
+                        spellcheck="false"
+                        :placeholder="stripeSecretPlaceholder"
+                        @keydown.enter.prevent="saveCommerceSettings"
+                      />
+                      <Button
+                        tone="green"
+                        size="compact"
+                        type="button"
+                        :disabled="commerceSaveDisabled"
+                        @click="saveCommerceSettings"
+                      >
+                        {{ commerceSaving ? "Saving..." : "Save" }}
+                      </Button>
+                    </div>
+                    <p class="field-hint">
+                      Use a Stripe key that starts with sk_test_ or sk_live_.
+                    </p>
+                  </label>
+
+                  <Button
+                    v-if="commerceSettings?.stripe.source === 'stored'"
+                    variant="outline"
+                    size="compact"
+                    type="button"
+                    :disabled="commerceClearDisabled"
+                    @click="clearCommerceStripeKey"
+                  >
+                    Remove stored key
+                  </Button>
+
+                  <p v-if="commerceMessage" class="success">
+                    {{ commerceMessage }}
+                  </p>
+                  <p v-if="commerceError" class="error">{{ commerceError }}</p>
                 </template>
               </section>
 
@@ -3237,6 +3155,19 @@ h1 {
   margin-top: 16px;
 }
 
+.payment-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.payment-key-row__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
 .outbound-sender-panel {
   display: grid;
   gap: 14px;
@@ -3257,89 +3188,113 @@ h1 {
 
 .plugin-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .plugin-row {
   display: grid;
-  gap: 10px;
-  padding: 14px;
+  gap: 8px;
+  padding: 10px 12px;
   border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 12px);
+  border-radius: 10px;
   background: var(--ui-surface, var(--color-bg));
 }
 
-.plugin-row__header {
+.plugin-row__main {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
-.plugin-row__title {
-  display: grid;
-  gap: 4px;
+.plugin-row__emoji {
+  flex-shrink: 0;
+  font-size: 21px;
+  line-height: 1;
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+.plugin-row__copy {
+  flex: 1;
   min-width: 0;
 }
 
 .plugin-row h3 {
   margin: 0;
   color: var(--color-text);
-  font-size: 16px;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.3;
 }
 
 .plugin-row p {
-  margin: 0;
+  margin: 2px 0 0;
   color: var(--color-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.plugin-row__badges,
-.plugin-row__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-}
-
-.plugin-action-button {
-  min-height: 30px;
-  padding: 6px 12px;
-  border-radius: 8px;
   font-size: 12px;
-  line-height: 1.2;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
-.plugin-setup-details {
-  width: fit-content;
-}
-
-.plugin-setup-details summary {
+.plugin-toggle {
+  position: relative;
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
-  min-height: 28px;
-  padding: 5px 10px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: 8px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-  font-weight: 700;
   cursor: pointer;
-  list-style: none;
 }
 
-.plugin-setup-details summary::-webkit-details-marker {
-  display: none;
+.plugin-toggle.is-busy {
+  cursor: wait;
+  opacity: 0.72;
 }
 
-.plugin-setup-details[open] {
-  width: 100%;
+.plugin-toggle__input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.plugin-setup-details[open] summary {
-  margin-bottom: 10px;
+.plugin-toggle__track {
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--color-border);
+  position: relative;
+  transition: background 0.2s ease;
+}
+
+.plugin-toggle__track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: transform 0.2s ease;
+}
+
+.plugin-toggle__input:checked + .plugin-toggle__track {
+  background: var(--color-accent);
+}
+
+.plugin-toggle__input:checked + .plugin-toggle__track::after {
+  transform: translateX(18px);
+}
+
+.plugin-toggle__input:focus-visible + .plugin-toggle__track {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.plugin-toggle__input:disabled + .plugin-toggle__track {
+  opacity: 0.55;
 }
 
 .plugin-meta-grid {
@@ -3392,46 +3347,6 @@ h1 {
   margin: 0 0 8px;
   color: var(--color-text);
   font-size: 13px;
-}
-
-.plugin-setup-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.plugin-setup-list li {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: var(--color-text);
-  font-size: 13px;
-}
-
-.plugin-setup-list small {
-  display: block;
-  margin-top: 2px;
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
-
-.setup-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  margin-top: 5px;
-  border-radius: 999px;
-  background: #c62828;
-}
-
-.setup-dot.configured {
-  background: #2e7d32;
-}
-
-.setup-dot.optional:not(.configured) {
-  background: var(--color-text-muted);
 }
 
 .plugin-chip-list {
@@ -3707,8 +3622,7 @@ h1 {
   .danger-card,
   .email-row,
   .connection-line,
-  .plugin-row__header {
-    flex-direction: column;
+  .plugin-row__main {
     align-items: flex-start;
   }
 
@@ -3718,8 +3632,13 @@ h1 {
     flex-wrap: wrap;
   }
 
-  .timezone-row {
+  .timezone-row,
+  .payment-key-row {
     align-items: stretch;
+  }
+
+  .payment-key-row {
+    flex-direction: column;
   }
 
   .timezone-row__actions {
@@ -3733,10 +3652,6 @@ h1 {
 
   .ai-model-row__field {
     flex-basis: 100%;
-  }
-
-  .plugin-row__badges {
-    justify-content: flex-start;
   }
 
   .plugin-meta-grid,

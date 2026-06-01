@@ -220,7 +220,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   name: "ME3 Mission Control",
   version: "0.1.0",
   description:
-    "Default first-party Core workspace for daily capture, tasks, projects, approvals, agent run history, plugin activity, private memory, context sources, setup status, and optional local-daemon bridge.",
+    "The default workspace for your daily notes, tasks, projects as well as important activity from your assistant.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
@@ -571,7 +571,7 @@ const ACCOUNTS_PLUGIN: CorePluginManifestSummary = {
   name: "ME3 Accounts",
   version: "0.1.0",
   description:
-    "Optional first-party ledger for manual, CSV, Stripe, and future invoice or receipt triage records.",
+    "Use ME3 to manage your accounts.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
@@ -684,7 +684,7 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   name: "ME3 Agent Chat",
   version: "0.1.0",
   description:
-    "First-party owner chat runtime for the ME3 assistant, exposed through the sandbox chat API and per-owner Durable Object.",
+    "Chat with your ME3 assistant from the side panel.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
@@ -834,7 +834,7 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
   name: "Local Executor",
   version: "0.1.0",
   description:
-    "Optional first-party local runner for bounded owner-approved work on paired local computers.",
+    "Connect ME3 to your local computer to run tasks there. Setup required.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",

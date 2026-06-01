@@ -220,12 +220,12 @@ watch(
     <div class="domain-management">
       <!-- Connected domain -->
       <div v-if="isConnected" class="connected-domain">
-        <div class="fallback-row">
-          <span>Worker fallback</span>
+        <p class="default-me3-url">
+          Default ME3 url:
           <a :href="workerFallbackUrl" target="_blank" rel="noopener">
             {{ workerFallbackUrl }}
           </a>
-        </div>
+        </p>
 
         <div class="domain-info">
           <div class="domain-header">
@@ -370,12 +370,12 @@ watch(
 
       <!-- No domain connected -->
       <div v-else class="no-domain">
-        <div class="fallback-row">
-          <span>Available now</span>
+        <p class="default-me3-url">
+          Default ME3 url:
           <a :href="workerFallbackUrl" target="_blank" rel="noopener">
             {{ workerFallbackUrl }}
           </a>
-        </div>
+        </p>
 
         <!-- Connect existing domain -->
         <div v-if="!showDomainInput && !embedded" class="domain-actions">
@@ -541,33 +541,21 @@ watch(
   line-height: 1.45;
 }
 
-.fallback-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  margin-bottom: 16px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-size: 13px;
-}
-
-.fallback-row span {
+.default-me3-url {
+  margin: 0 0 16px;
   color: var(--color-text-muted);
-  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
-.fallback-row a {
+.default-me3-url a {
   color: var(--color-text);
   font-weight: 600;
   text-decoration: none;
   overflow-wrap: anywhere;
-  text-align: right;
 }
 
-.fallback-row a:hover {
+.default-me3-url a:hover {
   text-decoration: underline;
 }
 
@@ -901,14 +889,9 @@ watch(
 
 @media (max-width: 720px) {
   .input-row,
-  .fallback-row,
   .hostname-list li {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .fallback-row a {
-    text-align: left;
   }
 }
 
