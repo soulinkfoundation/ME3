@@ -172,6 +172,8 @@ type MailboxMessageRow = {
   to_address: string | null;
   subject: string | null;
   text_body: string | null;
+  raw_headers_json?: string | null;
+  metadata_json?: string | null;
   agent_summary: string | null;
   agent_labels_json: string | null;
   received_at: string | null;
@@ -194,6 +196,32 @@ type EmailTriageResult = {
   needsReplyCount: number;
   importantCount: number;
   items: EmailTriageItem[];
+};
+
+type InvoiceExtraction = {
+  messageId: string;
+  description: string;
+  amountCents: number;
+  currency: string;
+  date: string;
+  status: "paid" | "pending" | "overdue" | "cancelled" | "needs_review";
+  categoryHint: string | null;
+  confidence: "high" | "medium" | "low";
+  sourceRef: string;
+};
+
+type InvoiceTriageResult = {
+  scanned: number;
+  candidates: number;
+  filed: number;
+  reviewed: number;
+  skipped: number;
+  entries: InvoiceExtraction[];
+};
+
+type FinancialCategoryRow = {
+  id: string;
+  name: string;
 };
 
 type PluginInstallationSetupRow = {
@@ -1204,6 +1232,35 @@ async function executeAssistantJobProviderBackedAction(
     idempotencyKey: string;
   },
 ) {
+  if (isInvoiceReceiptTriageJob(input.job, input.draft)) {
+    if (input.capability.id === "email.message.read") {
+      const triage = await buildInvoiceReceiptTriageResult(env, input.userId, { dryRun: true });
+      return insertAssistantJobActionResult(env, {
+        runId: input.run.id,
+        actionId: input.action.id,
+        capabilityId: input.capability.id,
+        idempotencyKey: input.idempotencyKey,
+        status: "succeeded",
+        externalRef: `mailbox:${triage.scanned}:messages:${triage.candidates}:invoice-candidates`,
+      });
+    }
+
+    if (
+      input.capability.id === "accounts.entry.create" ||
+      input.capability.id === "mission.task.create"
+    ) {
+      const triage = await buildInvoiceReceiptTriageResult(env, input.userId, { dryRun: false });
+      return insertAssistantJobActionResult(env, {
+        runId: input.run.id,
+        actionId: input.action.id,
+        capabilityId: input.capability.id,
+        idempotencyKey: input.idempotencyKey,
+        status: "succeeded",
+        externalRef: invoiceTriageExternalRef(triage),
+      });
+    }
+  }
+
   if (input.capability.id === "email.message.read") {
     const triage = await buildEmailTriageResult(env, input.userId);
     return insertAssistantJobActionResult(env, {
@@ -1608,6 +1665,18 @@ async function buildGeneratedMissionActivity(
   },
   defaultActivityType: string,
 ): Promise<{ title: string | null; summary: string | null; metadata?: Record<string, unknown> }> {
+  if (
+    defaultActivityType === "assistant_job.review_packet" &&
+    isInvoiceReceiptTriageJob(input.job, input.draft)
+  ) {
+    const triage = await buildInvoiceReceiptTriageResult(env, input.userId, { dryRun: true });
+    return {
+      title: `Result: ${input.job.name}`,
+      summary: formatInvoiceTriageMissionSummary(triage),
+      metadata: { invoiceTriage: triage },
+    };
+  }
+
   if (
     defaultActivityType === "assistant_job.review_packet" &&
     (input.job.recipe_id === "email-triage" ||
@@ -2978,6 +3047,286 @@ function resolveMissionOutputProjectId(
     || null;
 }
 
+const INVOICE_SUBJECT_KEYWORDS = [
+  "invoice",
+  "receipt",
+  "billing",
+  "payment",
+  "statement",
+  "subscription",
+  "charge",
+  "order confirmation",
+];
+const INVOICE_SENDER_KEYWORDS = [
+  "billing",
+  "invoice",
+  "receipt",
+  "stripe",
+  "paypal",
+  "wise",
+  "quickbooks",
+  "xero",
+];
+const INVOICE_BODY_CUES = [
+  "amount due",
+  "balance due",
+  "grand total",
+  "invoice number",
+  "invoice #",
+  "payment received",
+  "payment confirmation",
+  "thank you for your payment",
+];
+const INVOICE_AMOUNT_PATTERN =
+  /([$€£¥])\s?(\d[\d,]*(?:\.\d{1,2})?)|(?:\b(USD|EUR|GBP|CAD|AUD|NZD|JPY|CHF|SEK|NOK|DKK|SGD|HKD)\b)\s?(\d[\d,]*(?:\.\d{1,2})?)/i;
+const INVOICE_LABELLED_AMOUNT_PATTERN =
+  /(?:total|amount\s*due|balance\s*due|grand\s*total|subtotal|net\s*amount|invoice\s*total)[:\s]*[$€£¥]?\s?(\d[\d,]*(?:\.\d{1,2})?)/i;
+const INVOICE_DEFAULT_CATEGORIES = [
+  "Software",
+  "Hosting",
+  "Contractor",
+  "Marketing",
+  "Office",
+  "Travel",
+  "Professional Services",
+  "Other",
+];
+
+function isInvoiceReceiptTriageJob(job: AssistantJobRow, draft: AssistantJobDraft) {
+  return job.recipe_id === "invoice-receipt-triage" || draft.recipeId === "invoice-receipt-triage";
+}
+
+async function buildInvoiceReceiptTriageResult(
+  env: Env,
+  userId: string,
+  options: { dryRun: boolean },
+): Promise<InvoiceTriageResult> {
+  if (!options.dryRun) await ensureInvoiceExpenseCategories(env, userId);
+  const messages = await loadAssistantJobMailboxMessages(env, userId, 50);
+  const entries: InvoiceExtraction[] = [];
+  let candidates = 0;
+  let skipped = 0;
+  let filed = 0;
+  let reviewed = 0;
+
+  for (const message of messages) {
+    const score = scoreInvoiceMessage(message);
+    if (score < 3) {
+      skipped += 1;
+      continue;
+    }
+    candidates += 1;
+    const extraction = extractInvoiceFromMessage(message, score);
+    if (!extraction) {
+      skipped += 1;
+      continue;
+    }
+    entries.push(extraction);
+
+    if (options.dryRun) continue;
+    const inserted = await insertInvoiceFinancialEntry(env, userId, extraction);
+    if (inserted) {
+      filed += 1;
+      if (extraction.status === "needs_review") reviewed += 1;
+    } else {
+      skipped += 1;
+    }
+  }
+
+  return {
+    scanned: messages.length,
+    candidates,
+    filed: options.dryRun ? entries.length : filed,
+    reviewed: options.dryRun
+      ? entries.filter((entry) => entry.status === "needs_review").length
+      : reviewed,
+    skipped,
+    entries,
+  };
+}
+
+async function ensureInvoiceExpenseCategories(env: Env, userId: string) {
+  const statements = INVOICE_DEFAULT_CATEGORIES.map((name, index) =>
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO financial_categories
+         (id, user_id, name, entry_type, sort_order)
+       VALUES (?, ?, ?, 'expense', ?)`,
+    ).bind(crypto.randomUUID(), userId, name, index),
+  );
+  if (statements.length > 0) await env.DB.batch(statements);
+}
+
+async function insertInvoiceFinancialEntry(
+  env: Env,
+  userId: string,
+  extraction: InvoiceExtraction,
+) {
+  const categoryId = await getInvoiceCategoryId(env, userId, extraction.categoryHint);
+  const result = await env.DB.prepare(
+    `INSERT OR IGNORE INTO financial_entries
+       (id, user_id, entry_type, date, description, category_id, amount_cents,
+        currency, status, source, notes, source_ref, source_email_id)
+     VALUES (?, ?, 'expense', ?, ?, ?, ?, ?, ?, 'email_triage', ?, ?, ?)`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      userId,
+      extraction.date,
+      extraction.description,
+      categoryId,
+      extraction.amountCents,
+      extraction.currency,
+      extraction.status,
+      `Auto-triaged from email with ${extraction.confidence} confidence.`,
+      extraction.sourceRef,
+      extraction.messageId,
+    )
+    .run();
+  return (result.meta?.changes || 0) > 0;
+}
+
+async function getInvoiceCategoryId(env: Env, userId: string, categoryName: string | null) {
+  if (!categoryName) return null;
+  const row = await env.DB.prepare(
+    `SELECT id, name
+     FROM financial_categories
+     WHERE user_id = ? AND entry_type = 'expense' AND name = ? COLLATE NOCASE
+     LIMIT 1`,
+  )
+    .bind(userId, categoryName)
+    .first<FinancialCategoryRow>();
+  return row?.id || null;
+}
+
+function scoreInvoiceMessage(message: MailboxMessageRow) {
+  const subject = (message.subject || "").toLowerCase();
+  const from = (message.from_address || "").toLowerCase();
+  const body = (message.text_body || "").toLowerCase();
+  let score = 0;
+  if (INVOICE_SUBJECT_KEYWORDS.some((keyword) => subject.includes(keyword))) score += 3;
+  if (INVOICE_SENDER_KEYWORDS.some((keyword) => from.includes(keyword))) score += 2;
+  if (INVOICE_AMOUNT_PATTERN.test(`${subject}\n${body}`)) score += 2;
+  for (const cue of INVOICE_BODY_CUES) {
+    if (body.includes(cue)) score += 1;
+  }
+  if (INVOICE_LABELLED_AMOUNT_PATTERN.test(body)) score += 2;
+  return score;
+}
+
+function extractInvoiceFromMessage(
+  message: MailboxMessageRow,
+  score: number,
+): InvoiceExtraction | null {
+  const subject = normalizeOptionalText(message.subject) || "Invoice";
+  const body = normalizeWhitespace(message.text_body || "");
+  const combined = `${subject}\n${body}`;
+  const amount = parseInvoiceAmount(combined);
+  if (!amount) return null;
+  const confidence = score >= 7 ? "high" : score >= 5 ? "medium" : "low";
+  const status = confidence === "high" && looksPaid(combined) ? "paid" : "needs_review";
+  return {
+    messageId: message.id,
+    description: subject,
+    amountCents: amount.amountCents,
+    currency: amount.currency,
+    date: normalizeMissionDate(message.received_at?.slice(0, 10)) ||
+      normalizeMissionDate(message.created_at?.slice(0, 10)) ||
+      new Date().toISOString().slice(0, 10),
+    status,
+    categoryHint: inferInvoiceCategory(message),
+    confidence,
+    sourceRef: `email:${message.id}`,
+  };
+}
+
+function parseInvoiceAmount(text: string) {
+  const amountMatch = text.match(INVOICE_AMOUNT_PATTERN);
+  if (amountMatch) {
+    const symbol = amountMatch[1];
+    const symbolAmount = amountMatch[2];
+    const code = amountMatch[3];
+    const codeAmount = amountMatch[4];
+    const parsed = Number.parseFloat((symbolAmount || codeAmount || "").replace(/,/g, ""));
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return {
+        amountCents: Math.round(parsed * 100),
+        currency: currencyFromSymbol(symbol) || normalizeInvoiceCurrency(code) || "USD",
+      };
+    }
+  }
+  const labelledMatch = text.match(INVOICE_LABELLED_AMOUNT_PATTERN);
+  if (labelledMatch?.[1]) {
+    const parsed = Number.parseFloat(labelledMatch[1].replace(/,/g, ""));
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return { amountCents: Math.round(parsed * 100), currency: "USD" };
+    }
+  }
+  return null;
+}
+
+function currencyFromSymbol(symbol: string | undefined) {
+  if (symbol === "$") return "USD";
+  if (symbol === "€") return "EUR";
+  if (symbol === "£") return "GBP";
+  if (symbol === "¥") return "JPY";
+  return null;
+}
+
+function normalizeInvoiceCurrency(value: string | undefined) {
+  const currency = value?.trim().toUpperCase();
+  return currency && /^[A-Z]{3}$/.test(currency) ? currency : null;
+}
+
+function looksPaid(text: string) {
+  const lower = text.toLowerCase();
+  return lower.includes("receipt") ||
+    lower.includes("paid") ||
+    lower.includes("payment received") ||
+    lower.includes("payment confirmation") ||
+    lower.includes("thank you for your payment");
+}
+
+function inferInvoiceCategory(message: MailboxMessageRow) {
+  const text = `${message.subject || ""}\n${message.from_address || ""}\n${message.text_body || ""}`.toLowerCase();
+  if (/\b(hosting|cloudflare|vercel|netlify|aws|google cloud|render)\b/.test(text)) return "Hosting";
+  if (/\b(software|subscription|saas|github|notion|linear|figma|openai)\b/.test(text)) return "Software";
+  if (/\b(contractor|freelance|consultant)\b/.test(text)) return "Contractor";
+  if (/\b(marketing|ads|campaign)\b/.test(text)) return "Marketing";
+  if (/\b(travel|hotel|flight|train|taxi|uber)\b/.test(text)) return "Travel";
+  return "Other";
+}
+
+function formatInvoiceTriageMissionSummary(triage: InvoiceTriageResult) {
+  if (triage.candidates === 0) {
+    return `Scanned ${triage.scanned} inbox messages. No likely invoices or receipts were found.`;
+  }
+  const header = `Scanned ${triage.scanned} inbox messages and found ${triage.candidates} likely invoices or receipts. ${triage.filed} account entr${triage.filed === 1 ? "y" : "ies"} ready for the Accounts ledger; ${triage.reviewed} need${triage.reviewed === 1 ? "s" : ""} review.`;
+  const lines = triage.entries.slice(0, 5).map((entry) =>
+    `- ${entry.description}: ${formatInvoiceAmount(entry.amountCents, entry.currency)} (${entry.status})`,
+  );
+  return [header, ...lines].join("\n");
+}
+
+function formatInvoiceAmount(amountCents: number, currency: string) {
+  return `${currency} ${(amountCents / 100).toFixed(2)}`;
+}
+
+function invoiceTriageExternalRef(triage: InvoiceTriageResult) {
+  return `accounts:${triage.filed}:entries:${triage.reviewed}:review:${triage.candidates}:candidates:${triage.skipped}:skipped`;
+}
+
+function invoiceTriageResultFromActionResults(actionResults: SerializedActionResult[]) {
+  const ref = actionResults.find((result) => result.externalRef?.startsWith("accounts:"))?.externalRef;
+  const match = ref?.match(/^accounts:(\d+):entries:(\d+):review:(\d+):candidates:(\d+):skipped$/);
+  if (!match) return null;
+  return {
+    filed: Number.parseInt(match[1] || "0", 10),
+    reviewed: Number.parseInt(match[2] || "0", 10),
+    candidates: Number.parseInt(match[3] || "0", 10),
+    skipped: Number.parseInt(match[4] || "0", 10),
+  };
+}
+
 async function buildEmailTriageResult(env: Env, userId: string): Promise<EmailTriageResult> {
   const messages = await loadAssistantJobMailboxMessages(env, userId);
   const items = messages.map(summarizeMailboxMessageForTriage);
@@ -2999,7 +3348,7 @@ async function loadAssistantJobMailboxMessages(
   const rows = await env.DB.prepare(
     `SELECT m.id, m.mailbox_id, m.thread_key, m.provider_id, m.provider_message_id,
             m.from_address, m.to_address, m.subject, m.text_body, m.agent_summary,
-            m.agent_labels_json, m.received_at, m.created_at
+            m.raw_headers_json, m.metadata_json, m.agent_labels_json, m.received_at, m.created_at
      FROM mailbox_messages m
      INNER JOIN mailbox_aliases a ON a.id = m.mailbox_id
      WHERE a.user_id = ?
@@ -3205,6 +3554,13 @@ async function summarizeAssistantJobRunOutput(
   ).length;
   if (pending > 0) return `${pending} action${pending === 1 ? "" : "s"} waiting for approval`;
   if (failed > 0) return `${failed} action${failed === 1 ? "" : "s"} failed`;
+  if (isInvoiceReceiptTriageJob(job, draft)) {
+    const triage = invoiceTriageResultFromActionResults(actionResults);
+    if (triage) {
+      return `Invoice and Receipt Triage added ${triage.filed} account entr${triage.filed === 1 ? "y" : "ies"}; ${triage.reviewed} need${triage.reviewed === 1 ? "s" : ""} review and ${triage.skipped} skipped.`;
+    }
+    return "Invoice and Receipt Triage ran successfully. Check Mission Control Accounts for review items.";
+  }
   if (
     job.recipe_id === "email-triage" ||
     draft.recipeId === "email-triage"

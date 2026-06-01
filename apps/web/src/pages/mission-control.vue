@@ -156,6 +156,7 @@ type MissionActivity = {
   title: string;
   summary: string | null;
   status: string | null;
+  relatedId: string | null;
   createdAt: string;
 };
 
@@ -458,32 +459,42 @@ const scheduledTime = computed(() => {
   const time = scheduleDateTime.value.split("T")[1] || "";
   return normalizeLocalTimeInput(time);
 });
-const activityItems = computed<ActivityViewItem[]>(() => [
-  ...pendingApprovals.value.map((approval) => ({
-    id: `approval:${approval.id}`,
-    kind: "Approval",
-    title: approval.title,
-    summary: approval.summary || approval.actionId,
-    status: approval.riskLevel,
-    createdAt: approval.requestedAt,
-  })),
-  ...recentRuns.value.map((run) => ({
-    id: `run:${run.id}`,
-    kind: "Run",
-    title: run.title,
-    summary: run.promptSummary || run.model || "Run summary pending",
-    status: run.status,
-    createdAt: run.finishedAt || run.startedAt || run.createdAt,
-  })),
-  ...activity.value.map((item) => ({
-    id: `activity:${item.id}`,
-    kind: "Activity",
-    title: item.title,
-    summary: item.summary,
-    status: item.status,
-    createdAt: item.createdAt,
-  })),
-]);
+const activityItems = computed<ActivityViewItem[]>(() => {
+  const visibleRunIds = new Set(
+    recentRuns.value.flatMap((run) => [
+      run.id,
+      typeof run.result?.assistantJobRunId === "string" ? run.result.assistantJobRunId : null,
+    ]).filter(Boolean),
+  );
+  return [
+    ...pendingApprovals.value.map((approval) => ({
+      id: `approval:${approval.id}`,
+      kind: "Approval",
+      title: approval.title,
+      summary: approval.summary || approval.actionId,
+      status: approval.riskLevel,
+      createdAt: approval.requestedAt,
+    })),
+    ...recentRuns.value.map((run) => ({
+      id: `run:${run.id}`,
+      kind: "Run",
+      title: run.title,
+      summary: run.promptSummary || run.model || "Run summary pending",
+      status: run.status,
+      createdAt: run.finishedAt || run.startedAt || run.createdAt,
+    })),
+    ...activity.value
+      .filter((item) => !item.relatedId || !visibleRunIds.has(item.relatedId))
+      .map((item) => ({
+      id: `activity:${item.id}`,
+      kind: "Activity",
+      title: item.title,
+      summary: item.summary,
+      status: item.status,
+      createdAt: item.createdAt,
+      })),
+  ];
+});
 const visibleDailyBriefing = computed(() => {
   const briefing = latestBriefing.value;
   if (!briefing || !briefing.showInJournal || briefing.date !== selectedDate.value) return null;

@@ -73,6 +73,23 @@ type ReminderRow = Record<string, unknown> & {
   remind_at: string;
   status: string;
 };
+type FinancialCategoryRow = Record<string, unknown> & {
+  id: string;
+  user_id: string;
+  name: string;
+  entry_type: string;
+};
+type FinancialEntryRow = Record<string, unknown> & {
+  id: string;
+  user_id: string;
+  entry_type: string;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  source: string;
+  source_ref: string | null;
+  source_email_id: string | null;
+};
 
 type AssistantJobsDbState = {
   owner: Record<string, unknown> | null;
@@ -94,6 +111,8 @@ type AssistantJobsDbState = {
   events: Record<string, unknown>[];
   ingressEvents: IngressRow[];
   pluginActivities: Record<string, unknown>[];
+  financialCategories: FinancialCategoryRow[];
+  financialEntries: FinancialEntryRow[];
   channelConnections: ChannelConnectionRow[];
   channelEvents: ChannelEventRow[];
   mailbox: MailboxRow | null;
@@ -262,6 +281,66 @@ describe("assistant jobs persistence", () => {
         importantCount: 1,
       },
     });
+  });
+
+  it("triages invoice emails into Accounts ledger entries", async () => {
+    const env = createAssistantJobsEnv({
+      mailbox: activeMailboxRow(),
+      mailboxMessages: [
+        mailboxMessageRow({
+          id: "invoice-message-1",
+          thread_key: "thread-invoice",
+          from_address: "billing@vercel.com",
+          subject: "Receipt from Vercel",
+          text_body: "Thank you for your payment. Receipt total USD 20.00 paid.",
+        }),
+        mailboxMessageRow({
+          id: "message-2",
+          thread_key: "thread-chat",
+          from_address: "friend@example.com",
+          subject: "Lunch",
+          text_body: "Want to grab lunch this week?",
+        }),
+      ],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "invoice-receipt-triage" });
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+
+    expect(run.run.status).toBe("succeeded");
+    expect(run.run.outputPreview).toBe(
+      "Invoice and Receipt Triage added 1 account entry; 0 need review and 1 skipped.",
+    );
+    expect(run.actionResults).toContainEqual(
+      expect.objectContaining({
+        actionId: "create-accounts-entries",
+        capabilityId: "accounts.entry.create",
+        status: "succeeded",
+        externalRef: "accounts:1:entries:0:review:1:candidates:1:skipped",
+      }),
+    );
+    expect(env.__state.financialEntries).toHaveLength(1);
+    expect(env.__state.financialEntries[0]).toMatchObject({
+      entry_type: "expense",
+      description: "Receipt from Vercel",
+      category_id: expect.any(String),
+      amount_cents: 2000,
+      currency: "USD",
+      status: "paid",
+      source: "email_triage",
+      source_ref: "email:invoice-message-1",
+      source_email_id: "invoice-message-1",
+    });
+    expect(env.__state.pluginActivities).toHaveLength(1);
+    expect(env.__state.pluginActivities[0]).toMatchObject({
+      activity_type: "assistant_job.review_packet",
+      title: "Result: Invoice and Receipt Triage",
+      related_id: run.run.id,
+      status: "succeeded",
+    });
+    expect(env.__state.pluginActivities[0]?.summary).toContain(
+      "found 1 likely invoices or receipts",
+    );
   });
 
   it("uses calendar plugin readiness for calendar-backed starter jobs", async () => {
@@ -825,6 +904,8 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
     events: [],
     ingressEvents: [],
     pluginActivities: [],
+    financialCategories: [],
+    financialEntries: [],
     queueMessages: [],
     mailbox: null,
     pluginInstallations: [],
@@ -1171,6 +1252,49 @@ class FakeStatement {
       return { success: true };
     }
 
+    if (sql.includes("INSERT OR IGNORE INTO financial_categories")) {
+      const exists = this.state.financialCategories.some(
+        (category) =>
+          category.user_id === values[1] &&
+          category.name === values[2] &&
+          category.entry_type === "expense",
+      );
+      if (!exists) {
+        this.state.financialCategories.push({
+          id: values[0] as string,
+          user_id: values[1] as string,
+          name: values[2] as string,
+          entry_type: "expense",
+          sort_order: values[3] as number,
+        });
+      }
+      return { success: true, meta: { changes: exists ? 0 : 1 } };
+    }
+
+    if (sql.includes("INSERT OR IGNORE INTO financial_entries")) {
+      const exists = this.state.financialEntries.some(
+        (entry) => entry.user_id === values[1] && entry.source_ref === values[9],
+      );
+      if (!exists) {
+        this.state.financialEntries.push({
+          id: values[0] as string,
+          user_id: values[1] as string,
+          entry_type: "expense",
+          date: values[2] as string,
+          description: values[3] as string,
+          category_id: values[4] as string | null,
+          amount_cents: values[5] as number,
+          currency: values[6] as string,
+          status: values[7] as string,
+          source: "email_triage",
+          notes: values[8] as string,
+          source_ref: values[9] as string,
+          source_email_id: values[10] as string,
+        });
+      }
+      return { success: true, meta: { changes: exists ? 0 : 1 } };
+    }
+
     if (sql.includes("mission_plugin_activity")) {
       const exists = this.state.pluginActivities.some((activity) => activity.id === values[0]);
       if (!exists) {
@@ -1395,6 +1519,17 @@ class FakeStatement {
       return (
         this.state.pluginInstallations.find(
           (installation) => installation.plugin_id === "me3.calendar",
+        ) || null
+      ) as T | null;
+    }
+    if (sql.includes("FROM financial_categories")) {
+      const name = String(values[1] || "").toLowerCase();
+      return (
+        this.state.financialCategories.find(
+          (category) =>
+            category.user_id === values[0] &&
+            category.entry_type === "expense" &&
+            category.name.toLowerCase() === name,
         ) || null
       ) as T | null;
     }
