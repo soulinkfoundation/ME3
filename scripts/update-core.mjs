@@ -15,6 +15,7 @@ const args = parseArgs(process.argv.slice(2));
 const rootDir = resolveRootDir();
 const coreMetadataPath = path.join(rootDir, "me3-core.json");
 const packageJsonPath = path.join(rootDir, "package.json");
+const wranglerConfigPath = path.join(rootDir, "wrangler.toml");
 
 if (!existsSync(packageJsonPath)) {
   fail("Could not find package.json. Run this from the root of your ME3 Core repository.");
@@ -106,6 +107,7 @@ if (mergeResult.status !== 0) {
 }
 
 if (!args.skipInstall) run("pnpm", ["install"]);
+if (!args.skipCloudflareProvision) await provisionCloudflareQueues();
 if (!args.skipDoctor) run("pnpm", ["update:doctor"]);
 if (!args.skipBuild) run("pnpm", ["build"]);
 
@@ -199,6 +201,7 @@ function parseArgs(values) {
     baseTag: "",
     manifestUrl: "",
     skipBuild: false,
+    skipCloudflareProvision: false,
     skipDoctor: false,
     skipFetch: false,
     skipInstall: false,
@@ -226,6 +229,8 @@ function parseArgs(values) {
       parsed.manifestUrl = value.slice("--manifest-url=".length);
     } else if (value === "--skip-build") {
       parsed.skipBuild = true;
+    } else if (value === "--skip-cloudflare-provision") {
+      parsed.skipCloudflareProvision = true;
     } else if (value === "--skip-doctor") {
       parsed.skipDoctor = true;
     } else if (value === "--skip-fetch") {
@@ -258,6 +263,48 @@ function parseArgs(values) {
   }
 
   return parsed;
+}
+
+async function provisionCloudflareQueues() {
+  if (!existsSync(wranglerConfigPath)) return;
+
+  const config = await readFile(wranglerConfigPath, "utf8");
+  const queueNames = parseQueueNames(config);
+  if (queueNames.length === 0) return;
+
+  printHeader("Provisioning Cloudflare queues");
+  for (const queueName of queueNames) {
+    const result = run("pnpm", ["exec", "wrangler", "queues", "create", queueName], {
+      allowFailure: true,
+      quiet: true,
+    });
+    const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+    if (result.status === 0 || /already exists/i.test(output)) {
+      console.log(`OK ${queueName}`);
+      continue;
+    }
+
+    console.error(output.trim());
+    fail(
+      [
+        `Could not create Cloudflare queue "${queueName}".`,
+        "Run `pnpm exec wrangler login` if needed, then rerun `pnpm update:core`.",
+        "To handle Cloudflare resources manually, rerun with --skip-cloudflare-provision.",
+      ].join("\n"),
+    );
+  }
+}
+
+function parseQueueNames(config) {
+  const queueNames = new Set();
+  const queuePattern = /^\s*(?:queue|dead_letter_queue)\s*=\s*"([^"]+)"\s*$/gm;
+  let match = queuePattern.exec(config);
+  while (match) {
+    const queueName = match[1]?.trim();
+    if (queueName) queueNames.add(queueName);
+    match = queuePattern.exec(config);
+  }
+  return [...queueNames].sort();
 }
 
 function resolveRootDir() {
@@ -398,6 +445,7 @@ Options:
   --allow-dirty                Allow update with uncommitted local changes
   --skip-fetch                 Do not fetch upstream tags first
   --skip-install               Do not run pnpm install after merge
+  --skip-cloudflare-provision  Do not create Cloudflare queues from wrangler.toml
   --skip-doctor                Do not run pnpm update:doctor after merge
   --skip-build                 Do not run pnpm build after merge
   --yes, -y                    Skip confirmation prompts

@@ -81,6 +81,16 @@ if (!args.skipR2) {
 config = ensureEmailSendBinding(config);
 console.log("Configured EMAIL send binding for Cloudflare Email Service.");
 
+if (!args.skipQueues) {
+  for (const queueName of parseQueueNames(config)) {
+    runWrangler(["queues", "create", queueName], {
+      allowAlreadyExists: true,
+      failureMessage: `Could not create Cloudflare queue ${queueName}.`,
+    });
+    console.log(`Configured queue -> ${queueName}`);
+  }
+}
+
 if (config !== originalConfig) {
   writeFileSync(configPath, config);
   console.log(`Updated ${configPath}.`);
@@ -112,6 +122,7 @@ function parseArgs(values) {
     dbId: "",
     dbName: "",
     skipR2: false,
+    skipQueues: false,
     skipSecrets: false,
     yes: false,
   };
@@ -124,6 +135,8 @@ function parseArgs(values) {
       parsed.yes = true;
     } else if (value === "--skip-r2") {
       parsed.skipR2 = true;
+    } else if (value === "--skip-queues") {
+      parsed.skipQueues = true;
     } else if (value === "--skip-secrets") {
       parsed.skipSecrets = true;
     } else if (value === "--setup-password") {
@@ -151,12 +164,46 @@ function parseArgs(values) {
       index += 1;
     } else if (value.startsWith("--db-id=")) {
       parsed.dbId = value.slice("--db-id=".length);
+    } else if (value === "--help" || value === "-h") {
+      printHelp();
+      process.exit(0);
     } else {
       fail(`Unknown option: ${value}`);
     }
   }
 
   return parsed;
+}
+
+function parseQueueNames(value) {
+  const queueNames = new Set();
+  const queuePattern = /^\s*(?:queue|dead_letter_queue)\s*=\s*"([^"]+)"\s*$/gm;
+  let match = queuePattern.exec(value);
+  while (match) {
+    const queueName = match[1]?.trim();
+    if (queueName) queueNames.add(queueName);
+    match = queuePattern.exec(value);
+  }
+  return [...queueNames].sort();
+}
+
+function printHelp() {
+  console.log(`Usage: pnpm init:cloudflare -- [options]
+
+Prepares Cloudflare resources for a manual ME3 Core deploy.
+
+Options:
+  --config <path>          Wrangler config path (default: wrangler.toml)
+  --db-name <name>         D1 database name
+  --db-id <uuid>           Existing D1 database id
+  --bucket <name>          R2 bucket name
+  --setup-password <value> SETUP_PASSWORD secret value
+  --skip-r2                Do not create or configure SITE_ASSETS
+  --skip-queues            Do not create queues from wrangler.toml
+  --skip-secrets           Do not write Worker secrets
+  --yes, -y                Skip confirmation prompts
+  --help, -h               Show this help
+`);
 }
 
 async function confirm(question) {

@@ -47,7 +47,7 @@ pnpm update:core
 git push origin main
 ```
 
-The updater adds the `upstream` remote if it is missing, fetches release tags, connects copied Deploy-button history to the installed upstream tag when needed, merges the latest stable release, then runs `pnpm install`, `pnpm update:doctor`, and `pnpm build`.
+The updater adds the `upstream` remote if it is missing, fetches release tags, connects copied Deploy-button history to the installed upstream tag when needed, merges the latest stable release, creates any Cloudflare queues declared in `wrangler.toml`, then runs `pnpm install`, `pnpm update:doctor`, and `pnpm build`. If you need to manage Cloudflare resources manually, pass `--skip-cloudflare-provision`.
 
 New GitHub-based installs also include an **Update ME3 Core** GitHub Action. In the copied repository, open **Actions -> Update ME3 Core -> Run workflow**. The workflow runs the same updater, commits the result to `main`, and Cloudflare Workers Builds redeploys from that commit.
 
