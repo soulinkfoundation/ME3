@@ -170,7 +170,6 @@ async function disconnectSoulink() {
       {},
     );
     syncStatus(response);
-    notice.value = "Soulink assistant chat disconnected.";
   } catch (err: unknown) {
     error.value =
       err instanceof Error ? err.message : "Failed to disconnect Soulink";

@@ -8,6 +8,7 @@ import { api } from "../api";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { DEFAULT_APP_PATH } from "../utils/navigation";
+import { detectBrowserTimeZone } from "../utils/timezone";
 
 definePage({
   path: "/",
@@ -246,6 +247,7 @@ async function submitAuth() {
         name: name.value,
         username: deriveUsername(),
         password: password.value,
+        timezone: detectBrowserTimeZone(),
       })
     : await auth.loginOwner({
         email: email.value,

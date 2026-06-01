@@ -26,6 +26,7 @@ export interface BootstrapOwnerInput {
   name: string;
   username: string;
   password: string;
+  timezone?: string | null;
 }
 
 export interface LoginOwnerInput {
@@ -111,6 +112,7 @@ export const useAuthStore = defineStore("auth", () => {
           name: input.name.trim(),
           username: input.username.trim(),
           password: input.password,
+          timezone: input.timezone ?? undefined,
         },
       );
 

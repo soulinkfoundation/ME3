@@ -3041,7 +3041,7 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(200);
     expect(body.user.email).toBe("owner@example.com");
-    expect(body.user.timezone).toBe("UTC");
+    expect(body.user.timezone).toBeNull();
     expect(body.user.locale).toBe("en-US");
     expect(body.user.localeSource).toBe("inferred");
   });

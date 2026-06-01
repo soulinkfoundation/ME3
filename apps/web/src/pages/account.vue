@@ -8,10 +8,7 @@ import Button from "../components/Button.vue";
 import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import UiIcon from "../components/UiIcon.vue";
-import {
-  useTheme,
-  type ThemePreference,
-} from "../composables/useTheme";
+import { useTheme, type ThemePreference } from "../composables/useTheme";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import {
@@ -366,7 +363,6 @@ const emailProviderError = ref<string | null>(null);
 const appConnectionsLoading = ref(false);
 const appConnectionsSaving = ref(false);
 const me3Connection = ref<AppConnectionsResponse["me3"] | null>(null);
-const appConnectionsMessage = ref<string | null>(null);
 const appConnectionsError = ref<string | null>(null);
 const commerceLoading = ref(false);
 const commerceSaving = ref(false);
@@ -389,9 +385,18 @@ const showAiModelSection = true;
 
 const customDomainSiteUsername = computed(() => {
   const accountUsername = auth.user?.username || "";
-  const accountSite = sites.sites.find((site) => site.username === accountUsername);
-  const profileSite = sites.sites.find((site) => (site.site_type || "profile") === "profile");
-  return accountSite?.username || profileSite?.username || sites.sites[0]?.username || "";
+  const accountSite = sites.sites.find(
+    (site) => site.username === accountUsername,
+  );
+  const profileSite = sites.sites.find(
+    (site) => (site.site_type || "profile") === "profile",
+  );
+  return (
+    accountSite?.username ||
+    profileSite?.username ||
+    sites.sites[0]?.username ||
+    ""
+  );
 });
 
 const customDomainSite = computed(() =>
@@ -469,7 +474,8 @@ const emailAddressDomain = computed(() => {
 const emailAddressIsValid = computed(
   () =>
     isValidMailboxEmail(emailAddressNormalized.value) &&
-    emailAddressLocalPart.value === emailAddressNormalized.value.split("@")[0] &&
+    emailAddressLocalPart.value ===
+      emailAddressNormalized.value.split("@")[0] &&
     Boolean(emailAddressDomain.value),
 );
 
@@ -487,7 +493,8 @@ const installationEmailDomain = computed(() => {
 });
 
 const mailboxRoutedAddress = computed(() => {
-  const localPart = mailboxAliasNormalized.value || mailbox.value?.aliasLocalPart || "";
+  const localPart =
+    mailboxAliasNormalized.value || mailbox.value?.aliasLocalPart || "";
   if (localPart && installationEmailDomain.value) {
     return `${localPart}@${installationEmailDomain.value}`;
   }
@@ -500,7 +507,10 @@ const customDomainSuggestedDomain = computed(
 
 const selectedProviderNeedsSecret = computed(() => {
   const active = activeEmailProvider.value;
-  if (!active?.secretLabel || selectedEmailProviderId.value === "cloudflare-email") {
+  if (
+    !active?.secretLabel ||
+    selectedEmailProviderId.value === "cloudflare-email"
+  ) {
     return false;
   }
   return !active.keyHint && !activeEmailProviderInput.value.apiToken.trim();
@@ -511,13 +521,15 @@ const emailProviderSpecificSettingsValid = computed(() => {
   if (selectedEmailProviderId.value === "smtp") {
     return Boolean(
       input.smtpHost.trim() &&
-        input.smtpUsername.trim() &&
-        Number(input.smtpPort) > 0 &&
-        !selectedProviderNeedsSecret.value,
+      input.smtpUsername.trim() &&
+      Number(input.smtpPort) > 0 &&
+      !selectedProviderNeedsSecret.value,
     );
   }
   if (selectedEmailProviderId.value === "mailgun") {
-    return Boolean(input.sendingDomain.trim() && !selectedProviderNeedsSecret.value);
+    return Boolean(
+      input.sendingDomain.trim() && !selectedProviderNeedsSecret.value,
+    );
   }
   if (selectedEmailProviderId.value === "postmark") {
     return !selectedProviderNeedsSecret.value;
@@ -579,14 +591,15 @@ const visibleAccountPlugins = computed(() =>
   plugins.value.filter((plugin) => !isPluginComingSoon(plugin)),
 );
 
-const missionControlPlugin = computed(() =>
-  plugins.value.find((plugin) => plugin.id === "me3.mission-control") || null,
+const missionControlPlugin = computed(
+  () =>
+    plugins.value.find((plugin) => plugin.id === "me3.mission-control") || null,
 );
 
 const missionControlReady = computed(() =>
   Boolean(
     missionControlPlugin.value?.enabled &&
-      missionControlPlugin.value.status === "installed",
+    missionControlPlugin.value.status === "installed",
   ),
 );
 
@@ -641,7 +654,9 @@ const selectedAgentModelCostLabel = computed(
 
 const selectedProviderKeyInput = computed({
   get() {
-    return aiProviderKeyInputs.value[aiDefaultRouteInput.value.providerId] || "";
+    return (
+      aiProviderKeyInputs.value[aiDefaultRouteInput.value.providerId] || ""
+    );
   },
   set(value: string) {
     aiProviderKeyInputs.value = {
@@ -659,7 +674,9 @@ const selectedProviderNeedsKey = computed(
 
 const aiAgentModelConfigured = computed(() => {
   const provider = selectedAgentProvider.value;
-  return Boolean(provider?.configured && aiDefaultRouteInput.value.model.trim());
+  return Boolean(
+    provider?.configured && aiDefaultRouteInput.value.model.trim(),
+  );
 });
 
 const aiSettingsSummaryLabel = computed(() => {
@@ -691,7 +708,8 @@ const aiSettingsSaveDisabled = computed(
     aiSettingsSaving.value ||
     aiSettingsLoading.value ||
     aiAgentModelInvalid.value ||
-    (selectedProviderNeedsKey.value && !selectedProviderKeyInput.value.trim()) ||
+    (selectedProviderNeedsKey.value &&
+      !selectedProviderKeyInput.value.trim()) ||
     (aiProviderKeyInputCount.value > 0 && !aiEncryptionConfigured.value),
 );
 
@@ -866,7 +884,11 @@ function normalizeEmailDomain(value: string) {
 
 function inferEmailDomainFromHost(hostname: string) {
   const normalized = normalizeEmailDomain(hostname);
-  if (!normalized || normalized === "localhost" || normalized.endsWith(".workers.dev")) {
+  if (
+    !normalized ||
+    normalized === "localhost" ||
+    normalized.endsWith(".workers.dev")
+  ) {
     return "";
   }
   const parts = normalized.split(".");
@@ -883,7 +905,8 @@ function inferMailboxAlias() {
 function inferEmailAddressFromState() {
   const activeFromAddress =
     emailProviderInputs.value[selectedEmailProviderId.value]?.fromAddress || "";
-  if (isValidMailboxEmail(activeFromAddress)) return activeFromAddress.trim().toLowerCase();
+  if (isValidMailboxEmail(activeFromAddress))
+    return activeFromAddress.trim().toLowerCase();
 
   const cloudflareFromAddress =
     emailProviderInputs.value["cloudflare-email"]?.fromAddress || "";
@@ -893,7 +916,8 @@ function inferEmailAddressFromState() {
 
   if (mailboxRoutedAddress.value) return mailboxRoutedAddress.value;
 
-  const localPart = mailboxAliasNormalized.value || mailbox.value?.aliasLocalPart || "";
+  const localPart =
+    mailboxAliasNormalized.value || mailbox.value?.aliasLocalPart || "";
   if (localPart && installationEmailDomain.value) {
     return `${localPart}@${installationEmailDomain.value}`;
   }
@@ -947,12 +971,32 @@ function syncAccount(response: AccountResponse) {
   savedTimezoneInput.value = timezoneInput.value;
 }
 
+async function ensureBrowserTimezoneSaved(response: AccountResponse) {
+  if (response.user.timezone) return;
+
+  const detected = detectBrowserTimeZone();
+  if (!detected) return;
+
+  timezoneInput.value = detected;
+  try {
+    const saved = await api.put<AccountResponse>("/account", {
+      timezone: detected,
+      locale: null,
+    });
+    syncAccount(saved);
+  } catch {
+    timezoneInput.value = response.user.timezone || "";
+    savedTimezoneInput.value = timezoneInput.value;
+  }
+}
+
 async function loadAccount() {
   loading.value = true;
   error.value = null;
   try {
     const response = await api.get<AccountResponse>("/account");
     syncAccount(response);
+    await ensureBrowserTimezoneSaved(response);
   } catch (e: any) {
     error.value = e.message || "Failed to load account settings";
   } finally {
@@ -1073,7 +1117,8 @@ async function saveUnifiedEmailSettings() {
         : "",
     });
     mailbox.value = mailboxResponse.mailbox;
-    mailboxAliasInput.value = mailboxResponse.mailbox?.aliasLocalPart || localPart;
+    mailboxAliasInput.value =
+      mailboxResponse.mailbox?.aliasLocalPart || localPart;
     mailboxForwardingEnabled.value = Boolean(
       mailboxResponse.mailbox?.forwardingEnabled,
     );
@@ -1123,7 +1168,9 @@ async function loadPlugins() {
 }
 
 function syncPlugin(plugin: PluginRecord) {
-  const index = plugins.value.findIndex((candidate) => candidate.id === plugin.id);
+  const index = plugins.value.findIndex(
+    (candidate) => candidate.id === plugin.id,
+  );
   if (index >= 0) {
     plugins.value.splice(index, 1, plugin);
   } else {
@@ -1132,7 +1179,10 @@ function syncPlugin(plugin: PluginRecord) {
   window.dispatchEvent(new CustomEvent("me3:plugins-changed"));
 }
 
-function pluginActionKey(plugin: PluginRecord, action: "activate" | "deactivate") {
+function pluginActionKey(
+  plugin: PluginRecord,
+  action: "activate" | "deactivate",
+) {
   return `${plugin.id}:${action}`;
 }
 
@@ -1172,9 +1222,7 @@ function pluginNavEmoji(plugin: PluginRecord) {
 }
 
 function isPluginBusy(plugin: PluginRecord) {
-  return Boolean(
-    pluginActionLoading.value?.startsWith(`${plugin.id}:`),
-  );
+  return Boolean(pluginActionLoading.value?.startsWith(`${plugin.id}:`));
 }
 
 function isPluginEnabled(plugin: PluginRecord) {
@@ -1308,10 +1356,9 @@ async function saveAiSettings() {
     model: aiDefaultRouteInput.value.model.trim(),
   };
   const defaults = Object.fromEntries(
-    (["default", "chat", "reasoning", "extraction"] as AiRouteId[]).map((routeId) => [
-      routeId,
-      agentModel,
-    ]),
+    (["default", "chat", "reasoning", "extraction"] as AiRouteId[]).map(
+      (routeId) => [routeId, agentModel],
+    ),
   );
 
   try {
@@ -1396,7 +1443,8 @@ async function loadEmailProviderSettings() {
     );
     syncEmailProviderSettings(response);
   } catch (e: any) {
-    emailProviderError.value = e.message || "Failed to load email sender settings";
+    emailProviderError.value =
+      e.message || "Failed to load email sender settings";
   } finally {
     emailProviderLoading.value = false;
   }
@@ -1438,7 +1486,8 @@ async function loadCommerceSettings() {
   commerceError.value = null;
 
   try {
-    const response = await api.get<CommerceSettingsResponse>("/commerce/status");
+    const response =
+      await api.get<CommerceSettingsResponse>("/commerce/status");
     syncCommerceSettings(response);
   } catch (e: any) {
     commerceError.value = e.message || "Failed to load payment settings";
@@ -1511,7 +1560,6 @@ async function connectMe3App() {
   if (appConnectionsSaving.value) return;
 
   appConnectionsSaving.value = true;
-  appConnectionsMessage.value = null;
   appConnectionsError.value = null;
 
   try {
@@ -1525,7 +1573,8 @@ async function connectMe3App() {
     }
     appConnectionsError.value = "ME3.app connection is not ready yet.";
   } catch (e: any) {
-    appConnectionsError.value = e.message || "Failed to start ME3.app connection";
+    appConnectionsError.value =
+      e.message || "Failed to start ME3.app connection";
   } finally {
     appConnectionsSaving.value = false;
   }
@@ -1535,13 +1584,11 @@ async function disconnectMe3App() {
   if (appConnectionsSaving.value) return;
 
   appConnectionsSaving.value = true;
-  appConnectionsMessage.value = null;
   appConnectionsError.value = null;
 
   try {
     await api.delete("/account/app-connections/me3");
     await loadAppConnections();
-    appConnectionsMessage.value = "ME3.app disconnected.";
   } catch (e: any) {
     appConnectionsError.value = e.message || "Failed to disconnect ME3.app";
   } finally {
@@ -1606,7 +1653,10 @@ onMounted(async () => {
   if (route.query.section === "mailbox") {
     openSection.value.mailbox = true;
   }
-  if (route.query.section === "domain" || route.query.section === "custom-domain") {
+  if (
+    route.query.section === "domain" ||
+    route.query.section === "custom-domain"
+  ) {
     openSection.value.advanced = true;
   }
   if (route.query.section === "ai" || route.query.section === "providers") {
@@ -1615,7 +1665,10 @@ onMounted(async () => {
   if (route.query.section === "plugins") {
     openSection.value.plugins = true;
   }
-  if (route.query.section === "payments" || route.query.section === "commerce") {
+  if (
+    route.query.section === "payments" ||
+    route.query.section === "commerce"
+  ) {
     openSection.value.advanced = true;
   }
 });
@@ -1685,7 +1738,10 @@ onMounted(async () => {
       <div v-if="loading" class="status-row">Loading account...</div>
 
       <template v-else>
-        <section class="setup-checklist" aria-labelledby="assistant-setup-title">
+        <section
+          class="setup-checklist"
+          aria-labelledby="assistant-setup-title"
+        >
           <div class="setup-checklist__header">
             <h2 id="assistant-setup-title">Setup</h2>
           </div>
@@ -1816,7 +1872,10 @@ onMounted(async () => {
                   <summary>Forward a copy</summary>
                   <div class="email-disclosure-body email-forwarding-row">
                     <label class="checkbox-row email-forwarding-row__toggle">
-                      <input v-model="mailboxForwardingEnabled" type="checkbox" />
+                      <input
+                        v-model="mailboxForwardingEnabled"
+                        type="checkbox"
+                      />
                       <span>Turn on forwarding</span>
                     </label>
                     <input
@@ -1859,7 +1918,10 @@ onMounted(async () => {
                         <label class="field">
                           <span>SMTP host</span>
                           <input
-                            v-model="emailProviderInputs[selectedEmailProviderId].smtpHost"
+                            v-model="
+                              emailProviderInputs[selectedEmailProviderId]
+                                .smtpHost
+                            "
                             class="input"
                             type="text"
                             placeholder="smtp.example.com"
@@ -1870,7 +1932,10 @@ onMounted(async () => {
                         <label class="field">
                           <span>Port</span>
                           <input
-                            v-model.number="emailProviderInputs[selectedEmailProviderId].smtpPort"
+                            v-model.number="
+                              emailProviderInputs[selectedEmailProviderId]
+                                .smtpPort
+                            "
                             class="input"
                             type="number"
                             inputmode="numeric"
@@ -1883,7 +1948,10 @@ onMounted(async () => {
                         <label class="field">
                           <span>Security</span>
                           <select
-                            v-model="emailProviderInputs[selectedEmailProviderId].smtpSecurity"
+                            v-model="
+                              emailProviderInputs[selectedEmailProviderId]
+                                .smtpSecurity
+                            "
                             class="input"
                           >
                             <option value="starttls">STARTTLS</option>
@@ -1895,7 +1963,10 @@ onMounted(async () => {
                         <label class="field">
                           <span>Username</span>
                           <input
-                            v-model="emailProviderInputs[selectedEmailProviderId].smtpUsername"
+                            v-model="
+                              emailProviderInputs[selectedEmailProviderId]
+                                .smtpUsername
+                            "
                             class="input"
                             type="text"
                             autocomplete="username"
@@ -1909,7 +1980,10 @@ onMounted(async () => {
                         <label class="field">
                           <span>Mailgun domain</span>
                           <input
-                            v-model="emailProviderInputs[selectedEmailProviderId].sendingDomain"
+                            v-model="
+                              emailProviderInputs[selectedEmailProviderId]
+                                .sendingDomain
+                            "
                             class="input"
                             type="text"
                             placeholder="mg.example.com"
@@ -1920,7 +1994,10 @@ onMounted(async () => {
                         <label class="field">
                           <span>Region</span>
                           <select
-                            v-model="emailProviderInputs[selectedEmailProviderId].mailgunRegion"
+                            v-model="
+                              emailProviderInputs[selectedEmailProviderId]
+                                .mailgunRegion
+                            "
                             class="input"
                           >
                             <option value="us">US</option>
@@ -1938,7 +2015,10 @@ onMounted(async () => {
                       >
                         <span>{{ activeEmailProvider.secretLabel }}</span>
                         <input
-                          v-model="emailProviderInputs[selectedEmailProviderId].apiToken"
+                          v-model="
+                            emailProviderInputs[selectedEmailProviderId]
+                              .apiToken
+                          "
                           class="input"
                           type="password"
                           autocomplete="off"
@@ -1971,7 +2051,9 @@ onMounted(async () => {
                     :disabled="emailProviderTestDisabled"
                     @click="sendEmailProviderTestMessage"
                   >
-                    {{ emailProviderTesting ? "Sending..." : "Send test email" }}
+                    {{
+                      emailProviderTesting ? "Sending..." : "Send test email"
+                    }}
                   </Button>
                 </div>
 
@@ -1979,7 +2061,9 @@ onMounted(async () => {
                   Last test failed:
                   {{ activeEmailProvider.lastTestError }}
                 </p>
-                <p v-if="mailboxMessage" class="success">{{ mailboxMessage }}</p>
+                <p v-if="mailboxMessage" class="success">
+                  {{ mailboxMessage }}
+                </p>
                 <p v-if="emailProviderMessage" class="success">
                   {{ emailProviderMessage }}
                 </p>
@@ -2020,7 +2104,9 @@ onMounted(async () => {
             aria-labelledby="account-trigger-plugins"
             :hidden="!openSection.plugins"
           >
-            <div v-if="pluginsLoading" class="status-row">Loading plugins...</div>
+            <div v-if="pluginsLoading" class="status-row">
+              Loading plugins...
+            </div>
             <p v-else-if="pluginsError" class="error">{{ pluginsError }}</p>
 
             <template v-else>
@@ -2134,7 +2220,9 @@ onMounted(async () => {
                         @click="disconnectMe3App"
                       >
                         {{
-                          appConnectionsSaving ? "Disconnecting..." : "Disconnect"
+                          appConnectionsSaving
+                            ? "Disconnecting..."
+                            : "Disconnect"
                         }}
                       </Button>
                       <Button
@@ -2157,7 +2245,12 @@ onMounted(async () => {
                         soulinkPanelRef?.connection?.status === 'active',
                     }"
                   >
-                    <span class="connection-line__title">Soulink</span>
+                    <div class="connection-line__copy">
+                      <span class="connection-line__title">Soulink</span>
+                      <p class="connection-line__description">
+                        Chat with your ME3 assistant on the go.
+                      </p>
+                    </div>
                     <div class="connection-line__end">
                       <StatusBadge
                         v-if="soulinkPanelRef?.available"
@@ -2187,18 +2280,12 @@ onMounted(async () => {
                   >
                     Add password authentication before disconnecting ME3.app.
                   </p>
-                  <p v-if="appConnectionsMessage" class="success">
-                    {{ appConnectionsMessage }}
-                  </p>
                   <p v-if="appConnectionsError" class="error">
                     {{ appConnectionsError }}
                   </p>
                 </template>
                 <p v-if="soulinkPanelRef?.error" class="error">
                   {{ soulinkPanelRef.error }}
-                </p>
-                <p v-if="soulinkPanelRef?.notice" class="success">
-                  {{ soulinkPanelRef.notice }}
                 </p>
               </section>
 
@@ -2349,8 +2436,8 @@ onMounted(async () => {
 
                 <template v-else>
                   <p class="hint">
-                    Add your Stripe secret key here to accept direct paid bookings
-                    from your ME3 site.
+                    Add your Stripe secret key here to accept direct paid
+                    bookings from your ME3 site.
                   </p>
 
                   <p
@@ -2365,11 +2452,13 @@ onMounted(async () => {
                   </p>
 
                   <p
-                    v-if="commerceSettings && !commerceSettings.encryptionConfigured"
+                    v-if="
+                      commerceSettings && !commerceSettings.encryptionConfigured
+                    "
                     class="field-hint"
                   >
-                    A local encryption key will be initialized before this Stripe
-                    key is stored.
+                    A local encryption key will be initialized before this
+                    Stripe key is stored.
                   </p>
 
                   <label class="field payment-key-field">
@@ -2470,7 +2559,6 @@ onMounted(async () => {
                 <p v-if="message" class="success">{{ message }}</p>
                 <p v-if="error" class="error">{{ error }}</p>
               </section>
-
             </div>
           </div>
         </section>
@@ -2485,7 +2573,11 @@ onMounted(async () => {
                 sites, and associated data. This action cannot be undone.
               </p>
             </div>
-            <button class="button danger" type="button" @click="openDeleteModal">
+            <button
+              class="button danger"
+              type="button"
+              @click="openDeleteModal"
+            >
               Delete
             </button>
           </div>
@@ -3103,7 +3195,7 @@ h1 {
 
 .connection-line {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   min-height: 40px;
@@ -3126,12 +3218,26 @@ h1 {
   );
 }
 
+.connection-line__copy {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
 .connection-line__title {
   min-width: 0;
   color: var(--ui-text, var(--color-text));
   font-size: 14px;
   font-weight: 650;
   line-height: 1.2;
+}
+
+.connection-line__description {
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .connection-line__meta {
@@ -3145,14 +3251,19 @@ h1 {
   justify-content: flex-end;
   gap: 8px;
   flex-shrink: 0;
+  padding-top: 2px;
 }
 
 .connection-lines__hint {
   margin: 8px 0 0;
 }
 
+#account-payments .hint {
+  margin-bottom: 8px;
+}
+
 .payment-key-field {
-  margin-top: 16px;
+  margin-top: 0;
 }
 
 .payment-key-row {
@@ -3516,8 +3627,7 @@ h1 {
   justify-content: space-between;
   gap: 16px;
   padding: 16px 20px;
-  border: 1px solid
-    color-mix(in oklab, #e53935 34%, var(--color-border));
+  border: 1px solid color-mix(in oklab, #e53935 34%, var(--color-border));
   border-radius: 12px;
   background: color-mix(in oklab, #e53935 12%, var(--color-bg-subtle));
 }

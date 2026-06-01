@@ -1043,7 +1043,8 @@ app.post("/api/admin/bootstrap", async (c) => {
     username: body.username ?? "owner",
     bio: body.bio ?? "Personal AI assistant powered by ME3 Core.",
     avatar_url: body.avatar_url ?? null,
-    timezone: body.timezone ?? "UTC",
+    timezone:
+      body.timezone !== undefined ? normalizeTimeZone(body.timezone) : null,
   };
 
   await c.env.DB.prepare(
@@ -6272,7 +6273,8 @@ function normalizeLocale(value: unknown): string | null {
 }
 
 function serializeAccountOwner(owner: OwnerRecord) {
-  const timezone = owner.timezone || "UTC";
+  const storedTimezone = normalizeTimeZone(owner.timezone);
+  const effectiveTimezone = storedTimezone || "UTC";
   const explicitLocale = owner.locale?.trim() || null;
 
   return {
@@ -6280,8 +6282,8 @@ function serializeAccountOwner(owner: OwnerRecord) {
     email: owner.email,
     name: owner.name || "ME3 Core Owner",
     username: owner.username || "owner",
-    timezone,
-    locale: explicitLocale || inferLocaleFromTimeZone(timezone),
+    timezone: storedTimezone,
+    locale: explicitLocale || inferLocaleFromTimeZone(effectiveTimezone),
     localeSource: explicitLocale ? "explicit" : "inferred",
   };
 }
