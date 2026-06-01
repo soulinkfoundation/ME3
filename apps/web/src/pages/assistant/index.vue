@@ -532,6 +532,34 @@ function toggleBusyKey(job: AssistantJob) {
   return `${job.status === "active" ? "pause" : "resume"}:${job.id}`;
 }
 
+const jobNavEmojis: Record<string, string> = {
+  "daily-briefing": "☀️",
+  "weekly-review": "📊",
+  "booking-reminder": "🗓️",
+  "email-triage": "📧",
+  "invoice-receipt-triage": "🧾",
+  "local-coding-task": "💻",
+};
+
+function jobNavEmoji(job: AssistantJob) {
+  return jobNavEmojis[job.recipeId || ""] || "⚡";
+}
+
+function isJobEnabled(job: AssistantJob) {
+  return job.status === "active";
+}
+
+function isJobToggleBusy(job: AssistantJob) {
+  return isBusy(toggleBusyKey(job));
+}
+
+async function handleJobToggle(job: AssistantJob, enabled: boolean) {
+  if (enabled === isJobEnabled(job) || !canToggle(job) || isJobToggleBusy(job)) {
+    return;
+  }
+  await toggleJob(job);
+}
+
 function formatDate(value: string | null) {
   if (!value) return "Never";
   const date = new Date(value);
@@ -720,7 +748,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
       </section>
 
       <template v-else>
-        <section class="panel jobs-panel" aria-label="Assistant jobs">
+        <section class="jobs-panel" aria-label="Assistant jobs">
           <div class="job-list">
             <article
               v-for="job in sortedJobs"
@@ -733,33 +761,60 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   job.status === 'paused' || job.status === 'draft',
               }"
             >
+              <span class="job-row__emoji" aria-hidden="true">
+                {{ jobNavEmoji(job) }}
+              </span>
               <button
                 type="button"
-                class="job-row-main"
+                class="job-row__main"
                 @click="openJob(job.id)"
               >
-                <span class="job-title-block">
-                  <strong>{{ job.name }}</strong>
-                  <span
-                    class="status-badge"
-                    :class="`status-badge--${job.status}`"
-                  >
-                    {{ statusLabel(job.status) }}
+                <span class="job-row__copy">
+                  <span class="job-row__title-line">
+                    <strong>{{ job.name }}</strong>
+                    <span
+                      class="status-badge"
+                      :class="`status-badge--${job.status}`"
+                    >
+                      {{ statusLabel(job.status) }}
+                    </span>
                   </span>
-                </span>
-                <span class="job-meta">
-                  <span>Runs: {{ formatTrigger(job.triggerSummary) }}</span>
-                  <span>Last run: {{ formatDate(job.lastRunAt) }}</span>
+                  <span class="job-row__meta">
+                    Runs: {{ formatTrigger(job.triggerSummary) }} · Last run:
+                    {{ formatDate(job.lastRunAt) }}
+                  </span>
                 </span>
               </button>
 
-              <div class="job-row-side">
+              <div class="job-row__actions">
                 <span
                   v-if="job.lastRunStatus === 'waiting_for_approval'"
                   class="needs-you"
                 >
                   Needs you
                 </span>
+                <label
+                  class="job-toggle"
+                  :class="{ 'is-busy': isJobToggleBusy(job) }"
+                  @click.stop
+                >
+                  <input
+                    type="checkbox"
+                    class="job-toggle__input"
+                    :checked="isJobEnabled(job)"
+                    :disabled="!canToggle(job) || isJobToggleBusy(job)"
+                    :aria-label="
+                      isJobEnabled(job) ? `Pause ${job.name}` : `Enable ${job.name}`
+                    "
+                    @change="
+                      handleJobToggle(
+                        job,
+                        ($event.target as HTMLInputElement).checked,
+                      )
+                    "
+                  />
+                  <span class="job-toggle__track" aria-hidden="true" />
+                </label>
                 <button
                   type="button"
                   class="icon-button"
@@ -1280,17 +1335,33 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: grid;
 }
 
-.starter-row,
-.job-row {
+.jobs-panel {
+  min-width: 0;
+}
+
+.job-list {
+  gap: 8px;
+}
+
+.starter-row {
   display: grid;
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--ui-border);
 }
 
-.starter-row:last-child,
-.job-row:last-child {
+.starter-row:last-child {
   border-bottom: 0;
+}
+
+.job-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  background: var(--ui-surface);
 }
 
 .starter-row {
@@ -1312,12 +1383,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   line-height: 1.3;
 }
 
-.job-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-}
-
 .job-row--selected {
+  border-color: color-mix(in oklab, var(--ui-accent) 34%, var(--ui-border));
   background: color-mix(in oklab, var(--ui-accent-soft) 42%, var(--ui-surface));
 }
 
@@ -1325,24 +1392,38 @@ function messageFromUnknown(err: unknown, fallback: string) {
   opacity: 0.76;
 }
 
-.job-row-main {
-  display: grid;
-  gap: 8px;
+.job-row__emoji {
+  flex-shrink: 0;
+  font-size: 21px;
+  line-height: 1;
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+.job-row__main {
+  flex: 1;
   min-width: 0;
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  padding: 0;
 }
 
-.job-row-main:focus-visible,
+.job-row__main:focus-visible,
 button:focus-visible {
   outline: 2px solid var(--ui-accent);
   outline-offset: 2px;
 }
 
-.job-title-block {
+.job-row__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.job-row__title-line {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1350,30 +1431,84 @@ button:focus-visible {
   min-width: 0;
 }
 
-.job-title-block strong {
+.job-row__title-line strong {
   overflow-wrap: anywhere;
-  font-size: 15px;
-  line-height: 1.35;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.3;
 }
 
-.job-meta span {
+.job-row__meta {
   color: var(--ui-text-muted);
-  font-size: 13px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
-.job-meta {
-  display: grid;
-  grid-template-columns: minmax(140px, 1.2fr) minmax(120px, 1fr);
-  gap: 10px;
-}
-
-.job-row-side {
-  display: flex;
-  flex-wrap: wrap;
+.job-row__actions {
+  display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.job-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.job-toggle.is-busy {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.job-toggle__input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.job-toggle__track {
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--ui-border);
+  position: relative;
+  transition: background 0.2s ease;
+}
+
+.job-toggle__track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--ui-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: transform 0.2s ease;
+}
+
+.job-toggle__input:checked + .job-toggle__track {
+  background: var(--ui-accent);
+}
+
+.job-toggle__input:checked + .job-toggle__track::after {
+  transform: translateX(18px);
+}
+
+.job-toggle__input:focus-visible + .job-toggle__track {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+.job-toggle__input:disabled + .job-toggle__track {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .icon-button {
@@ -1753,24 +1888,18 @@ button:disabled {
   }
 
   .job-row {
-    grid-template-columns: minmax(0, 1fr);
-    position: relative;
-    padding-right: 56px;
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
-  .job-row-side {
-    position: absolute;
-    top: 14px;
-    right: 16px;
-    flex-direction: column;
-    align-items: flex-end;
-    justify-content: flex-start;
-    gap: 6px;
+  .job-row__main {
+    flex-basis: calc(100% - 33px);
   }
 
-  .job-meta {
-    grid-template-columns: 1fr;
-    gap: 4px;
+  .job-row__actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding-top: 2px;
   }
 
   .detail-facts {
