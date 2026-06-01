@@ -28,6 +28,12 @@ import {
   updateAssistantJob,
 } from "./assistant-jobs";
 import {
+  BOOKING_REMINDER_QUEUE_NAME,
+  dispatchDueBookingReminders,
+  processBookingReminderBatch,
+  scheduleBookingRemindersForBooking,
+} from "./booking-reminders";
+import {
   EmailProviderInputError,
   getEmailProviderSettings,
   sendEmailProviderTest,
@@ -175,6 +181,7 @@ import { searchLocationQuery } from "./location-search";
 import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "./site-generator";
 import type {
   AssistantJobEventQueueMessage,
+  BookingReminderQueueMessage,
   DbAgentChannelConnection,
   DbAgentChannelEvent,
   DbBooking,
@@ -348,6 +355,11 @@ type CoreBookIntent = NonNullable<Me3SiteProfile["intents"]>["book"] & {
   bufferTime?: number;
   offers?: CoreBookingOffer[];
   availability?: CoreBookingAvailability;
+  reminders?: {
+    enabled?: boolean;
+    reminder24h?: boolean;
+    reminder2h?: boolean;
+  };
   bookingTypes?: Array<{
     type?: string;
     offers?: CoreBookingOffer[];
@@ -614,6 +626,17 @@ app.post("/api/book/:username/free", async (c) => {
     .bind(bookingId)
     .first<DbBooking>();
 
+  if (booking) {
+    scheduleBookingRemindersForBooking(c.env, {
+      booking,
+      bookingTitle: offer.title,
+      timezone: resolveTimeZone(offer.availability.timezone),
+      reminders: bookIntent.reminders,
+    }).catch((error) => {
+      console.error("Failed to schedule booking reminders:", error);
+    });
+  }
+
   return c.json({ ok: true, booking: booking ? serializeBooking(booking) : { id: bookingId } });
 });
 
@@ -870,6 +893,20 @@ app.post("/api/book/:username/complete-checkout", async (c) => {
   )
     .bind(bookingId)
     .first<DbBooking>();
+
+  if (booking) {
+    const profile = await loadSiteProfileForCommerce(c.env, site);
+    const bookIntent = profile?.intents?.book as CoreBookIntent | undefined;
+    const offer = bookIntent ? resolveOneToOneBookingOffer(bookIntent, offerId) : null;
+    scheduleBookingRemindersForBooking(c.env, {
+      booking,
+      bookingTitle: offer?.title || "Book a session",
+      timezone: resolveTimeZone(offer?.availability.timezone),
+      reminders: bookIntent?.reminders,
+    }).catch((error) => {
+      console.error("Failed to schedule booking reminders:", error);
+    });
+  }
 
   return c.json({ ok: true, booking: booking ? serializeBooking(booking) : { id: bookingId } });
 });
@@ -7558,8 +7595,20 @@ const worker = {
   email(message: ForwardableEmailMessageLike, env: Env, _ctx?: ExecutionContext) {
     return handleInboundEmail(message, env);
   },
-  queue(batch: MessageBatch<AssistantJobEventQueueMessage>, env: Env) {
-    return handleAssistantJobQueueBatch(batch, env);
+  scheduled(_event: ScheduledEvent, env: Env, _ctx?: ExecutionContext) {
+    return dispatchDueBookingReminders(env).then(() => undefined);
+  },
+  queue(
+    batch: MessageBatch<AssistantJobEventQueueMessage | BookingReminderQueueMessage>,
+    env: Env,
+  ) {
+    if (batch.queue === BOOKING_REMINDER_QUEUE_NAME || batch.queue.includes("booking-reminders")) {
+      return processBookingReminderBatch(
+        batch as MessageBatch<BookingReminderQueueMessage>,
+        env,
+      );
+    }
+    return handleAssistantJobQueueBatch(batch as MessageBatch<AssistantJobEventQueueMessage>, env);
   },
 };
 

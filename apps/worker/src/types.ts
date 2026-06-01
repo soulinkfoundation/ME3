@@ -5,6 +5,7 @@ export interface Env {
   ASSETS?: Fetcher;
   SITE_ASSETS?: R2Bucket;
   ASSISTANT_JOB_EVENTS?: Queue<AssistantJobEventQueueMessage>;
+  BOOKING_REMINDER_QUEUE?: Queue<BookingReminderQueueMessage>;
 
   ENVIRONMENT?: string;
   CORE_WEB_ORIGIN?: string;
@@ -56,6 +57,10 @@ export interface Env {
 export type AssistantJobEventQueueMessage = {
   eventId: string;
   userId: string;
+};
+
+export type BookingReminderQueueMessage = {
+  reminderId: string;
 };
 
 export interface OwnerProfile {
@@ -117,6 +122,28 @@ export interface DbBooking {
   payment_status: "pending" | "succeeded" | "failed" | "not_required" | null;
   is_free_booking: number;
   paid_at: string | null;
+}
+
+export interface DbBookingReminder {
+  id: string;
+  booking_id: string;
+  site_id: string;
+  user_id: string;
+  reminder_type: "booking_reminder_24h" | "booking_reminder_2h";
+  channel: "email" | "telegram" | "soulink";
+  status: "scheduled" | "queued" | "processing" | "sent" | "cancelled" | "failed" | "skipped";
+  scheduled_for: string;
+  queued_at: string | null;
+  sent_at: string | null;
+  cancelled_at: string | null;
+  failed_at: string | null;
+  dead_lettered_at: string | null;
+  attempt_count: number;
+  payload_json: string;
+  provider_message_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DbUserReminder {

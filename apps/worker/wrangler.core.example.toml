@@ -29,6 +29,10 @@ bucket_name = "me3-site-assets"
 binding = "ASSISTANT_JOB_EVENTS"
 queue = "me3-assistant-job-events"
 
+[[queues.producers]]
+binding = "BOOKING_REMINDER_QUEUE"
+queue = "me3-booking-reminders"
+
 [[queues.consumers]]
 queue = "me3-assistant-job-events"
 max_batch_size = 10
@@ -37,10 +41,26 @@ max_retries = 5
 dead_letter_queue = "me3-assistant-job-events-dlq"
 
 [[queues.consumers]]
+queue = "me3-booking-reminders"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "me3-booking-reminders-dlq"
+
+[[queues.consumers]]
 queue = "me3-assistant-job-events-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
 max_retries = 0
+
+[[queues.consumers]]
+queue = "me3-booking-reminders-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 0
+
+[triggers]
+crons = ["*/15 * * * *"]
 
 # Cloudflare Email Service sender binding. Account -> Email stores the sender
 # address; this deploy-time binding lets the Worker call env.EMAIL.send().
