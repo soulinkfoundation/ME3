@@ -1584,10 +1584,11 @@ async function appendMissionPluginActivity(
     relatedId?: string | null;
   },
 ) {
+  const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT INTO mission_plugin_activity
-       (id, user_id, plugin_id, activity_type, title, summary, status, related_id, metadata_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}')`,
+       (id, user_id, plugin_id, activity_type, title, summary, status, related_id, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)`,
   )
     .bind(
       crypto.randomUUID(),
@@ -1598,6 +1599,7 @@ async function appendMissionPluginActivity(
       input.summary || null,
       input.status || null,
       input.relatedId || null,
+      now,
     )
     .run();
 }
@@ -1773,7 +1775,7 @@ function serializePluginActivity(row: MissionPluginActivityRow) {
     status: row.status,
     relatedId: row.related_id,
     metadata: parseJsonRecord(row.metadata_json),
-    createdAt: row.created_at,
+    createdAt: normalizeDbDateTime(row.created_at),
   };
 }
 
@@ -2126,6 +2128,14 @@ function normalizeSourceStatus(value: unknown): MissionContextSourceRow["status"
     return value;
   }
   return null;
+}
+
+function normalizeDbDateTime(value: string | null): string | null {
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return `${value.replace(" ", "T")}Z`;
+  }
+  return value;
 }
 
 function parseJsonRecord(raw: string | null): Record<string, unknown> {

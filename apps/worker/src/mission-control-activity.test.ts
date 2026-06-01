@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearMissionActivity } from "./mission-control";
+import { clearMissionActivity, listMissionPluginActivity } from "./mission-control";
 import type { Env } from "./types";
 
 describe("Mission Control activity", () => {
@@ -25,11 +25,32 @@ describe("Mission Control activity", () => {
     expect(agentRuns).toEqual([{ id: "run-2", user_id: "other" }]);
     expect(pluginActivity).toEqual([{ id: "activity-2", user_id: "other" }]);
   });
+
+  it("serializes SQLite UTC timestamps as ISO timestamps", async () => {
+    const env = createActivityEnv([], [
+      {
+        id: "activity-1",
+        user_id: "owner",
+        plugin_id: "me3.assistant-jobs",
+        activity_type: "assistant_job.review_packet",
+        title: "Result: Invoice and Receipt Triage",
+        summary: "Created a Mission Control result.",
+        status: "succeeded",
+        related_id: "run-1",
+        metadata_json: "{}",
+        created_at: "2026-06-01 13:20:00",
+      },
+    ]);
+
+    const activity = await listMissionPluginActivity(env, "owner");
+
+    expect(activity[0]?.createdAt).toBe("2026-06-01T13:20:00Z");
+  });
 });
 
 function createActivityEnv(
   agentRuns: Array<{ id: string; user_id: string }>,
-  pluginActivity: Array<{ id: string; user_id: string }>,
+  pluginActivity: Array<Record<string, unknown> & { id: string; user_id: string }>,
 ) {
   const db = {
     prepare(sql: string) {
@@ -43,6 +64,11 @@ function createActivityEnv(
                 if (rows[index]?.user_id === userId) rows.splice(index, 1);
               }
               return { success: true, meta: { changes: before - rows.length } };
+            },
+            async all<T>() {
+              return {
+                results: pluginActivity.filter((row) => row.user_id === userId) as T[],
+              };
             },
           };
         },

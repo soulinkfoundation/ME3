@@ -1565,11 +1565,12 @@ async function createAssistantJobMissionActivity(
       : input.job.purpose) ||
     null;
   const status = missionTextInput(input.action, "status") || "succeeded";
+  const now = new Date().toISOString();
 
   await env.DB.prepare(
     `INSERT OR IGNORE INTO mission_plugin_activity
-       (id, user_id, plugin_id, activity_type, title, summary, status, related_id, metadata_json)
-     VALUES (?, ?, 'me3.assistant-jobs', ?, ?, ?, ?, ?, ?)`,
+       (id, user_id, plugin_id, activity_type, title, summary, status, related_id, metadata_json, created_at)
+     VALUES (?, ?, 'me3.assistant-jobs', ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       activityId,
@@ -1580,6 +1581,7 @@ async function createAssistantJobMissionActivity(
       status,
       input.run.id,
       stringifyJson(missionOutputMetadata(input, generated.metadata)),
+      now,
     )
     .run();
 
@@ -2578,10 +2580,11 @@ async function appendAssistantJobMissionActivity(
   },
 ) {
   try {
+    const now = new Date().toISOString();
     await env.DB.prepare(
       `INSERT INTO mission_plugin_activity
-         (id, user_id, plugin_id, activity_type, title, summary, status, related_id, metadata_json)
-       VALUES (?, ?, 'me3.assistant-jobs', ?, ?, ?, ?, ?, ?)`,
+         (id, user_id, plugin_id, activity_type, title, summary, status, related_id, metadata_json, created_at)
+       VALUES (?, ?, 'me3.assistant-jobs', ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         crypto.randomUUID(),
@@ -2592,6 +2595,7 @@ async function appendAssistantJobMissionActivity(
         input.status || null,
         input.relatedId || null,
         stringifyJson(input.metadata || {}),
+        now,
       )
       .run();
   } catch {
