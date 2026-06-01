@@ -3,6 +3,7 @@ import { AGENT_CHAT_RUNTIME } from "./agent-chat";
 import { CALENDAR_RUNTIME } from "./calendar";
 import { ACCOUNTS_PLUGIN_ID } from "./accounts";
 import { LANDING_PAGES_RUNTIME } from "@me3-core/plugin-landing-pages";
+import { LOCAL_EXECUTOR_PLUGIN_ID, LOCAL_EXECUTOR_RUNTIME } from "@me3-core/plugin-local-executor";
 import { MISSION_CONTROL_RUNTIME } from "@me3-core/plugin-mission-control";
 import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
 
@@ -827,11 +828,131 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
   ],
 };
 
+const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
+  schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
+  id: LOCAL_EXECUTOR_PLUGIN_ID,
+  name: "Local Executor",
+  version: "0.1.0",
+  description:
+    "Optional first-party local runner for bounded owner-approved work on paired local computers.",
+  trustTier: "first_party",
+  distribution: "workspace_package",
+  installMode: "enabled_by_owner_config",
+  defaultEnabled: false,
+  implementationStatus: LOCAL_EXECUTOR_RUNTIME.bundled ? "bundled" : "catalog_only",
+  capabilityIds: ["local_executor.run"],
+  permissions: [
+    {
+      id: "local_executor.pair",
+      label: "Pair local runners",
+    },
+    {
+      id: "local_executor.policies.manage",
+      label: "Manage local project policies",
+    },
+    {
+      id: "local_executor.runs.manage",
+      label: "Queue and review local runner jobs",
+    },
+  ],
+  routes: [
+    {
+      id: "local-executor.status.api",
+      path: "/api/local-executor/status",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "local-executor.pairing.api",
+      path: "/api/local-executor/pairing/start",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
+      id: "local-executor.policies.api",
+      path: "/api/local-executor/policies",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "local-executor.policy.api",
+      path: "/api/local-executor/policies/:id",
+      methods: ["PATCH", "DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "local-executor.runs.api",
+      path: "/api/local-executor/runs",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
+      id: "local-executor.run.api",
+      path: "/api/local-executor/runs/:id",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "local-executor.audit.api",
+      path: "/api/local-executor/audit",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "local-executor.daemon.api",
+      path: "/api/local-executor/daemon/*",
+      methods: ["POST"],
+      auth: "daemon_token",
+    },
+  ],
+  uiSlots: [
+    {
+      id: "local-executor.assistant.starter",
+      slot: "assistant.jobs.starters",
+      label: "Run a coding task",
+    },
+    {
+      id: "local-executor.mission-control.setup",
+      slot: "mission-control.setup",
+      label: "Local Executor setup",
+    },
+    {
+      id: "local-executor.account.setup",
+      slot: "account.plugins.setup",
+      label: "Local Executor setup",
+    },
+  ],
+  agentTools: [
+    {
+      id: "local_executor.run",
+      label: "Queue a bounded local runner job",
+      sideEffect: "local_shell",
+      approvalMode: "approval_required",
+    },
+  ],
+  secrets: [],
+  migrations: [
+    {
+      id: "local-executor.0025",
+      path: "./apps/worker/migrations/0025_local_executor_plugin.sql",
+      destructive: false,
+    },
+  ],
+  queuesAndCrons: [],
+  notes: [
+    "Bundled through @me3-core/plugin-local-executor as an optional first-party Core package.",
+    "The plugin owns runner pairing, project policies, queued local runs, daemon token auth, and audit.",
+    "Mission Control remains the canonical owner-facing approval, result, history, and activity surface.",
+    "OpenCode is the default provider preset, with Codex and Claude presets available for local CLI users.",
+  ],
+};
+
 export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   AGENT_CHAT_PLUGIN,
   MISSION_CONTROL_PLUGIN,
   ACCOUNTS_PLUGIN,
   CALENDAR_PLUGIN,
+  LOCAL_EXECUTOR_PLUGIN,
   LANDING_PAGES_PLUGIN,
   SOCIAL_PUBLISHING_PLUGIN,
 ];

@@ -150,6 +150,9 @@ importers:
       '@me3-core/plugin-landing-pages':
         specifier: workspace:*
         version: link:../../packages/landing-pages
+      '@me3-core/plugin-local-executor':
+        specifier: workspace:*
+        version: link:../../packages/local-executor
       '@me3-core/plugin-mission-control':
         specifier: workspace:*
         version: link:../../packages/mission-control
@@ -224,6 +227,15 @@ importers:
         version: 2.1.9(@types/node@22.19.18)(happy-dom@14.12.3)
 
   packages/landing-pages:
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.19.18)(happy-dom@14.12.3)
+
+  packages/local-executor:
     devDependencies:
       typescript:
         specifier: ^5.3.3

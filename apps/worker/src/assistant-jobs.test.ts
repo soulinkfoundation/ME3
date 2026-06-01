@@ -213,6 +213,26 @@ describe("assistant jobs persistence", () => {
     expect(created.validation.status).toBe("valid");
   });
 
+  it("shows the Local Executor starter only after the plugin is active", async () => {
+    const missingEnv = createAssistantJobsEnv();
+    const missingRecipes = await listAssistantJobRecipes(missingEnv, "owner");
+    expect(missingRecipes.recipes.map((recipe) => recipe.id)).not.toContain("local-coding-task");
+
+    const activeEnv = createAssistantJobsEnv({
+      pluginInstallations: [
+        {
+          plugin_id: "me3.local-executor",
+          enabled: 1,
+          status: "installed",
+        },
+      ],
+    });
+    const activeRecipes = await listAssistantJobRecipes(activeEnv, "owner");
+    const localRecipe = activeRecipes.recipes.find((recipe) => recipe.id === "local-coding-task");
+    expect(localRecipe).toBeTruthy();
+    expect(localRecipe?.state).toBe("needs_setup");
+  });
+
   it("triages mailbox messages into a useful Mission Control result", async () => {
     const env = createAssistantJobsEnv({
       mailbox: activeMailboxRow(),
@@ -1516,9 +1536,10 @@ class FakeStatement {
         | null;
     }
     if (sql.includes("FROM plugin_installations")) {
+      const requestedPluginId = values[0] || (sql.includes("me3.calendar") ? "me3.calendar" : null);
       return (
         this.state.pluginInstallations.find(
-          (installation) => installation.plugin_id === "me3.calendar",
+          (installation) => installation.plugin_id === requestedPluginId,
         ) || null
       ) as T | null;
     }

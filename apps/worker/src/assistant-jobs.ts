@@ -16,6 +16,7 @@ import {
   type AssistantJobStarterRecipe,
   type AssistantJobContextResult,
 } from "@me3-core/assistant-jobs";
+import { LOCAL_EXECUTOR_PLUGIN_ID } from "@me3-core/plugin-local-executor";
 import type {
   Me3AgentContextCalendarEvent,
   Me3AgentContextPrivateMemory,
@@ -25,6 +26,12 @@ import type {
   Me3AgentContextTask,
 } from "@me3/knowledge";
 import type { AssistantJobEventQueueMessage, Env } from "./types";
+import {
+  LocalExecutorInputError,
+  createLocalExecutorRunFromAssistantJobAction,
+  isLocalExecutorSetupReady,
+} from "./local-executor";
+import { isCorePluginEnabled } from "./plugins";
 
 export class AssistantJobsInputError extends Error {
   constructor(
@@ -384,9 +391,14 @@ type UpdateAssistantJobIngressEventBody = {
 };
 
 export async function listAssistantJobRecipes(env: Env, userId: string) {
-  const readySetupRequirements = await getAssistantJobReadySetupRequirements(env, userId);
+  const [readySetupRequirements, localExecutorEnabled] = await Promise.all([
+    getAssistantJobReadySetupRequirements(env, userId),
+    isCorePluginEnabled(env, LOCAL_EXECUTOR_PLUGIN_ID).catch(() => false),
+  ]);
   return {
-    recipes: ASSISTANT_JOB_STARTER_RECIPES.map((recipe) => {
+    recipes: ASSISTANT_JOB_STARTER_RECIPES.filter(
+      (recipe) => recipe.id !== "local-coding-task" || localExecutorEnabled,
+    ).map((recipe) => {
       const serialized = serializeRecipe(recipe);
       const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(recipe), {
         readySetupRequirements,
@@ -405,14 +417,16 @@ export async function listAssistantJobRecipes(env: Env, userId: string) {
 
 async function getAssistantJobReadySetupRequirements(env: Env, userId: string) {
   const ready = new Set<string>();
-  const [ownerConnection, emailReady, calendarReady] = await Promise.all([
+  const [ownerConnection, emailReady, calendarReady, localExecutorReady] = await Promise.all([
     getActiveOwnerNotificationConnection(env, userId),
     isEmailSetupReady(env, userId),
     isCalendarSetupReady(env),
+    isLocalExecutorSetupReady(env, userId),
   ]);
   if (ownerConnection) ready.add("owner_notifications");
   if (emailReady) ready.add("email");
   if (calendarReady) ready.add("calendar");
+  if (localExecutorReady) ready.add("local_executor");
   return Array.from(ready);
 }
 
@@ -1176,6 +1190,36 @@ async function executeAssistantJobAction(
       status: "blocked",
       errorMessage: "Capability is forbidden by Assistant Job policy",
     });
+  }
+
+  if (capability.id === "local_executor.run") {
+    try {
+      const localRun = await createLocalExecutorRunFromAssistantJobAction(env, input.userId, {
+        job: input.job,
+        run: input.run,
+        draft: input.draft,
+        action: input.action,
+        ownerDirected: input.run.trigger_kind === "manual",
+      });
+      return insertAssistantJobActionResult(env, {
+        runId: input.run.id,
+        actionId: input.action.id,
+        capabilityId: capability.id,
+        idempotencyKey,
+        status: localRun.approvalId ? "pending_approval" : "succeeded",
+        approvalId: localRun.approvalId,
+        externalRef: `local-executor-run:${localRun.run.id}`,
+      });
+    } catch (error) {
+      return insertAssistantJobActionResult(env, {
+        runId: input.run.id,
+        actionId: input.action.id,
+        capabilityId: capability.id,
+        idempotencyKey,
+        status: error instanceof LocalExecutorInputError && error.status === 409 ? "blocked" : "failed",
+        errorMessage: error instanceof Error ? error.message : "Local Executor run could not be queued",
+      });
+    }
   }
 
   if (approvalMode === "approval_required") {

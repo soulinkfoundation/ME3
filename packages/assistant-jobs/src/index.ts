@@ -703,6 +703,31 @@ export const ASSISTANT_JOB_CAPABILITIES = [
     auditEventKind: "calendar_event_created",
   }),
   capability({
+    id: "local_executor.run",
+    owner: "plugin",
+    pluginId: "me3.local-executor",
+    label: "Run on local computer",
+    summary: "Queue one bounded run on a paired local runner.",
+    category: "local",
+    sideEffect: "local_shell",
+    approvalMode: "approval_required",
+    eventSafe: false,
+    manualRunSafe: true,
+    requiresSetup: ["local_executor"],
+    inputSchema: {
+      type: "object",
+      required: ["prompt"],
+      properties: {
+        projectPolicyId: "Local Executor project policy id.",
+        prompt: "Bounded task prompt for the local runner.",
+      },
+    },
+    userFacingReadSummary: "Reads the configured project policy and the owner-provided task.",
+    userFacingWriteSummary:
+      "Runs a configured local executor command and records results in Mission Control.",
+    auditEventKind: "local_executor_run_requested",
+  }),
+  capability({
     id: "daemon.metadata.read",
     owner: "plugin",
     pluginId: "me3.local-daemon",
@@ -923,6 +948,55 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
           "none",
           {
             messageTemplate: DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE,
+          },
+        ),
+      ],
+    }),
+  },
+  {
+    id: "local-coding-task",
+    name: "Run a coding task",
+    outcome:
+      "Run a bounded local coding agent on an approved project and record the result in Mission Control.",
+    firstVersion: "core_v1",
+    state: "needs_setup",
+    requiredCapabilityIds: [
+      "mission.project.read",
+      "local_executor.run",
+      "mission.activity.create",
+    ],
+    optionalCapabilityIds: ["message.owner.notify"],
+    recommendedSkillIds: [],
+    requiredSkillIds: [],
+    defaultDraft: draft({
+      name: "Run a coding task",
+      purpose: "Run a bounded local coding agent on an approved project.",
+      recipeId: "local-coding-task",
+      trigger: { kind: "manual" },
+      destination: missionDestination("activity", false),
+      actions: [
+        action("read-project", "mission.project.read", "Read project policy", "none"),
+        action(
+          "run-local-executor",
+          "local_executor.run",
+          "Run on local computer",
+          "approval_required",
+          {
+            projectPolicyId: null,
+            prompt:
+              "Use the approved project policy to make the requested coding change, then report status, changed files, quality gates, and artifacts. Do not commit or push unless the project policy explicitly allows it.",
+          },
+        ),
+        action(
+          "create-activity",
+          "mission.activity.create",
+          "Record Local Executor result",
+          "none",
+          {
+            activityType: "local_executor.run",
+            title: "Local Executor run queued",
+            summary: "A bounded local coding run was queued.",
+            status: "queued",
           },
         ),
       ],

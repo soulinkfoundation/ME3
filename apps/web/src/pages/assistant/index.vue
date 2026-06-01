@@ -170,6 +170,7 @@ const dailyBriefingVariables = [
 const suggestedRecipeOrder = [
   "daily-briefing",
   "weekly-review",
+  "local-coding-task",
   "email-triage",
   "invoice-receipt-triage",
 ];
@@ -591,6 +592,10 @@ function setupMessageForJob(job: AssistantJob) {
     .replace(
       /^Missing setup requirement:\s*owner_notifications\.?$/i,
       "Notifications setup is needed.",
+    )
+    .replace(
+      /^Missing setup requirement:\s*local_executor\.?$/i,
+      "Local Executor setup is needed.",
     );
 }
 
