@@ -270,7 +270,7 @@ type ProjectBoardStatus = ProjectBoardColumn["id"];
 
 const route = useRoute();
 const router = useRouter();
-const { toastSuccess } = useAppToast();
+const { toastFromUnknown, toastSuccess } = useAppToast();
 
 const basePrimarySections: PrimaryMissionSection[] = ["today", "projects"];
 const settingsSections: SettingsMissionSection[] = [
@@ -325,6 +325,7 @@ const daemon = ref<MissionDaemonStatus | null>(null);
 const activity = ref<MissionActivity[]>([]);
 const loading = ref(false);
 const error = ref("");
+const clearingActivity = ref(false);
 const captureText = ref("");
 const captureType = ref<MissionCaptureType>("task");
 const manualCaptureType = ref(false);
@@ -591,6 +592,28 @@ function applyOverview(response: MissionOverviewResponse) {
     selectedProjectDetailId.value = projects.value[0]?.id || "";
   }
   void loadMemoryAndSources();
+}
+
+async function clearActivity() {
+  if (activityItems.value.length === 0 || clearingActivity.value) return;
+  const confirmed = window.confirm(
+    "Clear Mission Control Activity? This removes run and plugin activity history from this view.",
+  );
+  if (!confirmed) return;
+
+  clearingActivity.value = true;
+  try {
+    await api.delete<{ cleared: { agentRuns: number; pluginActivity: number } }>(
+      "/mission-control/activity",
+    );
+    recentRuns.value = [];
+    activity.value = [];
+    toastSuccess("Activity cleared");
+  } catch (e) {
+    toastFromUnknown(e, "Activity could not be cleared");
+  } finally {
+    clearingActivity.value = false;
+  }
 }
 
 async function loadMemoryAndSources() {
@@ -2499,7 +2522,17 @@ onBeforeUnmount(() => {
             <h1>Activity</h1>
             <p>Approvals, runs, and Mission Control updates.</p>
           </div>
-          <span>{{ activityItems.length }}</span>
+          <div class="activity-header__actions">
+            <button
+              type="button"
+              class="text-button text-button--danger"
+              :disabled="activityItems.length === 0 || clearingActivity"
+              @click="clearActivity"
+            >
+              {{ clearingActivity ? "Clearing" : "Clear activity" }}
+            </button>
+            <span>{{ activityItems.length }}</span>
+          </div>
         </div>
         <div v-if="activityItems.length === 0" class="empty-row">No activity yet.</div>
         <article v-for="item in activityItems" :key="item.id" class="detail-row activity-row">
@@ -3267,6 +3300,13 @@ onBeforeUnmount(() => {
   margin: 3px 0 0;
   color: var(--ui-text-muted);
   font-size: 13px;
+}
+
+.activity-header__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
 }
 
 .capture-item {

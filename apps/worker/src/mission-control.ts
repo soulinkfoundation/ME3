@@ -957,6 +957,19 @@ export async function listMissionPluginActivity(env: Env, userId: string, limitI
   return (rows.results || []).map(serializePluginActivity);
 }
 
+export async function clearMissionActivity(env: Env, userId: string) {
+  const [agentRuns, pluginActivity] = await env.DB.batch([
+    env.DB.prepare(`DELETE FROM mission_agent_runs WHERE user_id = ?`).bind(userId),
+    env.DB.prepare(`DELETE FROM mission_plugin_activity WHERE user_id = ?`).bind(userId),
+  ]);
+  return {
+    cleared: {
+      agentRuns: agentRuns.meta?.changes || 0,
+      pluginActivity: pluginActivity.meta?.changes || 0,
+    },
+  };
+}
+
 export async function listMissionMemory(env: Env, userId: string, limitInput = 50) {
   const limit = Math.max(1, Math.min(limitInput, 100));
   const rows = await env.DB.prepare(

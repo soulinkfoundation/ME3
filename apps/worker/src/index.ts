@@ -79,6 +79,7 @@ import {
   approveMissionMemory,
   archiveMissionCapture,
   archiveMissionTask,
+  clearMissionActivity,
   createMissionCapture,
   createMissionContextSource,
   createMissionMemory,
@@ -2100,6 +2101,19 @@ app.get("/api/mission-control/plugin-activity", async (c) => {
 
   try {
     return c.json({ activity: await listMissionPluginActivity(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.delete("/api/mission-control/activity", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await clearMissionActivity(c.env, ownerId));
   } catch (error) {
     return missionControlErrorResponse(c, error);
   }
