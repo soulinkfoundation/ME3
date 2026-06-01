@@ -1473,12 +1473,31 @@ button:disabled {
     padding-bottom: 24px;
   }
 
-  .starter-row,
-  .job-row {
-    grid-template-columns: minmax(0, 1fr);
+  .starter-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 0;
+  }
+
+  .starter-main {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .starter-main p {
+    margin-top: 4px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .starter-row :deep(.me3-btn) {
+    flex-shrink: 0;
   }
 
   .job-row {
+    grid-template-columns: minmax(0, 1fr);
     position: relative;
     padding-right: 56px;
   }
@@ -1504,12 +1523,37 @@ button:disabled {
   }
 
   .assistant-modal {
-    align-items: stretch;
-    padding: 10px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0;
   }
 
   .assistant-modal__dialog {
-    max-height: calc(100vh - 20px);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-height: min(92dvh, 100%);
+    align-self: stretch;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+    border-radius: var(--ui-radius-lg) var(--ui-radius-lg) 0 0;
+  }
+
+  .assistant-modal__header {
+    flex-shrink: 0;
+    align-items: center;
+  }
+
+  .assistant-modal__header h2 {
+    font-size: 16px;
+  }
+
+  .starter-list {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: auto;
   }
 }
 </style>
