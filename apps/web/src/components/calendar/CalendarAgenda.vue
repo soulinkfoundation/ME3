@@ -528,11 +528,16 @@ watch(
 
 .calendar-day {
   display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
-  gap: 14px;
-  min-height: 84px;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-height: 0;
   padding: 12px 0;
   border-bottom: 1px solid var(--color-border);
+}
+
+.calendar-day:has(.calendar-day-empty) {
+  align-items: center;
 }
 
 .calendar-day-head {
@@ -542,28 +547,28 @@ watch(
 .calendar-date-rail {
   display: grid;
   justify-items: center;
-  gap: 2px;
-  padding-top: 2px;
+  gap: 1px;
+  padding-top: 0;
 }
 
 .calendar-date-rail span {
-  font-size: 12px;
-  font-weight: 750;
-  letter-spacing: 0.05em;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--color-text-muted);
 }
 
 .calendar-date-rail strong {
   color: var(--color-text);
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 650;
-  line-height: 1.1;
+  line-height: 1;
 }
 
 .calendar-items {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   align-content: start;
 }
 
@@ -589,9 +594,12 @@ watch(
 }
 
 .calendar-day-empty {
-  margin: 5px 0 0;
+  margin: 0;
+  width: 100%;
   color: var(--color-text-muted);
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.3;
+  text-align: left;
 }
 
 .calendar-item-time {
@@ -742,13 +750,21 @@ watch(
   }
 
   .calendar-day {
-    grid-template-columns: 58px minmax(0, 1fr);
-    gap: 12px;
-    min-height: 78px;
+    grid-template-columns: 50px minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px 0;
+  }
+
+  .calendar-date-rail span {
+    font-size: 9px;
   }
 
   .calendar-date-rail strong {
-    font-size: 22px;
+    font-size: 16px;
+  }
+
+  .calendar-day-empty {
+    font-size: 11px;
   }
 
   .calendar-item-time {

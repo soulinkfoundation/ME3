@@ -3051,7 +3051,7 @@ onBeforeUnmount(() => {
   }
 
   .main {
-    padding: 16px;
+    padding: 0;
   }
 
   .cal-toolbar {
