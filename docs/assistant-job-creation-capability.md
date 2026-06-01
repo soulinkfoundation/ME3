@@ -214,7 +214,10 @@ Assistant:
 
 - Checks whether Email is connected and ready.
 - Drafts a scheduled job scoped to the connected mailbox.
-- Creates a Mission Control result and optional draft replies.
+- Creates a Mission Control result from mailbox messages.
+- Current implemented path reads active inbox messages, writes mailbox summaries/labels, and
+  surfaces message/thread counts in Mission Control run and activity history.
+- Optional draft replies are still pending.
 - Does not send replies without approval.
 - If Email is not ready, offers a needs-setup draft.
 
