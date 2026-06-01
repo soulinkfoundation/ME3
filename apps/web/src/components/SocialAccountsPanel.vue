@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter, type LocationQueryRaw } from "vue-router";
-import { useSocialStore, type SocialAccountRow } from "../stores/social";
+import {
+  useSocialStore,
+  type SocialAccountRow,
+  type SocialProviderSetting,
+  type SocialStatus,
+} from "../stores/social";
 import UiIcon from "./UiIcon.vue";
 
 type SupportedPlatform =
@@ -20,8 +25,16 @@ const route = useRoute();
 const router = useRouter();
 
 const accounts = ref<SocialAccountRow[]>([]);
+const status = ref<SocialStatus | null>(null);
+const providerSettings = ref<SocialProviderSetting[]>([]);
 const busyPlatform = ref<SupportedPlatform | null>(null);
+const savingProvider = ref(false);
+const connectModalPlatform = ref<SupportedPlatform | null>(null);
 const localError = ref<string | null>(null);
+const providerDraft = ref({
+  clientId: "",
+  clientSecret: "",
+});
 
 const platforms: {
   id: SupportedPlatform;
@@ -107,9 +120,55 @@ const oauthErrorMessage = computed(() => {
   }
 });
 
+const modalPlatformLabel = computed(() => {
+  const platform = connectModalPlatform.value;
+  return platforms.find((item) => item.id === platform)?.label || "Social account";
+});
+
+const modalProviderSetting = computed(() =>
+  providerSettings.value.find(
+    (provider) => provider.providerId === connectModalPlatform.value,
+  ),
+);
+
+const hostedOAuthAvailable = computed(() => {
+  const platform = connectModalPlatform.value;
+  if (!platform || platform === "x") return false;
+  return Boolean(
+    status.value?.hostedOAuth.configured &&
+      status.value.hostedOAuth.platforms.includes(platform),
+  );
+});
+
+const ownAppReady = computed(() => Boolean(modalProviderSetting.value?.configured));
+
+const modalSummary = computed(() => {
+  if (connectModalPlatform.value === "x") {
+    return "X requires your own developer app and API credits. Add your app credentials, then connect your X account with OAuth.";
+  }
+  if (connectModalPlatform.value === "instagram") {
+    return hostedOAuthAvailable.value
+      ? "Use the ME3 managed Meta app to connect an Instagram professional account, or use your own Meta app credentials."
+      : "Connect Instagram with your own Meta app credentials. Publishing requires a professional account that can use Meta content publishing.";
+  }
+  if (connectModalPlatform.value === "linkedin") {
+    return hostedOAuthAvailable.value
+      ? "Use the ME3 managed LinkedIn app for the simplest connection, or use your own LinkedIn app credentials."
+      : "Connect LinkedIn with your own app credentials. The app needs Share on LinkedIn access.";
+  }
+  return "";
+});
+
 async function reloadAccounts() {
   try {
-    accounts.value = await social.fetchSocialAccounts();
+    const [nextStatus, nextAccounts, nextSettings] = await Promise.all([
+      social.fetchSocialStatus(),
+      social.fetchSocialAccounts(),
+      social.fetchProviderSettings(),
+    ]);
+    status.value = nextStatus;
+    accounts.value = nextAccounts;
+    providerSettings.value = nextSettings;
   } catch (error) {
     social.setErrorFromApi(error, "Failed to load connected social accounts");
     localError.value = social.error;
@@ -146,6 +205,64 @@ async function connect(platform: SupportedPlatform) {
     social.setErrorFromApi(error, "Could not start OAuth");
     localError.value = social.error;
     busyPlatform.value = null;
+  }
+}
+
+function openConnectModal(platform: SupportedPlatform) {
+  localError.value = null;
+  connectModalPlatform.value = platform;
+  const setting = providerSettings.value.find(
+    (provider) => provider.providerId === platform,
+  );
+  providerDraft.value = {
+    clientId: setting?.clientId || "",
+    clientSecret: "",
+  };
+}
+
+function closeConnectModal() {
+  if (busyPlatform.value || savingProvider.value) return;
+  connectModalPlatform.value = null;
+  providerDraft.value = { clientId: "", clientSecret: "" };
+}
+
+async function continueWithManagedApp() {
+  if (!connectModalPlatform.value) return;
+  await connect(connectModalPlatform.value);
+}
+
+async function continueWithOwnApp() {
+  if (!connectModalPlatform.value || savingProvider.value) return;
+  localError.value = null;
+  const platform = connectModalPlatform.value;
+  const current = modalProviderSetting.value;
+  const clientId = providerDraft.value.clientId.trim();
+  const clientSecret = providerDraft.value.clientSecret.trim();
+
+  if (!clientId) {
+    localError.value = "Client ID is required.";
+    return;
+  }
+  if (!clientSecret && !current?.configured) {
+    localError.value = "Client secret is required the first time you configure this app.";
+    return;
+  }
+
+  savingProvider.value = true;
+  try {
+    providerSettings.value = await social.updateProviderSetting({
+      id: platform as SocialProviderSetting["providerId"],
+      clientId,
+      ...(clientSecret ? { clientSecret } : {}),
+      enabled: true,
+    });
+    await connect(platform);
+  } catch (error) {
+    social.setErrorFromApi(error, "Could not configure social app");
+    localError.value = social.error;
+    busyPlatform.value = null;
+  } finally {
+    savingProvider.value = false;
   }
 }
 
@@ -216,7 +333,7 @@ watch(
               ? `${item.label} connected, click to reconnect`
               : `Connect ${item.label}`
           "
-          @click="connect(item.id)"
+          @click="openConnectModal(item.id)"
         >
           <UiIcon
             v-if="isConnected(item.id)"
@@ -294,6 +411,104 @@ watch(
           </span>
         </button>
       </div>
+    </div>
+
+    <div
+      v-if="connectModalPlatform"
+      class="social-connect-modal-backdrop"
+      role="presentation"
+      @click.self="closeConnectModal"
+    >
+      <section
+        class="social-connect-modal"
+        role="dialog"
+        aria-modal="true"
+        :aria-labelledby="`social-connect-title-${connectModalPlatform}`"
+      >
+        <div class="social-connect-modal__header">
+          <div>
+            <p class="social-connect-modal__eyebrow">Connect account</p>
+            <h3 :id="`social-connect-title-${connectModalPlatform}`">
+              {{ modalPlatformLabel }}
+            </h3>
+          </div>
+          <button
+            type="button"
+            class="social-connect-modal__close"
+            aria-label="Close connect dialog"
+            :disabled="busyPlatform !== null || savingProvider"
+            @click="closeConnectModal"
+          >
+            <UiIcon name="X" :size="18" aria-hidden="true" />
+          </button>
+        </div>
+
+        <p class="social-connect-modal__summary">{{ modalSummary }}</p>
+
+        <div
+          v-if="hostedOAuthAvailable"
+          class="social-connect-option social-connect-option--managed"
+        >
+          <div>
+            <strong>ME3 managed app</strong>
+            <p>Connect without creating a developer app.</p>
+          </div>
+          <button
+            type="button"
+            class="social-connect-option__button"
+            :disabled="busyPlatform !== null || savingProvider"
+            @click="continueWithManagedApp"
+          >
+            {{ busyPlatform === connectModalPlatform ? "Opening..." : "Continue" }}
+          </button>
+        </div>
+
+        <div class="social-own-app">
+          <div class="social-own-app__heading">
+            <strong>{{ hostedOAuthAvailable ? "Use my own app" : "App credentials" }}</strong>
+            <span v-if="ownAppReady">Configured</span>
+          </div>
+          <label>
+            <span>Client ID</span>
+            <input
+              v-model="providerDraft.clientId"
+              type="text"
+              autocomplete="off"
+              :placeholder="`${modalPlatformLabel} client ID`"
+            />
+          </label>
+          <label>
+            <span>Client secret</span>
+            <input
+              v-model="providerDraft.clientSecret"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="
+                modalProviderSetting?.secretHint
+                  ? `Saved ${modalProviderSetting.secretHint}`
+                  : `${modalPlatformLabel} client secret`
+              "
+            />
+          </label>
+          <p class="social-own-app__hint">
+            Callback path: {{ modalProviderSetting?.callbackPath || `/api/social/${connectModalPlatform}/callback` }}
+          </p>
+          <button
+            type="button"
+            class="social-own-app__button"
+            :disabled="busyPlatform !== null || savingProvider"
+            @click="continueWithOwnApp"
+          >
+            {{
+              savingProvider || busyPlatform === connectModalPlatform
+                ? "Opening..."
+                : ownAppReady
+                  ? "Save & reconnect"
+                  : "Save & connect"
+            }}
+          </button>
+        </div>
+      </section>
     </div>
   </section>
 </template>
@@ -515,6 +730,170 @@ watch(
   color: var(--color-text-muted);
 }
 
+.social-connect-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(0 0 0 / 0.42);
+}
+
+.social-connect-modal {
+  width: min(520px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.28);
+}
+
+.social-connect-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 20px 0;
+}
+
+.social-connect-modal__eyebrow {
+  margin: 0 0 4px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.social-connect-modal h3 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.social-connect-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.social-connect-modal__close:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-bg-muted);
+}
+
+.social-connect-modal__summary {
+  margin: 12px 20px 18px;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.social-connect-option,
+.social-own-app {
+  margin: 0 20px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-subtle);
+}
+
+.social-connect-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+}
+
+.social-connect-option p,
+.social-own-app__hint {
+  margin: 4px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.social-connect-option__button,
+.social-own-app__button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ui-accent, var(--color-accent));
+  color: var(--ui-accent-contrast, #fff);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.social-connect-option__button:disabled,
+.social-own-app__button:disabled,
+.social-connect-modal__close:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.social-own-app {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.social-own-app__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.social-own-app__heading span {
+  border: 1px solid #86efac;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.social-own-app label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.social-own-app input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.social-own-app input:focus {
+  outline: 2px solid var(--ui-accent-soft, var(--color-bg-muted));
+  border-color: var(--ui-accent, var(--color-accent));
+}
+
+.social-own-app__button {
+  justify-self: end;
+}
+
 @media (max-width: 520px) {
   .social-connect-row {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -541,6 +920,25 @@ watch(
   .social-connect-btn__brand--x-mark {
     width: 20px;
     height: 20px;
+  }
+
+  .social-connect-modal-backdrop {
+    align-items: end;
+    padding: 12px;
+  }
+
+  .social-connect-modal {
+    max-height: calc(100vh - 24px);
+  }
+
+  .social-connect-option {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .social-connect-option__button,
+  .social-own-app__button {
+    width: 100%;
   }
 }
 </style>

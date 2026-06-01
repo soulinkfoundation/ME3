@@ -2152,6 +2152,10 @@ app.get("/api/social/status", async (c) => {
 
   return c.json({
     plugin: await getSocialPublishingRuntimeStatus(c.env),
+    hostedOAuth: {
+      configured: Boolean(c.env.ME3_SOCIAL_OAUTH_ORIGIN),
+      platforms: c.env.ME3_SOCIAL_OAUTH_ORIGIN ? ["linkedin", "instagram"] : [],
+    },
   });
 });
 

@@ -12,9 +12,38 @@ export type SocialAccountRow = {
   lastVerifiedAt: string | null;
 };
 
+export type SocialStatus = {
+  plugin: {
+    status: string;
+    enabled: boolean;
+    ready: boolean;
+    statusLabel: string;
+  };
+  hostedOAuth: {
+    configured: boolean;
+    platforms: string[];
+  };
+};
+
+export type SocialProviderSetting = {
+  providerId: "x" | "linkedin" | "instagram" | "instagram_business";
+  label: string;
+  clientId: string;
+  configured: boolean;
+  enabled: boolean;
+  secretHint: string | null;
+  secretUpdatedAt: string | null;
+  callbackPath: string;
+};
+
 export const useSocialStore = defineStore("social", () => {
   const error = ref<string | null>(null);
   const loading = ref(false);
+
+  async function fetchSocialStatus(): Promise<SocialStatus> {
+    error.value = null;
+    return api.get<SocialStatus>("/social/status");
+  }
 
   async function fetchSocialAccounts(): Promise<SocialAccountRow[]> {
     error.value = null;
@@ -22,6 +51,28 @@ export const useSocialStore = defineStore("social", () => {
       "/social/accounts",
     );
     return data.accounts || [];
+  }
+
+  async function fetchProviderSettings(): Promise<SocialProviderSetting[]> {
+    error.value = null;
+    const data = await api.get<{ providers: SocialProviderSetting[] }>(
+      "/social/provider-settings",
+    );
+    return data.providers || [];
+  }
+
+  async function updateProviderSetting(payload: {
+    id: SocialProviderSetting["providerId"];
+    clientId: string;
+    clientSecret?: string;
+    enabled: boolean;
+  }): Promise<SocialProviderSetting[]> {
+    error.value = null;
+    const data = await api.put<{ providers: SocialProviderSetting[] }>(
+      "/social/provider-settings",
+      { providers: [payload] },
+    );
+    return data.providers || [];
   }
 
   async function startSocialOAuth(
@@ -59,7 +110,10 @@ export const useSocialStore = defineStore("social", () => {
   return {
     error,
     loading,
+    fetchSocialStatus,
     fetchSocialAccounts,
+    fetchProviderSettings,
+    updateProviderSetting,
     startSocialOAuth,
     disconnectSocialAccount,
     setErrorFromApi,

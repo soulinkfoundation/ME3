@@ -3519,6 +3519,7 @@ describe("ME3 Core Worker auth", () => {
 
   it("exposes Social Publishing runtime status and accounts when installed", async () => {
     const env = createEnv();
+    env.ME3_SOCIAL_OAUTH_ORIGIN = "https://social-oauth.example";
     const session = cookieHeader(await bootstrap(env));
 
     await app.fetch(
@@ -3542,6 +3543,24 @@ describe("ME3 Core Worker auth", () => {
       last_verified_at: "2026-05-11T10:00:00Z",
       created_at: "2026-05-11T09:00:00Z",
       updated_at: "2026-05-11T10:00:00Z",
+    });
+
+    const statusResponse = await app.fetch(
+      new Request("http://localhost/api/social/status", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const statusBody = (await statusResponse.json()) as {
+      plugin: { status: string; ready: boolean };
+      hostedOAuth: { configured: boolean; platforms: string[] };
+    };
+
+    expect(statusResponse.status).toBe(200);
+    expect(statusBody.plugin).toMatchObject({ status: "installed", ready: true });
+    expect(statusBody.hostedOAuth).toEqual({
+      configured: true,
+      platforms: ["linkedin", "instagram"],
     });
 
     const response = await app.fetch(
