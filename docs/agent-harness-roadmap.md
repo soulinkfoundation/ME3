@@ -52,6 +52,7 @@ results, drafts, approvals, setup, and history.
 | Scheduler and reliability | Assistant Job event ingress uses Cloudflare Queues and a DLQ. Heartbeat/reconciliation design exists. | Manual runs are synchronous, due scheduled jobs are not dispatched yet, and plugin queues such as booking reminders/social publishing are not wired in Core. | `me3-wsn.11`, `me3-wsn.22`, `me3-tlt.1`, `me3-1dr.1` |
 | Delivery channels | Soulink assistant chat can provision a stable Stream chat, send a welcome message, dispatch owner messages to ME3 Core, post assistant replies, and accept Core job notifications through `/api/me3/assistant-channel/notify`. Daily Briefing Run now delivers to the owner's Soulink chat. | Remaining delivery QA should focus on richer provider-backed jobs and failure visibility. | `me3-wsn.13`, `me3-wsn.25` |
 | Plugin expansion | Plugin manifests expose routes, UI slots, permissions, and `agentTools`. | Plugins need one capability contract plus optional skills/resources/recipes. | `me3-3ul`, `me3-q6s.2` |
+| Local executor | A reference plan now exists for an optional `me3.local-executor` plugin that owns daemon pairing, provider presets, local policies, queued runs, and audit, while Mission Control remains the canonical display surface. | Existing Mission Control daemon scaffolding and future Local Executor ownership could drift unless implementation consolidates them behind one authority. | `me3-wsn.28` |
 
 Soulink should now be treated as the primary portable assistant chat transport for harness work.
 The current milestone proves the channel plumbing: ME3 Core activation provisions one stable
@@ -131,6 +132,8 @@ Primary bead: `me3-ctx.8`.
 - Let plugins export capabilities, setup checks, optional skills/resources, and optional
   starter recipes.
 - Keep side effects behind the shared approval/audit layer.
+- Use the Local Executor reference to prove a plugin-owned local capability without exposing
+  raw local file or shell primitives in the first public job surface.
 - Prove the pattern with a first-party plugin such as social publishing only after the
   Core harness is dependable.
 
@@ -164,6 +167,7 @@ Detailed reference docs:
 - `docs/assistant-job-creation-capability.md`: custom job builder reference.
 - `docs/assistant-jobs-and-agent-skills.md`: skill/recipe/job/capability boundary.
 - `docs/agent-context-roadmap.md`: native context and memory design reference.
+- `docs/local-executor-assistant-job.md`: optional local executor plugin and daemon reference.
 - `docs/mission-control-plugin-mvp.md`: Mission Control workspace/plugin reference.
 - `docs/soulink-agent-chat-spike.md`: Soulink assistant chat channel reference.
 
