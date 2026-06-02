@@ -16,6 +16,7 @@ import { AI_AGENT_MODEL_OPTIONS } from "../../utils/aiModelCatalog";
 definePage({
   meta: {
     requiresAuth: true,
+    hideAppShell: true,
     hideAgentLauncher: true,
     title: "Assistant | ME3",
     description: "Chat with ME3 and manage assistant jobs.",
@@ -310,11 +311,11 @@ const weekdayOptions = [
 ];
 const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const starterPrompts = [
-  "Set up a job",
-  "Draft an email",
-  "Add a reminder",
-  "Review my week",
-  "Update my site",
+  { label: "Set up a job", icon: "⚙️" },
+  { label: "Draft an email", icon: "✉️" },
+  { label: "Add a reminder", icon: "⏰" },
+  { label: "Review my week", icon: "📅" },
+  { label: "Update my site", icon: "🛠️" },
 ];
 
 const sortedJobs = computed(() =>
@@ -431,6 +432,10 @@ const selectedModel = computed(
   () =>
     AI_AGENT_MODEL_OPTIONS.find((model) => model.id === selectedModelId.value) ||
     AI_AGENT_MODEL_OPTIONS[0],
+);
+
+const assistantConsoleMessages = computed(() =>
+  chatMessages.value.filter((message) => message.id !== "assistant-ready"),
 );
 
 const canSendAssistantMessage = computed(
@@ -1259,56 +1264,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 <template>
   <div class="assistant-page">
-    <Teleport to="#app-side-nav-mobile-page-controls">
-      <div v-if="!loadingJobs" class="assistant-mobile-nav">
-        <h1 class="assistant-mobile-nav__title">Assistant</h1>
-        <div class="assistant-mobile-nav__actions">
-          <Button
-            tone="outline"
-            shape="soft"
-            size="compact"
-            icon-only
-            aria-label="Jobs"
-            type="button"
-            @click="openConfigureJobsModal"
-          >
-            <template #icon>
-              <span class="me3-btn__emoji" aria-hidden="true">💼</span>
-            </template>
-          </Button>
-        </div>
-      </div>
-    </Teleport>
-
-    <header v-if="!loadingJobs" class="assistant-topbar">
-      <div class="assistant-topbar__actions">
-        <label class="model-picker">
-          <span class="sr-only">Model</span>
-          <select v-model="selectedModelId" class="model-picker__select">
-            <option
-              v-for="model in AI_AGENT_MODEL_OPTIONS"
-              :key="model.id"
-              :value="model.id"
-            >
-              {{ model.runtimeLabel }}: {{ model.label }}
-            </option>
-          </select>
-        </label>
-        <Button
-          tone="outline"
-          shape="soft"
-          size="compact"
-          type="button"
-          @click="openConfigureJobsModal"
-        >
-          <template #icon>
-            <span class="me3-btn__emoji" aria-hidden="true">💼</span>
-          </template>
-          Jobs
-        </Button>
-      </div>
-    </header>
-
     <main
       class="assistant-main"
       aria-label="Assistant console"
@@ -1328,18 +1283,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <div class="starter-prompt-list" aria-label="Starter prompts">
               <button
                 v-for="prompt in starterPrompts"
-                :key="prompt"
+                :key="prompt.label"
                 type="button"
                 class="starter-prompt"
-                @click="useStarterPrompt(prompt)"
+                @click="useStarterPrompt(prompt.label)"
               >
-                {{ prompt }}
+                <span class="starter-prompt__icon" aria-hidden="true">
+                  {{ prompt.icon }}
+                </span>
+                <span>{{ prompt.label }}</span>
               </button>
             </div>
           </div>
 
           <article
-            v-for="(message, index) in chatMessages"
+            v-for="(message, index) in assistantConsoleMessages"
             :key="
               message.id ||
               `${message.role}-${index}-${message.text.slice(0, 24)}`
@@ -1393,15 +1351,25 @@ function messageFromUnknown(err: unknown, fallback: string) {
         </div>
 
         <footer class="assistant-composer" aria-label="Message composer">
-          <div class="assistant-composer__toolbar">
-            <div class="assistant-composer__model">
-              <span>{{ selectedModel?.label }}</span>
-              <small>{{ selectedModel?.runtimeLabel }}</small>
-            </div>
-            <div class="assistant-composer__actions">
+          <label class="sr-only" for="assistant-console-input">
+            Message ME3
+          </label>
+          <textarea
+            id="assistant-console-input"
+            ref="assistantComposerRef"
+            v-model="assistantDraft"
+            class="assistant-input"
+            rows="1"
+            placeholder="Do anything"
+            :disabled="assistantSending"
+            @keydown="onAssistantComposerKeydown"
+            @input="autosizeAssistantComposer"
+          />
+          <div class="assistant-composer__bottom">
+            <div class="assistant-composer__left">
               <button
                 type="button"
-                class="icon-button"
+                class="composer-icon-button"
                 title="Add attachment"
                 aria-label="Add attachment"
                 disabled
@@ -1410,52 +1378,50 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </button>
               <button
                 type="button"
-                class="icon-button"
+                class="composer-icon-button"
+                title="Jobs"
+                aria-label="Jobs"
+                @click="openConfigureJobsModal"
+              >
+                <span class="me3-btn__emoji" aria-hidden="true">💼</span>
+              </button>
+            </div>
+
+            <div class="assistant-composer__right">
+              <label class="model-picker">
+                <span class="sr-only">Model</span>
+                <select v-model="selectedModelId" class="model-picker__select">
+                  <option
+                    v-for="model in AI_AGENT_MODEL_OPTIONS"
+                    :key="model.id"
+                    :value="model.id"
+                  >
+                    {{ model.label }}
+                  </option>
+                </select>
+              </label>
+              <button
+                type="button"
+                class="composer-icon-button"
                 title="Voice dictation"
                 aria-label="Voice dictation"
                 disabled
               >
                 <UiIcon name="Mic" :size="17" />
               </button>
-              <Button
-                tone="outline"
-                shape="soft"
-                size="compact"
+              <button
                 type="button"
-                @click="openConfigureJobsModal"
+                class="assistant-send"
+                :disabled="!canSendAssistantMessage"
+                :aria-label="assistantSending ? 'Sending' : 'Send message'"
+                @click="sendAssistantMessage"
               >
-                <template #icon>
-                  <span class="me3-btn__emoji" aria-hidden="true">💼</span>
-                </template>
-                Jobs
-              </Button>
+                <UiIcon name="ArrowUp" :size="18" />
+              </button>
             </div>
           </div>
-
-          <label class="sr-only" for="assistant-console-input">
-            Message ME3
-          </label>
-          <div class="assistant-composer__input-row">
-            <textarea
-              id="assistant-console-input"
-              ref="assistantComposerRef"
-              v-model="assistantDraft"
-              class="assistant-input"
-              rows="1"
-              placeholder="Message ME3..."
-              :disabled="assistantSending"
-              @keydown="onAssistantComposerKeydown"
-              @input="autosizeAssistantComposer"
-            />
-            <button
-              type="button"
-              class="assistant-send"
-              :disabled="!canSendAssistantMessage"
-              :aria-label="assistantSending ? 'Sending' : 'Send message'"
-              @click="sendAssistantMessage"
-            >
-              <UiIcon name="ArrowUp" :size="18" />
-            </button>
+          <div class="assistant-composer__meta">
+            <span>{{ selectedModel?.runtimeLabel }}</span>
           </div>
           <p v-if="assistantError" class="assistant-error">
             {{ assistantError }}
@@ -2202,22 +2168,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .model-picker__select {
-  max-width: min(52vw, 280px);
-  min-height: 34px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  padding: 0 30px 0 10px;
-  background: var(--ui-surface);
-  color: var(--ui-text);
+  max-width: min(38vw, 180px);
+  min-height: 32px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 24px 0 8px;
+  background: transparent;
+  color: var(--ui-text-muted);
   font: inherit;
-  font-size: 13px;
-  font-weight: 750;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .model-picker__select:focus-visible,
 .assistant-input:focus-visible {
-  border-color: var(--ui-accent);
-  outline: 2px solid color-mix(in oklab, var(--ui-accent) 35%, transparent);
+  outline: 2px solid color-mix(in oklab, var(--ui-accent) 32%, transparent);
   outline-offset: 2px;
 }
 
@@ -2225,7 +2190,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   flex: 1;
-  height: calc(100vh - 220px);
+  height: calc(100vh - 96px);
   min-height: 520px;
 }
 
@@ -2241,18 +2206,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-empty-state {
   display: grid;
-  gap: 16px;
+  gap: 20px;
   justify-items: center;
   margin: 0 0 18px;
-  padding: clamp(42px, 14vh, 110px) 0 10px;
+  padding: clamp(90px, 28vh, 250px) 0 10px;
   text-align: center;
 }
 
 .assistant-empty-state h2 {
   margin: 0;
-  font-size: clamp(28px, 5vw, 42px);
-  font-weight: 800;
-  line-height: 1.05;
+  color: var(--ui-text);
+  font-size: clamp(24px, 4vw, 30px);
+  font-weight: 500;
+  line-height: 1.15;
   letter-spacing: 0;
 }
 
@@ -2265,21 +2231,32 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .starter-prompt {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   min-height: 34px;
   border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
+  border-radius: 999px;
   padding: 0 10px;
   background: var(--ui-surface);
-  color: var(--ui-text);
+  color: var(--ui-text-muted);
   font: inherit;
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 700;
   cursor: pointer;
+}
+
+.starter-prompt__icon {
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .starter-prompt:hover {
   border-color: color-mix(in oklab, var(--ui-accent) 40%, var(--ui-border));
   background: var(--ui-surface-muted);
+  color: var(--ui-text);
 }
 
 .assistant-message {
@@ -2372,92 +2349,95 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: grid;
   gap: 8px;
   border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-lg);
+  border-radius: 18px;
   padding: 10px;
-  background: color-mix(in oklab, var(--ui-surface), var(--ui-bg) 10%);
+  background: var(--ui-surface);
   box-shadow: var(--ui-shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.08));
 }
 
-.assistant-composer__toolbar,
-.assistant-composer__actions,
-.assistant-composer__input-row {
+.assistant-composer__bottom,
+.assistant-composer__left,
+.assistant-composer__right {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.assistant-composer__toolbar {
+.assistant-composer__bottom {
   justify-content: space-between;
 }
 
-.assistant-composer__model {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.assistant-composer__model span,
-.assistant-composer__model small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.assistant-composer__model span {
-  color: var(--ui-text);
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1.2;
-}
-
-.assistant-composer__model small {
-  color: var(--ui-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.assistant-composer__actions {
+.assistant-composer__left,
+.assistant-composer__right {
   flex-shrink: 0;
-}
-
-.assistant-composer__input-row {
-  align-items: flex-end;
 }
 
 .assistant-input {
   display: block;
-  flex: 1;
+  width: 100%;
   min-height: 44px;
   max-height: 160px;
   resize: none;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-md);
-  padding: 12px 12px;
-  background: var(--ui-surface);
+  border: 0;
+  border-radius: 12px;
+  padding: 6px 2px 2px;
+  background: transparent;
   color: var(--ui-text);
   font: inherit;
   font-size: 15px;
   line-height: 1.45;
 }
 
+.assistant-input::placeholder {
+  color: color-mix(in oklab, var(--ui-text-muted) 70%, transparent);
+}
+
+.composer-icon-button,
 .assistant-send {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 42px;
-  height: 42px;
-  border: 1px solid var(--ui-accent);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-accent);
-  color: var(--ui-accent-contrast);
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ui-text-muted);
   cursor: pointer;
+}
+
+.composer-icon-button:hover {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.composer-icon-button:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.composer-icon-button:disabled:hover {
+  background: transparent;
+  color: var(--ui-text-muted);
+}
+
+.assistant-send {
+  background: color-mix(in oklab, var(--ui-text-muted) 80%, var(--ui-surface));
+  color: var(--ui-surface);
+}
+
+.assistant-send:not(:disabled):hover {
+  background: var(--ui-text);
 }
 
 .assistant-send:focus-visible {
   outline: 2px solid color-mix(in oklab, var(--ui-accent) 35%, transparent);
   outline-offset: 2px;
+}
+
+.assistant-composer__meta {
+  display: none;
 }
 
 .assistant-error {
@@ -3247,18 +3227,6 @@ button:disabled {
 
   .assistant-composer {
     border-radius: var(--ui-radius-md);
-  }
-
-  .assistant-composer__toolbar {
-    align-items: flex-start;
-  }
-
-  .assistant-composer__actions {
-    gap: 4px;
-  }
-
-  .assistant-composer__model {
-    max-width: 42vw;
   }
 
   .job-row {
