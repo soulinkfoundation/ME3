@@ -183,6 +183,60 @@ export type AssistantJobDraft = {
   requiredSkillIds: readonly string[];
 };
 
+export const INBOX_WATCH_TIMINGS = [
+  "immediate",
+  "daily_digest",
+  "weekly_digest",
+  "manual",
+] as const;
+
+export type InboxWatchTiming = (typeof INBOX_WATCH_TIMINGS)[number];
+
+export const INBOX_WATCH_INFERRED_LABELS = [
+  "needs_reply",
+  "important",
+  "finance",
+  "scheduling",
+  "review",
+] as const;
+
+export type InboxWatchInferredLabel = (typeof INBOX_WATCH_INFERRED_LABELS)[number];
+
+export type InboxWatchRuleConfig = {
+  id: string;
+  label: string;
+  enabled: boolean;
+  timing: InboxWatchTiming;
+  match: {
+    fromAddresses?: string[];
+    fromDomains?: string[];
+    subjectContains?: string[];
+    bodyContains?: string[];
+    inferredLabels?: InboxWatchInferredLabel[];
+  };
+  actions: {
+    notifyOwner?: boolean;
+    summarizeAndLabel?: boolean;
+    draftReply?: boolean;
+    createTask?: boolean;
+    recommendUnsubscribe?: boolean;
+    markImportantInternally?: boolean;
+  };
+};
+
+export type InboxWatchMessageCandidate = {
+  fromAddress?: string | null;
+  subject?: string | null;
+  body?: string | null;
+  labels?: readonly string[] | null;
+};
+
+export type InboxWatchMessageMatch = {
+  matched: boolean;
+  ruleIds: string[];
+  rules: InboxWatchRuleConfig[];
+};
+
 export type AssistantRecipeVersion = "core_v1" | "later_provider_adapter";
 export type AssistantRecipeState =
   | "ready"
@@ -847,6 +901,7 @@ function draft(input: {
   actions: readonly AssistantJobAction[];
   destination: AssistantJobDestination;
   scope?: AssistantJobScope;
+  rules?: readonly AssistantJobRule[];
   recommendedSkillIds?: readonly string[];
   requiredSkillIds?: readonly string[];
 }): AssistantJobDraft {
@@ -856,13 +911,45 @@ function draft(input: {
     recipeId: input.recipeId,
     trigger: input.trigger,
     scope: input.scope ?? DEFAULT_SCOPE,
-    rules: [],
+    rules: input.rules ?? [],
     actions: input.actions,
     approvalPolicy: DEFAULT_APPROVAL_POLICY,
     destination: input.destination,
     projectId: input.scope?.projectId ?? null,
     recommendedSkillIds: input.recommendedSkillIds ?? [],
     requiredSkillIds: input.requiredSkillIds ?? [],
+  };
+}
+
+const DEFAULT_INBOX_WATCH_RULE: InboxWatchRuleConfig = {
+  id: "any-inbox-message",
+  label: "Any inbox email",
+  enabled: true,
+  timing: "daily_digest",
+  match: {},
+  actions: {
+    summarizeAndLabel: true,
+  },
+};
+
+function inboxWatchRule(
+  id: string,
+  label: string,
+  match: InboxWatchRuleConfig["match"],
+  actions: InboxWatchRuleConfig["actions"] = { summarizeAndLabel: true },
+  timing: InboxWatchTiming = "daily_digest",
+): AssistantJobRule {
+  return {
+    id,
+    label,
+    field: "inbox_watch.rule",
+    operator: "matches",
+    value: {
+      enabled: true,
+      timing,
+      match,
+      actions,
+    },
   };
 }
 
@@ -1066,6 +1153,14 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
       recipeId: "email-triage",
       trigger: dailySchedule,
       destination: missionDestination("review_packet"),
+      rules: [
+        inboxWatchRule(
+          "any-inbox-message",
+          "Any inbox email",
+          {},
+          { summarizeAndLabel: true },
+        ),
+      ],
       actions: [
         action("read-email", "email.message.read", "Read scoped email", "none"),
         action(
@@ -1192,6 +1287,197 @@ export function createAssistantJobDraftFromRecipe(
   recipe: AssistantJobStarterRecipe,
 ): AssistantJobDraft {
   return cloneJson(recipe.defaultDraft);
+}
+
+export function normalizeInboxWatchRules(
+  rules: readonly AssistantJobRule[] | null | undefined,
+): InboxWatchRuleConfig[] {
+  const normalized = (rules || [])
+    .map((rule) => normalizeInboxWatchRule(rule))
+    .filter((rule): rule is InboxWatchRuleConfig => Boolean(rule));
+  return normalized.length > 0 ? normalized : [DEFAULT_INBOX_WATCH_RULE];
+}
+
+export function matchInboxWatchMessage(
+  candidate: InboxWatchMessageCandidate,
+  rules: readonly AssistantJobRule[] | readonly InboxWatchRuleConfig[] | null | undefined,
+  timing?: InboxWatchTiming | "all" | null,
+): InboxWatchMessageMatch {
+  const normalizedRules = isInboxWatchRuleConfigArray(rules)
+    ? rules
+    : normalizeInboxWatchRules(rules as readonly AssistantJobRule[] | null | undefined);
+  const activeRules = normalizedRules.filter(
+    (rule) => rule.enabled && (!timing || timing === "all" || rule.timing === timing),
+  );
+  const matches = activeRules.filter((rule) => inboxWatchRuleMatches(candidate, rule));
+  return {
+    matched: matches.length > 0,
+    ruleIds: matches.map((rule) => rule.id),
+    rules: matches,
+  };
+}
+
+function normalizeInboxWatchRule(rule: AssistantJobRule): InboxWatchRuleConfig | null {
+  if (rule.field === "inbox_watch.rule" && isRecord(rule.value)) {
+    const raw = rule.value;
+    return {
+      id: rule.id,
+      label: rule.label || rule.id,
+      enabled: raw.enabled !== false,
+      timing: normalizeInboxWatchTiming(raw.timing),
+      match: normalizeInboxWatchMatch(raw.match),
+      actions: normalizeInboxWatchActions(raw.actions),
+    };
+  }
+
+  const match = normalizeInboxWatchGenericMatch(rule);
+  if (!match) return null;
+  return {
+    id: rule.id,
+    label: rule.label || rule.id,
+    enabled: true,
+    timing: "daily_digest",
+    match,
+    actions: { summarizeAndLabel: true },
+  };
+}
+
+function normalizeInboxWatchGenericMatch(
+  rule: AssistantJobRule,
+): InboxWatchRuleConfig["match"] | null {
+  const field = normalizeText(rule.field).replace(/[._-]/g, "");
+  const values = normalizeTextArray(rule.value);
+  if (values.length === 0) return null;
+  if (field === "from" || field === "fromaddress" || field === "emailfrom") {
+    return { fromAddresses: values };
+  }
+  if (field === "fromdomain" || field === "emailfromdomain") {
+    return { fromDomains: values };
+  }
+  if (field === "subject" || field === "subjectcontains") {
+    return { subjectContains: values };
+  }
+  if (field === "body" || field === "bodycontains" || field === "textbody") {
+    return { bodyContains: values };
+  }
+  if (field === "inferredlabel" || field === "label" || field === "labels") {
+    return { inferredLabels: normalizeInboxWatchLabels(values) };
+  }
+  return null;
+}
+
+function normalizeInboxWatchTiming(value: unknown): InboxWatchTiming {
+  return INBOX_WATCH_TIMINGS.includes(value as InboxWatchTiming)
+    ? value as InboxWatchTiming
+    : "daily_digest";
+}
+
+function normalizeInboxWatchMatch(value: unknown): InboxWatchRuleConfig["match"] {
+  if (!isRecord(value)) return {};
+  return {
+    fromAddresses: normalizeTextArray(value.fromAddresses),
+    fromDomains: normalizeTextArray(value.fromDomains),
+    subjectContains: normalizeTextArray(value.subjectContains),
+    bodyContains: normalizeTextArray(value.bodyContains),
+    inferredLabels: normalizeInboxWatchLabels(value.inferredLabels),
+  };
+}
+
+function normalizeInboxWatchActions(value: unknown): InboxWatchRuleConfig["actions"] {
+  if (!isRecord(value)) return { summarizeAndLabel: true };
+  return {
+    notifyOwner: value.notifyOwner === true,
+    summarizeAndLabel: value.summarizeAndLabel !== false,
+    draftReply: value.draftReply === true,
+    createTask: value.createTask === true,
+    recommendUnsubscribe: value.recommendUnsubscribe === true,
+    markImportantInternally: value.markImportantInternally === true,
+  };
+}
+
+function inboxWatchRuleMatches(
+  candidate: InboxWatchMessageCandidate,
+  rule: InboxWatchRuleConfig,
+): boolean {
+  const match = rule.match;
+  const fromAddress = normalizeText(candidate.fromAddress);
+  const fromDomain = emailDomain(fromAddress);
+  const subject = normalizeText(candidate.subject);
+  const body = normalizeText(candidate.body);
+  const labels = new Set((candidate.labels || []).map(normalizeText));
+
+  if (
+    hasValues(match.fromAddresses) &&
+    !match.fromAddresses.some((value) => normalizeText(value) === fromAddress)
+  ) {
+    return false;
+  }
+  if (
+    hasValues(match.fromDomains) &&
+    !match.fromDomains.some((value) => normalizeDomain(value) === fromDomain)
+  ) {
+    return false;
+  }
+  if (
+    hasValues(match.subjectContains) &&
+    !match.subjectContains.some((value) => subject.includes(normalizeText(value)))
+  ) {
+    return false;
+  }
+  if (
+    hasValues(match.bodyContains) &&
+    !match.bodyContains.some((value) => body.includes(normalizeText(value)))
+  ) {
+    return false;
+  }
+  if (
+    hasValues(match.inferredLabels) &&
+    !match.inferredLabels.some((value) => labels.has(normalizeText(value)))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isInboxWatchRuleConfigArray(
+  value: readonly AssistantJobRule[] | readonly InboxWatchRuleConfig[] | null | undefined,
+): value is readonly InboxWatchRuleConfig[] {
+  return Array.isArray(value) && value.every((item) => isRecord(item) && "match" in item);
+}
+
+function normalizeInboxWatchLabels(value: unknown): InboxWatchInferredLabel[] {
+  return normalizeTextArray(value).filter((label): label is InboxWatchInferredLabel =>
+    INBOX_WATCH_INFERRED_LABELS.includes(label as InboxWatchInferredLabel),
+  );
+}
+
+function normalizeTextArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(normalizeText).filter(Boolean);
+  }
+  const text = normalizeText(value);
+  return text ? [text] : [];
+}
+
+function normalizeText(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeDomain(value: string): string {
+  return normalizeText(value).replace(/^@/, "");
+}
+
+function emailDomain(value: string): string {
+  const at = value.lastIndexOf("@");
+  return at >= 0 ? value.slice(at + 1) : "";
+}
+
+function hasValues(value: readonly unknown[] | undefined): value is readonly unknown[] {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function createAssistantJobContext(

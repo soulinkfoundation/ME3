@@ -7,6 +7,7 @@ import {
   createAssistantJobDraftFromRecipe,
   getAssistantJobCapability,
   getAssistantJobStarterRecipe,
+  matchInboxWatchMessage,
   validateAssistantJobDraft,
   type AssistantJobAction,
   type AssistantJobApprovalMode,
@@ -202,12 +203,15 @@ type EmailTriageItem = {
   subject: string;
   summary: string;
   labels: string[];
+  matchedRuleIds: string[];
   receivedAt: string | null;
 };
 
 type EmailTriageResult = {
   messageCount: number;
   threadCount: number;
+  matchedCount: number;
+  ruleMatchCounts: Record<string, number>;
   needsReplyCount: number;
   importantCount: number;
   items: EmailTriageItem[];
@@ -1594,7 +1598,7 @@ async function executeAssistantJobProviderBackedAction(
   }
 
   if (input.capability.id === "email.message.read") {
-    const triage = await buildEmailTriageResult(env, input.userId);
+    const triage = await buildEmailTriageResult(env, input.userId, input.draft);
     return insertAssistantJobActionResult(env, {
       runId: input.run.id,
       actionId: input.action.id,
@@ -1606,7 +1610,7 @@ async function executeAssistantJobProviderBackedAction(
   }
 
   if (input.capability.id === "email.thread.summarize") {
-    const triage = await buildEmailTriageResult(env, input.userId);
+    const triage = await buildEmailTriageResult(env, input.userId, input.draft);
     await persistEmailTriageSummaries(env, triage.items);
     return insertAssistantJobActionResult(env, {
       runId: input.run.id,
@@ -2014,7 +2018,7 @@ async function buildGeneratedMissionActivity(
     (input.job.recipe_id === "email-triage" ||
       input.draft.recipeId === "email-triage")
   ) {
-    const triage = await buildEmailTriageResult(env, input.userId);
+    const triage = await buildEmailTriageResult(env, input.userId, input.draft);
     const jobName = input.job.name || input.draft.name || "Inbox Watch";
     return {
       title: `${jobName}: ${triage.messageCount} message${triage.messageCount === 1 ? "" : "s"} reviewed`,
@@ -3769,15 +3773,28 @@ function invoiceTriageResultFromActionResults(actionResults: SerializedActionRes
   };
 }
 
-async function buildEmailTriageResult(env: Env, userId: string): Promise<EmailTriageResult> {
+async function buildEmailTriageResult(
+  env: Env,
+  userId: string,
+  draft?: AssistantJobDraft,
+): Promise<EmailTriageResult> {
   const messages = await loadAssistantJobMailboxMessages(env, userId);
-  const items = messages.map(summarizeMailboxMessageForTriage);
+  const items = messages.map((message) => summarizeMailboxMessageForTriage(message, draft));
   const threadKeys = new Set(items.map((item) => item.threadKey || item.id));
+  const matchedItems = items.filter((item) => item.matchedRuleIds.length > 0);
+  const ruleMatchCounts: Record<string, number> = {};
+  for (const item of matchedItems) {
+    for (const ruleId of item.matchedRuleIds) {
+      ruleMatchCounts[ruleId] = (ruleMatchCounts[ruleId] || 0) + 1;
+    }
+  }
   return {
     messageCount: items.length,
     threadCount: threadKeys.size,
-    needsReplyCount: items.filter((item) => item.labels.includes("needs_reply")).length,
-    importantCount: items.filter((item) => item.labels.includes("important")).length,
+    matchedCount: matchedItems.length,
+    ruleMatchCounts,
+    needsReplyCount: matchedItems.filter((item) => item.labels.includes("needs_reply")).length,
+    importantCount: matchedItems.filter((item) => item.labels.includes("important")).length,
     items,
   };
 }
@@ -3822,12 +3839,25 @@ async function persistEmailTriageSummaries(env: Env, items: EmailTriageItem[]) {
   }
 }
 
-function summarizeMailboxMessageForTriage(row: MailboxMessageRow): EmailTriageItem {
+function summarizeMailboxMessageForTriage(
+  row: MailboxMessageRow,
+  draft?: AssistantJobDraft,
+): EmailTriageItem {
   const subject = normalizeOptionalText(row.subject) || "(no subject)";
   const from = normalizeOptionalText(row.from_address) || "Unknown sender";
   const body = normalizeWhitespace(row.text_body || "");
   const existingSummary = normalizeOptionalText(row.agent_summary);
   const labels = inferEmailTriageLabels(subject, body);
+  const ruleMatch = matchInboxWatchMessage(
+    {
+      fromAddress: from,
+      subject,
+      body,
+      labels,
+    },
+    draft?.rules,
+    "all",
+  );
   const summary =
     existingSummary ||
     `${from} - ${subject}${body ? `: ${truncateText(body, 180)}` : ""}`;
@@ -3838,6 +3868,7 @@ function summarizeMailboxMessageForTriage(row: MailboxMessageRow): EmailTriageIt
     subject,
     summary,
     labels,
+    matchedRuleIds: ruleMatch.ruleIds,
     receivedAt: row.received_at || row.created_at || null,
   };
 }
@@ -3867,9 +3898,10 @@ function formatEmailTriageMissionSummary(triage: EmailTriageResult) {
 
   const header = [
     `${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"} across ${triage.threadCount} thread${triage.threadCount === 1 ? "" : "s"}.`,
+    `${triage.matchedCount} matched Inbox Watch rule${triage.matchedCount === 1 ? "" : "s"}.`,
     `${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply; ${triage.importantCount} flagged important.`,
   ].join(" ");
-  const lines = triage.items.slice(0, 5).map((item) => {
+  const lines = triage.items.filter((item) => item.matchedRuleIds.length > 0).slice(0, 5).map((item) => {
     const labels = item.labels.length ? ` [${item.labels.join(", ")}]` : "";
     return `- ${item.from}: ${item.subject}${labels}. ${truncateText(item.summary, 180)}`;
   });
@@ -4007,9 +4039,9 @@ async function summarizeAssistantJobRunOutput(
     job.recipe_id === "email-triage" ||
     draft.recipeId === "email-triage"
   ) {
-    const triage = await buildEmailTriageResult(env, userId);
+    const triage = await buildEmailTriageResult(env, userId, draft);
     const jobName = job.name || draft.name || "Inbox Watch";
-    return `${jobName} reviewed ${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"} across ${triage.threadCount} thread${triage.threadCount === 1 ? "" : "s"}; ${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply and ${triage.importantCount} flagged important.`;
+    return `${jobName} reviewed ${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"}, matched ${triage.matchedCount} across ${Object.keys(triage.ruleMatchCounts).length} rule${Object.keys(triage.ruleMatchCounts).length === 1 ? "" : "s"}; ${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply and ${triage.importantCount} flagged important.`;
   }
   if (job.recipe_id === "daily-briefing" || draft.recipeId === "daily-briefing") {
     const context = await buildDailyBriefingRenderContext(env, userId);

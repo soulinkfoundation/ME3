@@ -261,7 +261,7 @@ describe("assistant jobs persistence", () => {
 
     expect(run.run.status).toBe("succeeded");
     expect(run.run.outputPreview).toBe(
-      "Inbox Watch reviewed 2 inbox messages across 2 threads; 1 needs a reply and 1 flagged important.",
+      "Inbox Watch reviewed 2 inbox messages, matched 2 across 1 rule; 1 needs a reply and 1 flagged important.",
     );
     expect(env.__state.missionAgentRuns[0]?.prompt_summary).toBe(run.run.outputPreview);
     expect(run.actionResults).toContainEqual(
@@ -299,6 +299,10 @@ describe("assistant jobs persistence", () => {
       emailTriage: {
         messageCount: 2,
         threadCount: 2,
+        matchedCount: 2,
+        ruleMatchCounts: {
+          "any-inbox-message": 2,
+        },
         needsReplyCount: 1,
         importantCount: 1,
       },

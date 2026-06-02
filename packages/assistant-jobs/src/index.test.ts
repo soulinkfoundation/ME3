@@ -5,6 +5,8 @@ import {
   createAssistantJobContext,
   createAssistantJobDraftFromRecipe,
   getAssistantJobStarterRecipe,
+  matchInboxWatchMessage,
+  normalizeInboxWatchRules,
   validateAssistantJobDraft,
   type AssistantJobDraft,
 } from "./index";
@@ -50,6 +52,65 @@ describe("assistant jobs package", () => {
     expect(validation.status).toBe("needs_setup");
     expect(validation.errors.map((error) => error.code)).toContain("setup_missing");
     expect(validation.permissionSummary.setupRequirements).toContain("email");
+  });
+
+  it("normalizes and matches multiple Inbox Watch rules", () => {
+    const rules = normalizeInboxWatchRules([
+      {
+        id: "ada",
+        label: "Email from Ada",
+        field: "inbox_watch.rule",
+        operator: "matches",
+        value: {
+          enabled: true,
+          timing: "immediate",
+          match: { fromAddresses: ["ada@example.com"] },
+          actions: { notifyOwner: true },
+        },
+      },
+      {
+        id: "client-contract",
+        label: "Client contract mail",
+        field: "inbox_watch.rule",
+        operator: "matches",
+        value: {
+          enabled: true,
+          timing: "daily_digest",
+          match: {
+            fromDomains: ["client.com"],
+            subjectContains: ["contract"],
+            inferredLabels: ["needs_reply"],
+          },
+          actions: { draftReply: true, createTask: true },
+        },
+      },
+    ]);
+
+    expect(rules.map((rule) => rule.id)).toEqual(["ada", "client-contract"]);
+    expect(
+      matchInboxWatchMessage(
+        {
+          fromAddress: "legal@client.com",
+          subject: "Contract question",
+          body: "Can you review this?",
+          labels: ["needs_reply"],
+        },
+        rules,
+        "daily_digest",
+      ).ruleIds,
+    ).toEqual(["client-contract"]);
+    expect(
+      matchInboxWatchMessage(
+        {
+          fromAddress: "ada@example.com",
+          subject: "Hello",
+          body: "Quick hello.",
+          labels: ["review"],
+        },
+        rules,
+        "immediate",
+      ).ruleIds,
+    ).toEqual(["ada"]);
   });
 
   it("marks the local coding starter as setup-gated until Local Executor is ready", () => {
