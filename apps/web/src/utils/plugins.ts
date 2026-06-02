@@ -1,0 +1,109 @@
+export type PluginStatus =
+  | "available"
+  | "installed"
+  | "setup_required"
+  | "disabled"
+  | "coming_soon";
+
+export type PluginSetupRequirement = {
+  id: string;
+  label: string;
+  kind: "package" | "secret" | "binding" | "migration" | "queue" | "cron";
+  required: boolean;
+  configured: boolean;
+  note?: string;
+};
+
+export type PluginRecord = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  trustTier: "first_party" | "third_party";
+  distribution: "workspace_package" | "npm_package" | "remote_bundle";
+  implementationStatus: "catalog_only" | "bundled";
+  releaseStage: "available" | "coming_soon";
+  activationAllowed: boolean;
+  status: PluginStatus;
+  statusLabel: string;
+  installed: boolean;
+  enabled: boolean;
+  capabilityIds: string[];
+  permissions: { id: string; label: string }[];
+  routes: { id: string; path: string; methods: string[]; auth: string }[];
+  uiSlots: { id: string; slot: string; label: string }[];
+  agentTools: {
+    id: string;
+    label: string;
+    sideEffect: string;
+    approvalMode: string;
+  }[];
+  secrets: { name: string; label: string; required: boolean }[];
+  migrations: { id: string; path: string; destructive: false }[];
+  queuesAndCrons: {
+    id: string;
+    kind: "queue" | "cron";
+    binding?: string;
+    schedule?: string;
+  }[];
+  setupRequirements: PluginSetupRequirement[];
+  notes: string[];
+};
+
+export type PluginsResponse = {
+  catalogVersion: string;
+  plugins: PluginRecord[];
+};
+
+export const RECOMMENDED_START_PLUGIN_IDS = [
+  "me3.agent-chat",
+  "me3.mission-control",
+  "me3.calendar",
+] as const;
+
+export const RECOMMENDED_START_PLUGIN_ID_SET = new Set<string>(
+  RECOMMENDED_START_PLUGIN_IDS,
+);
+
+const pluginNavEmojis: Record<string, string> = {
+  "me3.mission-control": "🚀",
+  "me3.calendar": "🗓️",
+  "me3.agent-chat": "🤖",
+  "me3.social-publishing": "📣",
+  "me3.accounts": "💰",
+  "me3.landing-pages": "🌐",
+};
+
+export function pluginInfoText(plugin: PluginRecord) {
+  if (plugin.id === "me3.social-publishing") {
+    return "Adds social account connection and approval-first publishing.";
+  }
+  return plugin.description;
+}
+
+export function isPluginComingSoon(plugin: PluginRecord) {
+  return (
+    plugin.status === "coming_soon" ||
+    plugin.releaseStage === "coming_soon" ||
+    plugin.activationAllowed === false
+  );
+}
+
+export function canActivatePlugin(plugin: PluginRecord) {
+  return (
+    !isPluginComingSoon(plugin) &&
+    (plugin.status === "available" || plugin.status === "disabled")
+  );
+}
+
+export function isPluginEnabled(plugin: PluginRecord) {
+  return plugin.enabled || (!canActivatePlugin(plugin) && !isPluginComingSoon(plugin));
+}
+
+export function isLocalExecutorPlugin(plugin: PluginRecord) {
+  return plugin.id === "me3.local-executor";
+}
+
+export function pluginNavEmoji(plugin: PluginRecord) {
+  return pluginNavEmojis[plugin.id] || "🧩";
+}

@@ -5,6 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import CustomDomain from "../components/CustomDomain.vue";
 import Button from "../components/Button.vue";
+import PluginList from "../components/PluginList.vue";
 import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import UiIcon from "../components/UiIcon.vue";
@@ -21,6 +22,13 @@ import {
   AI_AGENT_MODEL_OPTIONS,
   type AiAgentModelOption,
 } from "../utils/aiModelCatalog";
+import {
+  canActivatePlugin,
+  isPluginComingSoon,
+  isPluginEnabled,
+  type PluginRecord,
+  type PluginsResponse,
+} from "../utils/plugins";
 
 definePage({
   meta: {
@@ -106,63 +114,6 @@ type MailboxResponse = {
   mailbox: MailboxRecord | null;
   sources: MailboxSource[];
   recentActivity: MailboxActivity[];
-};
-
-type PluginStatus =
-  | "available"
-  | "installed"
-  | "setup_required"
-  | "disabled"
-  | "coming_soon";
-
-type PluginSetupRequirement = {
-  id: string;
-  label: string;
-  kind: "package" | "secret" | "binding" | "migration" | "queue" | "cron";
-  required: boolean;
-  configured: boolean;
-  note?: string;
-};
-
-type PluginRecord = {
-  id: string;
-  name: string;
-  version: string;
-  description: string;
-  trustTier: "first_party" | "third_party";
-  distribution: "workspace_package" | "npm_package" | "remote_bundle";
-  implementationStatus: "catalog_only" | "bundled";
-  releaseStage: "available" | "coming_soon";
-  activationAllowed: boolean;
-  status: PluginStatus;
-  statusLabel: string;
-  installed: boolean;
-  enabled: boolean;
-  capabilityIds: string[];
-  permissions: { id: string; label: string }[];
-  routes: { id: string; path: string; methods: string[]; auth: string }[];
-  uiSlots: { id: string; slot: string; label: string }[];
-  agentTools: {
-    id: string;
-    label: string;
-    sideEffect: string;
-    approvalMode: string;
-  }[];
-  secrets: { name: string; label: string; required: boolean }[];
-  migrations: { id: string; path: string; destructive: false }[];
-  queuesAndCrons: {
-    id: string;
-    kind: "queue" | "cron";
-    binding?: string;
-    schedule?: string;
-  }[];
-  setupRequirements: PluginSetupRequirement[];
-  notes: string[];
-};
-
-type PluginsResponse = {
-  catalogVersion: string;
-  plugins: PluginRecord[];
 };
 
 type LocalExecutorPairingInstructions = {
@@ -602,6 +553,10 @@ const pluginSummaryStatusClass = computed(() => {
 
 const visibleAccountPlugins = computed(() =>
   plugins.value.filter((plugin) => !isPluginComingSoon(plugin)),
+);
+
+const pluginBusyIds = computed(() =>
+  pluginActionLoading.value ? [pluginActionLoading.value.split(":")[0]] : [],
 );
 
 const localExecutorPlugin = computed(
@@ -1214,57 +1169,10 @@ function pluginActionKey(
   return `${plugin.id}:${action}`;
 }
 
-function pluginInfoText(plugin: PluginRecord) {
-  if (plugin.id === "me3.social-publishing") {
-    return "Adds social account connection and approval-first publishing.";
-  }
-  return plugin.description;
-}
-
-function isPluginComingSoon(plugin: PluginRecord) {
-  return (
-    plugin.status === "coming_soon" ||
-    plugin.releaseStage === "coming_soon" ||
-    plugin.activationAllowed === false
-  );
-}
-
-function canActivatePlugin(plugin: PluginRecord) {
-  return (
-    !isPluginComingSoon(plugin) &&
-    (plugin.status === "available" || plugin.status === "disabled")
-  );
-}
-
-const pluginNavEmojis: Record<string, string> = {
-  "me3.mission-control": "🚀",
-  "me3.calendar": "🗓️",
-  "me3.agent-chat": "🤖",
-  "me3.social-publishing": "📣",
-  "me3.accounts": "💰",
-  "me3.landing-pages": "🌐",
-};
-
 const LOCAL_EXECUTOR_SOURCE_BIN =
   "node packages/local-executor/bin/me3-local-executor.mjs";
 const LOCAL_EXECUTOR_CONFIG_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} config init --provider opencode`;
 const LOCAL_EXECUTOR_ONCE_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} once`;
-
-function pluginNavEmoji(plugin: PluginRecord) {
-  return pluginNavEmojis[plugin.id] || "🧩";
-}
-
-function isPluginBusy(plugin: PluginRecord) {
-  return Boolean(pluginActionLoading.value?.startsWith(`${plugin.id}:`));
-}
-
-function isPluginEnabled(plugin: PluginRecord) {
-  return !canActivatePlugin(plugin);
-}
-
-function isLocalExecutorPlugin(plugin: PluginRecord) {
-  return plugin.id === "me3.local-executor";
-}
 
 function openLocalExecutorSetup() {
   localExecutorSetupOpen.value = true;
@@ -2218,61 +2126,14 @@ onMounted(async () => {
             <p v-else-if="pluginsError" class="error">{{ pluginsError }}</p>
 
             <template v-else>
-              <div v-if="visibleAccountPlugins.length" class="plugin-list">
-                <article
-                  v-for="plugin in visibleAccountPlugins"
-                  :key="plugin.id"
-                  class="plugin-row"
-                >
-                  <div class="plugin-row__main">
-                    <span class="plugin-row__emoji" aria-hidden="true">
-                      {{ pluginNavEmoji(plugin) }}
-                    </span>
-                    <div class="plugin-row__copy">
-                      <h3>{{ plugin.name }}</h3>
-                      <p>{{ pluginInfoText(plugin) }}</p>
-                    </div>
-                    <div class="plugin-row__actions">
-                      <Button
-                        v-if="isLocalExecutorPlugin(plugin)"
-                        variant="outline"
-                        size="small"
-                        shape="soft"
-                        type="button"
-                        @click="openLocalExecutorSetup"
-                      >
-                        Configure
-                      </Button>
-                      <label
-                        class="plugin-toggle"
-                        :class="{ 'is-busy': isPluginBusy(plugin) }"
-                      >
-                        <input
-                          type="checkbox"
-                          class="plugin-toggle__input"
-                          :checked="isPluginEnabled(plugin)"
-                          :disabled="isPluginBusy(plugin)"
-                          :aria-label="
-                            isPluginEnabled(plugin)
-                              ? `Disable ${plugin.name}`
-                              : `Enable ${plugin.name}`
-                          "
-                          @change="
-                            togglePlugin(
-                              plugin,
-                              ($event.target as HTMLInputElement).checked,
-                            )
-                          "
-                        />
-                        <span
-                          class="plugin-toggle__track"
-                          aria-hidden="true"
-                        />
-                      </label>
-                    </div>
-                  </div>
-                </article>
-              </div>
+              <PluginList
+                v-if="visibleAccountPlugins.length"
+                :plugins="visibleAccountPlugins"
+                :busy-plugin-ids="pluginBusyIds"
+                :show-local-executor-config="true"
+                @toggle="togglePlugin"
+                @configure-local-executor="openLocalExecutorSetup"
+              />
 
               <p v-else-if="plugins.length === 0" class="field-hint">
                 No curated plugins are registered in this Core build.
@@ -3606,124 +3467,6 @@ h1 {
   gap: 14px;
 }
 
-.plugin-list {
-  display: grid;
-  gap: 8px;
-}
-
-.plugin-row {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: 10px;
-  background: var(--ui-surface, var(--color-bg));
-}
-
-.plugin-row__main {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.plugin-row__emoji {
-  flex-shrink: 0;
-  font-size: 21px;
-  line-height: 1;
-  font-family:
-    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-}
-
-.plugin-row__copy {
-  flex: 1;
-  min-width: 0;
-}
-
-.plugin-row__actions {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 10px;
-}
-
-.plugin-row h3 {
-  margin: 0;
-  color: var(--color-text);
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.3;
-}
-
-.plugin-row p {
-  margin: 2px 0 0;
-  color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
-
-.plugin-toggle {
-  position: relative;
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  cursor: pointer;
-}
-
-.plugin-toggle.is-busy {
-  cursor: wait;
-  opacity: 0.72;
-}
-
-.plugin-toggle__input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.plugin-toggle__track {
-  width: 40px;
-  height: 22px;
-  border-radius: 999px;
-  background: var(--color-border);
-  position: relative;
-  transition: background 0.2s ease;
-}
-
-.plugin-toggle__track::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  background: var(--color-bg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  transition: transform 0.2s ease;
-}
-
-.plugin-toggle__input:checked + .plugin-toggle__track {
-  background: var(--color-accent);
-}
-
-.plugin-toggle__input:checked + .plugin-toggle__track::after {
-  transform: translateX(18px);
-}
-
-.plugin-toggle__input:focus-visible + .plugin-toggle__track {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-.plugin-toggle__input:disabled + .plugin-toggle__track {
-  opacity: 0.55;
-}
-
 .plugin-meta-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4149,8 +3892,7 @@ h1 {
 
   .danger-card,
   .email-row,
-  .connection-line,
-  .plugin-row__main {
+  .connection-line {
     align-items: flex-start;
   }
 
@@ -4187,10 +3929,6 @@ h1 {
   .mailbox-config-grid,
   .email-provider-fields {
     grid-template-columns: 1fr;
-  }
-
-  .plugin-row__actions {
-    justify-content: flex-end;
   }
 
   .local-executor-modal {

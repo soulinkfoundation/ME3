@@ -3,12 +3,21 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { RouterLink, useRouter } from "vue-router";
 import { api, getUsernameAvailability } from "../api";
+import PluginList from "../components/PluginList.vue";
 import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import { usePublish } from "../composables/usePublish";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useWizardStore } from "../stores/wizard";
 import { DEFAULT_APP_PATH } from "../utils/navigation";
+import {
+  RECOMMENDED_START_PLUGIN_ID_SET,
+  RECOMMENDED_START_PLUGIN_IDS,
+  isPluginComingSoon,
+  isPluginEnabled,
+  type PluginRecord,
+  type PluginsResponse,
+} from "../utils/plugins";
 
 definePage({
   meta: {
@@ -42,7 +51,7 @@ type EmailProviderSettingsResponse = {
   providers: Array<{ id: EmailProviderId }>;
 };
 
-const STEPS = ["Profile", "Email", "Soulink"] as const;
+const STEPS = ["Profile", "Email", "Plugins", "Soulink"] as const;
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
 
 const router = useRouter();
@@ -69,6 +78,13 @@ const emailSaving = ref(false);
 const emailMessage = ref("");
 const emailError = ref("");
 const mailboxAvailable = ref(true);
+const pluginsLoading = ref(false);
+const pluginsSaving = ref(false);
+const plugins = ref<PluginRecord[]>([]);
+const pluginsError = ref("");
+const selectedPluginIds = ref<Set<string>>(
+  new Set(RECOMMENDED_START_PLUGIN_IDS),
+);
 const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
   null,
 );
@@ -94,6 +110,15 @@ const finishDestination = computed(() =>
   profileSiteUsername.value
     ? `/sites/${encodeURIComponent(profileSiteUsername.value)}`
     : DEFAULT_APP_PATH,
+);
+const selectedPluginIdList = computed(() =>
+  Array.from(selectedPluginIds.value),
+);
+const pluginBusyIds = computed(() =>
+  pluginsSaving.value ? plugins.value.map((plugin) => plugin.id) : [],
+);
+const pluginsCanContinue = computed(
+  () => !pluginsLoading.value && !pluginsSaving.value,
 );
 
 const profileCanContinue = computed(
@@ -383,6 +408,100 @@ function skipEmail() {
   advanceTo(3);
 }
 
+function applyDefaultPluginSelection(nextPlugins: PluginRecord[]) {
+  const nextSelection = new Set<string>();
+  for (const plugin of nextPlugins) {
+    if (
+      !isPluginComingSoon(plugin) &&
+      RECOMMENDED_START_PLUGIN_ID_SET.has(plugin.id)
+    ) {
+      nextSelection.add(plugin.id);
+    }
+  }
+  selectedPluginIds.value = nextSelection;
+}
+
+async function loadPlugins() {
+  pluginsLoading.value = true;
+  pluginsError.value = "";
+
+  try {
+    const response = await api.get<PluginsResponse>("/plugins");
+    const nextPlugins = response.plugins || [];
+    plugins.value = nextPlugins;
+    applyDefaultPluginSelection(nextPlugins);
+  } catch (error) {
+    pluginsError.value =
+      error instanceof Error ? error.message : "Could not load plugins.";
+  } finally {
+    pluginsLoading.value = false;
+  }
+}
+
+function updatePluginSelection(plugin: PluginRecord, enabled: boolean) {
+  const nextSelection = new Set(selectedPluginIds.value);
+  if (enabled) {
+    nextSelection.add(plugin.id);
+  } else {
+    nextSelection.delete(plugin.id);
+  }
+  selectedPluginIds.value = nextSelection;
+}
+
+function syncPlugin(plugin: PluginRecord) {
+  const index = plugins.value.findIndex(
+    (candidate) => candidate.id === plugin.id,
+  );
+  if (index >= 0) {
+    plugins.value.splice(index, 1, plugin);
+  } else {
+    plugins.value.push(plugin);
+  }
+  window.dispatchEvent(new CustomEvent("me3:plugins-changed"));
+}
+
+async function savePlugins() {
+  if (!pluginsCanContinue.value) return;
+  if (plugins.value.length === 0) {
+    await loadPlugins();
+  }
+  if (pluginsError.value) return;
+
+  pluginsSaving.value = true;
+  pluginsError.value = "";
+
+  try {
+    const requestedPluginIds = selectedPluginIds.value;
+    const pluginsToUpdate = plugins.value.filter((plugin) => {
+      if (isPluginComingSoon(plugin)) return false;
+      return isPluginEnabled(plugin) !== requestedPluginIds.has(plugin.id);
+    });
+
+    for (const plugin of pluginsToUpdate) {
+      const shouldEnable = requestedPluginIds.has(plugin.id);
+      const response = await api.post<{ plugin: PluginRecord }>(
+        `/plugins/${encodeURIComponent(plugin.id)}/${
+          shouldEnable ? "activate" : "deactivate"
+        }`,
+        {},
+      );
+      syncPlugin(response.plugin);
+    }
+
+    advanceTo(4);
+  } catch (error) {
+    pluginsError.value =
+      error instanceof Error ? error.message : "Could not save plugins.";
+  } finally {
+    pluginsSaving.value = false;
+  }
+}
+
+function skipPlugins() {
+  pluginsError.value = "";
+  advanceTo(4);
+}
+
 async function finish() {
   await router.push(finishDestination.value);
 }
@@ -396,6 +515,9 @@ watch(domain, (value) => {
 watch(currentStep, (step) => {
   if (step === 2 && !emailLoading.value && !emailAddress.value) {
     void loadEmailDefaults();
+  }
+  if (step === 3 && !pluginsLoading.value && plugins.value.length === 0) {
+    void loadPlugins();
   }
 });
 
@@ -630,6 +752,57 @@ onBeforeUnmount(clearUsernameCheck);
         </form>
       </section>
 
+      <section
+        v-else-if="currentStep === 3"
+        class="start-step"
+        aria-labelledby="plugins-title"
+      >
+        <div class="step-copy">
+          <h1 id="plugins-title">Choose plugins</h1>
+          <p>
+            Start with chat, Mission Control, and Calendar. Add the other
+            workspace plugins when they match how you want to run ME3.
+          </p>
+        </div>
+
+        <div class="plugins-panel-wrap">
+          <div v-if="pluginsLoading" class="status-row">
+            Loading plugins...
+          </div>
+          <p v-else-if="pluginsError" class="error">{{ pluginsError }}</p>
+          <PluginList
+            v-else-if="plugins.length"
+            :plugins="plugins"
+            :busy-plugin-ids="pluginBusyIds"
+            :selected-plugin-ids="selectedPluginIdList"
+            :recommended-plugin-ids="RECOMMENDED_START_PLUGIN_IDS"
+            @toggle="updatePluginSelection"
+          />
+          <p v-else class="field-hint">
+            No curated plugins are registered in this Core build.
+          </p>
+        </div>
+
+        <div class="step-nav split">
+          <button class="nav-btn back" type="button" @click="goToStep(2)">
+            Back
+          </button>
+          <div class="nav-actions-right">
+            <button class="nav-btn ghost" type="button" @click="skipPlugins">
+              Skip for now
+            </button>
+            <button
+              class="nav-btn next"
+              type="button"
+              :disabled="!pluginsCanContinue"
+              @click="savePlugins"
+            >
+              {{ pluginsSaving ? "Saving..." : "Save plugins" }}
+            </button>
+          </div>
+        </div>
+      </section>
+
       <section v-else class="start-step" aria-labelledby="soulink-title">
         <div class="step-copy">
           <h1 id="soulink-title">Connect Soulink</h1>
@@ -653,7 +826,7 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
 
         <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(2)">
+          <button class="nav-btn back" type="button" @click="goToStep(3)">
             Back
           </button>
           <div class="nav-actions-right">
@@ -708,7 +881,7 @@ onBeforeUnmount(clearUsernameCheck);
 .progress-steps {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
 }
 
@@ -1006,11 +1179,18 @@ onBeforeUnmount(clearUsernameCheck);
   cursor: not-allowed;
 }
 
+.plugins-panel-wrap,
 .soulink-panel-wrap {
   padding: 18px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-md, 10px);
   background: var(--ui-surface, var(--color-bg));
+}
+
+.status-row {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 @media (max-width: 640px) {
