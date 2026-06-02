@@ -705,6 +705,12 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
       auth: "owner",
     },
     {
+      id: "assistant.voice.transcribe.api",
+      path: "/api/assistant/voice/transcribe",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
       id: "agent.sandbox.api",
       path: "/api/agent/sandbox",
       methods: ["POST"],

@@ -169,6 +169,10 @@ import {
   updateTelegramSettings,
 } from "./telegram-settings";
 import {
+  VoiceDictationInputError,
+  transcribeVoiceDictation,
+} from "./voice-dictation";
+import {
   buildLandingPageDocument,
   LANDING_PAGES_PLUGIN_ID,
   getLandingPageTemplateId,
@@ -1189,6 +1193,31 @@ app.post("/api/assistant/chat", async (c) => {
     reply: "ME3 Core assistant shell is booted. Model execution will be wired in the first bootable slice.",
     setupRequired: await getSetupRequired(c.env, ownerId),
   });
+});
+
+app.post("/api/assistant/voice/transcribe", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const formData = await c.req.formData().catch((): FormData | null => null);
+  const audio = formData?.get("audio");
+  const language = formData?.get("language");
+
+  if (!(audio instanceof Blob)) {
+    return c.json({ ok: false, error: "Audio file is required" }, 400);
+  }
+
+  try {
+    const result = await transcribeVoiceDictation(c.env, audio, {
+      language: typeof language === "string" && language.trim() ? language.trim() : null,
+    });
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    if (error instanceof VoiceDictationInputError) {
+      return c.json({ ok: false, error: error.message }, error.status as any);
+    }
+    throw error;
+  }
 });
 
 app.get("/api/assistant/jobs/recipes", async (c) => {

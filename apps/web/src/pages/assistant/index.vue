@@ -239,6 +239,14 @@ type AgentSandboxResponse = {
 
 type JobsResponse = { jobs: AssistantJob[] };
 type RecipesResponse = { recipes: AssistantJobRecipe[] };
+type VoiceTranscriptionResponse = {
+  ok: boolean;
+  providerId: string;
+  model: string;
+  text: string;
+  wordCount: number | null;
+  language: string | null;
+};
 
 const { toastSuccess, toastFromUnknown } = useAppToast();
 const agentChat = useAgentChat();
@@ -272,6 +280,13 @@ const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
 const selectedModelId = ref("workers-qwen3-30b");
+const voiceDictationState = ref<"idle" | "listening" | "processing" | "unsupported">("idle");
+const voiceDictationError = ref<string | null>(null);
+const voiceMediaRecorder = ref<MediaRecorder | null>(null);
+const voiceMediaStream = ref<MediaStream | null>(null);
+const voiceAudioChunks: Blob[] = [];
+let voiceStopTimeout: number | null = null;
+let voiceDiscardRecording = false;
 
 const defaultDailyBriefingTemplate =
   "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -442,13 +457,26 @@ const assistantConsoleMessages = computed(() =>
 const canSendAssistantMessage = computed(
   () => assistantDraft.value.trim().length > 0 && !assistantSending.value,
 );
+const canUseVoiceDictation = computed(
+  () => !assistantSending.value && voiceDictationState.value !== "processing",
+);
+const voiceDictationStatusText = computed(() => {
+  if (voiceDictationState.value === "listening") return "Listening";
+  if (voiceDictationState.value === "processing") return "Transcribing";
+  if (voiceDictationError.value) return voiceDictationError.value;
+  return "";
+});
 
 onMounted(() => {
+  if (!supportsMediaRecording()) {
+    voiceDictationState.value = "unsupported";
+  }
   void loadPage();
   window.addEventListener("keydown", handleWindowKeydown);
 });
 
 onBeforeUnmount(() => {
+  stopVoiceDictation({ discard: true });
   window.removeEventListener("keydown", handleWindowKeydown);
 });
 
@@ -645,6 +673,162 @@ function findPreviousUserMessageIndex(message: (typeof chatMessages.value)[numbe
   }
 
   return -1;
+}
+
+async function toggleVoiceDictation() {
+  if (!canUseVoiceDictation.value) return;
+  if (voiceDictationState.value === "listening") {
+    stopVoiceDictation();
+    return;
+  }
+  await startVoiceDictation();
+}
+
+async function startVoiceDictation() {
+  if (!supportsMediaRecording()) {
+    voiceDictationState.value = "unsupported";
+    voiceDictationError.value = "Voice dictation is not available in this browser.";
+    return;
+  }
+
+  voiceDictationError.value = null;
+  assistantError.value = null;
+  voiceAudioChunks.splice(0);
+  voiceDiscardRecording = false;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = getPreferredVoiceMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    voiceMediaStream.value = stream;
+    voiceMediaRecorder.value = recorder;
+
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size > 0) voiceAudioChunks.push(event.data);
+    });
+    recorder.addEventListener("stop", () => {
+      void transcribeRecordedVoice(recorder.mimeType || mimeType || "audio/webm");
+    });
+
+    recorder.start();
+    voiceDictationState.value = "listening";
+    voiceStopTimeout = window.setTimeout(() => {
+      stopVoiceDictation();
+    }, 120_000);
+  } catch (err) {
+    cleanupVoiceRecorder();
+    voiceDictationState.value = "idle";
+    voiceDictationError.value = messageFromUnknown(
+      err,
+      "Could not start voice dictation.",
+    );
+  }
+}
+
+function stopVoiceDictation(options: { discard?: boolean } = {}) {
+  if (voiceStopTimeout !== null) {
+    window.clearTimeout(voiceStopTimeout);
+    voiceStopTimeout = null;
+  }
+
+  const recorder = voiceMediaRecorder.value;
+  if (options.discard) {
+    voiceDiscardRecording = true;
+    voiceAudioChunks.splice(0);
+  }
+  if (recorder && recorder.state !== "inactive") {
+    recorder.stop();
+  } else {
+    cleanupVoiceRecorder();
+  }
+}
+
+async function transcribeRecordedVoice(mimeType: string) {
+  if (voiceDiscardRecording) {
+    voiceDiscardRecording = false;
+    voiceAudioChunks.splice(0);
+    cleanupVoiceRecorder();
+    voiceDictationState.value = "idle";
+    return;
+  }
+
+  const chunks = voiceAudioChunks.splice(0);
+  cleanupVoiceRecorder();
+  if (chunks.length === 0) {
+    voiceDictationState.value = "idle";
+    return;
+  }
+
+  voiceDictationState.value = "processing";
+  voiceDictationError.value = null;
+
+  try {
+    const formData = new FormData();
+    const audio = new Blob(chunks, { type: mimeType });
+    formData.append("audio", audio, `assistant-dictation.${extensionForMimeType(mimeType)}`);
+    const result = await api.upload<VoiceTranscriptionResponse>(
+      "/assistant/voice/transcribe",
+      formData,
+    );
+    insertVoiceTranscript(result.text);
+    voiceDictationState.value = "idle";
+  } catch (err) {
+    voiceDictationState.value = "idle";
+    voiceDictationError.value = messageFromUnknown(err, "Voice transcription failed.");
+  }
+}
+
+function insertVoiceTranscript(text: string) {
+  const transcript = text.trim();
+  if (!transcript) return;
+
+  const textarea = assistantComposerRef.value;
+  const current = assistantDraft.value;
+  const selectionStart = textarea?.selectionStart ?? current.length;
+  const selectionEnd = textarea?.selectionEnd ?? selectionStart;
+  const before = current.slice(0, selectionStart);
+  const after = current.slice(selectionEnd);
+  const prefix = before && !/\s$/.test(before) ? " " : "";
+  const suffix = after && !/^\s/.test(after) ? " " : "";
+
+  assistantDraft.value = `${before}${prefix}${transcript}${suffix}${after}`;
+  void nextTick(() => {
+    const cursor = selectionStart + prefix.length + transcript.length;
+    autosizeAssistantComposer();
+    assistantComposerRef.value?.focus();
+    assistantComposerRef.value?.setSelectionRange(cursor, cursor);
+  });
+}
+
+function cleanupVoiceRecorder() {
+  voiceMediaRecorder.value = null;
+  voiceMediaStream.value?.getTracks().forEach((track) => track.stop());
+  voiceMediaStream.value = null;
+}
+
+function supportsMediaRecording() {
+  return (
+    typeof navigator !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia) &&
+    typeof MediaRecorder !== "undefined"
+  );
+}
+
+function getPreferredVoiceMimeType() {
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+  ];
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || "";
+}
+
+function extensionForMimeType(mimeType: string) {
+  if (mimeType.includes("mp4")) return "m4a";
+  if (mimeType.includes("ogg")) return "ogg";
+  if (mimeType.includes("wav")) return "wav";
+  return "webm";
 }
 
 function onAssistantComposerKeydown(event: KeyboardEvent) {
@@ -1557,11 +1741,25 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <button
                 type="button"
                 class="composer-icon-button"
-                title="Voice dictation"
-                aria-label="Voice dictation"
-                disabled
+                :class="{ 'composer-icon-button--listening': voiceDictationState === 'listening' }"
+                :title="
+                  voiceDictationState === 'listening'
+                    ? 'Stop dictation'
+                    : 'Voice dictation'
+                "
+                :aria-label="
+                  voiceDictationState === 'listening'
+                    ? 'Stop voice dictation'
+                    : 'Start voice dictation'
+                "
+                :aria-pressed="voiceDictationState === 'listening'"
+                :disabled="!canUseVoiceDictation || voiceDictationState === 'unsupported'"
+                @click="toggleVoiceDictation"
               >
-                <UiIcon name="Mic" :size="17" />
+                <UiIcon
+                  :name="voiceDictationState === 'listening' ? 'MicOff' : 'Mic'"
+                  :size="17"
+                />
               </button>
               <button
                 type="button"
@@ -1576,6 +1774,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
           </div>
           <div class="assistant-composer__meta">
             <span>{{ selectedModel?.runtimeLabel }}</span>
+            <span v-if="voiceDictationStatusText" class="assistant-composer__voice-status">
+              {{ voiceDictationStatusText }}
+            </span>
           </div>
           <p v-if="assistantError" class="assistant-error">
             {{ assistantError }}
@@ -2611,9 +2812,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text);
 }
 
+.composer-icon-button--listening,
+.composer-icon-button--listening:hover:not(:disabled) {
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+}
+
 .composer-icon-button:disabled {
-  opacity: 1;
-  cursor: default;
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .composer-icon-button:disabled:hover {
@@ -2636,7 +2843,20 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-composer__meta {
-  display: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 16px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.assistant-composer__voice-status {
+  color: var(--ui-accent-strong);
+  font-weight: 700;
+  text-align: right;
 }
 
 .assistant-error {
