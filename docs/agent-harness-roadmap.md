@@ -181,6 +181,8 @@ Detailed reference docs:
 - `docs/assistant-jobs-heartbeat.md`: heartbeat and reconciliation reference.
 - `docs/assistant-job-creation-capability.md`: custom job builder reference.
 - `docs/assistant-jobs-and-agent-skills.md`: skill/recipe/job/capability boundary.
+- `docs/agent-chat-launcher-plan.md`: in-app launcher product direction for chat actions,
+  job creation, context attachments, and review/supervision.
 - `docs/inbox-watch-rules-plan.md`: Inbox Watch multiple rules, mixed timing, and
   approval-first outcomes plan.
 - `docs/agent-context-roadmap.md`: native context and memory design reference.
