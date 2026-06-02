@@ -6,6 +6,39 @@ Last updated: 2026-06-02
 
 Tracking: `me3-8it`.
 
+Related follow-up: `me3-kid` tracks the robust composer-only voice dictation adapter.
+
+## Progress Update
+
+As of 2026-06-02:
+
+- Milestone 1 shell is implemented:
+  - `/assistant` is a full-screen assistant console.
+  - The global launcher is hidden there.
+  - The Jobs modal remains available from the composer and keeps the existing starter/tuning flows.
+  - The bottom composer, model selector, starter prompts, and message timeline are in place.
+- Milestone 2 is partially implemented:
+  - `/api/assistant/chat/turn` is now the product-facing chat route.
+  - `/api/agent/sandbox` remains as a legacy alias.
+  - `/assistant`, the launcher, and wizard helper calls use the new endpoint.
+  - The assistant page sends the selected model with each turn.
+  - The Worker validates selected model payloads and forwards them to the runtime.
+  - The runtime respects selected provider/model when provided.
+  - Copy, retry, and edit/resend basics are implemented in the assistant UI.
+- Milestone 3 is partially implemented:
+  - The model picker exists in the assistant composer and is wired to chat turns.
+  - Setup-aware filtering, capability metadata, and persistence are still pending.
+- Voice mode has a dedicated implementation bead:
+  - `me3-kid` should build the robust composer-only voice dictation adapter with provider/plugin
+    architecture.
+
+Current QA coverage:
+
+- `pnpm build`
+- Focused Worker tests for `/assistant/chat/turn`, `/agent/sandbox` alias behavior, selected model
+  validation, and selected Workers AI model routing.
+- In-app browser visual checks for the assistant shell/composer.
+
 This document replaces the earlier agent chat launcher plan. The new product direction is that
 `/assistant` becomes ME3's full chat, agent, and model interface. The floating
 `AgentChatLauncher.vue` remains useful, but only as a lightweight companion on other pages.
@@ -360,14 +393,14 @@ Goal: make `/assistant` visually and structurally become the primary chat consol
 
 Tasks:
 
-- Keep `hideAgentLauncher: true` on `/assistant`.
-- Change page metadata from "Assistant Jobs" to "Assistant".
-- Preserve the existing Jobs modal and data-loading logic.
-- Add a centered chat timeline to `/assistant`.
-- Add a bottom composer similar in feel to Codex/Claude.
-- Put the Jobs button beside the model selector or composer controls.
-- Add empty state prompts without making a landing page.
-- Keep the UI calm, dense, and token-driven.
+- [x] Keep `hideAgentLauncher: true` on `/assistant`.
+- [x] Change page metadata from "Assistant Jobs" to "Assistant".
+- [x] Preserve the existing Jobs modal and data-loading logic.
+- [x] Add a centered chat timeline to `/assistant`.
+- [x] Add a bottom composer similar in feel to Codex/Claude.
+- [x] Put the Jobs button beside the model selector or composer controls.
+- [x] Add empty state prompts without making a landing page.
+- [x] Keep the UI calm, dense, and token-driven.
 
 Acceptance:
 
@@ -382,12 +415,20 @@ Goal: make the chat feel like a serious model interface.
 
 Tasks:
 
-- Decide whether to extend `/agent/sandbox` or create a new `/assistant/chat/turn` endpoint.
-- Add a typed turn request with message text, selected model, attachments, and context references.
-- Add streaming responses if feasible.
-- Add stop, retry, copy, and edit/resend basics.
-- Persist conversation turns enough for refresh resilience.
-- Continue writing structured chat/action audit events.
+- [x] Decide whether to extend `/agent/sandbox` or create a new `/assistant/chat/turn` endpoint.
+- [~] Add a typed turn request with message text, selected model, attachments, and context
+  references.
+- [ ] Add streaming responses if feasible.
+- [~] Add stop, retry, copy, and edit/resend basics.
+- [ ] Persist conversation turns enough for refresh resilience.
+- [ ] Continue writing structured chat/action audit events.
+
+Notes:
+
+- `/assistant/chat/turn` is the product endpoint.
+- `/agent/sandbox` is a legacy alias.
+- Message text and selected model are wired; attachments and context references are still pending.
+- Copy, retry, and edit/resend are wired; stop is still pending.
 
 Acceptance:
 
@@ -401,12 +442,18 @@ Goal: let owners choose a model without leaving the assistant page.
 
 Tasks:
 
-- Use `AI_AGENT_MODEL_OPTIONS` as the first catalog source.
-- Show configured/unconfigured provider state.
-- Respect Account defaults.
-- Persist the current assistant page selection.
-- Add model capability metadata for text, vision, long context, reasoning, and tool use.
-- Block or explain incompatible sends, such as image attachment to a text-only model.
+- [x] Use `AI_AGENT_MODEL_OPTIONS` as the first catalog source.
+- [ ] Show configured/unconfigured provider state.
+- [~] Respect Account defaults.
+- [ ] Persist the current assistant page selection.
+- [ ] Add model capability metadata for text, vision, long context, reasoning, and tool use.
+- [ ] Block or explain incompatible sends, such as image attachment to a text-only model.
+
+Notes:
+
+- The picker is visible in the assistant composer.
+- `/assistant` sends the selected model per turn.
+- Other chat surfaces omit model selection and continue to use Account/default routing.
 
 Acceptance:
 
@@ -440,12 +487,18 @@ Goal: make voice useful without turning it into a live voice agent.
 
 Tasks:
 
-- Add recorder UI to the composer.
-- Run a transcription spike around Whisper-family open-source options.
-- Choose browser/WASM, local executor, or server-backed transcription based on privacy, speed, and
+- [ ] Add recorder UI to the composer.
+- [ ] Run a transcription spike around Whisper-family open-source options.
+- [ ] Choose browser/WASM, local executor, or server-backed transcription based on privacy, speed, and
   standalone feasibility.
-- Insert transcript text into the composer.
-- Keep manual send as the confirmation step.
+- [ ] Insert transcript text into the composer.
+- [ ] Keep manual send as the confirmation step.
+
+Notes:
+
+- Tracked separately as `me3-kid`.
+- The chosen implementation should be composer-only and robust rather than a temporary browser-only
+  proof of concept.
 
 Acceptance:
 
