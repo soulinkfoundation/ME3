@@ -141,14 +141,7 @@ export const DEFAULT_LOCAL_EXECUTOR_PROJECT_POLICY: LocalExecutorProjectPolicy =
 };
 
 export const DEFAULT_LOCAL_EXECUTOR_CONFIG = {
-  runnerId: "my-desktop",
-  apiBase: "https://example.com/api/local-executor",
-  tokenStore: "~/.me3/local-executor/token.json",
-  logDir: "~/.me3/local-executor/runs",
-  pollIntervalSeconds: 20,
-  maxConcurrentRuns: 1,
   defaultProviderPreset: "opencode",
-  providers: LOCAL_EXECUTOR_PROVIDER_PRESETS,
 } as const;
 
 export function renderLocalExecutorProviderCommand(

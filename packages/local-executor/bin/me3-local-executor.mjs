@@ -2,7 +2,10 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+
+const defaultConfigPath = "~/.me3/local-executor/config.json";
+const defaultRunnerId = "my-desktop";
 
 const providerPresets = {
   opencode: {
@@ -21,14 +24,7 @@ const providerPresets = {
 };
 
 const defaultConfig = {
-  runnerId: "my-desktop",
-  apiBase: "https://example.com/api/local-executor",
-  tokenStore: "~/.me3/local-executor/token.json",
-  logDir: "~/.me3/local-executor/runs",
-  pollIntervalSeconds: 20,
-  maxConcurrentRuns: 1,
   defaultProviderPreset: "opencode",
-  providers: providerPresets,
 };
 
 const args = process.argv.slice(2);
@@ -69,14 +65,17 @@ Options:
   config init --provider <opencode|codex|claude>
                           Create local config with a default provider
   pair --api <url>       ME3 Core Local Executor API URL
+  pair --token-store <path>
+                          Override where the pairing token is saved
   once --api <url>       Override the saved API URL
+  once --config <path>   Override the local runner config path
   once --provider <id>   Override the local default provider for this run
 `);
 }
 
 async function handleConfig(argv) {
   const action = argv[0] || "show";
-  const configPath = expandPath(readFlag(argv, "--path") || "~/.me3/local-executor/config.json");
+  const configPath = expandPath(readFlag(argv, "--path") || defaultConfigPath);
   if (action === "show") {
     console.log(JSON.stringify(defaultConfig, null, 2));
     return;
@@ -87,10 +86,11 @@ async function handleConfig(argv) {
   await mkdir(dirname(configPath), { recursive: true });
   await writeFile(
     configPath,
-    `${JSON.stringify({ ...defaultConfig, defaultProviderPreset: provider }, null, 2)}\n`,
+    `${JSON.stringify({ defaultProviderPreset: provider }, null, 2)}\n`,
     { mode: 0o600 },
   );
   console.log(`Wrote ${configPath}`);
+  console.log(`Pairing tokens and run logs will live next to it by default.`);
 }
 
 function handleRender(argv) {
@@ -103,9 +103,11 @@ function handleRender(argv) {
 async function handlePair(argv) {
   const apiBase = requiredFlag(argv, "--api").replace(/\/$/, "");
   const code = requiredFlag(argv, "--code");
-  const runnerId = readFlag(argv, "--runner-id") || defaultConfig.runnerId;
+  const runnerId = readFlag(argv, "--runner-id") || defaultRunnerId;
   const displayName = readFlag(argv, "--name") || runnerId;
-  const tokenStore = expandPath(readFlag(argv, "--token-store") || defaultConfig.tokenStore);
+  const tokenStore = readFlag(argv, "--token-store")
+    ? expandPath(readFlag(argv, "--token-store"))
+    : defaultTokenStorePath();
   const response = await fetch(`${apiBase}/daemon/pairing/complete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -136,27 +138,29 @@ async function handlePair(argv) {
 }
 
 async function handleOnce(argv) {
-  const configPath = expandPath(readFlag(argv, "--config") || "~/.me3/local-executor/config.json");
+  const configPath = expandPath(readFlag(argv, "--config") || defaultConfigPath);
   const config = await readJson(configPath).catch(() => defaultConfig);
-  const tokenStore = expandPath(config.tokenStore || defaultConfig.tokenStore);
-  const tokenRecord = await readJson(tokenStore);
-  const apiBase = String(
-    readFlag(argv, "--api") ||
-      tokenRecord.apiBase ||
-      config.apiBase ||
-      defaultConfig.apiBase,
-  ).replace(/\/$/, "");
-  if (apiBase.includes("example.com")) {
+  const tokenStore = resolveLocalConfigPath(config.tokenStore, configPath, "token.json");
+  const tokenRecord = await readJson(tokenStore).catch((error) => {
+    throw new Error(
+      `No runner token found at ${tokenStore}. Pair this computer first, then run once again. ` +
+        `Original error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+  const configuredApiBase = readFlag(argv, "--api") || tokenRecord.apiBase || config.apiBase;
+  if (!configuredApiBase || String(configuredApiBase).includes("example.com")) {
     throw new Error(
       "No ME3 Core API URL is configured. Pair again from Account > Plugins > Local Executor, " +
         "or run once with --api http://localhost:8787/api/local-executor.",
     );
   }
+  const apiBase = String(configuredApiBase).replace(/\/$/, "");
   const authHeaders = {
     Authorization: `Bearer ${tokenRecord.token}`,
     "Content-Type": "application/json",
   };
 
+  console.log("Checking in with ME3...");
   const heartbeatResponse = await fetch(`${apiBase}/daemon/heartbeat`, {
     method: "POST",
     headers: authHeaders,
@@ -174,6 +178,7 @@ async function handleOnce(argv) {
     );
   }
 
+  console.log("Looking for one approved Local Executor run...");
   const claimResponse = await fetch(`${apiBase}/daemon/runs/claim`, {
     method: "POST",
     headers: authHeaders,
@@ -189,6 +194,8 @@ async function handleOnce(argv) {
   }
 
   const run = claim.run;
+  const runLabel = run.promptSummary || summarizePrompt(run.prompt) || run.id;
+  console.log(`Claimed run ${run.id}: ${runLabel}`);
   const providerOverride = readFlag(argv, "--provider");
   const providerId =
     normalizeProviderId(providerOverride) ||
@@ -203,18 +210,35 @@ async function handleOnce(argv) {
     providerPresets[providerId] ||
     providerPresets.opencode;
   const rendered = renderProviderCommand(provider, run.policy.pathHint, run.prompt);
-  const logDir = expandPath(config.logDir || defaultConfig.logDir);
+  const logDir = resolveLocalConfigPath(config.logDir, configPath, "runs");
   await mkdir(logDir, { recursive: true });
+  const logPath = join(logDir, `${run.id}.log`);
+  console.log(`Running ${providerId} in ${rendered.cwd}`);
+  console.log(`Local log: ${logPath}`);
+  await appendRunEvent(apiBase, authHeaders, run.id, {
+    eventType: "provider_started",
+    message: `Started ${providerId} locally.`,
+    payload: { providerId, cwd: rendered.cwd },
+  });
   const startedAt = Date.now();
   const output = await executeBounded(rendered, run.policy.caps?.maxRuntimeSeconds || 1800);
-  const boundedOutput = output.stdout.slice(0, run.policy.caps?.maxOutputChars || 24000);
-  const status = output.code === 0 ? "succeeded" : "failed";
+  const combinedOutput = output.stdout + (output.stderr ? `\n\nSTDERR\n${output.stderr}` : "");
+  const boundedOutput = combinedOutput.slice(0, run.policy.caps?.maxOutputChars || 24000);
+  const status = output.cancelled ? "cancelled" : output.code === 0 ? "succeeded" : "failed";
 
   await writeFile(
-    join(logDir, `${run.id}.log`),
-    boundedOutput + (output.stderr ? `\n\nSTDERR\n${output.stderr}` : ""),
+    logPath,
+    boundedOutput,
     { mode: 0o600 },
   );
+
+  if (output.cancelled) {
+    console.log("Run cancelled locally. Reporting cancellation to ME3...");
+  } else if (output.timedOut) {
+    console.log("Run timed out locally. Reporting failure to ME3...");
+  } else {
+    console.log(`Provider exited with code ${output.code ?? "unknown"}. Reporting ${status} to ME3...`);
+  }
 
   const completeResponse = await fetch(
     `${apiBase}/daemon/runs/${encodeURIComponent(run.id)}/complete`,
@@ -224,10 +248,26 @@ async function handleOnce(argv) {
       body: JSON.stringify({
         status,
         summary:
-          status === "succeeded" ? "Local run completed." : "Local run failed.",
+          status === "succeeded"
+            ? "Local run completed."
+            : status === "cancelled"
+              ? "Local run cancelled on the runner."
+              : "Local run failed.",
         outputPreview: boundedOutput,
-        errorCode: status === "failed" ? "process_failed" : null,
-        errorMessage: status === "failed" ? output.stderr.slice(0, 2000) : null,
+        errorCode:
+          status === "cancelled"
+            ? "runner_cancelled"
+            : output.timedOut
+              ? "timeout"
+              : status === "failed"
+                ? "process_failed"
+                : null,
+        errorMessage:
+          status === "cancelled"
+            ? "The local runner was interrupted before completion."
+            : status === "failed"
+              ? (output.stderr || output.stdout).slice(0, 2000)
+              : null,
         runtimeSeconds: Math.ceil((Date.now() - startedAt) / 1000),
         changedFiles: [],
         qualityGates: [],
@@ -243,7 +283,9 @@ async function handleOnce(argv) {
       complete.error || `Complete failed with ${completeResponse.status}`,
     );
   }
+  console.log(`Reported ${complete.run?.status || status} to ME3.`);
   console.log(JSON.stringify(complete.run, null, 2));
+  if (output.cancelled) process.exitCode = 130;
 }
 
 function renderProviderCommand(provider, repo, prompt) {
@@ -270,8 +312,42 @@ function executeBounded(command, timeoutSeconds) {
     });
     let stdout = "";
     let stderr = "";
-    const timeout = setTimeout(() => {
+    let settled = false;
+    let timedOut = false;
+    let cancelledSignal = null;
+    let killTimer = null;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+    };
+    const resolveOnce = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolvePromise(result);
+    };
+    const terminateChild = () => {
+      if (child.exitCode !== null || child.killed) return;
       child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }, 2000);
+      killTimer.unref?.();
+    };
+    const onSignal = (signal) => {
+      if (!cancelledSignal) {
+        cancelledSignal = signal;
+        console.log(`Received ${signal}. Stopping provider so ME3 can be updated...`);
+      }
+      terminateChild();
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      terminateChild();
     }, timeoutSeconds * 1000);
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -279,15 +355,35 @@ function executeBounded(command, timeoutSeconds) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      resolvePromise({ code, stdout, stderr });
+    child.on("close", (code, signal) => {
+      resolveOnce({
+        code,
+        signal,
+        stdout,
+        stderr,
+        cancelled: Boolean(cancelledSignal),
+        timedOut,
+      });
     });
     child.on("error", (error) => {
-      clearTimeout(timeout);
-      resolvePromise({ code: 1, stdout, stderr: error.message });
+      resolveOnce({
+        code: 1,
+        signal: null,
+        stdout,
+        stderr: error.message,
+        cancelled: Boolean(cancelledSignal),
+        timedOut,
+      });
     });
   });
+}
+
+async function appendRunEvent(apiBase, authHeaders, runId, body) {
+  await fetch(`${apiBase}/daemon/runs/${encodeURIComponent(runId)}/events`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify(body),
+  }).catch(() => null);
 }
 
 async function readJson(path) {
@@ -314,6 +410,21 @@ function selfCommand(subcommand) {
   const scriptPath =
     process.argv[1] || "packages/local-executor/bin/me3-local-executor.mjs";
   return `${nodePath} ${scriptPath} ${subcommand}`;
+}
+
+function defaultTokenStorePath() {
+  return join(dirname(expandPath(defaultConfigPath)), "token.json");
+}
+
+function resolveLocalConfigPath(value, configPath, fallbackName) {
+  if (!value) return join(dirname(configPath), fallbackName);
+  if (value === "~" || value.startsWith("~/") || isAbsolute(value)) return expandPath(value);
+  return resolve(dirname(configPath), value);
+}
+
+function summarizePrompt(prompt) {
+  if (!prompt) return "";
+  return String(prompt).replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
 function expandPath(path) {

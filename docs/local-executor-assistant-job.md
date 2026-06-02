@@ -209,36 +209,17 @@ Default config path:
 
 ```json
 {
-  "runnerId": "my-desktop",
-  "apiBase": "https://example.com/api",
-  "tokenStore": "~/.me3/local-executor/token.json",
-  "logDir": "~/.me3/local-executor/runs",
-  "pollIntervalSeconds": 20,
-  "maxConcurrentRuns": 1,
-  "defaultProviderPreset": "opencode",
-  "providers": {
-    "opencode": {
-      "command": "opencode",
-      "args": ["run", "--dir", "{repo}", "--format", "json", "{prompt}"]
-    },
-    "codex": {
-      "command": "codex",
-      "args": ["exec", "--json", "--sandbox", "workspace-write", "--cd", "{repo}", "{prompt}"]
-    },
-    "claude": {
-      "command": "claude",
-      "args": ["-p", "--output-format", "stream-json", "{prompt}"],
-      "cwd": "{repo}"
-    }
-  }
+  "defaultProviderPreset": "opencode"
 }
 ```
 
-Provider presets are configured locally, not per project in the Mission Control UI. OpenCode
-is the default because it can route to multiple model providers; users who prefer Codex or
-Claude can set `defaultProviderPreset` in `~/.me3/local-executor/config.json` or pass
-`once --provider codex` for a one-off run. The daemon must still validate the final command
-against the active project policy before spawning a process.
+The local runner keeps pairing state and logs next to that config by default:
+`~/.me3/local-executor/token.json` and `~/.me3/local-executor/runs/`. Provider presets are
+configured locally, not per project in the Mission Control UI. OpenCode is the default because
+it can route to multiple model providers; users who prefer Codex or Claude can set
+`defaultProviderPreset` in `~/.me3/local-executor/config.json` or pass `once --provider codex`
+for a one-off run. The daemon must still validate the final command against the active project
+policy before spawning a process.
 
 The daemon should store full local logs only under the local log directory. Core receives
 bounded summaries, structured events, and selected artifacts only when the run policy allows it.

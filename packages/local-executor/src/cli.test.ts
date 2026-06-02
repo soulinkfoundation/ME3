@@ -11,6 +11,19 @@ const cliPath = fileURLToPath(
 );
 
 describe("me3-local-executor CLI", () => {
+  it("writes a minimal provider config", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "me3-local-executor-config-"));
+    const configPath = join(dir, "config.json");
+
+    const init = await runCli(["config", "init", "--provider", "codex", "--path", configPath]);
+
+    expect(init.stderr).toBe("");
+    expect(init.stdout).toContain(`Wrote ${configPath}`);
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      defaultProviderPreset: "codex",
+    });
+  });
+
   it("stores the pairing API URL and reuses it for one-shot claims", async () => {
     const requests: string[] = [];
     const server = createServer((request, response) => {
@@ -82,7 +95,7 @@ describe("me3-local-executor CLI", () => {
 
       await writeFile(
         configPath,
-        JSON.stringify({ tokenStore, logDir: join(dir, "runs") }),
+        JSON.stringify({ defaultProviderPreset: "opencode" }),
       );
 
       const once = await runCli(["once", "--config", configPath]);
@@ -171,8 +184,6 @@ describe("me3-local-executor CLI", () => {
       await writeFile(
         configPath,
         JSON.stringify({
-          tokenStore,
-          logDir: join(dir, "runs"),
           defaultProviderPreset: "codex",
           providers: {
             codex: {
@@ -186,10 +197,116 @@ describe("me3-local-executor CLI", () => {
       const once = await runCli(["once", "--config", configPath]);
       expect(once.stderr).toBe("");
       expect(once.stdout).toContain('"id": "run-1"');
+      expect(await readFile(join(dir, "runs", "run-1.log"), "utf8")).toBe("codex-provider");
       expect(requests).toContain("POST /api/local-executor/daemon/runs/run-1/complete");
       expect(completionBody).toMatchObject({
         status: "succeeded",
         outputPreview: "codex-provider",
+      });
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("reports a claimed run as cancelled when the local process is interrupted", async () => {
+    let completionBody: Record<string, unknown> | null = null;
+    const server = createServer((request, response) => {
+      response.setHeader("Content-Type", "application/json");
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/heartbeat"
+      ) {
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/claim"
+      ) {
+        response.end(
+          JSON.stringify({
+            ok: true,
+            run: {
+              id: "run-cancel",
+              provider: "codex",
+              prompt: "Keep running until interrupted",
+              policy: {
+                pathHint: tmpdir(),
+                caps: { maxRuntimeSeconds: 30, maxOutputChars: 24000 },
+              },
+            },
+          }),
+        );
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/run-cancel/events"
+      ) {
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/run-cancel/complete"
+      ) {
+        let body = "";
+        request.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        request.on("end", () => {
+          completionBody = JSON.parse(body);
+          response.end(
+            JSON.stringify({
+              ok: true,
+              run: { id: "run-cancel", status: completionBody?.status || "cancelled" },
+            }),
+          );
+        });
+        return;
+      }
+
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: "Not found" }));
+    });
+
+    try {
+      const apiBase = await listen(server);
+      const dir = await mkdtemp(join(tmpdir(), "me3-local-executor-cancel-"));
+      const tokenStore = join(dir, "token.json");
+      const configPath = join(dir, "config.json");
+
+      await writeFile(
+        tokenStore,
+        JSON.stringify({
+          token: "daemon-token",
+          apiBase: `${apiBase}/api/local-executor`,
+        }),
+      );
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          defaultProviderPreset: "codex",
+          providers: {
+            codex: {
+              command: process.execPath,
+              args: ["-e", "setInterval(() => {}, 1000)"],
+            },
+          },
+        }),
+      );
+
+      const interrupted = await runCliAndInterrupt(["once", "--config", configPath], "Running codex");
+
+      expect(interrupted.code).toBe(130);
+      expect(interrupted.stdout).toContain("Reporting cancellation to ME3");
+      expect(completionBody).toMatchObject({
+        status: "cancelled",
+        errorCode: "runner_cancelled",
       });
     } finally {
       await close(server);
@@ -218,6 +335,37 @@ function runCli(args: string[]) {
       } else {
         reject(new Error(`CLI exited ${code}\n${stdout}\n${stderr}`));
       }
+    });
+  });
+}
+
+function runCliAndInterrupt(args: string[], stdoutNeedle: string) {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let interrupted = false;
+    const safety = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`CLI did not reach interrupt point\n${stdout}\n${stderr}`));
+    }, 5000);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      if (!interrupted && stdout.includes(stdoutNeedle)) {
+        interrupted = true;
+        setTimeout(() => child.kill("SIGINT"), 100);
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      clearTimeout(safety);
+      resolve({ code, stdout, stderr });
     });
   });
 }
