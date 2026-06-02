@@ -252,6 +252,9 @@ type ActivityViewItem = {
   summary: string | null;
   status: string | null;
   createdAt: string;
+  localExecutorRunId?: string | null;
+  canCancelLocalRun?: boolean;
+  canRetryLocalRun?: boolean;
 };
 
 type ProjectBoardColumn = {
@@ -325,6 +328,7 @@ const latestBriefing = ref<MissionDailyBriefing | null>(null);
 const loading = ref(false);
 const error = ref("");
 const clearingActivity = ref(false);
+const localRunActionId = ref("");
 const captureText = ref("");
 const captureType = ref<MissionCaptureType>("task");
 const manualCaptureType = ref(false);
@@ -477,14 +481,29 @@ const activityItems = computed<ActivityViewItem[]>(() => {
       status: approval.riskLevel,
       createdAt: approval.requestedAt,
     })),
-    ...recentRuns.value.map((run) => ({
-      id: `run:${run.id}`,
-      kind: "Run",
-      title: run.title,
-      summary: run.promptSummary || run.model || "Run summary pending",
-      status: run.status,
-      createdAt: run.finishedAt || run.startedAt || run.createdAt,
-    })),
+    ...recentRuns.value.map((run) => {
+      const localExecutorRunId =
+        typeof run.result?.localExecutorRunId === "string"
+          ? run.result.localExecutorRunId
+          : null;
+      return {
+        id: `run:${run.id}`,
+        kind: "Run",
+        title: run.title,
+        summary: run.promptSummary || run.model || "Run summary pending",
+        status: run.status,
+        createdAt: run.finishedAt || run.startedAt || run.createdAt,
+        localExecutorRunId,
+        canCancelLocalRun:
+          Boolean(localExecutorRunId) &&
+          (run.status === "queued" || run.status === "running"),
+        canRetryLocalRun:
+          Boolean(localExecutorRunId) &&
+          (run.status === "running" ||
+            run.status === "failed" ||
+            run.status === "cancelled"),
+      };
+    }),
     ...activity.value
       .filter((item) => !item.relatedId || !visibleRunIds.has(item.relatedId))
       .map((item) => ({
@@ -673,6 +692,48 @@ async function clearActivity() {
     toastFromUnknown(e, "Activity could not be cleared");
   } finally {
     clearingActivity.value = false;
+  }
+}
+
+async function cancelLocalExecutorRun(item: ActivityViewItem) {
+  const runId = item.localExecutorRunId;
+  if (!runId || localRunActionId.value) return;
+  const confirmed = window.confirm(
+    "Cancel this local run? Use this when the local runner is stuck or you no longer want it to finish.",
+  );
+  if (!confirmed) return;
+
+  localRunActionId.value = `cancel:${runId}`;
+  try {
+    await api.post(`/local-executor/runs/${encodeURIComponent(runId)}/cancel`, {});
+    toastSuccess("Local run cancelled");
+    await loadOverview();
+  } catch (e) {
+    toastFromUnknown(e, "Could not cancel local run");
+  } finally {
+    localRunActionId.value = "";
+  }
+}
+
+async function retryLocalExecutorRun(item: ActivityViewItem) {
+  const runId = item.localExecutorRunId;
+  if (!runId || localRunActionId.value) return;
+  if (item.status === "running") {
+    const confirmed = window.confirm(
+      "Requeue this running local run? Only do this if the old local runner is stuck or has been stopped.",
+    );
+    if (!confirmed) return;
+  }
+
+  localRunActionId.value = `retry:${runId}`;
+  try {
+    await api.post(`/local-executor/runs/${encodeURIComponent(runId)}/retry`, {});
+    toastSuccess("Local run queued again");
+    await loadOverview();
+  } catch (e) {
+    toastFromUnknown(e, "Could not retry local run");
+  } finally {
+    localRunActionId.value = "";
   }
 }
 
@@ -2921,6 +2982,51 @@ onBeforeUnmount(() => {
               item.status
             }}</span>
             <span>{{ formatDateTime(item.createdAt) }}</span>
+            <div
+              v-if="item.canCancelLocalRun || item.canRetryLocalRun"
+              class="activity-row__actions"
+            >
+              <button
+                v-if="item.canRetryLocalRun"
+                type="button"
+                class="text-button"
+                :disabled="
+                  Boolean(
+                    item.localExecutorRunId &&
+                      localRunActionId === `retry:${item.localExecutorRunId}`,
+                  ) || Boolean(localRunActionId)
+                "
+                @click="retryLocalExecutorRun(item)"
+              >
+                <UiIcon name="RefreshCw" :size="14" />
+                {{
+                  item.localExecutorRunId &&
+                  localRunActionId === `retry:${item.localExecutorRunId}`
+                    ? "Queuing"
+                    : "Retry"
+                }}
+              </button>
+              <button
+                v-if="item.canCancelLocalRun"
+                type="button"
+                class="text-button text-button--danger"
+                :disabled="
+                  Boolean(
+                    item.localExecutorRunId &&
+                      localRunActionId === `cancel:${item.localExecutorRunId}`,
+                  ) || Boolean(localRunActionId)
+                "
+                @click="cancelLocalExecutorRun(item)"
+              >
+                <UiIcon name="X" :size="14" />
+                {{
+                  item.localExecutorRunId &&
+                  localRunActionId === `cancel:${item.localExecutorRunId}`
+                    ? "Cancelling"
+                    : "Cancel"
+                }}
+              </button>
+            </div>
           </div>
         </article>
       </div>
@@ -3977,6 +4083,24 @@ onBeforeUnmount(() => {
   color: var(--ui-accent);
   font-size: 12px;
   font-weight: 700;
+}
+
+.activity-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.activity-row__actions .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .project-board {

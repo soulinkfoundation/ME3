@@ -115,6 +115,7 @@ import {
   LocalExecutorInputError,
   appendLocalExecutorRunProgress,
   authenticateLocalExecutorDaemon,
+  cancelLocalExecutorRun,
   claimLocalExecutorRun,
   completeLocalExecutorPairing,
   completeLocalExecutorRun,
@@ -126,6 +127,7 @@ import {
   listLocalExecutorAudit,
   listLocalExecutorPolicies,
   recordLocalExecutorHeartbeat,
+  retryLocalExecutorRun,
   startLocalExecutorPairing,
   updateLocalExecutorPolicy,
 } from "./local-executor";
@@ -2498,6 +2500,46 @@ app.get("/api/local-executor/runs/:id", async (c) => {
 
   try {
     return c.json(await getLocalExecutorRun(c.env, ownerId, c.req.param("id")));
+  } catch (error) {
+    return localExecutorErrorResponse(c, error);
+  }
+});
+
+app.post("/api/local-executor/runs/:id/cancel", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireLocalExecutorPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await cancelLocalExecutorRun(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return localExecutorErrorResponse(c, error);
+  }
+});
+
+app.post("/api/local-executor/runs/:id/retry", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireLocalExecutorPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await retryLocalExecutorRun(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
   } catch (error) {
     return localExecutorErrorResponse(c, error);
   }

@@ -312,6 +312,62 @@ describe("me3-local-executor CLI", () => {
       await close(server);
     }
   });
+
+  it("keeps polling in run mode until interrupted", async () => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(`${request.method} ${request.url}`);
+      response.setHeader("Content-Type", "application/json");
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/heartbeat"
+      ) {
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/claim"
+      ) {
+        response.end(JSON.stringify({ ok: true, run: null }));
+        return;
+      }
+
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: "Not found" }));
+    });
+
+    try {
+      const apiBase = await listen(server);
+      const dir = await mkdtemp(join(tmpdir(), "me3-local-executor-run-"));
+      const tokenStore = join(dir, "token.json");
+      const configPath = join(dir, "config.json");
+
+      await writeFile(
+        tokenStore,
+        JSON.stringify({
+          token: "daemon-token",
+          apiBase: `${apiBase}/api/local-executor`,
+        }),
+      );
+      await writeFile(configPath, JSON.stringify({ defaultProviderPreset: "codex" }));
+
+      const interrupted = await runCliAndInterrupt(
+        ["run", "--config", configPath, "--interval", "1"],
+        "No approved runs. Checking again in 1s.",
+      );
+
+      expect(interrupted.code).toBe(130);
+      expect(interrupted.stdout).toContain("Local Executor runner started");
+      expect(interrupted.stdout).toContain("Local Executor runner stopped.");
+      expect(requests).toContain("POST /api/local-executor/daemon/heartbeat");
+      expect(requests).toContain("POST /api/local-executor/daemon/runs/claim");
+    } finally {
+      await close(server);
+    }
+  });
 });
 
 function runCli(args: string[]) {

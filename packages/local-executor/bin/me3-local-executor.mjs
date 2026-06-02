@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { createWriteStream } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -43,6 +44,8 @@ try {
     await handlePair(args.slice(1));
   } else if (command === "once") {
     await handleOnce(args.slice(1));
+  } else if (command === "run" || command === "daemon") {
+    await handleRun(args.slice(1));
   } else {
     throw new Error(`Unknown command: ${command}`);
   }
@@ -60,6 +63,7 @@ Commands:
   render                 Render a provider command for inspection
   pair                   Complete pairing with ME3 Core and store the daemon token
   once                   Heartbeat, claim one approved run, execute it, and report completion
+  run                    Keep polling for approved runs until stopped
 
 Options:
   config init --provider <opencode|codex|claude>
@@ -70,6 +74,7 @@ Options:
   once --api <url>       Override the saved API URL
   once --config <path>   Override the local runner config path
   once --provider <id>   Override the local default provider for this run
+  run --interval <sec>   Poll interval for long-running mode
 `);
 }
 
@@ -138,6 +143,46 @@ async function handlePair(argv) {
 }
 
 async function handleOnce(argv) {
+  const runtime = await loadRuntime(argv);
+  const result = await claimAndExecuteOne(runtime, {
+    providerOverride: readFlag(argv, "--provider"),
+    noRunMessage: "No approved Local Executor runs to claim.",
+  });
+  if (result.cancelled) process.exitCode = 130;
+}
+
+async function handleRun(argv) {
+  const runtime = await loadRuntime(argv);
+  const providerOverride = readFlag(argv, "--provider");
+  const intervalSeconds = readPositiveInt(
+    readFlag(argv, "--interval") || runtime.config.pollIntervalSeconds,
+    20,
+  );
+  const stop = createStopController();
+  console.log(`Local Executor runner started. Polling every ${intervalSeconds}s. Press Ctrl-C to stop.`);
+  try {
+    while (!stop.requested()) {
+      const result = await claimAndExecuteOne(runtime, {
+        providerOverride,
+        quietWhenEmpty: true,
+      });
+      if (result.cancelled) {
+        stop.request("SIGINT");
+        break;
+      }
+      if (!result.claimed && !stop.requested()) {
+        console.log(`No approved runs. Checking again in ${intervalSeconds}s.`);
+        await stop.wait(intervalSeconds * 1000);
+      }
+    }
+  } finally {
+    stop.cleanup();
+  }
+  console.log("Local Executor runner stopped.");
+  if (stop.signal()) process.exitCode = 130;
+}
+
+async function loadRuntime(argv) {
   const configPath = expandPath(readFlag(argv, "--config") || defaultConfigPath);
   const config = await readJson(configPath).catch(() => defaultConfig);
   const tokenStore = resolveLocalConfigPath(config.tokenStore, configPath, "token.json");
@@ -159,11 +204,14 @@ async function handleOnce(argv) {
     Authorization: `Bearer ${tokenRecord.token}`,
     "Content-Type": "application/json",
   };
+  return { configPath, config, tokenStore, tokenRecord, apiBase, authHeaders };
+}
 
+async function claimAndExecuteOne(runtime, options = {}) {
   console.log("Checking in with ME3...");
-  const heartbeatResponse = await fetch(`${apiBase}/daemon/heartbeat`, {
+  const heartbeatResponse = await fetch(`${runtime.apiBase}/daemon/heartbeat`, {
     method: "POST",
-    headers: authHeaders,
+    headers: runtime.authHeaders,
     body: JSON.stringify({
       version: "0.1.0",
       platform: platform(),
@@ -179,9 +227,9 @@ async function handleOnce(argv) {
   }
 
   console.log("Looking for one approved Local Executor run...");
-  const claimResponse = await fetch(`${apiBase}/daemon/runs/claim`, {
+  const claimResponse = await fetch(`${runtime.apiBase}/daemon/runs/claim`, {
     method: "POST",
-    headers: authHeaders,
+    headers: runtime.authHeaders,
     body: JSON.stringify({ maxRuns: 1 }),
   });
   const claim = await claimResponse.json().catch(() => ({}));
@@ -189,48 +237,49 @@ async function handleOnce(argv) {
     throw new Error(claim.error || `Claim failed with ${claimResponse.status}`);
   }
   if (!claim.run) {
-    console.log("No approved Local Executor runs to claim.");
-    return;
+    if (!options.quietWhenEmpty) {
+      console.log(options.noRunMessage || "No approved Local Executor runs to claim.");
+    }
+    return { claimed: false, cancelled: false };
   }
 
   const run = claim.run;
   const runLabel = run.promptSummary || summarizePrompt(run.prompt) || run.id;
   console.log(`Claimed run ${run.id}: ${runLabel}`);
-  const providerOverride = readFlag(argv, "--provider");
+  return executeClaimedRun(runtime, run, options.providerOverride);
+}
+
+async function executeClaimedRun(runtime, run, providerOverride) {
   const providerId =
     normalizeProviderId(providerOverride) ||
-    normalizeProviderId(config.defaultProviderPreset) ||
+    normalizeProviderId(runtime.config.defaultProviderPreset) ||
     normalizeProviderId(run.provider) ||
     defaultConfig.defaultProviderPreset;
   if (providerOverride && !normalizeProviderId(providerOverride)) {
     throw new Error("Unknown provider preset. Use opencode, codex, or claude.");
   }
   const provider =
-    config.providers?.[providerId] ||
+    runtime.config.providers?.[providerId] ||
     providerPresets[providerId] ||
     providerPresets.opencode;
   const rendered = renderProviderCommand(provider, run.policy.pathHint, run.prompt);
-  const logDir = resolveLocalConfigPath(config.logDir, configPath, "runs");
+  const logDir = resolveLocalConfigPath(runtime.config.logDir, runtime.configPath, "runs");
   await mkdir(logDir, { recursive: true });
   const logPath = join(logDir, `${run.id}.log`);
   console.log(`Running ${providerId} in ${rendered.cwd}`);
   console.log(`Local log: ${logPath}`);
-  await appendRunEvent(apiBase, authHeaders, run.id, {
+  await appendRunEvent(runtime.apiBase, runtime.authHeaders, run.id, {
     eventType: "provider_started",
     message: `Started ${providerId} locally.`,
     payload: { providerId, cwd: rendered.cwd },
   });
   const startedAt = Date.now();
-  const output = await executeBounded(rendered, run.policy.caps?.maxRuntimeSeconds || 1800);
+  const log = createRunLog(logPath);
+  const output = await executeBounded(rendered, run.policy.caps?.maxRuntimeSeconds || 1800, { log });
+  await log.close();
   const combinedOutput = output.stdout + (output.stderr ? `\n\nSTDERR\n${output.stderr}` : "");
   const boundedOutput = combinedOutput.slice(0, run.policy.caps?.maxOutputChars || 24000);
   const status = output.cancelled ? "cancelled" : output.code === 0 ? "succeeded" : "failed";
-
-  await writeFile(
-    logPath,
-    boundedOutput,
-    { mode: 0o600 },
-  );
 
   if (output.cancelled) {
     console.log("Run cancelled locally. Reporting cancellation to ME3...");
@@ -241,10 +290,10 @@ async function handleOnce(argv) {
   }
 
   const completeResponse = await fetch(
-    `${apiBase}/daemon/runs/${encodeURIComponent(run.id)}/complete`,
+    `${runtime.apiBase}/daemon/runs/${encodeURIComponent(run.id)}/complete`,
     {
       method: "POST",
-      headers: authHeaders,
+      headers: runtime.authHeaders,
       body: JSON.stringify({
         status,
         summary:
@@ -285,7 +334,7 @@ async function handleOnce(argv) {
   }
   console.log(`Reported ${complete.run?.status || status} to ME3.`);
   console.log(JSON.stringify(complete.run, null, 2));
-  if (output.cancelled) process.exitCode = 130;
+  return { claimed: true, cancelled: Boolean(output.cancelled), status };
 }
 
 function renderProviderCommand(provider, repo, prompt) {
@@ -303,7 +352,7 @@ function normalizeProviderId(value) {
   return value === "opencode" || value === "codex" || value === "claude" ? value : null;
 }
 
-function executeBounded(command, timeoutSeconds) {
+function executeBounded(command, timeoutSeconds, options = {}) {
   return new Promise((resolvePromise) => {
     const child = spawn(command.command, command.args, {
       cwd: command.cwd,
@@ -316,11 +365,13 @@ function executeBounded(command, timeoutSeconds) {
     let timedOut = false;
     let cancelledSignal = null;
     let killTimer = null;
+    const onSigint = () => onSignal("SIGINT");
+    const onSigterm = () => onSignal("SIGTERM");
     const cleanup = () => {
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
-      process.off("SIGINT", onSignal);
-      process.off("SIGTERM", onSignal);
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
     };
     const resolveOnce = (result) => {
       if (settled) return;
@@ -343,17 +394,21 @@ function executeBounded(command, timeoutSeconds) {
       }
       terminateChild();
     };
-    process.once("SIGINT", onSignal);
-    process.once("SIGTERM", onSignal);
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
     const timeout = setTimeout(() => {
       timedOut = true;
       terminateChild();
     }, timeoutSeconds * 1000);
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+      options.log?.writeStdout(text);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr += text;
+      options.log?.writeStderr(text);
     });
     child.on("close", (code, signal) => {
       resolveOnce({
@@ -376,6 +431,26 @@ function executeBounded(command, timeoutSeconds) {
       });
     });
   });
+}
+
+function createRunLog(logPath) {
+  const stream = createWriteStream(logPath, { flags: "w", mode: 0o600 });
+  let stderrStarted = false;
+  return {
+    writeStdout(text) {
+      stream.write(text);
+    },
+    writeStderr(text) {
+      if (!stderrStarted) {
+        stream.write("\n\nSTDERR\n");
+        stderrStarted = true;
+      }
+      stream.write(text);
+    },
+    close() {
+      return new Promise((resolveClose) => stream.end(resolveClose));
+    },
+  };
 }
 
 async function appendRunEvent(apiBase, authHeaders, runId, body) {
@@ -403,6 +478,53 @@ function requiredFlag(argv, flag) {
   const value = readFlag(argv, flag);
   if (!value) throw new Error(`Missing ${flag}`);
   return value;
+}
+
+function readPositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function createStopController() {
+  let requested = false;
+  let stopSignal = null;
+  const waiters = new Set();
+  const request = (signal) => {
+    if (!requested) {
+      stopSignal = signal;
+      console.log(`Received ${signal}. Stopping runner loop...`);
+    }
+    requested = true;
+    for (const resolveWaiter of waiters) resolveWaiter();
+    waiters.clear();
+  };
+  const onSigint = () => request("SIGINT");
+  const onSigterm = () => request("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  return {
+    requested: () => requested,
+    signal: () => stopSignal,
+    request,
+    wait(ms) {
+      if (requested) return Promise.resolve();
+      return new Promise((resolveWait) => {
+        const done = () => {
+          clearTimeout(timer);
+          waiters.delete(done);
+          resolveWait();
+        };
+        const timer = setTimeout(done, ms);
+        waiters.add(done);
+      });
+    },
+    cleanup() {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      for (const resolveWaiter of waiters) resolveWaiter();
+      waiters.clear();
+    },
+  };
 }
 
 function selfCommand(subcommand) {

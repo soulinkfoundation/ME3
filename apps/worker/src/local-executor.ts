@@ -578,6 +578,133 @@ export async function getLocalExecutorRun(env: Env, userId: string, runId: strin
   };
 }
 
+export async function cancelLocalExecutorRun(
+  env: Env,
+  userId: string,
+  runId: string,
+  input: unknown,
+) {
+  const run = await requireRun(env, userId, runId);
+  if (!canCancelLocalExecutorRun(run.status)) {
+    throw new LocalExecutorInputError("This Local Executor run cannot be cancelled", 409);
+  }
+
+  const body = isRecord(input) ? input : {};
+  const now = new Date().toISOString();
+  const summary = boundText(
+    normalizeNullableText(body.summary) || "Local run cancelled by the owner.",
+    2000,
+  );
+  await env.DB.prepare(
+    `UPDATE local_executor_runs
+     SET status = 'cancelled', finished_at = ?, result_summary = ?,
+         error_code = ?, error_message = ?, updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(
+      now,
+      summary,
+      "owner_cancelled",
+      normalizeNullableText(body.reason) || null,
+      now,
+      run.id,
+      userId,
+    )
+    .run();
+  await appendLocalExecutorRunEvent(env, run.id, {
+    eventType: "cancelled",
+    actor: "owner",
+    message: summary,
+    payload: {},
+  });
+  await appendLocalExecutorAudit(env, userId, {
+    projectPolicyId: run.project_policy_id,
+    runId: run.id,
+    approvalId: run.approval_id,
+    eventType: "run_cancelled",
+    actor: "owner",
+    summary,
+  });
+
+  const cancelled = await requireRun(env, userId, run.id);
+  await upsertLocalExecutorMissionRun(env, userId, {
+    run: cancelled,
+    status: "cancelled",
+  });
+  await appendLocalExecutorMissionEvent(env, cancelled, "cancelled", summary, {
+    status: "cancelled",
+  });
+  await appendLocalExecutorMissionActivity(env, userId, {
+    title: `Local Executor: ${cancelled.prompt_summary}`,
+    summary,
+    status: "cancelled",
+    relatedId: cancelled.id,
+  });
+
+  return { ok: true, run: serializeRun(cancelled) };
+}
+
+export async function retryLocalExecutorRun(
+  env: Env,
+  userId: string,
+  runId: string,
+  input: unknown,
+) {
+  const run = await requireRun(env, userId, runId);
+  if (!canRetryLocalExecutorRun(run.status)) {
+    throw new LocalExecutorInputError("This Local Executor run cannot be retried", 409);
+  }
+
+  const body = isRecord(input) ? input : {};
+  const now = new Date().toISOString();
+  const summary = boundText(
+    normalizeNullableText(body.summary) || "Local run queued again by the owner.",
+    2000,
+  );
+  await env.DB.prepare(
+    `UPDATE local_executor_runs
+     SET status = 'queued', runner_id = NULL, started_at = NULL, finished_at = NULL,
+         result_summary = NULL, output_preview = NULL, artifact_manifest_json = '[]',
+         changed_files_json = '[]', quality_gates_json = '[]',
+         error_code = NULL, error_message = NULL, updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(now, run.id, userId)
+    .run();
+  await appendLocalExecutorRunEvent(env, run.id, {
+    eventType: "retried",
+    actor: "owner",
+    message: summary,
+    payload: { previousStatus: run.status },
+  });
+  await appendLocalExecutorAudit(env, userId, {
+    projectPolicyId: run.project_policy_id,
+    runId: run.id,
+    approvalId: run.approval_id,
+    eventType: "run_retried",
+    actor: "owner",
+    summary,
+    payload: { previousStatus: run.status },
+  });
+
+  const retried = await requireRun(env, userId, run.id);
+  await upsertLocalExecutorMissionRun(env, userId, {
+    run: retried,
+    status: "queued",
+  });
+  await appendLocalExecutorMissionEvent(env, retried, "queued", summary, {
+    previousStatus: run.status,
+  });
+  await appendLocalExecutorMissionActivity(env, userId, {
+    title: `Local Executor: ${retried.prompt_summary}`,
+    summary,
+    status: "queued",
+    relatedId: retried.id,
+  });
+
+  return { ok: true, run: serializeRun(retried) };
+}
+
 export async function listLocalExecutorAudit(env: Env, userId: string) {
   const rows = await env.DB.prepare(
     `SELECT *
@@ -1335,6 +1462,14 @@ function normalizeRunFinalStatus(value: unknown): Extract<
   return value === "succeeded" || value === "failed" || value === "cancelled" || value === "denied"
     ? value
     : null;
+}
+
+function canCancelLocalExecutorRun(status: LocalExecutorRunStatus) {
+  return status === "queued" || status === "waiting_for_approval" || status === "running";
+}
+
+function canRetryLocalExecutorRun(status: LocalExecutorRunStatus) {
+  return status === "running" || status === "failed" || status === "cancelled";
 }
 
 function normalizeCommandPolicy(value: unknown): LocalExecutorCommandPolicy | null {

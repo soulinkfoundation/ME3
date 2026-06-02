@@ -70,15 +70,16 @@ Local daemon owns:
 
 MVP note: the local runner is currently the `packages/local-executor/bin/me3-local-executor.mjs`
 script inside a ME3 Core checkout. Pairing stores the daemon token and API URL in
-`~/.me3/local-executor/token.json`. The `once` command is a one-shot claim/execute/report
-cycle; a long-running daemon mode is intentionally still follow-up work.
+`~/.me3/local-executor/token.json`. The `once` command claims one approved run and exits;
+the `run` command keeps polling until the owner stops it.
 
 ## MVP Progress
 
 Landed in the current Core line:
 
 - Local Executor plugin activation and Account row Configure modal.
-- Pairing code creation, daemon token exchange, heartbeat, one-shot claim, and completion.
+- Pairing code creation, daemon token exchange, heartbeat, one-shot claim, polling run mode,
+  and completion.
 - Local project creation from Mission Control Projects. Local projects store a folder path
   and create a conservative Local Executor project policy behind the scenes.
 - Project task `Run locally` action for tasks inside local projects.
@@ -88,7 +89,6 @@ Landed in the current Core line:
 
 Still follow-up:
 
-- Long-running daemon/poll mode.
 - Richer result panels, changed-file detection, quality-gate execution, and artifacts.
 - Assistant starter recipe and scheduled/event-triggered job approvals.
 - Friendlier local runner packaging outside a source checkout.
@@ -324,10 +324,11 @@ Audit must record:
 4. Done: Add D1 migration and owner/daemon route skeletons.
 5. Done: Build the source-checkout local runner CLI with pair, config, run-once, and provider render commands.
 6. Done: Add Account plugin Configure flow, Mission Control local projects, and task-level Run locally.
-7. Next: Add a long-running daemon mode and local runner packaging.
-8. Next: Add Local Coding Task starter recipe and scheduled/event-triggered approval flow.
-9. Next: Add richer Mission Control result panels for artifacts, changed files, gates, and local logs.
-10. Next: Add Soulink/chat manual-run handoff and concise result notification.
+7. Done: Add a long-running poll mode and owner retry/cancel recovery for stale runs.
+8. Next: Add local runner packaging.
+9. Next: Add Local Coding Task starter recipe and scheduled/event-triggered approval flow.
+10. Next: Add richer Mission Control result panels for artifacts, changed files, gates, and local logs.
+11. Next: Add Soulink/chat manual-run handoff and concise result notification.
 
 ## Test Plan
 

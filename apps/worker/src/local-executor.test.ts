@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_EXECUTOR_PLUGIN_ID } from "@me3-core/plugin-local-executor";
 import {
   authenticateLocalExecutorDaemon,
+  cancelLocalExecutorRun,
   claimLocalExecutorRun,
   completeLocalExecutorPairing,
   completeLocalExecutorRun,
   createLocalExecutorPolicy,
   createLocalExecutorRun,
   getLocalExecutorSetupState,
+  retryLocalExecutorRun,
   startLocalExecutorPairing,
 } from "./local-executor";
 import type { Env } from "./types";
@@ -152,6 +154,47 @@ describe("Local Executor worker runtime", () => {
     expect(await claimLocalExecutorRun(env, auth, {})).toMatchObject({
       ok: true,
       run: expect.objectContaining({ id: created.run.id, status: "running" }),
+    });
+  });
+
+  it("lets the owner cancel and retry a stuck local run", async () => {
+    const env = createReadyPluginEnv();
+    const paired = await pairRunner(env);
+    const auth = await authenticateLocalExecutorDaemon(env, `Bearer ${paired.token.token}`);
+    const policy = await createLocalExecutorPolicy(env, "owner", {
+      projectLabel: "ME3",
+      pathHint: "/Users/kieranbutler/Coding/me3",
+    });
+    const created = await createLocalExecutorRun(env, "owner", {
+      projectPolicyId: policy.policy.id,
+      prompt: "Fix the stuck run path.",
+    });
+    await claimLocalExecutorRun(env, auth, {});
+
+    const cancelled = await cancelLocalExecutorRun(env, "owner", created.run.id, {
+      reason: "Runner was stopped locally.",
+    });
+    expect(cancelled.run).toMatchObject({
+      id: created.run.id,
+      status: "cancelled",
+      errorCode: "owner_cancelled",
+    });
+
+    const retried = await retryLocalExecutorRun(env, "owner", created.run.id, {});
+    expect(retried.run).toMatchObject({
+      id: created.run.id,
+      status: "queued",
+      runnerId: null,
+      startedAt: null,
+      finishedAt: null,
+      errorCode: null,
+    });
+    expect(env.__state.runEvents.map((event) => event.event_type)).toEqual(
+      expect.arrayContaining(["cancelled", "retried"]),
+    );
+    expect(env.__state.missionRuns.at(-1)).toMatchObject({
+      status: "queued",
+      runner_id: null,
     });
   });
 });
@@ -364,6 +407,42 @@ class FakeLocalExecutorStatement {
         summary: values[8],
         payload_json: values[9],
       });
+      return { success: true };
+    }
+
+    if (sql.includes("UPDATE local_executor_runs") && sql.includes("status = 'cancelled'")) {
+      const run = this.state.runs.find(
+        (candidate) => candidate.id === values[5] && candidate.user_id === values[6],
+      );
+      if (run) {
+        run.status = "cancelled";
+        run.finished_at = values[0] as string;
+        run.result_summary = values[1] as string;
+        run.error_code = values[2] as string;
+        run.error_message = values[3] as string | null;
+        run.updated_at = values[4] as string;
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("UPDATE local_executor_runs") && sql.includes("status = 'queued'")) {
+      const run = this.state.runs.find(
+        (candidate) => candidate.id === values[1] && candidate.user_id === values[2],
+      );
+      if (run) {
+        run.status = "queued";
+        run.runner_id = null;
+        run.started_at = null;
+        run.finished_at = null;
+        run.result_summary = null;
+        run.output_preview = null;
+        run.artifact_manifest_json = "[]";
+        run.changed_files_json = "[]";
+        run.quality_gates_json = "[]";
+        run.error_code = null;
+        run.error_message = null;
+        run.updated_at = values[0] as string;
+      }
       return { success: true };
     }
 
