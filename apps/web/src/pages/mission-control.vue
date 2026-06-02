@@ -257,12 +257,19 @@ type ActivityViewItem = {
   canRetryLocalRun?: boolean;
 };
 
+type ProjectBoardStatus = Exclude<MissionTask["status"], "cancelled">;
+
 type ProjectBoardColumn = {
-  id: MissionTask["status"];
+  id: ProjectBoardStatus;
   label: string;
   tasks: MissionTask[];
 };
-type ProjectBoardStatus = ProjectBoardColumn["id"];
+
+type ProjectTaskDetailDraft = {
+  title: string;
+  description: string;
+  status: ProjectBoardStatus;
+};
 
 const route = useRoute();
 const router = useRouter();
@@ -299,7 +306,7 @@ const captureTypeOptions: Array<{
   { id: "event", icon: "CalendarDays", label: "Event" },
 ];
 const projectBoardStatuses: Array<{
-  id: MissionTask["status"];
+  id: ProjectBoardStatus;
   label: string;
 }> = [
   { id: "backlog", label: "Backlog" },
@@ -380,6 +387,14 @@ const projectTaskLocalRunId = ref("");
 const projectTaskComposerStatus = ref<ProjectBoardStatus | "">("");
 const draggedProjectTaskId = ref("");
 const projectTaskDropStatus = ref<ProjectBoardStatus | "">("");
+const selectedProjectTaskDetailId = ref("");
+const projectTaskDetailDraft = ref<ProjectTaskDetailDraft>({
+  title: "",
+  description: "",
+  status: "backlog",
+});
+const projectTaskDetailSaving = ref(false);
+const projectTaskDetailError = ref("");
 const accountsType = ref<FinancialEntryType>("expense");
 const accountsEntries = ref<FinancialEntry[]>([]);
 const accountsCategories = ref<FinancialCategory[]>([]);
@@ -564,6 +579,18 @@ const selectedProjectTasks = computed(() => {
     (task) => task.projectId === projectId && task.status !== "cancelled",
   );
 });
+const selectedProjectTaskDetail = computed(() =>
+  selectedProjectTaskDetailId.value
+    ? projectTasks.value.find(
+        (task) => task.id === selectedProjectTaskDetailId.value,
+      ) || null
+    : null,
+);
+const selectedProjectTaskDetailProject = computed(() =>
+  selectedProjectTaskDetail.value
+    ? projectForTask(selectedProjectTaskDetail.value)
+    : null,
+);
 const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
   projectBoardStatuses.map((column) => ({
     ...column,
@@ -581,6 +608,12 @@ const projectTaskCreateDisabled = computed(
     !projectTaskComposerStatus.value ||
     !projectTaskDraft.value.trim() ||
     !selectedProjectDetail.value,
+);
+const projectTaskDetailSaveDisabled = computed(
+  () =>
+    projectTaskDetailSaving.value ||
+    !selectedProjectTaskDetail.value ||
+    !projectTaskDetailDraft.value.title.trim(),
 );
 const accountsPage = computed(
   () => Math.floor(accountsOffset.value / ACCOUNTS_PAGE_SIZE) + 1,
@@ -1296,6 +1329,7 @@ function selectProjectDetail(projectId: string) {
   selectedProjectDetailId.value = projectId;
   projectPickerOpen.value = false;
   resetProjectTaskComposer();
+  closeProjectTaskDetail();
 }
 
 function toggleArchivePicker() {
@@ -1434,6 +1468,30 @@ function resetProjectTaskComposer() {
   projectTaskDraft.value = "";
 }
 
+function syncProjectTaskDetailDraft(task: MissionTask) {
+  projectTaskDetailDraft.value = {
+    title: task.title,
+    description: task.description || "",
+    status:
+      task.status === "cancelled"
+        ? "backlog"
+        : (task.status as ProjectBoardStatus),
+  };
+}
+
+function openProjectTaskDetail(task: MissionTask) {
+  if (draggedProjectTaskId.value || projectTaskDetailSaving.value) return;
+  selectedProjectTaskDetailId.value = task.id;
+  projectTaskDetailError.value = "";
+  syncProjectTaskDetailDraft(task);
+}
+
+function closeProjectTaskDetail(options: { force?: boolean } = {}) {
+  if (projectTaskDetailSaving.value && !options.force) return;
+  selectedProjectTaskDetailId.value = "";
+  projectTaskDetailError.value = "";
+}
+
 function openProjectTaskComposer(status: ProjectBoardStatus) {
   if (projectTaskSaving.value) return;
   projectTaskComposerStatus.value = status;
@@ -1497,6 +1555,38 @@ async function runProjectTaskLocally(task: MissionTask) {
   }
 }
 
+async function saveProjectTaskDetail() {
+  const task = selectedProjectTaskDetail.value;
+  const title = projectTaskDetailDraft.value.title.trim();
+  if (!task || !title || projectTaskDetailSaving.value) return;
+  projectTaskDetailSaving.value = true;
+  projectTaskDetailError.value = "";
+  try {
+    const response = await api.patch<{ task: MissionTask }>(
+      `/mission-control/tasks/${encodeURIComponent(task.id)}`,
+      {
+        title,
+        description: projectTaskDetailDraft.value.description.trim() || null,
+        status: projectTaskDetailDraft.value.status,
+      },
+    );
+    replaceProjectTask(response.task);
+    if (tasksDueToday.value.some((item) => item.id === response.task.id)) {
+      tasksDueToday.value = tasksDueToday.value.map((item) =>
+        item.id === response.task.id ? response.task : item,
+      );
+    }
+    syncProjectTaskDetailDraft(response.task);
+    closeProjectTaskDetail({ force: true });
+    toastSuccess("Task updated");
+  } catch (e) {
+    projectTaskDetailError.value =
+      e instanceof ApiError ? e.message : "Could not update task";
+  } finally {
+    projectTaskDetailSaving.value = false;
+  }
+}
+
 async function setProjectTaskStatus(
   task: MissionTask,
   status: MissionTask["status"],
@@ -1524,7 +1614,7 @@ async function setProjectTaskStatus(
 }
 
 function startProjectTaskDrag(event: DragEvent, task: MissionTask) {
-  if (projectTaskActionId.value) {
+  if (projectTaskActionId.value || task.status === "cancelled") {
     event.preventDefault();
     return;
   }
@@ -1576,8 +1666,8 @@ async function dropProjectTask(event: DragEvent, status: ProjectBoardStatus) {
   await setProjectTaskStatus(task, status);
 }
 
-async function archiveProjectTask(task: MissionTask) {
-  if (projectTaskActionId.value) return;
+async function archiveProjectTask(task: MissionTask): Promise<boolean> {
+  if (projectTaskActionId.value) return false;
   projectTaskActionId.value = task.id;
   projectTasksError.value = "";
   try {
@@ -1588,12 +1678,24 @@ async function archiveProjectTask(task: MissionTask) {
     tasksDueToday.value = tasksDueToday.value.filter(
       (item) => item.id !== task.id,
     );
+    if (selectedProjectTaskDetailId.value === task.id) {
+      selectedProjectTaskDetailId.value = "";
+    }
+    return true;
   } catch (e) {
     projectTasksError.value =
       e instanceof ApiError ? e.message : "Could not archive task";
+    return false;
   } finally {
     projectTaskActionId.value = "";
   }
+}
+
+async function archiveSelectedProjectTask() {
+  const task = selectedProjectTaskDetail.value;
+  if (!task || projectTaskDetailSaving.value) return;
+  const archived = await archiveProjectTask(task);
+  if (archived) closeProjectTaskDetail();
 }
 
 function replaceProjectTask(next: MissionTask) {
@@ -2627,7 +2729,13 @@ onBeforeUnmount(() => {
                       projectTaskActionId === task.id ||
                       projectTaskLocalRunId === task.id,
                   }"
+                  role="button"
+                  tabindex="0"
                   draggable="true"
+                  :aria-label="`Open details for ${task.title}`"
+                  @click="openProjectTaskDetail(task)"
+                  @keydown.enter.prevent="openProjectTaskDetail(task)"
+                  @keydown.space.prevent="openProjectTaskDetail(task)"
                   @dragstart="startProjectTaskDrag($event, task)"
                   @dragend="endProjectTaskDrag"
                 >
@@ -2656,7 +2764,7 @@ onBeforeUnmount(() => {
                       type="button"
                       class="project-task-card__run"
                       :disabled="Boolean(projectTaskLocalRunId)"
-                      @click="runProjectTaskLocally(task)"
+                      @click.stop="runProjectTaskLocally(task)"
                     >
                       <UiIcon name="Play" :size="14" />
                       {{
@@ -2673,7 +2781,7 @@ onBeforeUnmount(() => {
                         projectTaskActionId === task.id ||
                         projectTaskLocalRunId === task.id
                       "
-                      @click="archiveProjectTask(task)"
+                      @click.stop="archiveProjectTask(task)"
                     >
                       <UiIcon name="X" :size="15" />
                     </button>
@@ -3313,6 +3421,112 @@ onBeforeUnmount(() => {
             >
               {{ projectSaving ? "Adding..." : "Add project" }}
             </button>
+          </div>
+        </form>
+      </div>
+
+      <div
+        v-if="selectedProjectTaskDetail"
+        class="mission-modal"
+        role="presentation"
+        @click.self="closeProjectTaskDetail()"
+      >
+        <form
+          class="mission-modal__dialog task-detail-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="task-detail-modal-title"
+          @submit.prevent="saveProjectTaskDetail"
+        >
+          <div class="mission-modal__header">
+            <h2 id="task-detail-modal-title">Task details</h2>
+            <button
+              type="button"
+              class="icon-button quiet"
+              aria-label="Close"
+              @click="closeProjectTaskDetail()"
+            >
+              <UiIcon name="X" :size="18" />
+            </button>
+          </div>
+
+          <div class="task-detail-modal__context">
+            <span>{{ projectName(selectedProjectTaskDetail.projectId) }}</span>
+            <span
+              v-if="isLocalProject(selectedProjectTaskDetailProject)"
+              class="local-project-badge"
+              >Local</span
+            >
+            <span v-if="selectedProjectTaskDetail.dueAt">
+              {{ formatShortDate(selectedProjectTaskDetail.dueAt) }}
+            </span>
+          </div>
+
+          <label class="field">
+            <span>Title</span>
+            <input
+              v-model="projectTaskDetailDraft.title"
+              type="text"
+              autocomplete="off"
+              autofocus
+            />
+          </label>
+
+          <label class="field">
+            <span>Status</span>
+            <select v-model="projectTaskDetailDraft.status">
+              <option
+                v-for="status in projectBoardStatuses"
+                :key="status.id"
+                :value="status.id"
+              >
+                {{ status.label }}
+              </option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Notes</span>
+            <textarea
+              v-model="projectTaskDetailDraft.description"
+              rows="5"
+              placeholder="Add detail for the runner or reviewer"
+            />
+          </label>
+
+          <p v-if="projectTaskDetailError" class="mission-modal__error">
+            {{ projectTaskDetailError }}
+          </p>
+
+          <div class="mission-modal__actions task-detail-modal__actions">
+            <button
+              type="button"
+              class="text-button text-button--danger"
+              :disabled="
+                projectTaskDetailSaving ||
+                projectTaskActionId === selectedProjectTaskDetail.id
+              "
+              @click="archiveSelectedProjectTask"
+            >
+              Archive
+            </button>
+            <div class="task-detail-modal__primary-actions">
+              <button
+                type="button"
+                class="text-button"
+                :disabled="projectTaskDetailSaving"
+                @click="closeProjectTaskDetail()"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                class="text-button text-button--primary"
+                :disabled="projectTaskDetailSaveDisabled"
+              >
+                {{ projectTaskDetailSaving ? "Saving..." : "Save" }}
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -4250,7 +4464,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface);
-  cursor: grab;
+  cursor: pointer;
   transition:
     border-color 0.16s ease,
     opacity 0.16s ease,
@@ -4259,6 +4473,12 @@ onBeforeUnmount(() => {
 
 .project-task-card:active {
   cursor: grabbing;
+}
+
+.project-task-card:focus-visible {
+  border-color: var(--ui-accent);
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 2px;
 }
 
 .project-task-card.is-dragging {
@@ -4773,6 +4993,26 @@ onBeforeUnmount(() => {
 .mission-modal__actions {
   justify-content: flex-end;
   padding-top: 4px;
+}
+
+.task-detail-modal__context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -4px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+.task-detail-modal__actions {
+  justify-content: space-between;
+}
+
+.task-detail-modal__primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .field {
