@@ -221,7 +221,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   name: "ME3 Mission Control",
   version: "0.1.0",
   description:
-    "The default workspace for your daily notes, tasks, projects as well as important activity from your assistant.",
+    "Operational workspace for reviewing projects, tasks, approvals, private memory, sources, and assistant activity.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
@@ -240,7 +240,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   permissions: [
     {
       id: "mission.capture.manage",
-      label: "Create and manage daily captures and journal entries",
+      label: "Create and manage daily captures",
     },
     {
       id: "mission.tasks.manage",

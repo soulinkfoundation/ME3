@@ -9,12 +9,7 @@ import {
 } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRoute, useRouter } from "vue-router";
-import {
-  inferMissionCaptureType,
-  type MissionCaptureType,
-} from "@me3-core/plugin-mission-control";
 import { API_BASE, ApiError, api } from "../api";
-import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
 import type { UiIconName } from "../utils/icons";
@@ -31,19 +26,13 @@ definePage({
 });
 
 type MissionSection =
-  | "today"
-  | "journalArchive"
   | "projects"
   | "accounts"
   | "activity"
   | "memory"
   | "sources";
-type PrimaryMissionSection = "today" | "projects" | "accounts";
-type SettingsMissionSection =
-  | "journalArchive"
-  | "activity"
-  | "memory"
-  | "sources";
+type PrimaryMissionSection = "projects" | "accounts";
+type SettingsMissionSection = "activity" | "memory" | "sources";
 
 type MissionProject = {
   id: string;
@@ -56,35 +45,6 @@ type MissionProject = {
   sourceKind: "manual" | "daemon_repo" | "beads" | "import";
   sourceRef: string | null;
   metadata: Record<string, unknown>;
-};
-
-type MissionCapture = {
-  id: string;
-  type: MissionCaptureType;
-  text: string;
-  projectId: string | null;
-  status: "open" | "done" | "archived";
-  syncStatus: "local" | "pending" | "synced" | "failed" | "setup_required";
-  syncError: string | null;
-  dueAt: string | null;
-  eventStartAt: string | null;
-  eventEndAt: string | null;
-  createdAt: string;
-};
-
-type MissionDay = {
-  id: string;
-  date: string;
-  title: string | null;
-  journalText: string;
-  updatedAt: string;
-};
-
-type MissionJournalArchiveEntry = {
-  id: string;
-  date: string;
-  preview: string;
-  journalText: string;
 };
 
 type MissionTask = {
@@ -177,51 +137,6 @@ type MissionActivity = {
   createdAt: string;
 };
 
-type MissionDailyBriefing = {
-  id: string;
-  title: string;
-  message: string;
-  date: string;
-  createdAt: string;
-  showInJournal: boolean;
-  deliveryHint: "soulink" | "mission_control";
-};
-
-type MissionWeeklyReviewTask = {
-  id: string;
-  title: string;
-  projectId: string | null;
-  dueAt?: string | null;
-  completedAt?: string | null;
-  status?: string;
-  suggestedCarryOver?: boolean;
-};
-
-type MissionWeeklyReviewMemorySuggestion = {
-  id: string;
-  title: string;
-  body: string;
-  memoryKind: string;
-  duplicate: boolean;
-  pattern: boolean;
-  note: string;
-  checked?: boolean;
-};
-
-type MissionWeeklyReview = {
-  id: string;
-  runId: string;
-  title: string;
-  reviewDate: string;
-  weekLabel: string;
-  openTasks: MissionWeeklyReviewTask[];
-  completedTasks: MissionWeeklyReviewTask[];
-  reminders: Array<{ id: string; title: string; remindAt: string | null }>;
-  journalSummary: string;
-  memorySuggestions: MissionWeeklyReviewMemorySuggestion[];
-  createdAt: string;
-};
-
 type CorePluginRecord = {
   id: string;
   enabled: boolean;
@@ -275,22 +190,9 @@ type AccountsEntryForm = {
   notes: string;
 };
 
-type MissionOverviewResponse = {
-  day: MissionDay;
-  captures: MissionCapture[];
-  projects: MissionProject[];
-  tasksDueToday: MissionTask[];
-  pendingApprovals: MissionApproval[];
-  recentRuns: MissionRun[];
-  activity: MissionActivity[];
-  latestBriefing: MissionDailyBriefing | null;
-  latestWeeklyReview: MissionWeeklyReview | null;
-};
-
 type PluginsResponse = { plugins: CorePluginRecord[] };
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
-type MissionJournalArchiveResponse = { entries: MissionJournalArchiveEntry[] };
 type MissionTasksResponse = {
   tasks: MissionTask[];
   nextCursor: string | null;
@@ -328,35 +230,19 @@ const router = useRouter();
 const { toastFromUnknown, toastSuccess } = useAppToast();
 
 const basePrimarySections: PrimaryMissionSection[] = ["projects"];
-const settingsSections: SettingsMissionSection[] = [
-  "journalArchive",
-  "activity",
-  "memory",
-  "sources",
-];
+const settingsSections: SettingsMissionSection[] = ["activity", "memory", "sources"];
 const sectionIds: MissionSection[] = [
   ...basePrimarySections,
   "accounts",
   ...settingsSections,
 ];
 const sectionLabels: Record<MissionSection, string> = {
-  today: "Journal",
-  journalArchive: "Archive",
   projects: "Projects",
   accounts: "Accounts",
   activity: "Activity",
   memory: "Memory",
   sources: "Sources",
 };
-const captureTypeOptions: Array<{
-  id: MissionCaptureType;
-  icon: "CircleCheck" | "Clock" | "CalendarDays";
-  label: string;
-}> = [
-  { id: "task", icon: "CircleCheck", label: "Task" },
-  { id: "reminder", icon: "Clock", label: "Reminder" },
-  { id: "event", icon: "CalendarDays", label: "Event" },
-];
 const projectBoardStatuses: Array<{
   id: ProjectBoardStatus;
   label: string;
@@ -369,57 +255,22 @@ const projectBoardStatuses: Array<{
 const PROJECT_TASK_PAGE_SIZE = 50;
 const ACCOUNTS_PAGE_SIZE = 50;
 
-const selectedDate = ref(todayKey());
 const activeSection = ref<MissionSection>(
   normalizeSection(route.query.section),
 );
 const accountsEnabled = ref(false);
-const day = ref<MissionDay | null>(null);
-const captures = ref<MissionCapture[]>([]);
 const projects = ref<MissionProject[]>([]);
-const tasksDueToday = ref<MissionTask[]>([]);
 const pendingApprovals = ref<MissionApproval[]>([]);
 const recentRuns = ref<MissionRun[]>([]);
 const memory = ref<MissionMemory[]>([]);
 const sources = ref<MissionContextSource[]>([]);
 const activity = ref<MissionActivity[]>([]);
-const latestBriefing = ref<MissionDailyBriefing | null>(null);
-const latestWeeklyReview = ref<MissionWeeklyReview | null>(null);
-const weeklyReviewCarryOverIds = ref<Set<string>>(new Set());
-const weeklyReviewMemoryIds = ref<Set<string>>(new Set());
-const weeklyReviewCompletedOpen = ref(false);
-const weeklyReviewSubmitting = ref(false);
-const weeklyReviewSubmittedRunId = ref("");
-const doneCapturesOpen = ref(false);
 const loading = ref(false);
 const error = ref("");
 const clearingActivity = ref(false);
 const localRunActionId = ref("");
-const captureText = ref("");
-const captureType = ref<MissionCaptureType>("task");
-const manualCaptureType = ref(false);
-const selectedProjectId = ref("");
 const selectedProjectDetailId = ref("");
-const savingCapture = ref(false);
-const schedulePickerOpen = ref(false);
-const scheduleDateTime = ref("");
-const journalDraft = ref("");
-const journalState = ref<"idle" | "saving" | "saved" | "error">("idle");
-const datePickerOpen = ref(false);
-const datePickerMonth = ref(monthKey(selectedDate.value));
 const projectPickerOpen = ref(false);
-const journalArchiveEntries = ref<MissionJournalArchiveEntry[]>([]);
-const journalArchiveLoading = ref(false);
-const journalArchiveError = ref("");
-const selectedArchiveDate = ref("");
-const archivePickerOpen = ref(false);
-const selectedArchiveProjectId = ref("");
-const projectArchiveTasks = ref<MissionTask[]>([]);
-const projectArchiveLoading = ref(false);
-const projectArchiveLoadingMore = ref(false);
-const projectArchiveError = ref("");
-const projectArchiveNextCursor = ref<string | null>(null);
-const selectedProjectArchiveTaskId = ref("");
 const memoryDraft = ref("");
 const memoryActionId = ref("");
 const sourceDraft = ref("");
@@ -476,64 +327,12 @@ const accountsStripeStatus = ref("");
 const accountsStripeLastSyncedAt = ref<string | null>(null);
 const accountsImportInput = ref<HTMLInputElement | null>(null);
 const accountsForm = ref<AccountsEntryForm>(emptyAccountsForm("expense"));
-let journalSaveTimer: number | null = null;
 
 const primarySections = computed<PrimaryMissionSection[]>(() =>
   accountsEnabled.value
     ? [...basePrimarySections, "accounts"]
     : basePrimarySections,
 );
-const currentDateIsToday = computed(() => selectedDate.value === todayKey());
-const selectedDateLabel = computed(() =>
-  currentDateIsToday.value
-    ? "Today"
-    : formatDaySwitcherDate(selectedDate.value),
-);
-const activeProjectOptions = computed(() =>
-  projects.value.filter((project) => project.status === "active"),
-);
-const openCaptures = computed(() =>
-  captures.value.filter((capture) => capture.status === "open"),
-);
-const doneCaptures = computed(() =>
-  captures.value.filter((capture) => capture.status === "done"),
-);
-const visibleScheduledTasks = computed(() =>
-  tasksDueToday.value.filter((task) => task.sourceKind !== "capture"),
-);
-const selectedDayIsLoaded = computed(
-  () => day.value?.date === selectedDate.value && !loading.value,
-);
-const showCaptureList = computed(
-  () =>
-    selectedDayIsLoaded.value &&
-    (openCaptures.value.length > 0 ||
-      doneCaptures.value.length > 0 ||
-      visibleScheduledTasks.value.length > 0),
-);
-const journalStatusText = computed(() => {
-  if (journalState.value === "saving") return "Saving";
-  if (journalState.value === "saved") return "Saved";
-  if (journalState.value === "error") return "Could not save";
-  return "";
-});
-const capturePlaceholder = computed(() => {
-  if (captureType.value === "reminder")
-    return "Remind me to take a break tomorrow at 3pm";
-  if (captureType.value === "event") return "Coffee with Alex tomorrow at 10am";
-  return "Fix login redirect";
-});
-const schedulePickerTitle = computed(() =>
-  captureType.value === "event" ? "Schedule event" : "Schedule reminder",
-);
-const scheduledDate = computed(() => {
-  const [date] = scheduleDateTime.value.split("T");
-  return normalizeLocalDateInput(date);
-});
-const scheduledTime = computed(() => {
-  const time = scheduleDateTime.value.split("T")[1] || "";
-  return normalizeLocalTimeInput(time);
-});
 const activityItems = computed<ActivityViewItem[]>(() => {
   const visibleRunIds = new Set(
     recentRuns.value
@@ -589,38 +388,14 @@ const activityItems = computed<ActivityViewItem[]>(() => {
       })),
   ];
 });
-const visibleDailyBriefing = computed(() => {
-  const briefing = latestBriefing.value;
-  if (
-    !briefing ||
-    !briefing.showInJournal ||
-    briefing.date !== selectedDate.value
-  )
-    return null;
-  if (isDailyBriefingDismissed(briefing)) return null;
-  return briefing;
-});
-const visibleWeeklyReview = computed(() => {
-  const review = latestWeeklyReview.value;
-  if (!review || review.reviewDate !== selectedDate.value) return null;
-  if (weeklyReviewSubmittedRunId.value === review.runId) return null;
-  return review;
-});
-const weeklyReviewSubmitDisabled = computed(
-  () =>
-    weeklyReviewSubmitting.value ||
-    !visibleWeeklyReview.value ||
-    (weeklyReviewCarryOverIds.value.size === 0 &&
-      weeklyReviewMemoryIds.value.size === 0),
-);
 const settingsSectionActive = computed(() =>
   settingsSections.includes(activeSection.value as SettingsMissionSection),
 );
 const mobilePrimarySectionCycleLabel = computed(() =>
-  activeSection.value === "today" ? "Switch to projects" : "Switch to journal",
+  activeSection.value === "accounts" ? "Switch to projects" : "Switch to accounts",
 );
 const mobilePrimarySectionIcon = computed<UiIconName>(() =>
-  activeSection.value === "today" ? "LayoutGrid" : "CalendarDays",
+  activeSection.value === "accounts" ? "LayoutGrid" : "BadgeDollarSign",
 );
 const projectCreateDisabled = computed(
   () =>
@@ -753,78 +528,52 @@ const accountsFormDisabled = computed(
     !accountsForm.value.description.trim() ||
     !normalizeAccountsAmountInput(accountsForm.value.amount),
 );
-const selectedArchiveEntry = computed(
-  () =>
-    journalArchiveEntries.value.find(
-      (entry) => entry.date === selectedArchiveDate.value,
-    ) ||
-    journalArchiveEntries.value[0] ||
-    null,
-);
-const selectedArchiveProject = computed(
-  () =>
-    projects.value.find(
-      (project) => project.id === selectedArchiveProjectId.value,
-    ) || null,
-);
-const selectedArchiveLabel = computed(() =>
-  selectedArchiveProject.value
-    ? `${selectedArchiveProject.value.name} archive`
-    : "Journal archive",
-);
-const selectedProjectArchiveTask = computed(
-  () =>
-    projectArchiveTasks.value.find(
-      (task) => task.id === selectedProjectArchiveTaskId.value,
-    ) ||
-    projectArchiveTasks.value[0] ||
-    null,
-);
-
-async function loadOverview() {
-  const requestDate = selectedDate.value;
+async function loadMissionControlWorkspace() {
   loading.value = true;
   error.value = "";
   try {
-    const response = await api.get<MissionOverviewResponse>(
-      `/mission-control/overview?date=${encodeURIComponent(requestDate)}`,
+    const response = await api.get<{ projects: MissionProject[] }>(
+      "/mission-control/projects",
     );
-    if (selectedDate.value !== requestDate) return;
-    applyOverview(response);
+    projects.value = response.projects || [];
+    if (
+      selectedProjectDetailId.value &&
+      !projects.value.some(
+        (project) => project.id === selectedProjectDetailId.value,
+      )
+    ) {
+      selectedProjectDetailId.value = "";
+    }
+    await Promise.all([loadProjectTasks(), loadLocalExecutorStatus()]);
   } catch (e) {
-    if (selectedDate.value !== requestDate) return;
     error.value =
       e instanceof ApiError ? e.message : "Mission Control could not load";
   } finally {
-    if (selectedDate.value === requestDate) loading.value = false;
+    loading.value = false;
   }
 }
 
-function applyOverview(response: MissionOverviewResponse) {
-  day.value = response.day;
-  captures.value = response.captures || [];
-  projects.value = response.projects || [];
-  tasksDueToday.value = response.tasksDueToday || [];
-  pendingApprovals.value = response.pendingApprovals || [];
-  recentRuns.value = response.recentRuns || [];
-  activity.value = response.activity || [];
-  latestBriefing.value = response.latestBriefing || null;
-  latestWeeklyReview.value = response.latestWeeklyReview || null;
-  resetWeeklyReviewSelection(latestWeeklyReview.value);
-  journalDraft.value = response.day?.journalText || "";
-  journalState.value = "idle";
-  if (!selectedProjectId.value && projects.value[0]) {
-    selectedProjectId.value = projects.value[0].id;
+async function loadActivityReview() {
+  try {
+    const [approvalsResponse, runsResponse, activityResponse] =
+      await Promise.all([
+        api.get<{ approvals: MissionApproval[] }>(
+          "/mission-control/approvals?status=pending",
+        ),
+        api.get<{ runs: MissionRun[] }>(
+          "/mission-control/agent-runs?limit=50",
+        ),
+        api.get<{ activity: MissionActivity[] }>(
+          "/mission-control/plugin-activity?limit=50",
+        ),
+      ]);
+    pendingApprovals.value = approvalsResponse.approvals || [];
+    recentRuns.value = runsResponse.runs || [];
+    activity.value = activityResponse.activity || [];
+  } catch (e) {
+    error.value =
+      e instanceof ApiError ? e.message : "Activity could not load";
   }
-  if (
-    selectedProjectDetailId.value &&
-    !projects.value.some(
-      (project) => project.id === selectedProjectDetailId.value,
-    )
-  ) {
-    selectedProjectDetailId.value = "";
-  }
-  void loadMemoryAndSources();
 }
 
 async function clearActivity() {
@@ -861,7 +610,7 @@ async function cancelLocalExecutorRun(item: ActivityViewItem) {
   try {
     await api.post(`/local-executor/runs/${encodeURIComponent(runId)}/cancel`, {});
     toastSuccess("Local run cancelled");
-    await loadOverview();
+    await loadActivityReview();
   } catch (e) {
     toastFromUnknown(e, "Could not cancel local run");
   } finally {
@@ -883,86 +632,11 @@ async function retryLocalExecutorRun(item: ActivityViewItem) {
   try {
     await api.post(`/local-executor/runs/${encodeURIComponent(runId)}/retry`, {});
     toastSuccess("Local run queued again");
-    await loadOverview();
+    await loadActivityReview();
   } catch (e) {
     toastFromUnknown(e, "Could not retry local run");
   } finally {
     localRunActionId.value = "";
-  }
-}
-
-function dailyBriefingDismissKey(briefing: MissionDailyBriefing) {
-  return `mission-daily-briefing-dismissed:${briefing.date}:${briefing.id}`;
-}
-
-function isDailyBriefingDismissed(briefing: MissionDailyBriefing) {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(dailyBriefingDismissKey(briefing)) === "1";
-}
-
-function dismissDailyBriefing(briefing: MissionDailyBriefing) {
-  window.localStorage.setItem(dailyBriefingDismissKey(briefing), "1");
-  latestBriefing.value = { ...briefing, showInJournal: false };
-}
-
-function resetWeeklyReviewSelection(review: MissionWeeklyReview | null) {
-  weeklyReviewCompletedOpen.value = false;
-  if (!review || weeklyReviewSubmittedRunId.value === review.runId) {
-    weeklyReviewCarryOverIds.value = new Set();
-    weeklyReviewMemoryIds.value = new Set();
-    return;
-  }
-  weeklyReviewCarryOverIds.value = new Set(
-    review.openTasks
-      .filter((task) => task.suggestedCarryOver !== false)
-      .map((task) => task.id),
-  );
-  weeklyReviewMemoryIds.value = new Set(
-    review.memorySuggestions
-      .filter((suggestion) => suggestion.checked !== false)
-      .map((suggestion) => suggestion.id),
-  );
-}
-
-function toggleWeeklyReviewTask(taskId: string) {
-  const next = new Set(weeklyReviewCarryOverIds.value);
-  if (next.has(taskId)) next.delete(taskId);
-  else next.add(taskId);
-  weeklyReviewCarryOverIds.value = next;
-}
-
-function toggleWeeklyReviewMemory(suggestionId: string) {
-  const next = new Set(weeklyReviewMemoryIds.value);
-  if (next.has(suggestionId)) next.delete(suggestionId);
-  else next.add(suggestionId);
-  weeklyReviewMemoryIds.value = next;
-}
-
-async function submitWeeklyReview(review: MissionWeeklyReview) {
-  if (weeklyReviewSubmitDisabled.value) return;
-  weeklyReviewSubmitting.value = true;
-  error.value = "";
-  try {
-    await api.post(
-      `/mission-control/weekly-review/${encodeURIComponent(review.runId)}/submit`,
-      {
-        tasks: review.openTasks.map((task) => ({
-          id: task.id,
-          checked: weeklyReviewCarryOverIds.value.has(task.id),
-        })),
-        memorySuggestions: review.memorySuggestions.map((suggestion) => ({
-          ...suggestion,
-          checked: weeklyReviewMemoryIds.value.has(suggestion.id),
-        })),
-      },
-    );
-    weeklyReviewSubmittedRunId.value = review.runId;
-    toastSuccess("Weekly Review submitted");
-    await loadOverview();
-  } catch (e) {
-    toastFromUnknown(e, "Weekly Review could not be submitted");
-  } finally {
-    weeklyReviewSubmitting.value = false;
   }
 }
 
@@ -1195,93 +869,6 @@ async function syncAccountsStripe() {
   }
 }
 
-async function loadJournalArchive() {
-  journalArchiveLoading.value = true;
-  journalArchiveError.value = "";
-  try {
-    const response = await api.get<MissionJournalArchiveResponse>(
-      "/mission-control/journal-archive",
-    );
-    journalArchiveEntries.value = response.entries || [];
-    if (
-      selectedArchiveDate.value &&
-      journalArchiveEntries.value.some(
-        (entry) => entry.date === selectedArchiveDate.value,
-      )
-    ) {
-      return;
-    }
-    selectedArchiveDate.value = journalArchiveEntries.value[0]?.date || "";
-  } catch (e) {
-    journalArchiveError.value =
-      e instanceof ApiError ? e.message : "Journal archive could not load";
-    journalArchiveEntries.value = [];
-    selectedArchiveDate.value = "";
-  } finally {
-    journalArchiveLoading.value = false;
-  }
-}
-
-async function loadProjectArchive(projectId = selectedArchiveProjectId.value) {
-  if (!projectId) {
-    projectArchiveTasks.value = [];
-    projectArchiveNextCursor.value = null;
-    selectedProjectArchiveTaskId.value = "";
-    return;
-  }
-  projectArchiveLoading.value = true;
-  projectArchiveError.value = "";
-  try {
-    const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ archived: true, projectId }),
-    );
-    if (selectedArchiveProjectId.value !== projectId) return;
-    projectArchiveTasks.value = response.tasks || [];
-    projectArchiveNextCursor.value = response.nextCursor || null;
-    if (
-      selectedProjectArchiveTaskId.value &&
-      projectArchiveTasks.value.some(
-        (task) => task.id === selectedProjectArchiveTaskId.value,
-      )
-    ) {
-      return;
-    }
-    selectedProjectArchiveTaskId.value = projectArchiveTasks.value[0]?.id || "";
-  } catch (e) {
-    projectArchiveError.value =
-      e instanceof ApiError ? e.message : "Project archive could not load";
-    projectArchiveTasks.value = [];
-    projectArchiveNextCursor.value = null;
-    selectedProjectArchiveTaskId.value = "";
-  } finally {
-    projectArchiveLoading.value = false;
-  }
-}
-
-async function loadMoreProjectArchive() {
-  const projectId = selectedArchiveProjectId.value;
-  const cursor = projectArchiveNextCursor.value;
-  if (!projectId || !cursor || projectArchiveLoadingMore.value) return;
-  projectArchiveLoadingMore.value = true;
-  projectArchiveError.value = "";
-  try {
-    const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ archived: true, projectId, cursor }),
-    );
-    if (selectedArchiveProjectId.value !== projectId) return;
-    projectArchiveTasks.value = appendUniqueTasks(
-      projectArchiveTasks.value,
-      response.tasks || [],
-    );
-    projectArchiveNextCursor.value = response.nextCursor || null;
-  } catch (e) {
-    projectArchiveError.value =
-      e instanceof ApiError ? e.message : "Could not load more archived tasks";
-  } finally {
-    projectArchiveLoadingMore.value = false;
-  }
-}
-
 async function loadProjectTasks(
   projectId = selectedProjectTaskScopeId.value,
 ) {
@@ -1339,177 +926,7 @@ async function loadMoreProjectTasks() {
   }
 }
 
-async function submitCapture() {
-  const text = captureText.value.trim();
-  if (!text || savingCapture.value) return;
-  savingCapture.value = true;
-  error.value = "";
-  const hasPickedSchedule =
-    captureType.value !== "task" && scheduledDate.value && scheduledTime.value;
-  try {
-    const response = await api.post<{ capture: MissionCapture }>(
-      "/mission-control/capture",
-      {
-        date: selectedDate.value,
-        text,
-        type: captureType.value,
-        projectId: selectedProjectId.value || undefined,
-        scheduledDate: hasPickedSchedule ? scheduledDate.value : undefined,
-        scheduledTime: hasPickedSchedule ? scheduledTime.value : undefined,
-        timezone: hasPickedSchedule
-          ? Intl.DateTimeFormat().resolvedOptions().timeZone
-          : undefined,
-      },
-    );
-    captureText.value = "";
-    manualCaptureType.value = false;
-    captureType.value = "task";
-    schedulePickerOpen.value = false;
-    scheduleDateTime.value = "";
-    upsertCapture(response.capture);
-    toastSuccess(`${captureTypeLabel(response.capture.type)} captured`);
-  } catch (e) {
-    error.value = e instanceof ApiError ? e.message : "Capture failed";
-  } finally {
-    savingCapture.value = false;
-  }
-}
-
-async function setCaptureStatus(
-  capture: MissionCapture,
-  status: "open" | "done",
-) {
-  try {
-    const response = await api.patch<{ capture: MissionCapture }>(
-      `/mission-control/capture/${encodeURIComponent(capture.id)}`,
-      { status },
-    );
-    replaceCapture(response.capture);
-  } catch (e) {
-    error.value =
-      e instanceof ApiError ? e.message : "Could not update capture";
-  }
-}
-
-async function archiveCapture(capture: MissionCapture) {
-  try {
-    await api.delete<{ ok: true }>(
-      `/mission-control/capture/${encodeURIComponent(capture.id)}`,
-    );
-    captures.value = captures.value.filter((item) => item.id !== capture.id);
-  } catch (e) {
-    error.value =
-      e instanceof ApiError ? e.message : "Could not archive capture";
-  }
-}
-
-async function archiveTask(task: MissionTask) {
-  try {
-    await api.delete(`/mission-control/tasks/${encodeURIComponent(task.id)}`);
-    tasksDueToday.value = tasksDueToday.value.filter(
-      (item) => item.id !== task.id,
-    );
-  } catch (e) {
-    error.value = e instanceof ApiError ? e.message : "Could not remove task";
-  }
-}
-
-function replaceCapture(next: MissionCapture) {
-  upsertCapture(next);
-}
-
-function upsertCapture(next: MissionCapture) {
-  const index = captures.value.findIndex((item) => item.id === next.id);
-  if (index >= 0) captures.value.splice(index, 1, next);
-  else captures.value.unshift(next);
-}
-
-async function saveJournalNow() {
-  if (!day.value) return;
-  journalState.value = "saving";
-  try {
-    const response = await api.patch<{ day: MissionDay }>(
-      `/mission-control/days/${encodeURIComponent(selectedDate.value)}`,
-      {
-        journalText: journalDraft.value,
-      },
-    );
-    day.value = response.day;
-    journalState.value = "saved";
-  } catch {
-    journalState.value = "error";
-  }
-}
-
-function scheduleJournalSave() {
-  if (!day.value) return;
-  if (journalSaveTimer) window.clearTimeout(journalSaveTimer);
-  journalState.value = "saving";
-  journalSaveTimer = window.setTimeout(() => {
-    void saveJournalNow();
-  }, 700);
-}
-
-async function flushPendingJournalSave() {
-  if (journalSaveTimer) {
-    window.clearTimeout(journalSaveTimer);
-    journalSaveTimer = null;
-  }
-  if (day.value && journalDraft.value !== day.value.journalText) {
-    await saveJournalNow();
-  }
-}
-
-async function selectJournalDate(
-  date: string,
-  options: { openToday?: boolean } = {},
-) {
-  const normalizedDate = normalizeLocalDateInput(date);
-  if (!normalizedDate) return;
-  await flushPendingJournalSave();
-  selectedDate.value = normalizedDate;
-  datePickerOpen.value = false;
-  if (options.openToday) setSection("today");
-}
-
-function toggleDatePicker() {
-  if (!datePickerOpen.value) {
-    datePickerMonth.value = monthKey(selectedDate.value);
-  }
-  settingsMenuOpen.value = false;
-  projectPickerOpen.value = false;
-  archivePickerOpen.value = false;
-  datePickerOpen.value = !datePickerOpen.value;
-}
-
-function moveDatePickerMonth(delta: number) {
-  datePickerMonth.value = addMonths(datePickerMonth.value, delta);
-}
-
-function chooseDatePickerDay(date: string) {
-  void selectJournalDate(date);
-}
-
-function pickToday() {
-  void selectJournalDate(todayKey());
-}
-
-function openJournalArchive() {
-  selectedArchiveDate.value = selectedDate.value;
-  selectedArchiveProjectId.value = "";
-  archivePickerOpen.value = false;
-  datePickerOpen.value = false;
-  setSection("journalArchive");
-}
-
-function openSelectedArchiveEntry() {
-  if (!selectedArchiveEntry.value) return;
-  void selectJournalDate(selectedArchiveEntry.value.date, { openToday: true });
-}
-
 function toggleProjectPicker() {
-  datePickerOpen.value = false;
-  archivePickerOpen.value = false;
   settingsMenuOpen.value = false;
   projectPickerOpen.value = !projectPickerOpen.value;
 }
@@ -1521,53 +938,25 @@ function selectProjectDetail(projectId: string) {
   closeProjectTaskDetail();
 }
 
-function toggleArchivePicker() {
-  datePickerOpen.value = false;
-  projectPickerOpen.value = false;
-  settingsMenuOpen.value = false;
-  archivePickerOpen.value = !archivePickerOpen.value;
-}
-
-function selectJournalArchive() {
-  selectedArchiveProjectId.value = "";
-  archivePickerOpen.value = false;
-  if (
-    journalArchiveEntries.value.length === 0 &&
-    !journalArchiveLoading.value
-  ) {
-    void loadJournalArchive();
-  }
-}
-
-function selectProjectArchive(projectId: string) {
-  selectedArchiveProjectId.value = projectId;
-  selectedProjectArchiveTaskId.value = "";
-  archivePickerOpen.value = false;
-  void loadProjectArchive(projectId);
-}
-
 function setSection(section: MissionSection) {
   activeSection.value = section;
   settingsMenuOpen.value = false;
-  datePickerOpen.value = false;
   projectPickerOpen.value = false;
-  archivePickerOpen.value = false;
   if (section !== "projects") resetProjectTaskComposer();
   void router.replace({
     query: {
       ...route.query,
-      section: section === "today" ? undefined : sectionQueryValue(section),
+      section: section === "projects" ? undefined : sectionQueryValue(section),
     },
   });
 }
 
 function cyclePrimarySection() {
-  setSection(activeSection.value === "today" ? "projects" : "today");
+  setSection(activeSection.value === "accounts" ? "projects" : "accounts");
 }
 
 function openProjectModal() {
   projectPickerOpen.value = false;
-  archivePickerOpen.value = false;
   projectTitle.value = "";
   projectDescription.value = "";
   projectType.value = "standard";
@@ -1640,7 +1029,6 @@ async function addProject() {
       if (b.name === "Personal") return 1;
       return a.name.localeCompare(b.name);
     });
-    selectedProjectId.value ||= response.project.id;
     selectedProjectDetailId.value = response.project.id;
     toastSuccess("Project added");
     projectModalOpen.value = false;
@@ -1769,11 +1157,6 @@ async function saveProjectTaskDetail() {
       },
     );
     replaceProjectTask(response.task);
-    if (tasksDueToday.value.some((item) => item.id === response.task.id)) {
-      tasksDueToday.value = tasksDueToday.value.map((item) =>
-        item.id === response.task.id ? response.task : item,
-      );
-    }
     syncProjectTaskDetailDraft(response.task);
     closeProjectTaskDetail({ force: true });
     toastSuccess("Task updated");
@@ -1798,11 +1181,6 @@ async function setProjectTaskStatus(
       { status },
     );
     replaceProjectTask(response.task);
-    if (tasksDueToday.value.some((item) => item.id === response.task.id)) {
-      tasksDueToday.value = tasksDueToday.value.map((item) =>
-        item.id === response.task.id ? response.task : item,
-      );
-    }
   } catch (e) {
     projectTasksError.value =
       e instanceof ApiError ? e.message : "Could not update task";
@@ -1873,9 +1251,6 @@ async function archiveProjectTask(task: MissionTask): Promise<boolean> {
     projectTasks.value = projectTasks.value.filter(
       (item) => item.id !== task.id,
     );
-    tasksDueToday.value = tasksDueToday.value.filter(
-      (item) => item.id !== task.id,
-    );
     if (selectedProjectTaskDetailId.value === task.id) {
       selectedProjectTaskDetailId.value = "";
     }
@@ -1929,30 +1304,6 @@ function missionTasksUrl(options: {
   if (options.projectId) params.set("projectId", options.projectId);
   if (options.cursor) params.set("cursor", options.cursor);
   return `/mission-control/tasks?${params.toString()}`;
-}
-
-function moveDay(delta: number) {
-  void selectJournalDate(addDays(selectedDate.value, delta));
-}
-
-function chooseType(type: MissionCaptureType) {
-  captureType.value = type;
-  manualCaptureType.value = true;
-  if (type === "task") {
-    schedulePickerOpen.value = false;
-    return;
-  }
-  scheduleDateTime.value ||= defaultScheduleDateTime(selectedDate.value);
-  schedulePickerOpen.value = true;
-}
-
-function closeSchedulePicker() {
-  schedulePickerOpen.value = false;
-}
-
-function clearSchedulePicker() {
-  scheduleDateTime.value = "";
-  schedulePickerOpen.value = false;
 }
 
 async function addMemory() {
@@ -2026,20 +1377,6 @@ async function addSource() {
   }
 }
 
-function captureTypeLabel(type: MissionCaptureType): string {
-  if (type === "reminder") return "Reminder";
-  if (type === "event") return "Event";
-  return "Task";
-}
-
-function syncLabel(capture: MissionCapture): string {
-  if (capture.syncStatus === "synced") return "Synced";
-  if (capture.syncStatus === "pending") return "Pending";
-  if (capture.syncStatus === "setup_required") return "Setup";
-  if (capture.syncStatus === "failed") return "Failed";
-  return "Local";
-}
-
 function projectName(projectId: string | null): string {
   if (!projectId) return "Personal";
   return (
@@ -2064,14 +1401,6 @@ function isLocalProject(project: MissionProject | null | undefined): boolean {
 function localProjectPath(project: MissionProject | null | undefined): string {
   const value = project?.metadata?.localPath;
   return typeof value === "string" ? value : "";
-}
-
-function taskStatusLabel(status: MissionTask["status"]): string {
-  if (status === "in_progress") return "Doing";
-  if (status === "review") return "Review";
-  if (status === "done") return "Done";
-  if (status === "cancelled") return "Cancelled";
-  return "Backlog";
 }
 
 function emptyAccountsForm(type: FinancialEntryType): AccountsEntryForm {
@@ -2120,27 +1449,6 @@ function formatDateTime(value: string | null): string {
   }).format(date);
 }
 
-function formatDaySwitcherDate(value: string): string {
-  const date = new Date(`${value}T12:00:00`);
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "long",
-  }).format(date);
-}
-
-function formatArchiveDate(value: string): string {
-  if (value === todayKey()) return "Today";
-  const date = new Date(`${value}T12:00:00`);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-}
-
 function formatShortDate(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -2149,12 +1457,6 @@ function formatShortDate(value: string | null): string {
     month: "short",
     day: "numeric",
   }).format(date);
-}
-
-function formatProjectArchiveLine(task: MissionTask): string {
-  const archived = task.archivedAt ? formatShortDate(task.archivedAt) : "";
-  const status = taskStatusLabel(task.status);
-  return archived ? `${status} - Archived ${archived}` : status;
 }
 
 function memoryKindLabel(kind: string): string {
@@ -2189,41 +1491,8 @@ function memoryScopeLabel(item: MissionMemory): string {
     : memoryKindLabel(item.scopeKind);
 }
 
-function defaultScheduleDateTime(date: string): string {
-  return `${date}T09:00`;
-}
-
-function normalizeLocalDateInput(value: string): string {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
-}
-
-function normalizeLocalTimeInput(value: string): string {
-  const match = value.match(/^(\d{2}):(\d{2})/);
-  if (!match) return "";
-  return `${match[1]}:${match[2]}`;
-}
-
-function addDays(dateKey: string, days: number): string {
-  const [year, month, dayNumber] = dateKey.split("-").map(Number);
-  const date = new Date(year, month - 1, dayNumber + days);
-  return dateToKey(date);
-}
-
-function addMonths(monthKeyValue: string, months: number): string {
-  const [year, month] = monthKeyValue.split("-").map(Number);
-  const date = new Date(year, month - 1 + months, 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
 function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function monthKey(dateKey: string): string {
-  const normalized = normalizeLocalDateInput(dateKey);
-  if (normalized) return normalized.slice(0, 7);
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function todayKey(): string {
@@ -2232,14 +1501,21 @@ function todayKey(): string {
 }
 
 function sectionQueryValue(section: MissionSection): string {
-  if (section === "journalArchive") return "journal-archive";
   return section;
+}
+
+function isRemovedJournalSection(value: unknown): boolean {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return (
+    raw === "today" ||
+    raw === "journal" ||
+    raw === "archive" ||
+    raw === "journal-archive"
+  );
 }
 
 function normalizeSection(value: unknown): MissionSection {
   const raw = Array.isArray(value) ? value[0] : value;
-  if (raw === "journal") return "today";
-  if (raw === "archive" || raw === "journal-archive") return "journalArchive";
   if (raw === "approvals" || raw === "runs") return "activity";
   return sectionIds.includes(raw as MissionSection)
     ? (raw as MissionSection)
@@ -2247,20 +1523,8 @@ function normalizeSection(value: unknown): MissionSection {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape" && archivePickerOpen.value) {
-    archivePickerOpen.value = false;
-    return;
-  }
   if (event.key === "Escape" && projectPickerOpen.value) {
     projectPickerOpen.value = false;
-    return;
-  }
-  if (event.key === "Escape" && datePickerOpen.value) {
-    datePickerOpen.value = false;
-    return;
-  }
-  if (event.key === "Escape" && schedulePickerOpen.value) {
-    closeSchedulePicker();
     return;
   }
   if (event.key === "Escape" && projectModalOpen.value) {
@@ -2275,54 +1539,27 @@ function handleWindowKeydown(event: KeyboardEvent) {
 }
 
 function handleWindowClick() {
-  datePickerOpen.value = false;
   projectPickerOpen.value = false;
-  archivePickerOpen.value = false;
 }
-
-watch(captureText, (text) => {
-  if (!text.trim()) {
-    manualCaptureType.value = false;
-    captureType.value = "task";
-    schedulePickerOpen.value = false;
-    scheduleDateTime.value = "";
-    return;
-  }
-  if (!manualCaptureType.value) {
-    captureType.value = inferMissionCaptureType(text);
-  }
-});
-
-watch(selectedDate, (nextDate, previousDate) => {
-  if (scheduleDateTime.value && scheduledDate.value === previousDate) {
-    scheduleDateTime.value = `${nextDate}T${scheduledTime.value || "09:00"}`;
-  }
-  doneCapturesOpen.value = false;
-  datePickerMonth.value = monthKey(nextDate);
-  void loadOverview();
-});
-
-watch(journalDraft, (next, previous) => {
-  if (!day.value || next === previous || next === day.value.journalText) return;
-  scheduleJournalSave();
-});
 
 watch(
   () => route.query.section,
   (section) => {
+    if (isRemovedJournalSection(section)) {
+      void router.replace("/journal");
+      return;
+    }
     activeSection.value = normalizeSection(section);
   },
 );
 
 watch(activeSection, (section) => {
-  if (section === "journalArchive") {
-    if (selectedArchiveProjectId.value) void loadProjectArchive();
-    else void loadJournalArchive();
-  }
   if (section === "projects") {
     void loadProjectTasks();
     void loadLocalExecutorStatus();
   }
+  if (section === "activity") void loadActivityReview();
+  if (section === "memory" || section === "sources") void loadMemoryAndSources();
   if (section === "accounts") void loadAccounts();
 });
 
@@ -2332,22 +1569,24 @@ watch(selectedProjectDetailId, (next, previous) => {
 });
 
 onMounted(() => {
-  void loadOverview();
-  void loadPluginCapabilities();
-  if (activeSection.value === "journalArchive") {
-    if (selectedArchiveProjectId.value) void loadProjectArchive();
-    else void loadJournalArchive();
+  if (isRemovedJournalSection(route.query.section)) {
+    void router.replace("/journal");
+    return;
   }
+  void loadMissionControlWorkspace();
+  void loadPluginCapabilities();
   if (activeSection.value === "projects") {
     void loadProjectTasks();
     void loadLocalExecutorStatus();
   }
+  if (activeSection.value === "activity") void loadActivityReview();
+  if (activeSection.value === "memory" || activeSection.value === "sources")
+    void loadMemoryAndSources();
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener("click", handleWindowClick);
 });
 
 onBeforeUnmount(() => {
-  if (journalSaveTimer) window.clearTimeout(journalSaveTimer);
   window.removeEventListener("keydown", handleWindowKeydown);
   window.removeEventListener("click", handleWindowClick);
 });
@@ -2373,52 +1612,7 @@ onBeforeUnmount(() => {
       </nav>
 
       <div
-        v-if="activeSection === 'today'"
-        class="mission-control__day-switcher"
-        aria-label="Selected day"
-        @click.stop
-      >
-        <button
-          type="button"
-          class="icon-button"
-          aria-label="Previous day"
-          @click="moveDay(-1)"
-        >
-          <UiIcon name="ChevronLeft" :size="18" />
-        </button>
-        <button
-          type="button"
-          class="mission-control__day-label"
-          :aria-expanded="datePickerOpen"
-          aria-haspopup="dialog"
-          aria-label="Choose journal date"
-          @click="toggleDatePicker"
-        >
-          <strong>{{ selectedDateLabel }}</strong>
-        </button>
-        <button
-          type="button"
-          class="icon-button"
-          aria-label="Next day"
-          @click="moveDay(1)"
-        >
-          <UiIcon name="ChevronRight" :size="18" />
-        </button>
-        <DatePickerPopover
-          v-if="datePickerOpen"
-          :month-key="datePickerMonth"
-          :selected-date="selectedDate"
-          :today-date="todayKey()"
-          aria-label="Choose journal date"
-          secondary-action-label="View archive"
-          @move-month="moveDatePickerMonth"
-          @select-date="chooseDatePickerDay"
-          @today="pickToday"
-          @secondary-action="openJournalArchive"
-        />
-      </div>
-      <div
-        v-else-if="activeSection === 'projects'"
+        v-if="activeSection === 'projects'"
         class="mission-control__project-switcher"
         aria-label="Selected project"
         @click.stop
@@ -2484,64 +1678,12 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <div
-        v-else-if="activeSection === 'journalArchive'"
-        class="mission-control__archive-switcher"
-        aria-label="Selected archive"
-        @click.stop
-      >
-        <button
-          type="button"
-          class="mission-control__archive-label"
-          :aria-expanded="archivePickerOpen"
-          aria-haspopup="dialog"
-          aria-label="Choose archive"
-          @click="toggleArchivePicker"
-        >
-          <strong>{{ selectedArchiveLabel }}</strong>
-          <UiIcon
-            name="ChevronDown"
-            :size="15"
-            class="mission-control__project-caret"
-          />
-        </button>
-        <div
-          v-if="archivePickerOpen"
-          class="archive-picker-popover"
-          role="dialog"
-          aria-label="Choose archive"
-        >
-          <button
-            type="button"
-            class="archive-picker-popover__item"
-            :class="{ 'is-active': !selectedArchiveProject }"
-            @click="selectJournalArchive"
-          >
-            Journal archive
-          </button>
-          <button
-            v-for="project in projects"
-            :key="project.id"
-            type="button"
-            class="archive-picker-popover__item"
-            :class="{ 'is-active': selectedArchiveProject?.id === project.id }"
-            @click="selectProjectArchive(project.id)"
-          >
-            {{ project.name }} archive
-          </button>
-          <div
-            v-if="projects.length === 0"
-            class="archive-picker-popover__empty"
-          >
-            No projects yet.
-          </div>
-        </div>
-      </div>
       <div v-else class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
       </div>
 
       <button
+        v-if="primarySections.length > 1"
         type="button"
         class="icon-button mission-control__mobile-section-cycle"
         :aria-label="mobilePrimarySectionCycleLabel"
@@ -2561,9 +1703,7 @@ onBeforeUnmount(() => {
           aria-haspopup="menu"
           @click="
             settingsMenuOpen = !settingsMenuOpen;
-            datePickerOpen = false;
             projectPickerOpen = false;
-            archivePickerOpen = false;
           "
         >
           <UiIcon name="Settings" :size="18" />
@@ -2589,405 +1729,6 @@ onBeforeUnmount(() => {
     </header>
 
     <p v-if="error" class="mission-control__message is-error">{{ error }}</p>
-
-    <section v-show="activeSection === 'today'" class="mission-page">
-      <div class="daily-sheet">
-        <section
-          v-if="visibleDailyBriefing"
-          class="daily-briefing-panel"
-          aria-label="Daily briefing"
-        >
-          <div class="daily-briefing-panel__copy">
-            <h2>{{ visibleDailyBriefing.title }}</h2>
-            <p>{{ visibleDailyBriefing.message }}</p>
-          </div>
-          <button
-            type="button"
-            class="icon-button quiet"
-            aria-label="Dismiss daily briefing"
-            @click="dismissDailyBriefing(visibleDailyBriefing)"
-          >
-            <UiIcon name="X" :size="16" />
-          </button>
-        </section>
-
-        <section
-          v-if="visibleWeeklyReview"
-          class="weekly-review-panel"
-          aria-label="Weekly Review"
-        >
-          <div class="weekly-review-panel__header">
-            <div>
-              <h2>Weekly Review</h2>
-              <span>{{ visibleWeeklyReview.weekLabel }}</span>
-            </div>
-            <button
-              type="button"
-              class="text-button text-button--primary"
-              :disabled="weeklyReviewSubmitDisabled"
-              @click="submitWeeklyReview(visibleWeeklyReview)"
-            >
-              {{ weeklyReviewSubmitting ? "Submitting..." : "Submit" }}
-            </button>
-          </div>
-
-          <p class="weekly-review-panel__summary">
-            {{ visibleWeeklyReview.journalSummary }}
-          </p>
-
-          <div class="weekly-review-panel__section">
-            <div class="weekly-review-panel__section-header">
-              <strong>Open tasks</strong>
-              <span>{{ visibleWeeklyReview.openTasks.length }}</span>
-            </div>
-            <label
-              v-for="task in visibleWeeklyReview.openTasks"
-              :key="task.id"
-              class="weekly-review-check"
-            >
-              <input
-                type="checkbox"
-                :checked="weeklyReviewCarryOverIds.has(task.id)"
-                @change="toggleWeeklyReviewTask(task.id)"
-              />
-              <span>
-                <strong>{{ task.title }}</strong>
-                <small>{{ projectName(task.projectId) }}</small>
-              </span>
-            </label>
-          </div>
-
-          <div
-            v-if="visibleWeeklyReview.completedTasks.length"
-            class="weekly-review-panel__section"
-          >
-            <button
-              type="button"
-              class="weekly-review-panel__collapse"
-              :aria-expanded="weeklyReviewCompletedOpen"
-              @click="weeklyReviewCompletedOpen = !weeklyReviewCompletedOpen"
-            >
-              <UiIcon name="ChevronDown" :size="14" />
-              Completed ({{ visibleWeeklyReview.completedTasks.length }})
-            </button>
-            <div v-if="weeklyReviewCompletedOpen" class="weekly-review-list">
-              <div
-                v-for="task in visibleWeeklyReview.completedTasks"
-                :key="task.id"
-                class="weekly-review-list__item"
-              >
-                <UiIcon name="SquareCheck" :size="15" />
-                <span>{{ task.title }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="weekly-review-panel__section">
-            <div class="weekly-review-panel__section-header">
-              <strong>Memory suggestions</strong>
-              <span>{{ visibleWeeklyReview.memorySuggestions.length }}</span>
-            </div>
-            <label
-              v-for="suggestion in visibleWeeklyReview.memorySuggestions"
-              :key="suggestion.id"
-              class="weekly-review-check weekly-review-check--memory"
-            >
-              <input
-                type="checkbox"
-                :checked="weeklyReviewMemoryIds.has(suggestion.id)"
-                @change="toggleWeeklyReviewMemory(suggestion.id)"
-              />
-              <span>
-                <strong>{{ suggestion.body }}</strong>
-                <small>{{ suggestion.note }}</small>
-              </span>
-            </label>
-          </div>
-
-          <div
-            v-if="visibleWeeklyReview.reminders.length"
-            class="weekly-review-panel__meta"
-          >
-            {{ visibleWeeklyReview.reminders.length }} reminder{{
-              visibleWeeklyReview.reminders.length === 1 ? "" : "s"
-            }}
-          </div>
-        </section>
-
-        <form class="capture-row" @submit.prevent="submitCapture">
-          <input
-            v-model="captureText"
-            type="text"
-            class="capture-row__input"
-            :placeholder="capturePlaceholder"
-            autocomplete="off"
-          />
-          <select
-            v-model="selectedProjectId"
-            class="capture-row__project"
-            aria-label="Project"
-          >
-            <option
-              v-for="project in activeProjectOptions"
-              :key="project.id"
-              :value="project.id"
-            >
-              {{ project.name }}
-            </option>
-          </select>
-          <div class="capture-row__type" role="group" aria-label="Capture type">
-            <button
-              v-for="option in captureTypeOptions"
-              :key="option.id"
-              type="button"
-              class="type-button"
-              :class="{ 'is-active': captureType === option.id }"
-              :aria-label="option.label"
-              :title="option.label"
-              @click="chooseType(option.id)"
-            >
-              <UiIcon :name="option.icon" :size="18" />
-            </button>
-          </div>
-          <button
-            type="submit"
-            class="capture-row__submit"
-            :disabled="savingCapture || !captureText.trim()"
-            aria-label="Add capture"
-          >
-            <UiIcon name="Plus" :size="18" />
-          </button>
-        </form>
-
-        <section
-          v-if="showCaptureList"
-          class="capture-list"
-          aria-label="Today list"
-        >
-          <article
-            v-for="capture in openCaptures"
-            :key="capture.id"
-            class="capture-item"
-          >
-            <button
-              type="button"
-              class="capture-item__check"
-              aria-label="Mark done"
-              @click="setCaptureStatus(capture, 'done')"
-            >
-              <UiIcon name="Square" :size="16" />
-            </button>
-            <div class="capture-item__body">
-              <p>{{ capture.text }}</p>
-              <div class="capture-item__meta">
-                <span>{{ captureTypeLabel(capture.type) }}</span>
-                <span>{{ projectName(capture.projectId) }}</span>
-                <span v-if="capture.dueAt || capture.eventStartAt">
-                  {{ formatDateTime(capture.eventStartAt || capture.dueAt) }}
-                </span>
-                <span
-                  :class="`sync-pill sync-pill--${capture.syncStatus}`"
-                  :title="capture.syncError || syncLabel(capture)"
-                >
-                  {{ syncLabel(capture) }}
-                </span>
-              </div>
-            </div>
-            <button
-              type="button"
-              class="icon-button quiet"
-              aria-label="Archive capture"
-              @click="archiveCapture(capture)"
-            >
-              <UiIcon name="X" :size="16" />
-            </button>
-          </article>
-
-          <article
-            v-for="task in visibleScheduledTasks"
-            :key="task.id"
-            class="capture-item capture-item--scheduled"
-          >
-            <span class="capture-item__check capture-item__check--static">
-              <UiIcon name="CalendarDays" :size="16" />
-            </span>
-            <div class="capture-item__body">
-              <p>{{ task.title }}</p>
-              <div class="capture-item__meta">
-                <span>Scheduled</span>
-                <span>{{ projectName(task.projectId) }}</span>
-                <span>{{
-                  formatShortDate(task.dueAt || task.scheduledFor)
-                }}</span>
-              </div>
-            </div>
-            <button
-              type="button"
-              class="icon-button quiet"
-              aria-label="Archive scheduled task"
-              @click="archiveTask(task)"
-            >
-              <UiIcon name="X" :size="16" />
-            </button>
-          </article>
-
-          <template v-if="doneCaptures.length">
-            <button
-              type="button"
-              class="list-divider list-divider--toggle"
-              :aria-expanded="doneCapturesOpen"
-              @click="doneCapturesOpen = !doneCapturesOpen"
-            >
-              <UiIcon name="ChevronDown" :size="14" />
-              Done ({{ doneCaptures.length }})
-            </button>
-            <template v-if="doneCapturesOpen">
-              <article
-                v-for="capture in doneCaptures"
-                :key="capture.id"
-                class="capture-item capture-item--done"
-              >
-                <button
-                  type="button"
-                  class="capture-item__check"
-                  aria-label="Reopen"
-                  @click="setCaptureStatus(capture, 'open')"
-                >
-                  <UiIcon name="SquareCheck" :size="16" />
-                </button>
-                <div class="capture-item__body">
-                  <p>{{ capture.text }}</p>
-                  <div class="capture-item__meta">
-                    <span>{{ captureTypeLabel(capture.type) }}</span>
-                    <span>{{ projectName(capture.projectId) }}</span>
-                  </div>
-                </div>
-              </article>
-            </template>
-          </template>
-        </section>
-
-        <section class="journal-sheet" aria-label="Journal entry">
-          <span v-if="journalStatusText" class="journal-editor__status">
-            {{ journalStatusText }}
-          </span>
-          <textarea
-            v-model="journalDraft"
-            class="journal-editor__textarea"
-            rows="12"
-            placeholder="Journal entry field..."
-          />
-        </section>
-      </div>
-    </section>
-
-    <section v-show="activeSection === 'journalArchive'" class="mission-page">
-      <div class="archive-sheet">
-        <template v-if="!selectedArchiveProject">
-          <div v-if="journalArchiveLoading" class="empty-row">
-            Loading archive...
-          </div>
-          <div v-else-if="journalArchiveError" class="empty-row is-error">
-            {{ journalArchiveError }}
-          </div>
-          <div v-else-if="journalArchiveEntries.length === 0" class="empty-row">
-            No journal entries yet.
-          </div>
-          <div v-else class="journal-archive">
-            <div class="journal-archive__list" aria-label="Journal entries">
-              <button
-                v-for="entry in journalArchiveEntries"
-                :key="entry.id"
-                type="button"
-                class="journal-archive__row"
-                :class="{ 'is-active': selectedArchiveEntry?.id === entry.id }"
-                @click="selectedArchiveDate = entry.date"
-              >
-                <strong>{{ formatArchiveDate(entry.date) }}</strong>
-                <span>{{ entry.preview }}</span>
-              </button>
-            </div>
-
-            <article
-              v-if="selectedArchiveEntry"
-              class="journal-archive__preview"
-            >
-              <div class="journal-archive__preview-header">
-                <h2>{{ formatArchiveDate(selectedArchiveEntry.date) }}</h2>
-                <button
-                  type="button"
-                  class="text-button"
-                  @click="openSelectedArchiveEntry"
-                >
-                  Open entry
-                </button>
-              </div>
-              <p>{{ selectedArchiveEntry.journalText }}</p>
-            </article>
-          </div>
-        </template>
-
-        <template v-else>
-          <div v-if="projectArchiveLoading" class="empty-row">
-            Loading archive...
-          </div>
-          <div v-else-if="projectArchiveError" class="empty-row is-error">
-            {{ projectArchiveError }}
-          </div>
-          <div v-else-if="projectArchiveTasks.length === 0" class="empty-row">
-            No archived tasks for {{ selectedArchiveProject.name }} yet.
-          </div>
-          <div v-else class="journal-archive">
-            <div
-              class="journal-archive__list"
-              aria-label="Archived project tasks"
-            >
-              <button
-                v-for="task in projectArchiveTasks"
-                :key="task.id"
-                type="button"
-                class="journal-archive__row"
-                :class="{
-                  'is-active': selectedProjectArchiveTask?.id === task.id,
-                }"
-                @click="selectedProjectArchiveTaskId = task.id"
-              >
-                <strong>{{ task.title }}</strong>
-                <span>{{ formatProjectArchiveLine(task) }}</span>
-              </button>
-              <button
-                v-if="projectArchiveNextCursor"
-                type="button"
-                class="load-more-row"
-                :disabled="projectArchiveLoadingMore"
-                @click="loadMoreProjectArchive"
-              >
-                <UiIcon name="ChevronDown" :size="15" />
-                {{ projectArchiveLoadingMore ? "Loading..." : "Load more" }}
-              </button>
-            </div>
-
-            <article
-              v-if="selectedProjectArchiveTask"
-              class="journal-archive__preview"
-            >
-              <div class="journal-archive__preview-header">
-                <h2>{{ selectedProjectArchiveTask.title }}</h2>
-                <span class="status-badge">
-                  {{ taskStatusLabel(selectedProjectArchiveTask.status) }}
-                </span>
-              </div>
-              <p>
-                {{
-                  selectedProjectArchiveTask.description ||
-                  "No notes for this task."
-                }}
-              </p>
-            </article>
-          </div>
-        </template>
-      </div>
-    </section>
 
     <section v-show="activeSection === 'projects'" class="mission-page">
       <div class="projects-workspace">
@@ -3599,55 +2340,6 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <div
-        v-if="schedulePickerOpen && captureType !== 'task'"
-        class="mission-modal mission-modal--compact"
-        role="presentation"
-        @click.self="closeSchedulePicker"
-      >
-        <form
-          class="mission-modal__dialog schedule-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="schedule-modal-title"
-          @submit.prevent="closeSchedulePicker"
-        >
-          <div class="mission-modal__header">
-            <h2 id="schedule-modal-title">{{ schedulePickerTitle }}</h2>
-            <button
-              type="button"
-              class="icon-button quiet"
-              aria-label="Close"
-              @click="closeSchedulePicker"
-            >
-              <UiIcon name="X" :size="18" />
-            </button>
-          </div>
-
-          <label class="field">
-            <span>Date and time</span>
-            <input v-model="scheduleDateTime" type="datetime-local" autofocus />
-          </label>
-
-          <div class="mission-modal__actions">
-            <button
-              type="button"
-              class="text-button"
-              @click="clearSchedulePicker"
-            >
-              Clear
-            </button>
-            <button
-              type="button"
-              class="text-button text-button--primary"
-              @click="closeSchedulePicker"
-            >
-              Done
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div
         v-if="projectModalOpen"
         class="mission-modal"
         role="presentation"
@@ -4029,13 +2721,9 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__section-tab,
-.mission-control__day-label,
 .mission-control__project-label,
-.mission-control__archive-label,
-.type-button,
 .icon-button,
-.text-button,
-.capture-row__submit {
+.text-button {
   border: 1px solid transparent;
   background: transparent;
   color: inherit;
@@ -4059,15 +2747,6 @@ onBeforeUnmount(() => {
   color: var(--ui-text);
 }
 
-.mission-control__day-switcher {
-  position: relative;
-  display: grid;
-  grid-template-columns: 34px minmax(112px, 176px) 34px;
-  align-items: center;
-  justify-self: center;
-  gap: 4px;
-}
-
 .mission-control__section-title {
   justify-self: center;
   color: var(--ui-text);
@@ -4076,17 +2755,14 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
-.mission-control__project-switcher,
-.mission-control__archive-switcher {
+.mission-control__project-switcher {
   position: relative;
   display: grid;
   justify-self: center;
   min-width: 0;
 }
 
-.mission-control__day-label,
-.mission-control__project-label,
-.mission-control__archive-label {
+.mission-control__project-label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4098,26 +2774,19 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
-.mission-control__day-label:hover,
-.mission-control__day-label[aria-expanded="true"],
 .mission-control__project-label:hover,
-.mission-control__project-label[aria-expanded="true"],
-.mission-control__archive-label:hover,
-.mission-control__archive-label[aria-expanded="true"] {
+.mission-control__project-label[aria-expanded="true"] {
   background: var(--ui-surface-muted);
 }
 
-.mission-control__day-label strong,
-.mission-control__project-label strong,
-.mission-control__archive-label strong {
+.mission-control__project-label strong {
   overflow: hidden;
   font-size: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mission-control__project-label,
-.mission-control__archive-label {
+.mission-control__project-label {
   max-width: min(260px, calc(100vw - 120px));
 }
 
@@ -4128,24 +2797,18 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__project-label[aria-expanded="true"]
-  .mission-control__project-caret,
-.mission-control__archive-label[aria-expanded="true"]
   .mission-control__project-caret {
   transform: rotate(180deg);
 }
 
-.capture-item__meta,
 .detail-row p,
 .simple-sheet__header span,
-.journal-editor__status,
 .detail-row__aside {
   color: var(--ui-text-muted);
   font-size: 12px;
 }
 
-.icon-button,
-.type-button,
-.capture-row__submit {
+.icon-button {
   display: inline-grid;
   width: 36px;
   height: 36px;
@@ -4154,9 +2817,6 @@ onBeforeUnmount(() => {
 }
 
 .icon-button:hover,
-.type-button:hover,
-.capture-row__submit:hover,
-.type-button.is-active,
 .icon-button.is-active {
   background: var(--ui-accent-soft);
   color: var(--ui-accent-contrast);
@@ -4213,8 +2873,7 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted);
 }
 
-.project-picker-popover,
-.archive-picker-popover {
+.project-picker-popover {
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
@@ -4237,8 +2896,7 @@ onBeforeUnmount(() => {
   min-width: min(240px, calc(100vw - 28px));
 }
 
-.project-picker-popover__item,
-.archive-picker-popover__item {
+.project-picker-popover__item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4258,8 +2916,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.project-picker-popover__item > span:first-child,
-.archive-picker-popover__item > span:first-child {
+.project-picker-popover__item > span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4267,14 +2924,11 @@ onBeforeUnmount(() => {
 }
 
 .project-picker-popover__item:hover,
-.project-picker-popover__item.is-active,
-.archive-picker-popover__item:hover,
-.archive-picker-popover__item.is-active {
+.project-picker-popover__item.is-active {
   background: var(--ui-surface-muted);
 }
 
-.project-picker-popover__empty,
-.archive-picker-popover__empty {
+.project-picker-popover__empty {
   padding: 10px;
   color: var(--ui-text-muted);
   font-size: 13px;
@@ -4307,18 +2961,10 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-.daily-sheet,
-.journal-sheet,
 .simple-sheet {
   display: grid;
   width: min(700px, 100%);
   gap: 20px;
-}
-
-.archive-sheet {
-  display: grid;
-  width: min(920px, 100%);
-  gap: 0;
 }
 
 .projects-workspace {
@@ -4331,167 +2977,17 @@ onBeforeUnmount(() => {
   width: min(920px, 100%);
 }
 
-.daily-briefing-panel {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  border-bottom: 1px solid var(--ui-border);
-  padding: 0 0 16px;
-}
-
-.daily-briefing-panel__copy {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.daily-briefing-panel h2 {
-  margin: 0;
-  color: var(--ui-text);
-  font-size: 15px;
-  line-height: 1.25;
-}
-
-.daily-briefing-panel p {
-  margin: 0;
-  white-space: pre-line;
-  color: var(--ui-text);
-  font-size: 15px;
-  line-height: 1.5;
-}
-
-.weekly-review-panel {
-  display: grid;
-  gap: 16px;
-  padding: 0 0 18px;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.weekly-review-panel__header,
-.weekly-review-panel__section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.weekly-review-panel__header h2 {
-  margin: 0;
-  color: var(--ui-text);
-  font-size: 16px;
-  line-height: 1.25;
-}
-
-.weekly-review-panel__header span,
-.weekly-review-panel__section-header span,
-.weekly-review-panel__meta,
-.weekly-review-check small {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-
-.weekly-review-panel__summary {
-  margin: 0;
-  color: var(--ui-text);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.weekly-review-panel__section {
-  display: grid;
-  gap: 8px;
-}
-
-.weekly-review-panel__section-header strong {
-  font-size: 13px;
-}
-
-.weekly-review-check {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  padding: 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface);
-}
-
-.weekly-review-check input {
-  width: 16px;
-  height: 16px;
-  margin: 2px 0 0;
-  accent-color: var(--ui-accent);
-}
-
-.weekly-review-check span {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.weekly-review-check strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--ui-text);
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.weekly-review-check--memory strong {
-  font-weight: 550;
-}
-
-.weekly-review-panel__collapse {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: fit-content;
-  border: 0;
-  background: transparent;
-  color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.weekly-review-panel__collapse[aria-expanded="true"] svg {
-  transform: rotate(180deg);
-}
-
-.weekly-review-list {
-  display: grid;
-  gap: 6px;
-}
-
-.weekly-review-list__item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--ui-text-muted);
-  font-size: 13px;
-}
-
-.capture-row,
 .inline-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(130px, 170px) auto 40px;
+  grid-template-columns: minmax(0, 1fr) 40px;
   gap: 6px;
   align-items: center;
+  margin: 14px 0 4px;
   padding: 6px;
   border-radius: var(--ui-radius-md);
   background: var(--ui-surface-muted);
 }
 
-.capture-row__type {
-  display: flex;
-  gap: 2px;
-}
-
-.capture-row__input,
-.capture-row__project,
-.journal-editor__textarea,
 .inline-form input,
 .project-task-composer__input,
 .project-task-composer__project {
@@ -4504,8 +3000,6 @@ onBeforeUnmount(() => {
   font: inherit;
 }
 
-.capture-row__input,
-.capture-row__project,
 .inline-form input,
 .project-task-composer__input,
 .project-task-composer__project {
@@ -4513,15 +3007,10 @@ onBeforeUnmount(() => {
   padding: 0 12px;
 }
 
-.capture-row__input::placeholder,
-.journal-editor__textarea::placeholder,
 .project-task-composer__input::placeholder {
   color: var(--ui-text-muted);
 }
 
-.capture-row__input:focus,
-.capture-row__project:focus,
-.journal-editor__textarea:focus,
 .inline-form input:focus,
 .project-task-composer__input:focus,
 .project-task-composer__project:focus {
@@ -4529,26 +3018,17 @@ onBeforeUnmount(() => {
   outline-offset: 1px;
 }
 
-.capture-row__submit {
-  background: var(--ui-accent);
-  color: var(--ui-accent-contrast);
-}
-
-.capture-row__submit:disabled,
 .project-task-composer .icon-button:disabled,
 .project-column-add:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.capture-list,
-.simple-sheet,
-.journal-sheet {
+.simple-sheet {
   display: grid;
   gap: 0;
 }
 
-.capture-list__header,
 .simple-sheet__header {
   display: flex;
   align-items: center;
@@ -4559,7 +3039,6 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--ui-border);
 }
 
-.capture-list__header h1,
 .simple-sheet__header h1,
 .detail-row h2 {
   margin: 0;
@@ -4580,60 +3059,8 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
-.capture-item {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 36px;
-  gap: 8px;
-  align-items: center;
-  min-height: 56px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.capture-item__check {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text-muted);
-  cursor: pointer;
-}
-
-.capture-item__check:hover {
-  color: var(--ui-accent);
-}
-
-.capture-item__check--static {
-  cursor: default;
-}
-
-.capture-item__body {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.capture-item__body p,
 .detail-row p {
   margin: 0;
-}
-
-.capture-item__body p {
-  overflow-wrap: anywhere;
-  font-size: 15px;
-  line-height: 1.45;
-}
-
-.capture-item--done .capture-item__body p {
-  color: var(--ui-text-muted);
-  text-decoration: line-through;
-}
-
-.capture-item--scheduled .capture-item__body p {
-  color: var(--ui-text-muted);
 }
 
 .capture-item__meta {
@@ -4643,7 +3070,6 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 
-.sync-pill,
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -4670,14 +3096,8 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
-.sync-pill--synced,
 .status-badge.ready {
   color: var(--ui-accent);
-}
-
-.sync-pill--setup_required,
-.sync-pill--failed {
-  color: #b91c1c;
 }
 
 .status-badge--needs_review {
@@ -4686,35 +3106,6 @@ onBeforeUnmount(() => {
 
 .status-badge--active {
   color: var(--ui-accent);
-}
-
-.list-divider {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 18px 0 6px;
-  border: 0;
-  background: transparent;
-  color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0;
-  text-align: left;
-  text-transform: uppercase;
-  cursor: default;
-}
-
-.list-divider--toggle {
-  cursor: pointer;
-}
-
-.list-divider--toggle svg {
-  transition: transform 0.16s ease;
-}
-
-.list-divider--toggle[aria-expanded="false"] svg {
-  transform: rotate(-90deg);
 }
 
 .empty-row {
@@ -4726,23 +3117,6 @@ onBeforeUnmount(() => {
 
 .empty-row.is-error {
   color: #b91c1c;
-}
-
-.journal-sheet {
-  gap: 12px;
-}
-
-.journal-editor__status {
-  justify-self: end;
-  padding-top: 4px;
-}
-
-.journal-editor__textarea {
-  min-height: 260px;
-  resize: vertical;
-  padding: 5px;
-  font-size: 16px;
-  line-height: 1.65;
 }
 
 .detail-row {
@@ -5285,95 +3659,6 @@ onBeforeUnmount(() => {
   min-width: 180px;
 }
 
-.journal-archive {
-  display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  gap: 28px;
-  min-width: 0;
-}
-
-.journal-archive__list {
-  display: grid;
-  align-content: start;
-  min-width: 0;
-}
-
-.journal-archive__row {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-  padding: 12px 0;
-  border: 0;
-  border-bottom: 1px solid var(--ui-border);
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.journal-archive__row:hover,
-.journal-archive__row.is-active {
-  color: var(--ui-accent);
-}
-
-.journal-archive__row strong {
-  overflow: hidden;
-  font-size: 13px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.journal-archive__row span {
-  overflow: hidden;
-  color: var(--ui-text-muted);
-  font-size: 13px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.journal-archive__preview {
-  display: grid;
-  align-content: start;
-  gap: 16px;
-  min-width: 0;
-  padding-left: 28px;
-  border-left: 1px solid var(--ui-border);
-}
-
-.journal-archive__preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-
-.journal-archive__preview h2 {
-  margin: 0;
-  overflow: hidden;
-  font-size: 16px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.journal-archive__preview p {
-  margin: 0;
-  color: var(--ui-text);
-  font-size: 15px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-}
-
-.inline-form {
-  grid-template-columns: minmax(0, 1fr) 40px;
-  margin: 14px 0 4px;
-}
-
 .text-button {
   min-height: 34px;
   padding: 6px 10px;
@@ -5608,27 +3893,14 @@ onBeforeUnmount(() => {
     display: none;
   }
 
-  .mission-control__day-switcher,
   .mission-control__project-switcher,
-  .mission-control__archive-switcher,
   .mission-control__section-title {
     grid-column: 1;
     grid-row: 1;
     justify-self: stretch;
   }
 
-  .mission-control__day-switcher {
-    grid-template-columns: 32px minmax(0, 1fr) 32px;
-    gap: 2px;
-  }
-
-  .mission-control__day-switcher .icon-button {
-    width: 32px;
-    height: 32px;
-  }
-
-  .mission-control__project-label,
-  .mission-control__archive-label {
+  .mission-control__project-label {
     max-width: none;
   }
 
@@ -5641,29 +3913,6 @@ onBeforeUnmount(() => {
   .settings-menu {
     grid-column: 3;
     grid-row: 1;
-  }
-
-  .capture-row {
-    grid-template-columns: auto minmax(0, 1fr) 40px;
-  }
-
-  .capture-row__input {
-    grid-column: 1 / -1;
-  }
-
-  .capture-row__project {
-    grid-column: 2;
-    grid-row: 2;
-  }
-
-  .capture-row__type {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
-  .capture-row__submit {
-    grid-column: 3;
-    grid-row: 2;
   }
 
   .detail-row {
@@ -5694,16 +3943,6 @@ onBeforeUnmount(() => {
 
   .accounts-modal__grid {
     grid-template-columns: 1fr;
-  }
-
-  .journal-archive {
-    grid-template-columns: 1fr;
-    gap: 18px;
-  }
-
-  .journal-archive__preview {
-    padding-left: 0;
-    border-left: 0;
   }
 
   .memory-row__actions {
