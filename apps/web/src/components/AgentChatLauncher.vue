@@ -213,12 +213,7 @@ onMounted(async () => {
         :aria-expanded="false"
         @click="toggleChat"
       >
-        <img
-          src="/robot.png"
-          alt=""
-          class="agent-launcher-icon"
-          aria-hidden="true"
-        />
+        <span class="agent-launcher-icon" aria-hidden="true">🤖</span>
       </button>
 
       <div
@@ -361,9 +356,10 @@ onMounted(async () => {
 
 .agent-launcher-icon {
   display: block;
-  width: 58px;
-  height: 58px;
-  object-fit: contain;
+  font-size: 40px;
+  line-height: 1;
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   animation: agent-launcher-float 2.4s ease-in-out infinite;
 }
 

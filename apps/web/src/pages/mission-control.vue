@@ -4305,7 +4305,6 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   width: 100%;
-  padding-top: 16px;
 }
 
 .daily-sheet,
@@ -4741,7 +4740,7 @@ onBeforeUnmount(() => {
 .journal-editor__textarea {
   min-height: 260px;
   resize: vertical;
-  padding: 18px 0;
+  padding: 5px;
   font-size: 16px;
   line-height: 1.65;
 }

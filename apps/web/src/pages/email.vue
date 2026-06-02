@@ -1757,6 +1757,15 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
+          class="compose-btn compose-btn--mobile-nav"
+          aria-label="Compose"
+          title="Compose"
+          @click="openComposeModal()"
+        >
+          <UiIcon name="Pencil" :size="16" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
           class="mail-search__button mail-search__button--refresh"
           :disabled="loading"
           aria-label="Refresh conversations"
@@ -2972,6 +2981,55 @@ onBeforeUnmount(() => {
   outline-offset: 1px;
 }
 
+.mail-search--mobile-nav {
+  grid-template-columns: minmax(0, 1fr) 42px 42px 42px;
+  width: 100%;
+}
+
+.mail-search--mobile-nav .mail-search__input,
+.mail-search--mobile-nav .mail-search__button,
+.mail-search--mobile-nav .compose-btn--mobile-nav {
+  height: 42px;
+}
+
+.mail-search--mobile-nav .mail-search__button,
+.mail-search--mobile-nav .compose-btn--mobile-nav {
+  flex: 0 0 auto;
+  width: 42px;
+  padding: 0;
+}
+
+:global(
+  #app-side-nav-mobile-page-controls
+    .mail-search--mobile-nav
+    .mail-search__button:not(.mail-search__button--refresh)
+) {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+:global(
+  #app-side-nav-mobile-page-controls
+    .mail-search--mobile-nav
+    .compose-btn--mobile-nav
+) {
+  width: 42px;
+  height: 42px;
+  margin: 0;
+  padding: 0;
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.compose-btn--mobile-nav .compose-btn__label {
+  display: none;
+}
+
 .mail-search__button {
   display: inline-flex;
   align-items: center;
@@ -2979,13 +3037,25 @@ onBeforeUnmount(() => {
   height: 36px;
   width: 36px;
   padding: 0;
-  border: 1px solid var(--color-text);
+  border: 1px solid var(--color-accent);
   border-radius: 6px;
-  background: var(--color-text);
-  color: var(--color-bg);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.mail-search__button--refresh {
+  border-color: var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.mail-search__button--refresh:hover:not(:disabled) {
+  background: transparent;
+  color: var(--color-text);
+  border-color: var(--color-text);
 }
 
 .mail-search__button:disabled {
@@ -3187,16 +3257,18 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 40px;
   margin-bottom: 16px;
-  border: 1px solid var(--color-text);
+  border: 1px solid var(--color-accent);
   border-radius: 6px;
-  background: var(--color-text);
-  color: var(--color-bg);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
   font-size: 14px;
   font-weight: 700;
+  cursor: pointer;
 }
 
 .compose-btn:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .folder-nav {
@@ -4441,6 +4513,12 @@ onBeforeUnmount(() => {
 
 }
 
+@media (max-width: 959px) {
+  .mail-rail .compose-btn {
+    display: none;
+  }
+}
+
 @media (max-width: 640px) {
   .agent-main {
     padding: 0;
@@ -4457,7 +4535,7 @@ onBeforeUnmount(() => {
     gap: 2px;
   }
 
-  .mail-search__button {
+  .mail-search-bar .mail-search__button {
     padding: 0 10px;
   }
 
@@ -4485,19 +4563,6 @@ onBeforeUnmount(() => {
     display: none;
   }
 
-  .mail-search--mobile-nav {
-    grid-template-columns: minmax(0, 1fr) 42px 42px;
-    width: 100%;
-  }
-
-  .mail-search--mobile-nav .mail-search__button {
-    flex: 0 0 auto;
-  }
-
-  .mail-search--mobile-nav .mail-search__input {
-    height: 42px;
-  }
-
   .mail-rail,
   .conversation-list,
   .thread-pane {
@@ -4508,17 +4573,14 @@ onBeforeUnmount(() => {
     order: 2;
     position: static;
     z-index: 3;
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: max-content;
-    align-items: center;
-    gap: 8px;
+    display: block;
     width: 100%;
     height: auto;
     max-height: none;
     box-sizing: border-box;
-    padding: 8px 12px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-subtle);
     overflow-x: auto;
     overflow-y: hidden;
     overscroll-behavior-x: contain;
@@ -4537,26 +4599,13 @@ onBeforeUnmount(() => {
     display: none;
   }
 
-  .compose-btn {
-    flex: 0 0 auto;
-    width: 42px;
-    height: 36px;
-    margin: 0;
-    padding: 0;
-    font-size: 13px;
-  }
-
-  .compose-btn__label {
-    display: none;
-  }
-
   .folder-nav {
     display: flex;
-    flex: none;
+    flex-wrap: nowrap;
+    align-items: center;
     gap: 6px;
-    min-width: max-content;
-    overflow: visible;
-    overscroll-behavior-x: contain;
+    width: max-content;
+    min-width: 100%;
   }
 
   .folder-nav::-webkit-scrollbar {
@@ -4565,27 +4614,30 @@ onBeforeUnmount(() => {
 
   .folder-btn {
     flex: 0 0 auto;
-    width: 42px;
-    min-height: 36px;
-    padding: 0;
-    justify-content: center;
-    border-color: var(--color-border);
-    background: var(--color-bg);
-    font-size: 13px;
+    width: auto;
+    min-height: 38px;
+    padding: 0 12px;
+    justify-content: flex-start;
+    border-color: transparent;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 14px;
+    white-space: nowrap;
   }
 
+  .folder-btn:hover,
   .folder-btn--active {
-    background: var(--color-text);
-    color: var(--color-bg);
-    border-color: var(--color-text);
+    background: var(--color-bg);
+    color: var(--color-text);
+    border-color: var(--color-border);
   }
 
   .folder-btn__main {
-    gap: 7px;
+    gap: 8px;
   }
 
   .folder-btn__label-full {
-    display: none;
+    display: inline;
   }
 
   .folder-btn__label-mobile {
@@ -4593,7 +4645,14 @@ onBeforeUnmount(() => {
   }
 
   .folder-count {
-    display: none;
+    display: inline-flex;
+    background: var(--color-bg-muted);
+    color: var(--color-text-muted);
+    font-size: 12px;
+  }
+
+  .folder-btn--active .folder-count {
+    color: var(--color-text);
   }
 
   .conversation-list {

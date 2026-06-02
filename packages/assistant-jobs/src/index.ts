@@ -1051,7 +1051,8 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
     requiredSkillIds: [],
     defaultDraft: draft({
       name: "Daily Briefing",
-      purpose: "Prepare a daily Mission Control briefing.",
+      purpose:
+        "Sends a customised message to your mission control dashboard or Soulink when connected.",
       recipeId: "daily-briefing",
       trigger: dailySchedule,
       destination: missionDestination("review_packet"),

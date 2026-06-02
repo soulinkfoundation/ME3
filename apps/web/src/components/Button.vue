@@ -110,6 +110,13 @@ button.me3-btn {
   line-height: 0;
 }
 
+.me3-btn__emoji {
+  font-size: 1.125em;
+  line-height: 1;
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
 .me3-btn__label {
   line-height: 1;
 }

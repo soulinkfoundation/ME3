@@ -24,6 +24,7 @@ const showAgentLauncher = computed(
     auth.isAuthenticated &&
     agentChatInstalled.value &&
     route.meta.hideAppShell !== true &&
+    route.meta.hideAgentLauncher !== true &&
     !route.path.startsWith("/email"),
 );
 
