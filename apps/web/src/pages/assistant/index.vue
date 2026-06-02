@@ -16,7 +16,6 @@ import { AI_AGENT_MODEL_OPTIONS } from "../../utils/aiModelCatalog";
 definePage({
   meta: {
     requiresAuth: true,
-    hideAppShell: true,
     hideAgentLauncher: true,
     title: "Assistant | ME3",
     description: "Chat with ME3 and manage assistant jobs.",
@@ -1772,9 +1771,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </button>
             </div>
           </div>
-          <div class="assistant-composer__meta">
-            <span>{{ selectedModel?.runtimeLabel }}</span>
-            <span v-if="voiceDictationStatusText" class="assistant-composer__voice-status">
+          <div
+            v-if="voiceDictationStatusText"
+            class="assistant-composer__meta"
+          >
+            <span class="assistant-composer__voice-status">
               {{ voiceDictationStatusText }}
             </span>
           </div>
@@ -2845,8 +2846,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-composer__meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   min-height: 16px;
   color: var(--ui-text-muted);
   font-size: 12px;
@@ -2856,7 +2855,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-composer__voice-status {
   color: var(--ui-accent-strong);
   font-weight: 700;
-  text-align: right;
 }
 
 .assistant-error {
