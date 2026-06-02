@@ -2842,7 +2842,7 @@ describe("ME3 Core Worker auth", () => {
     expect(env.messages).toMatchObject([{ ownerId: "owner", content: "Hello" }]);
   });
 
-  it("dispatches owner sandbox chat turns through the agent runtime", async () => {
+  it("dispatches owner assistant chat turns through the agent runtime", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
     const runtimeCalls: Array<[string, RequestInit]> = [];
@@ -2871,7 +2871,7 @@ describe("ME3 Core Worker auth", () => {
     } as unknown as DurableObjectNamespace;
 
     const response = await app.fetch(
-      new Request("http://localhost/api/agent/sandbox", {
+      new Request("http://localhost/api/assistant/chat/turn", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2903,7 +2903,54 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
-  it("blocks sandbox chat turns when the Agent Chat plugin is disabled", async () => {
+  it("keeps the legacy sandbox chat endpoint as an alias", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const runtimeFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        auditId: null,
+        turnId: "turn-1",
+        specialist: "core.agent-chat",
+        replyText: "Hello from the legacy alias.",
+        model: "test-model",
+        source: "fallback",
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      }),
+    );
+
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/agent/sandbox", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ messageText: "Hello legacy route" }),
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      replyText: "Hello from the legacy alias.",
+    });
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+  });
+
+  it("blocks assistant chat turns when the Agent Chat plugin is disabled", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
 
@@ -2916,7 +2963,7 @@ describe("ME3 Core Worker auth", () => {
     );
 
     const response = await app.fetch(
-      new Request("http://localhost/api/agent/sandbox", {
+      new Request("http://localhost/api/assistant/chat/turn", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -699,6 +699,12 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   ],
   routes: [
     {
+      id: "assistant.chat.turn.api",
+      path: "/api/assistant/chat/turn",
+      methods: ["POST"],
+      auth: "owner",
+    },
+    {
       id: "agent.sandbox.api",
       path: "/api/agent/sandbox",
       methods: ["POST"],

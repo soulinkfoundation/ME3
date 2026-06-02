@@ -44,8 +44,8 @@ export const AGENT_CHAT_RUNTIME = {
   id: AGENT_CHAT_PLUGIN_ID,
   packageName: "@me3-core/plugin-agent-chat",
   bundled: true,
-  runtimeStatus: "sandbox_chat_runtime",
-  routes: ["/api/agent/sandbox"],
+  runtimeStatus: "assistant_chat_runtime",
+  routes: ["/api/assistant/chat/turn", "/api/agent/sandbox"],
   notes: [
     "Core bundles the owner chat runtime through a first-party plugin package.",
     "The plugin is enabled by default because agent chat is part of the baseline ME3 Core experience.",

@@ -283,7 +283,7 @@ type OwnerAuthState = {
   me3Configured: boolean;
 };
 type ChatBody = { message?: string };
-type AgentSandboxBody = { messageText?: unknown; replyToMessageId?: unknown };
+type AssistantChatTurnBody = { messageText?: unknown; replyToMessageId?: unknown };
 type SoulinkDispatchBody = {
   ownerSubject?: unknown;
   ownerNodeId?: unknown;
@@ -1362,7 +1362,7 @@ app.delete("/api/assistant/jobs/:id", async (c) => {
   }
 });
 
-app.post("/api/agent/sandbox", async (c) => {
+async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
@@ -1373,8 +1373,11 @@ app.post("/api/agent/sandbox", async (c) => {
     );
   }
 
-  const body = await c.req.json<AgentSandboxBody>().catch((): AgentSandboxBody => ({}));
-  const messageText = typeof body.messageText === "string" ? body.messageText.trim() : "";
+  const body = await c.req
+    .json<AssistantChatTurnBody>()
+    .catch((): AssistantChatTurnBody => ({}));
+  const messageText =
+    typeof body.messageText === "string" ? body.messageText.trim() : "";
   if (!messageText) {
     return c.json({ ok: false, error: "Message text is required" }, 400);
   }
@@ -1400,18 +1403,21 @@ app.post("/api/agent/sandbox", async (c) => {
 
   const id = runtime.idFromName(ownerId);
   const stub = runtime.get(id);
-  const response = await stub.fetch("https://me3-core-user-agent.internal/dispatch/sandbox", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      userId: ownerId,
-      connectionId: turn.connection.id,
-      sourceEventId: turn.sourceEvent.id,
-      turnId: turn.turnId,
-      messageText: turn.messageText,
-      replyToMessageId: turn.replyToMessageId,
-    }),
-  });
+  const response = await stub.fetch(
+    "https://me3-core-user-agent.internal/dispatch/sandbox",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: ownerId,
+        connectionId: turn.connection.id,
+        sourceEventId: turn.sourceEvent.id,
+        turnId: turn.turnId,
+        messageText: turn.messageText,
+        replyToMessageId: turn.replyToMessageId,
+      }),
+    },
+  );
 
   const payload = (await response.json().catch(() => null)) as
     | Record<string, unknown>
@@ -1431,7 +1437,10 @@ app.post("/api/agent/sandbox", async (c) => {
   }
 
   return c.json(payload);
-});
+}
+
+app.post("/api/assistant/chat/turn", handleAssistantChatTurn);
+app.post("/api/agent/sandbox", handleAssistantChatTurn);
 
 app.post("/api/agent/channels/soulink/dispatch", async (c) => {
   if (!(await isCorePluginEnabled(c.env, "me3.agent-chat"))) {

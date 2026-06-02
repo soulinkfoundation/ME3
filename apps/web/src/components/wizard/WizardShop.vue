@@ -622,7 +622,7 @@ async function suggestBusinessPositioning() {
 
   try {
     const response = await api.post<{ replyText?: string; error?: string }>(
-      "/agent/sandbox",
+      "/assistant/chat/turn",
       {
         messageText: buildSuggestionPrompt(),
       },
@@ -657,7 +657,7 @@ async function saveBusinessDetails() {
 
   try {
     const response = await api.post<{ replyText?: string; error?: string }>(
-      "/agent/sandbox",
+      "/assistant/chat/turn",
       {
         messageText: buildBusinessInferencePrompt(),
       },

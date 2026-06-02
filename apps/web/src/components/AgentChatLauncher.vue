@@ -128,7 +128,7 @@ async function sendMessage() {
   await scrollToBottom();
 
   try {
-    const result = await api.post<AgentSandboxResponse>("/agent/sandbox", {
+    const result = await api.post<AgentSandboxResponse>("/assistant/chat/turn", {
       messageText: text,
     });
 

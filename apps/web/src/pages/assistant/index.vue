@@ -311,11 +311,11 @@ const weekdayOptions = [
 ];
 const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const starterPrompts = [
-  { label: "Set up a job", icon: "⚙️" },
+  { label: "Set up a job", icon: "💼" },
   { label: "Draft an email", icon: "✉️" },
   { label: "Add a reminder", icon: "⏰" },
   { label: "Review my week", icon: "📅" },
-  { label: "Update my site", icon: "🛠️" },
+  { label: "Update my site", icon: "🌍" },
 ];
 
 const sortedJobs = computed(() =>
@@ -507,7 +507,7 @@ async function sendAssistantMessage() {
   await scrollAssistantToBottom();
 
   try {
-    const result = await api.post<AgentSandboxResponse>("/agent/sandbox", {
+    const result = await api.post<AgentSandboxResponse>("/assistant/chat/turn", {
       messageText: text,
     });
 
@@ -2168,22 +2168,23 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .model-picker__select {
-  max-width: min(38vw, 180px);
+  max-width: min(28vw, 132px);
   min-height: 32px;
   border: 0;
   border-radius: 999px;
-  padding: 0 24px 0 8px;
+  padding: 0 18px 0 6px;
   background: transparent;
   color: var(--ui-text-muted);
   font: inherit;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
+.model-picker__select:focus,
 .model-picker__select:focus-visible,
+.assistant-input:focus,
 .assistant-input:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--ui-accent) 32%, transparent);
-  outline-offset: 2px;
+  outline: none;
 }
 
 .assistant-console {
@@ -2348,8 +2349,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-composer {
   display: grid;
   gap: 8px;
+  width: 100%;
+  max-width: 600px;
+  margin-inline: auto;
   border: 1px solid var(--ui-border);
-  border-radius: 18px;
+  border-radius: 24px;
   padding: 10px;
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.08));
@@ -3175,9 +3179,11 @@ button:disabled {
 
   .assistant-composer {
     position: fixed;
-    right: 14px;
+    right: auto;
     bottom: max(14px, env(safe-area-inset-bottom, 0px));
-    left: 14px;
+    left: 50%;
+    width: min(600px, calc(100vw - 28px));
+    transform: translateX(-50%);
     z-index: 40;
   }
 
@@ -3226,7 +3232,7 @@ button:disabled {
   }
 
   .assistant-composer {
-    border-radius: var(--ui-radius-md);
+    border-radius: 20px;
   }
 
   .job-row {
