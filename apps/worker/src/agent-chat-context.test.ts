@@ -283,6 +283,36 @@ describe("Core chat native context", () => {
     });
   });
 
+  it("uses the selected Workers AI model when provided", async () => {
+    const aiRun = vi.fn(async () => ({
+      response: "Selected model reply.",
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      {
+        ...dispatchInput("Use this model."),
+        selectedModel: {
+          providerId: "workers-ai",
+          model: "@cf/example/selected-model",
+          optionId: "workers-selected",
+        },
+      },
+    );
+
+    expect(response).toMatchObject({
+      replyText: "Selected model reply.",
+      model: "@cf/example/selected-model",
+      source: "workers-ai",
+    });
+    expect(aiRun).toHaveBeenCalledWith(
+      "@cf/example/selected-model",
+      expect.any(Object),
+    );
+  });
+
   it("does not feed old provider setup fallbacks back into the model", async () => {
     const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
       response: "Yes, I am working through Qwen now.",

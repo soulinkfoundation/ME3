@@ -283,7 +283,16 @@ type OwnerAuthState = {
   me3Configured: boolean;
 };
 type ChatBody = { message?: string };
-type AssistantChatTurnBody = { messageText?: unknown; replyToMessageId?: unknown };
+type AssistantChatTurnBody = {
+  messageText?: unknown;
+  replyToMessageId?: unknown;
+  model?: unknown;
+};
+type AssistantChatTurnModelSelection = {
+  providerId: "workers-ai" | "openai" | "anthropic";
+  model: string;
+  optionId: string | null;
+};
 type SoulinkDispatchBody = {
   ownerSubject?: unknown;
   ownerNodeId?: unknown;
@@ -1362,6 +1371,37 @@ app.delete("/api/assistant/jobs/:id", async (c) => {
   }
 });
 
+function parseAssistantChatTurnModelSelection(
+  value: unknown,
+): AssistantChatTurnModelSelection | null | { error: string } {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { error: "model must be an object" };
+  }
+
+  const input = value as Record<string, unknown>;
+  const providerId = input.providerId;
+  const model = typeof input.model === "string" ? input.model.trim() : "";
+  const optionId =
+    typeof input.optionId === "string" && input.optionId.trim()
+      ? input.optionId.trim()
+      : null;
+
+  if (
+    providerId !== "workers-ai" &&
+    providerId !== "openai" &&
+    providerId !== "anthropic"
+  ) {
+    return { error: "model.providerId is not supported" };
+  }
+
+  if (!model || model.length > 160) {
+    return { error: "model.model is required" };
+  }
+
+  return { providerId, model, optionId };
+}
+
 async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -1380,6 +1420,10 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
     typeof body.messageText === "string" ? body.messageText.trim() : "";
   if (!messageText) {
     return c.json({ ok: false, error: "Message text is required" }, 400);
+  }
+  const selectedModel = parseAssistantChatTurnModelSelection(body.model);
+  if (selectedModel && "error" in selectedModel) {
+    return c.json({ ok: false, error: selectedModel.error }, 400);
   }
 
   const runtime = c.env.ME3_USER_AGENT;
@@ -1415,6 +1459,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
         turnId: turn.turnId,
         messageText: turn.messageText,
         replyToMessageId: turn.replyToMessageId,
+        selectedModel,
       }),
     },
   );

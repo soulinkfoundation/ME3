@@ -315,7 +315,7 @@ const starterPrompts = [
   { label: "Draft an email", icon: "✉️" },
   { label: "Add a reminder", icon: "⏰" },
   { label: "Review my week", icon: "📅" },
-  { label: "Update my site", icon: "🌍" },
+  { label: "Update my site", icon: "🌐" },
 ];
 
 const sortedJobs = computed(() =>
@@ -509,6 +509,13 @@ async function sendAssistantMessage() {
   try {
     const result = await api.post<AgentSandboxResponse>("/assistant/chat/turn", {
       messageText: text,
+      model: selectedModel.value
+        ? {
+            providerId: selectedModel.value.providerId,
+            model: selectedModel.value.model,
+            optionId: selectedModel.value.id,
+          }
+        : null,
     });
 
     agentChat.appendMessage({
@@ -1278,7 +1285,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
           class="assistant-timeline"
           aria-live="polite"
         >
-          <div class="assistant-empty-state">
+          <div
+            v-if="assistantConsoleMessages.length === 0"
+            class="assistant-empty-state"
+          >
             <h2>Message ME3</h2>
             <div class="starter-prompt-list" aria-label="Starter prompts">
               <button
@@ -1360,7 +1370,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             v-model="assistantDraft"
             class="assistant-input"
             rows="1"
-            placeholder="Do anything"
+            placeholder="Do anything..."
             :disabled="assistantSending"
             @keydown="onAssistantComposerKeydown"
             @input="autosizeAssistantComposer"
@@ -1374,7 +1384,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 aria-label="Add attachment"
                 disabled
               >
-                <UiIcon name="Paperclip" :size="17" />
+                <span class="composer-icon-button__emoji" aria-hidden="true">📎</span>
               </button>
               <button
                 type="button"
@@ -1383,7 +1393,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 aria-label="Jobs"
                 @click="openConfigureJobsModal"
               >
-                <span class="me3-btn__emoji" aria-hidden="true">💼</span>
+                <span class="composer-icon-button__emoji" aria-hidden="true">💼</span>
               </button>
             </div>
 
@@ -2216,7 +2226,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-empty-state h2 {
   margin: 0;
-  color: var(--ui-text);
+  color: var(--ui-text-muted);
   font-size: clamp(24px, 4vw, 30px);
   font-weight: 500;
   line-height: 1.15;
@@ -2411,8 +2421,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
   cursor: pointer;
 }
 
-.composer-icon-button:hover {
-  background: var(--ui-surface-muted);
+.composer-icon-button__emoji {
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.composer-icon-button:hover:not(:disabled) {
+  background: transparent;
   color: var(--ui-text);
 }
 

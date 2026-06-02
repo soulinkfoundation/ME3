@@ -2877,7 +2877,14 @@ describe("ME3 Core Worker auth", () => {
           "Content-Type": "application/json",
           Cookie: session,
         },
-        body: JSON.stringify({ messageText: "Hello agent" }),
+        body: JSON.stringify({
+          messageText: "Hello agent",
+          model: {
+            providerId: "openai",
+            model: "gpt-test",
+            optionId: "openai-gpt-test",
+          },
+        }),
       }),
       env,
     );
@@ -2900,6 +2907,38 @@ describe("ME3 Core Worker auth", () => {
     expect(JSON.parse(String(runtimeInit.body))).toMatchObject({
       userId: "owner",
       messageText: "Hello agent",
+      selectedModel: {
+        providerId: "openai",
+        model: "gpt-test",
+        optionId: "openai-gpt-test",
+      },
+    });
+  });
+
+  it("rejects unsupported assistant chat model selections", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: "Hello agent",
+          model: { providerId: "made-up", model: "whatever" },
+        }),
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload).toMatchObject({
+      ok: false,
+      error: "model.providerId is not supported",
     });
   });
 

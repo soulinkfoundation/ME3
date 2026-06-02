@@ -69,6 +69,13 @@ export type AgentSandboxDispatchInput = {
   turnId: string;
   messageText: string;
   replyToMessageId?: string | number | null;
+  selectedModel?: AgentChatModelSelection | null;
+};
+
+export type AgentChatModelSelection = {
+  providerId: AiProviderId;
+  model: string;
+  optionId?: string | null;
 };
 
 export type AgentSandboxDispatchResponse = {
@@ -595,7 +602,21 @@ export function isAgentSandboxDispatchInput(
     typeof input.connectionId === "string" &&
     typeof input.sourceEventId === "string" &&
     typeof input.turnId === "string" &&
-    typeof input.messageText === "string"
+    typeof input.messageText === "string" &&
+    isValidAgentChatModelSelection(input.selectedModel)
+  );
+}
+
+function isValidAgentChatModelSelection(
+  value: unknown,
+): value is AgentChatModelSelection | null | undefined {
+  if (value === undefined || value === null) return true;
+  if (!value || typeof value !== "object") return false;
+  const model = value as Partial<AgentChatModelSelection>;
+  return Boolean(
+    normalizeProviderId(model.providerId) &&
+      typeof model.model === "string" &&
+      normalizeModel(model.model),
   );
 }
 
@@ -1473,7 +1494,7 @@ export async function dispatchAgentSandboxTurn(
     return toolResponse;
   }
 
-  const route = await resolveAiRoute(env, input.userId);
+  const route = await resolveAiRoute(env, input.userId, input.selectedModel);
   const recent = await loadRecentMessages(env, input.userId);
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
   const agentContext = await loadCoreChatAgentContext(env, {
@@ -2803,12 +2824,16 @@ function isEmptyModelReply(replyText: string, route: AiRoute): boolean {
 async function resolveAiRoute(
   env: CoreAgentChatEnv,
   ownerId: string,
+  selectedModel?: AgentChatModelSelection | null,
 ): Promise<AiRoute> {
   const stored = await getStoredChatDefault(env, ownerId);
+  const selectedProvider = normalizeProviderId(selectedModel?.providerId);
+  const selectedModelName = normalizeModel(selectedModel?.model);
   const envProvider = normalizeProviderId(env.ME3_AI_CHAT_PROVIDER);
   const envModel = normalizeModel(env.ME3_AI_CHAT_MODEL) || normalizeModel(env.ME3_AI_MODEL);
   const storedProvider = normalizeProviderId(stored?.provider_id);
   const providerId =
+    selectedProvider ||
     storedProvider ||
     envProvider ||
     (envModel ? "workers-ai" : null) ||
@@ -2816,6 +2841,7 @@ async function resolveAiRoute(
     (env.ANTHROPIC_API_KEY ? "anthropic" : null) ||
     (env.AI ? "workers-ai" : "workers-ai");
   const model =
+    selectedModelName ||
     normalizeModel(stored?.model) ||
     envModel ||
     defaultModelForProvider(providerId);
