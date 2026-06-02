@@ -121,6 +121,8 @@ type LocalExecutorPairingInstructions = {
   installCommand: string;
   sourceCommand: string;
   onceCommand: string;
+  runCommand: string;
+  keepAwakeCommand: string;
   expiresAt: string | null;
 };
 
@@ -1173,6 +1175,8 @@ const LOCAL_EXECUTOR_SOURCE_BIN =
   "node packages/local-executor/bin/me3-local-executor.mjs";
 const LOCAL_EXECUTOR_CONFIG_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} config init --provider opencode`;
 const LOCAL_EXECUTOR_ONCE_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} once`;
+const LOCAL_EXECUTOR_RUN_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} run --interval 20`;
+const LOCAL_EXECUTOR_KEEP_AWAKE_COMMAND = `caffeinate -dimsu ${LOCAL_EXECUTOR_RUN_COMMAND}`;
 
 function openLocalExecutorSetup() {
   localExecutorSetupOpen.value = true;
@@ -1209,6 +1213,8 @@ async function startLocalExecutorPairing() {
       installCommand: response.installCommand,
       sourceCommand: sourceLocalExecutorCommand(response.installCommand),
       onceCommand: LOCAL_EXECUTOR_ONCE_COMMAND,
+      runCommand: LOCAL_EXECUTOR_RUN_COMMAND,
+      keepAwakeCommand: LOCAL_EXECUTOR_KEEP_AWAKE_COMMAND,
       expiresAt: response.expiresAt || null,
     };
   } catch (e: any) {
@@ -2597,9 +2603,9 @@ onMounted(async () => {
           </div>
 
           <p class="local-executor-modal__intro">
-            This plugin allows you to execute tasks on your local computer. It
-            requires that your computer be awake and a locally configured AI
-            model be configured.
+            A local runner is a small script on your computer. It checks ME3
+            for approved local tasks and starts your local coding tool. It only
+            works while your computer is awake and the runner command is open.
           </p>
 
           <router-link
@@ -2719,12 +2725,10 @@ onMounted(async () => {
               </div>
             </li>
             <li v-if="localExecutorPairing">
-              <strong>Run jobs when you are ready.</strong>
+              <strong>Test it once.</strong>
               <span>
-                This is a one-shot check, not a background service yet. Keep
-                using the same folder and run this whenever you want this
-                computer to claim one approved job. If there is no approved job,
-                it exits.
+                This checks ME3 once, claims one approved job if there is one,
+                then exits. It is the safest first test.
               </span>
               <div class="local-executor-command">
                 <pre><code>{{ localExecutorPairing.onceCommand }}</code></pre>
@@ -2742,6 +2746,58 @@ onMounted(async () => {
                 >
                   {{
                     localExecutorCopiedCommand === "once" ? "Copied" : "Copy"
+                  }}
+                </Button>
+              </div>
+            </li>
+            <li v-if="localExecutorPairing">
+              <strong>Keep it running.</strong>
+              <span>
+                Use this for automatic pickup. Leave Terminal open. When a
+                local project task moves to Doing, this computer can claim it.
+              </span>
+              <div class="local-executor-command">
+                <pre><code>{{ localExecutorPairing.runCommand }}</code></pre>
+                <Button
+                  variant="outline"
+                  size="small"
+                  shape="soft"
+                  type="button"
+                  @click="
+                    copyLocalExecutorCommand(
+                      localExecutorPairing.runCommand,
+                      'run',
+                    )
+                  "
+                >
+                  {{
+                    localExecutorCopiedCommand === "run" ? "Copied" : "Copy"
+                  }}
+                </Button>
+              </div>
+            </li>
+            <li v-if="localExecutorPairing">
+              <strong>Mac keep-awake option.</strong>
+              <span>
+                On macOS, this keeps the computer awake while the runner is
+                open. Close Terminal or press Control-C to stop it.
+              </span>
+              <div class="local-executor-command">
+                <pre><code>{{ localExecutorPairing.keepAwakeCommand }}</code></pre>
+                <Button
+                  variant="outline"
+                  size="small"
+                  shape="soft"
+                  type="button"
+                  @click="
+                    copyLocalExecutorCommand(
+                      localExecutorPairing.keepAwakeCommand,
+                      'awake',
+                    )
+                  "
+                >
+                  {{
+                    localExecutorCopiedCommand === "awake" ? "Copied" : "Copy"
                   }}
                 </Button>
               </div>

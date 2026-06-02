@@ -82,10 +82,17 @@ Landed in the current Core line:
   and completion.
 - Local project creation from Mission Control Projects. Local projects store a folder path
   and create a conservative Local Executor project policy behind the scenes.
-- Project task `Run locally` action for tasks inside local projects.
-- Linked Local Executor runs write Mission Control run/activity records.
+- Project task `Run locally` action for tasks inside local projects, plus automatic
+  Local Executor queueing when local-project tasks enter Doing.
+- Linked Local Executor runs write Mission Control run/activity records and keep the
+  originating Mission task attached to the run.
+- Successful linked local runs move the Mission task to Review for owner acceptance.
 - Local runner config lives on the user's computer at
   `~/.me3/local-executor/config.json`; provider choice is not project-specific UI.
+- Account Local Executor setup now shows the one-shot `once` test, the long-running
+  `run --interval 20` command, and a macOS keep-awake command.
+- Local runner startup checks the saved pairing token/API URL and selected provider
+  command before it claims work.
 
 Still follow-up:
 
@@ -325,10 +332,12 @@ Audit must record:
 5. Done: Build the source-checkout local runner CLI with pair, config, run-once, and provider render commands.
 6. Done: Add Account plugin Configure flow, Mission Control local projects, and task-level Run locally.
 7. Done: Add a long-running poll mode and owner retry/cancel recovery for stale runs.
-8. Next: Add local runner packaging.
-9. Next: Add Local Coding Task starter recipe and scheduled/event-triggered approval flow.
-10. Next: Add richer Mission Control result panels for artifacts, changed files, gates, and local logs.
-11. Next: Add Soulink/chat manual-run handoff and concise result notification.
+8. Done: Auto-queue local-project tasks when they enter Doing and move successful
+   linked runs to Review.
+9. Next: Add local runner packaging.
+10. Next: Add Local Coding Task starter recipe and scheduled/event-triggered approval flow.
+11. Next: Add richer Mission Control result panels for artifacts, changed files, gates, and local logs.
+12. Next: Add Soulink/chat manual-run handoff and concise result notification.
 
 ## Test Plan
 

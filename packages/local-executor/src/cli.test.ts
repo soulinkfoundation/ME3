@@ -95,7 +95,15 @@ describe("me3-local-executor CLI", () => {
 
       await writeFile(
         configPath,
-        JSON.stringify({ defaultProviderPreset: "opencode" }),
+        JSON.stringify({
+          defaultProviderPreset: "opencode",
+          providers: {
+            opencode: {
+              command: process.execPath,
+              args: ["-e", ""],
+            },
+          },
+        }),
       );
 
       const once = await runCli(["once", "--config", configPath]);
@@ -103,6 +111,49 @@ describe("me3-local-executor CLI", () => {
       expect(once.stdout).toContain("No approved Local Executor runs to claim.");
       expect(requests).toContain("POST /api/local-executor/daemon/heartbeat");
       expect(requests).toContain("POST /api/local-executor/daemon/runs/claim");
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("checks the provider command before claiming work", async () => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(`${request.method} ${request.url}`);
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ ok: true, run: null }));
+    });
+
+    try {
+      const apiBase = await listen(server);
+      const dir = await mkdtemp(join(tmpdir(), "me3-local-executor-preflight-"));
+      const tokenStore = join(dir, "token.json");
+      const configPath = join(dir, "config.json");
+
+      await writeFile(
+        tokenStore,
+        JSON.stringify({
+          token: "daemon-token",
+          apiBase: `${apiBase}/api/local-executor`,
+        }),
+      );
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          defaultProviderPreset: "codex",
+          providers: {
+            codex: {
+              command: "definitely-missing-me3-provider-command",
+              args: [],
+            },
+          },
+        }),
+      );
+
+      await expect(runCli(["once", "--config", configPath])).rejects.toThrow(
+        /Provider command "definitely-missing-me3-provider-command" was not found/,
+      );
+      expect(requests).toEqual([]);
     } finally {
       await close(server);
     }
@@ -459,7 +510,18 @@ describe("me3-local-executor CLI", () => {
           apiBase: `${apiBase}/api/local-executor`,
         }),
       );
-      await writeFile(configPath, JSON.stringify({ defaultProviderPreset: "codex" }));
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          defaultProviderPreset: "codex",
+          providers: {
+            codex: {
+              command: process.execPath,
+              args: ["-e", ""],
+            },
+          },
+        }),
+      );
 
       const interrupted = await runCliAndInterrupt(
         ["run", "--config", configPath, "--interval", "1"],

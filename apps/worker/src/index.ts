@@ -86,13 +86,13 @@ import {
   createMissionMemory,
   createMissionProject,
   createMissionTask,
+  createMissionTaskLocalExecutorRun,
   deleteMissionContextSource,
   deleteMissionMemory,
   getMissionControlOverview,
   getMissionDaemonStatus,
   getMissionDay,
   getMissionSetup,
-  getMissionTaskLocalExecutorRunInput,
   listMissionAgentRuns,
   listMissionApprovals,
   listMissionContextSources,
@@ -2044,12 +2044,10 @@ app.post("/api/mission-control/tasks/:id/local-run", async (c) => {
   if (localExecutorBlocked) return localExecutorBlocked;
 
   try {
-    const runInput = await getMissionTaskLocalExecutorRunInput(
-      c.env,
-      ownerId,
-      c.req.param("id"),
+    return c.json(
+      await createMissionTaskLocalExecutorRun(c.env, ownerId, c.req.param("id")),
+      201,
     );
-    return c.json(await createLocalExecutorRun(c.env, ownerId, runInput), 201);
   } catch (error) {
     if (error instanceof MissionControlInputError) {
       return missionControlErrorResponse(c, error);

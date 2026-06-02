@@ -117,6 +117,8 @@ type MissionApproval = {
 type MissionRun = {
   id: string;
   title: string;
+  projectId: string | null;
+  taskId: string | null;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   model: string | null;
   runnerId: string | null;
@@ -125,6 +127,20 @@ type MissionRun = {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+};
+
+type LocalExecutorStatusResponse = {
+  setup: {
+    ready: boolean;
+    paired: boolean;
+    hasProjectPolicy: boolean;
+    nextAction: string;
+  };
+  pairings: Array<{
+    displayName: string;
+    status: string;
+    lastSeenAt: string | null;
+  }>;
 };
 
 type MissionMemory = {
@@ -380,6 +396,7 @@ const projectTasksLoading = ref(false);
 const projectTasksLoadingMore = ref(false);
 const projectTasksError = ref("");
 const projectTasksNextCursor = ref<string | null>(null);
+const localExecutorStatus = ref<LocalExecutorStatusResponse | null>(null);
 const projectTaskDraft = ref("");
 const projectTaskProjectId = ref("");
 const projectTaskSaving = ref(false);
@@ -571,6 +588,28 @@ const selectedProjectTaskScopeId = computed(
 const selectedProjectIsLocal = computed(() =>
   isLocalProject(selectedProjectDetail.value),
 );
+const localExecutorRunnerLabel = computed(() => {
+  const setup = localExecutorStatus.value?.setup;
+  if (!setup) return "Runner status unknown";
+  if (setup.ready) return "Runner ready";
+  if (!setup.paired) return "Pair a runner";
+  if (!setup.hasProjectPolicy) return "Add a local project";
+  return "Runner not ready";
+});
+const localExecutorRunnerDetail = computed(() => {
+  const latestPairing = localExecutorStatus.value?.pairings.find(
+    (pairing) => pairing.status === "active",
+  );
+  if (latestPairing?.lastSeenAt) {
+    return `${latestPairing.displayName} last seen ${formatDateTime(
+      latestPairing.lastSeenAt,
+    )}`;
+  }
+  if (localExecutorStatus.value?.setup.ready) {
+    return "Keep the runner command open to claim Doing tasks.";
+  }
+  return "Use Account > Plugins > Local Executor to connect this computer.";
+});
 const selectedProjectTasks = computed(() => {
   const projectId = selectedProjectDetail.value?.id;
   if (!projectId) {
@@ -592,6 +631,27 @@ const selectedProjectTaskDetailProject = computed(() =>
     ? projectForTask(selectedProjectTaskDetail.value)
     : null,
 );
+const selectedProjectTaskLatestRun = computed(() => {
+  const taskId = selectedProjectTaskDetail.value?.id;
+  if (!taskId) return null;
+  return (
+    recentRuns.value.find(
+      (run) =>
+        run.taskId === taskId || run.result?.localExecutorTaskId === taskId,
+    ) || null
+  );
+});
+const selectedProjectTaskLatestRunSummary = computed(() => {
+  const run = selectedProjectTaskLatestRun.value;
+  if (!run) return "";
+  const summary = run.result?.summary;
+  if (typeof summary === "string" && summary.trim()) return summary.trim();
+  if (run.status === "queued") return "Queued for a local runner.";
+  if (run.status === "running") return "Running on a local runner.";
+  if (run.status === "succeeded") return "Local run completed.";
+  if (run.status === "failed") return "Local run failed.";
+  return "Local run cancelled.";
+});
 const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
   projectBoardStatuses.map((column) => ({
     ...column,
@@ -1124,6 +1184,16 @@ async function loadProjectTasks(
     projectTasksNextCursor.value = null;
   } finally {
     projectTasksLoading.value = false;
+  }
+}
+
+async function loadLocalExecutorStatus() {
+  try {
+    localExecutorStatus.value = await api.get<LocalExecutorStatusResponse>(
+      "/local-executor/status",
+    );
+  } catch {
+    localExecutorStatus.value = null;
   }
 }
 
@@ -2131,7 +2201,10 @@ watch(activeSection, (section) => {
     if (selectedArchiveProjectId.value) void loadProjectArchive();
     else void loadJournalArchive();
   }
-  if (section === "projects") void loadProjectTasks();
+  if (section === "projects") {
+    void loadProjectTasks();
+    void loadLocalExecutorStatus();
+  }
   if (section === "accounts") void loadAccounts();
 });
 
@@ -2147,7 +2220,10 @@ onMounted(() => {
     if (selectedArchiveProjectId.value) void loadProjectArchive();
     else void loadJournalArchive();
   }
-  if (activeSection.value === "projects") void loadProjectTasks();
+  if (activeSection.value === "projects") {
+    void loadProjectTasks();
+    void loadLocalExecutorStatus();
+  }
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener("click", handleWindowClick);
 });
@@ -2698,6 +2774,10 @@ onBeforeUnmount(() => {
             <div>
               <strong>Local project</strong>
               <span>{{ localProjectPath(selectedProjectDetail) }}</span>
+            </div>
+            <div class="local-project-summary__runner">
+              <strong>{{ localExecutorRunnerLabel }}</strong>
+              <span>{{ localExecutorRunnerDetail }}</span>
             </div>
           </div>
 
@@ -3487,6 +3567,19 @@ onBeforeUnmount(() => {
             <span v-if="selectedProjectTaskDetail.dueAt">
               {{ formatShortDate(selectedProjectTaskDetail.dueAt) }}
             </span>
+          </div>
+
+          <div
+            v-if="selectedProjectTaskLatestRun"
+            class="task-detail-modal__run"
+          >
+            <div>
+              <strong>Local run</strong>
+              <span class="status-badge">{{
+                selectedProjectTaskLatestRun.status
+              }}</span>
+            </div>
+            <p>{{ selectedProjectTaskLatestRunSummary }}</p>
           </div>
 
           <label class="field">
@@ -4486,6 +4579,11 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.local-project-summary__runner {
+  justify-items: end;
+  text-align: right;
+}
+
 .project-task-card {
   display: grid;
   gap: 8px;
@@ -5034,6 +5132,33 @@ onBeforeUnmount(() => {
   margin-top: -4px;
   color: var(--ui-text-muted);
   font-size: 12px;
+}
+
+.task-detail-modal__run {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.task-detail-modal__run div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-detail-modal__run strong {
+  font-size: 13px;
+}
+
+.task-detail-modal__run p {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .task-detail-modal__actions {

@@ -15,7 +15,12 @@ import {
 import { getUtcMsForLocalTime, normalizeTimeZone } from "./calendar";
 import { hasConfiguredAiProvider } from "./ai-providers";
 import { isCorePluginEnabled } from "./plugins";
-import { createLocalExecutorPolicy, getLocalExecutorSetupState } from "./local-executor";
+import {
+  createLocalExecutorPolicy,
+  createLocalExecutorRun,
+  getLocalExecutorRun,
+  getLocalExecutorSetupState,
+} from "./local-executor";
 import type { Env } from "./types";
 
 export class MissionControlInputError extends Error {
@@ -732,11 +737,64 @@ export async function getMissionTaskLocalExecutorRunInput(
 
   return {
     projectPolicyId,
+    missionTaskId: task.id,
+    missionProjectId: project.id,
     prompt,
     promptSummary: task.title,
     sourceKind: "manual",
     ownerDirected: true,
   };
+}
+
+export async function createMissionTaskLocalExecutorRun(
+  env: Env,
+  userId: string,
+  taskId: string,
+) {
+  const existing = await getActiveLocalExecutorRunForTask(env, userId, taskId);
+  if (existing) return existing;
+  return createLocalExecutorRun(
+    env,
+    userId,
+    await getMissionTaskLocalExecutorRunInput(env, userId, taskId),
+  );
+}
+
+async function queueLocalExecutorRunForDoingTask(
+  env: Env,
+  userId: string,
+  task: MissionTaskRow,
+) {
+  if (task.status !== "in_progress" || task.archived_at) return null;
+  const projectId = normalizeNullableText(task.project_id);
+  if (!projectId) return null;
+  const project = await getMissionProject(env, userId, projectId);
+  if (!project || project.source_kind !== "daemon_repo") return null;
+  const setup = await getLocalExecutorSetupState(env, userId);
+  if (!setup.ready) return null;
+  return createMissionTaskLocalExecutorRun(env, userId, task.id);
+}
+
+async function getActiveLocalExecutorRunForTask(env: Env, userId: string, taskId: string) {
+  const row = await env.DB.prepare(
+    `SELECT result_json
+     FROM mission_agent_runs
+     WHERE user_id = ? AND task_id = ? AND source = 'daemon'
+       AND status IN ('queued', 'running')
+     ORDER BY COALESCE(started_at, created_at) DESC
+     LIMIT 1`,
+  )
+    .bind(userId, taskId)
+    .first<{ result_json: string | null }>();
+  const runId = normalizeNullableText(
+    parseJsonRecord(row?.result_json ?? null).localExecutorRunId,
+  );
+  if (!runId) return null;
+  try {
+    return await getLocalExecutorRun(env, userId, runId);
+  } catch {
+    return null;
+  }
 }
 
 export async function updateMissionProject(
@@ -894,8 +952,10 @@ export async function createMissionTask(env: Env, userId: string, input: unknown
     )
     .run();
 
+  const task = (await getMissionTask(env, userId, id)) as MissionTaskRow;
+  await queueLocalExecutorRunForDoingTask(env, userId, task);
   return {
-    task: serializeTask((await getMissionTask(env, userId, id)) as MissionTaskRow),
+    task: serializeTask(task),
   };
 }
 
@@ -937,8 +997,10 @@ export async function updateMissionTask(
     )
     .run();
 
+  const task = (await getMissionTask(env, userId, taskId)) as MissionTaskRow;
+  await queueLocalExecutorRunForDoingTask(env, userId, task);
   return {
-    task: serializeTask((await getMissionTask(env, userId, taskId)) as MissionTaskRow),
+    task: serializeTask(task),
   };
 }
 

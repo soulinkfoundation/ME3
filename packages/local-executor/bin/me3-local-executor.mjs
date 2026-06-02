@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { constants, createWriteStream } from "node:fs";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 
 const defaultConfigPath = "~/.me3/local-executor/config.json";
 const defaultRunnerId = "my-desktop";
@@ -144,8 +144,10 @@ async function handlePair(argv) {
 
 async function handleOnce(argv) {
   const runtime = await loadRuntime(argv);
+  const providerOverride = readFlag(argv, "--provider");
+  await preflightRuntime(runtime, providerOverride);
   const result = await claimAndExecuteOne(runtime, {
-    providerOverride: readFlag(argv, "--provider"),
+    providerOverride,
     noRunMessage: "No approved Local Executor runs to claim.",
   });
   if (result.cancelled) process.exitCode = 130;
@@ -154,6 +156,7 @@ async function handleOnce(argv) {
 async function handleRun(argv) {
   const runtime = await loadRuntime(argv);
   const providerOverride = readFlag(argv, "--provider");
+  await preflightRuntime(runtime, providerOverride);
   const intervalSeconds = readPositiveInt(
     readFlag(argv, "--interval") || runtime.config.pollIntervalSeconds,
     20,
@@ -207,6 +210,23 @@ async function loadRuntime(argv) {
   return { configPath, config, tokenStore, tokenRecord, apiBase, authHeaders };
 }
 
+async function preflightRuntime(runtime, providerOverride) {
+  const providerId = resolveProviderId(runtime, providerOverride);
+  const provider = resolveProvider(runtime, providerId);
+  const command = String(provider.command || "").trim();
+  if (!command) {
+    throw new Error(`Provider ${providerId} does not define a command.`);
+  }
+  const executable = await findExecutable(command);
+  if (!executable) {
+    throw new Error(
+      `Provider command "${command}" was not found on PATH. Install ${providerId}, ` +
+        `or run config init --provider opencode|codex|claude and choose an installed tool.`,
+    );
+  }
+  console.log(`Provider ready: ${providerId}`);
+}
+
 async function claimAndExecuteOne(runtime, options = {}) {
   console.log("Checking in with ME3...");
   const heartbeatResponse = await fetch(`${runtime.apiBase}/daemon/heartbeat`, {
@@ -250,18 +270,8 @@ async function claimAndExecuteOne(runtime, options = {}) {
 }
 
 async function executeClaimedRun(runtime, run, providerOverride) {
-  const providerId =
-    normalizeProviderId(providerOverride) ||
-    normalizeProviderId(runtime.config.defaultProviderPreset) ||
-    normalizeProviderId(run.provider) ||
-    defaultConfig.defaultProviderPreset;
-  if (providerOverride && !normalizeProviderId(providerOverride)) {
-    throw new Error("Unknown provider preset. Use opencode, codex, or claude.");
-  }
-  const provider =
-    runtime.config.providers?.[providerId] ||
-    providerPresets[providerId] ||
-    providerPresets.opencode;
+  const providerId = resolveProviderId(runtime, providerOverride, run.provider);
+  const provider = resolveProvider(runtime, providerId);
   const rendered = renderProviderCommand(provider, run.policy.pathHint, run.prompt);
   const logDir = resolveLocalConfigPath(runtime.config.logDir, runtime.configPath, "runs");
   await mkdir(logDir, { recursive: true });
@@ -350,6 +360,58 @@ function renderProviderCommand(provider, repo, prompt) {
 
 function normalizeProviderId(value) {
   return value === "opencode" || value === "codex" || value === "claude" ? value : null;
+}
+
+function resolveProviderId(runtime, providerOverride, runProvider) {
+  if (providerOverride && !normalizeProviderId(providerOverride)) {
+    throw new Error("Unknown provider preset. Use opencode, codex, or claude.");
+  }
+  if (
+    runtime.config.defaultProviderPreset !== undefined &&
+    runtime.config.defaultProviderPreset !== null &&
+    !normalizeProviderId(runtime.config.defaultProviderPreset)
+  ) {
+    throw new Error("Unknown default provider preset. Use opencode, codex, or claude.");
+  }
+  return (
+    normalizeProviderId(providerOverride) ||
+    normalizeProviderId(runtime.config.defaultProviderPreset) ||
+    normalizeProviderId(runProvider) ||
+    defaultConfig.defaultProviderPreset
+  );
+}
+
+function resolveProvider(runtime, providerId) {
+  return runtime.config.providers?.[providerId] || providerPresets[providerId] || providerPresets.opencode;
+}
+
+async function findExecutable(command) {
+  if (command.includes("/") || command.includes("\\")) {
+    const candidate = isAbsolute(command) ? command : resolve(process.cwd(), command);
+    return (await isExecutable(candidate)) ? candidate : null;
+  }
+
+  const pathEntries = String(process.env.PATH || "").split(delimiter).filter(Boolean);
+  const extensions =
+    platform() === "win32"
+      ? String(process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)
+      : [""];
+  for (const entry of pathEntries) {
+    for (const extension of extensions) {
+      const candidate = join(entry, `${command}${extension}`);
+      if (await isExecutable(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+async function isExecutable(path) {
+  try {
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function executeBounded(command, timeoutSeconds, options = {}) {

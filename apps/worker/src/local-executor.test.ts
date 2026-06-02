@@ -35,6 +35,7 @@ type LocalExecutorDbState = {
   pairings: PairingRow[];
   policies: PolicyRow[];
   runs: RunRow[];
+  missionTasks: Record<string, unknown>[];
   runEvents: Record<string, unknown>[];
   audit: Record<string, unknown>[];
   approvals: Record<string, unknown>[];
@@ -126,6 +127,61 @@ describe("Local Executor worker runtime", () => {
     });
     expect(JSON.parse(env.__state.missionRuns[0]?.result_json as string)).toMatchObject({
       localExecutorRunId: created.run.id,
+      status: "succeeded",
+    });
+  });
+
+  it("links Mission Control tasks, dedupes active task runs, and moves successes to review", async () => {
+    const env = createReadyPluginEnv();
+    env.__state.missionTasks.push({
+      id: "task-1",
+      user_id: "owner",
+      status: "in_progress",
+      archived_at: null,
+    });
+    const paired = await pairRunner(env);
+    const auth = await authenticateLocalExecutorDaemon(env, `Bearer ${paired.token.token}`);
+    const policy = await createLocalExecutorPolicy(env, "owner", {
+      projectLabel: "ME3",
+      pathHint: "/Users/kieranbutler/Coding/me3",
+    });
+
+    const created = await createLocalExecutorRun(env, "owner", {
+      projectPolicyId: policy.policy.id,
+      prompt: "Implement the smallest useful fix.",
+      missionProjectId: "project-1",
+      missionTaskId: "task-1",
+    });
+    const duplicate = await createLocalExecutorRun(env, "owner", {
+      projectPolicyId: policy.policy.id,
+      prompt: "Implement the smallest useful fix again.",
+      missionProjectId: "project-1",
+      missionTaskId: "task-1",
+    });
+
+    expect(duplicate.run.id).toBe(created.run.id);
+    expect(env.__state.runs).toHaveLength(1);
+    expect(env.__state.missionRuns[0]).toMatchObject({
+      project_id: "project-1",
+      task_id: "task-1",
+    });
+    expect(JSON.parse(env.__state.missionRuns[0]?.result_json as string)).toMatchObject({
+      localExecutorRunId: created.run.id,
+      localExecutorTaskId: "task-1",
+    });
+
+    await claimLocalExecutorRun(env, auth, {});
+    await completeLocalExecutorRun(env, auth, created.run.id, {
+      status: "succeeded",
+      summary: "Changed two files and pnpm build passed.",
+    });
+
+    expect(env.__state.missionTasks[0]).toMatchObject({
+      id: "task-1",
+      status: "review",
+    });
+    expect(env.__state.missionRuns[0]).toMatchObject({
+      task_id: "task-1",
       status: "succeeded",
     });
   });
@@ -229,6 +285,7 @@ function createLocalExecutorEnv(overrides: Partial<LocalExecutorDbState> = {}): 
     pairings: [],
     policies: [],
     runs: [],
+    missionTasks: [],
     runEvents: [],
     audit: [],
     approvals: [],
@@ -484,19 +541,44 @@ class FakeLocalExecutorStatement {
         id: values[0],
         user_id: values[1],
         source: "daemon",
-        approval_id: values[2],
-        title: values[3],
-        prompt_summary: values[4],
-        status: values[5],
-        model: values[6],
-        runner_id: values[7],
-        started_at: values[8],
-        finished_at: values[9],
-        result_json: values[10],
-        artifact_manifest_json: values[11],
+        project_id: values[2],
+        task_id: values[3],
+        approval_id: values[4],
+        title: values[5],
+        prompt_summary: values[6],
+        status: values[7],
+        model: values[8],
+        runner_id: values[9],
+        started_at: values[10],
+        finished_at: values[11],
+        result_json: values[12],
+        artifact_manifest_json: values[13],
       };
-      if (existing) Object.assign(existing, row);
-      else this.state.missionRuns.push(row);
+      if (existing) {
+        Object.assign(existing, {
+          ...row,
+          project_id: row.project_id || existing.project_id,
+          task_id: row.task_id || existing.task_id,
+        });
+      } else {
+        this.state.missionRuns.push(row);
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("UPDATE mission_tasks")) {
+      const task = this.state.missionTasks.find(
+        (candidate) => candidate.id === values[0] && candidate.user_id === values[1],
+      );
+      if (
+        task &&
+        task.archived_at === null &&
+        task.status !== "done" &&
+        task.status !== "cancelled"
+      ) {
+        task.status = "review";
+        task.updated_at = new Date().toISOString();
+      }
       return { success: true };
     }
 
@@ -568,6 +650,25 @@ class FakeLocalExecutorStatement {
         this.state.policies.find(
           (policy) => policy.user_id === values[0] && policy.status === "active",
         ) || null
+      ) as T | null;
+    }
+
+    if (sql.includes("FROM mission_agent_runs") && sql.includes("task_id = ?")) {
+      return (
+        this.state.missionRuns.find(
+          (run) =>
+            run.user_id === values[0] &&
+            run.task_id === values[1] &&
+            run.source === "daemon" &&
+            (run.status === "queued" || run.status === "running"),
+        ) || null
+      ) as T | null;
+    }
+
+    if (sql.includes("FROM mission_agent_runs")) {
+      return (
+        this.state.missionRuns.find((run) => run.id === values[0] && run.user_id === values[1]) ||
+        null
       ) as T | null;
     }
 

@@ -134,6 +134,8 @@ type LocalExecutorRunCreateInput = {
   promptSummary?: unknown;
   sourceKind?: unknown;
   ownerDirected?: unknown;
+  missionTaskId?: unknown;
+  missionProjectId?: unknown;
   assistantJobId?: string | null;
   assistantJobRunId?: string | null;
   actionId?: string | null;
@@ -910,6 +912,9 @@ export async function completeLocalExecutorRun(
     run: completed,
     status: missionStatusFromLocalRun(status),
   });
+  if (status === "succeeded") {
+    await moveLinkedMissionTaskToReview(env, auth.pairing.user_id, completed);
+  }
   await appendLocalExecutorMissionEvent(env, completed, "completed", summary, { status });
   await appendLocalExecutorMissionActivity(env, auth.pairing.user_id, {
     title: `Local Executor: ${completed.prompt_summary}`,
@@ -939,6 +944,12 @@ async function createLocalExecutorRunInternal(
 
   const prompt = normalizeNullableText(input.prompt);
   if (!prompt) throw new LocalExecutorInputError("Run prompt is required");
+  const missionTaskId = normalizeNullableText(input.missionTaskId);
+  const missionProjectId = normalizeNullableText(input.missionProjectId);
+  if (missionTaskId) {
+    const existing = await getActiveLocalExecutorRunForMissionTask(env, userId, missionTaskId);
+    if (existing) return { run: serializeRun(existing), approvalId: existing.approval_id };
+  }
   const sourceKind = normalizeSourceKind(input.sourceKind) || "manual";
   const ownerDirected =
     input.ownerDirected !== false && (sourceKind === "manual" || sourceKind === "assistant_job");
@@ -1005,6 +1016,8 @@ async function createLocalExecutorRunInternal(
   await upsertLocalExecutorMissionRun(env, userId, {
     run: row,
     status: "queued",
+    missionTaskId,
+    missionProjectId,
   });
   await appendLocalExecutorMissionActivity(env, userId, {
     title: `Local Executor: ${promptSummary}`,
@@ -1057,11 +1070,22 @@ async function upsertLocalExecutorMissionRun(
   input: {
     run: LocalExecutorRunRow;
     status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    missionTaskId?: string | null;
+    missionProjectId?: string | null;
   },
 ) {
   const now = new Date().toISOString();
+  const missionRunId = input.run.mission_agent_run_id || localExecutorMissionRunId(input.run.id);
+  const existingLink =
+    input.missionTaskId || input.missionProjectId
+      ? null
+      : await getLocalExecutorMissionRunLink(env, userId, missionRunId);
+  const missionTaskId = normalizeNullableText(input.missionTaskId) || existingLink?.taskId || null;
+  const missionProjectId =
+    normalizeNullableText(input.missionProjectId) || existingLink?.projectId || null;
   const result = {
     localExecutorRunId: input.run.id,
+    localExecutorTaskId: missionTaskId,
     status: input.run.status,
     summary: input.run.result_summary,
     outputPreview: input.run.output_preview,
@@ -1074,8 +1098,10 @@ async function upsertLocalExecutorMissionRun(
     `INSERT INTO mission_agent_runs
        (id, user_id, source, project_id, task_id, approval_id, title, prompt_summary, status,
         model, runner_id, started_at, finished_at, result_json, artifact_manifest_json, created_at, updated_at)
-     VALUES (?, ?, 'daemon', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, 'daemon', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
+       project_id = COALESCE(excluded.project_id, mission_agent_runs.project_id),
+       task_id = COALESCE(excluded.task_id, mission_agent_runs.task_id),
        approval_id = excluded.approval_id,
        prompt_summary = excluded.prompt_summary,
        status = excluded.status,
@@ -1088,8 +1114,10 @@ async function upsertLocalExecutorMissionRun(
        updated_at = excluded.updated_at`,
   )
     .bind(
-      input.run.mission_agent_run_id || localExecutorMissionRunId(input.run.id),
+      missionRunId,
       userId,
+      missionProjectId,
+      missionTaskId,
       input.run.approval_id,
       `Local Executor: ${input.run.prompt_summary}`,
       input.run.prompt_summary,
@@ -1103,6 +1131,68 @@ async function upsertLocalExecutorMissionRun(
       now,
       now,
     )
+    .run();
+}
+
+async function getLocalExecutorMissionRunLink(env: Env, userId: string, missionRunId: string) {
+  const row = await env.DB.prepare(
+    `SELECT project_id, task_id
+     FROM mission_agent_runs
+     WHERE id = ? AND user_id = ?
+     LIMIT 1`,
+  )
+    .bind(missionRunId, userId)
+    .first<{ project_id: string | null; task_id: string | null }>();
+  return {
+    projectId: row?.project_id || null,
+    taskId: row?.task_id || null,
+  };
+}
+
+async function getActiveLocalExecutorRunForMissionTask(
+  env: Env,
+  userId: string,
+  taskId: string,
+) {
+  const row = await env.DB.prepare(
+    `SELECT result_json
+     FROM mission_agent_runs
+     WHERE user_id = ? AND task_id = ? AND source = 'daemon'
+       AND status IN ('queued', 'running')
+     ORDER BY COALESCE(started_at, created_at) DESC
+     LIMIT 1`,
+  )
+    .bind(userId, taskId)
+    .first<{ result_json: string | null }>();
+  const runId = normalizeNullableText(
+    parseJsonRecord(row?.result_json ?? null).localExecutorRunId,
+  );
+  if (!runId) return null;
+  try {
+    return await requireRun(env, userId, runId);
+  } catch {
+    return null;
+  }
+}
+
+async function moveLinkedMissionTaskToReview(
+  env: Env,
+  userId: string,
+  run: LocalExecutorRunRow,
+) {
+  const link = await getLocalExecutorMissionRunLink(
+    env,
+    userId,
+    run.mission_agent_run_id || localExecutorMissionRunId(run.id),
+  );
+  if (!link.taskId) return;
+  await env.DB.prepare(
+    `UPDATE mission_tasks
+     SET status = 'review', updated_at = datetime('now')
+     WHERE id = ? AND user_id = ? AND archived_at IS NULL
+       AND status NOT IN ('done', 'cancelled')`,
+  )
+    .bind(link.taskId, userId)
     .run();
 }
 
@@ -1395,6 +1485,8 @@ function normalizeRunCreateInput(input: unknown): LocalExecutorRunCreateInput {
     promptSummary: normalizeNullableText(body.promptSummary) || normalizeNullableText(body.taskSummary),
     sourceKind: normalizeSourceKind(body.sourceKind) || normalizeSourceKind(body.triggerKind),
     ownerDirected: body.ownerDirected,
+    missionTaskId: normalizeNullableText(body.missionTaskId),
+    missionProjectId: normalizeNullableText(body.missionProjectId),
   };
 }
 
