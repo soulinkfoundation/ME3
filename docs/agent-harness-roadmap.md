@@ -100,7 +100,8 @@ Latest QA notes, 2026-06-02:
   Mission Control. When Soulink is disconnected, the result remains visible in Mission Control.
 - Inbox Watch runs and writes Mission Control activity such as "Inbox Watch reviewed 6 inbox
   messages across 6 threads; 1 needs a reply and 0 flagged important." Next outcome work should
-  let owners define matching rules and approval-first draft reply actions.
+  let owners define matching rules and approval-first draft reply actions. Detailed plan:
+  `docs/inbox-watch-rules-plan.md`.
 - Invoice and Receipt Triage runs and writes Mission Control activity such as "Invoice and Receipt
   Triage added 0 account entries; 0 need review and 6 skipped." Satisfactory for now.
 - Weekly Review runs and writes Mission Control activity such as "Weekly Review ran successfully
@@ -180,6 +181,8 @@ Detailed reference docs:
 - `docs/assistant-jobs-heartbeat.md`: heartbeat and reconciliation reference.
 - `docs/assistant-job-creation-capability.md`: custom job builder reference.
 - `docs/assistant-jobs-and-agent-skills.md`: skill/recipe/job/capability boundary.
+- `docs/inbox-watch-rules-plan.md`: Inbox Watch multiple rules, mixed timing, and
+  approval-first outcomes plan.
 - `docs/agent-context-roadmap.md`: native context and memory design reference.
 - `docs/local-executor-assistant-job.md`: optional local executor plugin and daemon reference.
 - `docs/mission-control-plugin-mvp.md`: Mission Control workspace/plugin reference.
