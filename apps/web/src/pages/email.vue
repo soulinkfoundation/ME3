@@ -194,7 +194,7 @@ const activeEmailFrameObservers = new Set<ResizeObserver>();
 const composeOpen = ref(false);
 const composeSending = ref(false);
 const composeError = ref("");
-const composeMode = ref<"new" | "reply" | "edit">("new");
+const composeMode = ref<"new" | "reply" | "forward" | "edit">("new");
 const composeDraftId = ref<string | null>(null);
 const composeReplyToMessageId = ref<string | null>(null);
 const composeToFocused = ref(false);
@@ -1168,7 +1168,23 @@ async function markMessageRead(msg: InboxMessage, read = true) {
   }
 }
 
-function openComposeModal(message?: InboxMessage) {
+function getDisplayText(value: string | null | undefined): string {
+  if (!value) return "";
+  return repairLikelyMojibake(value);
+}
+
+function getMessagePreview(message: InboxMessage): string {
+  return getDisplayText(message.preview || message.body);
+}
+
+function getMessageTextBody(message: InboxMessage): string {
+  return getDisplayText(message.body || message.preview);
+}
+
+function openComposeModal(
+  message?: InboxMessage,
+  mode: "reply" | "forward" = "reply",
+) {
   composeError.value = "";
   composeDraftId.value = null;
   composeReplyToMessageId.value = null;
@@ -1193,7 +1209,7 @@ function openComposeModal(message?: InboxMessage) {
         fromAddress: message.fromAddress || defaultFromAddress,
         to: message.toAddress || "",
         subject: message.subject,
-        textBody: message.body || message.preview,
+        textBody: getMessageTextBody(message),
       };
       composeOpen.value = true;
       void nextTick(() => {
@@ -1202,22 +1218,53 @@ function openComposeModal(message?: InboxMessage) {
       return;
     }
 
-    composeMode.value = "reply";
-    composeReplyToMessageId.value = message.id;
-    const replyTo =
-      message.direction === "inbound" ? message.fromAddress : message.toAddress;
-    const replyFromAddress =
-      outboundSenderOptions.value.find(
-        (option) => option.address === message.toAddress,
-      )?.address || defaultFromAddress;
-    composeForm.value = {
-      fromAddress: replyFromAddress,
-      to: replyTo || "",
-      subject: /^(re|fwd):\s*/i.test(message.subject)
-        ? message.subject
-        : `Re: ${message.subject}`,
-      textBody: "",
-    };
+    if (mode === "forward") {
+      composeMode.value = "forward";
+      const originalBody = getMessageTextBody(message);
+      const forwardedLines = [
+        "",
+        "",
+        "---------- Forwarded message ---------",
+        `From: ${formatSenderValue(message)}`,
+        `Date: ${formatDateTimePart(parseApiDate(message.createdAt), {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          timeZone: auth.user?.timezone || undefined,
+        })}`,
+        `Subject: ${message.subject || "(no subject)"}`,
+        `To: ${formatRecipientValue(message)}`,
+        "",
+        originalBody,
+      ];
+      composeForm.value = {
+        fromAddress: defaultFromAddress,
+        to: "",
+        subject: /^fwd:\s*/i.test(message.subject)
+          ? message.subject
+          : `Fwd: ${message.subject || "(no subject)"}`,
+        textBody: forwardedLines.join("\n"),
+      };
+    } else {
+      composeMode.value = "reply";
+      composeReplyToMessageId.value = message.id;
+      const replyTo =
+        message.direction === "inbound" ? message.fromAddress : message.toAddress;
+      const replyFromAddress =
+        outboundSenderOptions.value.find(
+          (option) => option.address === message.toAddress,
+        )?.address || defaultFromAddress;
+      composeForm.value = {
+        fromAddress: replyFromAddress,
+        to: replyTo || "",
+        subject: /^(re|fwd):\s*/i.test(message.subject)
+          ? message.subject
+          : `Re: ${message.subject}`,
+        textBody: "",
+      };
+    }
   } else {
     composeMode.value = "new";
     composeForm.value = {
@@ -1347,7 +1394,37 @@ async function saveDraft(sendNow = false) {
 function getComposeTitle(): string {
   if (composeMode.value === "edit") return "Edit draft";
   if (composeMode.value === "reply") return "Reply";
+  if (composeMode.value === "forward") return "Forward";
   return "Compose";
+}
+
+function getComposePrimaryDraftLabel(): string {
+  if (composeMode.value === "edit") return "Save draft";
+  if (composeMode.value === "forward") return "Create forward";
+  if (composeMode.value === "reply") return "Create reply";
+  return "Create draft";
+}
+
+function getMojibakeScore(value: string): number {
+  const suspiciousMatches =
+    value.match(/(?:Â|Ã.|â[\u0080-\u00ff]{1,2}|[\u0080-\u009f])/g) || [];
+  const replacementMatches = value.match(/\uFFFD/g) || [];
+  return suspiciousMatches.length * 4 + replacementMatches.length * 8;
+}
+
+function repairLikelyMojibake(value: string): string {
+  if (!/[ÂÃâ\u0080-\u009f\uFFFD]/.test(value)) return value;
+  const beforeScore = getMojibakeScore(value);
+  if (beforeScore === 0) return value;
+
+  try {
+    const bytes = Uint8Array.from(value, (char) => char.charCodeAt(0) & 0xff);
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const afterScore = getMojibakeScore(decoded);
+    return afterScore < beforeScore ? decoded : value;
+  } catch {
+    return value;
+  }
 }
 
 function escapeHtml(value: string): string {
@@ -1493,12 +1570,12 @@ img { max-width: 100%; height: auto; }
 }
 
 function renderEmailHtml(message: InboxMessage): string {
-  return renderRichEmailDocument(message.htmlBody || "");
+  return renderRichEmailDocument(getDisplayText(message.htmlBody));
 }
 
 function renderMarkdownEmailHtml(message: InboxMessage): string {
   return renderMarkdownMessageDocument(
-    renderMarkdownBody(message.body || message.preview),
+    renderMarkdownBody(getMessageTextBody(message)),
   );
 }
 
@@ -2046,7 +2123,7 @@ onBeforeUnmount(() => {
                           To {{ message.toAddress }}
                         </span>
                         <span class="conversation-item__preview">
-                          {{ message.preview || message.body }}
+                          {{ getMessagePreview(message) }}
                         </span>
                       </p>
                     </div>
@@ -2158,6 +2235,18 @@ onBeforeUnmount(() => {
                       @click="openComposeModal(selectedMessage)"
                     >
                       <UiIcon name="Reply" :size="16" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-btn"
+                      title="Forward"
+                      :disabled="
+                        inboxBusy ||
+                        selectedMessage.status === 'pending_approval'
+                      "
+                      @click="openComposeModal(selectedMessage, 'forward')"
+                    >
+                      <UiIcon name="Forward" :size="16" aria-hidden="true" />
                     </button>
                     <button
                       v-if="
@@ -2290,7 +2379,7 @@ onBeforeUnmount(() => {
                         @load="resizeEmailFrame($event, message.id)"
                       />
                       <pre v-else class="message-body">{{
-                        message.body || message.preview
+                        getMessageTextBody(message)
                       }}</pre>
 
                       <div
@@ -2487,9 +2576,7 @@ onBeforeUnmount(() => {
             {{
               composeSending
                 ? "Saving…"
-                : composeMode === "edit"
-                  ? "Save draft"
-                  : "Create draft"
+                : getComposePrimaryDraftLabel()
             }}
           </button>
           <button
