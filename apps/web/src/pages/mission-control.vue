@@ -325,6 +325,7 @@ const memory = ref<MissionMemory[]>([]);
 const sources = ref<MissionContextSource[]>([]);
 const activity = ref<MissionActivity[]>([]);
 const latestBriefing = ref<MissionDailyBriefing | null>(null);
+const doneCapturesOpen = ref(false);
 const loading = ref(false);
 const error = ref("");
 const clearingActivity = ref(false);
@@ -424,9 +425,6 @@ const doneCaptures = computed(() =>
 );
 const visibleScheduledTasks = computed(() =>
   tasksDueToday.value.filter((task) => task.sourceKind !== "capture"),
-);
-const openItemCount = computed(
-  () => openCaptures.value.length + visibleScheduledTasks.value.length,
 );
 const selectedDayIsLoaded = computed(
   () => day.value?.date === selectedDate.value && !loading.value,
@@ -1146,8 +1144,8 @@ async function submitCapture() {
     captureType.value = "task";
     schedulePickerOpen.value = false;
     scheduleDateTime.value = "";
+    upsertCapture(response.capture);
     toastSuccess(`${captureTypeLabel(response.capture.type)} captured`);
-    await loadOverview();
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "Capture failed";
   } finally {
@@ -1195,8 +1193,13 @@ async function archiveTask(task: MissionTask) {
 }
 
 function replaceCapture(next: MissionCapture) {
+  upsertCapture(next);
+}
+
+function upsertCapture(next: MissionCapture) {
   const index = captures.value.findIndex((item) => item.id === next.id);
   if (index >= 0) captures.value.splice(index, 1, next);
+  else captures.value.unshift(next);
 }
 
 async function saveJournalNow() {
@@ -1990,6 +1993,7 @@ watch(selectedDate, (nextDate, previousDate) => {
   if (scheduleDateTime.value && scheduledDate.value === previousDate) {
     scheduleDateTime.value = `${nextDate}T${scheduledTime.value || "09:00"}`;
   }
+  doneCapturesOpen.value = false;
   datePickerMonth.value = monthKey(nextDate);
   void loadOverview();
 });
@@ -2347,15 +2351,6 @@ onBeforeUnmount(() => {
           class="capture-list"
           aria-label="Today list"
         >
-          <div class="capture-list__header">
-            <div>
-              <h1>{{ selectedDateLabel }}</h1>
-            </div>
-            <span>{{ openItemCount }} open</span>
-          </div>
-
-          <div v-if="loading" class="empty-row">Loading...</div>
-
           <article
             v-for="capture in openCaptures"
             :key="capture.id"
@@ -2424,28 +2419,38 @@ onBeforeUnmount(() => {
           </article>
 
           <template v-if="doneCaptures.length">
-            <div class="list-divider">Done</div>
-            <article
-              v-for="capture in doneCaptures"
-              :key="capture.id"
-              class="capture-item capture-item--done"
+            <button
+              type="button"
+              class="list-divider list-divider--toggle"
+              :aria-expanded="doneCapturesOpen"
+              @click="doneCapturesOpen = !doneCapturesOpen"
             >
-              <button
-                type="button"
-                class="capture-item__check"
-                aria-label="Reopen"
-                @click="setCaptureStatus(capture, 'open')"
+              <UiIcon name="ChevronDown" :size="14" />
+              Done ({{ doneCaptures.length }})
+            </button>
+            <template v-if="doneCapturesOpen">
+              <article
+                v-for="capture in doneCaptures"
+                :key="capture.id"
+                class="capture-item capture-item--done"
               >
-                <UiIcon name="SquareCheck" :size="16" />
-              </button>
-              <div class="capture-item__body">
-                <p>{{ capture.text }}</p>
-                <div class="capture-item__meta">
-                  <span>{{ captureTypeLabel(capture.type) }}</span>
-                  <span>{{ projectName(capture.projectId) }}</span>
+                <button
+                  type="button"
+                  class="capture-item__check"
+                  aria-label="Reopen"
+                  @click="setCaptureStatus(capture, 'open')"
+                >
+                  <UiIcon name="SquareCheck" :size="16" />
+                </button>
+                <div class="capture-item__body">
+                  <p>{{ capture.text }}</p>
+                  <div class="capture-item__meta">
+                    <span>{{ captureTypeLabel(capture.type) }}</span>
+                    <span>{{ projectName(capture.projectId) }}</span>
+                  </div>
                 </div>
-              </div>
-            </article>
+              </article>
+            </template>
           </template>
         </section>
 
@@ -4015,12 +4020,32 @@ onBeforeUnmount(() => {
 }
 
 .list-divider {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 18px 0 6px;
+  border: 0;
+  background: transparent;
   color: var(--ui-text-muted);
+  font: inherit;
   font-size: 12px;
   font-weight: 650;
   letter-spacing: 0;
+  text-align: left;
   text-transform: uppercase;
+  cursor: default;
+}
+
+.list-divider--toggle {
+  cursor: pointer;
+}
+
+.list-divider--toggle svg {
+  transition: transform 0.16s ease;
+}
+
+.list-divider--toggle[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
 }
 
 .empty-row {
