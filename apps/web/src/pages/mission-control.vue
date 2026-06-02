@@ -545,18 +545,23 @@ const projectCreateDisabled = computed(
 );
 const selectedProjectDetail = computed(
   () =>
-    projects.value.find(
-      (project) => project.id === selectedProjectDetailId.value,
-    ) ||
-    projects.value[0] ||
-    null,
+    selectedProjectDetailId.value
+      ? projects.value.find(
+          (project) => project.id === selectedProjectDetailId.value,
+        ) || null
+      : null,
+);
+const selectedProjectTaskScopeId = computed(
+  () => selectedProjectDetail.value?.id || "",
 );
 const selectedProjectIsLocal = computed(() =>
   isLocalProject(selectedProjectDetail.value),
 );
 const selectedProjectTasks = computed(() => {
   const projectId = selectedProjectDetail.value?.id;
-  if (!projectId) return [];
+  if (!projectId) {
+    return projectTasks.value.filter((task) => task.status !== "cancelled");
+  }
   return projectTasks.value.filter(
     (task) => task.projectId === projectId && task.status !== "cancelled",
   );
@@ -570,7 +575,7 @@ const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
   })),
 );
 const selectedProjectDetailLabel = computed(
-  () => selectedProjectDetail.value?.name || "Projects",
+  () => selectedProjectDetail.value?.name || "All",
 );
 const projectTaskCreateDisabled = computed(
   () =>
@@ -663,12 +668,12 @@ function applyOverview(response: MissionOverviewResponse) {
     selectedProjectId.value = projects.value[0].id;
   }
   if (
-    !selectedProjectDetailId.value ||
+    selectedProjectDetailId.value &&
     !projects.value.some(
       (project) => project.id === selectedProjectDetailId.value,
     )
   ) {
-    selectedProjectDetailId.value = projects.value[0]?.id || "";
+    selectedProjectDetailId.value = "";
   }
   void loadMemoryAndSources();
 }
@@ -1068,20 +1073,16 @@ async function loadMoreProjectArchive() {
 }
 
 async function loadProjectTasks(
-  projectId = selectedProjectDetail.value?.id || "",
+  projectId = selectedProjectTaskScopeId.value,
 ) {
-  if (!projectId) {
-    projectTasks.value = [];
-    projectTasksNextCursor.value = null;
-    return;
-  }
+  const scopeId = projectId || "";
   projectTasksLoading.value = true;
   projectTasksError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ projectId }),
+      missionTasksUrl({ projectId: scopeId }),
     );
-    if (selectedProjectDetail.value?.id !== projectId) return;
+    if (selectedProjectTaskScopeId.value !== scopeId) return;
     projectTasks.value = response.tasks || [];
     projectTasksNextCursor.value = response.nextCursor || null;
   } catch (e) {
@@ -1095,16 +1096,16 @@ async function loadProjectTasks(
 }
 
 async function loadMoreProjectTasks() {
-  const projectId = selectedProjectDetail.value?.id || "";
+  const projectId = selectedProjectTaskScopeId.value;
   const cursor = projectTasksNextCursor.value;
-  if (!projectId || !cursor || projectTasksLoadingMore.value) return;
+  if (!cursor || projectTasksLoadingMore.value) return;
   projectTasksLoadingMore.value = true;
   projectTasksError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
       missionTasksUrl({ projectId, cursor }),
     );
-    if (selectedProjectDetail.value?.id !== projectId) return;
+    if (selectedProjectTaskScopeId.value !== projectId) return;
     projectTasks.value = appendUniqueTasks(
       projectTasks.value,
       response.tasks || [],
@@ -1472,7 +1473,8 @@ async function addProjectTask(status: ProjectBoardStatus) {
 }
 
 async function runProjectTaskLocally(task: MissionTask) {
-  if (!selectedProjectIsLocal.value || projectTaskLocalRunId.value) return;
+  if (!isLocalProject(projectForTask(task)) || projectTaskLocalRunId.value)
+    return;
   projectTaskLocalRunId.value = task.id;
   projectTasksError.value = "";
   try {
@@ -1741,6 +1743,11 @@ function projectName(projectId: string | null): string {
     projects.value.find((project) => project.id === projectId)?.name ||
     "Personal"
   );
+}
+
+function projectForTask(task: MissionTask): MissionProject | null {
+  if (!task.projectId) return null;
+  return projects.value.find((project) => project.id === task.projectId) || null;
 }
 
 function isLocalProject(project: MissionProject | null | undefined): boolean {
@@ -2127,6 +2134,14 @@ onBeforeUnmount(() => {
           aria-label="Choose project"
         >
           <button
+            type="button"
+            class="project-picker-popover__item"
+            :class="{ 'is-active': !selectedProjectDetail }"
+            @click="selectProjectDetail('')"
+          >
+            <span>All</span>
+          </button>
+          <button
             v-for="project in projects"
             :key="project.id"
             type="button"
@@ -2143,7 +2158,7 @@ onBeforeUnmount(() => {
             v-if="projects.length === 0"
             class="project-picker-popover__empty"
           >
-            No projects yet.
+            No projects yet. Personal tasks will still appear in All.
           </div>
           <button
             type="button"
@@ -2558,11 +2573,6 @@ onBeforeUnmount(() => {
 
     <section v-show="activeSection === 'projects'" class="mission-page">
       <div class="projects-workspace">
-        <div v-if="!selectedProjectDetail" class="empty-row">
-          No projects yet.
-        </div>
-
-        <template v-else>
           <div v-if="selectedProjectIsLocal" class="local-project-summary">
             <div>
               <strong>Local project</strong>
@@ -2617,12 +2627,27 @@ onBeforeUnmount(() => {
                   @dragend="endProjectTaskDrag"
                 >
                   <p>{{ task.title }}</p>
-                  <span v-if="task.dueAt || task.scheduledFor">
-                    {{ formatShortDate(task.dueAt || task.scheduledFor) }}
-                  </span>
+                  <div class="project-task-card__meta">
+                    <span class="project-task-card__project">
+                      <img
+                        v-if="projectForTask(task)?.icon"
+                        :src="projectForTask(task)?.icon || ''"
+                        alt=""
+                      />
+                      <span>{{ projectName(task.projectId) }}</span>
+                    </span>
+                    <span
+                      v-if="isLocalProject(projectForTask(task))"
+                      class="local-project-badge"
+                      >Local</span
+                    >
+                    <span v-if="task.dueAt || task.scheduledFor">
+                      {{ formatShortDate(task.dueAt || task.scheduledFor) }}
+                    </span>
+                  </div>
                   <div class="project-task-card__actions">
                     <button
-                      v-if="selectedProjectIsLocal"
+                      v-if="isLocalProject(projectForTask(task))"
                       type="button"
                       class="project-task-card__run"
                       :disabled="Boolean(projectTaskLocalRunId)"
@@ -2650,7 +2675,10 @@ onBeforeUnmount(() => {
                   </div>
                 </article>
                 <form
-                  v-if="projectTaskComposerStatus === column.id"
+                  v-if="
+                    selectedProjectDetail &&
+                    projectTaskComposerStatus === column.id
+                  "
                   class="project-task-composer"
                   @submit.prevent="addProjectTask(column.id)"
                 >
@@ -2683,7 +2711,7 @@ onBeforeUnmount(() => {
                   </div>
                 </form>
                 <button
-                  v-else
+                  v-else-if="selectedProjectDetail"
                   type="button"
                   class="project-column-add"
                   :disabled="projectTaskSaving"
@@ -2710,7 +2738,6 @@ onBeforeUnmount(() => {
               }}
             </button>
           </template>
-        </template>
       </div>
     </section>
 
@@ -3645,6 +3672,11 @@ onBeforeUnmount(() => {
   transform: translateX(-50%);
 }
 
+.project-picker-popover {
+  width: min(300px, calc(100vw - 28px));
+  min-width: min(240px, calc(100vw - 28px));
+}
+
 .project-picker-popover__item,
 .archive-picker-popover__item {
   display: flex;
@@ -4145,7 +4177,7 @@ onBeforeUnmount(() => {
 
 .project-board__column-header span,
 .project-board__empty,
-.project-task-card span {
+.project-task-card__meta {
   color: var(--ui-text-muted);
   font-size: 12px;
 }
@@ -4219,6 +4251,41 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.4;
+}
+
+.project-task-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.project-task-card__project {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  font-weight: 650;
+}
+
+.project-task-card__project img {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.project-task-card__project span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-task-card .local-project-badge {
+  color: var(--ui-accent);
 }
 
 .project-task-card__actions {
