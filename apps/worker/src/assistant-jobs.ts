@@ -8,6 +8,7 @@ import {
   getAssistantJobCapability,
   getAssistantJobStarterRecipe,
   matchInboxWatchMessage,
+  normalizeInboxWatchRules,
   validateAssistantJobDraft,
   type AssistantJobAction,
   type AssistantJobApprovalMode,
@@ -17,6 +18,7 @@ import {
   type AssistantJobDraftValidation,
   type AssistantJobStarterRecipe,
   type AssistantJobContextResult,
+  type InboxWatchRuleConfig,
 } from "@me3-core/assistant-jobs";
 import { LOCAL_EXECUTOR_PLUGIN_ID } from "@me3-core/plugin-local-executor";
 import type {
@@ -195,6 +197,16 @@ type MailboxMessageRow = {
   agent_labels_json: string | null;
   received_at: string | null;
   created_at: string;
+};
+
+type InboxWatchActionCounts = {
+  drafted: number;
+  tasks: number;
+  notified: number;
+  skippedNotifications: number;
+  draftIds: string[];
+  taskIds: string[];
+  notificationIds: string[];
 };
 
 type EmailTriageItem = {
@@ -1623,13 +1635,16 @@ async function executeAssistantJobProviderBackedAction(
   if (input.capability.id === "email.thread.summarize") {
     const triage = await buildEmailTriageResult(env, input.userId, input.draft);
     await persistEmailTriageSummaries(env, triage.items);
+    const counts = await executeInboxWatchRuleOutcomes(env, input, triage);
     return insertAssistantJobActionResult(env, {
       runId: input.run.id,
       actionId: input.action.id,
       capabilityId: input.capability.id,
       idempotencyKey: input.idempotencyKey,
       status: "succeeded",
-      externalRef: `mailbox:${triage.threadCount}:threads`,
+      externalRef:
+        `mailbox:${triage.threadCount}:threads` +
+        `:drafted:${counts.drafted}:tasks:${counts.tasks}:notified:${counts.notified}:notify_skipped:${counts.skippedNotifications}`,
     });
   }
 
@@ -3806,6 +3821,20 @@ function invoiceTriageResultFromActionResults(actionResults: SerializedActionRes
   };
 }
 
+function inboxWatchCountsFromActionResults(actionResults: SerializedActionResult[]) {
+  const ref = actionResults.find((result) => result.externalRef?.includes(":drafted:"))?.externalRef;
+  const match = ref?.match(/:drafted:(\d+):tasks:(\d+):notified:(\d+):notify_skipped:(\d+)$/);
+  if (!match) {
+    return { drafted: 0, tasks: 0, notified: 0, notifySkipped: 0 };
+  }
+  return {
+    drafted: Number.parseInt(match[1] || "0", 10),
+    tasks: Number.parseInt(match[2] || "0", 10),
+    notified: Number.parseInt(match[3] || "0", 10),
+    notifySkipped: Number.parseInt(match[4] || "0", 10),
+  };
+}
+
 async function buildEmailTriageResult(
   env: Env,
   userId: string,
@@ -3870,6 +3899,318 @@ async function persistEmailTriageSummaries(env: Env, items: EmailTriageItem[]) {
       .bind(item.summary, stringifyJson(item.labels), now, item.id)
       .run();
   }
+}
+
+async function executeInboxWatchRuleOutcomes(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+  triage: EmailTriageResult,
+): Promise<InboxWatchActionCounts> {
+  const counts: InboxWatchActionCounts = {
+    drafted: 0,
+    tasks: 0,
+    notified: 0,
+    skippedNotifications: 0,
+    draftIds: [],
+    taskIds: [],
+    notificationIds: [],
+  };
+  if (input.job.recipe_id !== "email-triage" && input.draft.recipeId !== "email-triage") {
+    return counts;
+  }
+
+  const rulesById = new Map(normalizeInboxWatchRules(input.draft.rules).map((rule) => [rule.id, rule]));
+  const activeMailbox = await getActiveAssistantJobMailbox(env, input.userId);
+  const notificationConnection = await getActiveOwnerNotificationConnection(env, input.userId);
+
+  for (const item of triage.items) {
+    for (const ruleId of item.matchedRuleIds) {
+      const rule = rulesById.get(ruleId);
+      if (!rule?.enabled) continue;
+
+      if (rule.actions.draftReply && activeMailbox) {
+        const draftId = await createInboxWatchReplyDraft(env, {
+          userId: input.userId,
+          mailboxId: activeMailbox.id,
+          runId: input.run.id,
+          jobId: input.job.id,
+          rule,
+          item,
+        });
+        if (draftId) {
+          counts.drafted += 1;
+          counts.draftIds.push(draftId);
+        }
+      }
+
+      if (rule.actions.createTask) {
+        const taskId = await createInboxWatchMissionTask(env, {
+          userId: input.userId,
+          runId: input.run.id,
+          job: input.job,
+          draft: input.draft,
+          rule,
+          item,
+        });
+        if (taskId) {
+          counts.tasks += 1;
+          counts.taskIds.push(taskId);
+        }
+      }
+
+      if (rule.actions.notifyOwner) {
+        if (!notificationConnection) {
+          counts.skippedNotifications += 1;
+          continue;
+        }
+        const notificationId = await sendInboxWatchOwnerNotification(env, {
+          connection: notificationConnection,
+          runId: input.run.id,
+          jobId: input.job.id,
+          rule,
+          item,
+        });
+        if (notificationId) {
+          counts.notified += 1;
+          counts.notificationIds.push(notificationId);
+        }
+      }
+    }
+  }
+
+  return counts;
+}
+
+async function getActiveAssistantJobMailbox(
+  env: Env,
+  userId: string,
+): Promise<MailboxSetupRow | null> {
+  return env.DB.prepare(
+    `SELECT id
+     FROM mailbox_aliases
+     WHERE user_id = ?
+       AND status = 'active'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  )
+    .bind(userId)
+    .first<MailboxSetupRow>();
+}
+
+async function createInboxWatchReplyDraft(
+  env: Env,
+  input: {
+    userId: string;
+    mailboxId: string;
+    runId: string;
+    jobId: string;
+    rule: InboxWatchRuleConfig;
+    item: EmailTriageItem;
+  },
+): Promise<string | null> {
+  const draftId = inboxWatchArtifactId("draft", input.runId, input.item.id, input.rule.id);
+  const existing = await env.DB.prepare(
+    `SELECT id
+     FROM mailbox_messages
+     WHERE id = ? AND mailbox_id = ?
+     LIMIT 1`,
+  )
+    .bind(draftId, input.mailboxId)
+    .first<{ id: string }>();
+  if (existing) return null;
+
+  const now = new Date().toISOString();
+  const subject = /^re:/i.test(input.item.subject) ? input.item.subject : `Re: ${input.item.subject}`;
+  const body =
+    `Hi,\n\nThanks for your email. I have this and will come back to you shortly.\n\nBest,\n`;
+  await env.DB.prepare(
+    `INSERT INTO mailbox_messages (
+       id, mailbox_id, direction, message_kind, status, thread_key,
+       from_address, to_address, subject, text_body, html_body,
+       metadata_json, source_id, folder, created_by, created_at, updated_at
+     )
+     VALUES (?, ?, 'outbound', 'draft', 'pending_approval', ?, NULL, ?, ?, ?, NULL, ?, ?, 'drafts', 'assistant_job', ?, ?)`,
+  )
+    .bind(
+      draftId,
+      input.mailboxId,
+      input.item.threadKey,
+      input.item.from,
+      subject,
+      body,
+      stringifyJson({
+        assistantJobId: input.jobId,
+        assistantJobRunId: input.runId,
+        inboxWatchRuleId: input.rule.id,
+        inboxWatchRuleLabel: input.rule.label,
+        sourceMessageId: input.item.id,
+        sourceSummary: input.item.summary,
+      }),
+      input.item.id,
+      now,
+      now,
+    )
+    .run();
+  return draftId;
+}
+
+async function createInboxWatchMissionTask(
+  env: Env,
+  input: {
+    userId: string;
+    runId: string;
+    job: AssistantJobRow;
+    draft: AssistantJobDraft;
+    rule: InboxWatchRuleConfig;
+    item: EmailTriageItem;
+  },
+): Promise<string | null> {
+  const taskId = inboxWatchArtifactId("task", input.runId, input.item.id, input.rule.id);
+  const projectId =
+    input.draft.destination.projectId ||
+    input.draft.scope.projectId ||
+    input.job.project_id ||
+    null;
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+     `INSERT OR IGNORE INTO mission_tasks
+       (id, user_id, project_id, title, description, status, priority, due_at, scheduled_for,
+        source_kind, source_ref, approval_id, metadata_json, created_at, updated_at, archived_at)
+     VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, 'agent', ?, NULL, ?, ?, ?, NULL)`,
+  )
+    .bind(
+      taskId,
+      input.userId,
+      projectId,
+      `Inbox Watch: ${input.item.from}`,
+      [
+        `Matched rule: ${input.rule.label}`,
+        `Subject: ${input.item.subject}`,
+        `Summary: ${input.item.summary}`,
+        "Suggested next step: review and follow up.",
+      ].join("\n"),
+      3,
+      null,
+      null,
+      `inbox-watch:${input.runId}:${input.item.id}:${input.rule.id}`,
+      stringifyJson({
+        assistantJobId: input.job.id,
+        assistantJobRunId: input.runId,
+        inboxWatchRuleId: input.rule.id,
+        inboxWatchRuleLabel: input.rule.label,
+        sourceMessageId: input.item.id,
+        sourceThreadKey: input.item.threadKey,
+      }),
+      now,
+      now,
+    )
+    .run();
+  return taskId;
+}
+
+async function sendInboxWatchOwnerNotification(
+  env: Env,
+  input: {
+    connection: AgentChannelConnectionRow;
+    runId: string;
+    jobId: string;
+    rule: InboxWatchRuleConfig;
+    item: EmailTriageItem;
+  },
+): Promise<string | null> {
+  const providerEventId = `inbox-watch:${input.runId}:${input.item.id}:${input.rule.id}:owner-notify`;
+  const existingEvent = await getAgentChannelEventByProviderEventId(
+    env,
+    input.connection.id,
+    providerEventId,
+  );
+  if (existingEvent?.status === "sent" || existingEvent?.status === "pending") {
+    return null;
+  }
+
+  const message =
+    `Inbox Watch matched ${input.rule.label}: ${input.item.from} - ${input.item.subject}. ` +
+    truncateText(input.item.summary, 180);
+  const eventId = await insertOwnerNotificationChannelEvent(env, {
+    connection: input.connection,
+    providerEventId,
+    status: "pending",
+    message,
+    rawJson: {
+      assistantJobId: input.jobId,
+      assistantJobRunId: input.runId,
+      inboxWatchRuleId: input.rule.id,
+      sourceMessageId: input.item.id,
+    },
+  });
+
+  try {
+    const response = await fetch(`${getSoulinkApiOrigin(env)}/api/me3/assistant-channel/notify`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.connection.setup_token}`,
+        "Content-Type": "application/json",
+      },
+      body: stringifyJson({
+        streamChannelType: input.connection.provider_connection_id || "messaging",
+        streamChannelId: input.connection.provider_thread_id,
+        messageId: providerEventId,
+        messageText: message,
+        createdAt: new Date().toISOString(),
+      }),
+    });
+    const payload = await response.json().catch(() => null) as OwnerNotificationResult | null;
+    if (!response.ok || payload?.ok !== true) {
+      await updateOwnerNotificationChannelEvent(env, {
+        eventId,
+        status: "failed",
+        providerMessageId: normalizeOptionalText(payload?.messageId),
+        rawJson: payload,
+        errorMessage:
+          normalizeOptionalText(payload?.error) ||
+          `Soulink notification failed with ${response.status}`,
+      });
+      return null;
+    }
+    await updateOwnerNotificationChannelEvent(env, {
+      eventId,
+      status: "sent",
+      providerMessageId:
+        normalizeOptionalText(payload.messageId) ||
+        normalizeOptionalText(payload.eventId) ||
+        providerEventId,
+      rawJson: payload,
+      errorMessage: null,
+    });
+    await updateOwnerNotificationConnectionSentAt(env, input.connection.id);
+    return eventId;
+  } catch (error) {
+    await updateOwnerNotificationChannelEvent(env, {
+      eventId,
+      status: "failed",
+      providerMessageId: null,
+      rawJson: { errorMessage: getErrorMessage(error) },
+      errorMessage: getErrorMessage(error),
+    });
+    return null;
+  }
+}
+
+function inboxWatchArtifactId(
+  kind: "draft" | "task",
+  runId: string,
+  messageId: string,
+  ruleId: string,
+) {
+  return `inbox-watch-${kind}:${runId}:${messageId}:${ruleId}`;
 }
 
 function summarizeMailboxMessageForTriage(
@@ -4074,7 +4415,14 @@ async function summarizeAssistantJobRunOutput(
   ) {
     const triage = await buildEmailTriageResult(env, userId, draft);
     const jobName = job.name || draft.name || "Inbox Watch";
-    return `${jobName} reviewed ${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"}, matched ${triage.matchedCount} across ${Object.keys(triage.ruleMatchCounts).length} rule${Object.keys(triage.ruleMatchCounts).length === 1 ? "" : "s"}; ${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply and ${triage.importantCount} flagged important.`;
+    const counts = inboxWatchCountsFromActionResults(actionResults);
+    const outcomeBits = [
+      counts.drafted ? `drafted ${counts.drafted} repl${counts.drafted === 1 ? "y" : "ies"}` : null,
+      counts.tasks ? `created ${counts.tasks} task${counts.tasks === 1 ? "" : "s"}` : null,
+      counts.notified ? `notified you ${counts.notified} time${counts.notified === 1 ? "" : "s"}` : null,
+      counts.notifySkipped ? `${counts.notifySkipped} notification${counts.notifySkipped === 1 ? "" : "s"} skipped because Soulink is not connected` : null,
+    ].filter(Boolean);
+    return `${jobName} reviewed ${triage.messageCount} inbox message${triage.messageCount === 1 ? "" : "s"}, matched ${triage.matchedCount} across ${Object.keys(triage.ruleMatchCounts).length} rule${Object.keys(triage.ruleMatchCounts).length === 1 ? "" : "s"}; ${triage.needsReplyCount} need${triage.needsReplyCount === 1 ? "s" : ""} a reply and ${triage.importantCount} flagged important${outcomeBits.length ? `; ${outcomeBits.join(", ")}.` : "."}`;
   }
   if (job.recipe_id === "daily-briefing" || draft.recipeId === "daily-briefing") {
     const context = await buildDailyBriefingRenderContext(env, userId);

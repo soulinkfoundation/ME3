@@ -150,10 +150,8 @@ type InboxWatchRuleForm = {
   label: string;
   enabled: boolean;
   timing: InboxWatchTiming;
-  fromAddresses: string;
-  fromDomains: string;
-  subjectContains: string;
-  bodyContains: string;
+  from: string;
+  contains: string;
   inferredLabels: InboxWatchInferredLabel[];
   notifyOwner: boolean;
   summarizeAndLabel: boolean;
@@ -817,10 +815,14 @@ function inboxWatchRuleFormFromRule(
     label: rule.label || "Inbox Watch rule",
     enabled: value.enabled !== false,
     timing: normalizeInboxWatchTiming(value.timing),
-    fromAddresses: listToLines(match.fromAddresses),
-    fromDomains: listToLines(match.fromDomains),
-    subjectContains: listToLines(match.subjectContains),
-    bodyContains: listToLines(match.bodyContains),
+    from: listToLines(match.from) || listToLines([
+      ...listFromUnknown(match.fromAddresses),
+      ...listFromUnknown(match.fromDomains),
+    ]),
+    contains: listToLines(match.textContains) || listToLines([
+      ...listFromUnknown(match.subjectContains),
+      ...listFromUnknown(match.bodyContains),
+    ]),
     inferredLabels: normalizeInboxWatchLabels(match.inferredLabels),
     notifyOwner: actions.notifyOwner === true,
     summarizeAndLabel: actions.summarizeAndLabel !== false,
@@ -835,10 +837,8 @@ function defaultInboxWatchRuleForm(id: string = crypto.randomUUID()): InboxWatch
     label: "Any inbox email",
     enabled: true,
     timing: "daily_digest",
-    fromAddresses: "",
-    fromDomains: "",
-    subjectContains: "",
-    bodyContains: "",
+    from: "",
+    contains: "",
     inferredLabels: [],
     notifyOwner: false,
     summarizeAndLabel: true,
@@ -859,10 +859,8 @@ function buildInboxWatchRulePayload(
       enabled: rule.enabled,
       timing: rule.timing,
       match: {
-        fromAddresses: linesToList(rule.fromAddresses),
-        fromDomains: linesToList(rule.fromDomains),
-        subjectContains: linesToList(rule.subjectContains),
-        bodyContains: linesToList(rule.bodyContains),
+        from: linesToList(rule.from),
+        textContains: linesToList(rule.contains),
         inferredLabels: rule.inferredLabels,
       },
       actions: {
@@ -876,11 +874,16 @@ function buildInboxWatchRulePayload(
 }
 
 function listToLines(value: unknown) {
-  if (!Array.isArray(value)) return "";
-  return value
+  return listFromUnknown(value)
     .map((item) => (typeof item === "string" ? item.trim() : ""))
     .filter(Boolean)
     .join("\n");
+}
+
+function listFromUnknown(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function linesToList(value: string) {
@@ -1532,39 +1535,25 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
                   <div class="inbox-watch-grid">
                     <label class="inbox-watch-field">
-                      <span>From addresses</span>
+                      <span>From</span>
                       <textarea
-                        v-model="rule.fromAddresses"
+                        v-model="rule.from"
                         rows="3"
-                        placeholder="ada@example.com"
+                        placeholder="ada@example.com, client.com"
                       />
                     </label>
                     <label class="inbox-watch-field">
-                      <span>From domains</span>
+                      <span>Contains</span>
                       <textarea
-                        v-model="rule.fromDomains"
+                        v-model="rule.contains"
                         rows="3"
-                        placeholder="client.com"
-                      />
-                    </label>
-                    <label class="inbox-watch-field">
-                      <span>Subject contains</span>
-                      <textarea
-                        v-model="rule.subjectContains"
-                        rows="3"
-                        placeholder="contract"
-                      />
-                    </label>
-                    <label class="inbox-watch-field">
-                      <span>Body contains</span>
-                      <textarea
-                        v-model="rule.bodyContains"
-                        rows="3"
-                        placeholder="please reply"
+                        placeholder="contract, please reply"
                       />
                     </label>
                   </div>
 
+                  <div class="inbox-watch-labels">
+                    <span class="inbox-watch-labels__title">Looks like</span>
                   <div class="inbox-watch-checks">
                     <label class="checkbox-pill">
                       <input
@@ -1607,11 +1596,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       <span>Review</span>
                     </label>
                   </div>
+                  </div>
 
                   <div class="inbox-watch-actions">
                     <label class="checkbox-row">
                       <input v-model="rule.notifyOwner" type="checkbox" />
-                      <span>Notify me</span>
+                      <span>Notify me if connected</span>
                     </label>
                     <label class="checkbox-row">
                       <input v-model="rule.summarizeAndLabel" type="checkbox" />
@@ -2449,6 +2439,18 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.inbox-watch-labels {
+  display: grid;
+  gap: 8px;
+}
+
+.inbox-watch-labels__title {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .checkbox-pill,

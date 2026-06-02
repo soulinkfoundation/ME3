@@ -277,7 +277,7 @@ describe("assistant jobs persistence", () => {
         actionId: "summarize-thread",
         capabilityId: "email.thread.summarize",
         status: "succeeded",
-        externalRef: "mailbox:2:threads",
+        externalRef: "mailbox:2:threads:drafted:0:tasks:0:notified:0:notify_skipped:0",
       }),
     );
     expect(env.__state.mailboxMessages[0]?.agent_summary).toContain("Urgent launch question");
@@ -307,6 +307,80 @@ describe("assistant jobs persistence", () => {
         importantCount: 1,
       },
     });
+  });
+
+  it("runs Inbox Watch rule actions for matched messages", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ ok: true, messageId: "soulink-msg-1" }))),
+    );
+    const env = createAssistantJobsEnv({
+      mailbox: activeMailboxRow(),
+      channelConnections: [soulinkConnectionRow()],
+      mailboxMessages: [
+        mailboxMessageRow({
+          id: "message-ada",
+          thread_key: "thread-ada",
+          from_address: "ada@example.com",
+          subject: "Contract question",
+          text_body: "Can you review and reply today?",
+        }),
+      ],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "email-triage" });
+    await updateAssistantJob(env, "owner", created.job.id, {
+      inboxWatchRules: [
+        {
+          id: "ada-contract",
+          label: "Ada contracts",
+          field: "inbox_watch.rule",
+          operator: "matches",
+          value: {
+            enabled: true,
+            timing: "daily_digest",
+            match: {
+              from: ["ada@example.com"],
+              textContains: ["contract"],
+              inferredLabels: ["needs_reply"],
+            },
+            actions: {
+              notifyOwner: true,
+              summarizeAndLabel: true,
+              draftReply: true,
+              createTask: true,
+            },
+          },
+        },
+      ],
+    });
+
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+
+    expect(run.run.outputPreview).toContain("drafted 1 reply");
+    expect(run.run.outputPreview).toContain("created 1 task");
+    expect(run.run.outputPreview).toContain("notified you 1 time");
+    expect(env.__state.mailboxMessages).toContainEqual(
+      expect.objectContaining({
+        message_kind: "draft",
+        status: "pending_approval",
+        folder: "drafts",
+        to_address: "ada@example.com",
+        source_id: "message-ada",
+      }),
+    );
+    expect(env.__state.tasks).toContainEqual(
+      expect.objectContaining({
+        title: "Inbox Watch: ada@example.com",
+        source_ref: expect.stringContaining("inbox-watch:"),
+      }),
+    );
+    expect(env.__state.channelEvents).toContainEqual(
+      expect.objectContaining({
+        status: "sent",
+        provider_event_id: expect.stringContaining("owner-notify"),
+      }),
+    );
   });
 
   it("triages invoice emails into Accounts ledger entries", async () => {
@@ -1363,6 +1437,37 @@ class FakeStatement {
       return { success: true };
     }
 
+    if (sql.includes("INSERT INTO mailbox_messages")) {
+      const exists = this.state.mailboxMessages.some((message) => message.id === values[0]);
+      if (!exists) {
+        this.state.mailboxMessages.push({
+          id: values[0] as string,
+          mailbox_id: values[1] as string,
+          direction: "outbound",
+          message_kind: "draft",
+          status: "pending_approval",
+          folder: "drafts",
+          thread_key: values[2] as string | null,
+          provider_id: null,
+          provider_message_id: null,
+          from_address: null,
+          to_address: values[3] as string | null,
+          subject: values[4] as string | null,
+          text_body: values[5] as string | null,
+          html_body: null,
+          metadata_json: values[6] as string,
+          source_id: values[7] as string | null,
+          agent_summary: null,
+          agent_labels_json: null,
+          created_by: "assistant_job",
+          received_at: null,
+          created_at: values[8] as string,
+          updated_at: values[9] as string,
+        });
+      }
+      return { success: true };
+    }
+
     if (sql.includes("INSERT OR IGNORE INTO financial_categories")) {
       const exists = this.state.financialCategories.some(
         (category) =>
@@ -1639,6 +1744,13 @@ class FakeStatement {
             connection.status === "active" &&
             connection.channel === "soulink" &&
             connection.provider_thread_id,
+        ) || null
+      ) as T | null;
+    }
+    if (sql.includes("FROM mailbox_messages")) {
+      return (
+        this.state.mailboxMessages.find(
+          (message) => message.id === values[0] && message.mailbox_id === values[1],
         ) || null
       ) as T | null;
     }

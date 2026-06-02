@@ -77,8 +77,8 @@ describe("assistant jobs package", () => {
           enabled: true,
           timing: "daily_digest",
           match: {
-            fromDomains: ["client.com"],
-            subjectContains: ["contract"],
+            from: ["client.com"],
+            textContains: ["contract"],
             inferredLabels: ["needs_reply"],
           },
           actions: { draftReply: true, createTask: true },

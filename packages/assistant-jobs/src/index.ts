@@ -208,8 +208,10 @@ export type InboxWatchRuleConfig = {
   enabled: boolean;
   timing: InboxWatchTiming;
   match: {
+    from?: string[];
     fromAddresses?: string[];
     fromDomains?: string[];
+    textContains?: string[];
     subjectContains?: string[];
     bodyContains?: string[];
     inferredLabels?: InboxWatchInferredLabel[];
@@ -1377,6 +1379,8 @@ function normalizeInboxWatchMatch(value: unknown): InboxWatchRuleConfig["match"]
   return {
     fromAddresses: normalizeTextArray(value.fromAddresses),
     fromDomains: normalizeTextArray(value.fromDomains),
+    from: normalizeTextArray(value.from),
+    textContains: normalizeTextArray(value.textContains),
     subjectContains: normalizeTextArray(value.subjectContains),
     bodyContains: normalizeTextArray(value.bodyContains),
     inferredLabels: normalizeInboxWatchLabels(value.inferredLabels),
@@ -1407,6 +1411,12 @@ function inboxWatchRuleMatches(
   const labels = new Set((candidate.labels || []).map(normalizeText));
 
   if (
+    hasValues(match.from) &&
+    !match.from.some((value) => inboxWatchFromValueMatches(fromAddress, fromDomain, value))
+  ) {
+    return false;
+  }
+  if (
     hasValues(match.fromAddresses) &&
     !match.fromAddresses.some((value) => normalizeText(value) === fromAddress)
   ) {
@@ -1415,6 +1425,15 @@ function inboxWatchRuleMatches(
   if (
     hasValues(match.fromDomains) &&
     !match.fromDomains.some((value) => normalizeDomain(value) === fromDomain)
+  ) {
+    return false;
+  }
+  if (
+    hasValues(match.textContains) &&
+    !match.textContains.some((value) => {
+      const needle = normalizeText(value);
+      return subject.includes(needle) || body.includes(needle);
+    })
   ) {
     return false;
   }
@@ -1437,6 +1456,17 @@ function inboxWatchRuleMatches(
     return false;
   }
   return true;
+}
+
+function inboxWatchFromValueMatches(
+  fromAddress: string,
+  fromDomain: string,
+  value: string,
+): boolean {
+  const text = normalizeText(value);
+  if (!text) return false;
+  if (text.includes("@")) return text === fromAddress;
+  return normalizeDomain(text) === fromDomain;
 }
 
 function isInboxWatchRuleConfigArray(
