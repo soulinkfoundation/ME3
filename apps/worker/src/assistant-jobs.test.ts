@@ -473,6 +473,31 @@ describe("assistant jobs persistence", () => {
     expect(JSON.parse(notifyRequest?.body as string).messageText).toContain("Morning Kieran.");
   });
 
+  it("updates scheduled job cadence and next run metadata", async () => {
+    const env = createAssistantJobsEnv();
+    const created = await createAssistantJob(env, "owner", { recipeId: "weekly-review" });
+
+    const updated = await updateAssistantJob(env, "owner", created.job.id, {
+      schedule: {
+        cadence: "daily",
+        localTime: "09:30",
+        timezone: "owner",
+      },
+    });
+    const detail = await getAssistantJob(env, "owner", updated.job.id);
+
+    expect(updated.job.triggerSummary).toBe("Daily at 09:30");
+    expect(updated.job.nextRunAt).toEqual(expect.any(String));
+    expect(detail.version?.versionNumber).toBe(2);
+    expect(detail.version?.trigger).toMatchObject({
+      kind: "schedule",
+      cadence: "daily",
+      localTime: "09:30",
+      timezone: "owner",
+      nextRunAt: updated.job.nextRunAt,
+    });
+  });
+
   it("records assistant job ingress events idempotently", async () => {
     const env = createAssistantJobsEnv({ queue: true });
     const body = {
@@ -1436,6 +1461,21 @@ class FakeStatement {
         run.error_code = values[4] as string | null;
         run.error_message = values[5] as string | null;
         run.updated_at = new Date().toISOString();
+      }
+      return { success: true };
+    }
+
+    if (sql.includes("current_version_id = ?") && sql.includes("trigger_summary = ?")) {
+      const job = this.findJob(values[8], values[9]);
+      if (job) {
+        job.name = values[0] as string;
+        job.purpose = values[1] as string;
+        job.project_id = values[2] as string | null;
+        job.status = values[3] as string;
+        job.current_version_id = values[4] as string;
+        job.trigger_summary = values[5] as string;
+        job.next_run_at = values[6] as string | null;
+        job.setup_state_json = values[7] as string;
       }
       return { success: true };
     }

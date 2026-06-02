@@ -31,6 +31,7 @@ import {
   createLocalExecutorRunFromAssistantJobAction,
   isLocalExecutorSetupReady,
 } from "./local-executor";
+import { normalizeTimeZone } from "./calendar";
 import { isCorePluginEnabled } from "./plugins";
 
 export class AssistantJobsInputError extends Error {
@@ -372,7 +373,16 @@ type UpdateAssistantJobBody = {
   purpose?: unknown;
   status?: unknown;
   projectId?: unknown;
+  schedule?: unknown;
   dailyBriefingMessageTemplate?: unknown;
+};
+
+type AssistantJobSchedulePatch = {
+  cadence?: unknown;
+  localTime?: unknown;
+  timezone?: unknown;
+  dayOfWeek?: unknown;
+  dayOfMonth?: unknown;
 };
 
 type CreateAssistantJobIngressEventBody = {
@@ -831,13 +841,14 @@ export async function createAssistantJob(env: Env, userId: string, body: CreateA
       throw new AssistantJobsInputError("That job has already been added.", 409);
     }
   }
-  const validation = await validateAssistantJobDraftForUser(env, userId, draft);
+  const draftForStorage = await withComputedScheduleNextRunAt(env, userId, draft);
+  const validation = await validateAssistantJobDraftForUser(env, userId, draftForStorage);
   const requestedStatus = normalizeJobStatus(body.status);
   const status = resolveInitialStatus(validation, requestedStatus);
   const jobId = crypto.randomUUID();
   const versionId = crypto.randomUUID();
   const now = new Date().toISOString();
-  const triggerSummary = summarizeTrigger(draft.trigger);
+  const triggerSummary = summarizeTrigger(draftForStorage.trigger);
   const setupState = { validationStatus: validation.status, errors: validation.errors };
 
   await env.DB.batch([
@@ -849,15 +860,15 @@ export async function createAssistantJob(env: Env, userId: string, body: CreateA
     ).bind(
       jobId,
       userId,
-      draft.recipeId,
-      draft.name,
-      draft.purpose,
+      draftForStorage.recipeId,
+      draftForStorage.name,
+      draftForStorage.purpose,
       status,
       versionId,
-      draft.projectId,
-      stringifyJson(draft.destination),
+      draftForStorage.projectId,
+      stringifyJson(draftForStorage.destination),
       triggerSummary,
-      draft.trigger.kind === "schedule" ? draft.trigger.nextRunAt : null,
+      draftForStorage.trigger.kind === "schedule" ? draftForStorage.trigger.nextRunAt : null,
       stringifyJson(setupState),
       now,
       now,
@@ -867,7 +878,7 @@ export async function createAssistantJob(env: Env, userId: string, body: CreateA
       jobId,
       userId,
       versionNumber: 1,
-      draft,
+      draft: draftForStorage,
       validation,
       createdAt: now,
     }),
@@ -898,6 +909,9 @@ export async function updateAssistantJob(
     typeof body.dailyBriefingMessageTemplate === "string"
       ? body.dailyBriefingMessageTemplate.trim()
       : null;
+  const schedulePatch = isRecord(body.schedule)
+    ? (body.schedule as AssistantJobSchedulePatch)
+    : null;
 
   if (status === "archived") {
     throw new AssistantJobsInputError("Use DELETE to archive a job");
@@ -908,17 +922,31 @@ export async function updateAssistantJob(
     : null;
   let nextVersionId: string | null = null;
   let setupState: Record<string, unknown> | null = null;
+  let nextTriggerSummary: string | null = null;
+  let nextRunAt: string | null = null;
 
-  if (dailyBriefingMessageTemplate !== null) {
-    if (existing.recipe_id !== "daily-briefing") {
-      throw new AssistantJobsInputError("Daily briefing message can only be set on Daily Briefing jobs", 409);
-    }
+  if (dailyBriefingMessageTemplate !== null || schedulePatch) {
     if (!version) throw new AssistantJobsInputError("Job version not found", 404);
-    const draft = draftFromVersion(existing, version);
-    const nextDraft = withDailyBriefingMessageTemplate(draft, dailyBriefingMessageTemplate);
+    let nextDraft = draftFromVersion(existing, version);
+
+    if (existing.recipe_id !== "daily-briefing") {
+      if (dailyBriefingMessageTemplate !== null) {
+        throw new AssistantJobsInputError("Daily briefing message can only be set on Daily Briefing jobs", 409);
+      }
+    }
+
+    if (dailyBriefingMessageTemplate !== null) {
+      nextDraft = withDailyBriefingMessageTemplate(nextDraft, dailyBriefingMessageTemplate);
+    }
+    if (schedulePatch) {
+      nextDraft = await withUpdatedScheduleTrigger(env, userId, nextDraft, schedulePatch);
+    }
+
     const validation = await validateAssistantJobDraftForUser(env, userId, nextDraft);
     nextVersionId = crypto.randomUUID();
     setupState = { validationStatus: validation.status, errors: validation.errors };
+    nextTriggerSummary = summarizeTrigger(nextDraft.trigger);
+    nextRunAt = nextDraft.trigger.kind === "schedule" ? nextDraft.trigger.nextRunAt : null;
     await buildInsertVersionStatement(env, {
       versionId: nextVersionId,
       jobId,
@@ -934,10 +962,21 @@ export async function updateAssistantJob(
     await env.DB.prepare(
       `UPDATE assistant_jobs
        SET name = ?, purpose = ?, project_id = ?, status = ?, current_version_id = ?,
-           setup_state_json = ?, updated_at = CURRENT_TIMESTAMP
+           trigger_summary = ?, next_run_at = ?, setup_state_json = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND user_id = ?`,
     )
-      .bind(name, purpose, projectId, status, nextVersionId, stringifyJson(setupState), jobId, userId)
+      .bind(
+        name,
+        purpose,
+        projectId,
+        status,
+        nextVersionId,
+        nextTriggerSummary,
+        nextRunAt,
+        stringifyJson(setupState),
+        jobId,
+        userId,
+      )
       .run();
   } else {
     await env.DB.prepare(
@@ -2128,6 +2167,82 @@ function withDailyBriefingMessageTemplate(
           }
         : action,
     ),
+  };
+}
+
+async function withUpdatedScheduleTrigger(
+  env: Env,
+  userId: string,
+  draft: AssistantJobDraft,
+  patch: AssistantJobSchedulePatch,
+): Promise<AssistantJobDraft> {
+  if (draft.trigger.kind !== "schedule") {
+    throw new AssistantJobsInputError("Only scheduled jobs can change schedule", 409);
+  }
+  if (patch.cadence !== undefined && !normalizeScheduleCadence(patch.cadence)) {
+    throw new AssistantJobsInputError("Schedule cadence is invalid");
+  }
+  if (patch.localTime !== undefined && !normalizeScheduleLocalTime(patch.localTime)) {
+    throw new AssistantJobsInputError("Schedule time must use HH:mm");
+  }
+  if (patch.timezone !== undefined && !normalizeScheduleTimezone(patch.timezone)) {
+    throw new AssistantJobsInputError("Schedule timezone is invalid");
+  }
+
+  const cadence = normalizeScheduleCadence(patch.cadence) || draft.trigger.cadence;
+  const localTime =
+    normalizeScheduleLocalTime(patch.localTime) || draft.trigger.localTime || "08:00";
+  const timezone = normalizeScheduleTimezone(patch.timezone) || draft.trigger.timezone || "owner";
+  if (
+    cadence === "weekly" &&
+    patch.dayOfWeek !== undefined &&
+    normalizeScheduleDayOfWeek(patch.dayOfWeek) === null
+  ) {
+    throw new AssistantJobsInputError("Schedule day of week is invalid");
+  }
+  if (
+    cadence === "monthly" &&
+    patch.dayOfMonth !== undefined &&
+    normalizeScheduleDayOfMonth(patch.dayOfMonth) === null
+  ) {
+    throw new AssistantJobsInputError("Schedule day of month is invalid");
+  }
+  const dayOfWeek =
+    cadence === "weekly"
+      ? normalizeScheduleDayOfWeek(patch.dayOfWeek) ?? draft.trigger.dayOfWeek ?? 1
+      : null;
+  const dayOfMonth =
+    cadence === "monthly"
+      ? normalizeScheduleDayOfMonth(patch.dayOfMonth) ??
+        parseMonthlyDayOfMonth(draft.trigger.rrule) ??
+        1
+      : null;
+  const rrule = cadence === "monthly" ? `FREQ=MONTHLY;BYMONTHDAY=${dayOfMonth}` : null;
+  const trigger: AssistantJobDraft["trigger"] = {
+    kind: "schedule",
+    timezone,
+    cadence,
+    rrule,
+    localTime,
+    dayOfWeek,
+    nextRunAt: null,
+  };
+
+  return withComputedScheduleNextRunAt(env, userId, { ...draft, trigger });
+}
+
+async function withComputedScheduleNextRunAt(
+  env: Env,
+  userId: string,
+  draft: AssistantJobDraft,
+): Promise<AssistantJobDraft> {
+  if (draft.trigger.kind !== "schedule") return draft;
+  return {
+    ...draft,
+    trigger: {
+      ...draft.trigger,
+      nextRunAt: await computeNextScheduleRunAt(env, userId, draft.trigger),
+    },
   };
 }
 
@@ -3765,9 +3880,146 @@ function serializeIngressEvent(row: AssistantJobIngressEventRow) {
 function summarizeTrigger(trigger: AssistantJobDraft["trigger"]) {
   if (trigger.kind === "manual") return "Manual";
   if (trigger.kind === "event") return `When ${trigger.eventType} happens`;
-  if (trigger.cadence === "weekly" && trigger.localTime) return `Weekly at ${trigger.localTime}`;
+  if (trigger.cadence === "weekly" && trigger.localTime) {
+    return `Weekly on ${scheduleWeekdayLabel(trigger.dayOfWeek)} at ${trigger.localTime}`;
+  }
   if (trigger.cadence === "daily" && trigger.localTime) return `Daily at ${trigger.localTime}`;
+  if (trigger.cadence === "monthly" && trigger.localTime) {
+    return `Monthly on day ${parseMonthlyDayOfMonth(trigger.rrule) || 1} at ${trigger.localTime}`;
+  }
   return trigger.cadence;
+}
+
+async function computeNextScheduleRunAt(
+  env: Env,
+  userId: string,
+  trigger: Extract<AssistantJobDraft["trigger"], { kind: "schedule" }>,
+  now = new Date(),
+) {
+  const timezone = await resolveAssistantJobScheduleTimezone(env, userId, trigger.timezone);
+  const localTime = normalizeScheduleLocalTime(trigger.localTime) || "08:00";
+  const today = dateKeyInTimezone(now, timezone);
+  let candidateDate = today;
+
+  if (trigger.cadence === "weekly") {
+    candidateDate = nextWeeklyScheduleDate(today, trigger.dayOfWeek ?? 1);
+  } else if (trigger.cadence === "monthly") {
+    candidateDate = nextMonthlyScheduleDate(today, parseMonthlyDayOfMonth(trigger.rrule) || 1);
+  }
+
+  let candidate = zonedLocalTimeToUtc(candidateDate, localTime, timezone);
+  if (candidate.getTime() <= now.getTime()) {
+    if (trigger.cadence === "weekly") {
+      candidateDate = addDaysToDateKey(candidateDate, 7);
+    } else if (trigger.cadence === "monthly") {
+      candidateDate = nextMonthScheduleDate(
+        candidateDate,
+        parseMonthlyDayOfMonth(trigger.rrule) || 1,
+      );
+    } else {
+      candidateDate = addDaysToDateKey(candidateDate, 1);
+    }
+    candidate = zonedLocalTimeToUtc(candidateDate, localTime, timezone);
+  }
+
+  return candidate.toISOString();
+}
+
+async function resolveAssistantJobScheduleTimezone(env: Env, userId: string, timezone: string) {
+  if (timezone === "owner") {
+    const row = await env.DB.prepare("SELECT timezone FROM owner_profile WHERE id = ?")
+      .bind(userId)
+      .first<{ timezone: string | null }>()
+      .catch(() => null);
+    return normalizeTimeZone(row?.timezone) || "UTC";
+  }
+  return normalizeTimeZone(timezone) || "UTC";
+}
+
+function normalizeScheduleCadence(
+  value: unknown,
+): "daily" | "weekly" | "monthly" | "custom" | null {
+  return value === "daily" || value === "weekly" || value === "monthly" || value === "custom"
+    ? value
+    : null;
+}
+
+function normalizeScheduleLocalTime(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  const match = trimmed.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  return match ? trimmed : null;
+}
+
+function normalizeScheduleTimezone(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed === "owner") return "owner";
+  return normalizeTimeZone(trimmed);
+}
+
+function normalizeScheduleDayOfWeek(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 6 ? parsed : null;
+}
+
+function normalizeScheduleDayOfMonth(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 28 ? parsed : null;
+}
+
+function parseMonthlyDayOfMonth(rrule: string | null | undefined): number | null {
+  const match = rrule?.match(/(?:^|;)BYMONTHDAY=(\d{1,2})(?:;|$)/i);
+  if (!match?.[1]) return null;
+  return normalizeScheduleDayOfMonth(Number.parseInt(match[1], 10));
+}
+
+function scheduleWeekdayLabel(dayOfWeek: number | null | undefined) {
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return days[normalizeScheduleDayOfWeek(dayOfWeek) ?? 1] || "Monday";
+}
+
+function nextWeeklyScheduleDate(today: string, dayOfWeek: number) {
+  const todayDay = dayOfWeekForDateKey(today);
+  const normalizedDay = normalizeScheduleDayOfWeek(dayOfWeek) ?? 1;
+  const delta = (normalizedDay - todayDay + 7) % 7;
+  return addDaysToDateKey(today, delta);
+}
+
+function nextMonthlyScheduleDate(today: string, dayOfMonth: number) {
+  const [year, month, day] = today.split("-").map(Number);
+  const normalizedDay = normalizeScheduleDayOfMonth(dayOfMonth) ?? 1;
+  if (day <= normalizedDay) return dateKeyFromParts(year, month, normalizedDay);
+  return nextMonthScheduleDate(today, normalizedDay);
+}
+
+function nextMonthScheduleDate(dateKey: string, dayOfMonth: number) {
+  const [year, month] = dateKey.split("-").map(Number);
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextYear = month === 12 ? year + 1 : year;
+  return dateKeyFromParts(nextYear, nextMonth, dayOfMonth);
+}
+
+function addDaysToDateKey(dateKey: string, days: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days, 12, 0, 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function dayOfWeekForDateKey(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).getUTCDay();
+}
+
+function dateKeyFromParts(year: number, month: number, day: number) {
+  const safeDay = Math.min(day, daysInMonth(year, month));
+  return `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${safeDay
+    .toString()
+    .padStart(2, "0")}`;
+}
+
+function daysInMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month, 0, 12, 0, 0)).getUTCDate();
 }
 
 function normalizeIngressEventBody(body: CreateAssistantJobIngressEventBody) {

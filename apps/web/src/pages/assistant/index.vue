@@ -38,6 +38,27 @@ type AssistantRecipeState =
   | "manual_only"
   | "coming_later";
 
+type AssistantScheduleCadence = "daily" | "weekly" | "monthly" | "custom";
+
+type AssistantJobTrigger =
+  | { kind: "manual" }
+  | {
+      kind: "schedule";
+      timezone: string;
+      cadence: AssistantScheduleCadence;
+      rrule: string | null;
+      localTime: string | null;
+      dayOfWeek: number | null;
+      nextRunAt: string | null;
+    }
+  | {
+      kind: "event";
+      source: string;
+      sourceId: string;
+      eventType: string;
+      filters?: unknown[];
+    };
+
 type PermissionSummary = {
   reads?: string[];
   writes?: string[];
@@ -89,7 +110,7 @@ type AssistantJobRecipe = {
 type AssistantJobVersion = {
   id: string;
   versionNumber: number;
-  trigger: Record<string, unknown>;
+  trigger: AssistantJobTrigger;
   actions: Array<{
     id: string;
     capabilityId: string;
@@ -154,6 +175,11 @@ const detailModalOpen = ref(false);
 const busyKeys = ref(new Set<string>());
 const dailyBriefingTemplateDraft = ref("");
 const dailyBriefingTemplateNotice = ref("");
+const scheduleCadenceDraft = ref<AssistantScheduleCadence>("daily");
+const scheduleTimeDraft = ref("08:00");
+const scheduleDayOfWeekDraft = ref(1);
+const scheduleDayOfMonthDraft = ref(1);
+const scheduleNotice = ref("");
 
 const defaultDailyBriefingTemplate =
   "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -176,6 +202,24 @@ const suggestedRecipeOrder = [
 ];
 
 const suggestedRecipeIds = new Set(suggestedRecipeOrder);
+const scheduleCadenceOptions: Array<{
+  label: string;
+  value: AssistantScheduleCadence;
+}> = [
+  { label: "Every day", value: "daily" },
+  { label: "Every week", value: "weekly" },
+  { label: "Every month", value: "monthly" },
+];
+const weekdayOptions = [
+  { label: "Sunday", value: 0 },
+  { label: "Monday", value: 1 },
+  { label: "Tuesday", value: 2 },
+  { label: "Wednesday", value: 3 },
+  { label: "Thursday", value: 4 },
+  { label: "Friday", value: 5 },
+  { label: "Saturday", value: 6 },
+];
+const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const addedRecipeIds = computed(
   () =>
     new Set(
@@ -219,6 +263,11 @@ const selectedJobIsDailyBriefing = computed(
   () => selectedDetail.value?.job.recipeId === "daily-briefing",
 );
 
+const selectedScheduleTrigger = computed(() => {
+  const trigger = selectedDetail.value?.version?.trigger;
+  return isScheduleTrigger(trigger) ? trigger : null;
+});
+
 const savedDailyBriefingTemplate = computed(() => {
   const notifyAction = selectedDetail.value?.version?.actions.find(
     (action) => action.capabilityId === "message.owner.notify",
@@ -230,11 +279,33 @@ const savedDailyBriefingTemplate = computed(() => {
 });
 
 const dailyBriefingTemplateChanged = computed(
-  () => dailyBriefingTemplateDraft.value.trim() !== savedDailyBriefingTemplate.value.trim(),
+  () =>
+    dailyBriefingTemplateDraft.value.trim() !==
+    savedDailyBriefingTemplate.value.trim(),
 );
 
 const dailyBriefingPreview = computed(() =>
-  renderDailyBriefingPreview(dailyBriefingTemplateDraft.value || defaultDailyBriefingTemplate),
+  renderDailyBriefingPreview(
+    dailyBriefingTemplateDraft.value || defaultDailyBriefingTemplate,
+  ),
+);
+
+const scheduleDraftChanged = computed(() => {
+  const trigger = selectedScheduleTrigger.value;
+  if (!trigger) return false;
+  const savedDayOfMonth = parseMonthlyDayOfMonth(trigger.rrule) || 1;
+  return (
+    scheduleCadenceDraft.value !== trigger.cadence ||
+    scheduleTimeDraft.value !== (trigger.localTime || "08:00") ||
+    (scheduleCadenceDraft.value === "weekly" &&
+      scheduleDayOfWeekDraft.value !== (trigger.dayOfWeek ?? 1)) ||
+    (scheduleCadenceDraft.value === "monthly" &&
+      scheduleDayOfMonthDraft.value !== savedDayOfMonth)
+  );
+});
+
+const scheduleTimeValid = computed(() =>
+  /^([01]\d|2[0-3]):[0-5]\d$/.test(scheduleTimeDraft.value),
 );
 
 onMounted(() => {
@@ -291,6 +362,8 @@ async function openJob(jobId: string) {
     );
     dailyBriefingTemplateDraft.value = savedDailyBriefingTemplate.value;
     dailyBriefingTemplateNotice.value = "";
+    loadScheduleDraftFromDetail();
+    scheduleNotice.value = "";
   } catch (err) {
     closeDetailModal();
     toastFromUnknown(err, "Could not load job details.");
@@ -379,19 +452,65 @@ async function archiveJob(job: AssistantJob) {
 
 async function saveDailyBriefingTemplate() {
   const job = selectedDetail.value?.job;
-  if (!job || !selectedJobIsDailyBriefing.value || !dailyBriefingTemplateChanged.value) return;
+  if (
+    !job ||
+    !selectedJobIsDailyBriefing.value ||
+    !dailyBriefingTemplateChanged.value
+  )
+    return;
 
   await withBusy(`briefing-template:${job.id}`, async () => {
     const response = await api.patch<{ job: AssistantJob }>(
       `/assistant/jobs/${encodeURIComponent(job.id)}`,
       {
         dailyBriefingMessageTemplate:
-          dailyBriefingTemplateDraft.value.trim() || defaultDailyBriefingTemplate,
+          dailyBriefingTemplateDraft.value.trim() ||
+          defaultDailyBriefingTemplate,
       },
     );
-    jobs.value = jobs.value.map((item) => (item.id === job.id ? response.job : item));
+    jobs.value = jobs.value.map((item) =>
+      item.id === job.id ? response.job : item,
+    );
     await openJob(job.id);
     dailyBriefingTemplateNotice.value = "Message saved.";
+  });
+}
+
+async function saveJobSchedule() {
+  const job = selectedDetail.value?.job;
+  const trigger = selectedScheduleTrigger.value;
+  if (
+    !job ||
+    !trigger ||
+    !scheduleDraftChanged.value ||
+    !scheduleTimeValid.value
+  )
+    return;
+
+  await withBusy(`schedule:${job.id}`, async () => {
+    const response = await api.patch<{ job: AssistantJob }>(
+      `/assistant/jobs/${encodeURIComponent(job.id)}`,
+      {
+        schedule: {
+          cadence: scheduleCadenceDraft.value,
+          localTime: scheduleTimeDraft.value,
+          timezone: trigger.timezone || "owner",
+          dayOfWeek:
+            scheduleCadenceDraft.value === "weekly"
+              ? scheduleDayOfWeekDraft.value
+              : null,
+          dayOfMonth:
+            scheduleCadenceDraft.value === "monthly"
+              ? scheduleDayOfMonthDraft.value
+              : null,
+        },
+      },
+    );
+    jobs.value = jobs.value.map((item) =>
+      item.id === job.id ? response.job : item,
+    );
+    await openJob(job.id);
+    scheduleNotice.value = "Schedule saved.";
   });
 }
 
@@ -402,7 +521,8 @@ function resetDailyBriefingTemplate() {
 
 function insertDailyBriefingVariable(value: string) {
   const separator =
-    dailyBriefingTemplateDraft.value && !dailyBriefingTemplateDraft.value.endsWith(" ")
+    dailyBriefingTemplateDraft.value &&
+    !dailyBriefingTemplateDraft.value.endsWith(" ")
       ? " "
       : "";
   dailyBriefingTemplateDraft.value = `${dailyBriefingTemplateDraft.value}${separator}${value}`;
@@ -421,6 +541,8 @@ function closeDetailModal() {
   detailModalOpen.value = false;
   selectedJobId.value = null;
   selectedDetail.value = null;
+  dailyBriefingTemplateNotice.value = "";
+  scheduleNotice.value = "";
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
@@ -535,7 +657,7 @@ function toggleBusyKey(job: AssistantJob) {
 const jobNavEmojis: Record<string, string> = {
   "daily-briefing": "☀️",
   "weekly-review": "📊",
-  "booking-reminder": "🗓️",
+  "booking-reminder": "⏰",
   "email-triage": "📧",
   "invoice-receipt-triage": "🧾",
   "local-coding-task": "💻",
@@ -554,7 +676,11 @@ function isJobToggleBusy(job: AssistantJob) {
 }
 
 async function handleJobToggle(job: AssistantJob, enabled: boolean) {
-  if (enabled === isJobEnabled(job) || !canToggle(job) || isJobToggleBusy(job)) {
+  if (
+    enabled === isJobEnabled(job) ||
+    !canToggle(job) ||
+    isJobToggleBusy(job)
+  ) {
     return;
   }
   await toggleJob(job);
@@ -570,6 +696,39 @@ function formatDate(value: string | null) {
   }).format(date);
 }
 
+function loadScheduleDraftFromDetail() {
+  const trigger = selectedScheduleTrigger.value;
+  if (!trigger) return;
+  scheduleCadenceDraft.value =
+    trigger.cadence === "custom" ? "daily" : trigger.cadence;
+  scheduleTimeDraft.value = trigger.localTime || "08:00";
+  scheduleDayOfWeekDraft.value = trigger.dayOfWeek ?? 1;
+  scheduleDayOfMonthDraft.value = parseMonthlyDayOfMonth(trigger.rrule) || 1;
+}
+
+function isScheduleTrigger(
+  value: unknown,
+): value is Extract<AssistantJobTrigger, { kind: "schedule" }> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === "schedule"
+  );
+}
+
+function parseMonthlyDayOfMonth(rrule: string | null | undefined) {
+  const match = rrule?.match(/(?:^|;)BYMONTHDAY=(\d{1,2})(?:;|$)/i);
+  if (!match?.[1]) return null;
+  const day = Number.parseInt(match[1], 10);
+  return Number.isInteger(day) && day >= 1 && day <= 28 ? day : null;
+}
+
+function formatScheduleTimezone(
+  trigger: Extract<AssistantJobTrigger, { kind: "schedule" }>,
+) {
+  return trigger.timezone === "owner" ? "Account timezone" : trigger.timezone;
+}
+
 function formatNextRun(job: AssistantJob) {
   if (job.status !== "active") return "-";
   if (job.nextRunAt) return formatDate(job.nextRunAt);
@@ -582,8 +741,12 @@ function formatTrigger(summary: string) {
   const value = String(summary || "").trim();
   if (!value || value === "Manual") return "When you run it";
   if (/^Daily at /i.test(value)) return value.replace(/^Daily/i, "Every day");
+  if (/^Weekly on .+ at /i.test(value))
+    return value.replace(/^Weekly/i, "Every week");
   if (/^Weekly at /i.test(value))
     return value.replace(/^Weekly/i, "Every week");
+  if (/^Monthly on day /i.test(value))
+    return value.replace(/^Monthly/i, "Every month");
   if (value.includes("email.message.received"))
     return "When matching email arrives";
   if (value.includes("calendar.event.upcoming"))
@@ -642,11 +805,16 @@ function renderDailyBriefingPreview(template: string) {
     "today.date": "Monday 1 June",
     "calendar.summary": "Your calendar is clear for Monday 1 June.",
     "calendar.events": "",
-    "calendar.reminders": "Reminders: 1 due today.\n- 10:00 Follow up with Ben Hyneck",
-    "mission.tasks": "Mission Control: 1 task due today.\n- Review launch notes",
+    "calendar.reminders":
+      "Reminders: 1 due today.\n- 10:00 Follow up with Ben Hyneck",
+    "mission.tasks":
+      "Mission Control: 1 task due today.\n- Review launch notes",
   };
   return template
-    .replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, key: string) => values[key] ?? "")
+    .replace(
+      /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g,
+      (_match, key: string) => values[key] ?? "",
+    )
     .split("\n")
     .map((line) => line.replace(/[ \t]+$/g, ""))
     .join("\n")
@@ -666,10 +834,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
     <Teleport to="#app-side-nav-mobile-page-controls">
       <div v-if="!loadingJobs" class="assistant-mobile-nav">
         <h1 class="assistant-mobile-nav__title">Assistant jobs</h1>
-        <div
-          v-if="sortedJobs.length > 0"
-          class="assistant-mobile-nav__actions"
-        >
+        <div v-if="sortedJobs.length > 0" class="assistant-mobile-nav__actions">
           <Button
             tone="green"
             shape="soft"
@@ -711,7 +876,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
     <main
       class="assistant-main"
-      :class="{ 'assistant-main--empty': !loadingJobs && sortedJobs.length === 0 }"
+      :class="{
+        'assistant-main--empty': !loadingJobs && sortedJobs.length === 0,
+      }"
     >
       <section v-if="pageError" class="notice notice--error" role="alert">
         {{ pageError }}
@@ -804,7 +971,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     :checked="isJobEnabled(job)"
                     :disabled="!canToggle(job) || isJobToggleBusy(job)"
                     :aria-label="
-                      isJobEnabled(job) ? `Pause ${job.name}` : `Enable ${job.name}`
+                      isJobEnabled(job)
+                        ? `Pause ${job.name}`
+                        : `Enable ${job.name}`
                     "
                     @change="
                       handleJobToggle(
@@ -859,7 +1028,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
             Loading suggested jobs...
           </div>
           <div v-else-if="!suggestedRecipes.length" class="empty-row">
-            All suggested jobs have been added.
+            All suggested jobs have been added. Open an active job to duplicate
+            it.
           </div>
           <div v-else class="starter-list">
             <article
@@ -970,6 +1140,102 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </dl>
 
             <section
+              v-if="selectedScheduleTrigger"
+              class="detail-section schedule-settings"
+              aria-labelledby="job-schedule-title"
+            >
+              <div class="schedule-settings__header">
+                <h3 id="job-schedule-title">Schedule</h3>
+                <span>{{
+                  formatScheduleTimezone(selectedScheduleTrigger)
+                }}</span>
+              </div>
+
+              <div class="schedule-form">
+                <label class="schedule-field">
+                  <span>Cadence</span>
+                  <select v-model="scheduleCadenceDraft" class="schedule-input">
+                    <option
+                      v-for="option in scheduleCadenceOptions"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
+
+                <label class="schedule-field">
+                  <span>Time</span>
+                  <input
+                    v-model="scheduleTimeDraft"
+                    class="schedule-input"
+                    type="time"
+                    required
+                  />
+                </label>
+
+                <label
+                  v-if="scheduleCadenceDraft === 'weekly'"
+                  class="schedule-field"
+                >
+                  <span>Day</span>
+                  <select
+                    v-model.number="scheduleDayOfWeekDraft"
+                    class="schedule-input"
+                  >
+                    <option
+                      v-for="day in weekdayOptions"
+                      :key="day.value"
+                      :value="day.value"
+                    >
+                      {{ day.label }}
+                    </option>
+                  </select>
+                </label>
+
+                <label
+                  v-if="scheduleCadenceDraft === 'monthly'"
+                  class="schedule-field"
+                >
+                  <span>Day</span>
+                  <select
+                    v-model.number="scheduleDayOfMonthDraft"
+                    class="schedule-input"
+                  >
+                    <option
+                      v-for="day in monthDayOptions"
+                      :key="day"
+                      :value="day"
+                    >
+                      {{ day }}
+                    </option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="schedule-settings__actions">
+                <span v-if="scheduleNotice" class="inline-notice">
+                  {{ scheduleNotice }}
+                </span>
+                <Button
+                  tone="green"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="
+                    !scheduleDraftChanged ||
+                    !scheduleTimeValid ||
+                    isBusy(`schedule:${selectedJob.id}`)
+                  "
+                  @click="saveJobSchedule"
+                >
+                  Save schedule
+                </Button>
+              </div>
+            </section>
+
+            <section
               v-if="selectedJobIsDailyBriefing"
               class="detail-section briefing-settings"
               aria-labelledby="daily-briefing-message-title"
@@ -978,7 +1244,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <div>
                   <h3 id="daily-briefing-message-title">Daily message</h3>
                   <p>
-                    Soulink gets this message when connected. Mission Control keeps it in history.
+                    Soulink gets this message when connected. Mission Control
+                    keeps it in history.
                   </p>
                 </div>
                 <button
@@ -999,7 +1266,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 />
               </label>
 
-              <div class="briefing-variable-list" aria-label="Template variables">
+              <div
+                class="briefing-variable-list"
+                aria-label="Template variables"
+              >
                 <button
                   v-for="variable in dailyBriefingVariables"
                   :key="variable.value"
@@ -1624,6 +1894,53 @@ button:disabled {
   padding-top: 16px;
 }
 
+.schedule-settings__header,
+.schedule-settings__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.schedule-settings__header span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.schedule-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.schedule-field {
+  display: grid;
+  gap: 7px;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.schedule-input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 0 10px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.schedule-input:focus-visible {
+  border-color: var(--ui-accent);
+  outline: 2px solid color-mix(in oklab, var(--ui-accent) 35%, transparent);
+  outline-offset: 1px;
+}
+
 .briefing-settings__header,
 .briefing-settings__actions {
   display: flex;
@@ -1905,6 +2222,16 @@ button:disabled {
   .detail-facts {
     grid-template-columns: 1fr;
     row-gap: 8px;
+  }
+
+  .schedule-form {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-settings__header,
+  .schedule-settings__actions {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .assistant-modal {

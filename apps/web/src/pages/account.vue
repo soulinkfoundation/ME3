@@ -2722,8 +2722,7 @@ onMounted(async () => {
         >
           <div class="modal-header local-executor-modal__header">
             <div>
-              <p class="local-executor-modal__eyebrow">Local Executor</p>
-              <h2 id="local-executor-modal-title">Connect this computer</h2>
+              <h2 id="local-executor-modal-title">Connect to your local computer</h2>
             </div>
             <button
               class="modal-close"
@@ -2737,10 +2736,9 @@ onMounted(async () => {
           </div>
 
           <p class="local-executor-modal__intro">
-            Local Executor lets ME3 send an approved coding job to a computer
-            you control. That computer is the local runner. For now, the runner
-            is the command-line script inside your ME3 Core folder; nothing is
-            installed globally.
+            This plugin allows you to execute tasks on your local computer. It
+            requires that your computer be awake and a locally configured AI
+            model be configured.
           </p>
 
           <router-link
@@ -4029,15 +4027,6 @@ h1 {
 
 .local-executor-modal__header {
   margin-bottom: 0;
-}
-
-.local-executor-modal__eyebrow {
-  margin: 0 0 4px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .local-executor-modal__intro,
