@@ -25,7 +25,12 @@ import type {
   Me3AgentContextSource,
   Me3AgentContextTask,
 } from "@me3/knowledge";
-import type { AssistantJobEventQueueMessage, Env } from "./types";
+import type {
+  AssistantJobEventQueueMessage,
+  AssistantJobIngressEventQueueMessage,
+  AssistantJobScheduledRunQueueMessage,
+  Env,
+} from "./types";
 import {
   LocalExecutorInputError,
   createLocalExecutorRunFromAssistantJobAction,
@@ -123,6 +128,8 @@ type AssistantJobRunRow = {
   created_at: string;
   updated_at: string;
 };
+
+const DEFAULT_SCHEDULE_DISPATCH_LIMIT = 50;
 
 type AssistantJobActionResultStatus =
   | "skipped"
@@ -563,7 +570,7 @@ export async function recordAssistantJobIngressEvent(
 
 export async function processAssistantJobIngressQueueMessage(
   env: Env,
-  message: AssistantJobEventQueueMessage,
+  message: AssistantJobIngressEventQueueMessage,
 ) {
   const eventId = normalizeOptionalText(message.eventId);
   const userId = normalizeOptionalText(message.userId);
@@ -576,7 +583,7 @@ export async function processAssistantJobIngressQueueMessage(
     return { event: serializeIngressEvent(event), outcome: "already_processed", runCount: 0 };
   }
 
-  const existingRuns = await listAssistantJobRunsForTrigger(env, userId, event.id);
+  const existingRuns = await listAssistantJobRunsForTrigger(env, userId, "event", event.id);
   if (existingRuns.length > 0) {
     const matched = await setAssistantJobIngressEventStatus(env, userId, eventId, "matched", {
       matchedAt: new Date().toISOString(),
@@ -637,7 +644,7 @@ export async function processAssistantJobIngressQueueMessage(
 
 export async function markAssistantJobIngressQueueMessageFailed(
   env: Env,
-  message: AssistantJobEventQueueMessage,
+  message: AssistantJobIngressEventQueueMessage,
   error: unknown,
 ) {
   const eventId = normalizeOptionalText(message.eventId);
@@ -660,6 +667,111 @@ export async function markAssistantJobIngressQueueMessageFailed(
     },
   });
   return { event: serializeIngressEvent(failed), outcome: "failed" };
+}
+
+export async function processAssistantJobQueueMessage(
+  env: Env,
+  message: AssistantJobEventQueueMessage,
+) {
+  if (isAssistantJobScheduledRunQueueMessage(message)) {
+    return processAssistantJobScheduledRunQueueMessage(env, message);
+  }
+  return processAssistantJobIngressQueueMessage(env, message);
+}
+
+export async function markAssistantJobQueueMessageFailed(
+  env: Env,
+  message: AssistantJobEventQueueMessage,
+  error: unknown,
+) {
+  if (isAssistantJobScheduledRunQueueMessage(message)) {
+    return markAssistantJobScheduledRunQueueMessageFailed(env, message, error);
+  }
+  return markAssistantJobIngressQueueMessageFailed(env, message, error);
+}
+
+export async function processAssistantJobScheduledRunQueueMessage(
+  env: Env,
+  message: AssistantJobScheduledRunQueueMessage,
+) {
+  const runId = normalizeOptionalText(message.runId);
+  const userId = normalizeOptionalText(message.userId);
+  if (!runId || !userId) {
+    throw new AssistantJobsInputError("Assistant Job queue message is missing runId or userId");
+  }
+  return executeAssistantJobRun(env, userId, runId);
+}
+
+export async function markAssistantJobScheduledRunQueueMessageFailed(
+  env: Env,
+  message: AssistantJobScheduledRunQueueMessage,
+  error: unknown,
+) {
+  const runId = normalizeOptionalText(message.runId);
+  const userId = normalizeOptionalText(message.userId);
+  if (!runId || !userId) return { run: null, outcome: "invalid_message" };
+
+  await setAssistantJobRunStatus(env, userId, runId, {
+    status: "failed",
+    finishedAt: new Date().toISOString(),
+    errorCode: "queue_dead_lettered",
+    errorMessage: getErrorMessage(error),
+    eventType: "failed",
+    message: "Scheduled Assistant Job run reached the dead-letter queue",
+    payload: {
+      queueOutcome: "dead_lettered",
+      errorMessage: getErrorMessage(error),
+    },
+  });
+
+  const run = await requireAssistantJobRun(env, userId, runId);
+  await appendAssistantJobMissionActivity(env, userId, {
+    activityType: "assistant_job_schedule_dlq",
+    title: "Scheduled Assistant Job needs review",
+    summary: getErrorMessage(error),
+    status: "failed",
+    relatedId: runId,
+    metadata: {
+      runId,
+      jobId: run.job_id,
+      queueOutcome: "dead_lettered",
+    },
+  });
+  return { run: serializeRun(run), outcome: "failed" };
+}
+
+export async function dispatchDueScheduledAssistantJobs(
+  env: Env,
+  now = new Date(),
+  options: { limit?: number } = {},
+) {
+  const checkedAt = now.toISOString();
+  const limit = Math.max(
+    1,
+    Math.min(options.limit ?? DEFAULT_SCHEDULE_DISPATCH_LIMIT, DEFAULT_SCHEDULE_DISPATCH_LIMIT),
+  );
+  const rows = await env.DB.prepare(
+    `SELECT * FROM assistant_jobs
+     WHERE status = 'active'
+       AND current_version_id IS NOT NULL
+       AND next_run_at IS NOT NULL
+       AND next_run_at <= ?
+     ORDER BY next_run_at ASC
+     LIMIT ?`,
+  )
+    .bind(checkedAt, limit)
+    .all<AssistantJobRow>();
+
+  const jobs = [];
+  for (const job of rows.results) {
+    jobs.push(await dispatchDueScheduledAssistantJob(env, job, now));
+  }
+
+  return {
+    checkedAt,
+    jobCount: jobs.length,
+    jobs,
+  };
 }
 
 export async function updateAssistantJobIngressEvent(
@@ -1186,6 +1298,143 @@ async function createAssistantJobRunForEvent(
   ]);
 
   return serializeRun(await requireAssistantJobRun(env, event.user_id, runId));
+}
+
+async function dispatchDueScheduledAssistantJob(
+  env: Env,
+  job: AssistantJobRow,
+  now: Date,
+) {
+  if (!job.current_version_id || !job.next_run_at) {
+    return {
+      jobId: job.id,
+      outcome: "skipped",
+      reason: "missing_schedule_metadata",
+    };
+  }
+
+  const dueRunAt = job.next_run_at;
+  const dueDate = new Date(dueRunAt);
+  const scheduleAnchor = Number.isNaN(dueDate.getTime()) ? now : dueDate;
+  const version = await requireAssistantJobVersion(env, job.user_id, job.current_version_id);
+  const draft = draftFromVersion(job, version);
+  if (draft.trigger.kind !== "schedule") {
+    await updateAssistantJobNextRunAt(env, job.user_id, job.id, null);
+    return {
+      jobId: job.id,
+      outcome: "skipped",
+      reason: "current_version_is_not_scheduled",
+      dueRunAt,
+      nextRunAt: null,
+    };
+  }
+
+  const triggerRef = buildScheduleTriggerRef(job.id, dueRunAt);
+  const existingRuns = await listAssistantJobRunsForTrigger(
+    env,
+    job.user_id,
+    "schedule",
+    triggerRef,
+  );
+  let run =
+    existingRuns[0] ||
+    (await createAssistantJobRunForSchedule(env, job, version, draft, dueRunAt, triggerRef));
+  let execution = null;
+  let queueMessageSent = false;
+
+  if (run.status === "queued") {
+    if (env.ASSISTANT_JOB_EVENTS) {
+      await env.ASSISTANT_JOB_EVENTS.send({
+        kind: "scheduled_run",
+        runId: run.id,
+        userId: job.user_id,
+      });
+      queueMessageSent = true;
+    } else {
+      execution = await executeAssistantJobRun(env, job.user_id, run.id);
+      run = await requireAssistantJobRun(env, job.user_id, run.id);
+    }
+  }
+
+  const nextRunAt = await computeNextScheduleRunAt(
+    env,
+    job.user_id,
+    draft.trigger,
+    scheduleAnchor,
+  );
+  await updateAssistantJobNextRunAt(env, job.user_id, job.id, nextRunAt);
+
+  return {
+    jobId: job.id,
+    run: serializeRun(run),
+    dueRunAt,
+    nextRunAt,
+    queueMessageSent,
+    execution,
+    outcome: queueMessageSent
+      ? "queued"
+      : execution
+        ? "executed"
+        : run.status === "blocked"
+          ? "blocked"
+          : "recorded",
+  };
+}
+
+async function createAssistantJobRunForSchedule(
+  env: Env,
+  job: AssistantJobRow,
+  version: AssistantJobVersionRow,
+  draft: AssistantJobDraft,
+  dueRunAt: string,
+  triggerRef: string,
+) {
+  const validation = await validateAssistantJobDraftForUser(env, job.user_id, draft);
+  const runId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const blocked = validation.status !== "valid";
+  const status: AssistantJobRunStatus = blocked ? "blocked" : "queued";
+  const errorMessage = blocked
+    ? validation.errors[0]?.message || "Job is not ready to run"
+    : null;
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO assistant_job_runs
+       (id, user_id, job_id, job_version_id, trigger_kind, trigger_ref, status,
+        error_code, error_message, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'schedule', ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      runId,
+      job.user_id,
+      job.id,
+      version.id,
+      triggerRef,
+      status,
+      blocked ? "validation_blocked" : null,
+      errorMessage,
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `INSERT INTO assistant_job_run_events (id, run_id, event_type, message, payload_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      runId,
+      blocked ? "blocked" : "queued",
+      blocked ? "Scheduled run blocked by validation" : "Scheduled run queued",
+      stringifyJson({ validation, dueRunAt }),
+      now,
+    ),
+    env.DB.prepare(
+      `UPDATE assistant_jobs
+       SET last_run_at = ?, last_run_status = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ?`,
+    ).bind(now, status, job.id, job.user_id),
+  ]);
+
+  return await requireAssistantJobRun(env, job.user_id, runId);
 }
 
 async function executeAssistantJobAction(
@@ -2364,15 +2613,49 @@ async function listAssistantJobActionResults(env: Env, runId: string) {
   return rows.results.map(serializeActionResult);
 }
 
-async function listAssistantJobRunsForTrigger(env: Env, userId: string, triggerRef: string) {
+async function listAssistantJobRunsForTrigger(
+  env: Env,
+  userId: string,
+  triggerKind: AssistantJobRunRow["trigger_kind"],
+  triggerRef: string,
+) {
   const rows = await env.DB.prepare(
     `SELECT * FROM assistant_job_runs
-     WHERE user_id = ? AND trigger_kind = 'event' AND trigger_ref = ?
+     WHERE user_id = ? AND trigger_kind = ? AND trigger_ref = ?
      ORDER BY created_at DESC`,
   )
-    .bind(userId, triggerRef)
+    .bind(userId, triggerKind, triggerRef)
     .all<AssistantJobRunRow>();
   return rows.results;
+}
+
+async function updateAssistantJobNextRunAt(
+  env: Env,
+  userId: string,
+  jobId: string,
+  nextRunAt: string | null,
+) {
+  await env.DB.prepare(
+    `UPDATE assistant_jobs
+     SET next_run_at = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(nextRunAt, jobId, userId)
+    .run();
+}
+
+function buildScheduleTriggerRef(jobId: string, dueRunAt: string) {
+  return `schedule:${jobId}:${dueRunAt}`;
+}
+
+function isAssistantJobScheduledRunQueueMessage(
+  message: AssistantJobEventQueueMessage,
+): message is AssistantJobScheduledRunQueueMessage {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    (message as { kind?: unknown }).kind === "scheduled_run"
+  );
 }
 
 async function listEventTriggerCandidates(env: Env, userId: string) {

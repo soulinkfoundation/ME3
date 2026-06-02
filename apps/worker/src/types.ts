@@ -55,10 +55,21 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
 }
 
-export type AssistantJobEventQueueMessage = {
+export type AssistantJobIngressEventQueueMessage = {
+  kind?: "event";
   eventId: string;
   userId: string;
 };
+
+export type AssistantJobScheduledRunQueueMessage = {
+  kind: "scheduled_run";
+  runId: string;
+  userId: string;
+};
+
+export type AssistantJobEventQueueMessage =
+  | AssistantJobIngressEventQueueMessage
+  | AssistantJobScheduledRunQueueMessage;
 
 export type BookingReminderQueueMessage = {
   reminderId: string;

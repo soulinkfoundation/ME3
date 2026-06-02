@@ -30,13 +30,14 @@ import {
   AssistantJobsInputError,
   archiveAssistantJob,
   createAssistantJob,
+  dispatchDueScheduledAssistantJobs,
   duplicateAssistantJob,
   getAssistantJob,
   listAssistantJobRecipes,
   listAssistantJobIngressEvents,
   listAssistantJobs,
-  markAssistantJobIngressQueueMessageFailed,
-  processAssistantJobIngressQueueMessage,
+  markAssistantJobQueueMessageFailed,
+  processAssistantJobQueueMessage,
   recordAssistantJobIngressEvent,
   runAssistantJobNow,
   setAssistantJobPaused,
@@ -7822,13 +7823,13 @@ async function handleAssistantJobQueueBatch(
   for (const message of batch.messages) {
     try {
       if (isDeadLetterBatch) {
-        await markAssistantJobIngressQueueMessageFailed(
+        await markAssistantJobQueueMessageFailed(
           env,
           message.body,
-          new Error("Assistant Job event reached the dead-letter queue"),
+          new Error("Assistant Job queue message reached the dead-letter queue"),
         );
       } else {
-        await processAssistantJobIngressQueueMessage(env, message.body);
+        await processAssistantJobQueueMessage(env, message.body);
       }
       message.ack();
     } catch (error) {
@@ -8117,6 +8118,7 @@ const worker = {
     return handleInboundEmail(message, env);
   },
   async scheduled(_event: ScheduledEvent, env: Env, _ctx?: ExecutionContext) {
+    await dispatchDueScheduledAssistantJobs(env);
     await dispatchDueBookingReminders(env);
     await dispatchDueSocialPublications(env);
   },

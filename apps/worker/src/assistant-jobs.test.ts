@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveAssistantJob,
   createAssistantJob,
+  dispatchDueScheduledAssistantJobs,
   duplicateAssistantJob,
   executeAssistantJobRun,
   getAssistantJob,
@@ -9,6 +10,7 @@ import {
   listAssistantJobRecipes,
   listAssistantJobs,
   markAssistantJobIngressQueueMessageFailed,
+  processAssistantJobQueueMessage,
   processAssistantJobIngressQueueMessage,
   recordAssistantJobIngressEvent,
   runAssistantJobNow,
@@ -496,6 +498,62 @@ describe("assistant jobs persistence", () => {
       timezone: "owner",
       nextRunAt: updated.job.nextRunAt,
     });
+  });
+
+  it("dispatches due scheduled jobs through the queue and advances next run", async () => {
+    const env = createAssistantJobsEnv({ queue: true });
+    const created = await createAssistantJob(env, "owner", { recipeId: "weekly-review" });
+    const updated = await updateAssistantJob(env, "owner", created.job.id, {
+      schedule: {
+        cadence: "daily",
+        localTime: "08:00",
+        timezone: "owner",
+      },
+    });
+    const dueRunAt = "2026-06-02T07:00:00.000Z";
+    const jobRow = env.__state.jobs.find((job) => job.id === updated.job.id);
+    expect(jobRow).toBeTruthy();
+    jobRow!.next_run_at = dueRunAt;
+
+    const dispatched = await dispatchDueScheduledAssistantJobs(
+      env,
+      new Date("2026-06-02T07:05:00.000Z"),
+    );
+    const repeated = await dispatchDueScheduledAssistantJobs(
+      env,
+      new Date("2026-06-02T07:05:00.000Z"),
+    );
+    const queuedMessage = env.__state.queueMessages[0] as {
+      kind: "scheduled_run";
+      runId: string;
+      userId: string;
+    };
+
+    expect(dispatched.jobCount).toBe(1);
+    expect(dispatched.jobs[0]).toMatchObject({
+      jobId: updated.job.id,
+      dueRunAt,
+      nextRunAt: "2026-06-03T07:00:00.000Z",
+      queueMessageSent: true,
+      outcome: "queued",
+    });
+    expect(repeated.jobCount).toBe(0);
+    expect(env.__state.queueMessages).toHaveLength(1);
+    expect(queuedMessage).toMatchObject({
+      kind: "scheduled_run",
+      userId: "owner",
+    });
+    expect(env.__state.runs[0]).toMatchObject({
+      job_id: updated.job.id,
+      trigger_kind: "schedule",
+      trigger_ref: `schedule:${updated.job.id}:${dueRunAt}`,
+      status: "queued",
+    });
+
+    const processed = await processAssistantJobQueueMessage(env, queuedMessage);
+
+    expect((processed as { execution?: string }).execution).toBe("succeeded");
+    expect(env.__state.runs[0]?.status).toBe("succeeded");
   });
 
   it("records assistant job ingress events idempotently", async () => {
@@ -1141,7 +1199,11 @@ class FakeStatement {
         user_id: values[1] as string,
         job_id: values[2] as string,
         job_version_id: values[3] as string,
-        trigger_kind: sql.includes("'event'") ? "event" : "manual",
+        trigger_kind: sql.includes("'event'")
+          ? "event"
+          : sql.includes("'schedule'")
+            ? "schedule"
+            : "manual",
         trigger_ref: values[4] as string,
         status: values[5] as string,
         started_at: null,
@@ -1519,6 +1581,14 @@ class FakeStatement {
       return { success: true };
     }
 
+    if (sql.includes("SET next_run_at = ?")) {
+      const job = this.findJob(values[1], values[2]);
+      if (job) {
+        job.next_run_at = values[0] as string | null;
+      }
+      return { success: true };
+    }
+
     if (sql.includes("SET last_run_at = ?")) {
       const job = this.findJob(values[2], values[3]);
       if (job) {
@@ -1692,6 +1762,24 @@ class FakeStatement {
           : [],
       };
     }
+    if (sql.includes("FROM assistant_jobs") && sql.includes("next_run_at <= ?")) {
+      const checkedAt = values[0] as string;
+      const limit = values[1] as number;
+      return {
+        results: this.state.jobs
+          .filter(
+            (job) =>
+              job.status === "active" &&
+              job.current_version_id &&
+              job.next_run_at &&
+              (job.next_run_at as string) <= checkedAt,
+          )
+          .sort((a, b) =>
+            String(a.next_run_at || "").localeCompare(String(b.next_run_at || "")),
+          )
+          .slice(0, limit) as T[],
+      };
+    }
     if (sql.includes("FROM assistant_jobs j")) {
       return {
         results: this.state.jobs
@@ -1754,12 +1842,15 @@ class FakeStatement {
       };
     }
     if (sql.includes("FROM assistant_job_runs") && sql.includes("trigger_ref = ?")) {
+      const usesBoundTriggerKind = sql.includes("trigger_kind = ?");
+      const triggerKind = usesBoundTriggerKind ? values[1] : "event";
+      const triggerRef = usesBoundTriggerKind ? values[2] : values[1];
       return {
         results: this.state.runs.filter(
           (run) =>
             run.user_id === values[0] &&
-            run.trigger_kind === "event" &&
-            run.trigger_ref === values[1],
+            run.trigger_kind === triggerKind &&
+            run.trigger_ref === triggerRef,
         ) as T[],
       };
     }
