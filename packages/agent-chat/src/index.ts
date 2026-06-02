@@ -222,6 +222,7 @@ export type AgentMailboxDraftInput = {
   htmlBody?: unknown;
   source?: unknown;
   replyToMessageId?: unknown;
+  preservedAttachmentKeys?: unknown;
 };
 
 export type AgentMailboxMessageListOptions = {
@@ -518,6 +519,16 @@ type NormalizedMailboxDraftInput = {
   inReplyTo: string | null;
   referencesHeader: string | null;
   createdBy: string;
+  preservedAttachments: AgentMailboxAttachmentMetadata[];
+};
+
+type AgentMailboxAttachmentMetadata = {
+  filename?: string | null;
+  mimeType?: string | null;
+  disposition?: string | null;
+  size?: number | null;
+  storageKey?: string | null;
+  sourceMessageId?: string | null;
 };
 
 type D1RunResultLike = {
@@ -2119,6 +2130,13 @@ async function normalizeAgentMailboxDraftInput(
   const messageIdHeader =
     existingHeaders.messageIdHeader || createMessageIdHeader(fromAddress);
   const source = normalizeNullableText(body.source);
+  const allowedAttachmentSources = [replyTo, existing].filter(
+    (row): row is DbMailboxMessageRow => Boolean(row),
+  );
+  const preservedAttachments = selectPreservedAttachments(
+    allowedAttachmentSources,
+    body.preservedAttachmentKeys,
+  );
 
   return {
     fromAddress,
@@ -2135,6 +2153,7 @@ async function normalizeAgentMailboxDraftInput(
     inReplyTo: replyHeaders.inReplyTo || existingHeaders.inReplyTo,
     referencesHeader: replyHeaders.referencesHeader || existingHeaders.referencesHeader,
     createdBy: source === "agent" ? "agent" : "owner",
+    preservedAttachments,
   };
 }
 
@@ -2220,12 +2239,71 @@ async function updateAgentMailboxDraftRow(
 function createDraftMetadata(input: NormalizedMailboxDraftInput): Record<string, unknown> {
   return {
     approval_required: true,
+    attachmentCount: input.preservedAttachments.length,
+    attachments: input.preservedAttachments,
     outbound_headers: {
       message_id: input.messageIdHeader,
       in_reply_to: input.inReplyTo,
       references: input.referencesHeader,
     },
   };
+}
+
+function selectPreservedAttachments(
+  sources: DbMailboxMessageRow[],
+  rawKeys: unknown,
+): AgentMailboxAttachmentMetadata[] {
+  const requested = normalizePreservedAttachmentKeys(rawKeys);
+  if (requested.size === 0 || sources.length === 0) return [];
+
+  const selected: AgentMailboxAttachmentMetadata[] = [];
+  const seen = new Set<string>();
+  for (const source of sources) {
+    for (const attachment of getMailboxAttachmentMetadata(source)) {
+      const storageKey = attachment.storageKey?.trim();
+      if (!storageKey || !requested.has(storageKey) || seen.has(storageKey)) continue;
+      selected.push({
+        filename: attachment.filename || null,
+        mimeType: attachment.mimeType || null,
+        disposition: attachment.disposition || "attachment",
+        size: attachment.size || null,
+        storageKey,
+        sourceMessageId: attachment.sourceMessageId || source.id,
+      });
+      seen.add(storageKey);
+    }
+  }
+  return selected;
+}
+
+function normalizePreservedAttachmentKeys(rawKeys: unknown): Set<string> {
+  if (!Array.isArray(rawKeys)) return new Set();
+  return new Set(
+    rawKeys
+      .map((key) => (typeof key === "string" ? key.trim() : ""))
+      .filter((key) => key.length > 0),
+  );
+}
+
+function getMailboxAttachmentMetadata(row: DbMailboxMessageRow): AgentMailboxAttachmentMetadata[] {
+  const metadata = parseJsonRecord(row.metadata_json);
+  const rawAttachments = Array.isArray(metadata.attachments)
+    ? metadata.attachments
+    : [];
+  return rawAttachments
+    .filter(isPlainObject)
+    .map((attachment) => ({
+      filename: normalizeNullableText(attachment.filename),
+      mimeType: normalizeNullableText(attachment.mimeType),
+      disposition: normalizeNullableText(attachment.disposition),
+      size:
+        typeof attachment.size === "number" && Number.isFinite(attachment.size)
+          ? attachment.size
+          : null,
+      storageKey: normalizeNullableText(attachment.storageKey),
+      sourceMessageId: normalizeNullableText(attachment.sourceMessageId),
+    }))
+    .filter((attachment) => Boolean(attachment.storageKey));
 }
 
 function createMessageIdHeader(fromAddress: string): string {

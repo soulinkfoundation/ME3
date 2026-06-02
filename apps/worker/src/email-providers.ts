@@ -82,6 +82,7 @@ export type EmailProviderSendRequest = {
   subject: string;
   textBody: string;
   htmlBody?: string | null;
+  attachments?: EmailProviderAttachment[];
   threadKey?: string | null;
   messageIdHeader?: string | null;
   inReplyTo?: string | null;
@@ -89,6 +90,12 @@ export type EmailProviderSendRequest = {
   metadata?: Record<string, unknown> | null;
   createdBy?: string | null;
   approvedByUserId?: string | null;
+};
+
+export type EmailProviderAttachment = {
+  filename: string;
+  mimeType: string;
+  content: Uint8Array;
 };
 
 export type EmailProviderSendResponse = {
@@ -128,6 +135,7 @@ type EmailProviderSendMessage = {
   subject: string;
   textBody: string;
   htmlBody: string | null;
+  attachments: EmailProviderAttachment[];
   messageIdHeader: string | null;
   inReplyTo: string | null;
   referencesHeader: string | null;
@@ -252,6 +260,7 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
         subject: message.subject,
         text: message.textBody,
         html: message.htmlBody || undefined,
+        attachments: serializeCloudflareAttachments(message.attachments),
         headers,
       });
       return {
@@ -285,6 +294,7 @@ const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
           subject: message.subject,
           text: message.textBody,
           html: message.htmlBody || undefined,
+          attachments: serializeCloudflareAttachments(message.attachments),
           headers,
         }),
       },
@@ -312,6 +322,17 @@ function cloudflareEmailHeaders(message: EmailProviderSendMessage) {
     ...(message.inReplyTo ? { "In-Reply-To": message.inReplyTo } : {}),
     ...(message.referencesHeader ? { References: message.referencesHeader } : {}),
   };
+}
+
+function serializeCloudflareAttachments(attachments: EmailProviderAttachment[]) {
+  if (attachments.length === 0) return undefined;
+  return attachments.map((attachment) => ({
+    filename: attachment.filename,
+    type: attachment.mimeType,
+    contentType: attachment.mimeType,
+    disposition: "attachment",
+    content: encodeBase64Bytes(attachment.content),
+  }));
 }
 
 const POSTMARK_PROVIDER: EmailProviderAdapter = {
@@ -373,6 +394,11 @@ const POSTMARK_PROVIDER: EmailProviderAdapter = {
         Subject: message.subject,
         TextBody: message.textBody,
         HtmlBody: message.htmlBody || undefined,
+        Attachments: message.attachments.map((attachment) => ({
+          Name: attachment.filename,
+          Content: encodeBase64Bytes(attachment.content),
+          ContentType: attachment.mimeType,
+        })),
         ReplyTo: message.replyToAddress || undefined,
         MessageStream: config.messageStream || "outbound",
         Metadata: message.metadata,
@@ -525,6 +551,14 @@ const MAILGUN_PROVIDER: EmailProviderAdapter = {
     form.append("subject", message.subject);
     form.append("text", message.textBody);
     if (message.htmlBody) form.append("html", message.htmlBody);
+    for (const attachment of message.attachments) {
+      const content = attachment.content.slice();
+      form.append(
+        "attachment",
+        new Blob([content.buffer as ArrayBuffer], { type: attachment.mimeType }),
+        attachment.filename,
+      );
+    }
     if (message.replyToAddress) form.append("h:Reply-To", message.replyToAddress);
     form.append("h:X-ME3-Audit-ID", message.auditId);
     form.append("h:X-ME3-Provider", "mailgun");
@@ -748,6 +782,7 @@ export async function sendEmailWithProvider(
     subject,
     textBody: input.textBody,
     htmlBody: input.htmlBody || null,
+    attachments: input.attachments || [],
     messageIdHeader: input.messageIdHeader || null,
     inReplyTo: input.inReplyTo || null,
     referencesHeader: input.referencesHeader || null,
@@ -1361,6 +1396,28 @@ function buildSmtpMessage(
     headerLine("X-ME3-Provider", "smtp"),
     "MIME-Version: 1.0",
   ].filter((header): header is string => Boolean(header));
+  const bodyParts = buildSmtpBodyParts(message, `me3-alt-${message.auditId}`);
+
+  if (message.attachments.length > 0) {
+    const boundary = `me3-mixed-${message.auditId}`;
+    return [
+      ...headers,
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      "",
+      ...bodyParts.map((part) => [`--${boundary}`, ...part].join("\r\n")),
+      ...message.attachments.map((attachment) =>
+        [
+          `--${boundary}`,
+          `Content-Type: ${sanitizeHeaderValue(attachment.mimeType)}; name="${sanitizeHeaderValue(attachment.filename)}"`,
+          "Content-Transfer-Encoding: base64",
+          `Content-Disposition: attachment; filename="${sanitizeHeaderValue(attachment.filename)}"`,
+          "",
+          wrapBase64(encodeBase64Bytes(attachment.content)),
+        ].join("\r\n"),
+      ),
+      `--${boundary}--`,
+    ].join("\r\n");
+  }
 
   if (!message.htmlBody) {
     return [
@@ -1391,6 +1448,36 @@ function buildSmtpMessage(
   ].join("\r\n");
 }
 
+function buildSmtpBodyParts(
+  message: EmailProviderSendMessage,
+  alternativeBoundary: string,
+): string[][] {
+  if (!message.htmlBody) {
+    return [[
+      'Content-Type: text/plain; charset="UTF-8"',
+      "Content-Transfer-Encoding: 8bit",
+      "",
+      normalizeSmtpBody(message.textBody),
+    ]];
+  }
+
+  return [[
+    `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
+    "",
+    `--${alternativeBoundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    normalizeSmtpBody(message.textBody),
+    `--${alternativeBoundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    normalizeSmtpBody(message.htmlBody),
+    `--${alternativeBoundary}--`,
+  ]];
+}
+
 function headerLine(name: string, value: string): string {
   return `${name}: ${sanitizeHeaderValue(value)}`;
 }
@@ -1406,6 +1493,18 @@ function sanitizeHeaderValue(value: string): string {
 
 function normalizeSmtpBody(value: string): string {
   return value.replace(/\r?\n/g, "\r\n");
+}
+
+function encodeBase64Bytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.slice(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function wrapBase64(value: string): string {
+  return value.replace(/.{1,76}/g, "$&\r\n").trim();
 }
 
 function dotStuffSmtpData(value: string): string {

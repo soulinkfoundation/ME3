@@ -197,6 +197,8 @@ const composeError = ref("");
 const composeMode = ref<"new" | "reply" | "forward" | "edit">("new");
 const composeDraftId = ref<string | null>(null);
 const composeReplyToMessageId = ref<string | null>(null);
+const composePreservedAttachmentKeys = ref<string[]>([]);
+const composePreservedAttachments = ref<MailboxAttachment[]>([]);
 const composeToFocused = ref(false);
 const composeToHasTyped = ref(false);
 const composeToActiveIndex = ref(0);
@@ -675,6 +677,12 @@ function getAttachmentDownloadUrl(message: InboxMessage, index: number): string 
   return `${API_BASE}/mailbox/messages/${encodeURIComponent(
     message.id,
   )}/attachments/${index}`;
+}
+
+function getForwardableAttachments(message: InboxMessage): MailboxAttachment[] {
+  return getMessageAttachments(message).filter((attachment) =>
+    Boolean(attachment.storageKey),
+  );
 }
 
 function clearSelectedMessages() {
@@ -1188,6 +1196,8 @@ function openComposeModal(
   composeError.value = "";
   composeDraftId.value = null;
   composeReplyToMessageId.value = null;
+  composePreservedAttachmentKeys.value = [];
+  composePreservedAttachments.value = [];
   composeToFocused.value = false;
   composeToHasTyped.value = false;
   composeToActiveIndex.value = 0;
@@ -1221,6 +1231,11 @@ function openComposeModal(
     if (mode === "forward") {
       composeMode.value = "forward";
       const originalBody = getMessageTextBody(message);
+      const forwardableAttachments = getForwardableAttachments(message);
+      composePreservedAttachments.value = forwardableAttachments;
+      composePreservedAttachmentKeys.value = forwardableAttachments
+        .map((attachment) => attachment.storageKey?.trim() || "")
+        .filter(Boolean);
       const forwardedLines = [
         "",
         "",
@@ -1354,6 +1369,7 @@ async function saveDraft(sendNow = false) {
       textBody: composeForm.value.textBody,
       source: "user",
       replyToMessageId: composeReplyToMessageId.value || undefined,
+      preservedAttachmentKeys: composePreservedAttachmentKeys.value,
     };
     const response =
       composeMode.value === "edit" && composeDraftId.value
@@ -2552,6 +2568,32 @@ onBeforeUnmount(() => {
           <span>Message</span>
           <textarea v-model="composeForm.textBody" rows="10" required />
         </label>
+        <div
+          v-if="composePreservedAttachments.length > 0"
+          class="compose-attachments"
+        >
+          <p>
+            Forwarding {{ composePreservedAttachments.length }}
+            {{
+              composePreservedAttachments.length === 1
+                ? "attachment"
+                : "attachments"
+            }}
+          </p>
+          <div class="compose-attachment-list">
+            <span
+              v-for="(attachment, index) in composePreservedAttachments"
+              :key="`${attachment.storageKey || index}`"
+              class="compose-attachment-chip"
+            >
+              <UiIcon name="Paperclip" :size="14" aria-hidden="true" />
+              <span>{{ formatAttachmentName(attachment, index) }}</span>
+              <small v-if="formatAttachmentSize(attachment.size)">
+                {{ formatAttachmentSize(attachment.size) }}
+              </small>
+            </span>
+          </div>
+        </div>
         <p v-if="composeError" class="compose-error">{{ composeError }}</p>
         <footer class="compose-modal__actions">
           <button
@@ -4289,6 +4331,56 @@ onBeforeUnmount(() => {
 .compose-recipient-option:hover .compose-recipient-option__name,
 .compose-recipient-option.is-active .compose-recipient-option__name {
   color: inherit;
+}
+
+.compose-attachments {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-subtle);
+}
+
+.compose-attachments p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.compose-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.compose-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.compose-attachment-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compose-attachment-chip small {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
 }
 
 .compose-field input:focus,

@@ -56,6 +56,7 @@ import {
   sendEmailProviderTest,
   sendEmailWithProvider,
   updateEmailProviderSettings,
+  type EmailProviderAttachment,
 } from "./email-providers";
 import {
   addDaysToDateString,
@@ -104,6 +105,7 @@ import {
   listMissionDaemonAudit,
   resolveMissionApproval,
   startMissionDaemonPairing,
+  submitMissionWeeklyReview,
   suggestMissionMemory,
   updateMissionCapture,
   updateMissionContextSource,
@@ -214,6 +216,7 @@ import {
   updateAgentContactOutreachStatus,
   updateAgentReminder,
   upsertAgentMailbox,
+  type AgentMailboxMessage,
   type AgentSandboxDispatchResponse,
   type AgentMailboxDraftInput,
   type AgentMailboxUpdateInput,
@@ -2084,6 +2087,26 @@ app.delete("/api/mission-control/tasks/:id", async (c) => {
 
   try {
     return c.json(await archiveMissionTask(c.env, ownerId, c.req.param("id")));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/weekly-review/:runId/submit", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await submitMissionWeeklyReview(
+        c.env,
+        ownerId,
+        c.req.param("runId"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
   } catch (error) {
     return missionControlErrorResponse(c, error);
   }
@@ -4300,6 +4323,45 @@ app.get("/api/mailbox/messages", async (c) => {
   }));
 });
 
+app.get("/api/mailbox/messages/:messageId/attachments/:attachmentIndex", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  if (!c.env.SITE_ASSETS) {
+    return c.json({ error: "Mailbox attachment storage is not configured" }, 503);
+  }
+
+  const row = await c.env.DB.prepare(
+    `SELECT m.metadata_json
+     FROM mailbox_messages m
+     JOIN mailbox_aliases a ON a.id = m.mailbox_id
+     WHERE a.user_id = ? AND m.id = ?`,
+  )
+    .bind(ownerId, c.req.param("messageId"))
+    .first<{ metadata_json: string | null }>();
+  if (!row) return c.json({ error: "Message not found" }, 404);
+
+  const attachments = getStoredMailboxAttachments(row.metadata_json);
+  const index = Number.parseInt(c.req.param("attachmentIndex"), 10);
+  const attachment = Number.isInteger(index) ? attachments[index] : null;
+  if (!attachment?.storageKey) return c.json({ error: "Attachment not found" }, 404);
+
+  const object = await c.env.SITE_ASSETS.get(attachment.storageKey);
+  if (!object) return c.json({ error: "Attachment not found" }, 404);
+
+  const filename = sanitizeAttachmentFilename(
+    attachment.filename || "",
+    `attachment-${index + 1}`,
+  );
+  return new Response(object.body, {
+    headers: {
+      "Content-Type": attachment.mimeType || "application/octet-stream",
+      "Content-Length": String(object.size),
+      "Content-Disposition": `attachment; filename="${filename.replace(/"/g, "'")}"`,
+    },
+  });
+});
+
 app.post("/api/mailbox/drafts", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -4340,6 +4402,7 @@ app.post("/api/mailbox/drafts/:draftId/approve", async (c) => {
   try {
     const { mailbox, draft } = approval;
     const outboundHeaders = getAgentMailboxOutboundHeaders(draft);
+    const attachments = await loadDraftProviderAttachments(c.env, draft);
     const draftFromAddress =
       draft.fromAddress && !draft.fromAddress.toLowerCase().endsWith("@me3.local")
         ? draft.fromAddress
@@ -4353,6 +4416,7 @@ app.post("/api/mailbox/drafts/:draftId/approve", async (c) => {
       subject: draft.subject || "(no subject)",
       textBody: draft.body || "",
       htmlBody: draft.htmlBody,
+      attachments,
       threadKey: draft.threadKey,
       messageIdHeader: outboundHeaders.messageIdHeader,
       inReplyTo: outboundHeaders.inReplyTo,
@@ -7866,6 +7930,12 @@ async function handleInboundEmail(
       normalizeEmailHeaderValue(parsed.headers["in-reply-to"]) ||
       providerMessageId;
     const rowId = crypto.randomUUID();
+    const storedAttachments = await storeInboundEmailAttachments(
+      env,
+      mailbox.id,
+      rowId,
+      parsed.attachments,
+    );
 
     await env.DB.prepare(
       `INSERT INTO mailbox_messages (
@@ -7897,6 +7967,8 @@ async function handleInboundEmail(
           rawSize: message.rawSize,
           envelopeFrom: message.from,
           envelopeTo: message.to,
+          attachmentCount: storedAttachments.length,
+          attachments: storedAttachments,
         }),
         now,
         now,
@@ -7984,6 +8056,7 @@ function parseInboundEmail(
   subject: string;
   textBody: string;
   htmlBody: string | null;
+  attachments: ParsedInboundEmailAttachment[];
 } {
   const [rawHeaderText, ...bodyParts] = rawMessage.split(/\r?\n\r?\n/);
   const headers = {
@@ -7999,8 +8072,27 @@ function parseInboundEmail(
     subject: normalizeEmailHeaderValue(headers.subject) || "",
     textBody: parsedBody.textBody,
     htmlBody: parsedBody.htmlBody,
+    attachments: parsedBody.attachments,
   };
 }
+
+type ParsedInboundEmailAttachment = {
+  filename: string;
+  mimeType: string;
+  disposition: "attachment" | "inline";
+  contentId: string | null;
+  content: Uint8Array;
+};
+
+type StoredMailboxAttachment = {
+  filename: string;
+  mimeType: string;
+  disposition: "attachment" | "inline";
+  size: number;
+  storageKey: string;
+  contentId?: string | null;
+  sourceMessageId: string;
+};
 
 function headersToRecord(headers: Headers): Record<string, string> {
   const record: Record<string, string> = {};
@@ -8032,18 +8124,19 @@ function parseEmailBody(
   body: string,
   contentType: string,
   transferEncoding: string | undefined,
-): { textBody: string; htmlBody: string | null } {
+): { textBody: string; htmlBody: string | null; attachments: ParsedInboundEmailAttachment[] } {
   const boundary = extractMimeBoundary(contentType);
   if (!boundary) {
     const decoded = decodeEmailBody(body, transferEncoding);
     if (/text\/html/i.test(contentType)) {
-      return { textBody: stripHtml(decoded), htmlBody: decoded.trim() || null };
+      return { textBody: stripHtml(decoded), htmlBody: decoded.trim() || null, attachments: [] };
     }
-    return { textBody: decoded.trim(), htmlBody: null };
+    return { textBody: decoded.trim(), htmlBody: null, attachments: [] };
   }
 
   let textBody = "";
   let htmlBody: string | null = null;
+  const attachments: ParsedInboundEmailAttachment[] = [];
   for (const part of body.split(`--${boundary}`)) {
     if (!part.trim() || part.trim() === "--") continue;
     const [partHeadersText, ...partBodyParts] = part
@@ -8051,10 +8144,29 @@ function parseEmailBody(
       .split(/\r?\n\r?\n/);
     const partHeaders = parseRawEmailHeaders(partHeadersText || "");
     const partContentType = partHeaders["content-type"] || "";
-    const decoded = decodeEmailBody(
-      partBodyParts.join("\n\n").replace(/\r?\n--$/, ""),
-      partHeaders["content-transfer-encoding"],
-    ).trim();
+    const partBody = partBodyParts.join("\n\n").replace(/\r?\n--$/, "");
+    const partDisposition = partHeaders["content-disposition"] || "";
+    const filename = extractMimeFilename(partContentType, partDisposition);
+    const isAttachment =
+      /^attachment\b/i.test(partDisposition) ||
+      (Boolean(filename) && !/^text\/(?:plain|html)\b/i.test(partContentType));
+
+    if (isAttachment && filename) {
+      const content = decodeEmailBodyBytes(
+        partBody,
+        partHeaders["content-transfer-encoding"],
+      );
+      attachments.push({
+        filename,
+        mimeType: normalizeMimeType(partContentType),
+        disposition: /^inline\b/i.test(partDisposition) ? "inline" : "attachment",
+        contentId: normalizeEmailHeaderValue(partHeaders["content-id"]) || null,
+        content,
+      });
+      continue;
+    }
+
+    const decoded = decodeEmailBody(partBody, partHeaders["content-transfer-encoding"]).trim();
     if (!textBody && /^text\/plain\b/i.test(partContentType)) {
       textBody = decoded;
     } else if (!htmlBody && /^text\/html\b/i.test(partContentType)) {
@@ -8065,6 +8177,7 @@ function parseEmailBody(
   return {
     textBody: textBody || (htmlBody ? stripHtml(htmlBody) : ""),
     htmlBody,
+    attachments,
   };
 }
 
@@ -8074,25 +8187,170 @@ function extractMimeBoundary(contentType: string): string | null {
 }
 
 function decodeEmailBody(body: string, transferEncoding: string | undefined): string {
+  return new TextDecoder().decode(decodeEmailBodyBytes(body, transferEncoding));
+}
+
+function decodeEmailBodyBytes(body: string, transferEncoding: string | undefined): Uint8Array {
   const encoding = (transferEncoding || "").trim().toLowerCase();
   if (encoding === "base64") {
     try {
       const binary = atob(body.replace(/\s/g, ""));
-      return new TextDecoder().decode(
-        Uint8Array.from(binary, (char) => char.charCodeAt(0)),
-      );
+      return Uint8Array.from(binary, (char) => char.charCodeAt(0));
     } catch {
-      return body;
+      return new TextEncoder().encode(body);
     }
   }
   if (encoding === "quoted-printable") {
-    return body
+    const decoded = body
       .replace(/=\r?\n/g, "")
       .replace(/=([0-9a-f]{2})/gi, (_, hex: string) =>
         String.fromCharCode(Number.parseInt(hex, 16)),
       );
+    return Uint8Array.from(decoded, (char) => char.charCodeAt(0) & 0xff);
   }
-  return body;
+  return new TextEncoder().encode(body);
+}
+
+function extractMimeFilename(contentType: string, contentDisposition: string): string | null {
+  return (
+    extractMimeParameter(contentDisposition, "filename*") ||
+    extractMimeParameter(contentDisposition, "filename") ||
+    extractMimeParameter(contentType, "name*") ||
+    extractMimeParameter(contentType, "name")
+  );
+}
+
+function extractMimeParameter(header: string, name: string): string | null {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escapedName}=("[^"]*"|[^;]+)`, "i").exec(header);
+  const raw = (match?.[1] || "").trim();
+  if (!raw) return null;
+  const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+  const rfc5987 = /^utf-8''(.+)$/i.exec(value);
+  try {
+    return decodeURIComponent(rfc5987?.[1] || value).trim() || null;
+  } catch {
+    return value.trim() || null;
+  }
+}
+
+function normalizeMimeType(contentType: string): string {
+  return (contentType.split(";")[0] || "application/octet-stream").trim().toLowerCase();
+}
+
+function sanitizeAttachmentFilename(value: string, fallback: string): string {
+  const sanitized = value
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+  return sanitized || fallback;
+}
+
+async function storeInboundEmailAttachments(
+  env: Env,
+  mailboxId: string,
+  messageId: string,
+  attachments: ParsedInboundEmailAttachment[],
+): Promise<StoredMailboxAttachment[]> {
+  if (!env.SITE_ASSETS || attachments.length === 0) return [];
+
+  const stored: StoredMailboxAttachment[] = [];
+  for (const [index, attachment] of attachments.entries()) {
+    const filename = sanitizeAttachmentFilename(
+      attachment.filename,
+      `attachment-${index + 1}`,
+    );
+    const storageKey = [
+      "mailbox",
+      mailboxId,
+      "messages",
+      messageId,
+      "attachments",
+      `${index}-${crypto.randomUUID()}-${filename}`,
+    ].join("/");
+    await env.SITE_ASSETS.put(storageKey, attachment.content, {
+      httpMetadata: {
+        contentType: attachment.mimeType,
+      },
+      customMetadata: {
+        mailboxId,
+        messageId,
+        filename,
+        disposition: attachment.disposition,
+      },
+    });
+    stored.push({
+      filename,
+      mimeType: attachment.mimeType,
+      disposition: attachment.disposition,
+      size: attachment.content.byteLength,
+      storageKey,
+      contentId: attachment.contentId,
+      sourceMessageId: messageId,
+    });
+  }
+  return stored;
+}
+
+function getStoredMailboxAttachments(metadataJson: string | null): StoredMailboxAttachment[] {
+  const metadata = parseJsonRecord(metadataJson);
+  const rawAttachments = Array.isArray(metadata.attachments)
+    ? metadata.attachments
+    : [];
+  return rawAttachments
+    .filter((attachment): attachment is Record<string, unknown> =>
+      Boolean(attachment && typeof attachment === "object" && !Array.isArray(attachment)),
+    )
+    .map((attachment) => ({
+      filename: typeof attachment.filename === "string" ? attachment.filename : "",
+      mimeType:
+        typeof attachment.mimeType === "string" && attachment.mimeType.trim()
+          ? attachment.mimeType
+          : "application/octet-stream",
+      disposition:
+        attachment.disposition === "inline" ? ("inline" as const) : ("attachment" as const),
+      size:
+        typeof attachment.size === "number" && Number.isFinite(attachment.size)
+          ? attachment.size
+          : 0,
+      storageKey:
+        typeof attachment.storageKey === "string" ? attachment.storageKey : "",
+      contentId:
+        typeof attachment.contentId === "string" ? attachment.contentId : null,
+      sourceMessageId:
+        typeof attachment.sourceMessageId === "string"
+          ? attachment.sourceMessageId
+          : "",
+    }))
+    .filter((attachment) => attachment.storageKey.startsWith("mailbox/"));
+}
+
+async function loadDraftProviderAttachments(
+  env: Env,
+  draft: AgentMailboxMessage,
+): Promise<EmailProviderAttachment[]> {
+  if (!env.SITE_ASSETS) return [];
+  const rawAttachments = Array.isArray(draft.metadata.attachments)
+    ? draft.metadata.attachments
+    : [];
+  const attachments = getStoredMailboxAttachments(
+    JSON.stringify({ attachments: rawAttachments }),
+  );
+  const loaded: EmailProviderAttachment[] = [];
+  for (const attachment of attachments) {
+    const object = await env.SITE_ASSETS.get(attachment.storageKey);
+    if (!object) continue;
+    loaded.push({
+      filename: sanitizeAttachmentFilename(
+        attachment.filename,
+        `attachment-${loaded.length + 1}`,
+      ),
+      mimeType: attachment.mimeType || "application/octet-stream",
+      content: new Uint8Array(await object.arrayBuffer()),
+    });
+  }
+  return loaded;
 }
 
 function stripHtml(value: string): string {
