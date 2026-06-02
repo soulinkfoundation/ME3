@@ -381,6 +381,7 @@ const projectTasksLoadingMore = ref(false);
 const projectTasksError = ref("");
 const projectTasksNextCursor = ref<string | null>(null);
 const projectTaskDraft = ref("");
+const projectTaskProjectId = ref("");
 const projectTaskSaving = ref(false);
 const projectTaskActionId = ref("");
 const projectTaskLocalRunId = ref("");
@@ -607,7 +608,7 @@ const projectTaskCreateDisabled = computed(
     projectTaskSaving.value ||
     !projectTaskComposerStatus.value ||
     !projectTaskDraft.value.trim() ||
-    !selectedProjectDetail.value,
+    !projectTaskProjectId.value,
 );
 const projectTaskDetailSaveDisabled = computed(
   () =>
@@ -1466,6 +1467,7 @@ async function addProject() {
 function resetProjectTaskComposer() {
   projectTaskComposerStatus.value = "";
   projectTaskDraft.value = "";
+  projectTaskProjectId.value = "";
 }
 
 function syncProjectTaskDetailDraft(task: MissionTask) {
@@ -1496,9 +1498,16 @@ function openProjectTaskComposer(status: ProjectBoardStatus) {
   if (projectTaskSaving.value) return;
   projectTaskComposerStatus.value = status;
   projectTaskDraft.value = "";
+  projectTaskProjectId.value = selectedProjectDetail.value?.id || "";
   void nextTick(() => {
+    if (selectedProjectDetail.value) {
+      document
+        .querySelector<HTMLInputElement>(".project-task-composer__input")
+        ?.focus();
+      return;
+    }
     document
-      .querySelector<HTMLInputElement>(".project-task-composer__input")
+      .querySelector<HTMLSelectElement>(".project-task-composer__project")
       ?.focus();
   });
 }
@@ -1510,8 +1519,9 @@ function cancelProjectTaskComposer() {
 
 async function addProjectTask(status: ProjectBoardStatus) {
   const title = projectTaskDraft.value.trim();
-  const project = selectedProjectDetail.value;
-  if (!title || !project || projectTaskSaving.value) return;
+  const projectId =
+    selectedProjectDetail.value?.id || projectTaskProjectId.value;
+  if (!title || !projectId || projectTaskSaving.value) return;
   projectTaskSaving.value = true;
   projectTasksError.value = "";
   try {
@@ -1519,7 +1529,7 @@ async function addProjectTask(status: ProjectBoardStatus) {
       "/mission-control/tasks",
       {
         title,
-        projectId: project.id,
+        projectId,
         status,
       },
     );
@@ -1848,6 +1858,10 @@ function projectName(projectId: string | null): string {
     projects.value.find((project) => project.id === projectId)?.name ||
     "Personal"
   );
+}
+
+function projectTaskComposerProjectLabel(project: MissionProject): string {
+  return isLocalProject(project) ? `${project.name} (Local)` : project.name;
 }
 
 function projectForTask(task: MissionTask): MissionProject | null {
@@ -2788,13 +2802,26 @@ onBeforeUnmount(() => {
                   </div>
                 </article>
                 <form
-                  v-if="
-                    selectedProjectDetail &&
-                    projectTaskComposerStatus === column.id
-                  "
+                  v-if="projectTaskComposerStatus === column.id"
                   class="project-task-composer"
                   @submit.prevent="addProjectTask(column.id)"
                 >
+                  <select
+                    v-if="!selectedProjectDetail"
+                    v-model="projectTaskProjectId"
+                    class="project-task-composer__project"
+                    aria-label="Task project"
+                    @keydown.esc.prevent="cancelProjectTaskComposer"
+                  >
+                    <option value="">Choose project</option>
+                    <option
+                      v-for="project in projects"
+                      :key="project.id"
+                      :value="project.id"
+                    >
+                      {{ projectTaskComposerProjectLabel(project) }}
+                    </option>
+                  </select>
                   <input
                     v-model="projectTaskDraft"
                     class="project-task-composer__input"
@@ -2824,7 +2851,7 @@ onBeforeUnmount(() => {
                   </div>
                 </form>
                 <button
-                  v-else-if="selectedProjectDetail"
+                  v-else
                   type="button"
                   class="project-column-add"
                   :disabled="projectTaskSaving"
@@ -4041,7 +4068,8 @@ onBeforeUnmount(() => {
 .capture-row__project,
 .journal-editor__textarea,
 .inline-form input,
-.project-task-composer__input {
+.project-task-composer__input,
+.project-task-composer__project {
   width: 100%;
   min-width: 0;
   border: 0;
@@ -4054,7 +4082,8 @@ onBeforeUnmount(() => {
 .capture-row__input,
 .capture-row__project,
 .inline-form input,
-.project-task-composer__input {
+.project-task-composer__input,
+.project-task-composer__project {
   min-height: 40px;
   padding: 0 12px;
 }
@@ -4069,7 +4098,8 @@ onBeforeUnmount(() => {
 .capture-row__project:focus,
 .journal-editor__textarea:focus,
 .inline-form input:focus,
-.project-task-composer__input:focus {
+.project-task-composer__input:focus,
+.project-task-composer__project:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
 }
@@ -4586,7 +4616,8 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted);
 }
 
-.project-task-composer__input {
+.project-task-composer__input,
+.project-task-composer__project {
   min-height: 36px;
   padding: 0 8px;
 }
