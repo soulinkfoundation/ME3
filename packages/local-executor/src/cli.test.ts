@@ -208,6 +208,113 @@ describe("me3-local-executor CLI", () => {
     }
   });
 
+  it("closes provider stdin so non-interactive CLIs can start", async () => {
+    let completionBody: Record<string, unknown> | null = null;
+    const server = createServer((request, response) => {
+      response.setHeader("Content-Type", "application/json");
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/heartbeat"
+      ) {
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/claim"
+      ) {
+        response.end(
+          JSON.stringify({
+            ok: true,
+            run: {
+              id: "run-stdin",
+              provider: "codex",
+              prompt: "Provider should see stdin close",
+              policy: {
+                pathHint: tmpdir(),
+                caps: { maxRuntimeSeconds: 5, maxOutputChars: 24000 },
+              },
+            },
+          }),
+        );
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/run-stdin/events"
+      ) {
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        request.url === "/api/local-executor/daemon/runs/run-stdin/complete"
+      ) {
+        let body = "";
+        request.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        request.on("end", () => {
+          completionBody = JSON.parse(body);
+          response.end(
+            JSON.stringify({
+              ok: true,
+              run: { id: "run-stdin", status: completionBody?.status || "succeeded" },
+            }),
+          );
+        });
+        return;
+      }
+
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: "Not found" }));
+    });
+
+    try {
+      const apiBase = await listen(server);
+      const dir = await mkdtemp(join(tmpdir(), "me3-local-executor-stdin-"));
+      const tokenStore = join(dir, "token.json");
+      const configPath = join(dir, "config.json");
+
+      await writeFile(
+        tokenStore,
+        JSON.stringify({
+          token: "daemon-token",
+          apiBase: `${apiBase}/api/local-executor`,
+        }),
+      );
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          defaultProviderPreset: "codex",
+          providers: {
+            codex: {
+              command: process.execPath,
+              args: [
+                "-e",
+                "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('stdin-closed'));",
+              ],
+            },
+          },
+        }),
+      );
+
+      const once = await runCli(["once", "--config", configPath]);
+
+      expect(once.stderr).toBe("");
+      expect(completionBody).toMatchObject({
+        status: "succeeded",
+        outputPreview: "stdin-closed",
+      });
+    } finally {
+      await close(server);
+    }
+  });
+
   it("reports a claimed run as cancelled when the local process is interrupted", async () => {
     let completionBody: Record<string, unknown> | null = null;
     const server = createServer((request, response) => {

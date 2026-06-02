@@ -358,6 +358,7 @@ function executeBounded(command, timeoutSeconds, options = {}) {
       cwd: command.cwd,
       shell: false,
       env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
