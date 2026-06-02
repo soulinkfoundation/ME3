@@ -1,5 +1,12 @@
 export type AiAgentModelProviderId = "workers-ai" | "openai" | "anthropic";
 
+export type AiAgentModelCapability =
+  | "text"
+  | "vision"
+  | "long-context"
+  | "reasoning"
+  | "tool-use";
+
 export type AiAgentModelOption = {
   id: string;
   label: string;
@@ -8,6 +15,7 @@ export type AiAgentModelOption = {
   description: string;
   runtimeLabel: string;
   costLabel: string;
+  capabilities: AiAgentModelCapability[];
   badge?: string;
 };
 
@@ -19,6 +27,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/moonshotai/kimi-k2.6",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Paid",
+    capabilities: ["text", "long-context", "reasoning", "tool-use"],
     description: "Stronger frontier-scale Workers AI model for agentic work and tool use.",
   },
   {
@@ -28,6 +37,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/openai/gpt-oss-120b",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Low cost",
+    capabilities: ["text", "reasoning", "tool-use"],
     description: "Open-weight reasoning model hosted on Workers AI for agentic tasks.",
   },
   {
@@ -37,6 +47,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/zai-org/glm-4.7-flash",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Cheap",
+    capabilities: ["text", "long-context"],
     description: "Fast long-context Workers AI model for multilingual chat and summaries.",
   },
   {
@@ -46,6 +57,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/qwen/qwen3-30b-a3b-fp8",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Low cost",
+    capabilities: ["text"],
     badge: "Default",
     description: "Friendly first-install default for everyday chat, writing, and light planning.",
   },
@@ -56,6 +68,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/meta/llama-4-scout-17b-16e-instruct",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Low cost",
+    capabilities: ["text", "vision"],
     description: "Meta multimodal open model hosted on Workers AI for general assistant work.",
   },
   {
@@ -65,6 +78,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/qwen/qwq-32b",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Free",
+    capabilities: ["text", "reasoning"],
     description: "Free reasoning model for slower, more careful answers.",
   },
   {
@@ -74,6 +88,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "gpt-5.2",
     runtimeLabel: "OpenAI",
     costLabel: "Paid",
+    capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
     description: "OpenAI flagship for complex reasoning, coding, and agentic workflows.",
   },
   {
@@ -83,6 +98,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "gpt-5-mini",
     runtimeLabel: "OpenAI",
     costLabel: "Low cost",
+    capabilities: ["text", "reasoning", "tool-use"],
     description: "Cost-optimized OpenAI model for everyday chat and lighter agent tasks.",
   },
   {
@@ -92,6 +108,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "gpt-5-nano",
     runtimeLabel: "OpenAI",
     costLabel: "Cheapest",
+    capabilities: ["text"],
     description: "Lowest-cost OpenAI option for simple instruction following and extraction.",
   },
   {
@@ -101,6 +118,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "gpt-4o",
     runtimeLabel: "OpenAI",
     costLabel: "Paid",
+    capabilities: ["text", "vision", "tool-use"],
     description: "Familiar multimodal OpenAI model with broad compatibility.",
   },
   {
@@ -110,6 +128,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "gpt-4o-mini",
     runtimeLabel: "OpenAI",
     costLabel: "Cheap",
+    capabilities: ["text", "vision", "tool-use"],
     description: "Very inexpensive OpenAI option for quick chat, drafting, and extraction.",
   },
   {
@@ -119,6 +138,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "gpt-4.1",
     runtimeLabel: "OpenAI",
     costLabel: "Paid",
+    capabilities: ["text", "long-context", "tool-use"],
     description: "Strong non-reasoning OpenAI model for reliable instruction following.",
   },
   {
@@ -128,6 +148,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "claude-opus-4-6",
     runtimeLabel: "Anthropic",
     costLabel: "Paid",
+    capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
     description: "Paid Claude model for the hardest planning and reasoning work.",
   },
   {
@@ -137,6 +158,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "claude-sonnet-4-6",
     runtimeLabel: "Anthropic",
     costLabel: "Paid",
+    capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
     description: "Paid Claude model with a strong speed and intelligence balance.",
   },
   {
@@ -146,6 +168,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "claude-haiku-4-5",
     runtimeLabel: "Anthropic",
     costLabel: "Low cost",
+    capabilities: ["text", "vision", "tool-use"],
     description: "Fast lower-cost Claude option for lighter assistant work.",
   },
   {
@@ -155,6 +178,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "claude-3-5-haiku-latest",
     runtimeLabel: "Anthropic",
     costLabel: "Cheapest",
+    capabilities: ["text", "tool-use"],
     description: "Cheapest Claude option for simple replies, classification, and extraction.",
   },
 ];

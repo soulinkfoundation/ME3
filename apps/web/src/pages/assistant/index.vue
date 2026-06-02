@@ -11,7 +11,12 @@ import {
   formatAgentRuntimeMetadata,
   resolveAgentReplyText,
 } from "../../utils/agentChat";
-import { AI_AGENT_MODEL_OPTIONS } from "../../utils/aiModelCatalog";
+import {
+  AI_AGENT_MODEL_OPTIONS,
+  type AiAgentModelCapability,
+  type AiAgentModelOption,
+  type AiAgentModelProviderId,
+} from "../../utils/aiModelCatalog";
 
 definePage({
   meta: {
@@ -113,6 +118,42 @@ type AssistantJobRecipe = {
       landing?: string;
     };
   };
+};
+
+type AiRouteId = "default" | "chat" | "reasoning" | "extraction";
+
+type AiProviderRecord = {
+  id: AiAgentModelProviderId | string;
+  label: string;
+  description: string;
+  setupLabel: string;
+  supportsApiKey: boolean;
+  secretLabel: string | null;
+  configured: boolean;
+  setupRequired: boolean;
+  statusLabel: string;
+  source: "binding" | "environment" | "stored" | "not_configured";
+  keyHint: string | null;
+  keyUpdatedAt: string | null;
+  recommendedModels: Record<AiRouteId, string>;
+};
+
+type AiRouteRecord = {
+  id: AiRouteId;
+  label: string;
+  providerId: string;
+  providerLabel: string;
+  model: string;
+  configured: boolean;
+  setupRequired: boolean;
+  source: "stored" | "environment" | "recommended";
+};
+
+type AiSettingsResponse = {
+  encryptionConfigured: boolean;
+  providers: AiProviderRecord[];
+  routes: AiRouteRecord[];
+  defaults: Record<AiRouteId, AiRouteRecord>;
 };
 
 type AssistantJobVersion = {
@@ -279,6 +320,10 @@ const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
 const selectedModelId = ref("workers-qwen3-30b");
+const selectedModelTouched = ref(false);
+const aiSettingsLoading = ref(false);
+const aiSettingsError = ref("");
+const aiProviders = ref<AiProviderRecord[]>([]);
 const voiceDictationState = ref<"idle" | "listening" | "processing" | "unsupported">("idle");
 const voiceDictationError = ref<string | null>(null);
 const voiceMediaRecorder = ref<MediaRecorder | null>(null);
@@ -449,6 +494,47 @@ const selectedModel = computed(
     AI_AGENT_MODEL_OPTIONS[0],
 );
 
+const aiProviderById = computed(() => {
+  const providers = new Map<string, AiProviderRecord>();
+  for (const provider of aiProviders.value) {
+    providers.set(provider.id, provider);
+  }
+  return providers;
+});
+
+const assistantModelOptions = computed(() =>
+  AI_AGENT_MODEL_OPTIONS.map((option) => {
+    const setup = setupStateForModel(option);
+    return {
+      option,
+      optionLabel: [
+        option.label,
+        setup.statusLabel,
+        capabilitySummary(option.capabilities),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    };
+  }),
+);
+
+const selectedModelSetup = computed(() => setupStateForModel(selectedModel.value));
+
+const selectedModelTitle = computed(() => {
+  const model = selectedModel.value;
+  if (!model) return "Model";
+  const setup = selectedModelSetup.value;
+  return [
+    model.label,
+    model.runtimeLabel,
+    setup.statusLabel,
+    capabilitySummary(model.capabilities),
+    model.description,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+});
+
 const assistantConsoleMessages = computed(() =>
   chatMessages.value.filter((message) => message.id !== "assistant-ready"),
 );
@@ -489,7 +575,7 @@ watch(
 
 async function loadPage() {
   pageError.value = "";
-  await Promise.all([loadJobs(), loadRecipes()]);
+  await Promise.all([loadJobs(), loadRecipes(), loadAiSettings()]);
 }
 
 const COMPOSER_MAX_HEIGHT_PX = 160;
@@ -518,6 +604,103 @@ function useStarterPrompt(prompt: string) {
     autosizeAssistantComposer();
     assistantComposerRef.value?.focus();
   });
+}
+
+async function loadAiSettings() {
+  aiSettingsLoading.value = true;
+  aiSettingsError.value = "";
+
+  try {
+    const response = await api.get<AiSettingsResponse>("/ai-settings");
+    aiProviders.value = response.providers || [];
+    applyDefaultChatModel(response);
+  } catch (err) {
+    aiSettingsError.value = messageFromUnknown(
+      err,
+      "Could not check model setup.",
+    );
+  } finally {
+    aiSettingsLoading.value = false;
+  }
+}
+
+function applyDefaultChatModel(settings: AiSettingsResponse) {
+  if (selectedModelTouched.value) return;
+
+  const route = settings.defaults?.chat || settings.defaults?.default;
+  if (!route) return;
+
+  const matchedOption = AI_AGENT_MODEL_OPTIONS.find(
+    (option) =>
+      option.providerId === route.providerId && option.model === route.model,
+  );
+
+  if (matchedOption) {
+    selectedModelId.value = matchedOption.id;
+  }
+}
+
+function handleAssistantModelChange() {
+  selectedModelTouched.value = true;
+}
+
+function setupStateForModel(option: AiAgentModelOption | undefined) {
+  if (!option) {
+    return {
+      configured: false,
+      setupRequired: false,
+      statusLabel: "Unknown",
+      className: "model-picker__status--unknown",
+    };
+  }
+
+  if (aiSettingsLoading.value) {
+    return {
+      configured: false,
+      setupRequired: false,
+      statusLabel: "Checking",
+      className: "model-picker__status--unknown",
+    };
+  }
+
+  if (aiSettingsError.value) {
+    return {
+      configured: false,
+      setupRequired: false,
+      statusLabel: "Unknown",
+      className: "model-picker__status--unknown",
+    };
+  }
+
+  const provider = aiProviderById.value.get(option.providerId);
+  if (!provider) {
+    return {
+      configured: false,
+      setupRequired: false,
+      statusLabel: "Unknown",
+      className: "model-picker__status--unknown",
+    };
+  }
+
+  return {
+    configured: provider.configured,
+    setupRequired: provider.setupRequired,
+    statusLabel: provider.configured ? "Ready" : "Setup needed",
+    className: provider.configured
+      ? "model-picker__status--ready"
+      : "model-picker__status--setup",
+  };
+}
+
+function capabilitySummary(capabilities: AiAgentModelCapability[]) {
+  const labels: Record<AiAgentModelCapability, string> = {
+    text: "Text",
+    vision: "Vision",
+    "long-context": "Long",
+    reasoning: "Reasoning",
+    "tool-use": "Tools",
+  };
+  return capabilities.map((capability) => labels[capability]).join(", ");
 }
 
 function assistantMessageKey(message: { id?: string; role: string; text: string }, index?: number) {
@@ -1727,15 +1910,26 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <div class="assistant-composer__right">
               <label class="model-picker">
                 <span class="sr-only">Model</span>
-                <select v-model="selectedModelId" class="model-picker__select">
+                <select
+                  v-model="selectedModelId"
+                  class="model-picker__select"
+                  :title="selectedModelTitle"
+                  @change="handleAssistantModelChange"
+                >
                   <option
-                    v-for="model in AI_AGENT_MODEL_OPTIONS"
-                    :key="model.id"
-                    :value="model.id"
+                    v-for="model in assistantModelOptions"
+                    :key="model.option.id"
+                    :value="model.option.id"
                   >
-                    {{ model.label }}
+                    {{ model.optionLabel }}
                   </option>
                 </select>
+                <span
+                  class="model-picker__status"
+                  :class="selectedModelSetup.className"
+                >
+                  {{ selectedModelSetup.statusLabel }}
+                </span>
               </label>
               <button
                 type="button"
@@ -2520,11 +2714,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .model-picker {
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
 }
 
 .model-picker__select {
-  max-width: min(28vw, 132px);
+  max-width: min(30vw, 154px);
   min-height: 32px;
   border: 0;
   border-radius: 999px;
@@ -2534,6 +2730,32 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font: inherit;
   font-size: 12px;
   font-weight: 500;
+}
+
+.model-picker__status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  max-width: 88px;
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker__status--ready {
+  color: var(--ui-success, #1f8f55);
+}
+
+.model-picker__status--setup {
+  color: var(--ui-warning, #b26a00);
+}
+
+.model-picker__status--unknown {
+  color: var(--ui-text-muted);
 }
 
 .model-picker__select:focus,
