@@ -1082,60 +1082,6 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
     }),
   },
   {
-    id: "local-coding-task",
-    name: "Run a coding task",
-    outcome:
-      "Run a bounded local coding agent on an approved project and record the result in Mission Control.",
-    firstVersion: "core_v1",
-    state: "needs_setup",
-    requiredCapabilityIds: [
-      "mission.project.read",
-      "local_executor.run",
-      "mission.activity.create",
-    ],
-    optionalCapabilityIds: ["message.owner.notify"],
-    recommendedSkillIds: [],
-    requiredSkillIds: [],
-    defaultDraft: draft({
-      name: "Run a coding task",
-      purpose: "Run a bounded local coding agent on an approved project.",
-      recipeId: "local-coding-task",
-      trigger: { kind: "manual" },
-      destination: missionDestination("activity", false),
-      actions: [
-        action(
-          "read-project",
-          "mission.project.read",
-          "Read project policy",
-          "none",
-        ),
-        action(
-          "run-local-executor",
-          "local_executor.run",
-          "Run on local computer",
-          "approval_required",
-          {
-            projectPolicyId: null,
-            prompt:
-              "Use the approved project policy to make the requested coding change, then report status, changed files, quality gates, and artifacts. Do not commit or push unless the project policy explicitly allows it.",
-          },
-        ),
-        action(
-          "create-activity",
-          "mission.activity.create",
-          "Record Local Executor result",
-          "none",
-          {
-            activityType: "local_executor.run",
-            title: "Local Executor run queued",
-            summary: "A bounded local coding run was queued.",
-            status: "queued",
-          },
-        ),
-      ],
-    }),
-  },
-  {
     id: "email-triage",
     name: "Inbox Watch",
     outcome: "Get notified or take action when specific people email you.",

@@ -23,7 +23,6 @@ Default install state: available but off. The owner activates it from Account an
 
 Primary surfaces:
 
-- `/assistant`: shows a Local Executor job starter when the plugin is active.
 - `/account`: the Local Executor plugin row shows the setup/configure flow.
 - `/mission-control`: shows approvals, run history, audit, and results.
 - Soulink assistant chat: can create owner-directed manual runs and receive concise
@@ -51,7 +50,8 @@ Local Executor plugin owns:
 - Provider presets and local execution policy.
 - Executor run queue, daemon claim/heartbeat contracts, executor-specific audit, and
   local-executor setup readiness.
-- The `local_executor.run` capability and Local Executor starter recipes.
+- The `local_executor.run` capability used by local project tasks and future approved
+  event-driven runs.
 
 Mission Control owns:
 
@@ -89,15 +89,15 @@ Landed in the current Core line:
 - Successful linked local runs move the Mission task to Review for owner acceptance.
 - Local runner config lives on the user's computer at
   `~/.me3/local-executor/config.json`; provider choice is not project-specific UI.
-- Account Local Executor setup now shows the one-shot `once` test, the long-running
-  `run --interval 20` command, and a macOS keep-awake command.
+- Account Local Executor setup now shows the from-scratch clone, terminal, pairing,
+  provider config, long-running `run --interval 20`, local project, and Doing-task flow.
 - Local runner startup checks the saved pairing token/API URL and selected provider
   command before it claims work.
 
 Still follow-up:
 
 - Richer result panels, changed-file detection, quality-gate execution, and artifacts.
-- Assistant starter recipe and scheduled/event-triggered job approvals.
+- Scheduled/event-triggered Local Executor approvals.
 - Friendlier local runner packaging outside a source checkout.
 
 ## Capability Contract
@@ -131,31 +131,18 @@ Do not expose generic raw `daemon.file.write` or `daemon.shell.run` capabilities
 Keep raw local read/write/shell primitives internal or later. The first public surface is
 the safer executor job envelope.
 
-## Starter Job
+## Mission Control Task Flow
 
-Starter recipe: `local-coding-task`
+Local Executor work is started from Mission Control local projects, not from an Assistant
+Jobs recipe.
 
-User-facing name: `Run a coding task`
-
-Outcome: run a bounded local coding agent on an approved project and produce a Mission
-Control result with status, summary, changed files, quality gates, and artifacts.
-
-Default draft:
-
-- Trigger: manual.
-- Scope: one configured project/repo policy.
-- Actions:
-  - `mission.project.read`
-  - `local_executor.run`
-  - `mission.activity.create`
-  - optional `message.owner.notify`
-- Destination: Mission Control result/activity, linked to a project when known.
-- Default landing policy: report-only. The executor may change local files if the policy
-  allows it, but it should not commit or push unless the repo policy explicitly enables that.
-
-The starter should appear in `/assistant` only when the plugin is active. If no local runner
-is paired or no project policy exists, the job can be saved as `needs_setup` and should point
-the owner to the Local Executor plugin row in Account.
+- The owner creates a Mission Control project with type `Local` and the local repo path.
+- Mission Control creates a conservative Local Executor policy for that path.
+- Backlog tasks stay inert.
+- A task created in or moved to Doing queues one bounded Local Executor run when setup is ready.
+- The local runner claims the run, executes the configured provider in the local repo, and
+  reports the result back to Mission Control.
+- Successful linked runs move the task to Review. Done remains a human action.
 
 ## Data Model
 
@@ -263,17 +250,18 @@ Hard denials:
 
 1. Owner activates Local Executor.
 2. Owner pairs a daemon from an always-on machine.
-3. Owner adds one project policy.
-4. Owner creates or runs the Local Coding Task job from `/assistant`, chat, or Soulink.
-5. Core validates the job, policy, setup, and approval state.
-6. Core creates a Local Executor run and linked Mission Control run.
-7. Daemon polls, claims an approved run, and marks it running.
-8. Daemon validates local repo state and command policy.
-9. Daemon runs the configured provider command with the assembled prompt.
-10. Daemon streams bounded events and stores full logs locally.
-11. Daemon completes the run with summary, changed files, quality gates, artifacts, and errors.
-12. Core updates Local Executor and Mission Control records.
-13. Owner receives a concise notification through the active owner channel when configured.
+3. Owner configures a provider preset on the local machine.
+4. Owner adds a local project in Mission Control, which creates a project policy.
+5. Owner creates or moves a local project task to Doing.
+6. Core validates the task, policy, setup, and approval state.
+7. Core creates a Local Executor run and linked Mission Control run.
+8. Daemon polls, claims an approved run, and marks it running.
+9. Daemon validates local repo state and command policy.
+10. Daemon runs the configured provider command with the assembled prompt.
+11. Daemon streams bounded events and stores full logs locally.
+12. Daemon completes the run with summary, changed files, quality gates, artifacts, and errors.
+13. Core updates Local Executor and Mission Control records.
+14. Owner receives a concise notification through the active owner channel when configured.
 
 Scheduled or event-triggered runs stop after step 5 until a Mission Control approval is resolved.
 
@@ -335,14 +323,14 @@ Audit must record:
 8. Done: Auto-queue local-project tasks when they enter Doing and move successful
    linked runs to Review.
 9. Next: Add local runner packaging.
-10. Next: Add Local Coding Task starter recipe and scheduled/event-triggered approval flow.
+10. Next: Add scheduled/event-triggered Local Executor approval flow.
 11. Next: Add richer Mission Control result panels for artifacts, changed files, gates, and local logs.
 12. Next: Add Soulink/chat manual-run handoff and concise result notification.
 
 ## Test Plan
 
-- Plugin activation makes Local Executor visible in `/assistant`; missing daemon setup marks
-  the job `needs_setup`.
+- Plugin activation makes the Account configure flow visible and keeps Assistant Jobs free
+  of a Local Executor starter job.
 - Pairing flow creates a one-use code, completes with a daemon token, and heartbeats status
   into setup.
 - Manual owner-directed run is claimable by daemon and lands a Mission Control run plus a

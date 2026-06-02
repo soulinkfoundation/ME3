@@ -129,7 +129,9 @@ describe("assistant jobs persistence", () => {
   });
 
   it("creates, lists, pauses, duplicates, runs, and archives jobs", async () => {
-    const env = createAssistantJobsEnv();
+    const env = createAssistantJobsEnv({
+      channelConnections: [soulinkConnectionRow()],
+    });
 
     const created = await createAssistantJob(env, "owner", { recipeId: "weekly-review" });
     expect(created.job.status).toBe("active");
@@ -229,7 +231,7 @@ describe("assistant jobs persistence", () => {
     expect(created.validation.status).toBe("valid");
   });
 
-  it("shows the Local Executor starter only after the plugin is active", async () => {
+  it("does not expose a Local Executor starter job from Assistant Jobs", async () => {
     const missingEnv = createAssistantJobsEnv();
     const missingRecipes = await listAssistantJobRecipes(missingEnv, "owner");
     expect(missingRecipes.recipes.map((recipe) => recipe.id)).not.toContain("local-coding-task");
@@ -243,10 +245,32 @@ describe("assistant jobs persistence", () => {
         },
       ],
     });
+    activeEnv.__state.jobs.push({
+      id: "legacy-local-coding-job",
+      user_id: "owner",
+      recipe_id: "local-coding-task",
+      name: "Run a coding task",
+      purpose: "Legacy local coding starter.",
+      status: "active",
+      current_version_id: null,
+      project_id: null,
+      destination_json: "{}",
+      trigger_summary: "When you run it",
+      next_run_at: null,
+      last_run_at: null,
+      last_run_status: null,
+      failure_count: 0,
+      setup_state_json: "{}",
+      created_by: "owner",
+      created_at: "2026-06-02T12:00:00.000Z",
+      updated_at: "2026-06-02T12:00:00.000Z",
+      archived_at: null,
+    });
     const activeRecipes = await listAssistantJobRecipes(activeEnv, "owner");
-    const localRecipe = activeRecipes.recipes.find((recipe) => recipe.id === "local-coding-task");
-    expect(localRecipe).toBeTruthy();
-    expect(localRecipe?.state).toBe("needs_setup");
+    expect(activeRecipes.recipes.map((recipe) => recipe.id)).not.toContain("local-coding-task");
+    const activeJobs = await listAssistantJobs(activeEnv, "owner");
+    expect(activeJobs.jobs.map((job) => job.recipeId)).not.toContain("local-coding-task");
+    expect(activeJobs.jobs.map((job) => job.name)).not.toContain("Run a coding task");
   });
 
   it("triages mailbox messages into a useful Mission Control result", async () => {
@@ -568,7 +592,9 @@ describe("assistant jobs persistence", () => {
   });
 
   it("updates scheduled job cadence and next run metadata", async () => {
-    const env = createAssistantJobsEnv();
+    const env = createAssistantJobsEnv({
+      channelConnections: [soulinkConnectionRow()],
+    });
     const created = await createAssistantJob(env, "owner", { recipeId: "weekly-review" });
 
     const updated = await updateAssistantJob(env, "owner", created.job.id, {
@@ -593,7 +619,10 @@ describe("assistant jobs persistence", () => {
   });
 
   it("dispatches due scheduled jobs through the queue and advances next run", async () => {
-    const env = createAssistantJobsEnv({ queue: true });
+    const env = createAssistantJobsEnv({
+      queue: true,
+      channelConnections: [soulinkConnectionRow()],
+    });
     const created = await createAssistantJob(env, "owner", { recipeId: "weekly-review" });
     const updated = await updateAssistantJob(env, "owner", created.job.id, {
       schedule: {
@@ -1893,13 +1922,15 @@ class FakeStatement {
       };
     }
     if (sql.includes("FROM assistant_jobs") && sql.includes("next_run_at <= ?")) {
-      const checkedAt = values[0] as string;
-      const limit = values[1] as number;
+      const hidesLegacyLocalCoding = sql.includes("COALESCE(recipe_id");
+      const checkedAt = values[hidesLegacyLocalCoding ? 1 : 0] as string;
+      const limit = values[hidesLegacyLocalCoding ? 2 : 1] as number;
       return {
         results: this.state.jobs
           .filter(
             (job) =>
               job.status === "active" &&
+              (!hidesLegacyLocalCoding || job.recipe_id !== "local-coding-task") &&
               job.current_version_id &&
               job.next_run_at &&
               (job.next_run_at as string) <= checkedAt,
@@ -1911,9 +1942,15 @@ class FakeStatement {
       };
     }
     if (sql.includes("FROM assistant_jobs j")) {
+      const hidesLegacyLocalCoding = sql.includes("COALESCE(j.recipe_id");
       return {
         results: this.state.jobs
-          .filter((job) => job.user_id === values[0] && job.status === "active")
+          .filter(
+            (job) =>
+              job.user_id === values[0] &&
+              job.status === "active" &&
+              (!hidesLegacyLocalCoding || job.recipe_id !== "local-coding-task"),
+          )
           .flatMap((job) => {
             const version = this.state.versions.find(
               (candidate) =>
@@ -1958,16 +1995,24 @@ class FakeStatement {
       };
     }
     if (sql.includes("FROM assistant_jobs") && sql.includes("status = ?")) {
+      const hidesLegacyLocalCoding = sql.includes("COALESCE(recipe_id");
       return {
         results: this.state.jobs.filter(
-          (job) => job.user_id === values[0] && job.status === values[1],
+          (job) =>
+            job.user_id === values[0] &&
+            job.status === values[1] &&
+            (!hidesLegacyLocalCoding || job.recipe_id !== "local-coding-task"),
         ) as T[],
       };
     }
     if (sql.includes("FROM assistant_jobs")) {
+      const hidesLegacyLocalCoding = sql.includes("COALESCE(recipe_id");
       return {
         results: this.state.jobs.filter(
-          (job) => job.user_id === values[0] && job.status !== "archived",
+          (job) =>
+            job.user_id === values[0] &&
+            job.status !== "archived" &&
+            (!hidesLegacyLocalCoding || job.recipe_id !== "local-coding-task"),
         ) as T[],
       };
     }

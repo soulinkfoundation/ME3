@@ -20,12 +20,11 @@ describe("assistant jobs package", () => {
     expect(coreRecipes.map((recipe) => recipe.id)).toEqual([
       "weekly-review",
       "daily-briefing",
-      "local-coding-task",
     ]);
 
     for (const recipe of coreRecipes) {
       const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(recipe), {
-        readySetupRequirements: ["owner_notifications", "local_executor"],
+        readySetupRequirements: ["owner_notifications"],
       });
       expect(validation.status, recipe.id).toBe("valid");
       expect(validation.errors, recipe.id).toEqual([]);
@@ -111,17 +110,6 @@ describe("assistant jobs package", () => {
         "immediate",
       ).ruleIds,
     ).toEqual(["ada"]);
-  });
-
-  it("marks the local coding starter as setup-gated until Local Executor is ready", () => {
-    const localCoding = getAssistantJobStarterRecipe("local-coding-task");
-    if (!localCoding) throw new Error("Missing local-coding-task recipe");
-
-    const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(localCoding));
-
-    expect(validation.status).toBe("needs_setup");
-    expect(validation.errors.map((error) => error.code)).toContain("setup_missing");
-    expect(validation.permissionSummary.setupRequirements).toContain("local_executor");
   });
 
   it("rejects unknown capabilities even when a skill is available", () => {

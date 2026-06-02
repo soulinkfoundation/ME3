@@ -913,11 +913,6 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
   ],
   uiSlots: [
     {
-      id: "local-executor.assistant.starter",
-      slot: "assistant.jobs.starters",
-      label: "Run a coding task",
-    },
-    {
       id: "local-executor.account.setup",
       slot: "account.plugins.setup",
       label: "Local Executor setup",

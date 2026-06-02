@@ -20,7 +20,6 @@ import {
   type AssistantJobContextResult,
   type InboxWatchRuleConfig,
 } from "@me3-core/assistant-jobs";
-import { LOCAL_EXECUTOR_PLUGIN_ID } from "@me3-core/plugin-local-executor";
 import type {
   Me3AgentContextCalendarEvent,
   Me3AgentContextPrivateMemory,
@@ -41,7 +40,6 @@ import {
   isLocalExecutorSetupReady,
 } from "./local-executor";
 import { normalizeTimeZone } from "./calendar";
-import { isCorePluginEnabled } from "./plugins";
 
 export class AssistantJobsInputError extends Error {
   constructor(
@@ -134,6 +132,7 @@ type AssistantJobRunRow = {
 };
 
 const DEFAULT_SCHEDULE_DISPATCH_LIMIT = 50;
+const HIDDEN_ASSISTANT_JOB_RECIPE_IDS = ["local-coding-task"];
 
 type AssistantJobActionResultStatus =
   | "skipped"
@@ -445,14 +444,9 @@ type UpdateAssistantJobIngressEventBody = {
 };
 
 export async function listAssistantJobRecipes(env: Env, userId: string) {
-  const [readySetupRequirements, localExecutorEnabled] = await Promise.all([
-    getAssistantJobReadySetupRequirements(env, userId),
-    isCorePluginEnabled(env, LOCAL_EXECUTOR_PLUGIN_ID).catch(() => false),
-  ]);
+  const readySetupRequirements = await getAssistantJobReadySetupRequirements(env, userId);
   return {
-    recipes: ASSISTANT_JOB_STARTER_RECIPES.filter(
-      (recipe) => recipe.id !== "local-coding-task" || localExecutorEnabled,
-    ).map((recipe) => {
+    recipes: ASSISTANT_JOB_STARTER_RECIPES.map((recipe) => {
       const serialized = serializeRecipe(recipe);
       const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(recipe), {
         readySetupRequirements,
@@ -526,10 +520,17 @@ async function validateAssistantJobDraftForUser(
 
 export async function listAssistantJobs(env: Env, userId: string, status?: string | null) {
   const normalizedStatus = normalizeJobStatus(status);
+  const hiddenRecipeId = HIDDEN_ASSISTANT_JOB_RECIPE_IDS[0];
   const query = normalizedStatus
-    ? `SELECT * FROM assistant_jobs WHERE user_id = ? AND status = ? ORDER BY updated_at DESC, created_at DESC`
-    : `SELECT * FROM assistant_jobs WHERE user_id = ? AND status != 'archived' ORDER BY updated_at DESC, created_at DESC`;
-  const stmt = normalizedStatus ? env.DB.prepare(query).bind(userId, normalizedStatus) : env.DB.prepare(query).bind(userId);
+    ? `SELECT * FROM assistant_jobs
+       WHERE user_id = ? AND status = ? AND COALESCE(recipe_id, '') != ?
+       ORDER BY updated_at DESC, created_at DESC`
+    : `SELECT * FROM assistant_jobs
+       WHERE user_id = ? AND status != 'archived' AND COALESCE(recipe_id, '') != ?
+       ORDER BY updated_at DESC, created_at DESC`;
+  const stmt = normalizedStatus
+    ? env.DB.prepare(query).bind(userId, normalizedStatus, hiddenRecipeId)
+    : env.DB.prepare(query).bind(userId, hiddenRecipeId);
   const rows = await stmt.all<AssistantJobRow>();
   return { jobs: rows.results.map(serializeJob) };
 }
@@ -790,13 +791,14 @@ export async function dispatchDueScheduledAssistantJobs(
   const rows = await env.DB.prepare(
     `SELECT * FROM assistant_jobs
      WHERE status = 'active'
+       AND COALESCE(recipe_id, '') != ?
        AND current_version_id IS NOT NULL
        AND next_run_at IS NOT NULL
        AND next_run_at <= ?
      ORDER BY next_run_at ASC
      LIMIT ?`,
   )
-    .bind(checkedAt, limit)
+    .bind(HIDDEN_ASSISTANT_JOB_RECIPE_IDS[0], checkedAt, limit)
     .all<AssistantJobRow>();
 
   const jobs = [];
@@ -2859,10 +2861,11 @@ async function listEventTriggerCandidates(env: Env, userId: string) {
        ON v.id = j.current_version_id AND v.user_id = j.user_id
      WHERE j.user_id = ?
        AND j.status = 'active'
+       AND COALESCE(j.recipe_id, '') != ?
        AND j.archived_at IS NULL
      ORDER BY j.updated_at DESC, j.created_at DESC`,
   )
-    .bind(userId)
+    .bind(userId, HIDDEN_ASSISTANT_JOB_RECIPE_IDS[0])
     .all<AssistantJobMatchCandidateRow>();
   return rows.results;
 }

@@ -118,9 +118,7 @@ type MailboxResponse = {
 
 type LocalExecutorPairingInstructions = {
   code: string;
-  installCommand: string;
   sourceCommand: string;
-  onceCommand: string;
   runCommand: string;
   keepAwakeCommand: string;
   expiresAt: string | null;
@@ -574,6 +572,10 @@ const localExecutorPluginEnabled = computed(() =>
 
 const localExecutorPairingExpiryLabel = computed(() =>
   formatLocalExecutorExpiry(localExecutorPairing.value?.expiresAt),
+);
+
+const localExecutorPairingCommand = computed(
+  () => localExecutorPairing.value?.sourceCommand || "",
 );
 
 const missionControlPlugin = computed(
@@ -1173,8 +1175,9 @@ function pluginActionKey(
 
 const LOCAL_EXECUTOR_SOURCE_BIN =
   "node packages/local-executor/bin/me3-local-executor.mjs";
+const LOCAL_EXECUTOR_CD_COMMAND =
+  "cd /Users/[USERNAME]/[PROJECTS_FOLDER]/[YOUR_ME3_REPO]";
 const LOCAL_EXECUTOR_CONFIG_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} config init --provider opencode`;
-const LOCAL_EXECUTOR_ONCE_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} once`;
 const LOCAL_EXECUTOR_RUN_COMMAND = `${LOCAL_EXECUTOR_SOURCE_BIN} run --interval 20`;
 const LOCAL_EXECUTOR_KEEP_AWAKE_COMMAND = `caffeinate -dimsu ${LOCAL_EXECUTOR_RUN_COMMAND}`;
 
@@ -1210,9 +1213,7 @@ async function startLocalExecutorPairing() {
     });
     localExecutorPairing.value = {
       code: response.code,
-      installCommand: response.installCommand,
       sourceCommand: sourceLocalExecutorCommand(response.installCommand),
-      onceCommand: LOCAL_EXECUTOR_ONCE_COMMAND,
       runCommand: LOCAL_EXECUTOR_RUN_COMMAND,
       keepAwakeCommand: LOCAL_EXECUTOR_KEEP_AWAKE_COMMAND,
       expiresAt: response.expiresAt || null,
@@ -2602,53 +2603,107 @@ onMounted(async () => {
             </button>
           </div>
 
-          <p class="local-executor-modal__intro">
-            A local runner is a small script on your computer. It checks ME3
-            for approved local tasks and starts your local coding tool. It only
-            works while your computer is awake and the runner command is open.
-          </p>
-
-          <router-link
-            class="local-executor-project-link"
-            to="/mission-control?section=projects"
-            @click="closeLocalExecutorSetup"
-          >
-            Create a local project in Mission Control
-          </router-link>
-
           <p v-if="!localExecutorPluginEnabled" class="local-executor-note">
-            First, turn on Local Executor in the plugin row. Then come back here
-            and create the pairing command.
+            First, turn on Local Executor in this plugin row. Then come back
+            here and create the pairing command.
           </p>
 
           <ol class="local-executor-steps">
             <li>
-              <strong>Choose a folder.</strong>
+              <strong>Clone your ME3 Core repo.</strong>
               <span>
-                Use the ME3 Core folder on the computer that should do the work.
-                It is the folder with <code>packages/local-executor</code>
-                inside it.
+                Put the ME3 Core repo on the computer that will run local
+                tasks. This is the repo with
+                <code>packages/local-executor</code> inside it.
               </span>
             </li>
             <li>
-              <strong>Open Terminal.</strong>
-              <span>Terminal is where you paste the command.</span>
-            </li>
-            <li>
-              <strong>Go to the folder.</strong>
+              <strong>Open Terminal and go to that repo.</strong>
               <span>
-                Type <code>cd </code>, drag the ME3 folder into Terminal, then
-                press Return.
+                Replace the placeholders with your real folders, or type
+                <code>cd </code>, drag the ME3 folder into Terminal, and press
+                Return.
               </span>
+              <div class="local-executor-command">
+                <pre><code>{{ LOCAL_EXECUTOR_CD_COMMAND }}</code></pre>
+                <Button
+                  variant="outline"
+                  size="small"
+                  shape="soft"
+                  type="button"
+                  @click="
+                    copyLocalExecutorCommand(
+                      LOCAL_EXECUTOR_CD_COMMAND,
+                      'cd',
+                    )
+                  "
+                >
+                  {{
+                    localExecutorCopiedCommand === "cd" ? "Copied" : "Copy"
+                  }}
+                </Button>
+              </div>
             </li>
             <li>
-              <strong>Make sure your coding tool works.</strong>
+              <strong>Pair this computer with ME3.</strong>
               <span>
-                OpenCode is the default. Run this once to create
-                <code>~/.me3/local-executor/config.json</code>, then edit
-                <code>defaultProviderPreset</code> to <code>codex</code> or
-                <code>claude</code> if that is your local tool. ME3 does not
-                store the provider API key.
+                Create a temporary pairing command, then paste it into Terminal.
+                The code is already inside the command.
+              </span>
+              <Button
+                tone="green"
+                size="compact"
+                shape="soft"
+                type="button"
+                :disabled="
+                  localExecutorPairingBusy || !localExecutorPluginEnabled
+                "
+                @click="startLocalExecutorPairing"
+              >
+                {{
+                  localExecutorPairingBusy
+                    ? "Creating..."
+                    : localExecutorPairing
+                      ? "Create fresh command"
+                      : "Create pairing command"
+                }}
+              </Button>
+              <span v-if="localExecutorPairing">
+                <template v-if="localExecutorPairingExpiryLabel">
+                  It expires {{ localExecutorPairingExpiryLabel }}.
+                </template>
+                It saves a small runner token at
+                <code>~/.me3/local-executor/token.json</code>.
+              </span>
+              <div
+                v-if="localExecutorPairingCommand"
+                class="local-executor-command"
+              >
+                <pre><code>{{ localExecutorPairingCommand }}</code></pre>
+                <Button
+                  variant="outline"
+                  size="small"
+                  shape="soft"
+                  type="button"
+                  @click="
+                    copyLocalExecutorCommand(
+                      localExecutorPairingCommand,
+                      'pair',
+                    )
+                  "
+                >
+                  {{
+                    localExecutorCopiedCommand === "pair" ? "Copied" : "Copy"
+                  }}
+                </Button>
+              </div>
+            </li>
+            <li>
+              <strong>Configure your local AI agent.</strong>
+              <span>
+                OpenCode, Codex, and Claude are supported. Install and sign in
+                to the tool locally first. Use <code>opencode</code>,
+                <code>codex</code>, or <code>claude</code> in this command.
               </span>
               <div class="local-executor-command">
                 <pre><code>{{ LOCAL_EXECUTOR_CONFIG_COMMAND }}</code></pre>
@@ -2671,41 +2726,14 @@ onMounted(async () => {
               </div>
             </li>
             <li>
-              <strong>Create the pairing command.</strong>
+              <strong>Start the local runner.</strong>
               <span>
-                Click the button below. The temporary pairing code is already
-                inside the command, so you do not type the code separately.
-              </span>
-              <Button
-                tone="green"
-                size="compact"
-                shape="soft"
-                type="button"
-                :disabled="
-                  localExecutorPairingBusy || !localExecutorPluginEnabled
-                "
-                @click="startLocalExecutorPairing"
-              >
-                {{
-                  localExecutorPairingBusy
-                    ? "Creating..."
-                    : localExecutorPairing
-                      ? "Create fresh command"
-                      : "Create pairing command"
-                }}
-              </Button>
-            </li>
-            <li v-if="localExecutorPairing">
-              <strong>Paste this command into Terminal.</strong>
-              <span>
-                <template v-if="localExecutorPairingExpiryLabel">
-                  It expires {{ localExecutorPairingExpiryLabel }}.
-                </template>
-                It saves a small runner token at
-                <code>~/.me3/local-executor/token.json</code>.
+                Leave this Terminal window open. This is the process that
+                checks ME3 and picks up local tasks while your computer is
+                awake.
               </span>
               <div class="local-executor-command">
-                <pre><code>{{ localExecutorPairing.sourceCommand }}</code></pre>
+                <pre><code>{{ LOCAL_EXECUTOR_RUN_COMMAND }}</code></pre>
                 <Button
                   variant="outline"
                   size="small"
@@ -2713,59 +2741,7 @@ onMounted(async () => {
                   type="button"
                   @click="
                     copyLocalExecutorCommand(
-                      localExecutorPairing.sourceCommand,
-                      'pair',
-                    )
-                  "
-                >
-                  {{
-                    localExecutorCopiedCommand === "pair" ? "Copied" : "Copy"
-                  }}
-                </Button>
-              </div>
-            </li>
-            <li v-if="localExecutorPairing">
-              <strong>Test it once.</strong>
-              <span>
-                This checks ME3 once, claims one approved job if there is one,
-                then exits. It is the safest first test.
-              </span>
-              <div class="local-executor-command">
-                <pre><code>{{ localExecutorPairing.onceCommand }}</code></pre>
-                <Button
-                  variant="outline"
-                  size="small"
-                  shape="soft"
-                  type="button"
-                  @click="
-                    copyLocalExecutorCommand(
-                      localExecutorPairing.onceCommand,
-                      'once',
-                    )
-                  "
-                >
-                  {{
-                    localExecutorCopiedCommand === "once" ? "Copied" : "Copy"
-                  }}
-                </Button>
-              </div>
-            </li>
-            <li v-if="localExecutorPairing">
-              <strong>Keep it running.</strong>
-              <span>
-                Use this for automatic pickup. Leave Terminal open. When a
-                local project task moves to Doing, this computer can claim it.
-              </span>
-              <div class="local-executor-command">
-                <pre><code>{{ localExecutorPairing.runCommand }}</code></pre>
-                <Button
-                  variant="outline"
-                  size="small"
-                  shape="soft"
-                  type="button"
-                  @click="
-                    copyLocalExecutorCommand(
-                      localExecutorPairing.runCommand,
+                      LOCAL_EXECUTOR_RUN_COMMAND,
                       'run',
                     )
                   "
@@ -2775,15 +2751,12 @@ onMounted(async () => {
                   }}
                 </Button>
               </div>
-            </li>
-            <li v-if="localExecutorPairing">
-              <strong>Mac keep-awake option.</strong>
               <span>
-                On macOS, this keeps the computer awake while the runner is
-                open. Close Terminal or press Control-C to stop it.
+                On macOS, use this version if you want Terminal to keep the
+                computer awake while the runner is open.
               </span>
               <div class="local-executor-command">
-                <pre><code>{{ localExecutorPairing.keepAwakeCommand }}</code></pre>
+                <pre><code>{{ LOCAL_EXECUTOR_KEEP_AWAKE_COMMAND }}</code></pre>
                 <Button
                   variant="outline"
                   size="small"
@@ -2791,7 +2764,7 @@ onMounted(async () => {
                   type="button"
                   @click="
                     copyLocalExecutorCommand(
-                      localExecutorPairing.keepAwakeCommand,
+                      LOCAL_EXECUTOR_KEEP_AWAKE_COMMAND,
                       'awake',
                     )
                   "
@@ -2801,6 +2774,38 @@ onMounted(async () => {
                   }}
                 </Button>
               </div>
+            </li>
+            <li>
+              <strong>Add a local project in Mission Control.</strong>
+              <span>
+                Visit your ME3 site, open Mission Control, go to Projects, and
+                add a project with type <code>Local</code>. Use the local
+                folder path for the project repo you want the runner to work
+                in.
+              </span>
+              <router-link
+                class="local-executor-project-link"
+                to="/mission-control?section=projects"
+                @click="closeLocalExecutorSetup"
+              >
+                Open Mission Control Projects
+              </router-link>
+            </li>
+            <li>
+              <strong>Add a task and move it to Doing.</strong>
+              <span>
+                Backlog is just a holding area. When a task in a local project
+                moves to Doing, the local runner can claim it and run it inside
+                that project repo.
+              </span>
+            </li>
+            <li>
+              <strong>Review the result.</strong>
+              <span>
+                The local runner follows the rules in that project repo,
+                including its <code>AGENTS.md</code>. When the run succeeds,
+                ME3 moves the task to Review.
+              </span>
             </li>
           </ol>
 

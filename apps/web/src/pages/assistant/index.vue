@@ -229,7 +229,6 @@ const dailyBriefingVariables = [
 const suggestedRecipeOrder = [
   "daily-briefing",
   "weekly-review",
-  "local-coding-task",
   "email-triage",
   "invoice-receipt-triage",
 ];
@@ -748,7 +747,6 @@ const jobNavEmojis: Record<string, string> = {
   "booking-reminder": "⏰",
   "email-triage": "📧",
   "invoice-receipt-triage": "🧾",
-  "local-coding-task": "💻",
 };
 
 function recipeNavEmoji(recipeId: string) {
