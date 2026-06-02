@@ -31,7 +31,8 @@ export const ASSISTANT_JOB_APPROVAL_MODES = [
   "forbidden",
 ] as const;
 
-export type AssistantJobApprovalMode = (typeof ASSISTANT_JOB_APPROVAL_MODES)[number];
+export type AssistantJobApprovalMode =
+  (typeof ASSISTANT_JOB_APPROVAL_MODES)[number];
 
 export const ASSISTANT_JOB_SIDE_EFFECTS = [
   "read_private",
@@ -52,7 +53,8 @@ export const ASSISTANT_JOB_SIDE_EFFECTS = [
   "permission_change",
 ] as const;
 
-export type AssistantJobSideEffect = (typeof ASSISTANT_JOB_SIDE_EFFECTS)[number];
+export type AssistantJobSideEffect =
+  (typeof ASSISTANT_JOB_SIDE_EFFECTS)[number];
 
 export type AssistantCapabilityOwner = "core" | "plugin";
 export type AssistantCapabilityCategory =
@@ -182,7 +184,11 @@ export type AssistantJobDraft = {
 };
 
 export type AssistantRecipeVersion = "core_v1" | "later_provider_adapter";
-export type AssistantRecipeState = "ready" | "needs_setup" | "manual_only" | "coming_later";
+export type AssistantRecipeState =
+  | "ready"
+  | "needs_setup"
+  | "manual_only"
+  | "coming_later";
 
 export type AssistantJobStarterRecipe = {
   id: string;
@@ -268,7 +274,8 @@ export type AssistantJobContextInput = {
   warnings?: readonly string[];
 };
 
-export type AssistantJobContextRunManifestSource = Me3AgentContextManifestSource;
+export type AssistantJobContextRunManifestSource =
+  Me3AgentContextManifestSource;
 
 export type AssistantJobContextRunManifest = Me3AgentContextManifest;
 
@@ -278,7 +285,9 @@ export type AssistantJobContextResult = {
   manifest: AssistantJobContextRunManifest;
 };
 
-const EMPTY_SCHEMA = { type: "object" } as const satisfies AssistantCapabilitySchema;
+const EMPTY_SCHEMA = {
+  type: "object",
+} as const satisfies AssistantCapabilitySchema;
 
 const APPROVAL_MODE_WEIGHT: Record<AssistantJobApprovalMode, number> = {
   none: 0,
@@ -288,7 +297,10 @@ const APPROVAL_MODE_WEIGHT: Record<AssistantJobApprovalMode, number> = {
 };
 
 function capability(
-  input: Omit<AssistantCapability, "version" | "inputSchema" | "outputSchema"> & {
+  input: Omit<
+    AssistantCapability,
+    "version" | "inputSchema" | "outputSchema"
+  > & {
     inputSchema?: AssistantCapabilitySchema;
     outputSchema?: AssistantCapabilitySchema;
   },
@@ -563,7 +575,8 @@ export const ASSISTANT_JOB_CAPABILITIES = [
     owner: "plugin",
     pluginId: "me3.accounts",
     label: "Create account entries",
-    summary: "Create Accounts ledger entries from extracted invoice or receipt data.",
+    summary:
+      "Create Accounts ledger entries from extracted invoice or receipt data.",
     category: "mission_control",
     sideEffect: "write_internal_active",
     approvalMode: "review_required",
@@ -722,7 +735,8 @@ export const ASSISTANT_JOB_CAPABILITIES = [
         prompt: "Bounded task prompt for the local runner.",
       },
     },
-    userFacingReadSummary: "Reads the configured project policy and the owner-provided task.",
+    userFacingReadSummary:
+      "Reads the configured project policy and the owner-provided task.",
     userFacingWriteSummary:
       "Runs a configured local executor command and records results in Mission Control.",
     auditEventKind: "local_executor_run_requested",
@@ -769,7 +783,9 @@ export function getAssistantJobCapability(
   capabilityId: string,
   capabilities: readonly AssistantCapability[] = ASSISTANT_JOB_CAPABILITIES,
 ): AssistantCapability | null {
-  return capabilities.find((capability) => capability.id === capabilityId) ?? null;
+  return (
+    capabilities.find((capability) => capability.id === capabilityId) ?? null
+  );
 }
 
 export function isApprovalModeAtLeast(
@@ -877,7 +893,8 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
   {
     id: "weekly-review",
     name: "Weekly Review",
-    outcome: "Summarize the week, project changes, unfinished tasks, and carry-over choices.",
+    outcome:
+      "Summarize the week, project changes, unfinished tasks, and carry-over choices.",
     firstVersion: "core_v1",
     state: "ready",
     requiredCapabilityIds: [
@@ -892,28 +909,45 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
     requiredSkillIds: [],
     defaultDraft: draft({
       name: "Weekly Review",
-      purpose: "Prepare a weekly Mission Control review with carry-over choices.",
+      purpose:
+        "Prepare a weekly Mission Control review with carry-over choices.",
       recipeId: "weekly-review",
       trigger: weeklySchedule,
       destination: missionDestination("review_packet"),
       actions: [
-        action("read-projects", "mission.project.read", "Read project state", "none"),
+        action(
+          "read-projects",
+          "mission.project.read",
+          "Read project state",
+          "none",
+        ),
         action("read-tasks", "mission.task.read", "Read open tasks", "none"),
-        action("read-approvals", "mission.approval.read", "Read pending approvals", "none"),
+        action(
+          "read-approvals",
+          "mission.approval.read",
+          "Read pending approvals",
+          "none",
+        ),
         action(
           "create-review-packet",
           "mission.review_packet.create",
           "Create weekly review packet",
           "review_required",
         ),
-        action("create-activity", "mission.activity.create", "Record job activity", "none"),
+        action(
+          "create-activity",
+          "mission.activity.create",
+          "Record job activity",
+          "none",
+        ),
       ],
     }),
   },
   {
     id: "daily-briefing",
     name: "Daily Briefing",
-    outcome: "Prepare a morning review of today's tasks, approvals, and due items.",
+    outcome:
+      "Prepare a morning review of today's tasks, approvals, and due items.",
     firstVersion: "core_v1",
     state: "ready",
     requiredCapabilityIds: [
@@ -934,7 +968,12 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
       destination: missionDestination("review_packet"),
       actions: [
         action("read-tasks", "mission.task.read", "Read today's tasks", "none"),
-        action("read-approvals", "mission.approval.read", "Read pending approvals", "none"),
+        action(
+          "read-approvals",
+          "mission.approval.read",
+          "Read pending approvals",
+          "none",
+        ),
         action(
           "create-review-packet",
           "mission.review_packet.create",
@@ -975,7 +1014,12 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
       trigger: { kind: "manual" },
       destination: missionDestination("activity", false),
       actions: [
-        action("read-project", "mission.project.read", "Read project policy", "none"),
+        action(
+          "read-project",
+          "mission.project.read",
+          "Read project policy",
+          "none",
+        ),
         action(
           "run-local-executor",
           "local_executor.run",
@@ -1024,7 +1068,12 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
       destination: missionDestination("review_packet"),
       actions: [
         action("read-email", "email.message.read", "Read scoped email", "none"),
-        action("summarize-thread", "email.thread.summarize", "Summarize email threads", "none"),
+        action(
+          "summarize-thread",
+          "email.thread.summarize",
+          "Summarize email threads",
+          "none",
+        ),
         action(
           "create-review-packet",
           "mission.review_packet.create",
@@ -1037,7 +1086,8 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
   {
     id: "invoice-receipt-triage",
     name: "Invoice and Receipt Triage",
-    outcome: "Extract receipts and invoices and add them to an accounts ledger.",
+    outcome:
+      "Extract receipts and invoices from email and add them to an accounts ledger.",
     firstVersion: "later_provider_adapter",
     state: "needs_setup",
     requiredCapabilityIds: [
@@ -1050,7 +1100,8 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
     requiredSkillIds: [],
     defaultDraft: draft({
       name: "Invoice and Receipt Triage",
-      purpose: "Extract receipts and invoices and add them to an accounts ledger.",
+      purpose:
+        "Extract receipts and invoices from email and add them to an accounts ledger.",
       recipeId: "invoice-receipt-triage",
       trigger: dailySchedule,
       destination: missionDestination("accounts"),
@@ -1074,10 +1125,15 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
   {
     id: "booking-reminder",
     name: "Booking Reminder",
-    outcome: "Prepare context before a meeting or booking and create follow-up tasks after.",
+    outcome:
+      "Prepare context before a meeting or booking and create follow-up tasks after.",
     firstVersion: "later_provider_adapter",
     state: "needs_setup",
-    requiredCapabilityIds: ["calendar.event.read", "mission.review_packet.create", "mission.task.create"],
+    requiredCapabilityIds: [
+      "calendar.event.read",
+      "mission.review_packet.create",
+      "mission.task.create",
+    ],
     optionalCapabilityIds: ["email.thread.summarize", "message.owner.notify"],
     recommendedSkillIds: [],
     requiredSkillIds: [],
@@ -1094,14 +1150,24 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
       },
       destination: missionDestination("review_packet"),
       actions: [
-        action("read-calendar", "calendar.event.read", "Read scoped calendar events", "none"),
+        action(
+          "read-calendar",
+          "calendar.event.read",
+          "Read scoped calendar events",
+          "none",
+        ),
         action(
           "create-review-packet",
           "mission.review_packet.create",
           "Create booking reminder packet",
           "review_required",
         ),
-        action("create-task", "mission.task.create", "Create follow-up tasks", "none"),
+        action(
+          "create-task",
+          "mission.task.create",
+          "Create follow-up tasks",
+          "none",
+        ),
       ],
     }),
   },
@@ -1110,7 +1176,10 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
 export function getAssistantJobStarterRecipe(
   recipeId: string,
 ): AssistantJobStarterRecipe | null {
-  return ASSISTANT_JOB_STARTER_RECIPES.find((recipe) => recipe.id === recipeId) ?? null;
+  return (
+    ASSISTANT_JOB_STARTER_RECIPES.find((recipe) => recipe.id === recipeId) ??
+    null
+  );
 }
 
 export function listCoreV1AssistantJobStarterRecipes(): AssistantJobStarterRecipe[] {
@@ -1130,7 +1199,8 @@ export function createAssistantJobContext(
 ): AssistantJobContextResult {
   const activeScope = assistantJobContextScope(input);
   const requestText = assistantJobContextRequestText(input, activeScope);
-  const purpose = input.purpose ?? assistantJobContextPurpose(input.destination);
+  const purpose =
+    input.purpose ?? assistantJobContextPurpose(input.destination);
 
   const packet = resolveMe3AgentContextPacket({
     id: input.runId
@@ -1191,12 +1261,16 @@ export function validateAssistantJobDraft(
   options: AssistantJobDraftValidationOptions = {},
 ): AssistantJobDraftValidation {
   const capabilities = options.capabilities ?? ASSISTANT_JOB_CAPABILITIES;
-  const capabilityById = new Map(capabilities.map((capability) => [capability.id, capability]));
+  const capabilityById = new Map(
+    capabilities.map((capability) => [capability.id, capability]),
+  );
   const enabledCapabilityIds = options.enabledCapabilityIds
     ? new Set(options.enabledCapabilityIds)
     : null;
   const readySetupRequirements = new Set(options.readySetupRequirements ?? []);
-  const availableSkillIds = options.availableSkillIds ? new Set(options.availableSkillIds) : null;
+  const availableSkillIds = options.availableSkillIds
+    ? new Set(options.availableSkillIds)
+    : null;
   const errors: AssistantJobValidationError[] = [];
 
   if (!isValidTrigger(draft.trigger)) {
@@ -1248,7 +1322,10 @@ export function validateAssistantJobDraft(
       });
     }
 
-    if (capability.approvalMode === "forbidden" || action.approvalMode === "forbidden") {
+    if (
+      capability.approvalMode === "forbidden" ||
+      action.approvalMode === "forbidden"
+    ) {
       errors.push({
         code: "forbidden_action",
         message: `Capability cannot be used by Assistant Jobs: ${capability.id}.`,
@@ -1314,7 +1391,9 @@ export function buildAssistantJobPermissionSummary(
   draft: AssistantJobDraft,
   capabilities: readonly AssistantCapability[] = ASSISTANT_JOB_CAPABILITIES,
 ): AssistantJobPermissionSummary {
-  const capabilityById = new Map(capabilities.map((capability) => [capability.id, capability]));
+  const capabilityById = new Map(
+    capabilities.map((capability) => [capability.id, capability]),
+  );
   const reads = new Set<string>();
   const writes = new Set<string>();
   const approvalRequired = new Set<string>();
@@ -1325,7 +1404,10 @@ export function buildAssistantJobPermissionSummary(
     const capability = capabilityById.get(action.capabilityId);
     if (!capability) continue;
 
-    if (capability.sideEffect.startsWith("read_") || capability.sideEffect === "local_read") {
+    if (
+      capability.sideEffect.startsWith("read_") ||
+      capability.sideEffect === "local_read"
+    ) {
       reads.add(capability.userFacingReadSummary);
     } else {
       writes.add(capability.userFacingWriteSummary);
@@ -1342,7 +1424,10 @@ export function buildAssistantJobPermissionSummary(
       approvalRequired.add(capability.userFacingWriteSummary);
     }
 
-    if (capability.approvalMode === "forbidden" || action.approvalMode === "forbidden") {
+    if (
+      capability.approvalMode === "forbidden" ||
+      action.approvalMode === "forbidden"
+    ) {
       forbidden.add(capability.label);
     }
   }
@@ -1353,7 +1438,9 @@ export function buildAssistantJobPermissionSummary(
     approvalRequired: Array.from(approvalRequired),
     forbidden: Array.from(forbidden),
     setupRequirements: Array.from(setupRequirements),
-    skills: Array.from(new Set([...draft.recommendedSkillIds, ...draft.requiredSkillIds])),
+    skills: Array.from(
+      new Set([...draft.recommendedSkillIds, ...draft.requiredSkillIds]),
+    ),
   };
 }
 
@@ -1380,7 +1467,9 @@ function assistantJobContextPurpose(
   return "assistant_job";
 }
 
-function assistantJobContextRequestSummary(input: AssistantJobContextInput): string {
+function assistantJobContextRequestSummary(
+  input: AssistantJobContextInput,
+): string {
   const purpose = input.jobPurpose?.trim();
   return purpose ? `${input.jobName}: ${purpose}` : input.jobName;
 }
@@ -1432,7 +1521,9 @@ function validationStatusFromErrors(
 ): AssistantJobDraftValidation["status"] {
   const hasInvalidError = errors.some(
     (error) =>
-      error.blocking && error.code !== "setup_missing" && error.code !== "skill_missing",
+      error.blocking &&
+      error.code !== "setup_missing" &&
+      error.code !== "skill_missing",
   );
   if (hasInvalidError) return "invalid";
   const hasSetupError = errors.some(

@@ -663,8 +663,12 @@ const jobNavEmojis: Record<string, string> = {
   "local-coding-task": "💻",
 };
 
+function recipeNavEmoji(recipeId: string) {
+  return jobNavEmojis[recipeId] || "⚡";
+}
+
 function jobNavEmoji(job: AssistantJob) {
-  return jobNavEmojis[job.recipeId || ""] || "⚡";
+  return recipeNavEmoji(job.recipeId || "");
 }
 
 function isJobEnabled(job: AssistantJob) {
@@ -1037,6 +1041,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
               :key="recipe.id"
               class="starter-row"
             >
+              <span class="job-row__emoji" aria-hidden="true">
+                {{ recipeNavEmoji(recipe.id) }}
+              </span>
               <div class="starter-main">
                 <div class="starter-title-line">
                   <h3>{{ recipe.name }}</h3>
@@ -1614,14 +1621,20 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .starter-row {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--ui-border);
 }
 
 .starter-row:last-child {
   border-bottom: 0;
+}
+
+.starter-main {
+  flex: 1;
+  min-width: 0;
 }
 
 .job-row {
@@ -1632,12 +1645,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   border: 1px solid var(--ui-border);
   border-radius: 10px;
   background: var(--ui-surface);
-}
-
-.starter-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  padding: 12px 0;
 }
 
 .starter-title-line {
@@ -2182,16 +2189,14 @@ button:disabled {
   }
 
   .starter-row {
-    display: flex;
-    flex-direction: column;
     align-items: flex-start;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 10px 0;
   }
 
   .starter-main {
-    width: 100%;
-    min-width: 0;
+    flex-basis: calc(100% - 33px);
   }
 
   .starter-main p {
