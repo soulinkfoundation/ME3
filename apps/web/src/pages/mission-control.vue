@@ -327,7 +327,7 @@ const route = useRoute();
 const router = useRouter();
 const { toastFromUnknown, toastSuccess } = useAppToast();
 
-const basePrimarySections: PrimaryMissionSection[] = ["today", "projects"];
+const basePrimarySections: PrimaryMissionSection[] = ["projects"];
 const settingsSections: SettingsMissionSection[] = [
   "journalArchive",
   "activity",
@@ -2243,7 +2243,7 @@ function normalizeSection(value: unknown): MissionSection {
   if (raw === "approvals" || raw === "runs") return "activity";
   return sectionIds.includes(raw as MissionSection)
     ? (raw as MissionSection)
-    : "today";
+    : "projects";
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {

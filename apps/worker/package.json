@@ -14,6 +14,7 @@
     "@me3-core/assistant-jobs": "workspace:*",
     "@me3-core/plugin-agent-chat": "workspace:*",
     "@me3-core/plugin-calendar": "workspace:*",
+    "@me3-core/plugin-journal": "workspace:*",
     "@me3-core/plugin-landing-pages": "workspace:*",
     "@me3-core/plugin-local-executor": "workspace:*",
     "@me3-core/plugin-mission-control": "workspace:*",

@@ -24,6 +24,7 @@ const mobileNavOpen = ref(false);
 const mobileMediaQuery = "(max-width: 959px)";
 const navDrawerId = "app-side-nav-drawer";
 const missionControlInstalled = ref(false);
+const journalInstalled = ref(false);
 const calendarInstalled = ref(false);
 const socialPublishingInstalled = ref(false);
 const pluginChangedEvent = "me3:plugins-changed";
@@ -71,6 +72,7 @@ const isCalendar = computed(() => route.path.startsWith("/calendar"));
 const isMissionControl = computed(() =>
   route.path.startsWith("/mission-control"),
 );
+const isJournal = computed(() => route.path.startsWith("/journal"));
 const isEmail = computed(() => route.path.startsWith("/email"));
 const isSites = computed(
   () => route.path.startsWith("/sites/") || route.path.startsWith("/create"),
@@ -92,6 +94,7 @@ const showMobileDrawer = computed(
 function rowActive(
   kind:
     | "mission-control"
+    | "journal"
     | "calendar"
     | "email"
     | "sites"
@@ -102,6 +105,8 @@ function rowActive(
   switch (kind) {
     case "mission-control":
       return isMissionControl.value;
+    case "journal":
+      return isJournal.value;
     case "calendar":
       return isCalendar.value;
     case "email":
@@ -136,6 +141,12 @@ async function loadInstalledPluginNav() {
         plugin.enabled &&
         plugin.status === "installed",
     );
+    journalInstalled.value = response.plugins.some(
+      (plugin) =>
+        plugin.id === "me3.journal" &&
+        plugin.enabled &&
+        plugin.status === "installed",
+    );
     socialPublishingInstalled.value = response.plugins.some(
       (plugin) =>
         plugin.id === "me3.social-publishing" &&
@@ -144,6 +155,7 @@ async function loadInstalledPluginNav() {
     );
   } catch {
     missionControlInstalled.value = false;
+    journalInstalled.value = false;
     calendarInstalled.value = false;
     socialPublishingInstalled.value = false;
   }
@@ -243,6 +255,19 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
         >
           <span class="app-side-nav__emoji" aria-hidden="true">🗓️</span>
           <span class="sr-only">Calendar</span>
+        </RouterLink>
+
+        <RouterLink
+          v-if="journalInstalled"
+          to="/journal"
+          class="app-side-nav__row"
+          :class="{ 'app-side-nav__row--active': rowActive('journal') }"
+          aria-label="Journal"
+          title="Journal"
+          @click="closeMobileNav"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">📝</span>
+          <span class="sr-only">Journal</span>
         </RouterLink>
 
         <RouterLink

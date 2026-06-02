@@ -3208,7 +3208,7 @@ describe("ME3 Core Worker auth", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           offerId: "free-session",
-          localDate: "2026-06-02",
+          localDate: "2026-06-09",
           localTime: "15:15",
           guestName: "Test Guest",
           guestEmail: "guest@example.com",
@@ -3226,7 +3226,7 @@ describe("ME3 Core Worker auth", () => {
     expect(body.ok).toBe(true);
     expect(body.booking).toMatchObject({
       guestEmail: "guest@example.com",
-      startsAt: "2026-06-02T14:15:00.000Z",
+      startsAt: "2026-06-09T14:15:00.000Z",
       paymentStatus: "not_required",
     });
     expect(env.bookings).toHaveLength(1);
@@ -3248,7 +3248,7 @@ describe("ME3 Core Worker auth", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           offerId: "free-session",
-          localDate: "2026-06-02",
+          localDate: "2026-06-09",
           localTime: "15:15",
           guestName: "Test Guest",
           guestEmail: "test.com",
@@ -3268,7 +3268,7 @@ describe("ME3 Core Worker auth", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           offerId: "free-session",
-          localDate: "2026-06-02",
+          localDate: "2026-06-09",
           localTime: "15:15",
           guestName: "First Guest",
           guestEmail: "first@example.com",
@@ -3284,7 +3284,7 @@ describe("ME3 Core Worker auth", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           offerId: "free-session",
-          localDate: "2026-06-02",
+          localDate: "2026-06-09",
           localTime: "15:30",
           guestName: "Second Guest",
           guestEmail: "second@example.com",

@@ -2,6 +2,7 @@ import type { Env } from "./types";
 import { AGENT_CHAT_RUNTIME } from "./agent-chat";
 import { CALENDAR_RUNTIME } from "./calendar";
 import { ACCOUNTS_PLUGIN_ID } from "./accounts";
+import { JOURNAL_PLUGIN_ID, JOURNAL_RUNTIME } from "@me3-core/plugin-journal";
 import { LANDING_PAGES_RUNTIME } from "@me3-core/plugin-landing-pages";
 import { LOCAL_EXECUTOR_PLUGIN_ID, LOCAL_EXECUTOR_RUNTIME } from "@me3-core/plugin-local-executor";
 import { MISSION_CONTROL_RUNTIME } from "@me3-core/plugin-mission-control";
@@ -955,9 +956,73 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
   ],
 };
 
+const JOURNAL_PLUGIN: CorePluginManifestSummary = {
+  schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
+  id: JOURNAL_PLUGIN_ID,
+  name: "ME3 Journal",
+  version: "0.1.0",
+  description:
+    "Private daily writing workspace for notes, braindumps, drafts, and longer-form capture.",
+  trustTier: "first_party",
+  distribution: "workspace_package",
+  installMode: "enabled_by_owner_config",
+  defaultEnabled: false,
+  implementationStatus: JOURNAL_RUNTIME.bundled ? "bundled" : "catalog_only",
+  capabilityIds: ["workspace.journal", "journal.entries.manage"],
+  permissions: [
+    {
+      id: "journal.entries.manage",
+      label: "Create and manage private journal entries",
+    },
+  ],
+  routes: [
+    {
+      id: "journal.day.read.api",
+      path: "/api/journal/days/:date",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "journal.day.save.api",
+      path: "/api/journal/days/:date",
+      methods: ["PATCH"],
+      auth: "owner",
+    },
+    {
+      id: "journal.archive.api",
+      path: "/api/journal/archive",
+      methods: ["GET"],
+      auth: "owner",
+    },
+  ],
+  uiSlots: [
+    {
+      id: "journal.nav",
+      slot: "dashboard.nav",
+      label: "Journal",
+    },
+  ],
+  agentTools: [],
+  secrets: [],
+  migrations: [
+    {
+      id: "journal.0026",
+      path: "./apps/worker/migrations/0026_journal_plugin.sql",
+      destructive: false,
+    },
+  ],
+  queuesAndCrons: [],
+  notes: [
+    "Bundled through @me3-core/plugin-journal as an optional first-party Core package.",
+    "Journal owns private owner-scoped writing entries; Mission Control owns operational project review.",
+    "Assistant actions from journal text should be added through explicit capabilities in a later pass.",
+  ],
+};
+
 export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   AGENT_CHAT_PLUGIN,
   MISSION_CONTROL_PLUGIN,
+  JOURNAL_PLUGIN,
   ACCOUNTS_PLUGIN,
   CALENDAR_PLUGIN,
   LOCAL_EXECUTOR_PLUGIN,

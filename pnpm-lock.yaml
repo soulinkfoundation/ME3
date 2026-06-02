@@ -17,6 +17,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@me3-core/plugin-journal':
+        specifier: workspace:*
+        version: link:../../packages/journal
       '@me3-core/plugin-landing-pages':
         specifier: workspace:*
         version: link:../../packages/landing-pages
@@ -147,6 +150,9 @@ importers:
       '@me3-core/plugin-calendar':
         specifier: workspace:*
         version: link:../../packages/calendar
+      '@me3-core/plugin-journal':
+        specifier: workspace:*
+        version: link:../../packages/journal
       '@me3-core/plugin-landing-pages':
         specifier: workspace:*
         version: link:../../packages/landing-pages
@@ -212,6 +218,12 @@ importers:
         version: 2.1.9(@types/node@22.19.18)(happy-dom@14.12.3)
 
   packages/calendar:
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+
+  packages/journal:
     devDependencies:
       typescript:
         specifier: ^5.3.3
