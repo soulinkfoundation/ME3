@@ -111,6 +111,7 @@ type AssistantJobVersion = {
   id: string;
   versionNumber: number;
   trigger: AssistantJobTrigger;
+  rules: AssistantJobRule[];
   actions: Array<{
     id: string;
     capabilityId: string;
@@ -126,6 +127,38 @@ type AssistantJobVersion = {
     blocking?: boolean;
   }>;
   createdAt: string;
+};
+
+type AssistantJobRule = {
+  id: string;
+  label: string;
+  field: string;
+  operator: string;
+  value: unknown;
+};
+
+type InboxWatchTiming = "immediate" | "daily_digest" | "weekly_digest" | "manual";
+type InboxWatchInferredLabel =
+  | "needs_reply"
+  | "important"
+  | "finance"
+  | "scheduling"
+  | "review";
+
+type InboxWatchRuleForm = {
+  id: string;
+  label: string;
+  enabled: boolean;
+  timing: InboxWatchTiming;
+  fromAddresses: string;
+  fromDomains: string;
+  subjectContains: string;
+  bodyContains: string;
+  inferredLabels: InboxWatchInferredLabel[];
+  notifyOwner: boolean;
+  summarizeAndLabel: boolean;
+  draftReply: boolean;
+  createTask: boolean;
 };
 
 type AssistantJobActionResult = {
@@ -180,6 +213,8 @@ const scheduleTimeDraft = ref("08:00");
 const scheduleDayOfWeekDraft = ref(1);
 const scheduleDayOfMonthDraft = ref(1);
 const scheduleNotice = ref("");
+const inboxWatchRulesDraft = ref<InboxWatchRuleForm[]>([]);
+const inboxWatchRulesNotice = ref("");
 
 const defaultDailyBriefingTemplate =
   "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -263,6 +298,10 @@ const selectedJobIsDailyBriefing = computed(
   () => selectedDetail.value?.job.recipeId === "daily-briefing",
 );
 
+const selectedJobIsInboxWatch = computed(
+  () => selectedDetail.value?.job.recipeId === "email-triage",
+);
+
 const selectedScheduleTrigger = computed(() => {
   const trigger = selectedDetail.value?.version?.trigger;
   return isScheduleTrigger(trigger) ? trigger : null;
@@ -307,6 +346,18 @@ const scheduleDraftChanged = computed(() => {
 const scheduleTimeValid = computed(() =>
   /^([01]\d|2[0-3]):[0-5]\d$/.test(scheduleTimeDraft.value),
 );
+
+const inboxWatchRulesChanged = computed(() => {
+  if (!selectedJobIsInboxWatch.value) return false;
+  return (
+    JSON.stringify(buildInboxWatchRulePayload(inboxWatchRulesDraft.value)) !==
+    JSON.stringify(
+      buildInboxWatchRulePayload(
+        inboxWatchRuleFormsFromRules(selectedDetail.value?.version?.rules || []),
+      ),
+    )
+  );
+});
 
 onMounted(() => {
   void loadPage();
@@ -364,6 +415,7 @@ async function openJob(jobId: string) {
     dailyBriefingTemplateNotice.value = "";
     loadScheduleDraftFromDetail();
     scheduleNotice.value = "";
+    loadInboxWatchRulesDraftFromDetail();
   } catch (err) {
     closeDetailModal();
     toastFromUnknown(err, "Could not load job details.");
@@ -514,6 +566,42 @@ async function saveJobSchedule() {
   });
 }
 
+async function saveInboxWatchRules() {
+  const job = selectedDetail.value?.job;
+  if (!job || !selectedJobIsInboxWatch.value || !inboxWatchRulesChanged.value)
+    return;
+
+  await withBusy(`inbox-watch-rules:${job.id}`, async () => {
+    const response = await api.patch<{ job: AssistantJob }>(
+      `/assistant/jobs/${encodeURIComponent(job.id)}`,
+      {
+        inboxWatchRules: buildInboxWatchRulePayload(inboxWatchRulesDraft.value),
+      },
+    );
+    jobs.value = jobs.value.map((item) =>
+      item.id === job.id ? response.job : item,
+    );
+    await openJob(job.id);
+    inboxWatchRulesNotice.value = "Rules saved.";
+  });
+}
+
+function addInboxWatchRule() {
+  inboxWatchRulesDraft.value = [
+    ...inboxWatchRulesDraft.value,
+    defaultInboxWatchRuleForm(),
+  ];
+  inboxWatchRulesNotice.value = "";
+}
+
+function removeInboxWatchRule(ruleId: string) {
+  if (inboxWatchRulesDraft.value.length <= 1) return;
+  inboxWatchRulesDraft.value = inboxWatchRulesDraft.value.filter(
+    (rule) => rule.id !== ruleId,
+  );
+  inboxWatchRulesNotice.value = "";
+}
+
 function resetDailyBriefingTemplate() {
   dailyBriefingTemplateDraft.value = defaultDailyBriefingTemplate;
   dailyBriefingTemplateNotice.value = "";
@@ -543,6 +631,8 @@ function closeDetailModal() {
   selectedDetail.value = null;
   dailyBriefingTemplateNotice.value = "";
   scheduleNotice.value = "";
+  inboxWatchRulesNotice.value = "";
+  inboxWatchRulesDraft.value = [];
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
@@ -698,6 +788,132 @@ function formatDate(value: string | null) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+function loadInboxWatchRulesDraftFromDetail() {
+  inboxWatchRulesNotice.value = "";
+  inboxWatchRulesDraft.value = inboxWatchRuleFormsFromRules(
+    selectedDetail.value?.version?.rules || [],
+  );
+}
+
+function inboxWatchRuleFormsFromRules(
+  rules: AssistantJobRule[],
+): InboxWatchRuleForm[] {
+  const forms = rules
+    .map((rule) => inboxWatchRuleFormFromRule(rule))
+    .filter((rule): rule is InboxWatchRuleForm => Boolean(rule));
+  return forms.length ? forms : [defaultInboxWatchRuleForm("any-inbox-message")];
+}
+
+function inboxWatchRuleFormFromRule(
+  rule: AssistantJobRule,
+): InboxWatchRuleForm | null {
+  const value = isRecord(rule.value) ? rule.value : {};
+  const match = isRecord(value.match) ? value.match : {};
+  const actions = isRecord(value.actions) ? value.actions : {};
+  return {
+    id: rule.id || crypto.randomUUID(),
+    label: rule.label || "Inbox Watch rule",
+    enabled: value.enabled !== false,
+    timing: normalizeInboxWatchTiming(value.timing),
+    fromAddresses: listToLines(match.fromAddresses),
+    fromDomains: listToLines(match.fromDomains),
+    subjectContains: listToLines(match.subjectContains),
+    bodyContains: listToLines(match.bodyContains),
+    inferredLabels: normalizeInboxWatchLabels(match.inferredLabels),
+    notifyOwner: actions.notifyOwner === true,
+    summarizeAndLabel: actions.summarizeAndLabel !== false,
+    draftReply: actions.draftReply === true,
+    createTask: actions.createTask === true,
+  };
+}
+
+function defaultInboxWatchRuleForm(id: string = crypto.randomUUID()): InboxWatchRuleForm {
+  return {
+    id,
+    label: "Any inbox email",
+    enabled: true,
+    timing: "daily_digest",
+    fromAddresses: "",
+    fromDomains: "",
+    subjectContains: "",
+    bodyContains: "",
+    inferredLabels: [],
+    notifyOwner: false,
+    summarizeAndLabel: true,
+    draftReply: false,
+    createTask: false,
+  };
+}
+
+function buildInboxWatchRulePayload(
+  rules: InboxWatchRuleForm[],
+): AssistantJobRule[] {
+  return rules.map((rule) => ({
+    id: rule.id,
+    label: rule.label.trim() || "Inbox Watch rule",
+    field: "inbox_watch.rule",
+    operator: "matches",
+    value: {
+      enabled: rule.enabled,
+      timing: rule.timing,
+      match: {
+        fromAddresses: linesToList(rule.fromAddresses),
+        fromDomains: linesToList(rule.fromDomains),
+        subjectContains: linesToList(rule.subjectContains),
+        bodyContains: linesToList(rule.bodyContains),
+        inferredLabels: rule.inferredLabels,
+      },
+      actions: {
+        notifyOwner: rule.notifyOwner,
+        summarizeAndLabel: rule.summarizeAndLabel,
+        draftReply: rule.draftReply,
+        createTask: rule.createTask,
+      },
+    },
+  }));
+}
+
+function listToLines(value: unknown) {
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function linesToList(value: string) {
+  return value
+    .split(/\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeInboxWatchTiming(value: unknown): InboxWatchTiming {
+  return value === "immediate" ||
+    value === "daily_digest" ||
+    value === "weekly_digest" ||
+    value === "manual"
+    ? value
+    : "daily_digest";
+}
+
+function normalizeInboxWatchLabels(value: unknown): InboxWatchInferredLabel[] {
+  const allowed = new Set<InboxWatchInferredLabel>([
+    "needs_reply",
+    "important",
+    "finance",
+    "scheduling",
+    "review",
+  ]);
+  return Array.isArray(value)
+    ? value.filter((item): item is InboxWatchInferredLabel => allowed.has(item))
+    : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function loadScheduleDraftFromDetail() {
@@ -1238,6 +1454,197 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   @click="saveJobSchedule"
                 >
                   Save schedule
+                </Button>
+              </div>
+            </section>
+
+            <section
+              v-if="selectedJobIsInboxWatch"
+              class="detail-section inbox-watch-settings"
+              aria-labelledby="inbox-watch-rules-title"
+            >
+              <div class="inbox-watch-settings__header">
+                <div>
+                  <h3 id="inbox-watch-rules-title">Watch Rules</h3>
+                  <p>
+                    Match new inbox mail by sender, subject, body text, or
+                    internal labels.
+                  </p>
+                </div>
+                <Button
+                  tone="outline"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  @click="addInboxWatchRule"
+                >
+                  <template #icon>
+                    <UiIcon name="Plus" :size="16" />
+                  </template>
+                  Add rule
+                </Button>
+              </div>
+
+              <div class="inbox-watch-rule-list">
+                <article
+                  v-for="(rule, index) in inboxWatchRulesDraft"
+                  :key="rule.id"
+                  class="inbox-watch-rule"
+                >
+                  <div class="inbox-watch-rule__top">
+                    <label class="inbox-watch-field inbox-watch-field--name">
+                      <span>Rule name</span>
+                      <input v-model="rule.label" type="text" />
+                    </label>
+                    <label class="inbox-watch-field">
+                      <span>Timing</span>
+                      <select v-model="rule.timing">
+                        <option value="immediate">Immediate</option>
+                        <option value="daily_digest">Daily digest</option>
+                        <option value="weekly_digest">Weekly digest</option>
+                        <option value="manual">Manual</option>
+                      </select>
+                    </label>
+                    <label class="job-toggle inbox-watch-rule__toggle">
+                      <input
+                        v-model="rule.enabled"
+                        type="checkbox"
+                        class="job-toggle__input"
+                        :aria-label="
+                          rule.enabled
+                            ? `Disable ${rule.label || `rule ${index + 1}`}`
+                            : `Enable ${rule.label || `rule ${index + 1}`}`
+                        "
+                      />
+                      <span class="job-toggle__track" aria-hidden="true" />
+                    </label>
+                    <button
+                      type="button"
+                      class="icon-button"
+                      title="Remove rule"
+                      aria-label="Remove rule"
+                      :disabled="inboxWatchRulesDraft.length <= 1"
+                      @click="removeInboxWatchRule(rule.id)"
+                    >
+                      <UiIcon name="Trash2" :size="16" />
+                    </button>
+                  </div>
+
+                  <div class="inbox-watch-grid">
+                    <label class="inbox-watch-field">
+                      <span>From addresses</span>
+                      <textarea
+                        v-model="rule.fromAddresses"
+                        rows="3"
+                        placeholder="ada@example.com"
+                      />
+                    </label>
+                    <label class="inbox-watch-field">
+                      <span>From domains</span>
+                      <textarea
+                        v-model="rule.fromDomains"
+                        rows="3"
+                        placeholder="client.com"
+                      />
+                    </label>
+                    <label class="inbox-watch-field">
+                      <span>Subject contains</span>
+                      <textarea
+                        v-model="rule.subjectContains"
+                        rows="3"
+                        placeholder="contract"
+                      />
+                    </label>
+                    <label class="inbox-watch-field">
+                      <span>Body contains</span>
+                      <textarea
+                        v-model="rule.bodyContains"
+                        rows="3"
+                        placeholder="please reply"
+                      />
+                    </label>
+                  </div>
+
+                  <div class="inbox-watch-checks">
+                    <label class="checkbox-pill">
+                      <input
+                        v-model="rule.inferredLabels"
+                        type="checkbox"
+                        value="needs_reply"
+                      />
+                      <span>Needs reply</span>
+                    </label>
+                    <label class="checkbox-pill">
+                      <input
+                        v-model="rule.inferredLabels"
+                        type="checkbox"
+                        value="important"
+                      />
+                      <span>Important</span>
+                    </label>
+                    <label class="checkbox-pill">
+                      <input
+                        v-model="rule.inferredLabels"
+                        type="checkbox"
+                        value="finance"
+                      />
+                      <span>Finance</span>
+                    </label>
+                    <label class="checkbox-pill">
+                      <input
+                        v-model="rule.inferredLabels"
+                        type="checkbox"
+                        value="scheduling"
+                      />
+                      <span>Scheduling</span>
+                    </label>
+                    <label class="checkbox-pill">
+                      <input
+                        v-model="rule.inferredLabels"
+                        type="checkbox"
+                        value="review"
+                      />
+                      <span>Review</span>
+                    </label>
+                  </div>
+
+                  <div class="inbox-watch-actions">
+                    <label class="checkbox-row">
+                      <input v-model="rule.notifyOwner" type="checkbox" />
+                      <span>Notify me</span>
+                    </label>
+                    <label class="checkbox-row">
+                      <input v-model="rule.summarizeAndLabel" type="checkbox" />
+                      <span>Summarize and label</span>
+                    </label>
+                    <label class="checkbox-row">
+                      <input v-model="rule.draftReply" type="checkbox" />
+                      <span>Draft reply for review</span>
+                    </label>
+                    <label class="checkbox-row">
+                      <input v-model="rule.createTask" type="checkbox" />
+                      <span>Create task</span>
+                    </label>
+                  </div>
+                </article>
+              </div>
+
+              <div class="inbox-watch-settings__actions">
+                <span v-if="inboxWatchRulesNotice" class="inline-notice">
+                  {{ inboxWatchRulesNotice }}
+                </span>
+                <Button
+                  tone="green"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="
+                    !inboxWatchRulesChanged ||
+                    isBusy(`inbox-watch-rules:${selectedJob.id}`)
+                  "
+                  @click="saveInboxWatchRules"
+                >
+                  Save rules
                 </Button>
               </div>
             </section>
@@ -1948,6 +2355,127 @@ button:disabled {
   outline-offset: 1px;
 }
 
+.inbox-watch-settings__header,
+.inbox-watch-settings__actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inbox-watch-settings__header p {
+  margin: 4px 0 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.inbox-watch-rule-list {
+  display: grid;
+  gap: 12px;
+}
+
+.inbox-watch-rule {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 12px;
+  background: var(--ui-surface-muted);
+}
+
+.inbox-watch-rule__top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(132px, 160px) auto auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.inbox-watch-rule__toggle {
+  min-height: 40px;
+  align-items: center;
+}
+
+.inbox-watch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.inbox-watch-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.inbox-watch-field input,
+.inbox-watch-field select,
+.inbox-watch-field textarea {
+  width: 100%;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.inbox-watch-field input,
+.inbox-watch-field select {
+  min-height: 40px;
+  padding: 0 10px;
+}
+
+.inbox-watch-field textarea {
+  min-height: 78px;
+  resize: vertical;
+  padding: 9px 10px;
+  line-height: 1.4;
+}
+
+.inbox-watch-field input:focus-visible,
+.inbox-watch-field select:focus-visible,
+.inbox-watch-field textarea:focus-visible {
+  border-color: var(--ui-accent);
+  outline: 2px solid color-mix(in oklab, var(--ui-accent) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.inbox-watch-checks,
+.inbox-watch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.checkbox-pill,
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  color: var(--ui-text);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.checkbox-pill {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 5px 8px;
+  background: var(--ui-surface);
+}
+
+.checkbox-pill input,
+.checkbox-row input {
+  margin: 0;
+}
+
 .briefing-settings__header,
 .briefing-settings__actions {
   display: flex;
@@ -2234,9 +2762,24 @@ button:disabled {
   }
 
   .schedule-settings__header,
-  .schedule-settings__actions {
+  .schedule-settings__actions,
+  .inbox-watch-settings__header,
+  .inbox-watch-settings__actions {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .inbox-watch-rule__top,
+  .inbox-watch-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inbox-watch-rule__top {
+    align-items: stretch;
+  }
+
+  .inbox-watch-rule__toggle {
+    min-height: 28px;
   }
 
   .assistant-modal {

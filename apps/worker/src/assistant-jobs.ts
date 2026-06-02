@@ -13,6 +13,7 @@ import {
   type AssistantJobApprovalMode,
   type AssistantCapability,
   type AssistantJobDraft,
+  type AssistantJobRule,
   type AssistantJobDraftValidation,
   type AssistantJobStarterRecipe,
   type AssistantJobContextResult,
@@ -386,6 +387,7 @@ type UpdateAssistantJobBody = {
   projectId?: unknown;
   schedule?: unknown;
   dailyBriefingMessageTemplate?: unknown;
+  inboxWatchRules?: unknown;
 };
 
 type AssistantJobSchedulePatch = {
@@ -1028,6 +1030,9 @@ export async function updateAssistantJob(
   const schedulePatch = isRecord(body.schedule)
     ? (body.schedule as AssistantJobSchedulePatch)
     : null;
+  const inboxWatchRules = Array.isArray(body.inboxWatchRules)
+    ? (body.inboxWatchRules as AssistantJobRule[])
+    : null;
 
   if (status === "archived") {
     throw new AssistantJobsInputError("Use DELETE to archive a job");
@@ -1041,7 +1046,7 @@ export async function updateAssistantJob(
   let nextTriggerSummary: string | null = null;
   let nextRunAt: string | null = null;
 
-  if (dailyBriefingMessageTemplate !== null || schedulePatch) {
+  if (dailyBriefingMessageTemplate !== null || schedulePatch || inboxWatchRules) {
     if (!version) throw new AssistantJobsInputError("Job version not found", 404);
     let nextDraft = draftFromVersion(existing, version);
 
@@ -1056,6 +1061,12 @@ export async function updateAssistantJob(
     }
     if (schedulePatch) {
       nextDraft = await withUpdatedScheduleTrigger(env, userId, nextDraft, schedulePatch);
+    }
+    if (inboxWatchRules) {
+      if (existing.recipe_id !== "email-triage") {
+        throw new AssistantJobsInputError("Inbox Watch rules can only be set on Inbox Watch jobs", 409);
+      }
+      nextDraft = withInboxWatchRules(nextDraft, inboxWatchRules);
     }
 
     const validation = await validateAssistantJobDraftForUser(env, userId, nextDraft);
@@ -2420,6 +2431,28 @@ function withDailyBriefingMessageTemplate(
           }
         : action,
     ),
+  };
+}
+
+function withInboxWatchRules(
+  draft: AssistantJobDraft,
+  rules: readonly AssistantJobRule[],
+): AssistantJobDraft {
+  const normalizedRules = rules
+    .filter((rule) => isRecord(rule) && normalizeOptionalText(rule.id))
+    .map((rule) => ({
+      id: normalizeOptionalText(rule.id) || crypto.randomUUID(),
+      label: normalizeOptionalText(rule.label) || "Inbox Watch rule",
+      field: "inbox_watch.rule",
+      operator: "matches",
+      value: isRecord(rule.value) ? rule.value : {},
+    }));
+  if (normalizedRules.length === 0) {
+    throw new AssistantJobsInputError("At least one Inbox Watch rule is required");
+  }
+  return {
+    ...draft,
+    rules: normalizedRules,
   };
 }
 
