@@ -268,6 +268,7 @@ const inboxWatchRulesNotice = ref("");
 const assistantDraft = ref("");
 const assistantSending = ref(false);
 const assistantError = ref<string | null>(null);
+const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
 const selectedModelId = ref("workers-qwen3-30b");
@@ -492,23 +493,34 @@ function useStarterPrompt(prompt: string) {
   });
 }
 
-async function sendAssistantMessage() {
-  if (!canSendAssistantMessage.value) return;
+function assistantMessageKey(message: { id?: string; role: string; text: string }, index?: number) {
+  return message.id || `${message.role}:${index ?? 0}:${message.text.slice(0, 32)}`;
+}
 
-  const text = assistantDraft.value.trim();
-  assistantDraft.value = "";
+function newAssistantMessageId(role: "user" | "assistant") {
+  return `${role}:${crypto.randomUUID()}`;
+}
+
+function assistantMessageIndex(message: (typeof chatMessages.value)[number]) {
+  return chatMessages.value.indexOf(message);
+}
+
+async function submitAssistantText(text: string) {
+  const normalized = text.trim();
+  if (!normalized || assistantSending.value) return;
+
   assistantError.value = null;
-  autosizeAssistantComposer();
   agentChat.appendMessage({
+    id: newAssistantMessageId("user"),
     role: "user",
-    text,
+    text: normalized,
   });
   assistantSending.value = true;
   await scrollAssistantToBottom();
 
   try {
     const result = await api.post<AgentSandboxResponse>("/assistant/chat/turn", {
-      messageText: text,
+      messageText: normalized,
       model: selectedModel.value
         ? {
             providerId: selectedModel.value.providerId,
@@ -519,6 +531,7 @@ async function sendAssistantMessage() {
     });
 
     agentChat.appendMessage({
+      id: newAssistantMessageId("assistant"),
       role: "assistant",
       text: resolveAgentReplyText(result.replyText),
       meta: formatAgentRuntimeMetadata(result, {
@@ -538,6 +551,7 @@ async function sendAssistantMessage() {
     const message = messageFromUnknown(err, "Failed to reach ME3 right now.");
     assistantError.value = message;
     agentChat.appendMessage({
+      id: newAssistantMessageId("assistant"),
       role: "assistant",
       text: "I couldn't complete that turn just yet.",
       detail: message,
@@ -549,6 +563,88 @@ async function sendAssistantMessage() {
     autosizeAssistantComposer();
     assistantComposerRef.value?.focus();
   }
+}
+
+async function sendAssistantMessage() {
+  if (!canSendAssistantMessage.value) return;
+
+  const text = assistantDraft.value.trim();
+  assistantDraft.value = "";
+  autosizeAssistantComposer();
+  await submitAssistantText(text);
+}
+
+async function copyAssistantMessage(
+  message: (typeof chatMessages.value)[number],
+  index: number,
+) {
+  const text = message.text.trim();
+  if (!text) return;
+
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+  }
+
+  copiedMessageKey.value = assistantMessageKey(message, index);
+  window.setTimeout(() => {
+    if (copiedMessageKey.value === assistantMessageKey(message, index)) {
+      copiedMessageKey.value = null;
+    }
+  }, 1500);
+}
+
+async function retryAssistantTurn(message: (typeof chatMessages.value)[number]) {
+  if (assistantSending.value) return;
+
+  const startIndex =
+    message.role === "user"
+      ? assistantMessageIndex(message)
+      : findPreviousUserMessageIndex(message);
+  if (startIndex < 0) return;
+
+  const text = chatMessages.value[startIndex]?.text.trim();
+  if (!text) return;
+
+  chatMessages.value.splice(startIndex);
+  await submitAssistantText(text);
+}
+
+function editAndResendAssistantTurn(message: (typeof chatMessages.value)[number]) {
+  if (assistantSending.value || message.role !== "user") return;
+
+  const index = assistantMessageIndex(message);
+  if (index < 0) return;
+
+  assistantDraft.value = message.text;
+  assistantError.value = null;
+  chatMessages.value.splice(index);
+  void nextTick(() => {
+    autosizeAssistantComposer();
+    assistantComposerRef.value?.focus();
+  });
+}
+
+function findPreviousUserMessageIndex(message: (typeof chatMessages.value)[number]) {
+  const index = assistantMessageIndex(message);
+  if (index < 0) return -1;
+
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (chatMessages.value[cursor]?.role === "user") {
+      return cursor;
+    }
+  }
+
+  return -1;
 }
 
 function onAssistantComposerKeydown(event: KeyboardEvent) {
@@ -1342,6 +1438,54 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   {{ message.actionLabel }}
                 </a>
               </div>
+            </div>
+            <div class="assistant-message__tools" aria-label="Message actions">
+              <button
+                v-if="message.role === 'assistant'"
+                type="button"
+                class="assistant-message-tool"
+                :aria-label="
+                  copiedMessageKey === assistantMessageKey(message, index)
+                    ? 'Copied'
+                    : 'Copy message'
+                "
+                :title="
+                  copiedMessageKey === assistantMessageKey(message, index)
+                    ? 'Copied'
+                    : 'Copy'
+                "
+                @click="copyAssistantMessage(message, index)"
+              >
+                <UiIcon
+                  :name="
+                    copiedMessageKey === assistantMessageKey(message, index)
+                      ? 'Check'
+                      : 'Copy'
+                  "
+                  :size="14"
+                />
+              </button>
+              <button
+                v-if="message.role === 'user'"
+                type="button"
+                class="assistant-message-tool"
+                aria-label="Edit and resend"
+                title="Edit"
+                :disabled="assistantSending"
+                @click="editAndResendAssistantTurn(message)"
+              >
+                <UiIcon name="Pencil" :size="14" />
+              </button>
+              <button
+                type="button"
+                class="assistant-message-tool"
+                aria-label="Retry from here"
+                title="Retry"
+                :disabled="assistantSending"
+                @click="retryAssistantTurn(message)"
+              >
+                <UiIcon name="RefreshCw" :size="14" />
+              </button>
             </div>
           </article>
 
@@ -2272,15 +2416,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-message {
   display: flex;
+  flex-direction: column;
+  gap: 5px;
   min-width: 0;
 }
 
 .assistant-message--assistant {
-  justify-content: flex-start;
+  align-items: flex-start;
 }
 
 .assistant-message--user {
-  justify-content: flex-end;
+  align-items: flex-end;
 }
 
 .assistant-message__bubble {
@@ -2332,6 +2478,38 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font-size: 12px;
   font-weight: 800;
   text-decoration: none;
+}
+
+.assistant-message__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+  padding: 0 4px;
+  color: var(--ui-text-muted);
+}
+
+.assistant-message-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.assistant-message-tool:hover:not(:disabled) {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.assistant-message-tool:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .assistant-typing {
