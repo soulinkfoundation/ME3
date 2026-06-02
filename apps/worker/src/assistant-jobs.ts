@@ -278,6 +278,25 @@ type DailyBriefingReminderRow = {
   status: string;
 };
 
+type WeeklyReviewReminderRow = {
+  id: string;
+  title: string;
+  remind_at: string | null;
+  status: string;
+};
+
+type WeeklyReviewJournalRow = {
+  id: string;
+  date: string;
+  journal_text: string;
+};
+
+type WeeklyReviewMemoryRow = {
+  id: string;
+  title: string | null;
+  body: string;
+};
+
 type DailyBriefingRenderContext = {
   ownerName: string;
   dateKey: string;
@@ -1815,6 +1834,80 @@ async function createAssistantJobOwnerNotification(
   }
 }
 
+async function sendWeeklyReviewOwnerNotificationIfConnected(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+  },
+) {
+  const connection = await getActiveOwnerNotificationConnection(env, input.userId);
+  if (!connection) return;
+  const providerEventId = `${input.run.id}:weekly-review-ready`;
+  const existingEvent = await getAgentChannelEventByProviderEventId(
+    env,
+    connection.id,
+    providerEventId,
+  );
+  if (existingEvent?.status === "sent" || existingEvent?.status === "pending") return;
+
+  const review = await buildWeeklyReviewResult(env, input.userId, input.run.id);
+  const message = `Weekly Review is ready: ${review.openTasks.length} open tasks, ${review.completedTasks.length} completed, ${review.reminders.length} reminders, ${review.memorySuggestions.length} memory suggestions.`;
+  const eventId = await insertOwnerNotificationChannelEvent(env, {
+    connection,
+    providerEventId,
+    status: "pending",
+    message,
+    rawJson: {
+      assistantJobId: input.job.id,
+      assistantJobRunId: input.run.id,
+      notificationKind: "weekly_review.ready",
+    },
+  });
+
+  const response = await fetch(`${getSoulinkApiOrigin(env)}/api/me3/assistant-channel/notify`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${connection.setup_token}`,
+      "Content-Type": "application/json",
+    },
+    body: stringifyJson({
+      streamChannelType: connection.provider_connection_id || "messaging",
+      streamChannelId: connection.provider_thread_id,
+      messageId: providerEventId,
+      messageText: message,
+      createdAt: new Date().toISOString(),
+    }),
+  });
+  const payload = await response.json().catch(() => null) as OwnerNotificationResult | null;
+  if (!response.ok || payload?.ok !== true) {
+    await updateOwnerNotificationChannelEvent(env, {
+      eventId,
+      status: "failed",
+      providerMessageId: normalizeOptionalText(payload?.messageId),
+      rawJson: payload,
+      errorMessage:
+        normalizeOptionalText(payload?.error) ||
+        `Soulink notification failed with ${response.status}`,
+    });
+    return;
+  }
+
+  await updateOwnerNotificationChannelEvent(env, {
+    eventId,
+    status: "sent",
+    providerMessageId:
+      normalizeOptionalText(payload.messageId) ||
+      normalizeOptionalText(payload.eventId) ||
+      providerEventId,
+    rawJson: payload,
+    errorMessage: null,
+  });
+  await updateOwnerNotificationConnectionSentAt(env, connection.id);
+}
+
 async function resolveOwnerNotificationMessage(
   env: Env,
   input: {
@@ -1825,6 +1918,11 @@ async function resolveOwnerNotificationMessage(
     action: AssistantJobAction;
   },
 ) {
+  if (isWeeklyReviewJob(input.job, input.draft)) {
+    const review = await buildWeeklyReviewResult(env, input.userId, input.run.id);
+    return `Weekly Review is ready: ${review.openTasks.length} open tasks, ${review.completedTasks.length} completed, ${review.reminders.length} reminders, ${review.memorySuggestions.length} memory suggestions.`;
+  }
+
   if (input.job.recipe_id === "daily-briefing" || input.draft.recipeId === "daily-briefing") {
     const template =
       missionTextInput(input.action, "messageTemplate") ||
@@ -2004,6 +2102,13 @@ async function createAssistantJobMissionActivity(
     )
     .run();
 
+  if (
+    defaultActivityType === "assistant_job.review_packet" &&
+    isWeeklyReviewJob(input.job, input.draft)
+  ) {
+    await sendWeeklyReviewOwnerNotificationIfConnected(env, input).catch(() => null);
+  }
+
   return insertAssistantJobActionResult(env, {
     runId: input.run.id,
     actionId: input.action.id,
@@ -2050,6 +2155,18 @@ async function buildGeneratedMissionActivity(
       title: `${jobName}: ${triage.messageCount} message${triage.messageCount === 1 ? "" : "s"} reviewed`,
       summary: formatEmailTriageMissionSummary(triage),
       metadata: { emailTriage: triage },
+    };
+  }
+
+  if (
+    defaultActivityType === "assistant_job.review_packet" &&
+    isWeeklyReviewJob(input.job, input.draft)
+  ) {
+    const review = await buildWeeklyReviewResult(env, input.userId, input.run.id);
+    return {
+      title: `Weekly Review: ${review.weekLabel}`,
+      summary: review.journalSummary,
+      metadata: { weeklyReview: review },
     };
   }
 
@@ -2307,6 +2424,9 @@ async function upsertAssistantJobMissionAgentRun(
           assistantJobStatus: input.run.status,
           outputPreview: input.outputPreview || input.run.output_preview || null,
           actionResults: input.actionResults || [],
+          ...(isWeeklyReviewJob(input.job, input.draft)
+            ? { weeklyReview: await buildWeeklyReviewResult(env, userId, input.run.id) }
+            : {}),
         },
         input.context,
       )
@@ -2316,6 +2436,9 @@ async function upsertAssistantJobMissionAgentRun(
         assistantJobStatus: input.run.status,
         outputPreview: input.outputPreview || input.run.output_preview || null,
         actionResults: input.actionResults || [],
+        ...(isWeeklyReviewJob(input.job, input.draft)
+          ? { weeklyReview: await buildWeeklyReviewResult(env, userId, input.run.id) }
+          : {}),
         contextPacketId: null,
         contextManifest: null,
       };
@@ -3458,6 +3581,225 @@ function formatDailyTasks(tasks: Me3AgentContextTask[], dateKey: string) {
   ].join("\n");
 }
 
+function isWeeklyReviewJob(job: AssistantJobRow, draft: AssistantJobDraft) {
+  return job.recipe_id === "weekly-review" || draft.recipeId === "weekly-review";
+}
+
+async function buildWeeklyReviewResult(env: Env, userId: string, runId: string) {
+  const now = new Date();
+  const reviewDate = now.toISOString().slice(0, 10);
+  const weekStart = addIsoDays(reviewDate, -6);
+  const [openTasks, completedTasks, reminders, journalRows, memoryRows] = await Promise.all([
+    loadWeeklyReviewOpenTasks(env, userId),
+    loadWeeklyReviewCompletedTasks(env, userId, weekStart, reviewDate),
+    loadWeeklyReviewReminders(env, userId),
+    loadWeeklyReviewJournalRows(env, userId, weekStart, reviewDate),
+    loadWeeklyReviewMemoryRows(env, userId),
+  ]);
+  const journalSummary = summarizeWeeklyJournalNotes(journalRows);
+  const memorySuggestions = suggestWeeklyReviewMemory(journalRows, memoryRows, openTasks);
+
+  return {
+    kind: "weekly_review",
+    version: 1,
+    runId,
+    reviewDate,
+    weekStart,
+    weekEnd: reviewDate,
+    weekLabel: `${weekStart} to ${reviewDate}`,
+    openTasks: openTasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      projectId: task.projectId,
+      dueAt: task.dueAt,
+      status: task.status,
+      suggestedCarryOver: true,
+    })),
+    completedTasks: completedTasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      projectId: task.projectId,
+      completedAt: task.updatedAt,
+    })),
+    reminders: reminders.map((reminder) => ({
+      id: reminder.id,
+      title: reminder.title,
+      remindAt: reminder.remind_at,
+      status: reminder.status,
+    })),
+    journalSummary,
+    memorySuggestions,
+  };
+}
+
+async function loadWeeklyReviewOpenTasks(env: Env, userId: string) {
+  return loadAssistantJobTasksContext(env, userId, []);
+}
+
+async function loadWeeklyReviewCompletedTasks(
+  env: Env,
+  userId: string,
+  weekStart: string,
+  weekEnd: string,
+) {
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, project_id, title, description, status, priority, due_at,
+            scheduled_for, source_kind, source_ref, approval_id, metadata_json,
+            created_at, updated_at, archived_at
+     FROM mission_tasks
+     WHERE user_id = ?
+       AND status = 'done'
+       AND substr(updated_at, 1, 10) >= ?
+       AND substr(updated_at, 1, 10) <= ?
+     ORDER BY updated_at DESC
+     LIMIT 20`,
+  )
+    .bind(userId, weekStart, weekEnd)
+    .all<MissionTaskContextRow>()
+    .catch(() => ({ results: [] as MissionTaskContextRow[] }));
+
+  return (rows.results || []).map((row) => ({
+    id: row.id,
+    title: row.title,
+    projectId: row.project_id,
+    updatedAt: row.updated_at,
+  }));
+}
+
+async function loadWeeklyReviewReminders(env: Env, userId: string) {
+  const rows = await env.DB.prepare(
+    `SELECT id, title, remind_at, status
+     FROM user_reminders
+     WHERE user_id = ? AND status = 'pending'
+     ORDER BY remind_at ASC
+     LIMIT 20`,
+  )
+    .bind(userId)
+    .all<WeeklyReviewReminderRow>()
+    .catch(() => ({ results: [] as WeeklyReviewReminderRow[] }));
+  return rows.results || [];
+}
+
+async function loadWeeklyReviewJournalRows(
+  env: Env,
+  userId: string,
+  weekStart: string,
+  weekEnd: string,
+) {
+  const rows = await env.DB.prepare(
+    `SELECT id, date, journal_text
+     FROM mission_daily_notes
+     WHERE user_id = ?
+       AND date >= ?
+       AND date <= ?
+       AND LENGTH(TRIM(REPLACE(REPLACE(journal_text, char(10), ' '), char(13), ' '))) > 0
+     ORDER BY date ASC
+     LIMIT 14`,
+  )
+    .bind(userId, weekStart, weekEnd)
+    .all<WeeklyReviewJournalRow>()
+    .catch(() => ({ results: [] as WeeklyReviewJournalRow[] }));
+  return rows.results || [];
+}
+
+async function loadWeeklyReviewMemoryRows(env: Env, userId: string) {
+  const rows = await env.DB.prepare(
+    `SELECT id, title, body
+     FROM mission_private_memory
+     WHERE user_id = ? AND review_status = 'active'
+     ORDER BY updated_at DESC
+     LIMIT 100`,
+  )
+    .bind(userId)
+    .all<WeeklyReviewMemoryRow>()
+    .catch(() => ({ results: [] as WeeklyReviewMemoryRow[] }));
+  return rows.results || [];
+}
+
+function summarizeWeeklyJournalNotes(rows: WeeklyReviewJournalRow[]) {
+  const snippets = rows
+    .map((row) => normalizeWhitespace(row.journal_text))
+    .filter(Boolean);
+  if (snippets.length === 0) {
+    return "No journal notes were captured this week. The review is based on tasks and reminders.";
+  }
+  const combined = snippets.join(" ");
+  const sentences = combined.match(/[^.!?]+[.!?]?/g)?.map((item) => item.trim()).filter(Boolean) || [
+    combined,
+  ];
+  const summary = sentences.slice(0, 3).join(" ");
+  return truncateText(summary, 360);
+}
+
+function suggestWeeklyReviewMemory(
+  journalRows: WeeklyReviewJournalRow[],
+  memoryRows: WeeklyReviewMemoryRow[],
+  openTasks: Me3AgentContextTask[],
+) {
+  const sourceLines = [
+    ...journalRows.flatMap((row) =>
+      row.journal_text
+        .split(/\n+/)
+        .map((line) => normalizeWhitespace(line))
+        .filter((line) => line.length >= 18),
+    ),
+    ...openTasks.slice(0, 4).map((task) => `Ongoing task pattern: ${task.title}`),
+  ];
+  const existing = memoryRows
+    .map((row) => `${row.title || ""} ${row.body}`.toLowerCase())
+    .join("\n");
+  const fallback = [
+    "Review recurring open tasks during weekly planning.",
+    "Keep journal notes specific enough to turn into next actions.",
+    "Check whether repeated reminders indicate a routine worth protecting.",
+  ];
+  const candidates = (sourceLines.length ? sourceLines : fallback)
+    .map((line, index) => {
+      const body = truncateText(line, 180);
+      const duplicate = existing.includes(body.toLowerCase().slice(0, 48));
+      const pattern = sourceLines.filter((other) => sharedSignificantWordCount(line, other) >= 2).length > 1;
+      const note = duplicate
+        ? "Similar to existing memory; review before adding."
+        : pattern
+          ? "Repeated pattern across this review."
+          : "New weekly-review suggestion.";
+      return {
+        id: `weekly-memory-${index + 1}`,
+        title: duplicate ? "Possible duplicate" : pattern ? "Repeated pattern" : "Weekly note",
+        body,
+        memoryKind: pattern ? "learning" : "owner_note",
+        duplicate,
+        pattern,
+        note,
+        checked: !duplicate,
+      };
+    })
+    .filter((item, index, all) =>
+      all.findIndex((other) => other.body.toLowerCase() === item.body.toLowerCase()) === index,
+    );
+  return candidates.slice(0, 5);
+}
+
+function sharedSignificantWordCount(left: string, right: string) {
+  if (left === right) return 0;
+  const leftWords = significantWords(left);
+  const rightWords = significantWords(right);
+  return leftWords.filter((word) => rightWords.includes(word)).length;
+}
+
+function significantWords(value: string) {
+  return normalizeWhitespace(value)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 5);
+}
+
+function addIsoDays(date: string, delta: number) {
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + delta);
+  return parsed.toISOString().slice(0, 10);
+}
+
 function dateKeyInTimezone(date: Date, timezone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
@@ -4408,6 +4750,10 @@ async function summarizeAssistantJobRunOutput(
       return `Invoice and Receipt Triage added ${triage.filed} account entr${triage.filed === 1 ? "y" : "ies"}; ${triage.reviewed} need${triage.reviewed === 1 ? "s" : ""} review and ${triage.skipped} skipped.`;
     }
     return "Invoice and Receipt Triage ran successfully. Check Mission Control Accounts for review items.";
+  }
+  if (isWeeklyReviewJob(job, draft)) {
+    const review = await buildWeeklyReviewResult(env, userId, "");
+    return `Weekly Review is ready: ${review.openTasks.length} open tasks, ${review.completedTasks.length} completed, ${review.reminders.length} reminders, ${review.memorySuggestions.length} memory suggestions.`;
   }
   if (
     job.recipe_id === "email-triage" ||

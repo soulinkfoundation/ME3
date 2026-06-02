@@ -175,11 +175,25 @@ describe("assistant jobs persistence", () => {
       },
     });
     expect(env.__state.missionAgentRuns[0]?.prompt_summary).toBe(
-      "Weekly Review ran successfully and created a Mission Control result.",
+      "Weekly Review is ready: 0 open tasks, 0 completed, 0 reminders, 3 memory suggestions.",
     );
     expect(env.__state.missionAgentRuns[0]?.prompt_summary).not.toContain(
       "ME3 agent context packet",
     );
+    expect(JSON.parse(env.__state.missionAgentRuns[0]?.result_json as string)).toMatchObject({
+      weeklyReview: {
+        kind: "weekly_review",
+        openTasks: [],
+        completedTasks: [],
+        reminders: [],
+        memorySuggestions: expect.arrayContaining([
+          expect.objectContaining({
+            body: expect.any(String),
+            note: expect.any(String),
+          }),
+        ]),
+      },
+    });
 
     await archiveAssistantJob(env, "owner", created.job.id);
     const afterArchive = await listAssistantJobs(env, "owner");

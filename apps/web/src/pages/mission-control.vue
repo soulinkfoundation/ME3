@@ -187,6 +187,41 @@ type MissionDailyBriefing = {
   deliveryHint: "soulink" | "mission_control";
 };
 
+type MissionWeeklyReviewTask = {
+  id: string;
+  title: string;
+  projectId: string | null;
+  dueAt?: string | null;
+  completedAt?: string | null;
+  status?: string;
+  suggestedCarryOver?: boolean;
+};
+
+type MissionWeeklyReviewMemorySuggestion = {
+  id: string;
+  title: string;
+  body: string;
+  memoryKind: string;
+  duplicate: boolean;
+  pattern: boolean;
+  note: string;
+  checked?: boolean;
+};
+
+type MissionWeeklyReview = {
+  id: string;
+  runId: string;
+  title: string;
+  reviewDate: string;
+  weekLabel: string;
+  openTasks: MissionWeeklyReviewTask[];
+  completedTasks: MissionWeeklyReviewTask[];
+  reminders: Array<{ id: string; title: string; remindAt: string | null }>;
+  journalSummary: string;
+  memorySuggestions: MissionWeeklyReviewMemorySuggestion[];
+  createdAt: string;
+};
+
 type CorePluginRecord = {
   id: string;
   enabled: boolean;
@@ -249,6 +284,7 @@ type MissionOverviewResponse = {
   recentRuns: MissionRun[];
   activity: MissionActivity[];
   latestBriefing: MissionDailyBriefing | null;
+  latestWeeklyReview: MissionWeeklyReview | null;
 };
 
 type PluginsResponse = { plugins: CorePluginRecord[] };
@@ -348,6 +384,12 @@ const memory = ref<MissionMemory[]>([]);
 const sources = ref<MissionContextSource[]>([]);
 const activity = ref<MissionActivity[]>([]);
 const latestBriefing = ref<MissionDailyBriefing | null>(null);
+const latestWeeklyReview = ref<MissionWeeklyReview | null>(null);
+const weeklyReviewCarryOverIds = ref<Set<string>>(new Set());
+const weeklyReviewMemoryIds = ref<Set<string>>(new Set());
+const weeklyReviewCompletedOpen = ref(false);
+const weeklyReviewSubmitting = ref(false);
+const weeklyReviewSubmittedRunId = ref("");
 const doneCapturesOpen = ref(false);
 const loading = ref(false);
 const error = ref("");
@@ -558,6 +600,19 @@ const visibleDailyBriefing = computed(() => {
   if (isDailyBriefingDismissed(briefing)) return null;
   return briefing;
 });
+const visibleWeeklyReview = computed(() => {
+  const review = latestWeeklyReview.value;
+  if (!review || review.reviewDate !== selectedDate.value) return null;
+  if (weeklyReviewSubmittedRunId.value === review.runId) return null;
+  return review;
+});
+const weeklyReviewSubmitDisabled = computed(
+  () =>
+    weeklyReviewSubmitting.value ||
+    !visibleWeeklyReview.value ||
+    (weeklyReviewCarryOverIds.value.size === 0 &&
+      weeklyReviewMemoryIds.value.size === 0),
+);
 const settingsSectionActive = computed(() =>
   settingsSections.includes(activeSection.value as SettingsMissionSection),
 );
@@ -754,6 +809,8 @@ function applyOverview(response: MissionOverviewResponse) {
   recentRuns.value = response.recentRuns || [];
   activity.value = response.activity || [];
   latestBriefing.value = response.latestBriefing || null;
+  latestWeeklyReview.value = response.latestWeeklyReview || null;
+  resetWeeklyReviewSelection(latestWeeklyReview.value);
   journalDraft.value = response.day?.journalText || "";
   journalState.value = "idle";
   if (!selectedProjectId.value && projects.value[0]) {
@@ -846,6 +903,67 @@ function isDailyBriefingDismissed(briefing: MissionDailyBriefing) {
 function dismissDailyBriefing(briefing: MissionDailyBriefing) {
   window.localStorage.setItem(dailyBriefingDismissKey(briefing), "1");
   latestBriefing.value = { ...briefing, showInJournal: false };
+}
+
+function resetWeeklyReviewSelection(review: MissionWeeklyReview | null) {
+  weeklyReviewCompletedOpen.value = false;
+  if (!review || weeklyReviewSubmittedRunId.value === review.runId) {
+    weeklyReviewCarryOverIds.value = new Set();
+    weeklyReviewMemoryIds.value = new Set();
+    return;
+  }
+  weeklyReviewCarryOverIds.value = new Set(
+    review.openTasks
+      .filter((task) => task.suggestedCarryOver !== false)
+      .map((task) => task.id),
+  );
+  weeklyReviewMemoryIds.value = new Set(
+    review.memorySuggestions
+      .filter((suggestion) => suggestion.checked !== false)
+      .map((suggestion) => suggestion.id),
+  );
+}
+
+function toggleWeeklyReviewTask(taskId: string) {
+  const next = new Set(weeklyReviewCarryOverIds.value);
+  if (next.has(taskId)) next.delete(taskId);
+  else next.add(taskId);
+  weeklyReviewCarryOverIds.value = next;
+}
+
+function toggleWeeklyReviewMemory(suggestionId: string) {
+  const next = new Set(weeklyReviewMemoryIds.value);
+  if (next.has(suggestionId)) next.delete(suggestionId);
+  else next.add(suggestionId);
+  weeklyReviewMemoryIds.value = next;
+}
+
+async function submitWeeklyReview(review: MissionWeeklyReview) {
+  if (weeklyReviewSubmitDisabled.value) return;
+  weeklyReviewSubmitting.value = true;
+  error.value = "";
+  try {
+    await api.post(
+      `/mission-control/weekly-review/${encodeURIComponent(review.runId)}/submit`,
+      {
+        tasks: review.openTasks.map((task) => ({
+          id: task.id,
+          checked: weeklyReviewCarryOverIds.value.has(task.id),
+        })),
+        memorySuggestions: review.memorySuggestions.map((suggestion) => ({
+          ...suggestion,
+          checked: weeklyReviewMemoryIds.value.has(suggestion.id),
+        })),
+      },
+    );
+    weeklyReviewSubmittedRunId.value = review.runId;
+    toastSuccess("Weekly Review submitted");
+    await loadOverview();
+  } catch (e) {
+    toastFromUnknown(e, "Weekly Review could not be submitted");
+  } finally {
+    weeklyReviewSubmitting.value = false;
+  }
 }
 
 async function loadMemoryAndSources() {
@@ -2491,6 +2609,109 @@ onBeforeUnmount(() => {
           >
             <UiIcon name="X" :size="16" />
           </button>
+        </section>
+
+        <section
+          v-if="visibleWeeklyReview"
+          class="weekly-review-panel"
+          aria-label="Weekly Review"
+        >
+          <div class="weekly-review-panel__header">
+            <div>
+              <h2>Weekly Review</h2>
+              <span>{{ visibleWeeklyReview.weekLabel }}</span>
+            </div>
+            <button
+              type="button"
+              class="text-button text-button--primary"
+              :disabled="weeklyReviewSubmitDisabled"
+              @click="submitWeeklyReview(visibleWeeklyReview)"
+            >
+              {{ weeklyReviewSubmitting ? "Submitting..." : "Submit" }}
+            </button>
+          </div>
+
+          <p class="weekly-review-panel__summary">
+            {{ visibleWeeklyReview.journalSummary }}
+          </p>
+
+          <div class="weekly-review-panel__section">
+            <div class="weekly-review-panel__section-header">
+              <strong>Open tasks</strong>
+              <span>{{ visibleWeeklyReview.openTasks.length }}</span>
+            </div>
+            <label
+              v-for="task in visibleWeeklyReview.openTasks"
+              :key="task.id"
+              class="weekly-review-check"
+            >
+              <input
+                type="checkbox"
+                :checked="weeklyReviewCarryOverIds.has(task.id)"
+                @change="toggleWeeklyReviewTask(task.id)"
+              />
+              <span>
+                <strong>{{ task.title }}</strong>
+                <small>{{ projectName(task.projectId) }}</small>
+              </span>
+            </label>
+          </div>
+
+          <div
+            v-if="visibleWeeklyReview.completedTasks.length"
+            class="weekly-review-panel__section"
+          >
+            <button
+              type="button"
+              class="weekly-review-panel__collapse"
+              :aria-expanded="weeklyReviewCompletedOpen"
+              @click="weeklyReviewCompletedOpen = !weeklyReviewCompletedOpen"
+            >
+              <UiIcon name="ChevronDown" :size="14" />
+              Completed ({{ visibleWeeklyReview.completedTasks.length }})
+            </button>
+            <div v-if="weeklyReviewCompletedOpen" class="weekly-review-list">
+              <div
+                v-for="task in visibleWeeklyReview.completedTasks"
+                :key="task.id"
+                class="weekly-review-list__item"
+              >
+                <UiIcon name="SquareCheck" :size="15" />
+                <span>{{ task.title }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="weekly-review-panel__section">
+            <div class="weekly-review-panel__section-header">
+              <strong>Memory suggestions</strong>
+              <span>{{ visibleWeeklyReview.memorySuggestions.length }}</span>
+            </div>
+            <label
+              v-for="suggestion in visibleWeeklyReview.memorySuggestions"
+              :key="suggestion.id"
+              class="weekly-review-check weekly-review-check--memory"
+            >
+              <input
+                type="checkbox"
+                :checked="weeklyReviewMemoryIds.has(suggestion.id)"
+                @change="toggleWeeklyReviewMemory(suggestion.id)"
+              />
+              <span>
+                <strong>{{ suggestion.body }}</strong>
+                <small>{{ suggestion.note }}</small>
+              </span>
+            </label>
+          </div>
+
+          <div
+            v-if="visibleWeeklyReview.reminders.length"
+            class="weekly-review-panel__meta"
+          >
+            {{ visibleWeeklyReview.reminders.length }} reminder{{
+              visibleWeeklyReview.reminders.length === 1 ? "" : "s"
+            }}
+          </div>
         </section>
 
         <form class="capture-row" @submit.prevent="submitCapture">
@@ -4139,6 +4360,118 @@ onBeforeUnmount(() => {
   color: var(--ui-text);
   font-size: 15px;
   line-height: 1.5;
+}
+
+.weekly-review-panel {
+  display: grid;
+  gap: 16px;
+  padding: 0 0 18px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.weekly-review-panel__header,
+.weekly-review-panel__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.weekly-review-panel__header h2 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.weekly-review-panel__header span,
+.weekly-review-panel__section-header span,
+.weekly-review-panel__meta,
+.weekly-review-check small {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+.weekly-review-panel__summary {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.weekly-review-panel__section {
+  display: grid;
+  gap: 8px;
+}
+
+.weekly-review-panel__section-header strong {
+  font-size: 13px;
+}
+
+.weekly-review-check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+}
+
+.weekly-review-check input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--ui-accent);
+}
+
+.weekly-review-check span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.weekly-review-check strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ui-text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.weekly-review-check--memory strong {
+  font-weight: 550;
+}
+
+.weekly-review-panel__collapse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.weekly-review-panel__collapse[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.weekly-review-list {
+  display: grid;
+  gap: 6px;
+}
+
+.weekly-review-list__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ui-text-muted);
+  font-size: 13px;
 }
 
 .capture-row,

@@ -296,6 +296,19 @@ type MissionSetupItem = {
   actionPath: string | null;
 };
 
+type WeeklyReviewTaskInput = {
+  id?: unknown;
+  checked?: unknown;
+};
+
+type WeeklyReviewMemoryInput = {
+  id?: unknown;
+  body?: unknown;
+  title?: unknown;
+  memoryKind?: unknown;
+  checked?: unknown;
+};
+
 const PERSONAL_PROJECT_ID = "mission-project-personal";
 const DEFAULT_OWNER_TIMEZONE = "UTC";
 const ACTIVE_TASK_STATUSES: MissionTaskStatus[] = ["backlog", "in_progress", "review"];
@@ -312,7 +325,7 @@ export async function getMissionControlOverview(
     getMissionSetup(env, userId),
   ]);
 
-  const [tasksDueToday, pendingApprovals, recentRuns, activity, daemon, latestBriefing] =
+  const [tasksDueToday, pendingApprovals, recentRuns, activity, daemon, latestBriefing, latestWeeklyReview] =
     await Promise.all([
       listMissionTasks(env, userId, { dueDate: date, activeOnly: true, limit: 8 }),
       listMissionApprovals(env, userId, "pending", 8),
@@ -320,6 +333,7 @@ export async function getMissionControlOverview(
       listMissionPluginActivity(env, userId, 8),
       getMissionDaemonStatus(env, userId),
       getMissionControlDailyBriefing(env, userId, date),
+      getMissionControlWeeklyReview(env, userId, date),
     ]);
 
   return {
@@ -333,6 +347,7 @@ export async function getMissionControlOverview(
     daemon,
     activity,
     latestBriefing,
+    latestWeeklyReview,
   };
 }
 
@@ -1155,6 +1170,148 @@ async function getMissionControlDailyBriefing(env: Env, userId: string, date: st
     showInJournal: !soulinkConnection,
     deliveryHint: soulinkConnection ? "soulink" : "mission_control",
   };
+}
+
+async function getMissionControlWeeklyReview(env: Env, userId: string, date: string) {
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, source, project_id, task_id, approval_id, title,
+            prompt_summary, status, model, runner_id, started_at, finished_at,
+            cost_json, result_json, artifact_manifest_json, created_at, updated_at
+     FROM mission_agent_runs
+     WHERE user_id = ?
+       AND source = 'core'
+       AND status = 'succeeded'
+     ORDER BY COALESCE(finished_at, started_at, created_at) DESC
+     LIMIT 20`,
+  )
+    .bind(userId)
+    .all<MissionAgentRunRow>()
+    .catch(() => ({ results: [] as MissionAgentRunRow[] }));
+
+  for (const row of rows.results || []) {
+    const result = parseJsonRecord(row.result_json);
+    const review = parseWeeklyReviewResult(result.weeklyReview);
+    if (!review) continue;
+    if (review.reviewDate !== date) continue;
+    return {
+      ...review,
+      id: row.id,
+      runId: row.id,
+      assistantJobRunId:
+        typeof result.assistantJobRunId === "string" ? result.assistantJobRunId : null,
+      title: row.title.replace(/^Assistant Job:\s*/, ""),
+      createdAt: row.finished_at || row.started_at || row.created_at,
+    };
+  }
+  return null;
+}
+
+export async function submitMissionWeeklyReview(
+  env: Env,
+  userId: string,
+  runId: string,
+  input: unknown,
+) {
+  const reviewRun = await env.DB.prepare(
+    `SELECT id, user_id, source, project_id, task_id, approval_id, title,
+            prompt_summary, status, model, runner_id, started_at, finished_at,
+            cost_json, result_json, artifact_manifest_json, created_at, updated_at
+     FROM mission_agent_runs
+     WHERE id = ? AND user_id = ? AND source = 'core'
+     LIMIT 1`,
+  )
+    .bind(runId, userId)
+    .first<MissionAgentRunRow>();
+  if (!reviewRun) throw new MissionControlInputError("Weekly Review not found", 404);
+  const review = parseWeeklyReviewResult(parseJsonRecord(reviewRun.result_json).weeklyReview);
+  if (!review) throw new MissionControlInputError("Weekly Review result is not available", 404);
+
+  const body = isRecord(input) ? input : {};
+  const carryOverIds = new Set(
+    Array.isArray(body.tasks)
+      ? (body.tasks as WeeklyReviewTaskInput[])
+          .filter((item) => item && item.checked === true && typeof item.id === "string")
+          .map((item) => String(item.id))
+      : [],
+  );
+  const selectedMemory = Array.isArray(body.memorySuggestions)
+    ? (body.memorySuggestions as WeeklyReviewMemoryInput[]).filter(
+        (item) => item && item.checked === true && normalizeNullableText(item.body),
+      )
+    : [];
+  const dayId = missionDailyNoteId(userId, review.reviewDate);
+  const now = new Date().toISOString();
+  const carriedTaskIds = review.openTasks
+    .map((task) => normalizeNullableText(task.id))
+    .filter((taskId): taskId is string => taskId !== null)
+    .filter((taskId) => carryOverIds.has(taskId));
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO mission_daily_notes
+       (id, user_id, date, title, journal_text, created_at, updated_at)
+     VALUES (?, ?, ?, ?, '', ?, ?)`,
+  )
+    .bind(dayId, userId, review.reviewDate, `Weekly Review - ${review.reviewDate}`, now, now)
+    .run();
+
+  for (const taskId of carriedTaskIds) {
+    const task = await getMissionTask(env, userId, taskId);
+    if (!task || task.archived_at || task.status === "done" || task.status === "cancelled") {
+      continue;
+    }
+    await env.DB.prepare(
+      `UPDATE mission_tasks
+       SET scheduled_for = ?, updated_at = datetime('now')
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(review.reviewDate, taskId, userId)
+      .run();
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO mission_capture_items
+         (id, user_id, day_id, type, text, project_id, status, task_id,
+          calendar_event_id, reminder_id, due_at, event_start_at, event_end_at,
+          timezone, sync_status, sync_error, source, source_ref, created_at, updated_at)
+       VALUES (?, ?, ?, 'task', ?, ?, 'open', ?, NULL, NULL, NULL, NULL, NULL,
+         NULL, 'local', NULL, 'carry_over', ?, ?, ?)`,
+    )
+      .bind(
+        `weekly-review:${runId}:task:${taskId}`,
+        userId,
+        dayId,
+        task.title,
+        task.project_id,
+        taskId,
+        `${runId}:${taskId}`,
+        now,
+        now,
+      )
+      .run();
+  }
+
+  const memoryIds: string[] = [];
+  for (const suggestion of selectedMemory.slice(0, 5)) {
+    const result = await createMissionMemory(env, userId, {
+      memoryKind: normalizeMemoryKind(suggestion.memoryKind) || "owner_note",
+      scopeKind: "owner",
+      title: normalizeNullableText(suggestion.title) || "Weekly Review suggestion",
+      body: normalizeNullableText(suggestion.body),
+      confidence: 0.75,
+      sourceKind: "agent",
+      sourceRef: `${runId}:${normalizeNullableText(suggestion.id) || crypto.randomUUID()}`,
+    });
+    memoryIds.push(result.memory.id);
+  }
+
+  await appendMissionPluginActivity(env, userId, {
+    pluginId: "me3.mission-control",
+    activityType: "weekly_review.submitted",
+    title: "Weekly Review submitted",
+    summary: `${carriedTaskIds.length} task${carriedTaskIds.length === 1 ? "" : "s"} carried over; ${memoryIds.length} memory suggestion${memoryIds.length === 1 ? "" : "s"} queued.`,
+    status: "succeeded",
+    relatedId: runId,
+  });
+
+  return { ok: true, carriedTaskIds, memoryIds };
 }
 
 export async function clearMissionActivity(env: Env, userId: string) {
@@ -2325,6 +2482,32 @@ function parseDailyBriefingMetadata(metadata: Record<string, unknown>) {
   return { message, date };
 }
 
+function parseWeeklyReviewResult(value: unknown) {
+  if (!isRecord(value)) return null;
+  const reviewDate = typeof value.reviewDate === "string" ? value.reviewDate : null;
+  if (!reviewDate) return null;
+  return {
+    kind: "weekly_review",
+    version: typeof value.version === "number" ? value.version : 1,
+    reviewDate,
+    weekStart: typeof value.weekStart === "string" ? value.weekStart : reviewDate,
+    weekEnd: typeof value.weekEnd === "string" ? value.weekEnd : reviewDate,
+    weekLabel: typeof value.weekLabel === "string" ? value.weekLabel : reviewDate,
+    openTasks: normalizeWeeklyReviewArray(value.openTasks),
+    completedTasks: normalizeWeeklyReviewArray(value.completedTasks),
+    reminders: normalizeWeeklyReviewArray(value.reminders),
+    journalSummary:
+      typeof value.journalSummary === "string" && value.journalSummary.trim()
+        ? value.journalSummary.trim()
+        : "Weekly journal summary is not available.",
+    memorySuggestions: normalizeWeeklyReviewArray(value.memorySuggestions),
+  };
+}
+
+function normalizeWeeklyReviewArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
 function parseJsonArray(raw: string | null): unknown[] {
   if (!raw) return [];
   try {
@@ -2341,6 +2524,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function localDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function missionDailyNoteId(userId: string, date: string) {
+  return `mission-day:${userId}:${date}`;
 }
 
 function dailyTitle(date: string): string {
