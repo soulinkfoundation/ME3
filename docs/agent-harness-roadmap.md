@@ -13,8 +13,10 @@ publishing. The owner-facing UI should stay simple; internal terms can remain in
 
 ## Owner-Facing Model
 
-- Chat: ask the assistant to do something now.
-- Assistant Jobs: create and manage repeatable jobs.
+- Chat: ask the assistant to do something now. `/assistant` is the full chat, agent,
+  model-selection, attachment, and future conversational jobs-builder workspace.
+- Assistant Jobs: create and manage repeatable jobs. The Jobs modal remains the manual
+  management and tuning surface for saved jobs.
 - Mission Control: review results, approvals, tasks, memory, runs, and activity.
 - Account and Plugins: connect the things the assistant can use.
 
@@ -181,8 +183,8 @@ Detailed reference docs:
 - `docs/assistant-jobs-heartbeat.md`: heartbeat and reconciliation reference.
 - `docs/assistant-job-creation-capability.md`: custom job builder reference.
 - `docs/assistant-jobs-and-agent-skills.md`: skill/recipe/job/capability boundary.
-- `docs/agent-chat-launcher-plan.md`: in-app launcher product direction for chat actions,
-  job creation, context attachments, and review/supervision.
+- `docs/assistant-agent-console-plan.md`: `/assistant` full agent console direction,
+  model selection, attachments, voice dictation, jobs builder, and launcher split.
 - `docs/inbox-watch-rules-plan.md`: Inbox Watch multiple rules, mixed timing, and
   approval-first outcomes plan.
 - `docs/agent-context-roadmap.md`: native context and memory design reference.
