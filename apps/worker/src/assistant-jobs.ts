@@ -437,6 +437,129 @@ type UpdateAssistantJobIngressEventBody = {
   errorMessage?: unknown;
 };
 
+export type AssistantJobBuilderAction =
+  | {
+      kind: "job_draft";
+      draftId: string;
+      draft: AssistantJobDraft;
+      explanation: {
+        summary: string;
+        reads: string[];
+        writes: string[];
+        approvalRequired: string[];
+        setupWarnings: string[];
+      };
+      validation: AssistantJobDraftValidation;
+      availableActions: Array<"save" | "save_and_activate">;
+    }
+  | {
+      kind: "job_saved";
+      jobId: string;
+      summary: string;
+      status: AssistantJobStatus;
+      availableActions: Array<"activate" | "run_now" | "open_job">;
+    };
+
+export async function createAssistantJobBuilderAction(
+  env: Env,
+  userId: string,
+  messageText: string,
+): Promise<AssistantJobBuilderAction | null> {
+  const request = parseAssistantJobBuilderRequest(messageText);
+  if (request === null) return null;
+
+  const recipe = selectAssistantJobBuilderRecipe(request);
+  if (!recipe) return null;
+
+  const draft = createAssistantJobDraftFromRecipe(recipe);
+  const validation = await validateAssistantJobDraftForUser(env, userId, draft);
+  const setupWarnings = createAssistantJobBuilderSetupWarnings(validation);
+  const availableActions: Array<"save" | "save_and_activate"> =
+    validation.status === "invalid"
+      ? []
+      : validation.status === "valid"
+        ? ["save", "save_and_activate"]
+        : ["save"];
+
+  return {
+    kind: "job_draft",
+    draftId: crypto.randomUUID(),
+    draft,
+    explanation: {
+      summary: `I matched this to the ${recipe.name} starter job.`,
+      reads: validation.permissionSummary.reads,
+      writes: validation.permissionSummary.writes,
+      approvalRequired: validation.permissionSummary.approvalRequired,
+      setupWarnings,
+    },
+    validation,
+    availableActions,
+  };
+}
+
+function parseAssistantJobBuilderRequest(messageText: string) {
+  const trimmed = messageText.trim();
+  if (!trimmed.toLowerCase().startsWith("/job")) return null;
+  return trimmed.replace(/^\/job\b/i, "").trim();
+}
+
+function selectAssistantJobBuilderRecipe(request: string) {
+  const normalized = request.toLowerCase();
+  const candidates = [
+    {
+      recipeId: "invoice-receipt-triage",
+      keywords: ["invoice", "receipt", "receipts", "expense", "expenses", "accounts"],
+    },
+    {
+      recipeId: "email-triage",
+      keywords: ["inbox", "email", "emails", "message", "messages", "reply"],
+    },
+    {
+      recipeId: "daily-briefing",
+      keywords: ["daily", "morning", "briefing", "today", "every day"],
+    },
+    {
+      recipeId: "weekly-review",
+      keywords: ["weekly", "week", "friday", "review", "carry forward"],
+    },
+  ];
+
+  const matched =
+    candidates.find((candidate) =>
+      candidate.keywords.some((keyword) => normalized.includes(keyword)),
+    ) || candidates.find((candidate) => candidate.recipeId === "weekly-review");
+
+  return matched ? getAssistantJobStarterRecipe(matched.recipeId) : null;
+}
+
+function createAssistantJobBuilderSetupWarnings(
+  validation: AssistantJobDraftValidation,
+) {
+  const warnings = new Set<string>();
+  for (const requirement of validation.permissionSummary.setupRequirements) {
+    warnings.add(formatAssistantJobSetupRequirement(requirement));
+  }
+  for (const error of validation.errors) {
+    if (error.code === "setup_missing") continue;
+    if (error.code === "skill_missing") {
+      warnings.add("A required skill is not available yet.");
+      continue;
+    }
+    if (error.blocking) warnings.add("This draft needs adjustment before it can run.");
+  }
+  return Array.from(warnings);
+}
+
+function formatAssistantJobSetupRequirement(requirement: string) {
+  const labels: Record<string, string> = {
+    owner_notifications: "Connect an owner notification channel before activation.",
+    email: "Connect email before activation.",
+    calendar: "Enable calendar setup before activation.",
+    local_executor: "Connect the local executor before activation.",
+  };
+  return labels[requirement] || "Additional setup is required before activation.";
+}
+
 export async function listAssistantJobRecipes(env: Env, userId: string) {
   const readySetupRequirements = await getAssistantJobReadySetupRequirements(env, userId);
   return {

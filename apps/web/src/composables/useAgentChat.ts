@@ -7,6 +7,7 @@ export type AgentChatMessage = {
   createdAt?: string | null;
   meta?: string | null;
   detail?: string | null;
+  jobBuilderAction?: any;
   inboxLink?: boolean;
   rolodexLink?: boolean;
   reminderLink?: boolean;

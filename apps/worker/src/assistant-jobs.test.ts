@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveAssistantJob,
+  createAssistantJobBuilderAction,
   createAssistantJob,
   dispatchDueScheduledAssistantJobs,
   duplicateAssistantJob,
@@ -239,6 +240,51 @@ describe("assistant jobs persistence", () => {
     const created = await createAssistantJob(readyEnv, "owner", { recipeId: "email-triage" });
     expect(created.job.status).toBe("active");
     expect(created.validation.status).toBe("valid");
+  });
+
+  it("builds validated recipe-backed drafts from /job requests", async () => {
+    const weeklyEnv = createAssistantJobsEnv();
+    const weekly = await createAssistantJobBuilderAction(
+      weeklyEnv,
+      "owner",
+      "/job Every Friday afternoon, review my client projects.",
+    );
+
+    expect(weekly?.kind).toBe("job_draft");
+    if (weekly?.kind !== "job_draft") {
+      expect.fail("Expected a job draft action");
+    }
+    expect(weekly.draft.recipeId).toBe("weekly-review");
+    expect(weekly.validation.status).toBe("valid");
+    expect(weekly.availableActions).toEqual(["save", "save_and_activate"]);
+    expect(weekly.explanation.reads).toEqual(
+      expect.arrayContaining([
+        "Reads scoped Mission Control project state.",
+        "Reads scoped Mission Control tasks.",
+      ]),
+    );
+    expect(weekly.explanation.writes).toContain("Creates a Mission Control result.");
+
+    const inbox = await createAssistantJobBuilderAction(
+      createAssistantJobsEnv(),
+      "owner",
+      "/job watch my inbox for client emails",
+    );
+
+    expect(inbox?.kind).toBe("job_draft");
+    if (inbox?.kind !== "job_draft") {
+      expect.fail("Expected an inbox job draft action");
+    }
+    expect(inbox.draft.recipeId).toBe("email-triage");
+    expect(inbox.validation.status).toBe("needs_setup");
+    expect(inbox.availableActions).toEqual(["save"]);
+    expect(inbox.explanation.setupWarnings).toContain(
+      "Connect email before activation.",
+    );
+
+    await expect(
+      createAssistantJobBuilderAction(weeklyEnv, "owner", "review my week"),
+    ).resolves.toBeNull();
   });
 
   it("does not expose a Local Executor starter job from Assistant Jobs", async () => {

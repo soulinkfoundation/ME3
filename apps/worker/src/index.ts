@@ -29,6 +29,7 @@ import {
 import {
   AssistantJobsInputError,
   archiveAssistantJob,
+  createAssistantJobBuilderAction,
   createAssistantJob,
   dispatchDueScheduledAssistantJobs,
   duplicateAssistantJob,
@@ -43,6 +44,7 @@ import {
   setAssistantJobPaused,
   updateAssistantJobIngressEvent,
   updateAssistantJob,
+  type AssistantJobBuilderAction,
 } from "./assistant-jobs";
 import {
   BOOKING_REMINDER_QUEUE_NAME,
@@ -1644,6 +1646,42 @@ function serializeAssistantMessage(row: AssistantMessageRow) {
   };
 }
 
+function assistantJobBuilderReplyText(action: AssistantJobBuilderAction) {
+  if (action.kind === "job_saved") {
+    return action.summary;
+  }
+
+  const setupText = action.explanation.setupWarnings.length
+    ? " It needs setup before it can activate."
+    : action.validation.status === "valid"
+      ? " It is ready to save and activate."
+      : "";
+  return `${action.explanation.summary} Review the draft below, then save it when it looks right.${setupText}`;
+}
+
+async function persistAssistantTurnMessages(
+  env: Env,
+  ownerId: string,
+  threadId: string,
+  userText: string,
+  assistantText: string,
+) {
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
+      )
+        .bind(crypto.randomUUID(), ownerId, "user", userText, threadId),
+      env.DB.prepare(
+        "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
+      )
+        .bind(crypto.randomUUID(), ownerId, "assistant", assistantText, threadId),
+    ]);
+  } catch {
+    // Conversation persistence is useful context, but chat turns should not fail on audit writes.
+  }
+}
+
 function normalizeAssistantThreadId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -1966,14 +2004,6 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
   const requestedProjectId = normalizeNullableText(body.projectId);
   const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
 
-  const runtime = c.env.ME3_USER_AGENT;
-  if (!runtime) {
-    return c.json(
-      { ok: false, error: "Agent chat runtime is not configured" },
-      503,
-    );
-  }
-
   const replyToMessageId =
     typeof body.replyToMessageId === "string" ||
     typeof body.replyToMessageId === "number"
@@ -1992,6 +2022,37 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
   if ("error" in thread) {
     return c.json({ ok: false, error: thread.error }, thread.status);
   }
+
+  const builderAction = await createAssistantJobBuilderAction(c.env, ownerId, messageText);
+  if (builderAction) {
+    const replyText = assistantJobBuilderReplyText(builderAction);
+    await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, replyText);
+    await touchAssistantThread(c.env, ownerId, thread.id);
+    return c.json({
+      ok: true,
+      auditId: null,
+      turnId: null,
+      threadId: thread.id,
+      specialist: "core.job-builder",
+      replyText,
+      model: null,
+      source: "tool",
+      jobBuilderAction: builderAction,
+      emailAction: null,
+      reminderAction: null,
+      contentAction: null,
+      contactsChanged: false,
+    });
+  }
+
+  const runtime = c.env.ME3_USER_AGENT;
+  if (!runtime) {
+    return c.json(
+      { ok: false, error: "Agent chat runtime is not configured" },
+      503,
+    );
+  }
+
   const turn = await createAgentSandboxTurnRecord(c.env, {
     userId: ownerId,
     messageText,
@@ -2074,14 +2135,6 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
     return c.json({ ok: false, error: selectedModel.error }, 400);
   }
 
-  const runtime = c.env.ME3_USER_AGENT;
-  if (!runtime) {
-    return c.json(
-      { ok: false, error: "Agent chat runtime is not configured" },
-      503,
-    );
-  }
-
   const requestedThreadId = normalizeAssistantThreadId(body.threadId);
   const requestedProjectId = normalizeNullableText(body.projectId);
   const replyToMessageId =
@@ -2128,6 +2181,38 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
         }
 
         send("thread", { threadId: thread.id });
+
+        const builderAction = await createAssistantJobBuilderAction(c.env, ownerId, messageText);
+        if (builderAction) {
+          const replyText = assistantJobBuilderReplyText(builderAction);
+          await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, replyText);
+          await touchAssistantThread(c.env, ownerId, thread.id);
+          for (const chunk of splitAssistantStreamText(replyText)) {
+            send("delta", { text: chunk });
+          }
+          send("done", {
+            ok: true,
+            auditId: null,
+            turnId: null,
+            threadId: thread.id,
+            specialist: "core.job-builder",
+            replyText,
+            model: null,
+            source: "tool",
+            jobBuilderAction: builderAction,
+            emailAction: null,
+            reminderAction: null,
+            contentAction: null,
+            contactsChanged: false,
+          });
+          return;
+        }
+
+        const runtime = c.env.ME3_USER_AGENT;
+        if (!runtime) {
+          send("error", { ok: false, error: "Agent chat runtime is not configured" });
+          return;
+        }
 
         const turn = await createAgentSandboxTurnRecord(c.env, {
           userId: ownerId,

@@ -188,6 +188,107 @@ type AssistantJobRule = {
   value: unknown;
 };
 
+type AssistantJobScope = {
+  projectId: string | null;
+  sourceIds: string[];
+  providerAccountIds: string[];
+  filters: Array<{
+    field: string;
+    operator: string;
+    value: unknown;
+  }>;
+};
+
+type AssistantJobDraft = {
+  name: string;
+  purpose: string;
+  recipeId: string | null;
+  trigger: AssistantJobTrigger;
+  scope: AssistantJobScope;
+  rules: AssistantJobRule[];
+  actions: Array<{
+    id: string;
+    capabilityId: string;
+    label: string;
+    inputs: Record<string, unknown>;
+    approvalMode: string;
+    onFailure: string;
+    idempotencyScope: string;
+  }>;
+  approvalPolicy: {
+    defaultMode: string;
+    overrides: Array<{
+      capabilityId: string;
+      mode: string;
+      reason: string;
+    }>;
+    ownerCanApproveFrom: string;
+    approvalExpiresAfterHours: number | null;
+  };
+  destination: {
+    kind: "mission_control";
+    projectId: string | null;
+    landing:
+      | "review_packet"
+      | "task"
+      | "capture"
+      | "approval"
+      | "memory_review"
+      | "activity"
+      | "accounts";
+    quietIfNoChanges: boolean;
+  };
+  projectId: string | null;
+  recommendedSkillIds: string[];
+  requiredSkillIds: string[];
+};
+
+type AssistantJobDraftValidation = {
+  status: "valid" | "needs_setup" | "invalid";
+  errors: Array<{
+    code?: string;
+    message?: string;
+    blocking?: boolean;
+    actionId?: string;
+    capabilityId?: string;
+  }>;
+  permissionSummary: {
+    reads: string[];
+    writes: string[];
+    approvalRequired: string[];
+    forbidden: string[];
+    setupRequirements: string[];
+    skills: string[];
+  };
+};
+
+type AssistantJobBuilderAction =
+  | {
+      kind: "job_draft";
+      draftId: string;
+      draft: AssistantJobDraft;
+      explanation: {
+        summary: string;
+        reads: string[];
+        writes: string[];
+        approvalRequired: string[];
+        setupWarnings: string[];
+      };
+      validation: AssistantJobDraftValidation;
+      availableActions: Array<"save" | "save_and_activate">;
+    }
+  | {
+      kind: "job_saved";
+      jobId: string;
+      summary: string;
+      status: AssistantJobStatus;
+      availableActions: Array<"activate" | "run_now" | "open_job">;
+    };
+type AssistantJobSavedBuilderAction = Extract<
+  AssistantJobBuilderAction,
+  { kind: "job_saved" }
+>;
+
 type InboxWatchTiming = "immediate" | "daily_digest" | "weekly_digest" | "manual";
 type InboxWatchInferredLabel =
   | "needs_reply"
@@ -276,6 +377,7 @@ type AgentSandboxResponse = {
     itemId?: string;
     platforms?: Array<"x" | "linkedin" | "instagram" | "instagram_business">;
   } | null;
+  jobBuilderAction?: AssistantJobBuilderAction | null;
   contactsChanged?: boolean;
   error?: string;
 };
@@ -474,12 +576,18 @@ const weekdayOptions = [
   { label: "Saturday", value: 6 },
 ];
 const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
+const jobBuilderStarterPrompt =
+  "/job Every Friday afternoon, review my client projects and tell me what needs carrying forward.";
 const starterPrompts = [
-  { label: "Set up a job", icon: "💼" },
-  { label: "Draft an email", icon: "✉️" },
-  { label: "Add a reminder", icon: "⏰" },
-  { label: "Review my week", icon: "📅" },
-  { label: "Update my site", icon: "🌐" },
+  {
+    label: "Set up a job",
+    icon: "💼",
+    prompt: jobBuilderStarterPrompt,
+  },
+  { label: "Draft an email", icon: "✉️", prompt: "Draft an email" },
+  { label: "Add a reminder", icon: "⏰", prompt: "Add a reminder" },
+  { label: "Review my week", icon: "📅", prompt: "Review my week" },
+  { label: "Update my site", icon: "🌐", prompt: "Update my site" },
 ];
 const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
@@ -1101,6 +1209,11 @@ function useStarterPrompt(prompt: string) {
   });
 }
 
+function startAssistantJobBuilder() {
+  closeConfigureJobsModal();
+  useStarterPrompt(jobBuilderStarterPrompt);
+}
+
 function openAssistantAttachmentPicker() {
   if (assistantSending.value) return;
   assistantAttachmentInputRef.value?.click();
@@ -1599,6 +1712,148 @@ function applyAssistantResultToMessage(messageId: string, result: AgentSandboxRe
   message.actionHref = result.contentAction?.kind === "saved" ? "/assistant" : null;
   message.actionLabel =
     result.contentAction?.kind === "saved" ? "Open content bank" : null;
+  message.jobBuilderAction = result.jobBuilderAction || null;
+}
+
+type AssistantJobSaveResponse = {
+  job: AssistantJob;
+  version: AssistantJobVersion | null;
+  validation: AssistantJobDraftValidation;
+};
+
+function jobBuilderBusyKey(action: AssistantJobBuilderAction, intent: string) {
+  return action.kind === "job_draft"
+    ? `job-builder:${intent}:${action.draftId}`
+    : `job-builder:${intent}:${action.jobId}`;
+}
+
+function jobBuilderActionBusy(action: AssistantJobBuilderAction, intent: string) {
+  return busyKeys.value.has(jobBuilderBusyKey(action, intent));
+}
+
+async function saveAssistantJobBuilderDraft(
+  message: (typeof chatMessages.value)[number],
+  action: AssistantJobBuilderAction,
+  activate: boolean,
+) {
+  if (action.kind !== "job_draft") return;
+  const intent = activate ? "save_and_activate" : "save";
+  const key = jobBuilderBusyKey(action, intent);
+  if (busyKeys.value.has(key)) return;
+  busyKeys.value.add(key);
+  try {
+    const response = await api.post<AssistantJobSaveResponse>("/assistant/jobs", {
+      draft: action.draft,
+      status: activate ? "active" : "draft",
+    });
+    await loadJobs();
+    const savedAction = assistantJobSavedAction(response.job);
+    message.jobBuilderAction = savedAction;
+    message.text = savedAction.summary;
+    toastSuccess(activate && response.job.status === "active" ? "Job saved and activated." : "Job saved.");
+  } catch (err) {
+    assistantError.value = messageFromUnknown(err, "Job could not be saved.");
+    toastFromUnknown(err, "Job could not be saved.");
+  } finally {
+    busyKeys.value.delete(key);
+  }
+}
+
+async function runAssistantJobBuilderSaved(action: AssistantJobBuilderAction) {
+  if (action.kind !== "job_saved") return;
+  const job = jobs.value.find((item) => item.id === action.jobId);
+  if (!job) return;
+  await runJob(job);
+}
+
+async function activateAssistantJobBuilderSaved(
+  message: (typeof chatMessages.value)[number],
+  action: AssistantJobBuilderAction,
+) {
+  if (action.kind !== "job_saved") return;
+  const job = jobs.value.find((item) => item.id === action.jobId);
+  if (!job) return;
+  const key = jobBuilderBusyKey(action, "activate");
+  if (busyKeys.value.has(key)) return;
+  busyKeys.value.add(key);
+  try {
+    const response = await api.post<{ job: AssistantJob }>(
+      `/assistant/jobs/${encodeURIComponent(job.id)}/resume`,
+    );
+    await loadJobs();
+    const savedAction = assistantJobSavedAction(response.job);
+    message.jobBuilderAction = savedAction;
+    message.text = savedAction.summary;
+    toastSuccess("Job activated.");
+  } catch (err) {
+    assistantError.value = messageFromUnknown(err, "Job could not activate.");
+    toastFromUnknown(err, "Job could not activate.");
+  } finally {
+    busyKeys.value.delete(key);
+  }
+}
+
+function assistantJobSavedAction(job: AssistantJob): AssistantJobSavedBuilderAction {
+  const availableActions: Array<"activate" | "run_now" | "open_job"> = ["open_job"];
+  if (job.status === "draft" || job.status === "paused") {
+    availableActions.unshift("activate");
+  }
+  if (job.status === "active") {
+    availableActions.unshift("run_now");
+  }
+  return {
+    kind: "job_saved",
+    jobId: job.id,
+    status: job.status,
+    summary: `${job.name} was saved as ${assistantJobStatusLabel(job.status)}.`,
+    availableActions,
+  };
+}
+
+function assistantJobStatusLabel(
+  status: AssistantJobStatus | AssistantJobDraftValidation["status"],
+) {
+  const labels: Record<AssistantJobStatus | AssistantJobDraftValidation["status"], string> = {
+    draft: "Draft",
+    active: "Active",
+    paused: "Paused",
+    needs_setup: "Needs setup",
+    failing: "Failing",
+    archived: "Archived",
+    valid: "Ready",
+    invalid: "Needs changes",
+  };
+  return labels[status] || status;
+}
+
+function assistantJobBuilderTriggerLabel(draft: AssistantJobDraft) {
+  const trigger = draft.trigger;
+  if (trigger.kind === "manual") return "Manual run";
+  if (trigger.kind === "event") return "When a matching event happens";
+  if (trigger.cadence === "daily") return `Daily${trigger.localTime ? ` at ${trigger.localTime}` : ""}`;
+  if (trigger.cadence === "weekly") {
+    const day = weekdayOptions.find((option) => option.value === trigger.dayOfWeek)?.label;
+    return `Weekly${day ? ` on ${day}` : ""}${trigger.localTime ? ` at ${trigger.localTime}` : ""}`;
+  }
+  if (trigger.cadence === "monthly") return `Monthly${trigger.localTime ? ` at ${trigger.localTime}` : ""}`;
+  return "Custom schedule";
+}
+
+function assistantJobBuilderDestinationLabel(draft: AssistantJobDraft) {
+  const labels: Record<AssistantJobDraft["destination"]["landing"], string> = {
+    review_packet: "Mission Control review",
+    task: "Mission Control task",
+    capture: "Mission Control capture",
+    approval: "Mission Control approval",
+    memory_review: "Memory review",
+    activity: "Mission Control activity",
+    accounts: "Accounts",
+  };
+  return labels[draft.destination.landing] || "Mission Control";
+}
+
+function assistantJobBuilderList(values: string[]) {
+  return values.length ? values : ["Nothing extra."];
 }
 
 function setAssistantStoppedMessage(messageId: string, messageStarted: boolean) {
@@ -2911,7 +3166,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 :key="prompt.label"
                 type="button"
                 class="starter-prompt"
-                @click="useStarterPrompt(prompt.label)"
+                @click="useStarterPrompt(prompt.prompt)"
               >
                 <span class="starter-prompt__icon" aria-hidden="true">
                   {{ prompt.icon }}
@@ -2938,6 +3193,131 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <p v-if="message.detail" class="assistant-message__detail">
                 {{ message.detail }}
               </p>
+              <div
+                v-if="message.jobBuilderAction?.kind === 'job_draft'"
+                class="job-builder-card"
+              >
+                <div class="job-builder-card__header">
+                  <div>
+                    <h3>{{ message.jobBuilderAction.draft.name }}</h3>
+                    <p>{{ message.jobBuilderAction.draft.purpose }}</p>
+                  </div>
+                  <span
+                    class="job-builder-card__status"
+                    :class="`job-builder-card__status--${message.jobBuilderAction.validation.status}`"
+                  >
+                    {{ assistantJobStatusLabel(message.jobBuilderAction.validation.status) }}
+                  </span>
+                </div>
+                <dl class="job-builder-card__facts">
+                  <div>
+                    <dt>Trigger</dt>
+                    <dd>{{ assistantJobBuilderTriggerLabel(message.jobBuilderAction.draft) }}</dd>
+                  </div>
+                  <div>
+                    <dt>Reads</dt>
+                    <dd>
+                      {{ assistantJobBuilderList(message.jobBuilderAction.explanation.reads).join(", ") }}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Creates</dt>
+                    <dd>
+                      {{ assistantJobBuilderList(message.jobBuilderAction.explanation.writes).join(", ") }}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Asks before</dt>
+                    <dd>
+                      {{ assistantJobBuilderList(message.jobBuilderAction.explanation.approvalRequired).join(", ") }}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Destination</dt>
+                    <dd>{{ assistantJobBuilderDestinationLabel(message.jobBuilderAction.draft) }}</dd>
+                  </div>
+                </dl>
+                <ul
+                  v-if="message.jobBuilderAction.explanation.setupWarnings.length"
+                  class="job-builder-card__warnings"
+                >
+                  <li
+                    v-for="warning in message.jobBuilderAction.explanation.setupWarnings"
+                    :key="warning"
+                  >
+                    {{ warning }}
+                  </li>
+                </ul>
+                <div class="job-builder-card__actions">
+                  <button
+                    v-if="message.jobBuilderAction.availableActions.includes('save')"
+                    type="button"
+                    class="job-builder-card__button"
+                    :disabled="jobBuilderActionBusy(message.jobBuilderAction, 'save')"
+                    @click="saveAssistantJobBuilderDraft(message, message.jobBuilderAction, false)"
+                  >
+                    <UiIcon name="Save" :size="15" aria-hidden="true" />
+                    <span>Save job</span>
+                  </button>
+                  <button
+                    v-if="message.jobBuilderAction.availableActions.includes('save_and_activate')"
+                    type="button"
+                    class="job-builder-card__button job-builder-card__button--primary"
+                    :disabled="jobBuilderActionBusy(message.jobBuilderAction, 'save_and_activate')"
+                    @click="saveAssistantJobBuilderDraft(message, message.jobBuilderAction, true)"
+                  >
+                    <UiIcon name="Play" :size="15" aria-hidden="true" />
+                    <span>Save and activate</span>
+                  </button>
+                </div>
+              </div>
+              <div
+                v-else-if="message.jobBuilderAction?.kind === 'job_saved'"
+                class="job-builder-card job-builder-card--saved"
+              >
+                <div class="job-builder-card__header">
+                  <div>
+                    <h3>{{ message.text }}</h3>
+                    <p>Review settings, run a test, or activate it from here.</p>
+                  </div>
+                  <span
+                    class="job-builder-card__status"
+                    :class="`job-builder-card__status--${message.jobBuilderAction.status}`"
+                  >
+                    {{ assistantJobStatusLabel(message.jobBuilderAction.status) }}
+                  </span>
+                </div>
+                <div class="job-builder-card__actions">
+                  <button
+                    v-if="message.jobBuilderAction.availableActions.includes('activate')"
+                    type="button"
+                    class="job-builder-card__button job-builder-card__button--primary"
+                    :disabled="jobBuilderActionBusy(message.jobBuilderAction, 'activate')"
+                    @click="activateAssistantJobBuilderSaved(message, message.jobBuilderAction)"
+                  >
+                    <UiIcon name="Play" :size="15" aria-hidden="true" />
+                    <span>Activate job</span>
+                  </button>
+                  <button
+                    v-if="message.jobBuilderAction.availableActions.includes('run_now')"
+                    type="button"
+                    class="job-builder-card__button"
+                    @click="runAssistantJobBuilderSaved(message.jobBuilderAction)"
+                  >
+                    <UiIcon name="RefreshCw" :size="15" aria-hidden="true" />
+                    <span>Run now</span>
+                  </button>
+                  <button
+                    v-if="message.jobBuilderAction.availableActions.includes('open_job')"
+                    type="button"
+                    class="job-builder-card__button"
+                    @click="openJob(message.jobBuilderAction.jobId)"
+                  >
+                    <UiIcon name="Settings" :size="15" aria-hidden="true" />
+                    <span>Open job</span>
+                  </button>
+                </div>
+              </div>
               <div
                 v-if="
                   message.inboxLink ||
@@ -3328,14 +3708,24 @@ function messageFromUnknown(err: unknown, fallback: string) {
         >
           <header class="assistant-modal__header">
             <h2 id="configure-jobs-title">Jobs</h2>
-            <button
-              type="button"
-              class="modal-close"
-              aria-label="Close"
-              @click="closeConfigureJobsModal"
-            >
-              <UiIcon name="X" :size="20" />
-            </button>
+            <div class="assistant-modal__header-actions">
+              <button
+                type="button"
+                class="assistant-modal-action"
+                @click="startAssistantJobBuilder"
+              >
+                <UiIcon name="Plus" :size="15" aria-hidden="true" />
+                <span>Set up a job</span>
+              </button>
+              <button
+                type="button"
+                class="modal-close"
+                aria-label="Close"
+                @click="closeConfigureJobsModal"
+              >
+                <UiIcon name="X" :size="20" />
+              </button>
+            </div>
           </header>
 
           <div v-if="loadingJobs || loadingRecipes" class="empty-row">
@@ -4628,6 +5018,160 @@ function messageFromUnknown(err: unknown, fallback: string) {
   text-decoration: none;
 }
 
+.job-builder-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 14px;
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.job-builder-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.job-builder-card__header h3,
+.job-builder-card__header p {
+  margin: 0;
+}
+
+.job-builder-card__header h3 {
+  color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.job-builder-card__header p {
+  margin-top: 3px;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.job-builder-card__status {
+  flex: 0 0 auto;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.job-builder-card__status--valid,
+.job-builder-card__status--active {
+  border-color: color-mix(in oklab, var(--ui-accent) 36%, var(--ui-border));
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+}
+
+.job-builder-card__status--needs_setup,
+.job-builder-card__status--draft,
+.job-builder-card__status--paused {
+  border-color: color-mix(in oklab, #c08a18 44%, var(--ui-border));
+  background: color-mix(in oklab, #c08a18 12%, var(--ui-surface));
+  color: color-mix(in oklab, #9a6400 78%, var(--ui-text));
+}
+
+.job-builder-card__status--invalid,
+.job-builder-card__status--failing {
+  border-color: color-mix(in oklab, #c73939 42%, var(--ui-border));
+  background: color-mix(in oklab, #c73939 12%, var(--ui-surface));
+  color: color-mix(in oklab, #a32323 80%, var(--ui-text));
+}
+
+.job-builder-card__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 0;
+}
+
+.job-builder-card__facts div {
+  min-width: 0;
+}
+
+.job-builder-card__facts dt {
+  margin: 0 0 2px;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.job-builder-card__facts dd {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.job-builder-card__warnings {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 9px 10px 9px 26px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.job-builder-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.job-builder-card__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 0 11px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.job-builder-card__button:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--ui-accent) 42%, var(--ui-border));
+  background: var(--ui-surface-muted);
+}
+
+.job-builder-card__button--primary {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
+}
+
+.job-builder-card__button--primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ui-accent) 88%, var(--ui-text));
+  color: var(--ui-accent-contrast);
+}
+
+.job-builder-card__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .assistant-message__tools {
   display: inline-flex;
   align-items: center;
@@ -5686,6 +6230,33 @@ button:disabled {
   font-size: 17px;
   line-height: 1.25;
   letter-spacing: 0;
+}
+
+.assistant-modal__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-modal-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 0 10px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.assistant-modal-action:hover {
+  border-color: color-mix(in oklab, var(--ui-accent) 42%, var(--ui-border));
+  background: var(--ui-surface-muted);
 }
 
 .modal-close {
