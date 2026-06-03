@@ -3042,7 +3042,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 :disabled="assistantSending"
                 @click="openAssistantAttachmentPicker"
               >
-                <span class="composer-icon-button__emoji" aria-hidden="true">📎</span>
+                <UiIcon name="Paperclip" :size="18" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -3051,7 +3051,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 aria-label="Jobs"
                 @click="openConfigureJobsModal"
               >
-                <span class="composer-icon-button__emoji" aria-hidden="true">💼</span>
+                <UiIcon name="BriefcaseBusiness" :size="18" aria-hidden="true" />
               </button>
             </div>
 
@@ -4203,12 +4203,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
   align-items: center;
   gap: 4px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .model-picker__select-wrap {
   position: relative;
   display: inline-block;
-  max-width: min(30vw, 154px);
+  max-width: min(48vw, 220px);
   min-width: 0;
   vertical-align: middle;
 }
@@ -4225,7 +4226,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-height: 32px;
   overflow: hidden;
   padding: 0 22px 0 6px;
-  text-overflow: ellipsis;
   visibility: hidden;
   white-space: nowrap;
 }
@@ -4242,8 +4242,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   padding: 0 18px 0 6px;
   background: transparent;
   color: var(--ui-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .model-picker__status {
@@ -4523,11 +4521,18 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-composer__bottom {
   justify-content: space-between;
+  min-width: 0;
 }
 
 .assistant-composer__left,
 .assistant-composer__right {
   flex-shrink: 0;
+}
+
+.assistant-composer__right {
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: flex-end;
 }
 
 .assistant-input {
@@ -4623,13 +4628,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: transparent;
   color: var(--ui-text-muted);
   cursor: pointer;
-}
-
-.composer-icon-button__emoji {
-  font-family:
-    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  font-size: 18px;
-  line-height: 1;
 }
 
 .composer-icon-button:hover:not(:disabled) {
