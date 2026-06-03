@@ -575,10 +575,20 @@ app.use(
 
 app.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname;
-  if (pathname.startsWith("/api/auth/") && await isPublicSiteHost(c.env, c.req.url)) {
+  const isMeJsonDiscoveryPath =
+    pathname === "/me.json" || pathname === "/.well-known/me.json";
+  if (
+    !isMeJsonDiscoveryPath &&
+    pathname.startsWith("/api/auth/") &&
+    await isPublicSiteHost(c.env, c.req.url)
+  ) {
     return c.json({ error: "Not found" }, 404);
   }
-  if (!pathname.startsWith("/api/") && await isPublicSiteHost(c.env, c.req.url)) {
+  if (
+    !isMeJsonDiscoveryPath &&
+    !pathname.startsWith("/api/") &&
+    await isPublicSiteHost(c.env, c.req.url)
+  ) {
     return servePublicSiteRequest(c.env, c.req.raw);
   }
   await next();
@@ -6296,8 +6306,12 @@ async function isPublicSiteHost(env: Env, requestUrl: string): Promise<boolean> 
   if (inferredRootPublicHost && requestHost === inferredRootPublicHost) return true;
 
   if (isLikelyRootPublicSiteHost(requestHost)) {
-    const site = await getPublicSiteForHost(env, requestHost);
-    if (site?.published_at) return true;
+    try {
+      const site = await getPublicSiteForHost(env, requestHost);
+      if (site?.published_at) return true;
+    } catch {
+      return false;
+    }
   }
 
   const site = await env.DB.prepare(
