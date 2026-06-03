@@ -246,6 +246,7 @@ function createEnv(): Env & {
   owner: StoredOwner | null;
   assistantThreads: StoredAssistantThread[];
   assistantAttachments: StoredAssistantAttachment[];
+  failAssistantAttachmentInsert: boolean;
   missionProjects: StoredMissionProject[];
   messages: StoredMessage[];
   mailbox: DbMailboxAlias | null;
@@ -281,6 +282,7 @@ function createEnv(): Env & {
     owner: null as StoredOwner | null,
     assistantThreads: [] as StoredAssistantThread[],
     assistantAttachments: [] as StoredAssistantAttachment[],
+    failAssistantAttachmentInsert: false,
     missionProjects: [] as StoredMissionProject[],
     messages: [] as StoredMessage[],
     mailbox: null as DbMailboxAlias | null,
@@ -467,6 +469,9 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("INSERT INTO assistant_attachments")) {
+                if (state.failAssistantAttachmentInsert) {
+                  throw new Error("D1_ERROR: no such table: assistant_attachments");
+                }
                 state.assistantAttachments.push({
                   id: values[0] as string,
                   owner_id: values[1] as string,
@@ -1892,6 +1897,12 @@ function createEnv(): Env & {
     get assistantAttachments() {
       return state.assistantAttachments;
     },
+    get failAssistantAttachmentInsert() {
+      return state.failAssistantAttachmentInsert;
+    },
+    set failAssistantAttachmentInsert(value: boolean) {
+      state.failAssistantAttachmentInsert = value;
+    },
     get missionProjects() {
       return state.missionProjects;
     },
@@ -3094,6 +3105,28 @@ describe("ME3 Core Worker auth", () => {
       extracted_text: "# Notes\n\nRemember the launch checklist.",
       text_truncated: 0,
     });
+  });
+
+  it("returns a setup error when assistant attachment storage is not migrated", async () => {
+    const env = createEnv();
+    env.failAssistantAttachmentInsert = true;
+    const session = cookieHeader(await bootstrap(env));
+    const form = new FormData();
+    form.append("attachments", new File(["hello"], "hello.txt", { type: "text/plain" }));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/attachments", {
+        method: "POST",
+        headers: { Cookie: session },
+        body: form,
+      }),
+      env,
+    );
+    const payload = (await response.json()) as { ok: boolean; error: string };
+
+    expect(response.status).toBe(503);
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toContain("Assistant attachment storage is not migrated yet");
   });
 
   it("stores assistant image attachments in R2 when configured", async () => {

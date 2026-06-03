@@ -2932,17 +2932,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
           <label class="sr-only" for="assistant-console-input">
             Message ME3
           </label>
-          <textarea
-            id="assistant-console-input"
-            ref="assistantComposerRef"
-            v-model="assistantDraft"
-            class="assistant-input"
-            rows="1"
-            placeholder="Do anything..."
-            :disabled="assistantSending"
-            @keydown="onAssistantComposerKeydown"
-            @input="autosizeAssistantComposer"
-          />
           <div
             v-if="assistantAttachments.length > 0"
             class="assistant-attachments"
@@ -2955,6 +2944,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               :class="{
                 'assistant-attachment--error': attachment.status === 'error',
               }"
+              :title="attachment.error || `${attachment.name} · ${formatFileSize(attachment.size)}`"
             >
               <UiIcon
                 :name="attachment.kind === 'image' ? 'Image' : 'FileText'"
@@ -2963,7 +2953,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
               />
               <span class="assistant-attachment__name">{{ attachment.name }}</span>
               <span class="assistant-attachment__meta">
-                {{ attachment.status === 'uploading' ? 'Uploading' : formatFileSize(attachment.size) }}
+                {{
+                  attachment.status === 'uploading'
+                    ? 'Uploading'
+                    : attachment.status === 'error'
+                      ? 'Failed'
+                      : formatFileSize(attachment.size)
+                }}
               </span>
               <button
                 type="button"
@@ -2975,6 +2971,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </button>
             </span>
           </div>
+          <textarea
+            id="assistant-console-input"
+            ref="assistantComposerRef"
+            v-model="assistantDraft"
+            class="assistant-input"
+            rows="1"
+            placeholder="Do anything..."
+            :disabled="assistantSending"
+            @keydown="onAssistantComposerKeydown"
+            @input="autosizeAssistantComposer"
+          />
           <div class="assistant-composer__bottom">
             <div class="assistant-composer__left">
               <input
@@ -3083,11 +3090,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </div>
           </div>
           <div
-            v-if="
-              voiceDictationStatusText ||
-              assistantAttachmentNotice ||
-              assistantAttachmentIssue
-            "
+            v-if="voiceDictationStatusText"
             class="assistant-composer__meta"
           >
             <span
@@ -3095,18 +3098,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
               class="assistant-composer__voice-status"
             >
               {{ voiceDictationStatusText }}
-            </span>
-            <span
-              v-if="assistantAttachmentNotice"
-              class="assistant-composer__attachment-status"
-            >
-              {{ assistantAttachmentNotice }}
-            </span>
-            <span
-              v-if="assistantAttachmentIssue"
-              class="assistant-composer__attachment-status"
-            >
-              {{ assistantAttachmentIssue }}
             </span>
           </div>
           <p v-if="assistantError" class="assistant-error">

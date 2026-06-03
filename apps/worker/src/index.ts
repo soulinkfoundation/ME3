@@ -1354,26 +1354,40 @@ app.post("/api/assistant/attachments", async (c) => {
       });
     }
 
-    await c.env.DB.prepare(
-      `INSERT INTO assistant_attachments
-         (id, owner_id, thread_id, filename, mime_type, size, kind, status,
-          storage_key, extracted_text, text_truncated, metadata_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)`,
-    )
-      .bind(
-        id,
-        ownerId,
-        threadId,
-        filename,
-        mimeType,
-        file.size,
-        kind,
-        storageKey,
-        extractedText,
-        textTruncated,
-        JSON.stringify({ source: "assistant-composer" }),
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO assistant_attachments
+           (id, owner_id, thread_id, filename, mime_type, size, kind, status,
+            storage_key, extracted_text, text_truncated, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)`,
       )
-      .run();
+        .bind(
+          id,
+          ownerId,
+          threadId,
+          filename,
+          mimeType,
+          file.size,
+          kind,
+          storageKey,
+          extractedText,
+          textTruncated,
+          JSON.stringify({ source: "assistant-composer" }),
+        )
+        .run();
+    } catch (error) {
+      if (isMissingAssistantAttachmentsTableError(error)) {
+        return c.json(
+          {
+            ok: false,
+            error:
+              "Assistant attachment storage is not migrated yet. Restart the local Worker or run pnpm --filter @me3-core/worker db:migrate:local.",
+          },
+          503,
+        );
+      }
+      throw error;
+    }
 
     uploaded.push({
       id,
@@ -2340,6 +2354,14 @@ function normalizeAssistantAttachmentMimeType(file: File, filename: string) {
 function formatByteLimit(bytes: number) {
   if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} KB`;
   return `${Math.round(bytes / 100_000) / 10} MB`;
+}
+
+function isMissingAssistantAttachmentsTableError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return (
+    /assistant_attachments/i.test(message) &&
+    /no such table|not found|no such object/i.test(message)
+  );
 }
 
 function normalizeAssistantAuditText(value: unknown): string | null {
