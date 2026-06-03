@@ -45,6 +45,18 @@ export type ContactOutreachMeta = {
   messageAngle?: string | null;
   sourceUrl?: string | null;
   discoveryJobId?: string | null;
+  avatarUrl?: string | null;
+  me3Url?: string | null;
+  soulinkLinkId?: string | null;
+  soulinkNodeId?: string | null;
+  soulinkChatUrl?: string | null;
+  soulinkOrigin?: string | null;
+  soulinkSourceChatId?: string | null;
+  soulinkContextLabel?: string | null;
+  soulinkSourceChatTitle?: string | null;
+  soulinkSourceChatKind?: string | null;
+  soulinkStatus?: string | null;
+  soulinkLastActiveAt?: string | null;
 } & Record<string, unknown>;
 export type ContactOutreachSummary = Record<OutreachStatus, number>;
 

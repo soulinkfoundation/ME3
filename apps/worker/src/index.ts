@@ -222,6 +222,7 @@ import {
   updateAgentContact,
   updateAgentContactOutreachStatus,
   updateAgentReminder,
+  upsertAgentContact,
   upsertAgentMailbox,
   type AgentMailboxMessage,
   type AgentSandboxDispatchResponse,
@@ -349,6 +350,41 @@ type SoulinkProvisionResponse = {
   streamChannelId?: string;
   soulinkChatUrl?: string;
   error?: string;
+};
+type SoulinkLinksResponse = {
+  links?: SoulinkLinkRecord[];
+  error?: string;
+};
+type SoulinkLinkRecord = {
+  id?: unknown;
+  fromNodeId?: unknown;
+  toNodeId?: unknown;
+  sourceChatId?: unknown;
+  status?: unknown;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  otherNode?: SoulinkLinkNodeRecord | null;
+  context?: SoulinkLinkContextRecord | null;
+};
+type SoulinkLinkNodeRecord = {
+  id?: unknown;
+  displayName?: unknown;
+  handle?: unknown;
+  me3Url?: unknown;
+  kind?: unknown;
+  avatarUrl?: unknown;
+  email?: unknown;
+  contactEmail?: unknown;
+};
+type SoulinkLinkContextRecord = {
+  sourceChatId?: unknown;
+  sourceChatTitle?: unknown;
+  sourceChatKind?: unknown;
+  streamChannelId?: unknown;
+  soulinkChatUrl?: unknown;
+  chatUrl?: unknown;
+  lastActiveAt?: unknown;
+  label?: unknown;
 };
 type TelegramUser = {
   id?: unknown;
@@ -5395,6 +5431,58 @@ app.get("/api/mailbox/messages/:messageId/attachments/:attachmentIndex", async (
   });
 });
 
+app.post("/api/mailbox/messages/:messageId/unsubscribe", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const row = await c.env.DB.prepare(
+    `SELECT m.id, m.direction, m.message_kind, m.raw_headers_json
+     FROM mailbox_messages m
+     JOIN mailbox_aliases a ON a.id = m.mailbox_id
+     WHERE a.user_id = ? AND m.id = ?`,
+  )
+    .bind(ownerId, c.req.param("messageId"))
+    .first<{
+      id: string;
+      direction: string;
+      message_kind: string;
+      raw_headers_json: string | null;
+    }>();
+  if (!row) return c.json({ error: "Message not found" }, 404);
+  if (row.direction !== "inbound" || row.message_kind !== "email") {
+    return c.json({ error: "Unsubscribe is only available for inbound email" }, 400);
+  }
+
+  const action = resolveMailboxUnsubscribeAction(row.raw_headers_json);
+  if (!action) return c.json({ error: "This message does not include an unsubscribe action" }, 404);
+
+  if (action.mode === "one_click") {
+    try {
+      const response = await fetch(action.url, {
+        method: "POST",
+        headers: {
+          Accept: "text/plain, */*",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: "List-Unsubscribe=One-Click",
+        redirect: "follow",
+      });
+      if (!response.ok) {
+        return c.json(
+          { error: `Unsubscribe request failed with status ${response.status}` },
+          502,
+        );
+      }
+      return c.json({ ok: true, mode: "one_click", status: response.status });
+    } catch (error) {
+      console.error("Mailbox one-click unsubscribe error:", error);
+      return c.json({ error: "Failed to send unsubscribe request" }, 502);
+    }
+  }
+
+  return c.json({ ok: true, mode: "open", url: action.url });
+});
+
 app.post("/api/mailbox/attachments", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -5862,6 +5950,17 @@ app.post("/api/soulink/disconnect", async (c) => {
   });
 });
 
+app.post("/api/soulink/contacts/sync", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const result = await syncSoulinkContacts(c.env, ownerId);
+  if (!result.ok) {
+    return c.json(result, result.status as any);
+  }
+  return c.json(result);
+});
+
 app.get("/api/contacts", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -6196,6 +6295,11 @@ async function isPublicSiteHost(env: Env, requestUrl: string): Promise<boolean> 
   const inferredRootPublicHost = getInferredRootPublicSiteHost(env);
   if (inferredRootPublicHost && requestHost === inferredRootPublicHost) return true;
 
+  if (isLikelyRootPublicSiteHost(requestHost)) {
+    const site = await getPublicSiteForHost(env, requestHost);
+    if (site?.published_at) return true;
+  }
+
   const site = await env.DB.prepare(
     `SELECT custom_domain FROM sites
      WHERE lower(custom_domain) = ?
@@ -6217,6 +6321,13 @@ function getInferredRootPublicSiteHost(env: Env): string {
   if (!adminHost.startsWith("me3.")) return "";
   const rootHost = adminHost.slice("me3.".length);
   return isValidPublicSiteDomain(rootHost) ? rootHost : "";
+}
+
+function isLikelyRootPublicSiteHost(host: string): boolean {
+  if (!isValidPublicSiteDomain(host)) return false;
+  if (host.endsWith(".workers.dev")) return false;
+  if (host.startsWith("me3.") || host.startsWith("api.")) return false;
+  return true;
 }
 
 function getCoreDomainState(
@@ -7806,6 +7917,238 @@ async function buildSoulinkStatusPayload(
   };
 }
 
+async function syncSoulinkContacts(env: Env, ownerId: string) {
+  const config = getSoulinkConnectorConfig(env);
+  if (!config.configured) {
+    return { ok: false, status: 503, error: "Soulink connector is not configured" };
+  }
+
+  const connection = await getSoulinkConnection(env, ownerId);
+  if (!connection || connection.status !== "active") {
+    return { ok: false, status: 409, error: "Connect Soulink before syncing contacts" };
+  }
+
+  const linksResult = await fetchSoulinkLinks(config.apiOrigin, connection);
+  if (!linksResult.ok) {
+    return {
+      ok: false,
+      status: linksResult.status,
+      error: linksResult.error,
+    };
+  }
+
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const link of linksResult.links) {
+    const input = await soulinkLinkToContactInput(
+      link,
+      config.apiOrigin,
+    );
+    if (!input) {
+      skipped += 1;
+      continue;
+    }
+
+    const result = await upsertAgentContact(env, ownerId, input);
+    if ("error" in result) {
+      skipped += 1;
+      continue;
+    }
+    if (result.created) created += 1;
+    else updated += 1;
+  }
+
+  const contacts = await listAgentContacts(env, ownerId);
+  return {
+    ok: true,
+    synced: created + updated,
+    created,
+    updated,
+    skipped,
+    contacts: contacts.contacts,
+    summary: contacts.summary,
+  };
+}
+
+async function fetchSoulinkLinks(
+  apiOrigin: string,
+  connection: DbAgentChannelConnection,
+): Promise<
+  | { ok: true; links: SoulinkLinkRecord[] }
+  | { ok: false; status: number; error: string }
+> {
+  const metadata = parseJsonRecord(connection.provider_metadata_json);
+  const ownerNodeId =
+    typeof metadata.ownerNodeId === "string"
+      ? metadata.ownerNodeId
+      : connection.provider_user_id;
+  const url = new URL("/api/me3/links", apiOrigin);
+  if (ownerNodeId) url.searchParams.set("ownerNodeId", ownerNodeId);
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${connection.setup_token}`,
+    },
+  });
+  const payload = (await response.json().catch(() => null)) as SoulinkLinksResponse | null;
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status === 404 ? 501 : 502,
+      error:
+        payload?.error ||
+        "Soulink Links sync is not available from this Soulink connector yet",
+    };
+  }
+
+  return {
+    ok: true,
+    links: Array.isArray(payload?.links) ? payload.links : [],
+  };
+}
+
+async function soulinkLinkToContactInput(
+  link: SoulinkLinkRecord,
+  soulinkOrigin: string,
+) {
+  const node = link.otherNode && typeof link.otherNode === "object" ? link.otherNode : null;
+  const linkId = stringValue(link.id);
+  const nodeId = stringValue(node?.id);
+  const sourceRef = nodeId || linkId;
+  if (!sourceRef) return null;
+
+  const me3Url = stringValue(node?.me3Url);
+  const meProfile = await resolveLinkedMeProfile(me3Url);
+  const name =
+    stringValue(node?.displayName) ||
+    stringValue(meProfile?.name) ||
+    stringValue(node?.handle) ||
+    "Soulink contact";
+  const email =
+    normalizeEmail(node?.email) ||
+    normalizeEmail(node?.contactEmail) ||
+    normalizeEmail(meProfile?.email) ||
+    null;
+  const avatarUrl =
+    stringValue(node?.avatarUrl) ||
+    stringValue(meProfile?.avatarUrl) ||
+    null;
+  const context = link.context && typeof link.context === "object" ? link.context : null;
+  const soulinkChatUrl = buildSoulinkContactChatUrl(soulinkOrigin, link, context);
+  const lastActiveAt =
+    stringValue(context?.lastActiveAt) ||
+    stringValue(link.updatedAt) ||
+    stringValue(link.createdAt);
+  const socialHandles: Record<string, string> = {};
+  const handle = stringValue(node?.handle);
+  if (handle) socialHandles.soulink = handle;
+  if (me3Url) socialHandles.me3 = me3Url;
+
+  return {
+    name,
+    email,
+    source: "soulink" as const,
+    sourceRef,
+    relationship: "contact" as const,
+    status: "active" as const,
+    lastInteractionAt: lastActiveAt,
+    socialHandles,
+    metadata: {
+      avatarUrl,
+      me3Url,
+      soulinkLinkId: linkId,
+      soulinkNodeId: nodeId,
+      soulinkChatUrl,
+      soulinkOrigin,
+      soulinkSourceChatId:
+        stringValue(context?.sourceChatId) || stringValue(link.sourceChatId),
+      soulinkContextLabel: stringValue(context?.label),
+      soulinkSourceChatTitle: stringValue(context?.sourceChatTitle),
+      soulinkSourceChatKind: stringValue(context?.sourceChatKind),
+      soulinkStatus: stringValue(link.status),
+      soulinkLastActiveAt: lastActiveAt,
+      resolvedFromMeJsonAt: meProfile?.resolvedAt || null,
+      coreResolvedAt: new Date().toISOString(),
+    },
+  };
+}
+
+async function resolveLinkedMeProfile(me3Url: string | null): Promise<{
+  name: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  resolvedAt: string;
+} | null> {
+  const candidates = candidateMeJsonUrls(me3Url);
+  for (const candidate of candidates) {
+    const response = await fetch(candidate, {
+      headers: { Accept: "application/json" },
+    }).catch(() => null);
+    if (!response?.ok) continue;
+    const data = (await response.json().catch(() => null)) as unknown;
+    if (!isPlainObject(data)) continue;
+    const links = isPlainObject(data.links) ? data.links : {};
+    return {
+      name: stringValue(data.name),
+      email: normalizeEmail(links.email),
+      avatarUrl: resolveProfileAssetUrl(candidate, stringValue(data.avatar)),
+      resolvedAt: new Date().toISOString(),
+    };
+  }
+  return null;
+}
+
+function candidateMeJsonUrls(me3Url: string | null): string[] {
+  if (!me3Url) return [];
+  try {
+    const base = new URL(me3Url);
+    if (!/^https?:$/.test(base.protocol)) return [];
+    if (base.pathname.endsWith(".json")) return [base.toString()];
+    const root = new URL(base.toString());
+    root.pathname = root.pathname.replace(/\/+$/, "");
+    root.search = "";
+    root.hash = "";
+    return [
+      new URL(`${root.pathname}/me.json`.replace(/\/+/g, "/"), root.origin).toString(),
+      new URL("/.well-known/me.json", root.origin).toString(),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function resolveProfileAssetUrl(profileUrl: string, assetUrl: string | null): string | null {
+  if (!assetUrl) return null;
+  try {
+    return new URL(assetUrl, profileUrl).toString();
+  } catch {
+    return assetUrl;
+  }
+}
+
+function buildSoulinkContactChatUrl(
+  soulinkOrigin: string,
+  link: SoulinkLinkRecord,
+  context: SoulinkLinkContextRecord | null,
+): string | null {
+  const explicitUrl = stringValue(context?.soulinkChatUrl) || stringValue(context?.chatUrl);
+  if (explicitUrl) return explicitUrl;
+  const streamChannelId = stringValue(context?.streamChannelId);
+  if (streamChannelId) {
+    return `${soulinkOrigin}/?chat=${encodeURIComponent(
+      streamChannelId.includes(":") ? streamChannelId : `messaging:${streamChannelId}`,
+    )}`;
+  }
+  const sourceChatId = stringValue(context?.sourceChatId) || stringValue(link.sourceChatId);
+  return sourceChatId ? `${soulinkOrigin}/?chat=${encodeURIComponent(sourceChatId)}` : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function serializeProviderChannelEvent(row: DbAgentChannelEvent) {
   return {
     id: row.id,
@@ -9266,6 +9609,57 @@ function parseRawEmailHeaders(rawHeaders: string): Record<string, string> {
   }
 
   return headers;
+}
+
+type MailboxUnsubscribeAction =
+  | { mode: "one_click"; url: string }
+  | { mode: "link"; url: string }
+  | { mode: "mailto"; url: string };
+
+function resolveMailboxUnsubscribeAction(
+  rawHeadersJson: string | null,
+): MailboxUnsubscribeAction | null {
+  const headers = parseJsonRecord(rawHeadersJson);
+  const listUnsubscribe = getHeaderValue(headers, "list-unsubscribe");
+  if (!listUnsubscribe) return null;
+
+  const urls = parseListUnsubscribeUrls(listUnsubscribe);
+  const httpsUrl = urls.find(isHttpsUrl);
+  const mailtoUrl = urls.find((url) => url.trim().toLowerCase().startsWith("mailto:"));
+  const oneClick =
+    getHeaderValue(headers, "list-unsubscribe-post")?.trim().toLowerCase() ===
+    "list-unsubscribe=one-click";
+
+  if (oneClick && httpsUrl) return { mode: "one_click", url: httpsUrl };
+  if (httpsUrl) return { mode: "link", url: httpsUrl };
+  if (mailtoUrl) return { mode: "mailto", url: mailtoUrl };
+  return null;
+}
+
+function getHeaderValue(headers: Record<string, unknown>, name: string): string | null {
+  const lowerName = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lowerName && typeof value === "string") {
+      return value;
+    }
+  }
+  return null;
+}
+
+function parseListUnsubscribeUrls(value: string): string[] {
+  const bracketed = [...value.matchAll(/<([^>]+)>/g)]
+    .map((match) => match[1]?.trim() || "")
+    .filter(Boolean);
+  if (bracketed.length > 0) return bracketed;
+  return value.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function parseEmailBody(

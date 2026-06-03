@@ -38,6 +38,7 @@ export {
   updateAgentContact,
   updateAgentContactOutreachStatus,
   updateAgentReminder,
+  upsertAgentContact,
   upsertAgentMailbox,
   type AgentContact,
   type AgentContactInput,

@@ -42,6 +42,6 @@ const maskPosition = computed(
   background-image: url("/flower.png");
   background-repeat: repeat;
   background-size: 144px 144px;
-  opacity: 0.3;
+  opacity: 0.2;
 }
 </style>

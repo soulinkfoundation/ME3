@@ -1482,6 +1482,20 @@ function createEnv(): Env & {
                   ) || null
                 ) as T | null;
               }
+              if (
+                sql.includes("FROM mailbox_messages") &&
+                sql.includes("JOIN mailbox_aliases")
+              ) {
+                return (
+                  state.mailbox && state.mailbox.user_id === values[0]
+                    ? state.mailboxMessages.find(
+                        (message) =>
+                          message.id === values[1] &&
+                          message.mailbox_id === state.mailbox?.id,
+                      )
+                    : null
+                ) as T | null;
+              }
               if (sql.includes("FROM mailbox_aliases")) {
                 if (sql.includes("status = 'active'")) {
                   return state.mailbox?.status === "active" ? (state.mailbox as T) : null;
@@ -2431,6 +2445,20 @@ describe("ME3 Core Worker auth", () => {
     addBookableSite(env);
     env.ME3_SITE_USERNAME = "owner";
     env.CORE_WEB_ORIGIN = "https://me3.kieranbutler.com";
+
+    const response = await app.fetch(new Request("https://kieranbutler.com/login"), env);
+    const html = await response.text();
+
+    expect(response.status).toBe(404);
+    expect(html).toContain("Page not found");
+    expect(html).not.toContain("Sign in with ME3.app");
+  });
+
+  it("does not expose the login page on a root custom domain without admin env vars", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    env.ME3_SITE_USERNAME = "owner";
+    env.CORE_WEB_ORIGIN = undefined;
 
     const response = await app.fetch(new Request("https://kieranbutler.com/login"), env);
     const html = await response.text();
@@ -6342,6 +6370,88 @@ describe("ME3 Core Worker auth", () => {
         created_by: "cloudflare-email-routing",
       }),
     ]);
+  });
+
+  it("exposes and performs one-click unsubscribe for inbound list messages", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/mailbox", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ aliasLocalPart: "name", forwardingEnabled: false }),
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/mailbox/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const inbound = createInboundEmailMessage(
+      [
+        "From: List <news@example.com>",
+        "To: name@example.com",
+        "Subject: Newsletter",
+        "Message-ID: <newsletter@example.com>",
+        "List-Unsubscribe: <mailto:unsubscribe@example.com>, <https://example.com/unsubscribe/token>",
+        "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
+        "Content-Type: text/plain; charset=utf-8",
+        "",
+        "Latest news.",
+      ].join("\r\n"),
+    );
+    await emailWorker().email(inbound, env);
+
+    const messagesResponse = await app.fetch(
+      new Request("http://localhost/api/mailbox/messages?folder=inbox&direction=inbound", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const messagesBody = (await messagesResponse.json()) as {
+      messages: Array<{ id: string; unsubscribeAction: unknown }>;
+    };
+    expect(messagesBody.messages[0]?.unsubscribeAction).toEqual({
+      available: true,
+      mode: "one_click",
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const unsubscribeResponse = await app.fetch(
+        new Request(
+          `http://localhost/api/mailbox/messages/${messagesBody.messages[0]?.id}/unsubscribe`,
+          {
+            method: "POST",
+            headers: { Cookie: session },
+          },
+        ),
+        env,
+      );
+      expect(unsubscribeResponse.status).toBe(200);
+      expect(await unsubscribeResponse.json()).toEqual({
+        ok: true,
+        mode: "one_click",
+        status: 204,
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://example.com/unsubscribe/token",
+        expect.objectContaining({
+          method: "POST",
+          body: "List-Unsubscribe=One-Click",
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("forwards inbound mailbox copies when forwarding is enabled", async () => {

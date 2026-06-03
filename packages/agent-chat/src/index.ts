@@ -479,6 +479,11 @@ type DbMailboxMessageRow = {
   created_at: string;
 };
 
+type MailboxUnsubscribeAction = {
+  available: true;
+  mode: "one_click" | "link" | "mailto";
+};
+
 type DbMissionMemoryRow = {
   id: string;
   memory_kind: string;
@@ -777,6 +782,75 @@ export async function createAgentContact(
   const contact = await getAgentContact(env, userId, id);
   if (!contact) return { error: "Contact not found", status: 400 };
   return contact;
+}
+
+export async function upsertAgentContact(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  value: unknown,
+): Promise<{ contact: AgentContact; created: boolean } | { error: string; status: 400 | 404 }> {
+  const input = parseAgentContactInput(value);
+  if (!input.name?.trim()) {
+    return { error: "Contact name is required", status: 400 };
+  }
+
+  const source = input.source || "manual";
+  const sourceRef = input.sourceRef || null;
+  const email = input.email || null;
+  const { contacts } = await listAgentContacts(env, userId);
+  const existing =
+    (sourceRef
+      ? contacts.find(
+          (contact) =>
+            contact.source === source && contact.sourceRef === sourceRef,
+        )
+      : null) ||
+    (sourceRef && source === "soulink"
+      ? contacts.find((contact) => contact.metadata?.soulinkNodeId === sourceRef)
+      : null) ||
+    (email
+      ? contacts.find(
+          (contact) => contact.email?.trim().toLowerCase() === email,
+        )
+      : null);
+
+  if (!existing) {
+    const created = await createAgentContact(env, userId, input);
+    if ("error" in created) return created;
+    return { contact: created, created: true };
+  }
+
+  const incomingMetadata = normalizeContactMetadata(input) || {};
+  const existingMetadata = existing.metadata || {};
+  const canRefreshIdentity =
+    existing.source === source || existing.source === "soulink";
+  const merged = await updateAgentContact(env, userId, existing.id, {
+    name: canRefreshIdentity ? input.name || existing.name : existing.name,
+    email: existing.email || input.email || null,
+    phone: existing.phone,
+    source: existing.source,
+    sourceRef: canRefreshIdentity
+      ? input.sourceRef || existing.sourceRef
+      : existing.sourceRef,
+    relationship: existing.relationship,
+    status: existing.status,
+    notes: existing.notes,
+    tags: existing.tags,
+    lastInteractionAt: input.lastInteractionAt || existing.lastInteractionAt,
+    nextFollowupAt: existing.nextFollowupAt,
+    outreachStatus: existing.outreachStatus,
+    socialHandles: {
+      ...existing.socialHandles,
+      ...(input.socialHandles || {}),
+    },
+    metadata: {
+      ...existingMetadata,
+      ...incomingMetadata,
+    },
+  });
+
+  if ("error" in merged) return merged;
+  return { contact: merged, created: false };
 }
 
 export async function updateAgentContact(
@@ -2183,6 +2257,7 @@ function normalizeFolder(value: unknown): string | null {
 function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
   const metadata = parseJsonRecord(row.metadata_json);
   const agentLabels = parseJsonArray(row.agent_labels_json);
+  const unsubscribeAction = getMailboxUnsubscribeAction(row);
   return {
     id: row.id,
     direction: row.direction,
@@ -2199,6 +2274,7 @@ function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
     htmlBody: row.html_body || null,
     preview: (row.text_body || "").slice(0, 280),
     metadata,
+    unsubscribeAction,
     sourceId: row.source_id,
     folder: row.folder,
     readAt: row.read_at,
@@ -2214,6 +2290,56 @@ function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
     sentAt: row.sent_at,
     createdAt: row.created_at,
   };
+}
+
+function getMailboxUnsubscribeAction(
+  row: DbMailboxMessageRow,
+): MailboxUnsubscribeAction | null {
+  if (row.direction !== "inbound" || row.message_kind !== "email") return null;
+  const headers = parseJsonRecord(row.raw_headers_json);
+  const listUnsubscribe = getHeaderValue(headers, "list-unsubscribe");
+  if (!listUnsubscribe) return null;
+
+  const urls = parseListUnsubscribeUrls(listUnsubscribe);
+  const oneClick =
+    getHeaderValue(headers, "list-unsubscribe-post")?.trim().toLowerCase() ===
+    "list-unsubscribe=one-click";
+  if (oneClick && urls.some((url) => isHttpsUrl(url))) {
+    return { available: true, mode: "one_click" };
+  }
+  if (urls.some((url) => isHttpsUrl(url))) {
+    return { available: true, mode: "link" };
+  }
+  if (urls.some((url) => url.trim().toLowerCase().startsWith("mailto:"))) {
+    return { available: true, mode: "mailto" };
+  }
+  return null;
+}
+
+function getHeaderValue(headers: Record<string, unknown>, name: string): string | null {
+  const lowerName = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lowerName && typeof value === "string") {
+      return value;
+    }
+  }
+  return null;
+}
+
+function parseListUnsubscribeUrls(value: string): string[] {
+  const bracketed = [...value.matchAll(/<([^>]+)>/g)]
+    .map((match) => match[1]?.trim() || "")
+    .filter(Boolean);
+  if (bracketed.length > 0) return bracketed;
+  return value.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 async function normalizeAgentMailboxDraftInput(
