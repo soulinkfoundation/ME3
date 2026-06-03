@@ -52,13 +52,15 @@ Soulink owns portable messaging:
 
 - Quick owner/assistant chat away from the ME3 UI.
 - Notifications and replies.
-- A bridge into the same assistant runtime, not a separate durable product model.
+- A bridge into the same assistant runtime, not a competing history UI or default source for
+  `/assistant` Recent.
 
-`AgentChatLauncher.vue` owns lightweight in-app capture:
+`AgentChatLauncher.vue` is retired from the active assistant history model:
 
-- Quick command/chat entry on non-assistant pages.
-- Current-page context handoff.
-- Continue in `/assistant` when the owner needs history, attachments, model choice, or longer work.
+- The global launcher UI is disabled app-wide.
+- Keep the component only as legacy fallback code while the app settles.
+- Route in-app assistant work through `/assistant`.
+- Route portable chat and notifications through Soulink.
 
 ## Transcript, Context, And Audit Split
 
@@ -166,8 +168,10 @@ Recommended defaults:
 - New chat from Mission Control project: preselect that project.
 - New chat from a project task or local run: set the task/run context link and the task's project as
   the primary project.
-- New chat from `AgentChatLauncher.vue`: no project unless current page context clearly supplies one.
-- Soulink-originated chat: no primary project unless the bridge receives explicit project context.
+- New chat from `AgentChatLauncher.vue`: not part of the active UX while the launcher is disabled.
+- Soulink-originated chat: remains channel-owned and ephemeral by default; only create a Core
+  assistant thread when the owner explicitly saves, promotes, or continues the portable conversation
+  in `/assistant`.
 
 The Personal project may be shown as a filter/group if it already exists, but do not silently force
 all ungrouped chats into Personal. "Ungrouped" is a useful state.
@@ -279,31 +283,38 @@ Project grouping should influence context:
 - Do not include every project task by default.
 - Always include a source manifest so the assistant can say what context it used.
 
-## Soulink And Launcher Sharing
+## Soulink And Launcher Reconciliation
 
-Use the same underlying thread/message model, but expose different UX.
+The launcher no longer needs to participate in the shared history model. Soulink should be treated as
+a portable assistant channel with bounded retention, not as an automatic feeder into `/assistant`.
 
 Recommended behavior:
 
-- `/assistant` shows all active assistant threads, including launcher-created threads if saved.
-- `AgentChatLauncher.vue` can create or append to a lightweight thread, then offer "Open full
-  assistant".
-- Soulink can map its stable assistant channel to a thread or thread family, but should avoid dumping
-  every portable message into the main `/assistant` Recent list unless that becomes useful.
+- `/assistant` shows Core-owned assistant threads created in the assistant UI, Mission Control, or
+  explicit save/continue flows.
+- `AgentChatLauncher.vue` stays disabled and should not create a competing chat store.
+- Soulink keeps portable chat history channel-owned and ephemeral by default.
+- Soulink-origin conversations do not appear in `/assistant` Recent by default.
+- If the owner chooses to continue a Soulink conversation in `/assistant`, create or attach a Core
+  assistant thread and link the Soulink channel id through `assistant_thread_context`.
+- Mission Control and audit records may reference Soulink channel ids, message ids, summaries, or
+  promoted Core thread ids, but should not depend on raw portable transcript storage.
 
 First pass:
 
-- `/assistant` and launcher share Core threads.
-- Soulink remains bridged through existing assistant message plumbing, with a follow-up decision on
-  whether to show Soulink-origin threads in `/assistant` by default.
+- `/assistant` is the only active in-app chat history surface.
+- Soulink remains bridged through existing assistant runtime plumbing.
+- Add promotion/linking only when a concrete Soulink UX needs "continue in Assistant" or durable
+  project context.
 
 ## Retention And Privacy Defaults
 
 Defaults:
 
 - `/assistant` threads persist until archived or deleted.
-- Launcher chats persist only when they create a thread or are continued in `/assistant`; otherwise
-  local ephemeral behavior is acceptable.
+- Launcher chats do not persist while the launcher UI is disabled.
+- Soulink chat is ephemeral/channel-owned by default; promoted conversations follow `/assistant`
+  thread retention from the point of promotion onward.
 - Archived threads are hidden from default Recent.
 - Deleted threads are tombstoned first, then hard-deleted by a later cleanup if needed.
 - Export produces transcript content and basic metadata, not internal audit logs.
@@ -377,8 +388,10 @@ Acceptance:
 
 ### Phase 5: Soulink And Audit Reconciliation
 
-- Decide whether Soulink assistant channels appear in `/assistant` by default.
-- Map Soulink channel ids to thread context where appropriate.
+- Keep Soulink assistant channels out of `/assistant` by default.
+- Keep the launcher disabled and out of the active chat history model.
+- Map Soulink channel ids to thread context only when a conversation is explicitly promoted or
+  continued in `/assistant`.
 - Make action/job audit events reference thread/message ids without depending on transcript storage.
 - Add owner-visible links from Mission Control run/activity records back to relevant chats when
   useful.
@@ -387,6 +400,7 @@ Acceptance:
 
 - Portable chat and in-app chat do not feel like competing assistant products.
 - Mission Control can show useful action provenance without exposing unnecessary transcript text.
+- The disabled launcher cannot create a separate chat history store.
 
 ## Quality Gates
 
@@ -415,8 +429,6 @@ Browser verification for UI phases:
 - Should archived chats be visible under a collapsed `Archived` section or only in search/filter?
 - Should thread summaries be generated automatically, or should titles be the only generated field
   at first?
-- Should Soulink-origin threads be visible in `/assistant` Recent by default, or behind a `Soulink`
-  filter?
 - Should Personal be shown as a project group, or should unassigned chats stay visually separate?
 - What hard-delete retention window, if any, should follow transcript deletion?
 
