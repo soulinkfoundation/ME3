@@ -1978,7 +1978,7 @@ onBeforeUnmount(() => {
   <div class="agent-page">
     <Teleport to="#app-side-nav-mobile-page-controls">
       <form
-        v-if="activeTab !== 'telegram' && activeTab !== 'contacts' && !mobileThreadOpen"
+        v-if="isEmailTab(activeTab)"
         class="mail-search mail-search--mobile-nav"
         role="search"
         @submit.prevent="applySearch"
@@ -2059,7 +2059,10 @@ onBeforeUnmount(() => {
           {{ telegramNotice }}
         </div>
 
-        <div class="inbox-panel">
+        <div
+          class="inbox-panel"
+          :class="{ 'inbox-panel--with-mobile-controls': isEmailTab(activeTab) }"
+        >
           <template v-if="activeTab === 'telegram'">
             <div v-if="telegramLoading" class="state-card panel-pad">
               Loading Telegram…
@@ -2150,11 +2153,11 @@ onBeforeUnmount(() => {
           </template>
 
           <template v-else>
-            <div class="mail-workspace">
-              <aside
-                class="mail-rail"
-                :class="{ 'mail-rail--mobile-hidden': mobileThreadOpen }"
-              >
+            <div
+              class="mail-workspace"
+              :class="{ 'mail-workspace--has-thread': selectedMessage }"
+            >
+              <aside class="mail-rail">
                 <nav
                   class="folder-nav"
                   role="tablist"
@@ -3674,6 +3677,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.inbox-panel--with-mobile-controls {
+  height: calc(100dvh - var(--app-shell-mobile-nav-height));
+}
+
 .mail-workspace {
   display: flex;
   flex-direction: column;
@@ -3719,7 +3726,6 @@ onBeforeUnmount(() => {
   display: none;
 }
 
-.mail-rail--mobile-hidden,
 .conversation-list--mobile-hidden {
   display: none;
 }
@@ -4379,6 +4385,55 @@ onBeforeUnmount(() => {
 .thread-scroll {
   flex: 1;
   padding: 0 0 24px;
+}
+
+@media (min-width: 641px) {
+  .mail-workspace {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mail-workspace--has-thread {
+    grid-template-columns: minmax(320px, 42%) minmax(0, 1fr);
+  }
+
+  .mail-rail {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .conversation-list {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .contacts-panel {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .mail-workspace--has-thread .conversation-list {
+    border-right: 1px solid var(--color-border);
+  }
+
+  .mail-workspace--has-thread .thread-pane {
+    grid-column: 2;
+    grid-row: 2;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .conversation-list--mobile-hidden {
+    display: flex;
+  }
+
+  .thread-toolbar {
+    justify-content: flex-end;
+  }
+
+  .thread-back-btn {
+    display: none;
+  }
 }
 
 .message-card {
@@ -5396,7 +5451,7 @@ onBeforeUnmount(() => {
   }
 
   .thread-pane {
-    height: calc(100dvh - var(--app-shell-mobile-nav-height));
+    height: auto;
   }
 
   .thread-back-btn {
