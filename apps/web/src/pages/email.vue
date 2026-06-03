@@ -199,6 +199,7 @@ const mailboxAddress = ref<string | null>(null);
 const expandedId = ref<string | null>(null);
 const mobileThreadOpen = ref(false);
 const searchQuery = ref("");
+const contactSearchQuery = ref("");
 const actionPending = ref<string | null>(null);
 const deletePending = ref<string | null>(null);
 const unsubscribePending = ref<string | null>(null);
@@ -336,7 +337,29 @@ const contactRecipientOptions = computed(() =>
     })),
 );
 
-const visibleContacts = computed(() =>
+const contactSearchTerm = computed(() =>
+  contactSearchQuery.value.trim().toLowerCase(),
+);
+
+const searchableContactText = (contact: Contact): string =>
+  [
+    contact.name,
+    contact.email,
+    contact.phone,
+    contact.relationship,
+    contact.source,
+    contact.notes,
+    contact.metadata?.soulinkContextLabel,
+    contact.metadata?.soulinkSourceChatTitle,
+    contact.metadata?.soulinkOrigin,
+    contact.tags.join(" "),
+    Object.values(contact.socialHandles).join(" "),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+const activeContacts = computed(() =>
   [...contacts.value]
     .filter((contact) => contact.status !== "archived")
     .sort((a, b) => {
@@ -352,6 +375,36 @@ const visibleContacts = computed(() =>
         b.createdAt;
       return bTime.localeCompare(aTime);
     }),
+);
+
+const visibleContacts = computed(() => {
+  const term = contactSearchTerm.value;
+  if (!term) return activeContacts.value;
+  return activeContacts.value.filter((contact) =>
+    searchableContactText(contact).includes(term),
+  );
+});
+
+const mobileSearchQuery = computed({
+  get: () =>
+    activeTab.value === "contacts"
+      ? contactSearchQuery.value
+      : searchQuery.value,
+  set: (value: string) => {
+    if (activeTab.value === "contacts") {
+      contactSearchQuery.value = value;
+      return;
+    }
+    searchQuery.value = value;
+  },
+});
+
+const mobileSearchLabel = computed(() =>
+  activeTab.value === "contacts" ? "Search contacts" : "Search mail",
+);
+
+const mobileSearchDisabled = computed(() =>
+  activeTab.value === "contacts" ? contactsStore.loading : loading.value,
 );
 
 const composeRecipientSuggestions = computed(() => {
@@ -829,6 +882,11 @@ async function applySearch() {
   mobileThreadOpen.value = false;
   clearSelectedMessages();
   await loadMessages();
+}
+
+async function applyMobileSearch() {
+  if (activeTab.value === "contacts") return;
+  await applySearch();
 }
 
 function updateMessageLocally(id: string, patch: Partial<InboxMessage>) {
@@ -1978,34 +2036,35 @@ onBeforeUnmount(() => {
   <div class="agent-page">
     <Teleport to="#app-side-nav-mobile-page-controls">
       <form
-        v-if="isEmailTab(activeTab)"
+        v-if="isEmailTab(activeTab) || activeTab === 'contacts'"
         class="mail-search mail-search--mobile-nav"
         role="search"
-        @submit.prevent="applySearch"
+        @submit.prevent="applyMobileSearch"
       >
         <label
           class="mail-search__label"
           for="mail-search-input-mobile-nav"
         >
-          Search mail
+          {{ mobileSearchLabel }}
         </label>
         <input
           id="mail-search-input-mobile-nav"
-          v-model="searchQuery"
+          v-model="mobileSearchQuery"
           class="mail-search__input"
           type="search"
-          placeholder="Search mail"
+          :placeholder="mobileSearchLabel"
         />
         <button
           type="submit"
           class="mail-search__button mail-mobile-icon-btn"
-          :disabled="loading"
-          aria-label="Search mail"
+          :disabled="mobileSearchDisabled"
+          :aria-label="mobileSearchLabel"
           title="Search"
         >
           <UiIcon name="Search" :size="18" aria-hidden="true" />
         </button>
         <button
+          v-if="activeTab !== 'contacts'"
           type="button"
           class="compose-btn compose-btn--mobile-nav"
           aria-label="Compose"
@@ -2015,12 +2074,30 @@ onBeforeUnmount(() => {
           <span class="compose-btn__label">Compose</span>
         </button>
         <button
+          v-else
+          type="button"
+          class="compose-btn compose-btn--mobile-nav"
+          aria-label="Add contact"
+          @click="openContactModal"
+        >
+          <UiIcon name="Plus" :size="16" aria-hidden="true" />
+          <span class="compose-btn__label">Add</span>
+        </button>
+        <button
           type="button"
           class="mail-search__button mail-search__button--refresh mail-mobile-icon-btn"
-          :disabled="loading"
-          aria-label="Refresh conversations"
-          title="Refresh"
-          @click="refreshMessagesPage"
+          :disabled="activeTab === 'contacts' ? soulinkSyncing : loading"
+          :aria-label="
+            activeTab === 'contacts'
+              ? 'Sync Soulink contacts'
+              : 'Refresh conversations'
+          "
+          :title="activeTab === 'contacts' ? 'Sync Soulink contacts' : 'Refresh'"
+          @click="
+            activeTab === 'contacts'
+              ? syncSoulinkContacts()
+              : refreshMessagesPage()
+          "
         >
           <UiIcon name="RefreshCw" :size="18" aria-hidden="true" />
         </button>
@@ -2230,37 +2307,6 @@ onBeforeUnmount(() => {
                 class="contacts-panel"
                 aria-label="Contacts"
               >
-                <header class="contacts-toolbar">
-                  <div>
-                    <h2>Contacts</h2>
-                    <p>
-                      {{ visibleContacts.length }}
-                      {{ visibleContacts.length === 1 ? "person" : "people" }}
-                    </p>
-                  </div>
-                  <div class="contacts-toolbar__actions">
-                    <button
-                      type="button"
-                      class="contacts-icon-btn"
-                      :disabled="soulinkSyncing"
-                      title="Sync Soulink contacts"
-                      aria-label="Sync Soulink contacts"
-                      @click="syncSoulinkContacts"
-                    >
-                      <UiIcon name="RefreshCw" :size="16" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      class="contacts-add-btn"
-                      aria-label="Add contact"
-                      @click="openContactModal"
-                    >
-                      <UiIcon name="Plus" :size="16" aria-hidden="true" />
-                      <span>Add</span>
-                    </button>
-                  </div>
-                </header>
-
                 <div
                   v-if="soulinkSyncError"
                   class="contacts-sync-note contacts-sync-note--error"
@@ -2342,9 +2388,19 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-else class="empty-state empty-state--inline">
                   <div class="empty-state__stack">
-                    <p>No contacts yet.</p>
+                    <p>
+                      {{
+                        contactSearchTerm
+                          ? "No contacts match that search."
+                          : "No contacts yet."
+                      }}
+                    </p>
                     <p class="empty-state__sub">
-                      Add one manually or sync Links from Soulink.
+                      {{
+                        contactSearchTerm
+                          ? "Try a name, email, tag, or Soulink detail."
+                          : "Add one manually or sync Links from Soulink."
+                      }}
                     </p>
                   </div>
                 </div>
@@ -3911,28 +3967,6 @@ onBeforeUnmount(() => {
   background: var(--ui-bg, var(--color-bg));
 }
 
-.contacts-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
-}
-
-.contacts-toolbar h2 {
-  margin: 0;
-  font-size: 18px;
-  line-height: 1.2;
-}
-
-.contacts-toolbar p {
-  margin: 3px 0 0;
-  font-size: 13px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.contacts-toolbar__actions,
 .contact-row__actions {
   display: inline-flex;
   align-items: center;
@@ -3940,7 +3974,6 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
-.contacts-add-btn,
 .contacts-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -3950,15 +3983,6 @@ onBeforeUnmount(() => {
   background: var(--ui-surface, var(--color-bg));
   color: var(--ui-text, var(--color-text));
   cursor: pointer;
-}
-
-.contacts-add-btn {
-  gap: 6px;
-  min-height: 34px;
-  padding: 0 10px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
 }
 
 .contacts-icon-btn {
@@ -3971,13 +3995,11 @@ onBeforeUnmount(() => {
   text-decoration: none;
 }
 
-.contacts-add-btn:hover:not(:disabled),
 .contacts-icon-btn:hover:not(:disabled) {
   background: var(--ui-surface-muted, var(--color-bg-subtle));
   border-color: var(--ui-border-strong, var(--color-text));
 }
 
-.contacts-add-btn:disabled,
 .contacts-icon-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
