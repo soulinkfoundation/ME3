@@ -682,9 +682,6 @@ const assistantAttachmentIssue = computed(() => {
   return "";
 });
 const assistantComposerDragActive = computed(() => assistantComposerDragDepth.value > 0);
-const assistantSelectedThread = computed(() =>
-  assistantThreads.value.find((thread) => thread.id === assistantThreadId.value) || null,
-);
 const assistantProjectThreadGroups = computed(() =>
   assistantProjects.value.map((project) => ({
     project,
@@ -856,34 +853,6 @@ async function clearAssistantThreadSearch() {
   assistantThreadSearchDraft.value = "";
   assistantThreadSearch.value = "";
   await loadAssistantThreads();
-}
-
-async function updateAssistantThreadProject(projectId: string | null) {
-  const thread = assistantSelectedThread.value;
-  if (!thread || assistantThreadActionId.value) return;
-  assistantThreadActionId.value = thread.id;
-  try {
-    const response = await api.patch<{ thread: AssistantThread }>(
-      `/assistant/threads/${encodeURIComponent(thread.id)}`,
-      { projectId },
-    );
-    upsertAssistantThread(response.thread);
-    await router.replace({
-      query: {
-        ...route.query,
-        project: response.thread.projectId || undefined,
-      },
-    });
-  } catch (err) {
-    assistantThreadsError.value = messageFromUnknown(err, "Chat project could not update.");
-  } finally {
-    assistantThreadActionId.value = null;
-  }
-}
-
-function onAssistantThreadProjectChange(event: Event) {
-  const value = event.target instanceof HTMLSelectElement ? event.target.value : "";
-  void updateAssistantThreadProject(value || null);
 }
 
 async function archiveAssistantThread(thread: AssistantThread) {
@@ -2720,63 +2689,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
           </form>
         </nav>
 
-        <div
-          v-if="assistantSelectedThread"
-          class="assistant-history__active-tools"
-          aria-label="Selected chat controls"
-        >
-          <label class="assistant-history__project-select">
-            <span>Project</span>
-            <select
-              :value="assistantSelectedThread.projectId || ''"
-              :disabled="assistantThreadActionId === assistantSelectedThread.id"
-              @change="onAssistantThreadProjectChange"
-            >
-              <option value="">Chats</option>
-              <option
-                v-for="project in assistantProjects"
-                :key="project.id"
-                :value="project.id"
-              >
-                {{ project.name }}
-              </option>
-            </select>
-          </label>
-          <div class="assistant-history__actions">
-            <button
-              type="button"
-              title="Export transcript"
-              aria-label="Export transcript"
-              :disabled="assistantThreadActionId === assistantSelectedThread.id"
-              @click="exportAssistantThread(assistantSelectedThread)"
-            >
-              <UiIcon name="Download" :size="15" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              :title="assistantSelectedThread.status === 'archived' ? 'Restore chat' : 'Archive chat'"
-              :aria-label="assistantSelectedThread.status === 'archived' ? 'Restore chat' : 'Archive chat'"
-              :disabled="assistantThreadActionId === assistantSelectedThread.id"
-              @click="archiveAssistantThread(assistantSelectedThread)"
-            >
-              <UiIcon
-                :name="assistantSelectedThread.status === 'archived' ? 'ArchiveRestore' : 'Archive'"
-                :size="15"
-                aria-hidden="true"
-              />
-            </button>
-            <button
-              type="button"
-              title="Delete chat"
-              aria-label="Delete chat"
-              :disabled="assistantThreadActionId === assistantSelectedThread.id"
-              @click="deleteAssistantThread(assistantSelectedThread)"
-            >
-              <UiIcon name="Trash2" :size="15" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-
         <p v-if="assistantThreadsError" class="assistant-history__message">
           {{ assistantThreadsError }}
         </p>
@@ -2815,31 +2727,71 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <span v-if="group.threads.length" class="assistant-history__count">
                 {{ group.threads.length }}
               </span>
+              <span class="assistant-history__project-add" aria-hidden="true">
+                <UiIcon name="Plus" :size="14" />
+              </span>
             </button>
             <nav
               v-if="group.threads.length"
               class="assistant-history__list assistant-history__list--nested"
               :aria-label="`${group.project.name} chats`"
             >
-              <button
+              <div
                 v-for="thread in group.threads"
                 :key="thread.id"
-                type="button"
-                class="assistant-history__thread"
+                class="assistant-history__thread-row"
                 :class="{ 'is-active': assistantThreadId === thread.id }"
-                :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
-                @click="selectAssistantThread(thread.id)"
               >
-                <UiIcon name="MessageSquare" :size="15" aria-hidden="true" />
-                <span class="assistant-history__thread-main">
-                  <span class="assistant-history__thread-title">
-                    {{ threadTitle(thread) }}
+                <button
+                  type="button"
+                  class="assistant-history__thread"
+                  :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
+                  @click="selectAssistantThread(thread.id)"
+                >
+                  <UiIcon name="MessageSquare" :size="15" aria-hidden="true" />
+                  <span class="assistant-history__thread-main">
+                    <span class="assistant-history__thread-title">
+                      {{ threadTitle(thread) }}
+                    </span>
+                    <span class="assistant-history__thread-meta">
+                      {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
+                    </span>
                   </span>
-                  <span class="assistant-history__thread-meta">
-                    {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
-                  </span>
-                </span>
-              </button>
+                </button>
+                <div
+                  v-if="assistantThreadId === thread.id"
+                  class="assistant-history__thread-actions"
+                  aria-label="Selected chat controls"
+                >
+                  <button
+                    type="button"
+                    title="Export transcript"
+                    aria-label="Export transcript"
+                    :disabled="assistantThreadActionId === thread.id"
+                    @click="exportAssistantThread(thread)"
+                  >
+                    <UiIcon name="Download" :size="14" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Archive chat"
+                    aria-label="Archive chat"
+                    :disabled="assistantThreadActionId === thread.id"
+                    @click="archiveAssistantThread(thread)"
+                  >
+                    <UiIcon name="Archive" :size="14" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete chat"
+                    aria-label="Delete chat"
+                    :disabled="assistantThreadActionId === thread.id"
+                    @click="deleteAssistantThread(thread)"
+                  >
+                    <UiIcon name="Trash2" :size="14" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
             </nav>
           </div>
         </section>
@@ -2850,25 +2802,62 @@ function messageFromUnknown(err: unknown, fallback: string) {
             class="assistant-history__list"
             aria-label="Chats outside projects"
           >
-            <button
+            <div
               v-for="thread in assistantUngroupedThreads"
               :key="thread.id"
-              type="button"
-              class="assistant-history__thread"
+              class="assistant-history__thread-row"
               :class="{ 'is-active': assistantThreadId === thread.id }"
-              :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
-              @click="selectAssistantThread(thread.id)"
             >
-              <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
-              <span class="assistant-history__thread-main">
-                <span class="assistant-history__thread-title">
-                  {{ threadTitle(thread) }}
+              <button
+                type="button"
+                class="assistant-history__thread"
+                :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
+                @click="selectAssistantThread(thread.id)"
+              >
+                <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
+                <span class="assistant-history__thread-main">
+                  <span class="assistant-history__thread-title">
+                    {{ threadTitle(thread) }}
+                  </span>
+                  <span class="assistant-history__thread-meta">
+                    {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
+                  </span>
                 </span>
-                <span class="assistant-history__thread-meta">
-                  {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
-                </span>
-              </span>
-            </button>
+              </button>
+              <div
+                v-if="assistantThreadId === thread.id"
+                class="assistant-history__thread-actions"
+                aria-label="Selected chat controls"
+              >
+                <button
+                  type="button"
+                  title="Export transcript"
+                  aria-label="Export transcript"
+                  :disabled="assistantThreadActionId === thread.id"
+                  @click="exportAssistantThread(thread)"
+                >
+                  <UiIcon name="Download" :size="14" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  title="Archive chat"
+                  aria-label="Archive chat"
+                  :disabled="assistantThreadActionId === thread.id"
+                  @click="archiveAssistantThread(thread)"
+                >
+                  <UiIcon name="Archive" :size="14" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  title="Delete chat"
+                  aria-label="Delete chat"
+                  :disabled="assistantThreadActionId === thread.id"
+                  @click="deleteAssistantThread(thread)"
+                >
+                  <UiIcon name="Trash2" :size="14" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
             <p
               v-if="assistantThreadListEmpty"
               class="assistant-history__message"
@@ -3991,10 +3980,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
   position: relative;
   isolation: isolate;
   display: block;
-  min-height: 100vh;
+  box-sizing: border-box;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   padding: 0 14px 18px;
   background: var(--ui-bg);
   color: var(--ui-text);
+  overflow: hidden;
 }
 
 .assistant-page--history-collapsed {
@@ -4004,7 +3997,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-history {
   position: fixed;
   inset: 0 auto 0 0;
-  z-index: 70;
+  z-index: 90;
   display: flex;
   flex-direction: column;
   width: min(300px, calc(100vw - var(--app-shell-mobile-nav-leading-padding)));
@@ -4158,7 +4151,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history__search button,
-.assistant-history__actions button {
+.assistant-history__thread-actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4171,19 +4164,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   cursor: pointer;
 }
 
-.assistant-history__active-tools {
-  display: grid;
-  gap: 8px;
-  border-block: 1px solid var(--ui-border);
-  padding: 10px 0;
-}
-
-.assistant-history__project-select {
-  display: grid;
-  gap: 4px;
-}
-
-.assistant-history__project-select span,
 .assistant-history__section h2 {
   margin: 0;
   color: color-mix(in oklab, var(--ui-text-muted) 76%, transparent);
@@ -4191,29 +4171,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font-weight: 500;
 }
 
-.assistant-history__project-select select {
-  width: 100%;
-  min-height: 32px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  padding: 0 8px;
-  background: color-mix(in oklab, var(--ui-surface) 64%, transparent);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.assistant-history__actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.assistant-history__actions {
-  justify-content: flex-end;
-}
-
-.assistant-history__actions button:hover,
+.assistant-history__thread-actions button:hover:not(:disabled),
 .assistant-history__search button:hover {
   background: var(--ui-surface);
   color: var(--ui-text);
@@ -4239,8 +4197,26 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text-muted);
 }
 
+.assistant-history__project-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.assistant-history__count + .assistant-history__project-add {
+  margin-left: 0;
+}
+
+.assistant-history__project-row:hover .assistant-history__project-add,
+.assistant-history__project-row:focus-visible .assistant-history__project-add {
+  opacity: 1;
+}
+
 .assistant-history__project-row.is-active,
-.assistant-history__thread.is-active {
+.assistant-history__thread-row.is-active {
   background: var(--ui-surface);
   color: var(--ui-text);
 }
@@ -4255,6 +4231,26 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: grid;
   gap: 2px;
   min-width: 0;
+}
+
+.assistant-history__thread-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  border-radius: var(--ui-radius-sm);
+}
+
+.assistant-history__thread-row .assistant-history__thread {
+  flex: 1 1 auto;
+}
+
+.assistant-history__thread-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding-right: 2px;
 }
 
 .assistant-history__thread-title,
@@ -4314,7 +4310,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-history-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 80;
   border: 0;
   background: color-mix(in oklab, var(--ui-bg) 42%, transparent);
 }
@@ -4326,9 +4322,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  height: 100%;
+  max-height: 100%;
   width: min(820px, 100%);
   margin: 0 auto;
   padding: 0;
+  overflow: hidden;
 }
 
 .assistant-topbar {
@@ -4354,6 +4353,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
     var(--workspace-topbar-padding-block)
     var(--app-shell-mobile-nav-leading-padding);
   align-items: center;
+}
+
+:global(.app-root:has(.assistant-page--history-open) .app-side-nav-mobile-bar) {
+  z-index: 40;
+  pointer-events: none;
 }
 
 .assistant-mobile-nav__actions {
@@ -4467,11 +4471,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-console {
-  display: block;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   width: min(600px, 100%);
   max-width: 600px;
-  height: auto;
+  height: 100%;
+  max-height: 100%;
   min-height: 0;
   margin: 0 auto;
 }
@@ -4479,6 +4485,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-timeline {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: 14px;
   min-height: 0;
   padding: 28px 0 146px;
