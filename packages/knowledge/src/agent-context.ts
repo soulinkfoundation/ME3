@@ -20,7 +20,6 @@ export type Me3AgentContextSourceKind =
   | "calendar_event"
   | "task"
   | "project"
-  | "mission_capture"
   | "assistant_message"
   | "agent_job"
   | "plugin"
@@ -1102,7 +1101,6 @@ function sourceKindDisplayOrder(kind: Me3AgentContextSourceKind): number {
     "calendar_event",
     "assistant_message",
     "agent_job",
-    "mission_capture",
     "plugin",
     "manual",
     "unknown",
@@ -1135,8 +1133,6 @@ function manifestSourceKindLabel(kind: Me3AgentContextSourceKind, count: number)
       return plural ? "tasks" : "task";
     case "project":
       return plural ? "projects" : "project";
-    case "mission_capture":
-      return plural ? "mission captures" : "mission capture";
     case "assistant_message":
       return plural ? "recent messages" : "recent message";
     case "agent_job":

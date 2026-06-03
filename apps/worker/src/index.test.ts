@@ -3465,10 +3465,19 @@ describe("ME3 Core Worker auth", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "me3.mission-control",
-          routePaths: expect.arrayContaining(["/api/mission-control/overview"]),
           agentToolIds: expect.arrayContaining(["mission.task.create"]),
+          capabilityIds: expect.not.arrayContaining(["workspace.daily_capture"]),
         }),
       ]),
+    );
+    const missionControlPlugin = body.plugins.find(
+      (plugin: { id: string }) => plugin.id === "me3.mission-control",
+    );
+    expect(missionControlPlugin?.routePaths).toEqual(
+      expect.arrayContaining(["/api/mission-control/projects"]),
+    );
+    expect(missionControlPlugin?.routePaths).toEqual(
+      expect.not.arrayContaining(["/api/mission-control/overview"]),
     );
   });
 

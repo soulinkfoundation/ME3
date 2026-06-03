@@ -18,7 +18,7 @@ This is a design spec. It is not a migration file.
 
 Core owns the Assistant Jobs model because `/assistant` is a Core surface and job execution crosses installed plugins.
 
-Mission Control owns the default destination records: job results, tasks, captures, approvals, private memory suggestions, activity, and run summaries. Some internal schema fields still use the older `review_packet` identifier for compatibility; user-facing copy should say result.
+Mission Control owns the default destination records: job results, tasks, approvals, private memory suggestions, activity, and run summaries. Some internal schema fields still use the older `review_packet` identifier for compatibility; user-facing copy should say result.
 
 Plugins own provider-specific configuration and capabilities. Jobs store references to plugin capabilities but should not copy provider secrets, hosted-only subscription state, or plugin-private credentials.
 

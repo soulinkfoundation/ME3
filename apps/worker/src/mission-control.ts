@@ -1,15 +1,9 @@
 import {
-  inferMissionCaptureType,
-  normalizeMissionCaptureStatus,
-  normalizeMissionCaptureType,
   normalizeMissionDateKey,
   normalizeMissionProjectStatus,
   normalizeMissionTaskStatus,
   slugifyMissionProjectName,
-  type MissionCaptureStatus,
-  type MissionCaptureType,
   type MissionProjectStatus,
-  type MissionSyncStatus,
   type MissionTaskStatus,
 } from "@me3-core/plugin-mission-control";
 import { getUtcMsForLocalTime, normalizeTimeZone } from "./calendar";
@@ -90,39 +84,6 @@ type MissionTaskCursor =
       updatedAt: string;
       id: string;
     };
-
-type MissionDailyNoteRow = {
-  id: string;
-  user_id: string;
-  date: string;
-  title: string | null;
-  journal_text: string;
-  created_at: string;
-  updated_at: string;
-};
-
-type MissionCaptureRow = {
-  id: string;
-  user_id: string;
-  day_id: string;
-  type: MissionCaptureType;
-  text: string;
-  project_id: string | null;
-  status: MissionCaptureStatus;
-  task_id: string | null;
-  calendar_event_id: string | null;
-  reminder_id: string | null;
-  due_at: string | null;
-  event_start_at: string | null;
-  event_end_at: string | null;
-  timezone: string | null;
-  sync_status: MissionSyncStatus;
-  sync_error: string | null;
-  source: "manual" | "agent" | "import" | "carry_over";
-  source_ref: string | null;
-  created_at: string;
-  updated_at: string;
-};
 
 type MissionApprovalRow = {
   id: string;
@@ -277,17 +238,6 @@ type TemporalHint = {
   timezone: string;
 };
 
-type CaptureCreateInput = {
-  date?: unknown;
-  text?: unknown;
-  type?: unknown;
-  projectId?: unknown;
-  scheduledDate?: unknown;
-  scheduledTime?: unknown;
-  timezone?: unknown;
-  source?: unknown;
-};
-
 type MissionSetupItem = {
   id: string;
   label: string;
@@ -312,322 +262,6 @@ type WeeklyReviewMemoryInput = {
 const PERSONAL_PROJECT_ID = "mission-project-personal";
 const DEFAULT_OWNER_TIMEZONE = "UTC";
 const ACTIVE_TASK_STATUSES: MissionTaskStatus[] = ["backlog", "in_progress", "review"];
-
-export async function getMissionControlOverview(
-  env: Env,
-  userId: string,
-  dateInput: unknown,
-) {
-  const date = normalizeMissionDateKey(dateInput) || localDateKey(new Date());
-  const [day, projects, setup] = await Promise.all([
-    getMissionDay(env, userId, date),
-    listMissionProjects(env, userId),
-    getMissionSetup(env, userId),
-  ]);
-
-  const [tasksDueToday, pendingApprovals, recentRuns, activity, daemon, latestBriefing, latestWeeklyReview] =
-    await Promise.all([
-      listMissionTasks(env, userId, { dueDate: date, activeOnly: true, limit: 8 }),
-      listMissionApprovals(env, userId, "pending", 8),
-      listMissionAgentRuns(env, userId, 8),
-      listMissionPluginActivity(env, userId, 8),
-      getMissionDaemonStatus(env, userId),
-      getMissionControlDailyBriefing(env, userId, date),
-      getMissionControlWeeklyReview(env, userId, date),
-    ]);
-
-  return {
-    day: day.day,
-    captures: day.captures,
-    projects,
-    tasksDueToday,
-    pendingApprovals,
-    recentRuns,
-    setup,
-    daemon,
-    activity,
-    latestBriefing,
-    latestWeeklyReview,
-  };
-}
-
-export async function getMissionDay(env: Env, userId: string, date: string) {
-  const normalizedDate = requireDateKey(date);
-  const [day, projects] = await Promise.all([
-    getOrCreateMissionDay(env, userId, normalizedDate),
-    listMissionProjects(env, userId),
-  ]);
-  const captures = await env.DB.prepare(
-    `SELECT id, user_id, day_id, type, text, project_id, status, task_id,
-            calendar_event_id, reminder_id, due_at, event_start_at, event_end_at,
-            timezone, sync_status, sync_error, source, source_ref, created_at, updated_at
-     FROM mission_capture_items
-     WHERE user_id = ? AND day_id = ? AND status != 'archived'
-     ORDER BY status = 'done', created_at DESC`,
-  )
-    .bind(userId, day.id)
-    .all<MissionCaptureRow>();
-
-  return {
-    day: serializeDay(day),
-    captures: (captures.results || []).map(serializeCapture),
-    projects,
-  };
-}
-
-export async function listMissionJournalEntries(
-  env: Env,
-  userId: string,
-  options: { limit?: unknown } = {},
-) {
-  const limit = normalizeListLimit(options.limit, 100);
-  const rows = await env.DB.prepare(
-    `SELECT id, user_id, date, title, journal_text, created_at, updated_at
-     FROM mission_daily_notes
-     WHERE user_id = ?
-       AND LENGTH(TRIM(REPLACE(REPLACE(journal_text, char(10), ' '), char(13), ' '))) > 0
-     ORDER BY date DESC
-     LIMIT ?`,
-  )
-    .bind(userId, limit)
-    .all<MissionDailyNoteRow>();
-
-  return (rows.results || []).map(serializeJournalEntry);
-}
-
-export async function updateMissionDay(
-  env: Env,
-  userId: string,
-  date: string,
-  input: unknown,
-) {
-  const normalizedDate = requireDateKey(date);
-  const body = isRecord(input) ? input : {};
-  const journalText =
-    typeof body.journalText === "string"
-      ? body.journalText
-      : typeof body.journal_text === "string"
-        ? body.journal_text
-        : "";
-  const title = normalizeNullableText(body.title);
-  const day = await getOrCreateMissionDay(env, userId, normalizedDate);
-
-  await env.DB.prepare(
-    `UPDATE mission_daily_notes
-     SET title = ?, journal_text = ?, updated_at = datetime('now')
-     WHERE id = ? AND user_id = ?`,
-  )
-    .bind(title, journalText, day.id, userId)
-    .run();
-
-  return {
-    day: serializeDay({
-      ...day,
-      title,
-      journal_text: journalText,
-      updated_at: new Date().toISOString(),
-    }),
-  };
-}
-
-export async function createMissionCapture(
-  env: Env,
-  userId: string,
-  input: CaptureCreateInput,
-) {
-  const text = normalizeNullableText(input.text);
-  if (!text) throw new MissionControlInputError("Capture text is required");
-
-  const date = normalizeMissionDateKey(input.date) || localDateKey(new Date());
-  const type = normalizeMissionCaptureType(input.type) || inferMissionCaptureType(text);
-  const source = input.source === "agent" ? "agent" : "manual";
-  const projectId =
-    typeof input.projectId === "string" && input.projectId.trim()
-      ? input.projectId.trim()
-      : (await ensurePersonalProject(env, userId)).id;
-  await ensureProjectExists(env, userId, projectId);
-
-  const ownerTimezone = await getOwnerTimezone(env, userId);
-  const manualTimezone =
-    typeof input.timezone === "string" ? normalizeTimeZone(input.timezone) : null;
-  const temporal =
-    parseManualTemporalHint(input.scheduledDate, input.scheduledTime, manualTimezone || ownerTimezone) ||
-    parseTemporalHint(text, date, ownerTimezone);
-  const day = await getOrCreateMissionDay(env, userId, date);
-  const captureId = crypto.randomUUID();
-  let taskId: string | null = null;
-  let reminderId: string | null = null;
-  let calendarEventId: string | null = null;
-  let syncStatus: MissionSyncStatus = "local";
-  let syncError: string | null = null;
-  const dueAt = temporal?.startsAt || null;
-  const eventStartAt = type === "event" ? temporal?.startsAt || null : null;
-  const eventEndAt = type === "event" ? temporal?.endsAt || null : null;
-
-  if (type === "task") {
-    taskId = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO mission_tasks
-         (id, user_id, project_id, title, status, priority, due_at, scheduled_for, source_kind, source_ref)
-       VALUES (?, ?, ?, ?, 'backlog', 3, ?, ?, 'capture', ?)`,
-    )
-      .bind(taskId, userId, projectId, text, dueAt, date, captureId)
-      .run();
-  } else if (!(await isCorePluginEnabled(env, "me3.calendar"))) {
-    syncStatus = "setup_required";
-    syncError = "Calendar plugin is disabled. Enable Calendar to sync reminders and events.";
-  } else if (!temporal) {
-    syncStatus = "pending";
-    syncError = "Add a date and time to sync this capture to Calendar.";
-  } else if (type === "reminder") {
-    reminderId = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO user_reminders
-         (id, user_id, title, notes, remind_at, timezone, recurrence_rule, status, created_via)
-       VALUES (?, ?, ?, NULL, ?, ?, NULL, 'pending', 'mission_control')`,
-    )
-      .bind(reminderId, userId, cleanupReminderTitle(text), temporal.startsAt, temporal.timezone)
-      .run();
-    syncStatus = "synced";
-  } else {
-    calendarEventId = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO user_calendar_events
-         (id, user_id, title, notes, location, starts_at, ends_at, timezone, all_day, kind, recurrence_rule)
-       VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, 0, 'event', NULL)`,
-    )
-      .bind(calendarEventId, userId, text, temporal.startsAt, temporal.endsAt, temporal.timezone)
-      .run();
-    syncStatus = "synced";
-  }
-
-  await env.DB.prepare(
-    `INSERT INTO mission_capture_items
-       (id, user_id, day_id, type, text, project_id, status, task_id,
-        calendar_event_id, reminder_id, due_at, event_start_at, event_end_at,
-        timezone, sync_status, sync_error, source)
-     VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      captureId,
-      userId,
-      day.id,
-      type,
-      text,
-      projectId,
-      taskId,
-      calendarEventId,
-      reminderId,
-      dueAt,
-      eventStartAt,
-      eventEndAt,
-      temporal?.timezone || ownerTimezone,
-      syncStatus,
-      syncError,
-      source,
-    )
-    .run();
-
-  await appendMissionPluginActivity(env, userId, {
-    pluginId: "me3.mission-control",
-    activityType: "capture.created",
-    title: `Captured ${type}`,
-    summary: text,
-    status: syncStatus,
-    relatedId: captureId,
-  });
-
-  const capture = await getMissionCapture(env, userId, captureId);
-  if (!capture) throw new MissionControlInputError("Capture was not created", 409);
-  return { capture: serializeCapture(capture) };
-}
-
-export async function updateMissionCapture(
-  env: Env,
-  userId: string,
-  captureId: string,
-  input: unknown,
-) {
-  const existing = await getMissionCapture(env, userId, captureId);
-  if (!existing) throw new MissionControlInputError("Capture not found", 404);
-  const body = isRecord(input) ? input : {};
-  const status = normalizeMissionCaptureStatus(body.status) || existing.status;
-  const text = normalizeNullableText(body.text) || existing.text;
-  const projectId =
-    typeof body.projectId === "string" && body.projectId.trim()
-      ? body.projectId.trim()
-      : existing.project_id;
-  if (projectId) await ensureProjectExists(env, userId, projectId);
-
-  await env.DB.prepare(
-    `UPDATE mission_capture_items
-     SET text = ?, project_id = ?, status = ?, updated_at = datetime('now')
-     WHERE id = ? AND user_id = ?`,
-  )
-    .bind(text, projectId, status, captureId, userId)
-    .run();
-
-  if (existing.task_id) {
-    await env.DB.prepare(
-      `UPDATE mission_tasks
-       SET title = ?, project_id = ?, status = CASE WHEN ? = 'done' THEN 'done' ELSE status END,
-           updated_at = datetime('now')
-       WHERE id = ? AND user_id = ?`,
-    )
-      .bind(text, projectId, status, existing.task_id, userId)
-      .run();
-  }
-
-  const capture = await getMissionCapture(env, userId, captureId);
-  if (!capture) throw new MissionControlInputError("Capture not found", 404);
-  return { capture: serializeCapture(capture) };
-}
-
-export async function archiveMissionCapture(env: Env, userId: string, captureId: string) {
-  const existing = await getMissionCapture(env, userId, captureId);
-  if (!existing) {
-    throw new MissionControlInputError("Capture not found", 404);
-  }
-
-  const result = await env.DB.prepare(
-    `UPDATE mission_capture_items
-     SET status = 'archived', updated_at = datetime('now')
-     WHERE id = ? AND user_id = ?`,
-  )
-    .bind(captureId, userId)
-    .run();
-  if ((result.meta?.changes || 0) === 0) {
-    throw new MissionControlInputError("Capture not found", 404);
-  }
-
-  if (existing.task_id) {
-    await env.DB.prepare(
-      `UPDATE mission_tasks
-       SET status = 'cancelled', archived_at = datetime('now'), updated_at = datetime('now')
-       WHERE id = ? AND user_id = ?`,
-    )
-      .bind(existing.task_id, userId)
-      .run();
-  }
-
-  if (existing.reminder_id) {
-    await env.DB.prepare(
-      `UPDATE user_reminders
-       SET status = 'cancelled'
-       WHERE id = ? AND user_id = ?`,
-    )
-      .bind(existing.reminder_id, userId)
-      .run();
-  }
-
-  if (existing.calendar_event_id) {
-    await env.DB.prepare("DELETE FROM user_calendar_events WHERE id = ? AND user_id = ?")
-      .bind(existing.calendar_event_id, userId)
-      .run();
-  }
-
-  return { ok: true };
-}
 
 export async function listMissionProjects(env: Env, userId: string) {
   await ensurePersonalProject(env, userId);
@@ -1239,20 +873,11 @@ export async function submitMissionWeeklyReview(
         (item) => item && item.checked === true && normalizeNullableText(item.body),
       )
     : [];
-  const dayId = missionDailyNoteId(userId, review.reviewDate);
   const now = new Date().toISOString();
   const carriedTaskIds = review.openTasks
     .map((task) => normalizeNullableText(task.id))
     .filter((taskId): taskId is string => taskId !== null)
     .filter((taskId) => carryOverIds.has(taskId));
-
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO mission_daily_notes
-       (id, user_id, date, title, journal_text, created_at, updated_at)
-     VALUES (?, ?, ?, ?, '', ?, ?)`,
-  )
-    .bind(dayId, userId, review.reviewDate, `Weekly Review - ${review.reviewDate}`, now, now)
-    .run();
 
   for (const taskId of carriedTaskIds) {
     const task = await getMissionTask(env, userId, taskId);
@@ -1265,26 +890,6 @@ export async function submitMissionWeeklyReview(
        WHERE id = ? AND user_id = ?`,
     )
       .bind(review.reviewDate, taskId, userId)
-      .run();
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO mission_capture_items
-         (id, user_id, day_id, type, text, project_id, status, task_id,
-          calendar_event_id, reminder_id, due_at, event_start_at, event_end_at,
-          timezone, sync_status, sync_error, source, source_ref, created_at, updated_at)
-       VALUES (?, ?, ?, 'task', ?, ?, 'open', ?, NULL, NULL, NULL, NULL, NULL,
-         NULL, 'local', NULL, 'carry_over', ?, ?, ?)`,
-    )
-      .bind(
-        `weekly-review:${runId}:task:${taskId}`,
-        userId,
-        dayId,
-        task.title,
-        task.project_id,
-        taskId,
-        `${runId}:${taskId}`,
-        now,
-        now,
-      )
       .run();
   }
 
@@ -1548,8 +1153,7 @@ export async function deleteMissionContextSource(env: Env, userId: string, sourc
 }
 
 export async function getMissionSetup(env: Env, userId: string) {
-  const [calendarEnabled, aiConfigured, memory, sources, daemon, localExecutor] = await Promise.all([
-    isCorePluginEnabled(env, "me3.calendar"),
+  const [aiConfigured, memory, sources, daemon, localExecutor] = await Promise.all([
     hasConfiguredAiProvider(env, userId),
     listMissionMemory(env, userId, 1),
     listMissionContextSources(env, userId, 20),
@@ -1558,15 +1162,6 @@ export async function getMissionSetup(env: Env, userId: string) {
   ]);
 
   const items: MissionSetupItem[] = [
-    {
-      id: "calendar",
-      label: "Calendar sync",
-      status: calendarEnabled ? "ready" : "setup_required",
-      detail: calendarEnabled
-        ? "Reminder and event captures can sync to Calendar."
-        : "Enable Calendar to sync reminder and event captures.",
-      actionPath: calendarEnabled ? "/calendar" : "/account?section=plugins&blocked=me3.calendar",
-    },
     {
       id: "ai-provider",
       label: "AI provider",
@@ -1621,7 +1216,6 @@ export async function getMissionSetup(env: Env, userId: string) {
   ];
 
   return {
-    calendarEnabled,
     aiConfigured,
     memoryCount: memory.length,
     contextSourceCount: sources.length,
@@ -1726,18 +1320,6 @@ export async function listMissionDaemonAudit(env: Env, userId: string) {
   return { audit: daemon.audit };
 }
 
-async function getMissionCapture(env: Env, userId: string, captureId: string) {
-  return env.DB.prepare(
-    `SELECT id, user_id, day_id, type, text, project_id, status, task_id,
-            calendar_event_id, reminder_id, due_at, event_start_at, event_end_at,
-            timezone, sync_status, sync_error, source, source_ref, created_at, updated_at
-     FROM mission_capture_items
-     WHERE id = ? AND user_id = ?`,
-  )
-    .bind(captureId, userId)
-    .first<MissionCaptureRow>();
-}
-
 async function getMissionProject(env: Env, userId: string, projectId: string) {
   return env.DB.prepare(
     `SELECT id, user_id, name, slug, description, status, color, icon, source_kind,
@@ -1781,34 +1363,6 @@ async function getMissionContextSource(env: Env, userId: string, sourceId: strin
   )
     .bind(sourceId, userId)
     .first<MissionContextSourceRow>();
-}
-
-async function getOrCreateMissionDay(env: Env, userId: string, date: string) {
-  await ensurePersonalProject(env, userId);
-  const existing = await env.DB.prepare(
-    `SELECT id, user_id, date, title, journal_text, created_at, updated_at
-     FROM mission_daily_notes
-     WHERE user_id = ? AND date = ?`,
-  )
-    .bind(userId, date)
-    .first<MissionDailyNoteRow>();
-  if (existing) return existing;
-
-  const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT INTO mission_daily_notes (id, user_id, date, title, journal_text)
-     VALUES (?, ?, ?, ?, '')`,
-  )
-    .bind(id, userId, date, dailyTitle(date))
-    .run();
-
-  return (await env.DB.prepare(
-    `SELECT id, user_id, date, title, journal_text, created_at, updated_at
-     FROM mission_daily_notes
-     WHERE id = ?`,
-  )
-    .bind(id)
-    .first<MissionDailyNoteRow>()) as MissionDailyNoteRow;
 }
 
 async function ensurePersonalProject(env: Env, userId: string) {
@@ -1993,53 +1547,6 @@ function serializeTask(row: MissionTaskRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
-  };
-}
-
-function serializeDay(row: MissionDailyNoteRow) {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    date: row.date,
-    title: row.title,
-    journalText: row.journal_text,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function serializeJournalEntry(row: MissionDailyNoteRow) {
-  const text = row.journal_text || "";
-  return {
-    id: row.id,
-    date: row.date,
-    preview: journalPreview(text),
-    journalText: text,
-  };
-}
-
-function serializeCapture(row: MissionCaptureRow) {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    dayId: row.day_id,
-    type: row.type,
-    text: row.text,
-    projectId: row.project_id,
-    status: row.status,
-    taskId: row.task_id,
-    calendarEventId: row.calendar_event_id,
-    reminderId: row.reminder_id,
-    dueAt: row.due_at,
-    eventStartAt: row.event_start_at,
-    eventEndAt: row.event_end_at,
-    timezone: row.timezone,
-    syncStatus: row.sync_status,
-    syncError: row.sync_error,
-    source: row.source,
-    sourceRef: row.source_ref,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
   };
 }
 
@@ -2382,10 +1889,6 @@ function decodeMissionTaskCursor(
   throw new MissionControlInputError("Task cursor is invalid");
 }
 
-function journalPreview(value: string): string {
-  return value.replace(/\s+/g, " ").trim().slice(0, 160);
-}
-
 function normalizeConfidence(value: unknown): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return 1;
@@ -2524,19 +2027,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function localDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function missionDailyNoteId(userId: string, date: string) {
-  return `mission-day:${userId}:${date}`;
-}
-
-function dailyTitle(date: string): string {
-  const parsed = new Date(`${date}T12:00:00.000Z`);
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "long",
-  }).format(parsed);
 }
 
 function addDays(date: string, days: number): string {

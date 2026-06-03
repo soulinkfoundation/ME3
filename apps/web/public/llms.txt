@@ -62,12 +62,12 @@ Generated from the typed ME3 knowledge package. This file is public-safe and sho
   Surfaces: core, hosted
   Lifecycle: available
   Runtime state in Core: available
-  Summary: Mission Control gives the owner a private workspace for daily capture, tasks, projects, approvals, private memory, context sources, and run history.
+  Summary: Mission Control gives the owner a private workspace for tasks, projects, approvals, private memory, context sources, and run history.
   Approval mode: owner_approval
   Side effect: internal_write
   Data boundary: Mission Control data is private, owner-scoped, and plugin-owned.
-  App/API routes: /mission-control, /api/mission-control/overview
-  Agent tool ids: mission.capture.create, mission.task.create, mission.memory.write, mission.approval.request
+  App/API routes: /mission-control
+  Agent tool ids: mission.task.create, mission.memory.write, mission.approval.request
   Boundaries: Private memory writes should be visible and approval-aware. Public me.json remains Core-owned and separate from Mission Control memory.
 - Optional local daemon bridge (workspace.local_daemon_bridge)
   Category: workspace

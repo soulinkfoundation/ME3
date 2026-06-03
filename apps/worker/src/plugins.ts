@@ -45,7 +45,7 @@ export type CorePluginManifestSummary = {
   uiSlots: { id: string; slot: string; label: string }[];
   agentTools: { id: string; label: string; sideEffect: string; approvalMode: string }[];
   secrets: { name: string; label: string; required: boolean }[];
-  migrations: { id: string; path: string; destructive: false }[];
+  migrations: { id: string; path: string; destructive: boolean; description?: string }[];
   queuesAndCrons: {
     id: string;
     kind: "queue" | "cron";
@@ -229,7 +229,6 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   implementationStatus: MISSION_CONTROL_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: [
     "workspace.mission_control",
-    "workspace.daily_capture",
     "workspace.tasks",
     "workspace.approvals",
     "workspace.private_memory",
@@ -238,10 +237,6 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
     "workspace.local_daemon_bridge",
   ],
   permissions: [
-    {
-      id: "mission.capture.manage",
-      label: "Create and manage daily captures",
-    },
     {
       id: "mission.tasks.manage",
       label: "Create and manage Mission Control tasks and projects",
@@ -268,36 +263,6 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   routes: [
-    {
-      id: "mission.overview.api",
-      path: "/api/mission-control/overview",
-      methods: ["GET"],
-      auth: "owner",
-    },
-    {
-      id: "mission.day.api",
-      path: "/api/mission-control/days/:date",
-      methods: ["GET", "PATCH"],
-      auth: "owner",
-    },
-    {
-      id: "mission.journal_archive.api",
-      path: "/api/mission-control/journal-archive",
-      methods: ["GET"],
-      auth: "owner",
-    },
-    {
-      id: "mission.capture.api",
-      path: "/api/mission-control/capture",
-      methods: ["GET", "POST"],
-      auth: "owner",
-    },
-    {
-      id: "mission.capture.item.api",
-      path: "/api/mission-control/capture/:id",
-      methods: ["PATCH", "DELETE"],
-      auth: "owner",
-    },
     {
       id: "mission.projects.api",
       path: "/api/mission-control/projects",
@@ -401,12 +366,6 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   ],
   agentTools: [
     {
-      id: "mission.capture.create",
-      label: "Create daily capture",
-      sideEffect: "internal_write",
-      approvalMode: "none",
-    },
-    {
       id: "mission.task.create",
       label: "Create task",
       sideEffect: "internal_write",
@@ -449,6 +408,13 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       id: "mission.0015",
       path: "./apps/worker/migrations/0015_mission_control_plugin.sql",
       destructive: false,
+    },
+    {
+      id: "mission.0027",
+      path: "./apps/worker/migrations/0027_mission_control_remove_daily_notes.sql",
+      destructive: true,
+      description:
+        "Remove retired Mission Control daily-note and capture storage.",
     },
   ],
   queuesAndCrons: [],

@@ -284,12 +284,6 @@ type WeeklyReviewReminderRow = {
   status: string;
 };
 
-type WeeklyReviewJournalRow = {
-  id: string;
-  date: string;
-  journal_text: string;
-};
-
 type WeeklyReviewMemoryRow = {
   id: string;
   title: string | null;
@@ -1687,9 +1681,6 @@ async function executeAssistantJobMissionOutputAction(
   if (input.capability.id === "mission.task.create") {
     return createAssistantJobMissionTask(env, input);
   }
-  if (input.capability.id === "mission.capture.create") {
-    return createAssistantJobMissionCapture(env, input);
-  }
   if (input.capability.id === "mission.activity.create") {
     return createAssistantJobMissionActivity(env, input, "assistant_job.activity");
   }
@@ -1989,69 +1980,6 @@ async function createAssistantJobMissionTask(
     idempotencyKey: input.idempotencyKey,
     status: "succeeded",
     externalRef: taskId,
-  });
-}
-
-async function createAssistantJobMissionCapture(
-  env: Env,
-  input: {
-    userId: string;
-    job: AssistantJobRow;
-    run: AssistantJobRunRow;
-    draft: AssistantJobDraft;
-    action: AssistantJobAction;
-    capability: AssistantCapability;
-    idempotencyKey: string;
-  },
-) {
-  const date = normalizeMissionDate(input.action.inputs.date) || new Date().toISOString().slice(0, 10);
-  const dayId = missionDailyNoteId(input.userId, date);
-  const captureId = missionOutputId(input.run, input.action, "capture");
-  const now = new Date().toISOString();
-
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO mission_daily_notes
-       (id, user_id, date, title, journal_text, created_at, updated_at)
-     VALUES (?, ?, ?, ?, '', ?, ?)`,
-  )
-    .bind(dayId, input.userId, date, `Assistant Jobs - ${date}`, now, now)
-    .run();
-
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO mission_capture_items
-       (id, user_id, day_id, type, text, project_id, status, task_id, calendar_event_id,
-        reminder_id, due_at, event_start_at, event_end_at, timezone, sync_status, sync_error,
-        source, source_ref, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, ?, ?, ?, ?, 'local', NULL,
-       'agent', ?, ?, ?)`,
-  )
-    .bind(
-      captureId,
-      input.userId,
-      dayId,
-      normalizeMissionCaptureType(input.action.inputs.type),
-      missionTextInput(input.action, "text")
-        || missionTextInput(input.action, "title")
-        || input.action.label
-        || input.job.name,
-      resolveMissionOutputProjectId(input.job, input.draft, input.action),
-      normalizeNullableText(input.action.inputs.dueAt),
-      normalizeNullableText(input.action.inputs.eventStartAt),
-      normalizeNullableText(input.action.inputs.eventEndAt),
-      normalizeNullableText(input.action.inputs.timezone),
-      input.idempotencyKey,
-      now,
-      now,
-    )
-    .run();
-
-  return insertAssistantJobActionResult(env, {
-    runId: input.run.id,
-    actionId: input.action.id,
-    capabilityId: input.capability.id,
-    idempotencyKey: input.idempotencyKey,
-    status: "succeeded",
-    externalRef: captureId,
   });
 }
 
@@ -3438,10 +3366,6 @@ function missionOutputId(run: AssistantJobRunRow, action: AssistantJobAction, ki
   return `assistant-job-output:${run.id}:${action.id}:${kind}`;
 }
 
-function missionDailyNoteId(userId: string, date: string) {
-  return `assistant-job-day:${userId}:${date}`;
-}
-
 function missionTextInput(action: AssistantJobAction, key: string) {
   return normalizeNullableText(action.inputs[key]);
 }
@@ -3592,15 +3516,14 @@ async function buildWeeklyReviewResult(env: Env, userId: string, runId: string) 
   const now = new Date();
   const reviewDate = now.toISOString().slice(0, 10);
   const weekStart = addIsoDays(reviewDate, -6);
-  const [openTasks, completedTasks, reminders, journalRows, memoryRows] = await Promise.all([
+  const [openTasks, completedTasks, reminders, memoryRows] = await Promise.all([
     loadWeeklyReviewOpenTasks(env, userId),
     loadWeeklyReviewCompletedTasks(env, userId, weekStart, reviewDate),
     loadWeeklyReviewReminders(env, userId),
-    loadWeeklyReviewJournalRows(env, userId, weekStart, reviewDate),
     loadWeeklyReviewMemoryRows(env, userId),
   ]);
-  const journalSummary = summarizeWeeklyJournalNotes(journalRows);
-  const memorySuggestions = suggestWeeklyReviewMemory(journalRows, memoryRows, openTasks);
+  const taskSummary = summarizeWeeklyReviewTasks(openTasks, completedTasks, reminders);
+  const memorySuggestions = suggestWeeklyReviewMemory(memoryRows, openTasks);
 
   return {
     kind: "weekly_review",
@@ -3630,7 +3553,7 @@ async function buildWeeklyReviewResult(env: Env, userId: string, runId: string) 
       remindAt: reminder.remind_at,
       status: reminder.status,
     })),
-    journalSummary,
+    journalSummary: taskSummary,
     memorySuggestions,
   };
 }
@@ -3683,28 +3606,6 @@ async function loadWeeklyReviewReminders(env: Env, userId: string) {
   return rows.results || [];
 }
 
-async function loadWeeklyReviewJournalRows(
-  env: Env,
-  userId: string,
-  weekStart: string,
-  weekEnd: string,
-) {
-  const rows = await env.DB.prepare(
-    `SELECT id, date, journal_text
-     FROM mission_daily_notes
-     WHERE user_id = ?
-       AND date >= ?
-       AND date <= ?
-       AND LENGTH(TRIM(REPLACE(REPLACE(journal_text, char(10), ' '), char(13), ' '))) > 0
-     ORDER BY date ASC
-     LIMIT 14`,
-  )
-    .bind(userId, weekStart, weekEnd)
-    .all<WeeklyReviewJournalRow>()
-    .catch(() => ({ results: [] as WeeklyReviewJournalRow[] }));
-  return rows.results || [];
-}
-
 async function loadWeeklyReviewMemoryRows(env: Env, userId: string) {
   const rows = await env.DB.prepare(
     `SELECT id, title, body
@@ -3719,41 +3620,31 @@ async function loadWeeklyReviewMemoryRows(env: Env, userId: string) {
   return rows.results || [];
 }
 
-function summarizeWeeklyJournalNotes(rows: WeeklyReviewJournalRow[]) {
-  const snippets = rows
-    .map((row) => normalizeWhitespace(row.journal_text))
-    .filter(Boolean);
-  if (snippets.length === 0) {
-    return "No journal notes were captured this week. The review is based on tasks and reminders.";
-  }
-  const combined = snippets.join(" ");
-  const sentences = combined.match(/[^.!?]+[.!?]?/g)?.map((item) => item.trim()).filter(Boolean) || [
-    combined,
-  ];
-  const summary = sentences.slice(0, 3).join(" ");
-  return truncateText(summary, 360);
+function summarizeWeeklyReviewTasks(
+  openTasks: Me3AgentContextTask[],
+  completedTasks: Array<{ title: string }>,
+  reminders: WeeklyReviewReminderRow[],
+) {
+  return [
+    `${openTasks.length} open task${openTasks.length === 1 ? "" : "s"}`,
+    `${completedTasks.length} completed this week`,
+    `${reminders.length} pending reminder${reminders.length === 1 ? "" : "s"}`,
+  ].join(", ");
 }
 
 function suggestWeeklyReviewMemory(
-  journalRows: WeeklyReviewJournalRow[],
   memoryRows: WeeklyReviewMemoryRow[],
   openTasks: Me3AgentContextTask[],
 ) {
   const sourceLines = [
-    ...journalRows.flatMap((row) =>
-      row.journal_text
-        .split(/\n+/)
-        .map((line) => normalizeWhitespace(line))
-        .filter((line) => line.length >= 18),
-    ),
-    ...openTasks.slice(0, 4).map((task) => `Ongoing task pattern: ${task.title}`),
+    ...openTasks.slice(0, 6).map((task) => `Ongoing task pattern: ${task.title}`),
   ];
   const existing = memoryRows
     .map((row) => `${row.title || ""} ${row.body}`.toLowerCase())
     .join("\n");
   const fallback = [
     "Review recurring open tasks during weekly planning.",
-    "Keep journal notes specific enough to turn into next actions.",
+    "Keep project notes specific enough to turn into next actions.",
     "Check whether repeated reminders indicate a routine worth protecting.",
   ];
   const candidates = (sourceLines.length ? sourceLines : fallback)
@@ -4665,10 +4556,6 @@ function normalizeMissionDate(value: unknown) {
   const text = normalizeNullableText(value);
   if (!text || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
   return text;
-}
-
-function normalizeMissionCaptureType(value: unknown) {
-  return value === "reminder" || value === "event" || value === "task" ? value : "task";
 }
 
 function riskLevelForCapability(capability: AssistantCapability) {

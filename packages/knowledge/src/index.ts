@@ -281,9 +281,9 @@ export const ME3_CAPABILITIES: readonly Me3Capability[] = [
     title: "Mission Control workspace",
     category: "workspace",
     summary:
-      "Mission Control gives the owner a private workspace for daily capture, tasks, projects, approvals, private memory, context sources, and run history.",
+      "Mission Control gives the owner a private workspace for tasks, projects, approvals, private memory, context sources, and run history.",
     agentSummary:
-      "Mission Control is the default private workspace for capture, tasks, approvals, private memory, context sources, plugin activity, and run history.",
+      "Mission Control is the default private workspace for tasks, approvals, private memory, context sources, plugin activity, and run history.",
     surfaces: ["core", "hosted"],
     lifecycle: "available",
     pluginId: "me3.mission-control",
@@ -291,9 +291,8 @@ export const ME3_CAPABILITIES: readonly Me3Capability[] = [
     approvalMode: "owner_approval",
     sideEffect: "internal_write",
     dataBoundary: "Mission Control data is private, owner-scoped, and plugin-owned.",
-    appRoutes: ["/mission-control", "/api/mission-control/overview"],
+    appRoutes: ["/mission-control"],
     agentToolIds: [
-      "mission.capture.create",
       "mission.task.create",
       "mission.memory.write",
       "mission.approval.request",

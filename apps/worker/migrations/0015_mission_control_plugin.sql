@@ -47,54 +47,6 @@ CREATE INDEX IF NOT EXISTS idx_mission_tasks_user_status
 CREATE INDEX IF NOT EXISTS idx_mission_tasks_project_status
   ON mission_tasks(project_id, status);
 
-CREATE TABLE IF NOT EXISTS mission_daily_notes (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL DEFAULT 'owner',
-  date TEXT NOT NULL,
-  title TEXT,
-  journal_text TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(user_id, date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_mission_daily_notes_user_date
-  ON mission_daily_notes(user_id, date);
-
-CREATE TABLE IF NOT EXISTS mission_capture_items (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL DEFAULT 'owner',
-  day_id TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('task', 'reminder', 'event')),
-  text TEXT NOT NULL,
-  project_id TEXT,
-  status TEXT NOT NULL DEFAULT 'open'
-    CHECK (status IN ('open', 'done', 'archived')),
-  task_id TEXT,
-  calendar_event_id TEXT,
-  reminder_id TEXT,
-  due_at TEXT,
-  event_start_at TEXT,
-  event_end_at TEXT,
-  timezone TEXT,
-  sync_status TEXT NOT NULL DEFAULT 'local'
-    CHECK (sync_status IN ('local', 'pending', 'synced', 'failed', 'setup_required')),
-  sync_error TEXT,
-  source TEXT NOT NULL DEFAULT 'manual'
-    CHECK (source IN ('manual', 'agent', 'import', 'carry_over')),
-  source_ref TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (day_id) REFERENCES mission_daily_notes(id) ON DELETE CASCADE,
-  FOREIGN KEY (project_id) REFERENCES mission_projects(id) ON DELETE SET NULL,
-  FOREIGN KEY (task_id) REFERENCES mission_tasks(id) ON DELETE SET NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_mission_capture_items_day_status
-  ON mission_capture_items(day_id, status, created_at);
-CREATE INDEX IF NOT EXISTS idx_mission_capture_items_user_type
-  ON mission_capture_items(user_id, type, sync_status);
-
 CREATE TABLE IF NOT EXISTS mission_approvals (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT 'owner',

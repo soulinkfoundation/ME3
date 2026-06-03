@@ -86,10 +86,8 @@ import { getCoreVersionInfo } from "./core-version";
 import {
   MissionControlInputError,
   approveMissionMemory,
-  archiveMissionCapture,
   archiveMissionTask,
   clearMissionActivity,
-  createMissionCapture,
   createMissionContextSource,
   createMissionMemory,
   createMissionProject,
@@ -97,14 +95,11 @@ import {
   createMissionTaskLocalExecutorRun,
   deleteMissionContextSource,
   deleteMissionMemory,
-  getMissionControlOverview,
   getMissionDaemonStatus,
-  getMissionDay,
   getMissionSetup,
   listMissionAgentRuns,
   listMissionApprovals,
   listMissionContextSources,
-  listMissionJournalEntries,
   listMissionMemory,
   listMissionTaskPage,
   listMissionPluginActivity,
@@ -114,9 +109,7 @@ import {
   startMissionDaemonPairing,
   submitMissionWeeklyReview,
   suggestMissionMemory,
-  updateMissionCapture,
   updateMissionContextSource,
-  updateMissionDay,
   updateMissionMemory,
   updateMissionProject,
   updateMissionTask,
@@ -1914,69 +1907,6 @@ app.post("/api/accounts/stripe/sync", async (c) => {
   }
 });
 
-app.get("/api/mission-control/overview", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-  const blocked = await requireMissionControlPlugin(c);
-  if (blocked) return blocked;
-
-  try {
-    return c.json(await getMissionControlOverview(c.env, ownerId, c.req.query("date")));
-  } catch (error) {
-    return missionControlErrorResponse(c, error);
-  }
-});
-
-app.get("/api/mission-control/days/:date", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-  const blocked = await requireMissionControlPlugin(c);
-  if (blocked) return blocked;
-
-  try {
-    return c.json(await getMissionDay(c.env, ownerId, c.req.param("date")));
-  } catch (error) {
-    return missionControlErrorResponse(c, error);
-  }
-});
-
-app.get("/api/mission-control/journal-archive", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-  const blocked = await requireMissionControlPlugin(c);
-  if (blocked) return blocked;
-
-  try {
-    return c.json({
-      entries: await listMissionJournalEntries(c.env, ownerId, {
-        limit: c.req.query("limit"),
-      }),
-    });
-  } catch (error) {
-    return missionControlErrorResponse(c, error);
-  }
-});
-
-app.patch("/api/mission-control/days/:date", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-  const blocked = await requireMissionControlPlugin(c);
-  if (blocked) return blocked;
-
-  try {
-    return c.json(
-      await updateMissionDay(
-        c.env,
-        ownerId,
-        c.req.param("date"),
-        await c.req.json().catch(() => ({})),
-      ),
-    );
-  } catch (error) {
-    return missionControlErrorResponse(c, error);
-  }
-});
-
 app.get("/api/journal/days/:date", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -2024,72 +1954,6 @@ app.get("/api/journal/archive", async (c) => {
     );
   } catch (error) {
     return journalErrorResponse(c, error);
-  }
-});
-
-app.get("/api/mission-control/capture", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-  const blocked = await requireMissionControlPlugin(c);
-  if (blocked) return blocked;
-
-  try {
-    return c.json(await getMissionDay(c.env, ownerId, c.req.query("date") || localDateKey()));
-  } catch (error) {
-    return missionControlErrorResponse(c, error);
-  }
-});
-
-app.post("/api/mission-control/capture", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-  const blocked = await requireMissionControlPlugin(c);
-  if (blocked) return blocked;
-
-  try {
-    return c.json(
-      await createMissionCapture(
-        c.env,
-        ownerId,
-        await c.req.json().catch(() => ({})),
-      ),
-      201,
-    );
-  } catch (error) {
-    return missionControlErrorResponse(c, error);
-  }
-});
-
-app.patch("/api/mission-control/capture/:id", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-  const blocked = await requireMissionControlPlugin(c);
-  if (blocked) return blocked;
-
-  try {
-    return c.json(
-      await updateMissionCapture(
-        c.env,
-        ownerId,
-        c.req.param("id"),
-        await c.req.json().catch(() => ({})),
-      ),
-    );
-  } catch (error) {
-    return missionControlErrorResponse(c, error);
-  }
-});
-
-app.delete("/api/mission-control/capture/:id", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-  const blocked = await requireMissionControlPlugin(c);
-  if (blocked) return blocked;
-
-  try {
-    return c.json(await archiveMissionCapture(c.env, ownerId, c.req.param("id")));
-  } catch (error) {
-    return missionControlErrorResponse(c, error);
   }
 });
 

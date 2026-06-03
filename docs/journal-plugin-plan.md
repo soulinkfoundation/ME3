@@ -12,7 +12,7 @@ Mission Control should stop competing with Journal and Assistant:
 - Assistant owns conversational action: task creation, reminders, events, bookings, site edits, project-aware jobs, and automation.
 - Mission Control owns operational review: for this pass, its visible default workspace becomes the current Projects board.
 
-The old Mission Control journal entries do not need to be migrated. The new Journal plugin should use fresh APIs and storage. Existing Mission Control journal data can remain in place as legacy data because `mission_capture_items` currently references `mission_daily_notes`; this plan only stops using that table for the new Journal surface.
+The old Mission Control journal entries do not need to be migrated. The new Journal plugin uses fresh APIs and storage. The follow-up Mission Control cleanup removes the retired legacy daily-note and capture tables once the visible Journal surface has moved to `/journal`.
 
 ## Plugin Shape
 
@@ -179,11 +179,7 @@ After `/journal` exists, reduce `apps/web/src/pages/mission-control.vue`:
 - Remove the journal archive UI from Mission Control.
 - Keep the current Projects kanban view as-is for this pass.
 
-Temporary compatibility is acceptable:
-
-- Mission Control APIs for captures/tasks can stay.
-- `mission_daily_notes` can stay because current capture storage depends on it.
-- Activity, memory, sources, and setup can stay behind existing internal/settings affordances if removing them creates too much unrelated churn.
+Temporary compatibility is acceptable for activity, memory, sources, and setup behind existing internal/settings affordances if removing them creates too much unrelated churn. Mission Control journal/capture APIs and legacy daily-note storage are retired by the follow-up cleanup.
 
 Longer term, Mission Control can become a simpler status/review page or a project list with collapsible project sections, but that is out of scope for this pass.
 

@@ -101,13 +101,12 @@ Mission Control should contribute the v1 workbench capabilities:
 | --- | --- | --- | --- |
 | `mission.review_packet.create` | Create a scan-friendly Mission Control result. Internal legacy ID; user-facing copy should say result. | `write_internal_draft` | `review_required` |
 | `mission.task.create` | Create a Mission Control task. | `write_internal_active` | `none` or `review_required` by job |
-| `mission.capture.create` | Create a capture item. | `write_internal_active` | `none` |
 | `mission.approval.create` | Create an approval item. | `write_internal_active` | `none` |
 | `mission.activity.create` | Add project or job activity. | `write_internal_active` | `none` |
 | `mission.memory.suggest` | Suggest private memory for review. | `write_internal_draft` | `review_required` |
 | `mission.memory.activate` | Convert a suggestion into active durable memory. | `memory_write` | `approval_required` |
 | `mission.project.read` | Read scoped project state. | `read_private` | `none` |
-| `mission.task.read` | Read scoped tasks and captures. | `read_private` | `none` |
+| `mission.task.read` | Read scoped tasks. | `read_private` | `none` |
 | `mission.approval.read` | Read pending approvals. | `read_private` | `none` |
 
 V1 starter jobs should be possible with these capabilities alone.
@@ -213,7 +212,7 @@ The validator checks:
 The registry should help generate job permission copy:
 
 ```text
-This job can read tasks and captures in Mission Control.
+This job can read tasks in Mission Control.
 It can create Mission Control results and draft tasks.
 It will ask before sending email or writing durable memory.
 It cannot delete provider data or change permissions.

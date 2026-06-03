@@ -103,8 +103,6 @@ type AssistantJobsDbState = {
   missionAgentRuns: Record<string, unknown>[];
   projects: Record<string, unknown>[];
   tasks: Record<string, unknown>[];
-  dailyNotes: Record<string, unknown>[];
-  captures: Record<string, unknown>[];
   memory: Record<string, unknown>[];
   calendarEvents: Record<string, unknown>[];
   reminders: ReminderRow[];
@@ -819,12 +817,6 @@ describe("assistant jobs persistence", () => {
         externalRef: `assistant-job-output:${first.run.id}:create-task:task`,
       }),
       expect.objectContaining({
-        actionId: "create-capture",
-        capabilityId: "mission.capture.create",
-        status: "succeeded",
-        externalRef: `assistant-job-output:${first.run.id}:create-capture:capture`,
-      }),
-      expect.objectContaining({
         actionId: "create-activity",
         capabilityId: "mission.activity.create",
         status: "succeeded",
@@ -839,25 +831,13 @@ describe("assistant jobs persistence", () => {
       status: "backlog",
       source_kind: "agent",
     });
-    expect(env.__state.dailyNotes).toHaveLength(1);
-    expect(env.__state.dailyNotes[0]).toMatchObject({
-      id: "assistant-job-day:owner:2026-05-23",
-      date: "2026-05-23",
-    });
-    expect(env.__state.captures).toHaveLength(1);
-    expect(env.__state.captures[0]).toMatchObject({
-      text: "Review launch notes",
-      project_id: "project-1",
-      type: "task",
-      source: "agent",
-    });
     expect(env.__state.pluginActivities).toHaveLength(1);
     expect(env.__state.pluginActivities[0]).toMatchObject({
       activity_type: "assistant_job.activity",
       title: "Job finished",
       related_id: first.run.id,
     });
-    expect(env.__state.actionResults).toHaveLength(3);
+    expect(env.__state.actionResults).toHaveLength(2);
   });
 
   it("persists scoped context manifests and failed source markers for job runs", async () => {
@@ -955,8 +935,8 @@ describe("assistant jobs persistence", () => {
 
 function eventJobDraft() {
   return {
-    name: "Capture Review",
-    purpose: "Review new Mission Control captures.",
+    name: "Task Review",
+    purpose: "Review new Mission Control tasks.",
     recipeId: null,
     trigger: {
       kind: "event",
@@ -1055,20 +1035,6 @@ function missionOutputJobDraft() {
         idempotencyScope: "run",
       },
       {
-        id: "create-capture",
-        capabilityId: "mission.capture.create",
-        label: "Create capture",
-        inputs: {
-          text: "Review launch notes",
-          type: "task",
-          projectId: "project-1",
-          date: "2026-05-23",
-        },
-        approvalMode: "none",
-        onFailure: "stop",
-        idempotencyScope: "run",
-      },
-      {
         id: "create-activity",
         capabilityId: "mission.activity.create",
         label: "Create activity",
@@ -1119,8 +1085,6 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
     missionAgentRuns: [],
     projects: [],
     tasks: [],
-    dailyNotes: [],
-    captures: [],
     memory: [],
     calendarEvents: [],
     reminders: [],
@@ -1430,51 +1394,6 @@ class FakeStatement {
           created_at: values[10] as string,
           updated_at: values[11] as string,
           archived_at: null,
-        });
-      }
-      return { success: true };
-    }
-
-    if (sql.includes("INSERT OR IGNORE INTO mission_daily_notes")) {
-      const exists = this.state.dailyNotes.some((note) => note.id === values[0]);
-      if (!exists) {
-        this.state.dailyNotes.push({
-          id: values[0] as string,
-          user_id: values[1] as string,
-          date: values[2] as string,
-          title: values[3] as string,
-          journal_text: "",
-          created_at: values[4] as string,
-          updated_at: values[5] as string,
-        });
-      }
-      return { success: true };
-    }
-
-    if (sql.includes("INSERT OR IGNORE INTO mission_capture_items")) {
-      const exists = this.state.captures.some((capture) => capture.id === values[0]);
-      if (!exists) {
-        this.state.captures.push({
-          id: values[0] as string,
-          user_id: values[1] as string,
-          day_id: values[2] as string,
-          type: values[3] as string,
-          text: values[4] as string,
-          project_id: values[5] as string | null,
-          status: "open",
-          task_id: null,
-          calendar_event_id: null,
-          reminder_id: null,
-          due_at: values[6] as string | null,
-          event_start_at: values[7] as string | null,
-          event_end_at: values[8] as string | null,
-          timezone: values[9] as string | null,
-          sync_status: "local",
-          sync_error: null,
-          source: "agent",
-          source_ref: values[10] as string,
-          created_at: values[11] as string,
-          updated_at: values[12] as string,
         });
       }
       return { success: true };

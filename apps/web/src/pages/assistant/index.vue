@@ -1655,7 +1655,6 @@ function formatTrigger(summary: string) {
 function formatDestination(detail: AssistantJobDetail | null) {
   const landing = detail?.job.destination?.landing;
   if (landing === "task") return "Mission Control tasks";
-  if (landing === "capture") return "Mission Control captures";
   if (landing === "approval") return "Mission Control approvals";
   if (landing === "memory_review") return "Mission Control memory review";
   if (landing === "activity") return "Mission Control activity";

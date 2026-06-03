@@ -26,7 +26,7 @@ For this cleanup pass:
 - Journal UI and journal archive UI leave Mission Control.
 - Task/reminder/event capture UI leaves Mission Control.
 - Backend Mission Control task/project/activity APIs remain in place.
-- Legacy `mission_daily_notes` storage remains in place because capture records currently reference it, but the Mission Control page should stop using journal data.
+- Legacy `mission_daily_notes` and `mission_capture_items` storage is removed in the follow-up database cleanup.
 
 After this pass, the product boundary should be clear:
 
@@ -173,10 +173,10 @@ Keep Mission Control APIs for now:
 Update catalog copy in `apps/worker/src/plugins.ts`:
 
 - Remove "daily notes" and "journal entries" from the Mission Control plugin description.
-- Change `mission.capture.manage` copy so it does not promise journal entries.
+- Remove retired daily-capture capabilities and route metadata.
 - Keep task/project/activity/approval/memory/source permissions.
 
-Do not drop or rename `mission_daily_notes` in this cleanup.
+Follow-up cleanup drops `mission_daily_notes` and `mission_capture_items` once Journal owns writing and Mission Control no longer exposes daily capture.
 
 ## Project Archive Decision
 
@@ -254,7 +254,5 @@ Use the in-app browser or Playwright screenshots to verify:
 
 - Redesigning Projects from kanban to a single-column collapsible list.
 - Moving task/reminder/event creation into Assistant.
-- Deleting Mission Control capture APIs.
-- Dropping `mission_daily_notes`.
 - Migrating old journal entries.
 - Building selected-text Journal actions.
