@@ -485,6 +485,7 @@ const loadingRecipes = ref(false);
 const loadingDetail = ref(false);
 const pageError = ref("");
 const configureJobsModalOpen = ref(false);
+const recipeIngredientsModalOpen = ref(false);
 const detailModalOpen = ref(false);
 const busyKeys = ref(new Set<string>());
 const dailyBriefingTemplateDraft = ref("");
@@ -581,7 +582,7 @@ const weekdayOptions = [
 ];
 const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const jobBuilderStarterPrompt =
-  "/job Every Friday afternoon, review my client projects and tell me what needs carrying forward.";
+  "/job Every friday, review my projects and outstanding tasks";
 const starterPrompts = [
   {
     label: "Set up a job",
@@ -1907,6 +1908,47 @@ function assistantJobBuilderToolPhrase(draft: AssistantJobDraft) {
   return formatHumanList(assistantJobBuilderToolNames(draft));
 }
 
+function recipeIngredientNames(recipe: AssistantJobRecipe) {
+  const required = recipe.requiredCapabilityIds.map((capabilityId) =>
+    assistantRecipeIngredientName(capabilityId),
+  );
+  const optional = recipe.optionalCapabilityIds.map((capabilityId) =>
+    assistantRecipeIngredientName(capabilityId),
+  );
+  return { required, optional };
+}
+
+function assistantRecipeIngredientName(capabilityId: string) {
+  const labels: Record<string, string> = {
+    "mission.project.read": "Mission Control Projects",
+    "mission.task.read": "Mission Control Tasks",
+    "mission.approval.read": "Mission Control Approvals",
+    "mission.review_packet.create": "Mission Control Reviews",
+    "mission.activity.create": "Mission Control Activity",
+    "mission.task.create": "Mission Control Task Creation",
+    "message.owner.notify": "Owner Notifications",
+    "email.message.read": "Email Messages",
+    "email.thread.summarize": "Email Thread Summaries",
+    "email.reply.draft": "Email Reply Drafts",
+    "accounts.entry.create": "Accounts Entries",
+    "calendar.event.read": "Calendar Events",
+  };
+  if (labels[capabilityId]) return labels[capabilityId];
+  return capabilityId
+    .split(".")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).replace(/_/g, " "))
+    .join(" ");
+}
+
+function openRecipeIngredientsModal() {
+  recipeIngredientsModalOpen.value = true;
+}
+
+function closeRecipeIngredientsModal() {
+  recipeIngredientsModalOpen.value = false;
+}
+
 function assistantJobBuilderSentenceSegments(
   action: Extract<AssistantJobBuilderAction, { kind: "job_draft" }>,
 ): AssistantJobBuilderSentenceSegment[] {
@@ -2511,6 +2553,7 @@ function closeConfigureJobsModal() {
   if (detailModalOpen.value) {
     closeDetailModal();
   }
+  closeRecipeIngredientsModal();
   configureJobsModalOpen.value = false;
 }
 
@@ -3812,6 +3855,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <div class="assistant-modal__header-actions">
               <button
                 type="button"
+                class="assistant-modal-icon-action"
+                title="Recipe ingredients"
+                aria-label="Recipe ingredients"
+                @click="openRecipeIngredientsModal"
+              >
+                <UiIcon name="Info" :size="16" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
                 class="assistant-modal-action"
                 @click="startAssistantJobBuilder"
               >
@@ -3970,6 +4022,90 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </div>
               </article>
             </template>
+          </div>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="recipeIngredientsModalOpen"
+        class="assistant-modal assistant-modal--stacked"
+        @click.self="closeRecipeIngredientsModal"
+      >
+        <section
+          class="assistant-modal__dialog assistant-modal__dialog--wide"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="recipe-ingredients-title"
+        >
+          <header class="assistant-modal__header">
+            <div class="assistant-modal__header-copy">
+              <h2 id="recipe-ingredients-title">Recipe ingredients</h2>
+              <p>ME3 features currently available to starter recipes.</p>
+            </div>
+            <button
+              type="button"
+              class="modal-close"
+              aria-label="Close"
+              @click="closeRecipeIngredientsModal"
+            >
+              <UiIcon name="X" :size="20" />
+            </button>
+          </header>
+
+          <div v-if="loadingRecipes" class="empty-row">
+            Loading recipes...
+          </div>
+          <div v-else class="recipe-ingredient-list" role="list">
+            <article
+              v-for="recipe in recipes"
+              :key="recipe.id"
+              class="recipe-ingredient-row"
+              role="listitem"
+            >
+              <div class="recipe-ingredient-row__header">
+                <span class="job-row__emoji" aria-hidden="true">
+                  {{ recipeNavEmoji(recipe.id) }}
+                </span>
+                <div>
+                  <h3>{{ recipe.name }}</h3>
+                  <p>{{ cleanPlainText(recipe.outcome) }}</p>
+                </div>
+                <span
+                  class="status-badge"
+                  :class="`status-badge--${recipe.state}`"
+                >
+                  {{ recipe.state === 'needs_setup' ? 'Needs setup' : recipe.state === 'coming_later' ? 'Later' : 'Ready' }}
+                </span>
+              </div>
+              <div class="recipe-ingredient-row__groups">
+                <div>
+                  <strong>Required</strong>
+                  <div class="recipe-ingredient-row__chips">
+                    <span
+                      v-for="ingredient in recipeIngredientNames(recipe).required"
+                      :key="`${recipe.id}:required:${ingredient}`"
+                      class="recipe-ingredient-chip"
+                    >
+                      {{ ingredient }}
+                    </span>
+                  </div>
+                </div>
+                <div v-if="recipeIngredientNames(recipe).optional.length">
+                  <strong>Optional</strong>
+                  <div class="recipe-ingredient-row__chips">
+                    <span
+                      v-for="ingredient in recipeIngredientNames(recipe).optional"
+                      :key="`${recipe.id}:optional:${ingredient}`"
+                      class="recipe-ingredient-chip recipe-ingredient-chip--optional"
+                    >
+                      {{ ingredient }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </article>
           </div>
         </section>
       </div>
@@ -6347,6 +6483,103 @@ button:disabled {
 .assistant-modal-action:hover {
   border-color: color-mix(in oklab, var(--ui-accent) 42%, var(--ui-border));
   background: var(--ui-surface-muted);
+}
+
+.assistant-modal-icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.assistant-modal-icon-action:hover {
+  border-color: color-mix(in oklab, var(--ui-accent) 42%, var(--ui-border));
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.recipe-ingredient-list {
+  display: grid;
+  gap: 10px;
+}
+
+.recipe-ingredient-row {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 12px;
+  background: var(--ui-surface);
+}
+
+.recipe-ingredient-row__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.recipe-ingredient-row__header h3,
+.recipe-ingredient-row__header p {
+  margin: 0;
+}
+
+.recipe-ingredient-row__header h3 {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.recipe-ingredient-row__header p {
+  margin-top: 2px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.recipe-ingredient-row__groups {
+  display: grid;
+  gap: 10px;
+}
+
+.recipe-ingredient-row__groups strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.recipe-ingredient-row__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recipe-ingredient-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border: 1px solid color-mix(in oklab, var(--ui-accent) 34%, var(--ui-border));
+  border-radius: 999px;
+  padding: 0 9px;
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.recipe-ingredient-chip--optional {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
 }
 
 .modal-close {
