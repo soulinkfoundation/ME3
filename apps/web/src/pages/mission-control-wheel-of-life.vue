@@ -24,16 +24,19 @@ definePage({
 <style scoped>
 .wheel-life-page {
   display: flex;
-  min-height: 100vh;
+  box-sizing: border-box;
+  height: 100vh;
+  min-height: 0;
   flex-direction: column;
-  padding: 18px 24px 40px;
+  overflow: hidden;
+  padding: 0 24px;
   background: var(--ui-bg);
   color: var(--ui-text);
 }
 
 @media (max-width: 959px) {
   .wheel-life-page {
-    padding: 14px 14px 32px;
+    padding: 0 14px;
     padding-left: var(--app-shell-mobile-nav-leading-padding);
   }
 }

@@ -308,11 +308,19 @@ function sectorPath(radius: number, startAngle: number, endAngle: number) {
 
 function labelPositionStyle(midAngle: number) {
   const angle = ((midAngle - 90) * Math.PI) / 180;
-  const x = 50 + Math.cos(angle) * LABEL_RADIUS_PERCENT;
+  const cos = Math.cos(angle);
+  const x = 50 + cos * LABEL_RADIUS_PERCENT;
   const y = 50 + Math.sin(angle) * LABEL_RADIUS_PERCENT;
+  const transform =
+    cos > 0.7
+      ? "translate(0, -50%)"
+      : cos < -0.7
+        ? "translate(-100%, -50%)"
+        : "translate(-50%, -50%)";
   return {
     left: `${x}%`,
     top: `${y}%`,
+    transform,
   };
 }
 
@@ -494,12 +502,13 @@ watch([segments, snapshots], persistState, { deep: true });
       </button>
       <button
         type="button"
-        class="life-wheel__save"
+        class="life-wheel__icon-button"
         :disabled="!allSegmentsScored"
+        aria-label="Save snapshot"
+        title="Save snapshot"
         @click="openSaveModal"
       >
-        <UiIcon name="Save" :size="16" aria-hidden="true" />
-        <span>Save snapshot</span>
+        <UiIcon name="Save" :size="18" />
       </button>
     </div>
 
@@ -830,8 +839,11 @@ watch([segments, snapshots], persistState, { deep: true });
 .life-wheel {
   position: relative;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
   width: min(1180px, 100%);
+  height: 100%;
+  min-height: 0;
   margin: 0 auto;
   color: var(--ui-text);
 }
@@ -948,13 +960,15 @@ watch([segments, snapshots], persistState, { deep: true });
 .life-wheel__workspace {
   display: block;
   min-width: 0;
+  min-height: 0;
 }
 
 .life-wheel__stage {
   display: grid;
   align-content: center;
-  min-height: calc(100vh - 86px);
-  padding: 12px 0 28px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
 }
 
 .life-wheel__canvas {
@@ -1036,7 +1050,6 @@ watch([segments, snapshots], persistState, { deep: true });
   line-height: 1.15;
   text-align: left;
   white-space: nowrap;
-  transform: translate(-50%, -50%);
   cursor: pointer;
   pointer-events: auto;
 }
@@ -1311,8 +1324,8 @@ watch([segments, snapshots], persistState, { deep: true });
   }
 
   .life-wheel__stage {
-    min-height: auto;
-    padding: 6px 0 8px;
+    min-height: 0;
+    padding: 0;
   }
 
   .life-wheel__canvas {
