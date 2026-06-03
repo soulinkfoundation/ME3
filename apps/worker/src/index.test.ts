@@ -24,6 +24,22 @@ type StoredMessage = {
   ownerId: string;
   role: string;
   content: string;
+  threadId?: string | null;
+  created_at?: string;
+};
+type StoredAssistantThread = {
+  id: string;
+  owner_id: string;
+  title: string;
+  origin_surface: "assistant" | "launcher" | "soulink" | "job" | "system";
+  project_id: string | null;
+  status: "active" | "archived" | "deleted";
+  pinned_at: string | null;
+  archived_at: string | null;
+  deleted_at: string | null;
+  last_message_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type StoredOwner = OwnerProfile & { password_hash: string | null };
@@ -207,6 +223,7 @@ type StoredContentItem = {
 
 function createEnv(): Env & {
   owner: StoredOwner | null;
+  assistantThreads: StoredAssistantThread[];
   messages: StoredMessage[];
   mailbox: DbMailboxAlias | null;
   pluginInstallations: DbPluginInstallation[];
@@ -239,6 +256,7 @@ function createEnv(): Env & {
 } {
   const state = {
     owner: null as StoredOwner | null,
+    assistantThreads: [] as StoredAssistantThread[],
     messages: [] as StoredMessage[],
     mailbox: null as DbMailboxAlias | null,
     pluginInstallations: [] as DbPluginInstallation[],
@@ -344,12 +362,43 @@ function createEnv(): Env & {
                 state.installSecrets.delete(values[0] as string);
               }
 
+              if (sql.includes("INSERT INTO assistant_threads")) {
+                state.assistantThreads.push({
+                  id: values[0] as string,
+                  owner_id: values[1] as string,
+                  title: values[2] as string,
+                  origin_surface: "assistant",
+                  project_id: null,
+                  status: "active",
+                  pinned_at: null,
+                  archived_at: null,
+                  deleted_at: null,
+                  last_message_at: "2026-05-11T10:06:00Z",
+                  created_at: "2026-05-11T10:06:00Z",
+                  updated_at: "2026-05-11T10:06:00Z",
+                });
+              }
+
+              if (sql.includes("UPDATE assistant_threads")) {
+                state.assistantThreads = state.assistantThreads.map((thread) =>
+                  thread.id === values[0] && thread.owner_id === values[1]
+                    ? {
+                        ...thread,
+                        last_message_at: "2026-05-11T10:07:00Z",
+                        updated_at: "2026-05-11T10:07:00Z",
+                      }
+                    : thread,
+                );
+              }
+
               if (sql.includes("INSERT INTO assistant_messages")) {
                 state.messages.push({
                   id: values[0] as string,
                   ownerId: values[1] as string,
                   role: values[2] as string,
                   content: values[3] as string,
+                  threadId: sql.includes("thread_id") ? (values[4] as string | null) : null,
+                  created_at: "2026-05-11T10:07:00Z",
                 });
               }
 
@@ -1327,6 +1376,16 @@ function createEnv(): Env & {
               if (sql.includes("FROM owner_profile") && values[0] === state.owner?.id) {
                 return state.owner as T;
               }
+              if (sql.includes("FROM assistant_threads")) {
+                return (
+                  state.assistantThreads.find(
+                    (thread) =>
+                      thread.id === values[0] &&
+                      thread.owner_id === values[1] &&
+                      thread.status !== "deleted",
+                  ) || null
+                ) as T | null;
+              }
               if (sql.includes("FROM mailbox_aliases")) {
                 if (sql.includes("status = 'active'")) {
                   return state.mailbox?.status === "active" ? (state.mailbox as T) : null;
@@ -1574,6 +1633,42 @@ function createEnv(): Env & {
               return null;
             },
             async all<T>() {
+              if (sql.includes("FROM assistant_threads")) {
+                return {
+                  results: state.assistantThreads
+                    .filter((thread) => {
+                      const ownerMatches = !values[0] || thread.owner_id === values[0];
+                      const statusMatches = !values[1] || thread.status === values[1];
+                      return ownerMatches && statusMatches;
+                    })
+                    .sort((a, b) =>
+                      String(b.last_message_at || b.updated_at).localeCompare(
+                        String(a.last_message_at || a.updated_at),
+                      ),
+                    ) as T[],
+                };
+              }
+              if (sql.includes("FROM assistant_messages")) {
+                const ownerId = values[0] as string;
+                const threadId = sql.includes("thread_id = ?")
+                  ? (values[1] as string)
+                  : null;
+                return {
+                  results: state.messages
+                    .filter(
+                      (message) =>
+                        message.ownerId === ownerId &&
+                        (!threadId || message.threadId === threadId) &&
+                        (message.role === "user" || message.role === "assistant"),
+                    )
+                    .map((message) => ({
+                      id: message.id,
+                      role: message.role,
+                      content: message.content,
+                      created_at: message.created_at || "2026-05-11T10:07:00Z",
+                    })) as T[],
+                };
+              }
               if (sql.includes("FROM contacts")) {
                 return {
                   results: state.contacts.filter(
@@ -1686,6 +1781,9 @@ function createEnv(): Env & {
     },
     get messages() {
       return state.messages;
+    },
+    get assistantThreads() {
+      return state.assistantThreads;
     },
     get mailbox() {
       return state.mailbox;
@@ -2888,7 +2986,7 @@ describe("ME3 Core Worker auth", () => {
       }),
       env,
     );
-    const payload = await response.json();
+    const payload = (await response.json()) as Record<string, unknown>;
 
     expect(response.status).toBe(200);
     expect(payload).toMatchObject({
@@ -2896,6 +2994,15 @@ describe("ME3 Core Worker auth", () => {
       specialist: "core.agent-chat",
       replyText: "Hello from Core chat.",
     });
+    expect(payload.threadId).toBe(env.assistantThreads[0]?.id);
+    expect(env.assistantThreads).toMatchObject([
+      {
+        owner_id: "owner",
+        title: "Hello agent",
+        origin_surface: "assistant",
+        status: "active",
+      },
+    ]);
     expect(env.agentEvents).toHaveLength(1);
     expect(env.agentEvents[0]).toMatchObject({
       channel: "sandbox",
@@ -2906,12 +3013,71 @@ describe("ME3 Core Worker auth", () => {
     const runtimeInit = runtimeCalls[0]?.[1] || {};
     expect(JSON.parse(String(runtimeInit.body))).toMatchObject({
       userId: "owner",
+      threadId: env.assistantThreads[0]?.id,
       messageText: "Hello agent",
       selectedModel: {
         providerId: "openai",
         model: "gpt-test",
         optionId: "openai-gpt-test",
       },
+    });
+  });
+
+  it("loads persisted assistant thread messages for refresh resilience", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.assistantThreads.push({
+      id: "thread-1",
+      owner_id: "owner",
+      title: "Project check-in",
+      origin_surface: "assistant",
+      project_id: null,
+      status: "active",
+      pinned_at: null,
+      archived_at: null,
+      deleted_at: null,
+      last_message_at: "2026-05-11T10:07:00Z",
+      created_at: "2026-05-11T10:06:00Z",
+      updated_at: "2026-05-11T10:07:00Z",
+    });
+    env.messages.push(
+      {
+        id: "message-1",
+        ownerId: "owner",
+        role: "user",
+        content: "What should I do next?",
+        threadId: "thread-1",
+        created_at: "2026-05-11T10:06:00Z",
+      },
+      {
+        id: "message-2",
+        ownerId: "owner",
+        role: "assistant",
+        content: "Review the open project tasks.",
+        threadId: "thread-1",
+        created_at: "2026-05-11T10:07:00Z",
+      },
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/threads/thread-1/messages", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      thread: {
+        id: "thread-1",
+        title: "Project check-in",
+        status: "active",
+      },
+      messages: [
+        { id: "message-1", role: "user", text: "What should I do next?" },
+        { id: "message-2", role: "assistant", text: "Review the open project tasks." },
+      ],
     });
   });
 

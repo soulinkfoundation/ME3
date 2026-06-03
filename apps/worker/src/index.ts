@@ -290,6 +290,7 @@ type OwnerAuthState = {
 type ChatBody = { message?: string };
 type AssistantChatTurnBody = {
   messageText?: unknown;
+  threadId?: unknown;
   replyToMessageId?: unknown;
   model?: unknown;
 };
@@ -297,6 +298,26 @@ type AssistantChatTurnModelSelection = {
   providerId: "workers-ai" | "openai" | "anthropic";
   model: string;
   optionId: string | null;
+};
+type AssistantThreadRow = {
+  id: string;
+  owner_id: string;
+  title: string;
+  origin_surface: "assistant" | "launcher" | "soulink" | "job" | "system";
+  project_id: string | null;
+  status: "active" | "archived" | "deleted";
+  pinned_at: string | null;
+  archived_at: string | null;
+  deleted_at: string | null;
+  last_message_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+type AssistantMessageRow = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
 };
 type SoulinkDispatchBody = {
   ownerSubject?: unknown;
@@ -1434,6 +1455,174 @@ function parseAssistantChatTurnModelSelection(
   return { providerId, model, optionId };
 }
 
+function serializeAssistantThread(row: AssistantThreadRow) {
+  return {
+    id: row.id,
+    title: row.title,
+    originSurface: row.origin_surface,
+    projectId: row.project_id,
+    status: row.status,
+    pinnedAt: row.pinned_at,
+    archivedAt: row.archived_at,
+    deletedAt: row.deleted_at,
+    lastMessageAt: row.last_message_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function serializeAssistantMessage(row: AssistantMessageRow) {
+  return {
+    id: row.id,
+    role: row.role,
+    text: row.content,
+    createdAt: row.created_at,
+  };
+}
+
+function normalizeAssistantThreadId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 160) return null;
+  return trimmed;
+}
+
+function assistantThreadTitleFromMessage(messageText: string) {
+  const title = messageText.replace(/\s+/g, " ").trim();
+  if (!title) return "New chat";
+  return title.length > 80 ? `${title.slice(0, 77).trimEnd()}...` : title;
+}
+
+async function getAssistantThread(
+  env: Env,
+  ownerId: string,
+  threadId: string,
+): Promise<AssistantThreadRow | null> {
+  return env.DB.prepare(
+    `SELECT id, owner_id, title, origin_surface, project_id, status, pinned_at,
+            archived_at, deleted_at, last_message_at, created_at, updated_at
+     FROM assistant_threads
+     WHERE id = ? AND owner_id = ? AND status != 'deleted'
+     LIMIT 1`,
+  )
+    .bind(threadId, ownerId)
+    .first<AssistantThreadRow>();
+}
+
+async function createAssistantThread(
+  env: Env,
+  ownerId: string,
+  messageText: string,
+): Promise<AssistantThreadRow> {
+  const id = crypto.randomUUID();
+  const title = assistantThreadTitleFromMessage(messageText);
+  await env.DB.prepare(
+    `INSERT INTO assistant_threads
+       (id, owner_id, title, origin_surface, status, last_message_at)
+     VALUES (?, ?, ?, 'assistant', 'active', CURRENT_TIMESTAMP)`,
+  )
+    .bind(id, ownerId, title)
+    .run();
+
+  const thread = await getAssistantThread(env, ownerId, id);
+  return (
+    thread || {
+      id,
+      owner_id: ownerId,
+      title,
+      origin_surface: "assistant",
+      project_id: null,
+      status: "active",
+      pinned_at: null,
+      archived_at: null,
+      deleted_at: null,
+      last_message_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+  );
+}
+
+async function resolveAssistantThreadForTurn(
+  env: Env,
+  ownerId: string,
+  threadId: string | null,
+  messageText: string,
+): Promise<AssistantThreadRow | null | { error: string; status: 400 | 404 }> {
+  if (!threadId) return createAssistantThread(env, ownerId, messageText);
+  const thread = await getAssistantThread(env, ownerId, threadId);
+  if (!thread) return { error: "Assistant thread not found", status: 404 };
+  if (thread.status !== "active") {
+    return { error: "Assistant thread is not active", status: 400 };
+  }
+  return thread;
+}
+
+async function touchAssistantThread(env: Env, ownerId: string, threadId: string) {
+  try {
+    await env.DB.prepare(
+      `UPDATE assistant_threads
+       SET last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND owner_id = ?`,
+    )
+      .bind(threadId, ownerId)
+      .run();
+  } catch {
+    // Thread timestamps should not break the chat turn if persistence is degraded.
+  }
+}
+
+app.get("/api/assistant/threads", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const statusParam = c.req.query("status");
+  const status =
+    statusParam === "archived" || statusParam === "deleted" ? statusParam : "active";
+  const limit = Math.min(
+    Math.max(Number.parseInt(c.req.query("limit") || "40", 10) || 40, 1),
+    100,
+  );
+
+  const rows = await c.env.DB.prepare(
+    `SELECT id, owner_id, title, origin_surface, project_id, status, pinned_at,
+            archived_at, deleted_at, last_message_at, created_at, updated_at
+     FROM assistant_threads
+     WHERE owner_id = ? AND status = ?
+     ORDER BY pinned_at DESC NULLS LAST, last_message_at DESC NULLS LAST, updated_at DESC
+     LIMIT ?`,
+  )
+    .bind(ownerId, status, limit)
+    .all<AssistantThreadRow>();
+
+  return c.json({ threads: (rows.results || []).map(serializeAssistantThread) });
+});
+
+app.get("/api/assistant/threads/:threadId/messages", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const threadId = normalizeAssistantThreadId(c.req.param("threadId"));
+  if (!threadId) return c.json({ ok: false, error: "Thread id is required" }, 400);
+
+  const thread = await getAssistantThread(c.env, ownerId, threadId);
+  if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+
+  const rows = await c.env.DB.prepare(
+    `SELECT id, role, content, created_at
+     FROM assistant_messages
+     WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
+     ORDER BY created_at ASC`,
+  )
+    .bind(ownerId, threadId)
+    .all<AssistantMessageRow>();
+
+  return c.json({
+    thread: serializeAssistantThread(thread),
+    messages: (rows.results || []).map(serializeAssistantMessage),
+  });
+});
+
 async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -1457,6 +1646,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
   if (selectedModel && "error" in selectedModel) {
     return c.json({ ok: false, error: selectedModel.error }, 400);
   }
+  const requestedThreadId = normalizeAssistantThreadId(body.threadId);
 
   const runtime = c.env.ME3_USER_AGENT;
   if (!runtime) {
@@ -1471,6 +1661,18 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
     typeof body.replyToMessageId === "number"
       ? body.replyToMessageId
       : null;
+  const thread = await resolveAssistantThreadForTurn(
+    c.env,
+    ownerId,
+    requestedThreadId,
+    messageText,
+  );
+  if (!thread) {
+    return c.json({ ok: false, error: "Assistant thread is required" }, 500);
+  }
+  if ("error" in thread) {
+    return c.json({ ok: false, error: thread.error }, thread.status);
+  }
   const turn = await createAgentSandboxTurnRecord(c.env, {
     userId: ownerId,
     messageText,
@@ -1489,6 +1691,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
         connectionId: turn.connection.id,
         sourceEventId: turn.sourceEvent.id,
         turnId: turn.turnId,
+        threadId: thread.id,
         messageText: turn.messageText,
         replyToMessageId: turn.replyToMessageId,
         selectedModel,
@@ -1513,7 +1716,8 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
     );
   }
 
-  return c.json(payload);
+  await touchAssistantThread(c.env, ownerId, thread.id);
+  return c.json({ ...payload, threadId: thread.id });
 }
 
 app.post("/api/assistant/chat/turn", handleAssistantChatTurn);

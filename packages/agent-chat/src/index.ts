@@ -67,6 +67,7 @@ export type AgentSandboxDispatchInput = {
   connectionId: string;
   sourceEventId: string;
   turnId: string;
+  threadId?: string | null;
   messageText: string;
   replyToMessageId?: string | number | null;
   selectedModel?: AgentChatModelSelection | null;
@@ -82,6 +83,7 @@ export type AgentSandboxDispatchResponse = {
   ok: boolean;
   auditId: string | null;
   turnId: string | null;
+  threadId?: string | null;
   specialist: string | null;
   replyText: string | null;
   model: string | null;
@@ -1487,16 +1489,24 @@ export async function dispatchAgentSandboxTurn(
   const owner = await getOwnerProfile(env, input.userId);
   const toolResponse = await maybeHandleCoreToolTurn(env, input, owner);
   if (toolResponse) {
-    await persistAssistantMessage(env, input.userId, "user", input.messageText);
+    await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
     if (toolResponse.replyText) {
-      await persistAssistantMessage(env, input.userId, "assistant", toolResponse.replyText);
+      await persistAssistantMessage(
+        env,
+        input.userId,
+        "assistant",
+        toolResponse.replyText,
+        input.threadId,
+      );
     }
-    await storage.put(resultKey, toolResponse);
-    return toolResponse;
+    const response = { ...toolResponse, threadId: input.threadId ?? null };
+    await touchAssistantThread(env, input.userId, input.threadId);
+    await storage.put(resultKey, response);
+    return response;
   }
 
   const route = await resolveAiRoute(env, input.userId, input.selectedModel);
-  const recent = await loadRecentMessages(env, input.userId);
+  const recent = await loadRecentMessages(env, input.userId, input.threadId);
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
   const agentContext = await loadCoreChatAgentContext(env, {
     ownerId: input.userId,
@@ -1535,10 +1545,18 @@ export async function dispatchAgentSandboxTurn(
   }
   response = attachAgentContextToResponse(response, agentContext);
 
-  await persistAssistantMessage(env, input.userId, "user", input.messageText);
+  await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
   if (response.replyText) {
-    await persistAssistantMessage(env, input.userId, "assistant", response.replyText);
+    await persistAssistantMessage(
+      env,
+      input.userId,
+      "assistant",
+      response.replyText,
+      input.threadId,
+    );
   }
+  response.threadId = input.threadId ?? null;
+  await touchAssistantThread(env, input.userId, input.threadId);
 
   await storage.put(resultKey, response);
   return response;
@@ -3037,16 +3055,24 @@ async function getOwnerProfile(
 async function loadRecentMessages(
   env: CoreAgentChatEnv,
   ownerId: string,
+  threadId?: string | null,
 ): Promise<Array<{ role: "user" | "assistant"; content: string }>> {
   try {
+    const hasThread = typeof threadId === "string" && threadId.trim().length > 0;
     const rows = await env.DB.prepare(
-      `SELECT role, content
-       FROM assistant_messages
-       WHERE owner_id = ? AND role IN ('user', 'assistant')
-       ORDER BY created_at DESC
-       LIMIT 12`,
+      hasThread
+        ? `SELECT role, content
+           FROM assistant_messages
+           WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
+           ORDER BY created_at DESC
+           LIMIT 12`
+        : `SELECT role, content
+           FROM assistant_messages
+           WHERE owner_id = ? AND role IN ('user', 'assistant')
+           ORDER BY created_at DESC
+           LIMIT 12`,
     )
-      .bind(ownerId)
+      .bind(...(hasThread ? [ownerId, threadId] : [ownerId]))
       .all<{ role: "user" | "assistant"; content: string }>();
     return (rows.results || [])
       .reverse()
@@ -3467,10 +3493,22 @@ async function persistAssistantMessage(
   ownerId: string,
   role: "user" | "assistant",
   content: string,
+  threadId?: string | null,
 ) {
   if (role === "assistant" && isProviderSetupFallbackMessage(content)) return;
 
   try {
+    const normalizedThreadId =
+      typeof threadId === "string" && threadId.trim() ? threadId.trim() : null;
+    if (normalizedThreadId) {
+      await env.DB.prepare(
+        "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
+      )
+        .bind(crypto.randomUUID(), ownerId, role, content, normalizedThreadId)
+        .run();
+      return;
+    }
+
     await env.DB.prepare(
       "INSERT INTO assistant_messages (id, owner_id, role, content) VALUES (?, ?, ?, ?)",
     )
@@ -3478,6 +3516,25 @@ async function persistAssistantMessage(
       .run();
   } catch {
     // Conversation persistence is useful context, but chat turns should not fail on audit writes.
+  }
+}
+
+async function touchAssistantThread(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+  threadId?: string | null,
+) {
+  if (typeof threadId !== "string" || !threadId.trim()) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE assistant_threads
+       SET last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND owner_id = ?`,
+    )
+      .bind(threadId.trim(), ownerId)
+      .run();
+  } catch {
+    // Thread timestamps are useful for history ordering, but should not fail a turn.
   }
 }
 

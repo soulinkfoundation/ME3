@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../../api";
 import Button from "../../components/Button.vue";
@@ -240,6 +241,7 @@ type AssistantJobDetail = {
 type AgentSandboxResponse = {
   ok: boolean;
   turnId: string | null;
+  threadId?: string | null;
   specialist: string | null;
   replyText: string | null;
   model: string | null;
@@ -276,6 +278,20 @@ type AgentSandboxResponse = {
   contactsChanged?: boolean;
   error?: string;
 };
+type AssistantThreadMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: string;
+};
+type AssistantThreadMessagesResponse = {
+  thread: {
+    id: string;
+    title: string;
+    status: "active" | "archived" | "deleted";
+  };
+  messages: AssistantThreadMessage[];
+};
 
 type JobsResponse = { jobs: AssistantJob[] };
 type RecipesResponse = { recipes: AssistantJobRecipe[] };
@@ -290,6 +306,8 @@ type VoiceTranscriptionResponse = {
 
 const { toastSuccess, toastFromUnknown } = useAppToast();
 const agentChat = useAgentChat();
+const route = useRoute();
+const router = useRouter();
 
 const jobs = ref<AssistantJob[]>([]);
 const recipes = ref<AssistantJobRecipe[]>([]);
@@ -316,6 +334,8 @@ const inboxWatchRulesNotice = ref("");
 const assistantDraft = ref("");
 const assistantSending = ref(false);
 const assistantError = ref<string | null>(null);
+const assistantThreadId = ref<string | null>(null);
+const assistantThreadLoading = ref(false);
 const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
@@ -540,7 +560,10 @@ const assistantConsoleMessages = computed(() =>
 );
 
 const canSendAssistantMessage = computed(
-  () => assistantDraft.value.trim().length > 0 && !assistantSending.value,
+  () =>
+    assistantDraft.value.trim().length > 0 &&
+    !assistantSending.value &&
+    !assistantThreadLoading.value,
 );
 const canUseVoiceDictation = computed(
   () => !assistantSending.value && voiceDictationState.value !== "processing",
@@ -572,10 +595,72 @@ watch(
   },
   { deep: true },
 );
+watch(
+  () => route.query.thread,
+  () => {
+    if (assistantThreadId.value === routeThreadId()) return;
+    void loadAssistantThreadFromRoute();
+  },
+);
 
 async function loadPage() {
   pageError.value = "";
-  await Promise.all([loadJobs(), loadRecipes(), loadAiSettings()]);
+  await Promise.all([
+    loadJobs(),
+    loadRecipes(),
+    loadAiSettings(),
+    loadAssistantThreadFromRoute(),
+  ]);
+}
+
+function routeThreadId() {
+  const value = route.query.thread;
+  if (Array.isArray(value)) return value[0]?.trim() || null;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+async function setRouteThreadId(threadId: string) {
+  if (routeThreadId() === threadId) return;
+  await router.replace({
+    query: {
+      ...route.query,
+      thread: threadId,
+    },
+  });
+}
+
+async function loadAssistantThreadFromRoute() {
+  const threadId = routeThreadId();
+  assistantThreadId.value = threadId;
+  assistantError.value = null;
+
+  if (!threadId) {
+    agentChat.resetMessages();
+    return;
+  }
+
+  assistantThreadLoading.value = true;
+  try {
+    const response = await api.get<AssistantThreadMessagesResponse>(
+      `/assistant/threads/${encodeURIComponent(threadId)}/messages`,
+    );
+    if (assistantThreadId.value !== threadId) return;
+    agentChat.replaceMessages(
+      response.messages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        text: message.text,
+      })),
+    );
+  } catch (err) {
+    if (assistantThreadId.value !== threadId) return;
+    assistantError.value = messageFromUnknown(err, "Assistant thread could not load.");
+    agentChat.resetMessages();
+  } finally {
+    if (assistantThreadId.value === threadId) {
+      assistantThreadLoading.value = false;
+    }
+  }
 }
 
 const COMPOSER_MAX_HEIGHT_PX = 160;
@@ -731,6 +816,7 @@ async function submitAssistantText(text: string) {
   try {
     const result = await api.post<AgentSandboxResponse>("/assistant/chat/turn", {
       messageText: normalized,
+      threadId: assistantThreadId.value,
       model: selectedModel.value
         ? {
             providerId: selectedModel.value.providerId,
@@ -739,6 +825,9 @@ async function submitAssistantText(text: string) {
           }
         : null,
     });
+    if (result.threadId) {
+      assistantThreadId.value = result.threadId;
+    }
 
     agentChat.appendMessage({
       id: newAssistantMessageId("assistant"),
@@ -757,6 +846,9 @@ async function submitAssistantText(text: string) {
       actionLabel:
         result.contentAction?.kind === "saved" ? "Open content bank" : null,
     });
+    if (result.threadId) {
+      await setRouteThreadId(result.threadId);
+    }
   } catch (err) {
     const message = messageFromUnknown(err, "Failed to reach ME3 right now.");
     assistantError.value = message;
