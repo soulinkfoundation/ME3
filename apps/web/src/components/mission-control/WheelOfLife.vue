@@ -675,6 +675,12 @@ watch([segments, snapshots], persistState, { deep: true });
                     maxlength="36"
                   />
                   <input
+                    v-model="segment.helper"
+                    class="life-wheel__helper-input"
+                    :aria-label="`${segment.label} helper text`"
+                    maxlength="180"
+                  />
+                  <input
                     v-model="segment.color"
                     class="life-wheel__color-input"
                     type="color"
@@ -690,12 +696,6 @@ watch([segments, snapshots], persistState, { deep: true });
                     <UiIcon name="Trash2" :size="15" />
                   </button>
                 </div>
-                <input
-                  v-model="segment.helper"
-                  class="life-wheel__helper-input"
-                  :aria-label="`${segment.label} helper text`"
-                  maxlength="180"
-                />
                 <div class="life-wheel__score-row">
                   <input
                     :id="`score-${segment.id}`"
@@ -1095,14 +1095,14 @@ watch([segments, snapshots], persistState, { deep: true });
 
 .life-wheel__segment-list {
   display: grid;
-  gap: 10px;
+  gap: 7px;
   overflow: auto;
 }
 
 .life-wheel__segment-editor {
   display: grid;
-  gap: 8px;
-  padding-bottom: 10px;
+  gap: 6px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--ui-border);
 }
 
@@ -1111,6 +1111,9 @@ watch([segments, snapshots], persistState, { deep: true });
 }
 
 .life-wheel__segment-editor-top {
+  display: grid;
+  grid-template-columns: 42px minmax(120px, 0.42fr) minmax(180px, 1fr) 34px 34px;
+  align-items: center;
   gap: 6px;
 }
 
@@ -1141,7 +1144,6 @@ watch([segments, snapshots], persistState, { deep: true });
 }
 
 .life-wheel__helper-input {
-  width: 100%;
   padding: 0 9px;
   color: var(--ui-text-muted);
 }
@@ -1203,6 +1205,7 @@ watch([segments, snapshots], persistState, { deep: true });
 
 .life-wheel-modal__dialog {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(620px, 100%);
   max-height: min(760px, calc(100vh - 36px));
   overflow: hidden;
@@ -1210,7 +1213,7 @@ watch([segments, snapshots], persistState, { deep: true });
 }
 
 .life-wheel-modal__dialog--wide {
-  width: min(840px, 100%);
+  width: min(760px, 100%);
 }
 
 .life-wheel-modal__header {
@@ -1231,6 +1234,7 @@ watch([segments, snapshots], persistState, { deep: true });
 .life-wheel-history {
   display: grid;
   gap: 10px;
+  min-height: 0;
   overflow: auto;
   padding: 16px;
 }
@@ -1373,6 +1377,20 @@ watch([segments, snapshots], persistState, { deep: true });
   .life-wheel__segment-editor-top {
     display: grid;
     grid-template-columns: 42px minmax(0, 1fr) 34px 34px;
+  }
+
+  .life-wheel__helper-input {
+    grid-column: 1 / -1;
+  }
+
+  .life-wheel__color-input {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .life-wheel__remove-button {
+    grid-column: 4;
+    grid-row: 1;
   }
 
   .life-wheel-modal {
