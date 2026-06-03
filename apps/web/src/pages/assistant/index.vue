@@ -4360,6 +4360,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   pointer-events: none;
 }
 
+:global(.app-root:has(.assistant-page--history-open) .app-side-nav-shell) {
+  z-index: 0;
+}
+
 .assistant-mobile-nav__actions {
   display: flex;
   justify-content: flex-end;
