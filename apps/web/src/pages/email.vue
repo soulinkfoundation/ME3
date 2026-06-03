@@ -148,6 +148,15 @@ type TelegramStatusResponse = {
   recentEvents: unknown[];
 };
 
+type SoulinkStatusResponse = {
+  available: boolean;
+  configured: boolean;
+  connection: {
+    status: "pending" | "active" | "disconnected";
+  } | null;
+  recentEvents: unknown[];
+};
+
 type AgentTurn = {
   id: string;
   channel: "telegram" | "sandbox" | "soulink";
@@ -239,6 +248,7 @@ const soulinkSyncing = ref(false);
 const soulinkSyncError = ref("");
 const soulinkSyncNotice = ref("");
 const soulinkSyncAttempted = ref(false);
+const soulinkContactsConnected = ref(false);
 const offset = ref(0);
 const limit = 50;
 const TELEGRAM_PAGE_LIMIT = 50;
@@ -405,6 +415,10 @@ const mobileSearchLabel = computed(() =>
 
 const mobileSearchDisabled = computed(() =>
   activeTab.value === "contacts" ? contactsStore.loading : loading.value,
+);
+
+const canSyncSoulinkContacts = computed(
+  () => activeTab.value === "contacts" && soulinkContactsConnected.value,
 );
 
 const composeRecipientSuggestions = computed(() => {
@@ -1055,15 +1069,33 @@ async function loadContactsPage(options: { syncSoulink?: boolean } = {}) {
   contactError.value = "";
   soulinkSyncError.value = "";
   soulinkSyncNotice.value = "";
-  await contactsStore.fetchContacts();
+  await Promise.all([contactsStore.fetchContacts(), loadSoulinkContactsStatus()]);
   contactsLoaded.value = true;
-  if (options.syncSoulink) {
+  if (options.syncSoulink && soulinkContactsConnected.value) {
     await syncSoulinkContacts();
+  }
+}
+
+async function loadSoulinkContactsStatus() {
+  try {
+    const response = await api.get<SoulinkStatusResponse>("/soulink/status");
+    soulinkContactsConnected.value = response.connection?.status === "active";
+  } catch {
+    soulinkContactsConnected.value = false;
   }
 }
 
 async function syncSoulinkContacts() {
   if (soulinkSyncing.value) return;
+  if (!soulinkContactsConnected.value) {
+    await loadSoulinkContactsStatus();
+  }
+  if (!soulinkContactsConnected.value) {
+    soulinkSyncError.value = "";
+    soulinkSyncNotice.value = "";
+    soulinkSyncAttempted.value = true;
+    return;
+  }
   soulinkSyncing.value = true;
   soulinkSyncAttempted.value = true;
   soulinkSyncError.value = "";
@@ -2084,6 +2116,7 @@ onBeforeUnmount(() => {
           <span class="compose-btn__label">Add</span>
         </button>
         <button
+          v-if="activeTab !== 'contacts' || canSyncSoulinkContacts"
           type="button"
           class="mail-search__button mail-search__button--refresh mail-mobile-icon-btn"
           :disabled="activeTab === 'contacts' ? soulinkSyncing : loading"
@@ -2308,7 +2341,17 @@ onBeforeUnmount(() => {
                 aria-label="Contacts"
               >
                 <div
-                  v-if="soulinkSyncError"
+                  v-if="!soulinkContactsConnected"
+                  class="contacts-sync-note"
+                >
+                  You can sync other ME3 contacts here by connecting to
+                  Soulink in
+                  <router-link to="/account" class="empty-hint-link">
+                    account settings
+                  </router-link>.
+                </div>
+                <div
+                  v-else-if="soulinkSyncError"
                   class="contacts-sync-note contacts-sync-note--error"
                 >
                   {{ soulinkSyncError }}
