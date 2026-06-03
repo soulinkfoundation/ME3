@@ -159,6 +159,26 @@ describe("TiptapEditor", () => {
     expect(wrapper.find(".tiptap-editor").exists()).toBe(true);
     expect(wrapper.find(".editor-toolbar").exists()).toBe(true);
     expect(wrapper.find(".editor-content-wrapper").exists()).toBe(true);
+    expect(wrapper.find(".editor-title-field").exists()).toBe(false);
+  });
+
+  it("should render optional title field below the toolbar", () => {
+    const wrapper = mount(TiptapEditor, {
+      props: {
+        modelValue: "",
+        showTitleField: true,
+        title: "Morning pages",
+      },
+    });
+
+    const titleInput = wrapper.find(".editor-title-input");
+    expect(titleInput.exists()).toBe(true);
+    expect((titleInput.element as HTMLInputElement).value).toBe("Morning pages");
+
+    const rootHtml = wrapper.find(".tiptap-editor").html();
+    expect(rootHtml.indexOf("editor-toolbar")).toBeLessThan(
+      rootHtml.indexOf("editor-title-field"),
+    );
   });
 
   it("should render toolbar buttons", () => {

@@ -26,14 +26,26 @@ const props = withDefaults(
     placeholder?: string;
     /** Full-bleed toolbar and borderless content for narrow writing surfaces (e.g. journal). */
     variant?: "default" | "workspace";
+    /** Optional title shown below the toolbar (e.g. journal entry title). */
+    showTitleField?: boolean;
+    title?: string;
+    titlePlaceholder?: string;
+    titleMaxLength?: number;
+    titleDisabled?: boolean;
   }>(),
   {
     variant: "default",
+    showTitleField: false,
+    title: "",
+    titlePlaceholder: "Untitled",
+    titleMaxLength: 180,
+    titleDisabled: false,
   },
 );
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
+  (e: "update:title", value: string): void;
   (
     e: "imageAdded",
     image: { id: string; blob: Blob; mimeType: string; ext: string }
@@ -1197,6 +1209,19 @@ defineExpose({
       </button>
     </div>
 
+    <div v-if="showTitleField" class="editor-title-field">
+      <input
+        :value="title"
+        type="text"
+        class="editor-title-input"
+        :placeholder="titlePlaceholder"
+        :maxlength="titleMaxLength"
+        :disabled="titleDisabled"
+        aria-label="Title"
+        @input="emit('update:title', ($event.target as HTMLInputElement).value)"
+      />
+    </div>
+
     <p v-if="imageError" class="editor-error">{{ imageError }}</p>
 
     <!-- Editor content -->
@@ -1534,6 +1559,37 @@ defineExpose({
 
 .link-btn.primary:hover {
   background: var(--color-primary-hover, #0056b3);
+}
+
+.editor-title-field {
+  width: 100%;
+}
+
+.editor-title-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  padding: 4px 0 8px;
+  background: transparent;
+  color: var(--ui-text, var(--color-text, #232428));
+  font: inherit;
+  outline: none;
+}
+
+.editor-title-input:focus {
+  border-bottom-color: var(--ui-accent, var(--color-accent, #007bff));
+}
+
+.editor-title-input:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.tiptap-editor--workspace .editor-title-input {
+  font-size: clamp(1.25rem, 2.5vw, 1.5rem);
+  font-weight: 600;
+  line-height: 1.25;
 }
 
 .tiptap-editor--workspace {

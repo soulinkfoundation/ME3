@@ -1960,15 +1960,6 @@ onBeforeUnmount(() => {
                 class="mail-rail"
                 :class="{ 'mail-rail--mobile-hidden': mobileThreadOpen }"
               >
-                <button
-                  type="button"
-                  class="compose-btn"
-                  aria-label="Compose"
-                  @click="openComposeModal()"
-                >
-                  <UiIcon name="Pencil" :size="16" aria-hidden="true" />
-                  <span class="compose-btn__label">Compose</span>
-                </button>
                 <nav class="folder-nav" aria-label="Mailbox folders">
                   <button
                     v-for="key in emailTabOrder"
@@ -2011,47 +2002,6 @@ onBeforeUnmount(() => {
                   </button>
                 </nav>
               </aside>
-
-              <div
-                class="mail-search-bar"
-                :class="{ 'mail-search-bar--mobile-hidden': mobileThreadOpen }"
-              >
-                <form
-                  class="mail-search"
-                  role="search"
-                  @submit.prevent="applySearch"
-                >
-                  <label class="mail-search__label" for="mail-search-input">
-                    Search mail
-                  </label>
-                  <input
-                    id="mail-search-input"
-                    v-model="searchQuery"
-                    class="mail-search__input"
-                    type="search"
-                    placeholder="Search mail"
-                  />
-                  <button
-                    type="submit"
-                    class="mail-search__button"
-                    :disabled="loading"
-                    aria-label="Search mail"
-                    title="Search"
-                  >
-                    <UiIcon name="Search" :size="15" aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    class="mail-search__button mail-search__button--refresh"
-                    :disabled="loading"
-                    aria-label="Refresh conversations"
-                    title="Refresh"
-                    @click="refreshMessagesPage"
-                  >
-                    <UiIcon name="RefreshCw" :size="15" aria-hidden="true" />
-                  </button>
-                </form>
-              </div>
 
               <section
                 class="conversation-list"
@@ -3252,19 +3202,9 @@ onBeforeUnmount(() => {
 .mail-workspace {
   display: grid;
   grid-template-columns: 210px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-}
-
-.mail-search-bar {
-  grid-column: 2;
-  grid-row: 1;
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  padding: 14px 16px;
-  background: var(--color-bg);
 }
 
 .mail-rail,
@@ -3290,14 +3230,14 @@ onBeforeUnmount(() => {
 
 .conversation-list {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 1;
   height: 100%;
   overflow: hidden;
 }
 
 .thread-pane {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 1;
   display: none;
   height: 100%;
   overflow: hidden;
@@ -3429,8 +3369,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 68px;
-  padding: 14px 16px;
+  min-height: var(--workspace-topbar-height);
+  padding: var(--workspace-topbar-padding-block) 16px;
 }
 
 .conversation-list__head h2,
@@ -3696,7 +3636,6 @@ onBeforeUnmount(() => {
   display: flex;
 }
 
-.mail-search-bar--mobile-hidden,
 .conversation-list--mobile-hidden {
   display: none;
 }
@@ -4642,13 +4581,8 @@ onBeforeUnmount(() => {
 
   .mail-workspace {
     grid-template-columns: 190px minmax(260px, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     min-height: 0;
-  }
-
-  .mail-search-bar {
-    grid-column: 2 / -1;
-    grid-row: 1;
   }
 
   .mail-rail {
@@ -4658,21 +4592,15 @@ onBeforeUnmount(() => {
 
   .conversation-list {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 1;
   }
 
   .thread-pane {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 1;
     border-top: 0;
   }
 
-}
-
-@media (max-width: 959px) {
-  .mail-rail .compose-btn {
-    display: none;
-  }
 }
 
 @media (max-width: 640px) {
@@ -4691,10 +4619,6 @@ onBeforeUnmount(() => {
     gap: 2px;
   }
 
-  .mail-search-bar .mail-search__button {
-    padding: 0 10px;
-  }
-
   .mail-workspace {
     display: flex;
     flex-direction: column;
@@ -4703,20 +4627,7 @@ onBeforeUnmount(() => {
   }
 
   .inbox-panel {
-    height: calc(100dvh - 68px);
-  }
-
-  .mail-search-bar {
-    order: 1;
-    position: static;
-    z-index: 4;
-    width: 100%;
-    box-sizing: border-box;
-    padding: 10px 12px;
-  }
-
-  .mail-search-bar:not(.mail-search-bar--mobile-hidden) {
-    display: none;
+    height: calc(100dvh - var(--app-shell-mobile-nav-height));
   }
 
   .mail-rail,
@@ -4726,7 +4637,7 @@ onBeforeUnmount(() => {
   }
 
   .mail-rail {
-    order: 2;
+    order: 1;
     position: static;
     z-index: 3;
     display: block;
@@ -4748,7 +4659,6 @@ onBeforeUnmount(() => {
     display: none;
   }
 
-  .mail-search-bar--mobile-hidden,
   .mail-rail--mobile-hidden,
   .conversation-list--mobile-hidden {
     display: none;
@@ -4811,7 +4721,7 @@ onBeforeUnmount(() => {
   }
 
   .conversation-list {
-    order: 3;
+    order: 2;
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
@@ -4885,9 +4795,9 @@ onBeforeUnmount(() => {
   }
 
   .thread-pane {
-    order: 4;
+    order: 3;
     display: none;
-    height: calc(100dvh - 68px);
+    height: calc(100dvh - var(--app-shell-mobile-nav-height));
     min-height: 0;
     overflow: hidden;
     border-top: 0;

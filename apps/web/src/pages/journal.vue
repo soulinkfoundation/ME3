@@ -224,7 +224,6 @@ async function setDate(date: string) {
   selectedDate.value = normalized;
   datePickerMonth.value = monthKey(normalized);
   datePickerOpen.value = false;
-  archiveOpen.value = false;
   await loadDay(normalized);
 }
 
@@ -362,31 +361,15 @@ onBeforeUnmount(() => {
       <section class="journal__sheet" aria-label="Journal entry">
         <p v-if="error" class="journal__message is-error">{{ error }}</p>
 
-        <div class="journal__meta">
-          <div class="journal__field journal__field--title">
-            <input
-              v-model="title"
-              type="text"
-              placeholder="Untitled note"
-              maxlength="180"
-              aria-label="Title"
-              :disabled="loading"
-            />
-          </div>
-          <div class="journal__field journal__field--date">
-            <input
-              type="text"
-              :value="formatEntrySheetDate(selectedDate)"
-              readonly
-              aria-label="Entry date"
-            />
-          </div>
-        </div>
-
         <div class="journal__editor-wrap" :class="{ 'is-loading': loading }">
           <TiptapEditor
             v-model="description"
+            v-model:title="title"
+            show-title-field
             variant="workspace"
+            title-placeholder="Untitled note"
+            :title-max-length="180"
+            :title-disabled="loading"
             placeholder="Write your note here..."
           />
         </div>
@@ -402,20 +385,27 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .journal {
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--ui-bg, var(--color-bg));
   color: var(--ui-text, var(--color-text));
 }
 
 .journal__topbar {
+  flex-shrink: 0;
   position: sticky;
   top: 0;
-  z-index: 8;
+  z-index: 25;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 16px;
-  padding: 18px 32px;
+  box-sizing: border-box;
+  min-height: var(--workspace-topbar-height);
+  padding: var(--workspace-topbar-padding-block)
+    var(--workspace-topbar-padding-inline);
   border-bottom: none;
   box-shadow: none;
   background: color-mix(
@@ -501,26 +491,30 @@ onBeforeUnmount(() => {
 .journal__workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 24px;
+  flex: 1;
+  min-height: 0;
   width: min(100%, 980px);
   margin: 0 auto;
-  padding: 16px 24px 56px;
+  padding: 0 24px 16px;
+  box-sizing: border-box;
+  min-height: calc(100dvh - var(--workspace-topbar-height));
 }
 
 .journal__workspace:has(.journal__archive) {
   grid-template-columns: minmax(220px, 280px) minmax(0, 700px);
   align-items: stretch;
-  min-height: calc(100dvh - 72px);
 }
 
 .journal__archive {
   position: sticky;
-  top: 72px;
+  top: var(--workspace-topbar-height);
   align-self: stretch;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-height: calc(100dvh - 72px);
+  min-height: calc(100dvh - var(--workspace-topbar-height));
   overflow-y: auto;
   border-right: 1px solid var(--ui-border, var(--color-border));
   padding-right: 14px;
@@ -585,46 +579,19 @@ onBeforeUnmount(() => {
 }
 
 .journal__sheet {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   width: min(100%, 700px);
   margin: 0 auto;
 }
 
-.journal__meta {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 180px;
-  gap: 24px;
-  margin-bottom: 22px;
-}
-
-.journal__field input {
-  width: 100%;
-  box-sizing: border-box;
-  border: 0;
-  border-bottom: 1px solid transparent;
-  padding: 4px 0 8px;
-  background: transparent;
-  color: var(--ui-text, var(--color-text));
-  font: inherit;
-}
-
-.journal__field--title input {
-  font-size: clamp(1.25rem, 2.5vw, 1.5rem);
-  font-weight: 600;
-  line-height: 1.25;
-}
-
-.journal__field--date input {
-  font-size: 1.08rem;
-}
-
-.journal__field input:focus {
-  border-bottom-color: var(--ui-accent, var(--color-accent));
-  outline: none;
-}
-
 .journal__editor-wrap {
-  min-height: 560px;
-  --tiptap-toolbar-offset: 72px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  --tiptap-toolbar-offset: var(--workspace-topbar-height);
 }
 
 .journal__editor-wrap.is-loading {
@@ -632,8 +599,16 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-.journal__editor-wrap :deep(.tiptap-editor) {
-  min-height: 560px;
+.journal__editor-wrap :deep(.tiptap-editor--workspace) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.journal__editor-wrap :deep(.tiptap-editor--workspace .editor-toolbar),
+.journal__editor-wrap :deep(.tiptap-editor--workspace .editor-title-field) {
+  flex-shrink: 0;
 }
 
 .journal__workspace:has(.journal__archive)
@@ -644,23 +619,30 @@ onBeforeUnmount(() => {
   margin-right: 0;
 }
 
-.journal__editor-wrap :deep(.editor-content-wrapper) {
-  min-height: 480px;
-  padding: 8px 0 16px;
+.journal__editor-wrap :deep(.tiptap-editor--workspace .editor-content-wrapper) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0 0;
   background: transparent;
 }
 
-.journal__editor-wrap :deep(.editor-content-wrapper .ProseMirror) {
-  min-height: 420px;
+.journal__editor-wrap :deep(.tiptap-editor--workspace .editor-content-wrapper .ProseMirror) {
+  flex: 1;
+  min-height: 100%;
 }
 
 .journal__status {
+  flex-shrink: 0;
   min-height: 22px;
   padding-top: 12px;
   text-align: right;
 }
 
 .journal__message {
+  flex-shrink: 0;
   margin: 0 0 16px;
 }
 
@@ -671,7 +653,8 @@ onBeforeUnmount(() => {
 @media (max-width: 900px) {
   .journal__topbar {
     grid-template-columns: auto 1fr auto;
-    padding: 12px 14px;
+    padding: var(--workspace-topbar-padding-block) 14px;
+    padding-left: var(--app-shell-mobile-nav-leading-padding);
   }
 
   .journal__topbar-spacer {
@@ -685,34 +668,20 @@ onBeforeUnmount(() => {
   .journal__workspace,
   .journal__workspace:has(.journal__archive) {
     grid-template-columns: minmax(0, 1fr);
-    padding: 12px 14px 40px;
+    padding: 0 14px 12px;
+  }
+
+  .journal__workspace:has(.journal__archive) {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .journal__archive {
     position: static;
+    min-height: 0;
     max-height: 260px;
     border-right: 0;
     border-bottom: 1px solid var(--ui-border, var(--color-border));
     padding: 0 0 14px;
-  }
-
-  .journal__meta {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
-  }
-
-  .journal__field--date {
-    display: none;
-  }
-
-  .journal__editor-wrap,
-  .journal__editor-wrap :deep(.tiptap-editor) {
-    min-height: 460px;
-  }
-
-  .journal__editor-wrap :deep(.editor-content) {
-    min-height: 380px;
-    padding: 18px;
   }
 }
 

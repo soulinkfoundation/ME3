@@ -30,6 +30,20 @@
   --ui-radius-lg: 12px;
   --ui-shadow-sm: 0 8px 22px rgba(27, 27, 29, 0.08);
   --ui-shadow-md: var(--shadow-soft);
+  --workspace-topbar-height: 52px;
+  --workspace-topbar-padding-block: 8px;
+  --workspace-topbar-padding-inline: 24px;
+  --workspace-topbar-control-size: 36px;
+  --app-shell-mobile-nav-height: var(--workspace-topbar-height);
+  --app-shell-mobile-nav-inset-inline-start: 8px;
+  --app-side-nav-width: calc(
+    2 * var(--app-shell-mobile-nav-inset-inline-start) +
+      var(--workspace-topbar-control-size)
+  );
+  --app-shell-mobile-nav-leading-padding: calc(
+    var(--app-shell-mobile-nav-inset-inline-start) +
+      var(--workspace-topbar-control-size) + 4px
+  );
   --font-sans:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

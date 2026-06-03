@@ -100,7 +100,6 @@ watch(
 <style scoped>
 .app-root {
   min-height: 100%;
-  --app-shell-mobile-nav-height: 68px;
 }
 
 .app-root--shelled .app-root__view {
@@ -115,7 +114,9 @@ watch(
   justify-content: stretch;
   min-width: 0;
   min-height: var(--app-shell-mobile-nav-height);
-  padding: 12px 8px 12px 56px;
+  padding: var(--workspace-topbar-padding-block) 8px
+    var(--workspace-topbar-padding-block)
+    var(--app-shell-mobile-nav-leading-padding);
   background: var(--color-bg);
   box-sizing: border-box;
 }

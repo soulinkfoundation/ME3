@@ -291,6 +291,7 @@ type ChatBody = { message?: string };
 type AssistantChatTurnBody = {
   messageText?: unknown;
   threadId?: unknown;
+  projectId?: unknown;
   replyToMessageId?: unknown;
   model?: unknown;
   attachments?: unknown;
@@ -1520,15 +1521,16 @@ async function createAssistantThread(
   env: Env,
   ownerId: string,
   messageText: string,
+  projectId: string | null,
 ): Promise<AssistantThreadRow> {
   const id = crypto.randomUUID();
   const title = assistantThreadTitleFromMessage(messageText);
   await env.DB.prepare(
     `INSERT INTO assistant_threads
-       (id, owner_id, title, origin_surface, status, last_message_at)
-     VALUES (?, ?, ?, 'assistant', 'active', CURRENT_TIMESTAMP)`,
+       (id, owner_id, title, origin_surface, project_id, status, last_message_at)
+     VALUES (?, ?, ?, 'assistant', ?, 'active', CURRENT_TIMESTAMP)`,
   )
-    .bind(id, ownerId, title)
+    .bind(id, ownerId, title, projectId)
     .run();
 
   const thread = await getAssistantThread(env, ownerId, id);
@@ -1538,7 +1540,7 @@ async function createAssistantThread(
       owner_id: ownerId,
       title,
       origin_surface: "assistant",
-      project_id: null,
+      project_id: projectId,
       status: "active",
       pinned_at: null,
       archived_at: null,
@@ -1555,14 +1557,32 @@ async function resolveAssistantThreadForTurn(
   ownerId: string,
   threadId: string | null,
   messageText: string,
+  projectId: string | null,
 ): Promise<AssistantThreadRow | null | { error: string; status: 400 | 404 }> {
-  if (!threadId) return createAssistantThread(env, ownerId, messageText);
+  if (!threadId) {
+    if (projectId && !(await assistantProjectExists(env, ownerId, projectId))) {
+      return { error: "Mission Control project not found", status: 404 };
+    }
+    return createAssistantThread(env, ownerId, messageText, projectId);
+  }
   const thread = await getAssistantThread(env, ownerId, threadId);
   if (!thread) return { error: "Assistant thread not found", status: 404 };
   if (thread.status !== "active") {
     return { error: "Assistant thread is not active", status: 400 };
   }
   return thread;
+}
+
+async function assistantProjectExists(env: Env, ownerId: string, projectId: string) {
+  const row = await env.DB.prepare(
+    `SELECT id
+     FROM mission_projects
+     WHERE id = ? AND user_id = ? AND status != 'archived'
+     LIMIT 1`,
+  )
+    .bind(projectId, ownerId)
+    .first<{ id: string }>();
+  return Boolean(row);
 }
 
 async function touchAssistantThread(env: Env, ownerId: string, threadId: string) {
@@ -1586,25 +1606,156 @@ app.get("/api/assistant/threads", async (c) => {
   const statusParam = c.req.query("status");
   const status =
     statusParam === "archived" || statusParam === "deleted" ? statusParam : "active";
+  const projectIdParam = c.req.query("projectId");
+  const normalizedProjectId = normalizeNullableText(projectIdParam);
+  const projectFilter =
+    projectIdParam === "none" || projectIdParam === "ungrouped"
+      ? "none"
+      : normalizedProjectId;
+  const search = normalizeNullableText(c.req.query("q"));
   const limit = Math.min(
     Math.max(Number.parseInt(c.req.query("limit") || "40", 10) || 40, 1),
     100,
   );
+  const where = ["owner_id = ?", "status = ?"];
+  const bindings: unknown[] = [ownerId, status];
+  if (projectFilter === "none") {
+    where.push("project_id IS NULL");
+  } else if (projectFilter) {
+    where.push("project_id = ?");
+    bindings.push(projectFilter);
+  }
+  if (search) {
+    const pattern = `%${search.replace(/[%_]/g, "\\$&")}%`;
+    where.push(
+      `(title LIKE ? ESCAPE '\\' OR EXISTS (
+        SELECT 1
+        FROM assistant_messages
+        WHERE assistant_messages.thread_id = assistant_threads.id
+          AND assistant_messages.owner_id = assistant_threads.owner_id
+          AND assistant_messages.role IN ('user', 'assistant')
+          AND assistant_messages.content LIKE ? ESCAPE '\\'
+      ))`,
+    );
+    bindings.push(pattern, pattern);
+  }
+  bindings.push(limit);
 
   const rows = await c.env.DB.prepare(
     `SELECT id, owner_id, title, origin_surface, project_id, status, pinned_at,
             archived_at, deleted_at, last_message_at, created_at, updated_at
      FROM assistant_threads
-     WHERE owner_id = ? AND status = ?
+     WHERE ${where.join(" AND ")}
      ORDER BY pinned_at IS NULL, pinned_at DESC,
               last_message_at IS NULL, last_message_at DESC,
               updated_at DESC
      LIMIT ?`,
   )
-    .bind(ownerId, status, limit)
+    .bind(...bindings)
     .all<AssistantThreadRow>();
 
   return c.json({ threads: (rows.results || []).map(serializeAssistantThread) });
+});
+
+app.patch("/api/assistant/threads/:threadId", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const threadId = normalizeAssistantThreadId(c.req.param("threadId"));
+  if (!threadId) return c.json({ ok: false, error: "Thread id is required" }, 400);
+
+  const thread = await getAssistantThread(c.env, ownerId, threadId);
+  if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const projectId =
+    Object.prototype.hasOwnProperty.call(body, "projectId")
+      ? normalizeNullableText(body.projectId)
+      : thread.project_id;
+  if (projectId && !(await assistantProjectExists(c.env, ownerId, projectId))) {
+    return c.json({ ok: false, error: "Mission Control project not found" }, 404);
+  }
+
+  let nextStatus = thread.status;
+  if (body.status === "active" || body.status === "archived") {
+    nextStatus = body.status;
+  }
+  const pinned =
+    Object.prototype.hasOwnProperty.call(body, "pinned") && typeof body.pinned === "boolean"
+      ? body.pinned
+      : Boolean(thread.pinned_at);
+  const title = normalizeNullableText(body.title) || thread.title;
+
+  await c.env.DB.prepare(
+    `UPDATE assistant_threads
+     SET title = ?, project_id = ?, status = ?,
+         pinned_at = CASE WHEN ? THEN COALESCE(pinned_at, CURRENT_TIMESTAMP) ELSE NULL END,
+         archived_at = CASE WHEN ? = 'archived' THEN COALESCE(archived_at, CURRENT_TIMESTAMP) ELSE NULL END,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND owner_id = ?`,
+  )
+    .bind(title, projectId, nextStatus, pinned ? 1 : 0, nextStatus, threadId, ownerId)
+    .run();
+
+  const updated = await getAssistantThread(c.env, ownerId, threadId);
+  return c.json({ thread: updated ? serializeAssistantThread(updated) : serializeAssistantThread(thread) });
+});
+
+app.delete("/api/assistant/threads/:threadId", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const threadId = normalizeAssistantThreadId(c.req.param("threadId"));
+  if (!threadId) return c.json({ ok: false, error: "Thread id is required" }, 400);
+
+  const thread = await getAssistantThread(c.env, ownerId, threadId);
+  if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+
+  await c.env.DB.prepare(
+    `UPDATE assistant_threads
+     SET status = 'deleted', deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP),
+         archived_at = NULL, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND owner_id = ?`,
+  )
+    .bind(threadId, ownerId)
+    .run();
+  await c.env.DB.prepare(
+    `UPDATE assistant_messages
+     SET content = ''
+     WHERE owner_id = ? AND thread_id = ?`,
+  )
+    .bind(ownerId, threadId)
+    .run();
+
+  return c.json({ ok: true });
+});
+
+app.get("/api/assistant/threads/:threadId/export", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const threadId = normalizeAssistantThreadId(c.req.param("threadId"));
+  if (!threadId) return c.json({ ok: false, error: "Thread id is required" }, 400);
+
+  const thread = await getAssistantThread(c.env, ownerId, threadId);
+  if (!thread || thread.status === "deleted") {
+    return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+  }
+
+  const rows = await c.env.DB.prepare(
+    `SELECT id, role, content, created_at
+     FROM assistant_messages
+     WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
+     ORDER BY created_at ASC`,
+  )
+    .bind(ownerId, threadId)
+    .all<AssistantMessageRow>();
+
+  return c.json({
+    thread: serializeAssistantThread(thread),
+    messages: (rows.results || []).map(serializeAssistantMessage),
+    exportedAt: new Date().toISOString(),
+  });
 });
 
 app.get("/api/assistant/threads/:threadId/messages", async (c) => {
@@ -1656,6 +1807,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
     return c.json({ ok: false, error: selectedModel.error }, 400);
   }
   const requestedThreadId = normalizeAssistantThreadId(body.threadId);
+  const requestedProjectId = normalizeNullableText(body.projectId);
 
   const runtime = c.env.ME3_USER_AGENT;
   if (!runtime) {
@@ -1675,6 +1827,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
     ownerId,
     requestedThreadId,
     messageText,
+    requestedProjectId,
   );
   if (!thread) {
     return c.json({ ok: false, error: "Assistant thread is required" }, 500);
@@ -1691,6 +1844,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
       route: c.req.path,
       threadId: thread.id,
       requestedThreadId,
+      requestedProjectId,
       selectedModel: selectedModel || null,
       attachmentCount: Array.isArray(body.attachments) ? body.attachments.length : 0,
       attachmentManifest: createAssistantAttachmentAuditManifest(body.attachments),
@@ -1771,6 +1925,7 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
   }
 
   const requestedThreadId = normalizeAssistantThreadId(body.threadId);
+  const requestedProjectId = normalizeNullableText(body.projectId);
   const replyToMessageId =
     typeof body.replyToMessageId === "string" ||
     typeof body.replyToMessageId === "number"
@@ -1803,6 +1958,7 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
           ownerId,
           requestedThreadId,
           messageText,
+          requestedProjectId,
         );
         if (!thread) {
           send("error", { ok: false, error: "Assistant thread is required" });
@@ -1825,6 +1981,7 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
             stream: true,
             threadId: thread.id,
             requestedThreadId,
+            requestedProjectId,
             selectedModel: selectedModel || null,
             attachmentCount,
             attachmentManifest,

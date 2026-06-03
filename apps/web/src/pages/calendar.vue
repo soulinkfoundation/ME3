@@ -2572,16 +2572,18 @@ onBeforeUnmount(() => {
 
 .cal-create-menu--mobile-nav {
   position: fixed;
-  top: 62px;
+  top: var(--workspace-topbar-height);
   right: 14px;
   left: auto;
   width: min(220px, calc(100vw - 28px));
 }
 
 :global(#app-side-nav-mobile-page-controls:has(.cal-mobile-nav-controls)) {
-  min-height: 64px;
-  padding-top: 10px;
-  padding-bottom: 10px;
+  min-height: var(--app-shell-mobile-nav-height);
+  height: var(--app-shell-mobile-nav-height);
+  padding: var(--workspace-topbar-padding-block) 8px
+    var(--workspace-topbar-padding-block)
+    var(--app-shell-mobile-nav-leading-padding);
 }
 
 .cal-toolbar-left {

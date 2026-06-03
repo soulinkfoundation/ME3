@@ -163,7 +163,7 @@ watch(navDrawerOpen, (isOpen) => {
     <header class="app-side-nav-mobile-bar">
       <button
         type="button"
-        class="app-side-nav-mobile-bar__button"
+        class="app-side-nav-control app-side-nav-mobile-bar__button"
         :aria-label="navMenuLabel"
         :aria-controls="navDrawerId"
         :aria-expanded="navDrawerOpen ? 'true' : 'false'"
@@ -171,7 +171,7 @@ watch(navDrawerOpen, (isOpen) => {
       >
         <UiIcon
           :name="navDrawerOpen ? 'X' : 'Menu'"
-          :size="22"
+          :size="18"
           aria-hidden="true"
         />
       </button>
@@ -211,7 +211,7 @@ watch(navDrawerOpen, (isOpen) => {
       <nav class="app-side-nav__links" aria-label="Primary">
         <RouterLink
           to="/assistant"
-          class="app-side-nav__row"
+          class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('assistant') }"
           aria-label="Assistant"
           title="Assistant"
@@ -224,7 +224,7 @@ watch(navDrawerOpen, (isOpen) => {
         <RouterLink
           v-if="missionControlInstalled"
           to="/mission-control"
-          class="app-side-nav__row"
+          class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('mission-control') }"
           aria-label="Mission Control"
           title="Mission Control"
@@ -237,7 +237,7 @@ watch(navDrawerOpen, (isOpen) => {
         <RouterLink
           v-if="calendarInstalled"
           to="/calendar"
-          class="app-side-nav__row"
+          class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('calendar') }"
           aria-label="Calendar"
           title="Calendar"
@@ -250,7 +250,7 @@ watch(navDrawerOpen, (isOpen) => {
         <RouterLink
           v-if="journalInstalled"
           to="/journal"
-          class="app-side-nav__row"
+          class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('journal') }"
           aria-label="Journal"
           title="Journal"
@@ -262,7 +262,7 @@ watch(navDrawerOpen, (isOpen) => {
 
         <RouterLink
           to="/email"
-          class="app-side-nav__row"
+          class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('email') }"
           aria-label="Email"
           title="Email"
@@ -274,7 +274,7 @@ watch(navDrawerOpen, (isOpen) => {
 
         <RouterLink
           :to="sitesPath"
-          class="app-side-nav__row"
+          class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('sites') }"
           aria-label="Site builder"
           title="Site builder"
@@ -287,7 +287,7 @@ watch(navDrawerOpen, (isOpen) => {
         <RouterLink
           v-if="socialPublishingInstalled"
           to="/social"
-          class="app-side-nav__row"
+          class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('social') }"
           aria-label="Social publishing"
           title="Social publishing"
@@ -299,7 +299,7 @@ watch(navDrawerOpen, (isOpen) => {
 
         <RouterLink
           to="/account"
-          class="app-side-nav__row"
+          class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('account') }"
           aria-label="Settings"
           title="Settings"
@@ -321,39 +321,48 @@ watch(navDrawerOpen, (isOpen) => {
 
 .app-side-nav-mobile-bar {
   position: absolute;
-  inset: 12px auto auto 8px;
+  top: var(--workspace-topbar-padding-block);
+  left: var(--app-shell-mobile-nav-inset-inline-start);
   z-index: 70;
-  display: block;
-  width: 48px;
-  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--workspace-topbar-control-size);
+  height: var(--workspace-topbar-control-size);
   padding: 0;
   pointer-events: none;
 }
 
-.app-side-nav-mobile-bar__button {
+.app-side-nav-control {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  box-sizing: border-box;
+  width: var(--workspace-topbar-control-size);
+  height: var(--workspace-topbar-control-size);
+  min-height: var(--workspace-topbar-control-size);
+  padding: 0;
   border: none;
-  border-radius: 12px;
+  border-radius: var(--ui-radius-sm);
   background: transparent;
   color: var(--color-text);
   cursor: pointer;
-  pointer-events: auto;
   transition:
     background 0.15s ease,
     color 0.15s ease;
 }
 
-.app-side-nav-mobile-bar__button:hover,
-.app-side-nav-mobile-bar__button:focus-visible {
+.app-side-nav-mobile-bar__button {
+  pointer-events: auto;
+}
+
+.app-side-nav-control:hover,
+.app-side-nav-control:focus-visible {
   background: var(--color-bg-subtle);
   color: var(--color-accent);
 }
 
-.app-side-nav-mobile-bar__button:focus-visible {
+.app-side-nav-control:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
@@ -375,10 +384,14 @@ watch(navDrawerOpen, (isOpen) => {
   z-index: 60;
   display: flex;
   flex-direction: column;
-  width: 64px;
+  width: var(--app-side-nav-width);
   height: 100dvh;
   box-sizing: border-box;
-  padding: 72px 0 20px;
+  padding: calc(
+      var(--workspace-topbar-padding-block) +
+        var(--workspace-topbar-control-size) + 8px
+    )
+    0 20px;
   border-right: 1px solid var(--color-border);
   background: var(--color-bg);
   overflow: hidden;
@@ -407,37 +420,19 @@ watch(navDrawerOpen, (isOpen) => {
 .app-side-nav__links {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 9px;
   flex: 1;
   min-height: 0;
-  padding: 4px 8px 0;
+  padding: 0 var(--app-shell-mobile-nav-inset-inline-start);
 }
 
 .app-side-nav__row {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 8px 6px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--color-text);
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
   text-align: center;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
-}
-
-.app-side-nav__row:hover,
-.app-side-nav__row:focus-visible {
-  background: var(--color-bg-subtle);
-  color: var(--color-accent);
 }
 
 .app-side-nav__row--active {
@@ -466,7 +461,7 @@ watch(navDrawerOpen, (isOpen) => {
 .app-side-nav__emoji {
   flex-shrink: 0;
   color: var(--color-text);
-  font-size: 21px;
+  font-size: 20px;
   line-height: 1;
   font-family:
     "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;

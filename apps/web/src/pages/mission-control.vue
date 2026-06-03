@@ -441,7 +441,7 @@ const mobilePrimarySectionCycleLabel = computed(() =>
   activeSection.value === "accounts" ? "Switch to projects" : "Switch to accounts",
 );
 const mobilePrimarySectionIcon = computed<UiIconName>(() =>
-  activeSection.value === "accounts" ? "LayoutGrid" : "CircleDollarSign",
+  activeSection.value === "accounts" ? "ListTodo" : "CircleDollarSign",
 );
 const projectCreateDisabled = computed(
   () =>
@@ -1025,6 +1025,15 @@ function openProjectModal() {
   projectLogoName.value = "";
   projectError.value = "";
   projectModalOpen.value = true;
+}
+
+function openAssistantForSelectedProject() {
+  const project = selectedProjectDetail.value;
+  if (!project) return;
+  void router.push({
+    path: "/assistant",
+    query: { project: project.id },
+  });
 }
 
 function closeProjectModal() {
@@ -1866,22 +1875,6 @@ onBeforeUnmount(() => {
 <template>
   <main class="mission-control">
     <header class="mission-control__topbar">
-      <nav
-        class="mission-control__sections"
-        aria-label="Mission Control primary sections"
-      >
-        <button
-          v-for="section in primarySections"
-          :key="section"
-          type="button"
-          class="mission-control__section-tab"
-          :class="{ 'is-active': activeSection === section }"
-          @click="setSection(section)"
-        >
-          {{ sectionLabels[section] }}
-        </button>
-      </nav>
-
       <div
         v-if="activeSection === 'projects'"
         class="mission-control__project-switcher"
@@ -1949,14 +1942,23 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <div v-else class="mission-control__section-title">
+      <button
+        v-if="activeSection === 'projects' && selectedProjectDetail"
+        type="button"
+        class="mission-control__assistant-link"
+        @click="openAssistantForSelectedProject"
+      >
+        <UiIcon name="MessagesSquare" :size="15" aria-hidden="true" />
+        <span>Ask assistant</span>
+      </button>
+      <div v-if="activeSection !== 'projects'" class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
       </div>
 
       <button
         v-if="primarySections.length > 1"
         type="button"
-        class="icon-button mission-control__mobile-section-cycle"
+        class="icon-button mission-control__section-cycle"
         :aria-label="mobilePrimarySectionCycleLabel"
         :title="mobilePrimarySectionCycleLabel"
         @click="cyclePrimarySection"
@@ -2254,7 +2256,7 @@ onBeforeUnmount(() => {
               class="text-button"
               @click="chooseAccountsImportFile"
             >
-              <UiIcon name="Upload" :size="15" />
+              <UiIcon name="Upload" :size="13" />
               {{ accountsImporting ? "Importing..." : "Import CSV" }}
             </button>
             <button
@@ -2262,7 +2264,7 @@ onBeforeUnmount(() => {
               class="text-button"
               @click="exportAccountsCsv"
             >
-              <UiIcon name="Download" :size="15" />
+              <UiIcon name="Download" :size="13" />
               Export CSV
             </button>
             <button
@@ -2271,7 +2273,7 @@ onBeforeUnmount(() => {
               :disabled="accountsSyncing || !accountsStripeConfigured"
               @click="syncAccountsStripe"
             >
-              <UiIcon name="RefreshCw" :size="15" />
+              <UiIcon name="RefreshCw" :size="13" />
               {{ accountsSyncing ? "Syncing..." : "Sync Stripe" }}
             </button>
             <button
@@ -2279,7 +2281,7 @@ onBeforeUnmount(() => {
               class="text-button text-button--primary"
               @click="openAccountsModal"
             >
-              <UiIcon name="Plus" :size="15" />
+              <UiIcon name="Plus" :size="13" />
               Add entry
             </button>
             <input
@@ -3165,22 +3167,57 @@ onBeforeUnmount(() => {
   top: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(44px, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto 36px 36px;
   align-items: center;
-  gap: 16px;
-  min-height: 64px;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: var(--workspace-topbar-height);
   min-width: 0;
-  padding: 12px 0;
+  padding: var(--workspace-topbar-padding-block) 0;
   background: color-mix(in oklab, var(--ui-bg), transparent 4%);
   backdrop-filter: blur(16px);
 }
 
-.mission-control__sections {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 6px;
+.mission-control__project-switcher,
+.mission-control__section-title {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: center;
   min-width: 0;
-  overflow-x: auto;
+}
+
+.mission-control__assistant-link {
+  grid-column: 2;
+  grid-row: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 0 9px;
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mission-control__assistant-link:hover {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.mission-control__section-cycle {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.settings-menu {
+  grid-column: 4;
+  grid-row: 1;
 }
 
 .mission-control__section-tab,
@@ -3211,7 +3248,6 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__section-title {
-  justify-self: center;
   color: var(--ui-text);
   font-size: 15px;
   font-weight: 700;
@@ -3221,7 +3257,6 @@ onBeforeUnmount(() => {
 .mission-control__project-switcher {
   position: relative;
   display: grid;
-  justify-self: center;
   min-width: 0;
 }
 
@@ -3290,13 +3325,27 @@ onBeforeUnmount(() => {
   color: var(--ui-text);
 }
 
-.settings-menu {
-  position: relative;
-  justify-self: end;
+.mission-control__section-cycle {
+  display: inline-grid;
+  grid-column: 2;
+  grid-row: 1;
 }
 
-.mission-control__mobile-section-cycle {
-  display: none;
+.mission-control__topbar .icon-button {
+  color: var(--ui-text-muted);
+}
+
+.mission-control__topbar .icon-button:hover,
+.mission-control__topbar .icon-button.is-active {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.settings-menu {
+  position: relative;
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
 }
 
 .settings-menu__dropdown {
@@ -3971,7 +4020,21 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
-.accounts-toolbar__actions .text-button,
+.accounts-toolbar__actions {
+  gap: 6px;
+}
+
+.accounts-toolbar__actions .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
 .accounts-pagination .text-button {
   display: inline-flex;
   align-items: center;
@@ -4493,35 +4556,17 @@ onBeforeUnmount(() => {
   }
 
   .mission-control__topbar {
-    grid-template-columns: minmax(0, 1fr) 36px 36px;
     gap: 6px;
-    padding-left: 48px;
-  }
-
-  .mission-control__sections {
-    display: none;
+    padding-left: var(--app-shell-mobile-nav-leading-padding);
   }
 
   .mission-control__project-switcher,
   .mission-control__section-title {
-    grid-column: 1;
-    grid-row: 1;
     justify-self: stretch;
   }
 
   .mission-control__project-label {
     max-width: none;
-  }
-
-  .mission-control__mobile-section-cycle {
-    display: inline-grid;
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .settings-menu {
-    grid-column: 3;
-    grid-row: 1;
   }
 
   .detail-row {

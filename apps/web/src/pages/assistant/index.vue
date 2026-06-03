@@ -300,6 +300,22 @@ type AssistantThread = {
 type AssistantThreadsResponse = {
   threads: AssistantThread[];
 };
+type MissionProject = {
+  id: string;
+  name: string;
+  slug: string;
+  status: "active" | "paused" | "archived";
+  color: string | null;
+  icon: string | null;
+};
+type MissionProjectsResponse = {
+  projects: MissionProject[];
+};
+type AssistantThreadExportResponse = {
+  thread: AssistantThread;
+  messages: AssistantThreadMessage[];
+  exportedAt: string;
+};
 type AssistantAttachmentKind = "text" | "image" | "unsupported";
 type AssistantAttachmentDraft = {
   id: string;
@@ -312,11 +328,7 @@ type AssistantAttachmentDraft = {
   error: string | null;
 };
 type AssistantThreadMessagesResponse = {
-  thread: {
-    id: string;
-    title: string;
-    status: "active" | "archived" | "deleted";
-  };
+  thread: AssistantThread;
   messages: AssistantThreadMessage[];
 };
 
@@ -367,10 +379,15 @@ const assistantThreadLoading = ref(false);
 const assistantThreads = ref<AssistantThread[]>([]);
 const assistantThreadsLoading = ref(false);
 const assistantThreadsError = ref("");
+const assistantProjects = ref<MissionProject[]>([]);
+const assistantProjectsLoading = ref(false);
+const assistantProjectsError = ref("");
+const assistantThreadSearchDraft = ref("");
+const assistantThreadSearch = ref("");
+const assistantThreadStatusFilter = ref<"active" | "archived">("active");
+const assistantThreadActionId = ref<string | null>(null);
 const assistantHistoryCollapsed = ref(false);
 const assistantHistoryDrawerOpen = ref(false);
-const assistantPinnedOpen = ref(true);
-const assistantRecentOpen = ref(true);
 const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
@@ -633,11 +650,24 @@ const assistantAttachmentIssue = computed(() => {
 
   return "";
 });
-const assistantPinnedThreads = computed(() =>
-  assistantThreads.value.filter((thread) => thread.pinnedAt),
+const assistantSelectedThread = computed(() =>
+  assistantThreads.value.find((thread) => thread.id === assistantThreadId.value) || null,
 );
-const assistantRecentThreads = computed(() =>
-  assistantThreads.value.filter((thread) => !thread.pinnedAt),
+const assistantProjectThreadGroups = computed(() =>
+  assistantProjects.value.map((project) => ({
+    project,
+    threads: assistantThreads.value.filter((thread) => thread.projectId === project.id),
+  })),
+);
+const assistantUngroupedThreads = computed(() =>
+  assistantThreads.value.filter((thread) => !thread.projectId),
+);
+const assistantThreadSearchActive = computed(() => assistantThreadSearch.value.trim().length > 0);
+const assistantThreadListEmpty = computed(
+  () =>
+    !assistantThreadsLoading.value &&
+    assistantThreads.value.length === 0 &&
+    !assistantThreadsError.value,
 );
 
 const canSendAssistantMessage = computed(
@@ -691,6 +721,7 @@ async function loadPage() {
     loadJobs(),
     loadRecipes(),
     loadAiSettings(),
+    loadAssistantProjects(),
     loadAssistantThreads(),
     loadAssistantThreadFromRoute(),
   ]);
@@ -700,8 +731,14 @@ async function loadAssistantThreads() {
   assistantThreadsLoading.value = true;
   assistantThreadsError.value = "";
   try {
+    const params = new URLSearchParams({
+      status: assistantThreadStatusFilter.value,
+      limit: "80",
+    });
+    const search = assistantThreadSearch.value.trim();
+    if (search) params.set("q", search);
     const response = await api.get<AssistantThreadsResponse>(
-      "/assistant/threads?status=active&limit=60",
+      `/assistant/threads?${params.toString()}`,
     );
     assistantThreads.value = response.threads || [];
   } catch (err) {
@@ -711,23 +748,44 @@ async function loadAssistantThreads() {
   }
 }
 
+async function loadAssistantProjects() {
+  assistantProjectsLoading.value = true;
+  assistantProjectsError.value = "";
+  try {
+    const response = await api.get<MissionProjectsResponse>("/mission-control/projects");
+    assistantProjects.value = response.projects || [];
+  } catch (err) {
+    assistantProjectsError.value = messageFromUnknown(err, "Projects could not load.");
+  } finally {
+    assistantProjectsLoading.value = false;
+  }
+}
+
 function routeThreadId() {
   const value = route.query.thread;
   if (Array.isArray(value)) return value[0]?.trim() || null;
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function routeProjectId() {
+  const value = route.query.project;
+  if (Array.isArray(value)) return value[0]?.trim() || null;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 async function setRouteThreadId(threadId: string) {
   if (routeThreadId() === threadId) return;
+  const thread = assistantThreads.value.find((item) => item.id === threadId);
   await router.replace({
     query: {
       ...route.query,
       thread: threadId,
+      project: thread?.projectId || undefined,
     },
   });
 }
 
-async function startNewAssistantChat() {
+async function startNewAssistantChat(projectId: string | null = null) {
   assistantThreadId.value = null;
   assistantError.value = null;
   assistantHistoryDrawerOpen.value = false;
@@ -736,6 +794,7 @@ async function startNewAssistantChat() {
     query: {
       ...route.query,
       thread: undefined,
+      project: projectId || undefined,
     },
   });
   await nextTick();
@@ -753,6 +812,148 @@ async function selectAssistantThread(threadId: string) {
 
 function toggleAssistantHistoryCollapsed() {
   assistantHistoryCollapsed.value = !assistantHistoryCollapsed.value;
+}
+
+async function applyAssistantThreadSearch() {
+  assistantThreadSearch.value = assistantThreadSearchDraft.value.trim();
+  await loadAssistantThreads();
+}
+
+async function clearAssistantThreadSearch() {
+  assistantThreadSearchDraft.value = "";
+  assistantThreadSearch.value = "";
+  await loadAssistantThreads();
+}
+
+async function setAssistantThreadStatusFilter(status: "active" | "archived") {
+  if (assistantThreadStatusFilter.value === status) return;
+  assistantThreadStatusFilter.value = status;
+  await loadAssistantThreads();
+}
+
+async function updateAssistantThreadProject(projectId: string | null) {
+  const thread = assistantSelectedThread.value;
+  if (!thread || assistantThreadActionId.value) return;
+  assistantThreadActionId.value = thread.id;
+  try {
+    const response = await api.patch<{ thread: AssistantThread }>(
+      `/assistant/threads/${encodeURIComponent(thread.id)}`,
+      { projectId },
+    );
+    upsertAssistantThread(response.thread);
+    await router.replace({
+      query: {
+        ...route.query,
+        project: response.thread.projectId || undefined,
+      },
+    });
+  } catch (err) {
+    assistantThreadsError.value = messageFromUnknown(err, "Chat project could not update.");
+  } finally {
+    assistantThreadActionId.value = null;
+  }
+}
+
+function onAssistantThreadProjectChange(event: Event) {
+  const value = event.target instanceof HTMLSelectElement ? event.target.value : "";
+  void updateAssistantThreadProject(value || null);
+}
+
+async function archiveAssistantThread(thread: AssistantThread) {
+  if (assistantThreadActionId.value) return;
+  assistantThreadActionId.value = thread.id;
+  const nextStatus = thread.status === "archived" ? "active" : "archived";
+  try {
+    const response = await api.patch<{ thread: AssistantThread }>(
+      `/assistant/threads/${encodeURIComponent(thread.id)}`,
+      { status: nextStatus },
+    );
+    assistantThreads.value = assistantThreads.value.filter((item) => item.id !== thread.id);
+    if (assistantThreadId.value === thread.id && nextStatus === "archived") {
+      await startNewAssistantChat(null);
+    }
+    if (assistantThreadStatusFilter.value === nextStatus) {
+      upsertAssistantThread(response.thread);
+    }
+  } catch (err) {
+    assistantThreadsError.value = messageFromUnknown(err, "Chat could not update.");
+  } finally {
+    assistantThreadActionId.value = null;
+  }
+}
+
+async function deleteAssistantThread(thread: AssistantThread) {
+  if (assistantThreadActionId.value) return;
+  const confirmed = window.confirm(`Delete "${threadTitle(thread)}"? This removes transcript text.`);
+  if (!confirmed) return;
+  assistantThreadActionId.value = thread.id;
+  try {
+    await api.delete(`/assistant/threads/${encodeURIComponent(thread.id)}`);
+    assistantThreads.value = assistantThreads.value.filter((item) => item.id !== thread.id);
+    if (assistantThreadId.value === thread.id) {
+      await startNewAssistantChat(null);
+    }
+  } catch (err) {
+    assistantThreadsError.value = messageFromUnknown(err, "Chat could not be deleted.");
+  } finally {
+    assistantThreadActionId.value = null;
+  }
+}
+
+async function exportAssistantThread(thread: AssistantThread) {
+  if (assistantThreadActionId.value) return;
+  assistantThreadActionId.value = thread.id;
+  try {
+    const response = await api.get<AssistantThreadExportResponse>(
+      `/assistant/threads/${encodeURIComponent(thread.id)}/export`,
+    );
+    const transcript = [
+      `# ${threadTitle(response.thread)}`,
+      "",
+      `Exported: ${response.exportedAt}`,
+      response.thread.projectId ? `Project: ${projectName(response.thread.projectId)}` : "Project: None",
+      "",
+      ...response.messages.flatMap((message) => [
+        `## ${message.role === "user" ? "You" : "ME3"} - ${message.createdAt}`,
+        "",
+        message.text || "",
+        "",
+      ]),
+    ].join("\n");
+    const blob = new Blob([transcript], { type: "text/markdown;charset=utf-8" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${slugifyFilename(threadTitle(response.thread)) || "assistant-chat"}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    assistantThreadsError.value = messageFromUnknown(err, "Chat could not export.");
+  } finally {
+    assistantThreadActionId.value = null;
+  }
+}
+
+function upsertAssistantThread(thread: AssistantThread) {
+  assistantThreads.value = [
+    thread,
+    ...assistantThreads.value.filter((item) => item.id !== thread.id),
+  ];
+}
+
+function projectName(projectId: string | null) {
+  if (!projectId) return "Chats";
+  return assistantProjects.value.find((project) => project.id === projectId)?.name || "Project";
+}
+
+function slugifyFilename(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
 }
 
 function formatAssistantThreadTime(value: string | null) {
@@ -791,6 +992,9 @@ async function loadAssistantThreadFromRoute() {
       `/assistant/threads/${encodeURIComponent(threadId)}/messages`,
     );
     if (assistantThreadId.value !== threadId) return;
+    if (response.thread) {
+      upsertAssistantThread(response.thread);
+    }
     agentChat.replaceMessages(
       response.messages.map((message) => ({
         id: message.id,
@@ -1134,6 +1338,7 @@ async function submitAssistantText(
       {
         messageText: normalized,
         threadId: assistantThreadId.value,
+        projectId: assistantThreadId.value ? undefined : routeProjectId(),
         attachments,
         model: selectedModel.value
           ? {
@@ -2267,7 +2472,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
           type="button"
           class="assistant-mobile-nav__button"
           aria-label="New chat"
-          @click="startNewAssistantChat"
+          @click="startNewAssistantChat(null)"
         >
           <UiIcon name="Plus" :size="18" aria-hidden="true" />
         </button>
@@ -2282,17 +2487,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
       aria-label="Assistant chat history"
     >
       <header class="assistant-history__header">
-        <button
-          type="button"
-          class="assistant-history__new"
-          :class="{ 'assistant-history__new--collapsed': assistantHistoryCollapsed }"
-          :aria-label="assistantHistoryCollapsed ? 'New chat' : undefined"
-          title="New chat"
-          @click="startNewAssistantChat"
-        >
-          <UiIcon name="Plus" :size="16" aria-hidden="true" />
-          <span class="assistant-history__new-label">New chat</span>
-        </button>
         <button
           type="button"
           class="assistant-history__icon-button assistant-history__collapse"
@@ -2326,8 +2520,117 @@ function messageFromUnknown(err: unknown, fallback: string) {
       </header>
 
       <div v-if="!assistantHistoryCollapsed" class="assistant-history__body">
+        <nav class="assistant-history__topnav" aria-label="Assistant tools">
+          <button
+            type="button"
+            class="assistant-history__nav-row"
+            @click="startNewAssistantChat(null)"
+          >
+            <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
+            <span>New chat</span>
+          </button>
+          <form class="assistant-history__search" @submit.prevent="applyAssistantThreadSearch">
+            <UiIcon name="Search" :size="15" aria-hidden="true" />
+            <input
+              v-model="assistantThreadSearchDraft"
+              type="search"
+              placeholder="Search"
+              aria-label="Search chats"
+            />
+            <button
+              v-if="assistantThreadSearchActive"
+              type="button"
+              aria-label="Clear chat search"
+              @click="clearAssistantThreadSearch"
+            >
+              <UiIcon name="X" :size="14" aria-hidden="true" />
+            </button>
+          </form>
+        </nav>
+
+        <div
+          v-if="assistantSelectedThread"
+          class="assistant-history__active-tools"
+          aria-label="Selected chat controls"
+        >
+          <label class="assistant-history__project-select">
+            <span>Project</span>
+            <select
+              :value="assistantSelectedThread.projectId || ''"
+              :disabled="assistantThreadActionId === assistantSelectedThread.id"
+              @change="onAssistantThreadProjectChange"
+            >
+              <option value="">Chats</option>
+              <option
+                v-for="project in assistantProjects"
+                :key="project.id"
+                :value="project.id"
+              >
+                {{ project.name }}
+              </option>
+            </select>
+          </label>
+          <div class="assistant-history__actions">
+            <button
+              type="button"
+              title="Export transcript"
+              aria-label="Export transcript"
+              :disabled="assistantThreadActionId === assistantSelectedThread.id"
+              @click="exportAssistantThread(assistantSelectedThread)"
+            >
+              <UiIcon name="Download" :size="15" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              :title="assistantSelectedThread.status === 'archived' ? 'Restore chat' : 'Archive chat'"
+              :aria-label="assistantSelectedThread.status === 'archived' ? 'Restore chat' : 'Archive chat'"
+              :disabled="assistantThreadActionId === assistantSelectedThread.id"
+              @click="archiveAssistantThread(assistantSelectedThread)"
+            >
+              <UiIcon
+                :name="assistantSelectedThread.status === 'archived' ? 'ArchiveRestore' : 'Archive'"
+                :size="15"
+                aria-hidden="true"
+              />
+            </button>
+            <button
+              type="button"
+              title="Delete chat"
+              aria-label="Delete chat"
+              :disabled="assistantThreadActionId === assistantSelectedThread.id"
+              @click="deleteAssistantThread(assistantSelectedThread)"
+            >
+              <UiIcon name="Trash2" :size="15" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        <div class="assistant-history__filter" role="tablist" aria-label="Chat status">
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="assistantThreadStatusFilter === 'active'"
+            :class="{ 'is-active': assistantThreadStatusFilter === 'active' }"
+            @click="setAssistantThreadStatusFilter('active')"
+          >
+            Active
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="assistantThreadStatusFilter === 'archived'"
+            :class="{ 'is-active': assistantThreadStatusFilter === 'archived' }"
+            @click="setAssistantThreadStatusFilter('archived')"
+          >
+            Archived
+          </button>
+        </div>
+
         <p v-if="assistantThreadsError" class="assistant-history__message">
           {{ assistantThreadsError }}
+        </p>
+        <p v-else-if="assistantProjectsError" class="assistant-history__message">
+          {{ assistantProjectsError }}
         </p>
         <p
           v-else-if="assistantThreadsLoading && assistantThreads.length === 0"
@@ -2336,71 +2639,68 @@ function messageFromUnknown(err: unknown, fallback: string) {
           Loading chats...
         </p>
 
-        <section
-          v-if="assistantPinnedThreads.length > 0"
-          class="assistant-history__section"
-        >
-          <button
-            type="button"
-            class="assistant-history__section-toggle"
-            :aria-expanded="assistantPinnedOpen"
-            @click="assistantPinnedOpen = !assistantPinnedOpen"
+        <section class="assistant-history__section">
+          <h2>Projects</h2>
+          <div
+            v-if="assistantProjectsLoading && assistantProjects.length === 0"
+            class="assistant-history__message"
           >
-            <span>Pinned</span>
-            <UiIcon
-              :name="assistantPinnedOpen ? 'ChevronDown' : 'ChevronRight'"
-              :size="14"
-              aria-hidden="true"
-            />
-          </button>
-          <nav
-            v-if="assistantPinnedOpen"
-            class="assistant-history__list"
-            aria-label="Pinned chats"
+            Loading projects...
+          </div>
+          <div
+            v-for="group in assistantProjectThreadGroups"
+            :key="group.project.id"
+            class="assistant-history__project-group"
           >
             <button
-              v-for="thread in assistantPinnedThreads"
-              :key="thread.id"
               type="button"
-              class="assistant-history__thread"
-              :class="{ 'is-active': assistantThreadId === thread.id }"
-              :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
-              @click="selectAssistantThread(thread.id)"
+              class="assistant-history__project-row"
+              :class="{ 'is-active': routeProjectId() === group.project.id && !assistantThreadId }"
+              :aria-label="`Start a new chat in ${group.project.name}`"
+              @click="startNewAssistantChat(group.project.id)"
             >
-              <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
-              <span class="assistant-history__thread-main">
-                <span class="assistant-history__thread-title">
-                  {{ threadTitle(thread) }}
-                </span>
-                <span class="assistant-history__thread-meta">
-                  {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
-                </span>
+              <UiIcon name="Folder" :size="15" aria-hidden="true" />
+              <span>{{ group.project.name }}</span>
+              <span v-if="group.threads.length" class="assistant-history__count">
+                {{ group.threads.length }}
               </span>
             </button>
-          </nav>
+            <nav
+              v-if="group.threads.length"
+              class="assistant-history__list assistant-history__list--nested"
+              :aria-label="`${group.project.name} chats`"
+            >
+              <button
+                v-for="thread in group.threads"
+                :key="thread.id"
+                type="button"
+                class="assistant-history__thread"
+                :class="{ 'is-active': assistantThreadId === thread.id }"
+                :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
+                @click="selectAssistantThread(thread.id)"
+              >
+                <UiIcon name="MessageSquare" :size="15" aria-hidden="true" />
+                <span class="assistant-history__thread-main">
+                  <span class="assistant-history__thread-title">
+                    {{ threadTitle(thread) }}
+                  </span>
+                  <span class="assistant-history__thread-meta">
+                    {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
+                  </span>
+                </span>
+              </button>
+            </nav>
+          </div>
         </section>
 
         <section class="assistant-history__section">
-          <button
-            type="button"
-            class="assistant-history__section-toggle"
-            :aria-expanded="assistantRecentOpen"
-            @click="assistantRecentOpen = !assistantRecentOpen"
-          >
-            <span>Recent</span>
-            <UiIcon
-              :name="assistantRecentOpen ? 'ChevronDown' : 'ChevronRight'"
-              :size="14"
-              aria-hidden="true"
-            />
-          </button>
+          <h2>Chats</h2>
           <nav
-            v-if="assistantRecentOpen"
             class="assistant-history__list"
-            aria-label="Recent chats"
+            aria-label="Chats outside projects"
           >
             <button
-              v-for="thread in assistantRecentThreads"
+              v-for="thread in assistantUngroupedThreads"
               :key="thread.id"
               type="button"
               class="assistant-history__thread"
@@ -2419,10 +2719,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </span>
             </button>
             <p
-              v-if="!assistantThreadsLoading && assistantRecentThreads.length === 0"
+              v-if="assistantThreadListEmpty"
               class="assistant-history__message"
             >
-              No saved chats yet.
+              {{ assistantThreadSearchActive ? "No matching chats." : "No saved chats yet." }}
+            </p>
+            <p
+              v-else-if="!assistantThreadsLoading && assistantUngroupedThreads.length === 0"
+              class="assistant-history__message"
+            >
+              No chats outside projects.
             </p>
           </nav>
         </section>
@@ -3417,8 +3723,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   z-index: 70;
   display: flex;
   flex-direction: column;
-  width: min(300px, calc(100vw - 56px));
-  max-width: calc(100vw - 56px);
+  width: min(300px, calc(100vw - var(--app-shell-mobile-nav-leading-padding)));
+  max-width: min(300px, calc(100vw - var(--app-shell-mobile-nav-leading-padding)));
   min-width: 0;
   height: 100dvh;
   max-height: 100dvh;
@@ -3436,7 +3742,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history--collapsed {
-  width: min(300px, calc(100vw - 56px));
+  width: min(300px, calc(100vw - var(--app-shell-mobile-nav-leading-padding)));
 }
 
 .assistant-history--collapsed .assistant-history__body {
@@ -3446,45 +3752,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-history__header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 4px;
   min-width: 0;
 }
 
-.assistant-history__new {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 42px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  padding: 0 12px;
-  background: var(--ui-surface);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.assistant-history__new:hover,
+.assistant-history__nav-row:hover,
+.assistant-history__project-row:hover,
 .assistant-history__thread:hover,
-.assistant-history__section-toggle:hover,
 .assistant-history__icon-button:hover {
-  border-color: color-mix(in oklab, var(--ui-accent) 36%, var(--ui-border));
+  background: color-mix(in oklab, var(--ui-surface) 64%, transparent);
   color: var(--ui-text);
-}
-
-.assistant-history__new--collapsed {
-  width: 42px;
-  flex: 0 0 42px;
-  padding: 0;
-}
-
-.assistant-history__new--collapsed .assistant-history__new-label {
-  display: none;
 }
 
 .assistant-history__icon-button,
@@ -3513,61 +3791,184 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-history__body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   min-height: 0;
-  padding-top: 16px;
+  padding-top: 10px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
 
+.assistant-history__topnav,
 .assistant-history__section {
-  display: grid;
-  gap: 6px;
-}
-
-.assistant-history__section-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: 30px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  padding: 0 8px;
-  background: transparent;
-  color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.assistant-history__list {
   display: grid;
   gap: 4px;
 }
 
+.assistant-history__nav-row,
+.assistant-history__project-row,
 .assistant-history__thread {
   display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
   min-width: 0;
-  min-height: 42px;
+  min-height: 32px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
-  padding: 6px 8px;
+  padding: 4px 6px;
   background: transparent;
-  color: var(--ui-text-muted);
+  color: var(--ui-text);
   font: inherit;
+  font-size: 13px;
+  font-weight: 520;
   text-align: left;
   cursor: pointer;
 }
 
-.assistant-history__thread.is-active {
-  border-color: var(--ui-border);
+.assistant-history__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 0 6px;
+  background: transparent;
+  color: var(--ui-text-muted);
+}
+
+.assistant-history__search:focus-within {
+  border-color: color-mix(in oklab, var(--ui-accent) 34%, var(--ui-border));
+  background: var(--ui-surface);
+}
+
+.assistant-history__search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.assistant-history__search button,
+.assistant-history__actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.assistant-history__active-tools {
+  display: grid;
+  gap: 8px;
+  border-block: 1px solid var(--ui-border);
+  padding: 10px 0;
+}
+
+.assistant-history__project-select {
+  display: grid;
+  gap: 4px;
+}
+
+.assistant-history__project-select span,
+.assistant-history__section h2 {
+  margin: 0;
+  color: color-mix(in oklab, var(--ui-text-muted) 76%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.assistant-history__project-select select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 0 8px;
+  background: color-mix(in oklab, var(--ui-surface) 64%, transparent);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.assistant-history__actions,
+.assistant-history__filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.assistant-history__actions {
+  justify-content: flex-end;
+}
+
+.assistant-history__actions button:hover,
+.assistant-history__search button:hover {
   background: var(--ui-surface);
   color: var(--ui-text);
+}
+
+.assistant-history__filter {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 2px;
+}
+
+.assistant-history__filter button {
+  flex: 1 1 0;
+  min-height: 26px;
+  border: 0;
+  border-radius: calc(var(--ui-radius-sm) - 2px);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.assistant-history__filter button.is-active {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+
+.assistant-history__list {
+  display: grid;
+  gap: 2px;
+}
+
+.assistant-history__list--nested {
+  margin-left: 14px;
+  padding-left: 6px;
+  border-left: 1px solid var(--ui-border);
+}
+
+.assistant-history__project-group {
+  display: grid;
+  gap: 2px;
+}
+
+.assistant-history__project-row {
+  color: var(--ui-text-muted);
+}
+
+.assistant-history__project-row.is-active,
+.assistant-history__thread.is-active {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+
+.assistant-history__count {
+  margin-left: auto;
+  color: var(--ui-text-muted);
+  font-size: 11px;
 }
 
 .assistant-history__thread-main {
@@ -3586,8 +3987,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-history__thread-title {
   color: inherit;
-  font-size: 13px;
-  font-weight: 750;
+  font-size: 12px;
+  font-weight: 540;
   line-height: 1.25;
 }
 
@@ -3638,10 +4039,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 :global(#app-side-nav-mobile-page-controls:has(.assistant-mobile-nav)) {
-  --app-shell-mobile-nav-height: 56px;
   min-height: var(--app-shell-mobile-nav-height);
   height: var(--app-shell-mobile-nav-height);
-  padding: 12px 8px 0 56px;
+  padding: var(--workspace-topbar-padding-block) 8px
+    var(--workspace-topbar-padding-block)
+    var(--app-shell-mobile-nav-leading-padding);
   align-items: center;
 }
 
