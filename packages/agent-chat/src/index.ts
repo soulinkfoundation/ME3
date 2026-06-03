@@ -1446,6 +1446,7 @@ export async function createAgentSandboxTurnRecord(
     userId: string;
     messageText: string;
     replyToMessageId?: string | number | null;
+    metadata?: Record<string, unknown> | null;
   },
 ): Promise<AgentSandboxTurnRecord> {
   const messageText = input.messageText.trim();
@@ -1461,6 +1462,7 @@ export async function createAgentSandboxTurnRecord(
     turnId,
     messageText,
     replyToMessageId,
+    metadata: input.metadata,
   });
 
   return {
@@ -2682,6 +2684,7 @@ async function insertSandboxEvent(
     turnId: string;
     messageText: string;
     replyToMessageId: string | number | null;
+    metadata?: Record<string, unknown> | null;
   },
 ): Promise<AgentSandboxSourceEvent> {
   const id = crypto.randomUUID();
@@ -2697,7 +2700,11 @@ async function insertSandboxEvent(
       input.connectionId,
       input.replyToMessageId === null ? null : String(input.replyToMessageId),
       input.messageText,
-      JSON.stringify({ runtime: "sandbox", turnId: input.turnId }),
+      JSON.stringify({
+        runtime: "sandbox",
+        turnId: input.turnId,
+        ...(input.metadata || {}),
+      }),
     )
     .run();
 

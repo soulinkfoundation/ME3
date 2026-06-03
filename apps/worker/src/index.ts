@@ -293,6 +293,7 @@ type AssistantChatTurnBody = {
   threadId?: unknown;
   replyToMessageId?: unknown;
   model?: unknown;
+  attachments?: unknown;
 };
 type AssistantChatTurnModelSelection = {
   providerId: "workers-ai" | "openai" | "anthropic";
@@ -1679,6 +1680,14 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
     userId: ownerId,
     messageText,
     replyToMessageId,
+    metadata: {
+      surface: "assistant",
+      route: c.req.path,
+      threadId: thread.id,
+      requestedThreadId,
+      selectedModel: selectedModel || null,
+      attachmentCount: Array.isArray(body.attachments) ? body.attachments.length : 0,
+    },
   });
 
   const id = runtime.idFromName(ownerId);

@@ -3009,6 +3009,19 @@ describe("ME3 Core Worker auth", () => {
       direction: "inbound",
       text_body: "Hello agent",
     });
+    expect(JSON.parse(env.agentEvents[0]?.raw_json || "{}")).toMatchObject({
+      runtime: "sandbox",
+      surface: "assistant",
+      route: "/api/assistant/chat/turn",
+      threadId: env.assistantThreads[0]?.id,
+      requestedThreadId: null,
+      selectedModel: {
+        providerId: "openai",
+        model: "gpt-test",
+        optionId: "openai-gpt-test",
+      },
+      attachmentCount: 0,
+    });
     expect(runtimeFetch).toHaveBeenCalledOnce();
     const runtimeInit = runtimeCalls[0]?.[1] || {};
     expect(JSON.parse(String(runtimeInit.body))).toMatchObject({
