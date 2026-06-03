@@ -471,6 +471,8 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const D1_SITE_FILE_MAX_BYTES = 1_900_000;
 const INBOUND_EMAIL_PROVIDER_ID = "cloudflare-email-routing";
 const MAX_INBOUND_EMAIL_BYTES = 1024 * 1024;
+const MAX_MAILBOX_ATTACHMENT_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_MAILBOX_ATTACHMENT_UPLOAD_COUNT = 10;
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -4500,6 +4502,79 @@ app.get("/api/mailbox/messages/:messageId/attachments/:attachmentIndex", async (
       "Content-Disposition": `attachment; filename="${filename.replace(/"/g, "'")}"`,
     },
   });
+});
+
+app.post("/api/mailbox/attachments", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  if (!c.env.SITE_ASSETS) {
+    return c.json({ error: "Mailbox attachment storage is not configured" }, 503);
+  }
+
+  const mailbox = await c.env.DB.prepare(
+    `SELECT id
+     FROM mailbox_aliases
+     WHERE user_id = ?
+     ORDER BY created_at ASC
+     LIMIT 1`,
+  )
+    .bind(ownerId)
+    .first<{ id: string }>();
+  if (!mailbox) return c.json({ error: "Mailbox not found" }, 404);
+
+  const form = await c.req.formData().catch(() => null);
+  if (!form) return c.json({ error: "Attachment upload is invalid" }, 400);
+  const files = form
+    .getAll("attachments")
+    .filter((entry): entry is File => entry instanceof File);
+  if (files.length === 0) return c.json({ error: "Choose at least one attachment" }, 400);
+  if (files.length > MAX_MAILBOX_ATTACHMENT_UPLOAD_COUNT) {
+    return c.json(
+      { error: `Upload up to ${MAX_MAILBOX_ATTACHMENT_UPLOAD_COUNT} attachments at a time` },
+      400,
+    );
+  }
+
+  const uploaded: StoredMailboxAttachment[] = [];
+  for (const [index, file] of files.entries()) {
+    if (file.size > MAX_MAILBOX_ATTACHMENT_UPLOAD_BYTES) {
+      return c.json(
+        { error: `${file.name || `Attachment ${index + 1}`} is larger than 25 MB` },
+        400,
+      );
+    }
+    const filename = sanitizeAttachmentFilename(file.name, `attachment-${index + 1}`);
+    const mimeType = file.type || "application/octet-stream";
+    const storageKey = [
+      "mailbox",
+      mailbox.id,
+      "uploads",
+      `${new Date().toISOString().slice(0, 10)}`,
+      `${crypto.randomUUID()}-${filename}`,
+    ].join("/");
+    const content = await file.arrayBuffer();
+    await c.env.SITE_ASSETS.put(storageKey, content, {
+      httpMetadata: {
+        contentType: mimeType,
+      },
+      customMetadata: {
+        mailboxId: mailbox.id,
+        filename,
+        disposition: "attachment",
+      },
+    });
+    uploaded.push({
+      filename,
+      mimeType,
+      disposition: "attachment",
+      size: file.size,
+      storageKey,
+      sourceMessageId: "",
+    });
+  }
+
+  return c.json({ attachments: uploaded }, 201);
 });
 
 app.post("/api/mailbox/drafts", async (c) => {

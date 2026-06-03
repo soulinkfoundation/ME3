@@ -230,6 +230,7 @@ export type AgentMailboxDraftInput = {
   source?: unknown;
   replyToMessageId?: unknown;
   preservedAttachmentKeys?: unknown;
+  uploadedAttachments?: unknown;
 };
 
 export type AgentMailboxMessageListOptions = {
@@ -2158,6 +2159,10 @@ async function normalizeAgentMailboxDraftInput(
     allowedAttachmentSources,
     body.preservedAttachmentKeys,
   );
+  const uploadedAttachments = normalizeUploadedAttachments(
+    mailbox.id,
+    body.uploadedAttachments,
+  );
 
   return {
     fromAddress,
@@ -2174,7 +2179,10 @@ async function normalizeAgentMailboxDraftInput(
     inReplyTo: replyHeaders.inReplyTo || existingHeaders.inReplyTo,
     referencesHeader: replyHeaders.referencesHeader || existingHeaders.referencesHeader,
     createdBy: source === "agent" ? "agent" : "owner",
-    preservedAttachments,
+    preservedAttachments: mergeAttachmentMetadata([
+      ...preservedAttachments,
+      ...uploadedAttachments,
+    ]),
   };
 }
 
@@ -2304,6 +2312,46 @@ function normalizePreservedAttachmentKeys(rawKeys: unknown): Set<string> {
       .map((key) => (typeof key === "string" ? key.trim() : ""))
       .filter((key) => key.length > 0),
   );
+}
+
+function normalizeUploadedAttachments(
+  mailboxId: string,
+  rawAttachments: unknown,
+): AgentMailboxAttachmentMetadata[] {
+  if (!Array.isArray(rawAttachments)) return [];
+  const allowedPrefix = `mailbox/${mailboxId}/uploads/`;
+  const normalized: AgentMailboxAttachmentMetadata[] = [];
+  for (const attachment of rawAttachments) {
+    if (!isPlainObject(attachment)) continue;
+    const storageKey = normalizeNullableText(attachment.storageKey);
+    if (!storageKey?.startsWith(allowedPrefix)) continue;
+    normalized.push({
+      filename: normalizeNullableText(attachment.filename) || null,
+      mimeType: normalizeNullableText(attachment.mimeType) || null,
+      disposition: "attachment",
+      size:
+        typeof attachment.size === "number" && Number.isFinite(attachment.size)
+          ? attachment.size
+          : null,
+      storageKey,
+      sourceMessageId: null,
+    });
+  }
+  return normalized;
+}
+
+function mergeAttachmentMetadata(
+  attachments: AgentMailboxAttachmentMetadata[],
+): AgentMailboxAttachmentMetadata[] {
+  const seen = new Set<string>();
+  const merged: AgentMailboxAttachmentMetadata[] = [];
+  for (const attachment of attachments) {
+    const storageKey = attachment.storageKey?.trim();
+    if (!storageKey || seen.has(storageKey)) continue;
+    merged.push(attachment);
+    seen.add(storageKey);
+  }
+  return merged;
 }
 
 function getMailboxAttachmentMetadata(row: DbMailboxMessageRow): AgentMailboxAttachmentMetadata[] {

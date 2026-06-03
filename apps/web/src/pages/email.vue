@@ -35,6 +35,11 @@ type MailboxAttachment = {
   disposition?: "attachment" | "inline" | null;
   size?: number | null;
   storageKey?: string | null;
+  sourceMessageId?: string | null;
+};
+
+type MailboxAttachmentUploadResponse = {
+  attachments: MailboxAttachment[];
 };
 
 type InboxMessage = {
@@ -199,6 +204,8 @@ const composeDraftId = ref<string | null>(null);
 const composeReplyToMessageId = ref<string | null>(null);
 const composePreservedAttachmentKeys = ref<string[]>([]);
 const composePreservedAttachments = ref<MailboxAttachment[]>([]);
+const composeUploadedAttachments = ref<MailboxAttachment[]>([]);
+const composeUploadingAttachments = ref(false);
 const composeToFocused = ref(false);
 const composeToHasTyped = ref(false);
 const composeToActiveIndex = ref(0);
@@ -684,6 +691,11 @@ function getForwardableAttachments(message: InboxMessage): MailboxAttachment[] {
     Boolean(attachment.storageKey),
   );
 }
+
+const composeVisibleAttachments = computed(() => [
+  ...composePreservedAttachments.value,
+  ...composeUploadedAttachments.value,
+]);
 
 function clearSelectedMessages() {
   selectedMessageIds.value = new Set();
@@ -1198,6 +1210,8 @@ function openComposeModal(
   composeReplyToMessageId.value = null;
   composePreservedAttachmentKeys.value = [];
   composePreservedAttachments.value = [];
+  composeUploadedAttachments.value = [];
+  composeUploadingAttachments.value = false;
   composeToFocused.value = false;
   composeToHasTyped.value = false;
   composeToActiveIndex.value = 0;
@@ -1215,6 +1229,11 @@ function openComposeModal(
     if (message.status === "pending_approval") {
       composeMode.value = "edit";
       composeDraftId.value = message.id;
+      const existingAttachments = getForwardableAttachments(message);
+      composePreservedAttachments.value = existingAttachments;
+      composePreservedAttachmentKeys.value = existingAttachments
+        .map((attachment) => attachment.storageKey?.trim() || "")
+        .filter(Boolean);
       composeForm.value = {
         fromAddress: message.fromAddress || defaultFromAddress,
         to: message.toAddress || "",
@@ -1370,6 +1389,7 @@ async function saveDraft(sendNow = false) {
       source: "user",
       replyToMessageId: composeReplyToMessageId.value || undefined,
       preservedAttachmentKeys: composePreservedAttachmentKeys.value,
+      uploadedAttachments: composeUploadedAttachments.value,
     };
     const response =
       composeMode.value === "edit" && composeDraftId.value
@@ -1405,6 +1425,41 @@ async function saveDraft(sendNow = false) {
   } finally {
     composeSending.value = false;
   }
+}
+
+async function uploadComposeAttachments(event: Event) {
+  const input = event.target as HTMLInputElement | null;
+  const files = Array.from(input?.files || []);
+  if (input) input.value = "";
+  if (files.length === 0 || composeUploadingAttachments.value) return;
+
+  composeUploadingAttachments.value = true;
+  composeError.value = "";
+  try {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append("attachments", file);
+    }
+    const response = await api.upload<MailboxAttachmentUploadResponse>(
+      "/mailbox/attachments",
+      formData,
+    );
+    composeUploadedAttachments.value = [
+      ...composeUploadedAttachments.value,
+      ...(response.attachments || []),
+    ];
+  } catch (err) {
+    composeError.value =
+      err instanceof Error ? err.message : "Failed to upload attachment";
+  } finally {
+    composeUploadingAttachments.value = false;
+  }
+}
+
+function removeUploadedAttachment(index: number) {
+  composeUploadedAttachments.value = composeUploadedAttachments.value.filter(
+    (_, currentIndex) => currentIndex !== index,
+  );
 }
 
 function getComposeTitle(): string {
@@ -2577,18 +2632,35 @@ onBeforeUnmount(() => {
           <span>Message</span>
           <textarea v-model="composeForm.textBody" rows="10" required />
         </label>
-        <div
-          v-if="composePreservedAttachments.length > 0"
-          class="compose-attachments"
-        >
-          <p>
-            Forwarding {{ composePreservedAttachments.length }}
-            {{
-              composePreservedAttachments.length === 1
-                ? "attachment"
-                : "attachments"
-            }}
-          </p>
+        <div class="compose-attachments">
+          <div class="compose-attachments__head">
+            <p>
+              {{
+                composeVisibleAttachments.length > 0
+                  ? `${composeVisibleAttachments.length} ${
+                      composeVisibleAttachments.length === 1
+                        ? "attachment"
+                        : "attachments"
+                    }`
+                  : "Attachments"
+              }}
+            </p>
+            <label
+              class="compose-attachment-upload"
+              :class="{ 'is-disabled': composeUploadingAttachments }"
+            >
+              <UiIcon name="Paperclip" :size="14" aria-hidden="true" />
+              <span>{{
+                composeUploadingAttachments ? "Uploading..." : "Attach"
+              }}</span>
+              <input
+                type="file"
+                multiple
+                :disabled="composeUploadingAttachments"
+                @change="uploadComposeAttachments"
+              />
+            </label>
+          </div>
           <div class="compose-attachment-list">
             <span
               v-for="(attachment, index) in composePreservedAttachments"
@@ -2600,6 +2672,32 @@ onBeforeUnmount(() => {
               <small v-if="formatAttachmentSize(attachment.size)">
                 {{ formatAttachmentSize(attachment.size) }}
               </small>
+            </span>
+            <span
+              v-for="(attachment, index) in composeUploadedAttachments"
+              :key="`${attachment.storageKey || index}`"
+              class="compose-attachment-chip"
+            >
+              <UiIcon name="Paperclip" :size="14" aria-hidden="true" />
+              <span>
+                {{
+                  formatAttachmentName(
+                    attachment,
+                    index + composePreservedAttachments.length,
+                  )
+                }}
+              </span>
+              <small v-if="formatAttachmentSize(attachment.size)">
+                {{ formatAttachmentSize(attachment.size) }}
+              </small>
+              <button
+                type="button"
+                class="compose-attachment-remove"
+                :aria-label="`Remove ${formatAttachmentName(attachment, index)}`"
+                @click="removeUploadedAttachment(index)"
+              >
+                <UiIcon name="X" :size="13" aria-hidden="true" />
+              </button>
             </span>
           </div>
         </div>
@@ -4414,11 +4512,52 @@ onBeforeUnmount(() => {
   background: var(--color-bg-subtle);
 }
 
+.compose-attachments__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .compose-attachments p {
   margin: 0;
   color: var(--color-text-muted);
   font-size: 12px;
   font-weight: 700;
+}
+
+.compose-attachment-upload {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.compose-attachment-upload:hover {
+  border-color: var(--color-text);
+}
+
+.compose-attachment-upload.is-disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.compose-attachment-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .compose-attachment-list {
@@ -4453,6 +4592,25 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   color: var(--color-text-muted);
   font-size: 11px;
+}
+
+.compose-attachment-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: -3px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.compose-attachment-remove:hover {
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
 }
 
 .compose-field input:focus,
