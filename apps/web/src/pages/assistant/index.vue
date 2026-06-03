@@ -928,10 +928,15 @@ async function setRouteThreadId(threadId: string) {
   });
 }
 
-async function startNewAssistantChat(projectId: string | null = null) {
+async function startNewAssistantChat(
+  projectId: string | null = null,
+  options: { closeHistory?: boolean } = {},
+) {
   assistantThreadId.value = null;
   assistantError.value = null;
-  assistantHistoryDrawerOpen.value = false;
+  if (options.closeHistory !== false) {
+    assistantHistoryDrawerOpen.value = false;
+  }
   agentChat.resetMessages();
   await router.replace({
     query: {
@@ -946,10 +951,8 @@ async function startNewAssistantChat(projectId: string | null = null) {
 
 async function selectAssistantThread(threadId: string) {
   if (!threadId || assistantThreadId.value === threadId) {
-    assistantHistoryDrawerOpen.value = false;
     return;
   }
-  assistantHistoryDrawerOpen.value = false;
   await setRouteThreadId(threadId);
 }
 
@@ -979,7 +982,7 @@ async function archiveAssistantThread(thread: AssistantThread) {
     );
     assistantThreads.value = assistantThreads.value.filter((item) => item.id !== thread.id);
     if (assistantThreadId.value === thread.id && nextStatus === "archived") {
-      await startNewAssistantChat(null);
+      await startNewAssistantChat(null, { closeHistory: false });
     }
     if (nextStatus === "active") {
       upsertAssistantThread(response.thread);
@@ -1008,7 +1011,7 @@ async function deleteAssistantThread(thread: AssistantThread) {
     await api.delete(`/assistant/threads/${encodeURIComponent(thread.id)}`);
     assistantThreads.value = assistantThreads.value.filter((item) => item.id !== thread.id);
     if (assistantThreadId.value === thread.id) {
-      await startNewAssistantChat(null);
+      await startNewAssistantChat(null, { closeHistory: false });
     }
     return true;
   } catch (err) {
