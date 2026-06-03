@@ -539,6 +539,9 @@ app.use(
 
 app.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname;
+  if (pathname.startsWith("/api/auth/") && await isPublicSiteHost(c.env, c.req.url)) {
+    return c.json({ error: "Not found" }, 404);
+  }
   if (!pathname.startsWith("/api/") && await isPublicSiteHost(c.env, c.req.url)) {
     return servePublicSiteRequest(c.env, c.req.raw);
   }
@@ -6190,6 +6193,9 @@ async function isPublicSiteHost(env: Env, requestUrl: string): Promise<boolean> 
   const siteHost = getSiteHost(env);
   if (siteHost && requestHost === siteHost) return true;
 
+  const inferredRootPublicHost = getInferredRootPublicSiteHost(env);
+  if (inferredRootPublicHost && requestHost === inferredRootPublicHost) return true;
+
   const site = await env.DB.prepare(
     `SELECT custom_domain FROM sites
      WHERE lower(custom_domain) = ?
@@ -6203,6 +6209,14 @@ async function isPublicSiteHost(env: Env, requestUrl: string): Promise<boolean> 
   const inferredAdminHost = getAdminHost(env, undefined, site.custom_domain);
   const inferredApiHost = getApiHost(env);
   return requestHost !== inferredAdminHost && requestHost !== inferredApiHost;
+}
+
+function getInferredRootPublicSiteHost(env: Env): string {
+  const adminHost =
+    normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN);
+  if (!adminHost.startsWith("me3.")) return "";
+  const rootHost = adminHost.slice("me3.".length);
+  return isValidPublicSiteDomain(rootHost) ? rootHost : "";
 }
 
 function getCoreDomainState(

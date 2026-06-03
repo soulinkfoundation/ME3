@@ -2407,6 +2407,55 @@ describe("ME3 Core Worker auth", () => {
     expect(body.intents.chat).toBe("http://localhost:8787/api/assistant/chat");
   });
 
+  it("serves a public-site 404 on the root domain inferred from the admin host", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    env.ME3_SITE_USERNAME = "owner";
+    env.CORE_WEB_ORIGIN = "https://me3.kieranbutler.com";
+
+    const response = await app.fetch(
+      new Request("https://kieranbutler.com/somenonexistentpage"),
+      env,
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(404);
+    expect(html).toContain("Page not found");
+    expect(html).toContain("Return home");
+    expect(html).not.toContain("Sign in");
+    expect(html).not.toContain("ThemeToggle");
+  });
+
+  it("does not expose the login page on the public root domain", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    env.ME3_SITE_USERNAME = "owner";
+    env.CORE_WEB_ORIGIN = "https://me3.kieranbutler.com";
+
+    const response = await app.fetch(new Request("https://kieranbutler.com/login"), env);
+    const html = await response.text();
+
+    expect(response.status).toBe(404);
+    expect(html).toContain("Page not found");
+    expect(html).not.toContain("Sign in with ME3.app");
+  });
+
+  it("blocks owner auth endpoints on the public root domain", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    env.ME3_SITE_USERNAME = "owner";
+    env.CORE_WEB_ORIGIN = "https://me3.kieranbutler.com";
+
+    const response = await app.fetch(
+      new Request("https://kieranbutler.com/api/auth/login", { method: "POST" }),
+      env,
+    );
+    const body = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(404);
+    expect(body.error).toBe("Not found");
+  });
+
   it("bootstraps the owner and sets an httpOnly session cookie", async () => {
     const env = createEnv();
 
