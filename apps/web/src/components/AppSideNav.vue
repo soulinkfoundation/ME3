@@ -19,9 +19,7 @@ const sitesPath = computed(() =>
     ? `/sites/${profileSite.value.username}`
     : "/create",
 );
-const isMobileViewport = ref(false);
-const mobileNavOpen = ref(false);
-const mobileMediaQuery = "(max-width: 959px)";
+const navDrawerOpen = ref(false);
 const navDrawerId = "app-side-nav-drawer";
 const missionControlInstalled = ref(false);
 const journalInstalled = ref(false);
@@ -29,23 +27,17 @@ const calendarInstalled = ref(false);
 const socialPublishingInstalled = ref(false);
 const pluginChangedEvent = "me3:plugins-changed";
 
-let mobileViewportQuery: MediaQueryList | null = null;
-
-function syncMobileViewport(event?: MediaQueryList | MediaQueryListEvent) {
-  isMobileViewport.value = event?.matches ?? false;
+function closeNavDrawer() {
+  navDrawerOpen.value = false;
 }
 
-function closeMobileNav() {
-  mobileNavOpen.value = false;
-}
-
-function toggleMobileNav() {
-  mobileNavOpen.value = !mobileNavOpen.value;
+function toggleNavDrawer() {
+  navDrawerOpen.value = !navDrawerOpen.value;
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
-    closeMobileNav();
+    closeNavDrawer();
   }
 }
 
@@ -54,15 +46,11 @@ onMounted(async () => {
     await sites.fetchSites();
   }
   void loadInstalledPluginNav();
-  mobileViewportQuery = window.matchMedia(mobileMediaQuery);
-  syncMobileViewport(mobileViewportQuery);
-  mobileViewportQuery.addEventListener("change", syncMobileViewport);
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener(pluginChangedEvent, loadInstalledPluginNav);
 });
 
 onBeforeUnmount(() => {
-  mobileViewportQuery?.removeEventListener("change", syncMobileViewport);
   window.removeEventListener("keydown", handleWindowKeydown);
   window.removeEventListener(pluginChangedEvent, loadInstalledPluginNav);
   document.body.style.overflow = "";
@@ -84,11 +72,8 @@ const isAccount = computed(() => {
   const p = route.path;
   return p === "/account" || p === "/account/" || p.startsWith("/account/");
 });
-const mobileMenuLabel = computed(() =>
-  mobileNavOpen.value ? "Close navigation" : "Open navigation",
-);
-const showMobileDrawer = computed(
-  () => isMobileViewport.value && mobileNavOpen.value,
+const navMenuLabel = computed(() =>
+  navDrawerOpen.value ? "Close navigation" : "Open navigation",
 );
 
 function rowActive(
@@ -164,18 +149,12 @@ async function loadInstalledPluginNav() {
 watch(
   () => route.fullPath,
   () => {
-    closeMobileNav();
+    closeNavDrawer();
   },
 );
 
-watch(isMobileViewport, (isMobile) => {
-  if (!isMobile) {
-    closeMobileNav();
-  }
-});
-
-watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
-  document.body.style.overflow = isOpen && isMobile ? "hidden" : "";
+watch(navDrawerOpen, (isOpen) => {
+  document.body.style.overflow = isOpen ? "hidden" : "";
 });
 </script>
 
@@ -185,34 +164,33 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
       <button
         type="button"
         class="app-side-nav-mobile-bar__button"
-        :aria-label="mobileMenuLabel"
+        :aria-label="navMenuLabel"
         :aria-controls="navDrawerId"
-        :aria-expanded="showMobileDrawer ? 'true' : 'false'"
-        @click="toggleMobileNav"
+        :aria-expanded="navDrawerOpen ? 'true' : 'false'"
+        @click="toggleNavDrawer"
       >
         <UiIcon
-          :name="showMobileDrawer ? 'X' : 'Menu'"
+          :name="navDrawerOpen ? 'X' : 'Menu'"
           :size="22"
           aria-hidden="true"
         />
       </button>
-
     </header>
 
     <button
-      v-if="showMobileDrawer"
+      v-if="navDrawerOpen"
       type="button"
       class="app-side-nav__backdrop"
       aria-label="Close navigation"
-      @click="closeMobileNav"
+      @click="closeNavDrawer"
     />
 
     <aside
       :id="navDrawerId"
       class="app-side-nav"
-      :class="{ 'app-side-nav--mobile-open': showMobileDrawer }"
-      :aria-hidden="isMobileViewport && !showMobileDrawer ? 'true' : undefined"
-      :inert="isMobileViewport && !showMobileDrawer"
+      :class="{ 'app-side-nav--open': navDrawerOpen }"
+      :aria-hidden="!navDrawerOpen ? 'true' : undefined"
+      :inert="!navDrawerOpen"
       aria-label="App navigation"
     >
       <RouterLink
@@ -225,12 +203,24 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
         "
         class="app-side-nav__logo"
         aria-label="ME3"
-        @click="closeMobileNav"
+        @click="closeNavDrawer"
       >
         <BrandLogo class="app-side-nav__logo-img" />
       </RouterLink>
 
       <nav class="app-side-nav__links" aria-label="Primary">
+        <RouterLink
+          to="/assistant"
+          class="app-side-nav__row"
+          :class="{ 'app-side-nav__row--active': rowActive('assistant') }"
+          aria-label="Assistant"
+          title="Assistant"
+          @click="closeNavDrawer"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">🤖</span>
+          <span class="sr-only">Assistant</span>
+        </RouterLink>
+
         <RouterLink
           v-if="missionControlInstalled"
           to="/mission-control"
@@ -238,7 +228,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           :class="{ 'app-side-nav__row--active': rowActive('mission-control') }"
           aria-label="Mission Control"
           title="Mission Control"
-          @click="closeMobileNav"
+          @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">🚀</span>
           <span class="sr-only">Mission Control</span>
@@ -251,7 +241,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           :class="{ 'app-side-nav__row--active': rowActive('calendar') }"
           aria-label="Calendar"
           title="Calendar"
-          @click="closeMobileNav"
+          @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">🗓️</span>
           <span class="sr-only">Calendar</span>
@@ -264,9 +254,9 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           :class="{ 'app-side-nav__row--active': rowActive('journal') }"
           aria-label="Journal"
           title="Journal"
-          @click="closeMobileNav"
+          @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">📝</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">✍️</span>
           <span class="sr-only">Journal</span>
         </RouterLink>
 
@@ -276,7 +266,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           :class="{ 'app-side-nav__row--active': rowActive('email') }"
           aria-label="Email"
           title="Email"
-          @click="closeMobileNav"
+          @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">📧</span>
           <span class="sr-only">Email</span>
@@ -288,22 +278,10 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           :class="{ 'app-side-nav__row--active': rowActive('sites') }"
           aria-label="Site builder"
           title="Site builder"
-          @click="closeMobileNav"
+          @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">🌐</span>
           <span class="sr-only">Site builder</span>
-        </RouterLink>
-
-        <RouterLink
-          to="/assistant"
-          class="app-side-nav__row"
-          :class="{ 'app-side-nav__row--active': rowActive('assistant') }"
-          aria-label="Assistant"
-          title="Assistant"
-          @click="closeMobileNav"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">🤖</span>
-          <span class="sr-only">Assistant</span>
         </RouterLink>
 
         <RouterLink
@@ -313,7 +291,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           :class="{ 'app-side-nav__row--active': rowActive('social') }"
           aria-label="Social publishing"
           title="Social publishing"
-          @click="closeMobileNav"
+          @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">📣</span>
           <span class="sr-only">Social publishing</span>
@@ -325,7 +303,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
           :class="{ 'app-side-nav__row--active': rowActive('account') }"
           aria-label="Settings"
           title="Settings"
-          @click="closeMobileNav"
+          @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">⚙️</span>
           <span class="sr-only">Settings</span>
@@ -341,41 +319,89 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
   z-index: 50;
 }
 
+.app-side-nav-mobile-bar {
+  position: absolute;
+  inset: 12px auto auto 8px;
+  z-index: 70;
+  display: block;
+  width: 48px;
+  height: 44px;
+  padding: 0;
+  pointer-events: none;
+}
+
+.app-side-nav-mobile-bar__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.app-side-nav-mobile-bar__button:hover,
+.app-side-nav-mobile-bar__button:focus-visible {
+  background: var(--color-bg-subtle);
+  color: var(--color-accent);
+}
+
+.app-side-nav-mobile-bar__button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.app-side-nav__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: block;
+  border: none;
+  background: color-mix(in oklab, var(--color-text), transparent 68%);
+  cursor: pointer;
+}
+
 .app-side-nav {
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 50;
+  z-index: 60;
   display: flex;
   flex-direction: column;
   width: 64px;
-  height: 100vh;
+  height: 100dvh;
   box-sizing: border-box;
-  padding: 20px 0;
+  padding: 72px 0 20px;
   border-right: 1px solid var(--color-border);
   background: var(--color-bg);
   overflow: hidden;
+  transform: translateX(-100%);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    transform 0.18s ease,
+    visibility 0s linear 0.18s;
+  box-shadow: var(--shadow-soft);
 }
 
-.app-side-nav-mobile-bar,
-.app-side-nav__backdrop {
-  display: none;
+.app-side-nav--open {
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    transform 0.18s ease,
+    visibility 0s linear 0s;
 }
 
 .app-side-nav__logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-bottom: 20px;
-  text-decoration: none;
-}
-
-.app-side-nav__logo-img {
-  display: block;
-  height: 18px;
-  width: auto;
-  max-width: 100%;
+  display: none;
 }
 
 .app-side-nav__links {
@@ -384,7 +410,7 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
   gap: 2px;
   flex: 1;
   min-height: 0;
-  padding: 0 8px;
+  padding: 4px 8px 0;
 }
 
 .app-side-nav__row {
@@ -445,90 +471,5 @@ watch([showMobileDrawer, isMobileViewport], ([isOpen, isMobile]) => {
   font-family:
     "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
   transition: color 0.15s ease;
-}
-
-@media (max-width: 959px) {
-  .app-side-nav-mobile-bar {
-    position: absolute;
-    inset: 12px auto auto 8px;
-    z-index: 70;
-    display: block;
-    width: 48px;
-    height: 44px;
-    padding: 0;
-    pointer-events: none;
-  }
-
-  .app-side-nav-mobile-bar__button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .app-side-nav-mobile-bar__button {
-    width: 44px;
-    height: 44px;
-    border: none;
-    border-radius: 12px;
-    background: transparent;
-    color: var(--color-text);
-    cursor: pointer;
-    pointer-events: auto;
-    transition:
-      background 0.15s ease,
-      color 0.15s ease;
-  }
-
-  .app-side-nav-mobile-bar__button:hover,
-  .app-side-nav-mobile-bar__button:focus-visible {
-    background: var(--color-bg-subtle);
-    color: var(--color-accent);
-  }
-
-  .app-side-nav-mobile-bar__button:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
-  }
-
-  .app-side-nav__backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 55;
-    display: block;
-    border: none;
-    background: color-mix(in oklab, var(--color-text), transparent 68%);
-    cursor: pointer;
-  }
-
-  .app-side-nav {
-    top: 0;
-    z-index: 60;
-    height: 100dvh;
-    padding-top: 72px;
-    transform: translateX(-100%);
-    visibility: hidden;
-    pointer-events: none;
-    transition:
-      transform 0.18s ease,
-      visibility 0s linear 0.18s;
-    box-shadow: var(--shadow-soft);
-  }
-
-  .app-side-nav--mobile-open {
-    transform: translateX(0);
-    visibility: visible;
-    pointer-events: auto;
-    transition:
-      transform 0.18s ease,
-      visibility 0s linear 0s;
-  }
-
-  .app-side-nav__logo {
-    display: none;
-  }
-
-  .app-side-nav__links {
-    padding-top: 4px;
-  }
 }
 </style>

@@ -3264,7 +3264,6 @@ onBeforeUnmount(() => {
   align-items: center;
   min-width: 0;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
 }
 
@@ -3432,7 +3431,6 @@ onBeforeUnmount(() => {
   gap: 12px;
   min-height: 68px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--color-border);
 }
 
 .conversation-list__head h2,
@@ -4737,7 +4735,6 @@ onBeforeUnmount(() => {
     max-height: none;
     box-sizing: border-box;
     padding: 10px 12px;
-    border-bottom: 1px solid var(--color-border);
     background: var(--color-bg-subtle);
     overflow-x: auto;
     overflow-y: hidden;

@@ -436,7 +436,6 @@ onMounted(() => {
   grid-template-columns: 1fr minmax(0, auto) 1fr;
   align-items: center;
   padding: 16px 24px;
-  border-bottom: 1px solid var(--color-border);
 }
 
 .header-center {

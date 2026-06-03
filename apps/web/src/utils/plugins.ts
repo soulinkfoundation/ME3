@@ -82,7 +82,7 @@ const pluginDisplayRank = new Map(
 
 const pluginNavEmojis: Record<string, string> = {
   "me3.mission-control": "🚀",
-  "me3.journal": "📝",
+  "me3.journal": "✍️",
   "me3.calendar": "🗓️",
   "me3.agent-chat": "🤖",
   "me3.social-publishing": "📣",

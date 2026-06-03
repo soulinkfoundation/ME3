@@ -2914,6 +2914,23 @@ h1 {
 }
 
 .account-mobile-nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+}
+
+.account-mobile-nav__actions {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+}
+
+.account-header {
   display: none;
 }
 
@@ -3921,29 +3938,6 @@ h1 {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-@media (max-width: 959px) {
-  .account-header {
-    display: none;
-  }
-
-  .account-mobile-nav {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    min-width: 0;
-    min-height: 36px;
-  }
-
-  .account-mobile-nav__actions {
-    position: absolute;
-    top: 50%;
-    right: 0;
-    transform: translateY(-50%);
-  }
 }
 
 @media (max-width: 720px) {

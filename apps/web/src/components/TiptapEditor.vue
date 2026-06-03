@@ -20,10 +20,17 @@ import TiptapImageNode from "./TiptapImageNode.vue";
 import TiptapFaqNode from "./TiptapFaqNode.vue";
 import TiptapCarouselNode from "./TiptapCarouselNode.vue";
 
-const props = defineProps<{
-  modelValue: string;
-  placeholder?: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    modelValue: string;
+    placeholder?: string;
+    /** Full-bleed toolbar and borderless content for narrow writing surfaces (e.g. journal). */
+    variant?: "default" | "workspace";
+  }>(),
+  {
+    variant: "default",
+  },
+);
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
@@ -1014,7 +1021,10 @@ defineExpose({
 </script>
 
 <template>
-  <div class="tiptap-editor">
+  <div
+    class="tiptap-editor"
+    :class="{ 'tiptap-editor--workspace': variant === 'workspace' }"
+  >
     <!-- Toolbar -->
     <div class="editor-toolbar">
       <button
@@ -1526,41 +1536,27 @@ defineExpose({
   background: var(--color-primary-hover, #0056b3);
 }
 
-.tiptap-editor :deep(.tiptap-editor) {
-  gap: 10px;
+.tiptap-editor--workspace {
+  gap: 4px;
 }
 
-.tiptap-editor :deep(.editor-toolbar) {
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  padding: 6px 10px;
-  gap: 6px;
+.tiptap-editor--workspace .editor-toolbar {
+  box-sizing: border-box;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  border: none;
+  border-radius: 0;
+  background: var(--ui-bg, var(--color-bg, #ffffff));
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 4px;
 }
 
-.tiptap-editor :deep(.toolbar-btn) {
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-}
-
-.tiptap-editor :deep(.toolbar-divider) {
-  background: var(--color-border);
-}
-
-.tiptap-editor :deep(.toolbar-meta) {
-  font-size: 11px;
-}
-
-.tiptap-editor :deep(.editor-content-wrapper) {
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
-  padding: 18px;
-  min-height: 320px;
-  background: transparent;
-}
-
-.tiptap-editor :deep(.editor-content-wrapper .ProseMirror) {
-  font-size: 15px;
-  line-height: 1.6;
+.tiptap-editor--workspace .editor-content-wrapper {
+  border: none;
+  border-radius: 0;
+  padding-left: 0;
+  padding-right: 0;
 }
 </style>

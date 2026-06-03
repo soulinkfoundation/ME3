@@ -2536,19 +2536,52 @@ onBeforeUnmount(() => {
 }
 
 .cal-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  display: none;
+}
+
+.cal-mobile-nav-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 36px 36px;
   align-items: center;
-  gap: 16px;
-  min-height: 64px;
+  gap: 6px;
+  width: 100%;
   min-width: 0;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--ui-border);
-  background: color-mix(in oklab, var(--ui-bg), transparent 4%);
-  backdrop-filter: blur(16px);
+}
+
+.cal-period-switcher--mobile {
+  grid-template-columns: 32px auto 32px;
+  justify-self: start;
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.cal-period-switcher--mobile .cal-arrow {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+}
+
+.cal-period-switcher--mobile .cal-period-title {
+  min-height: 32px;
+  max-width: min(220px, calc(100vw - 180px));
+  padding-inline: 6px;
+  font-size: 14px;
+}
+
+.cal-create-menu--mobile-nav {
+  position: fixed;
+  top: 62px;
+  right: 14px;
+  left: auto;
+  width: min(220px, calc(100vw - 28px));
+}
+
+:global(#app-side-nav-mobile-page-controls:has(.cal-mobile-nav-controls)) {
+  min-height: 64px;
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
 .cal-toolbar-left {
@@ -3039,66 +3072,17 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 959px) {
-  :global(#app-side-nav-mobile-page-controls:has(.cal-mobile-nav-controls)) {
-    min-height: 64px;
-    padding-top: 10px;
-    padding-bottom: 10px;
-  }
+.cal-mobile-create-wrap {
+  position: relative;
+}
 
+@media (max-width: 959px) {
   .ops-page {
     padding: 0;
   }
 
   .main {
     padding: 0;
-  }
-
-  .cal-toolbar {
-    display: none;
-  }
-
-  .cal-mobile-nav-controls {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 36px 36px;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .cal-period-switcher--mobile {
-    grid-template-columns: 32px auto 32px;
-    justify-self: start;
-    width: max-content;
-    max-width: 100%;
-    min-width: 0;
-  }
-
-  .cal-period-switcher--mobile .cal-arrow {
-    width: 32px;
-    height: 32px;
-    border: 0;
-    background: transparent;
-  }
-
-  .cal-period-switcher--mobile .cal-period-title {
-    min-height: 32px;
-    max-width: min(220px, calc(100vw - 180px));
-    padding-inline: 6px;
-    font-size: 14px;
-  }
-
-  .cal-mobile-create-wrap {
-    position: relative;
-  }
-
-  .cal-create-menu--mobile-nav {
-    position: fixed;
-    top: 62px;
-    right: 14px;
-    left: auto;
-    width: min(220px, calc(100vw - 28px));
   }
 
   .cal-sidebar {

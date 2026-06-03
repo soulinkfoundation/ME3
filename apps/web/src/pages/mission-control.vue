@@ -441,7 +441,7 @@ const mobilePrimarySectionCycleLabel = computed(() =>
   activeSection.value === "accounts" ? "Switch to projects" : "Switch to accounts",
 );
 const mobilePrimarySectionIcon = computed<UiIconName>(() =>
-  activeSection.value === "accounts" ? "LayoutGrid" : "BadgeDollarSign",
+  activeSection.value === "accounts" ? "LayoutGrid" : "CircleDollarSign",
 );
 const projectCreateDisabled = computed(
   () =>
@@ -3171,7 +3171,6 @@ onBeforeUnmount(() => {
   min-height: 64px;
   min-width: 0;
   padding: 12px 0;
-  border-bottom: 1px solid var(--ui-border);
   background: color-mix(in oklab, var(--ui-bg), transparent 4%);
   backdrop-filter: blur(16px);
 }

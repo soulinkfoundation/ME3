@@ -7,6 +7,9 @@ import AgentChatLauncher from "./components/AgentChatLauncher.vue";
 import AppSideNav from "./components/AppSideNav.vue";
 import { useAuthStore } from "./stores/auth";
 
+/** Set true to show the floating agent chat launcher on supported pages. */
+const AGENT_LAUNCHER_UI_ENABLED = false;
+
 const route = useRoute();
 const auth = useAuthStore();
 const agentChatInstalled = ref(false);
@@ -21,6 +24,7 @@ const showAppShell = computed(
 
 const showAgentLauncher = computed(
   () =>
+    AGENT_LAUNCHER_UI_ENABLED &&
     auth.isAuthenticated &&
     agentChatInstalled.value &&
     route.meta.hideAppShell !== true &&
@@ -102,36 +106,21 @@ watch(
 .app-root--shelled .app-root__view {
   min-height: 100vh;
   min-height: 100dvh;
-  padding-left: 64px;
   box-sizing: border-box;
 }
 
-@media (max-width: 959px) {
-  .app-root--shelled .app-root__view {
-    padding-top: 0;
-    padding-left: 0;
-  }
-
-  .app-root__mobile-page-controls {
-    display: flex;
-    align-items: center;
-    justify-content: stretch;
-    min-width: 0;
-    min-height: var(--app-shell-mobile-nav-height);
-    padding: 12px 8px 12px 56px;
-    border-bottom: 1px solid var(--color-border);
-    background: var(--color-bg);
-    box-sizing: border-box;
-  }
-
-  .app-root__mobile-page-controls:empty {
-    display: none;
-  }
+.app-root__mobile-page-controls {
+  display: flex;
+  align-items: center;
+  justify-content: stretch;
+  min-width: 0;
+  min-height: var(--app-shell-mobile-nav-height);
+  padding: 12px 8px 12px 56px;
+  background: var(--color-bg);
+  box-sizing: border-box;
 }
 
-@media (min-width: 960px) {
-  .app-root__mobile-page-controls {
-    display: none;
-  }
+.app-root__mobile-page-controls:empty {
+  display: none;
 }
 </style>

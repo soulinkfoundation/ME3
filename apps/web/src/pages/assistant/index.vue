@@ -2263,7 +2263,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
         >
           <UiIcon name="MessagesSquare" :size="18" aria-hidden="true" />
         </button>
-        <p class="assistant-mobile-nav__title">Assistant</p>
         <button
           type="button"
           class="assistant-mobile-nav__button"
@@ -3401,32 +3400,47 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 <style scoped>
 .assistant-page {
-  display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: 24px;
+  display: block;
   min-height: 100vh;
-  padding: 0 24px 0 0;
+  padding: 0 14px 18px;
   background: var(--ui-bg);
   color: var(--ui-text);
 }
 
 .assistant-page--history-collapsed {
-  grid-template-columns: 64px minmax(0, 1fr);
+  display: block;
 }
 
 .assistant-history {
-  position: sticky;
-  top: 0;
-  align-self: start;
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 70;
   display: flex;
   flex-direction: column;
+  width: min(300px, calc(100vw - 56px));
+  max-width: calc(100vw - 56px);
   min-width: 0;
-  height: 100vh;
-  max-height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   border-right: 1px solid var(--ui-border);
   padding: 14px 10px;
   background: var(--ui-surface-muted);
   overflow: hidden;
+  transform: translateX(-102%);
+  transition: transform 0.18s ease;
+  box-shadow: var(--ui-shadow-md);
+}
+
+.assistant-history--open {
+  transform: translateX(0);
+}
+
+.assistant-history--collapsed {
+  width: min(300px, calc(100vw - 56px));
+}
+
+.assistant-history--collapsed .assistant-history__body {
+  display: flex;
 }
 
 .assistant-history__header {
@@ -3488,8 +3502,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
   cursor: pointer;
 }
 
-.assistant-history__close {
+.assistant-history__collapse {
   display: none;
+}
+
+.assistant-history__close {
+  display: inline-flex;
 }
 
 .assistant-history__body {
@@ -3586,7 +3604,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history-backdrop {
-  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  border: 0;
+  background: color-mix(in oklab, var(--ui-bg) 42%, transparent);
 }
 
 .assistant-main {
@@ -3596,36 +3618,31 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-height: 0;
   width: min(820px, 100%);
   margin: 0 auto;
-  padding: 0 0 24px;
+  padding: 0;
 }
 
 .assistant-topbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  width: 100%;
-  min-height: 64px;
-  min-width: 0;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--ui-border);
-  background: color-mix(in oklab, var(--ui-bg), transparent 4%);
-  backdrop-filter: blur(16px);
-}
-
-.assistant-mobile-nav {
   display: none;
 }
 
-.assistant-mobile-nav__title {
-  margin: 0;
-  color: var(--ui-text);
-  font-size: 15px;
-  font-weight: 800;
-  line-height: 1.2;
-  text-align: center;
+.assistant-mobile-nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+}
+
+:global(#app-side-nav-mobile-page-controls:has(.assistant-mobile-nav)) {
+  --app-shell-mobile-nav-height: 56px;
+  min-height: var(--app-shell-mobile-nav-height);
+  height: var(--app-shell-mobile-nav-height);
+  padding: 12px 8px 0 56px;
+  align-items: center;
 }
 
 .assistant-mobile-nav__actions {
@@ -3703,11 +3720,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-console {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: block;
   flex: 1;
-  height: calc(100vh - 96px);
-  min-height: 520px;
+  height: auto;
+  min-height: 0;
 }
 
 .assistant-timeline {
@@ -3715,7 +3731,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  padding: 28px 0 18px;
+  padding: 28px 0 146px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -3896,9 +3912,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-composer {
+  position: fixed;
+  right: auto;
+  bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  z-index: 40;
   display: grid;
   gap: 8px;
-  width: 100%;
+  width: min(600px, calc(100vw - 28px));
   max-width: 600px;
   margin-inline: auto;
   border: 1px solid var(--ui-border);
@@ -3906,6 +3927,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   padding: 10px;
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.08));
+  transform: translateX(-50%);
 }
 
 .assistant-composer__bottom,
@@ -4800,125 +4822,6 @@ button:disabled {
   gap: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--ui-border);
-}
-
-@media (max-width: 959px) {
-  .assistant-page {
-    display: block;
-    padding: 0 14px 18px;
-  }
-
-  .assistant-history {
-    position: fixed;
-    inset: 0 auto 0 0;
-    z-index: 70;
-    width: min(300px, calc(100vw - 56px));
-    max-width: calc(100vw - 56px);
-    height: 100dvh;
-    max-height: 100dvh;
-    transform: translateX(-102%);
-    transition: transform 0.18s ease;
-    box-shadow: var(--ui-shadow-md);
-  }
-
-  .assistant-history--open {
-    transform: translateX(0);
-  }
-
-  .assistant-history--collapsed {
-    width: min(300px, calc(100vw - 56px));
-  }
-
-  .assistant-history--collapsed .assistant-history__body {
-    display: flex;
-  }
-
-  .assistant-page--history-collapsed {
-    display: block;
-  }
-
-  .assistant-history__new--collapsed {
-    flex: 1 1 auto;
-    width: auto;
-    padding: 0 12px;
-  }
-
-  .assistant-history__new--collapsed .assistant-history__new-label {
-    display: inline;
-  }
-
-  .assistant-history__collapse {
-    display: none;
-  }
-
-  .assistant-history__close {
-    display: inline-flex;
-  }
-
-  .assistant-history-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: block;
-    border: 0;
-    background: color-mix(in oklab, var(--ui-bg) 42%, transparent);
-  }
-
-  .assistant-main {
-    padding-top: 0;
-    padding-bottom: 0;
-  }
-
-  .assistant-console {
-    display: block;
-    height: auto;
-    min-height: 0;
-  }
-
-  .assistant-timeline {
-    padding-bottom: 146px;
-  }
-
-  .assistant-composer {
-    position: fixed;
-    right: auto;
-    bottom: max(14px, env(safe-area-inset-bottom, 0px));
-    left: 50%;
-    width: min(600px, calc(100vw - 28px));
-    transform: translateX(-50%);
-    z-index: 40;
-  }
-
-  .assistant-topbar {
-    display: none;
-  }
-
-  .assistant-mobile-nav {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    width: 100%;
-    min-width: 0;
-    min-height: 36px;
-    padding: 10px 0 4px;
-  }
-
-  .assistant-mobile-nav__actions {
-    position: absolute;
-    top: 50%;
-    right: 0;
-    display: flex;
-    gap: 6px;
-    transform: translateY(-50%);
-  }
-
-  .assistant-mobile-nav :deep(.me3-btn--icon-only.me3-btn--compact) {
-    width: 36px;
-    min-width: 36px;
-    padding: 0;
-  }
 }
 
 @media (max-width: 760px) {

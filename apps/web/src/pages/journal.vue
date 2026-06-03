@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../api";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
@@ -49,7 +56,9 @@ let currentLoadToken = 0;
 
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
 const selectedDateLabel = computed(() =>
-  currentDateIsToday.value ? "Today" : formatDaySwitcherDate(selectedDate.value),
+  currentDateIsToday.value
+    ? "Today"
+    : formatDaySwitcherDate(selectedDate.value),
 );
 const saveStatusText = computed(() => {
   if (saveState.value === "saving") return "Saving";
@@ -57,7 +66,9 @@ const saveStatusText = computed(() => {
   if (saveState.value === "error") return "Could not save";
   return "";
 });
-const hasLoadedEntry = computed(() => loadedEntry.value?.date === selectedDate.value);
+const hasLoadedEntry = computed(
+  () => loadedEntry.value?.date === selectedDate.value,
+);
 
 function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -99,8 +110,7 @@ function formatDaySwitcherDate(value: string): string {
   }).format(date);
 }
 
-function formatArchiveDate(value: string): string {
-  if (value === todayKey()) return "Today";
+function formatEntrySheetDate(value: string): string {
   const date = new Date(`${value}T12:00:00`);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("en-GB", {
@@ -109,6 +119,11 @@ function formatArchiveDate(value: string): string {
     month: "short",
     year: "numeric",
   }).format(date);
+}
+
+function formatArchiveDate(value: string): string {
+  if (value === todayKey()) return "Today";
+  return formatEntrySheetDate(value);
 }
 
 function clearSaveTimer() {
@@ -145,7 +160,9 @@ async function saveEntry() {
   } catch (saveError) {
     saveState.value = "error";
     error.value =
-      saveError instanceof Error ? saveError.message : "Could not save journal entry.";
+      saveError instanceof Error
+        ? saveError.message
+        : "Could not save journal entry.";
   }
 }
 
@@ -174,7 +191,9 @@ async function loadDay(date: string) {
   } catch (loadError) {
     if (token !== currentLoadToken) return;
     error.value =
-      loadError instanceof Error ? loadError.message : "Could not load journal entry.";
+      loadError instanceof Error
+        ? loadError.message
+        : "Could not load journal entry.";
   } finally {
     hydratingEntry.value = false;
     if (token === currentLoadToken) loading.value = false;
@@ -190,7 +209,9 @@ async function loadArchive() {
     archiveEntries.value = response.entries || [];
   } catch (archiveError) {
     error.value =
-      archiveError instanceof Error ? archiveError.message : "Could not load archive.";
+      archiveError instanceof Error
+        ? archiveError.message
+        : "Could not load archive.";
   } finally {
     archiveLoading.value = false;
   }
@@ -297,18 +318,22 @@ onBeforeUnmount(() => {
       </div>
       <button
         type="button"
-        class="journal__archive-button"
+        class="journal__archive-button journal-icon-button"
         :class="{ 'is-active': archiveOpen }"
+        aria-label="Archive"
         :aria-pressed="archiveOpen ? 'true' : 'false'"
         @click="toggleArchive"
       >
         <UiIcon name="Archive" :size="16" />
-        Archive
       </button>
     </header>
 
     <div class="journal__workspace">
-      <aside v-if="archiveOpen" class="journal__archive" aria-label="Journal archive">
+      <aside
+        v-if="archiveOpen"
+        class="journal__archive"
+        aria-label="Journal archive"
+      >
         <div class="journal__archive-head">
           <h2>Archive</h2>
           <span v-if="archiveLoading">Loading</span>
@@ -322,9 +347,14 @@ onBeforeUnmount(() => {
           @click="setDate(entry.date)"
         >
           <strong>{{ entry.title || formatArchiveDate(entry.date) }}</strong>
-          <span>{{ entry.title ? formatArchiveDate(entry.date) : entry.preview }}</span>
+          <span>{{
+            entry.title ? formatArchiveDate(entry.date) : entry.preview
+          }}</span>
         </button>
-        <p v-if="!archiveLoading && archiveEntries.length === 0" class="journal__empty">
+        <p
+          v-if="!archiveLoading && archiveEntries.length === 0"
+          class="journal__empty"
+        >
           No saved entries yet.
         </p>
       </aside>
@@ -333,25 +363,30 @@ onBeforeUnmount(() => {
         <p v-if="error" class="journal__message is-error">{{ error }}</p>
 
         <div class="journal__meta">
-          <label class="journal__field journal__field--title">
-            <span>Title</span>
+          <div class="journal__field journal__field--title">
             <input
               v-model="title"
               type="text"
               placeholder="Untitled note"
               maxlength="180"
+              aria-label="Title"
               :disabled="loading"
             />
-          </label>
-          <label class="journal__field journal__field--date">
-            <span>Date</span>
-            <input type="text" :value="formatArchiveDate(selectedDate)" readonly />
-          </label>
+          </div>
+          <div class="journal__field journal__field--date">
+            <input
+              type="text"
+              :value="formatEntrySheetDate(selectedDate)"
+              readonly
+              aria-label="Entry date"
+            />
+          </div>
         </div>
 
         <div class="journal__editor-wrap" :class="{ 'is-loading': loading }">
           <TiptapEditor
             v-model="description"
+            variant="workspace"
             placeholder="Write your note here..."
           />
         </div>
@@ -381,8 +416,13 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 16px;
   padding: 18px 32px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
-  background: color-mix(in srgb, var(--ui-bg, var(--color-bg)) 92%, transparent);
+  border-bottom: none;
+  box-shadow: none;
+  background: color-mix(
+    in srgb,
+    var(--ui-bg, var(--color-bg)) 92%,
+    transparent
+  );
   backdrop-filter: blur(14px);
 }
 
@@ -394,17 +434,18 @@ onBeforeUnmount(() => {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   justify-self: center;
 }
 
 .journal-icon-button,
 .journal__day-label,
 .journal__archive-button {
-  border: 1px solid var(--ui-border, var(--color-border));
-  background: var(--ui-surface, var(--color-surface));
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--ui-text, var(--color-text));
   cursor: pointer;
+  border-radius: var(--ui-radius-sm, 8px);
 }
 
 .journal-icon-button {
@@ -413,34 +454,48 @@ onBeforeUnmount(() => {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 999px;
+  padding: 0;
+}
+
+.journal-icon-button:focus,
+.journal-icon-button:focus-visible,
+.journal__day-label:focus,
+.journal__day-label:focus-visible,
+.journal__archive-button:focus,
+.journal__archive-button:focus-visible {
+  outline: none;
 }
 
 .journal__day-label {
+  display: inline-flex;
   min-width: 138px;
-  height: 38px;
-  padding: 0 16px;
-  border-radius: 999px;
-  font-size: 0.92rem;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.journal__day-label strong {
+  font-weight: inherit;
+}
+
+.journal__day-label[aria-expanded="true"] {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
 .journal__archive-button {
-  display: inline-flex;
-  align-items: center;
   justify-self: end;
-  gap: 8px;
-  height: 38px;
-  padding: 0 14px;
-  border-radius: 999px;
-  font-size: 0.9rem;
 }
 
 .journal-icon-button:hover,
 .journal__day-label:hover,
 .journal__archive-button:hover,
 .journal__archive-button.is-active {
-  border-color: var(--ui-border-strong, var(--color-border-strong));
-  background: var(--ui-surface-muted, var(--color-surface-muted));
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
 .journal__workspace {
@@ -449,24 +504,27 @@ onBeforeUnmount(() => {
   gap: 24px;
   width: min(100%, 980px);
   margin: 0 auto;
-  padding: 34px 24px 56px;
+  padding: 16px 24px 56px;
 }
 
 .journal__workspace:has(.journal__archive) {
   grid-template-columns: minmax(220px, 280px) minmax(0, 700px);
-  align-items: start;
+  align-items: stretch;
+  min-height: calc(100dvh - 72px);
 }
 
 .journal__archive {
   position: sticky;
-  top: 92px;
+  top: 72px;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: calc(100vh - 120px);
-  overflow: auto;
+  min-height: calc(100dvh - 72px);
+  overflow-y: auto;
   border-right: 1px solid var(--ui-border, var(--color-border));
   padding-right: 14px;
+  box-sizing: border-box;
 }
 
 .journal__archive-head {
@@ -538,20 +596,6 @@ onBeforeUnmount(() => {
   margin-bottom: 22px;
 }
 
-.journal__field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.journal__field span {
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
 .journal__field input {
   width: 100%;
   box-sizing: border-box;
@@ -564,9 +608,9 @@ onBeforeUnmount(() => {
 }
 
 .journal__field--title input {
-  font-size: clamp(2rem, 5vw, 3rem);
-  font-weight: 800;
-  line-height: 1.05;
+  font-size: clamp(1.25rem, 2.5vw, 1.5rem);
+  font-weight: 600;
+  line-height: 1.25;
 }
 
 .journal__field--date input {
@@ -580,6 +624,7 @@ onBeforeUnmount(() => {
 
 .journal__editor-wrap {
   min-height: 560px;
+  --tiptap-toolbar-offset: 72px;
 }
 
 .journal__editor-wrap.is-loading {
@@ -591,12 +636,18 @@ onBeforeUnmount(() => {
   min-height: 560px;
 }
 
+.journal__workspace:has(.journal__archive)
+  .journal__editor-wrap
+  :deep(.tiptap-editor--workspace .editor-toolbar) {
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
 .journal__editor-wrap :deep(.editor-content-wrapper) {
   min-height: 480px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 12px);
-  padding: 28px;
-  background: var(--ui-surface, var(--color-surface));
+  padding: 8px 0 16px;
+  background: transparent;
 }
 
 .journal__editor-wrap :deep(.editor-content-wrapper .ProseMirror) {
@@ -634,7 +685,7 @@ onBeforeUnmount(() => {
   .journal__workspace,
   .journal__workspace:has(.journal__archive) {
     grid-template-columns: minmax(0, 1fr);
-    padding: 22px 14px 40px;
+    padding: 12px 14px 40px;
   }
 
   .journal__archive {
@@ -666,21 +717,16 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 560px) {
-  .journal__archive-button {
-    width: 38px;
-    padding: 0;
-    justify-content: center;
-    font-size: 0;
-  }
-
   .journal__day-label {
     min-width: 108px;
-    padding: 0 10px;
+    max-width: min(220px, calc(100vw - 180px));
+    padding-inline: 6px;
+    font-size: 14px;
   }
 
   .journal-icon-button {
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    height: 32px;
   }
 }
 </style>
