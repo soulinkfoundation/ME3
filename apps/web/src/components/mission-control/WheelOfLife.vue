@@ -40,7 +40,7 @@ const OUTER_RADIUS = 108;
 const VIEWBOX_MIN = -154;
 const VIEWBOX_SIZE = 308;
 const WHEEL_CENTER = VIEWBOX_MIN + VIEWBOX_SIZE / 2;
-const LABEL_RADIUS_PERCENT = 36;
+const LABEL_RADIUS_PERCENT = 33;
 
 const legacyDefaultEmojiById: Record<string, Record<string, string>> = {
   health: { "💙": "❤️" },
@@ -48,6 +48,7 @@ const legacyDefaultEmojiById: Record<string, Record<string, string>> = {
   work: { "🧭": "💼" },
   finances: { "◌": "💰" },
   home: { "⌂": "🏡" },
+  joy: { "✦": "🤗" },
 };
 
 const defaultSegments: WheelSegment[] = [
@@ -97,7 +98,7 @@ const defaultSegments: WheelSegment[] = [
     label: "Joy",
     helper: "What you do for fun",
     color: "#be123c",
-    emoji: "✦",
+    emoji: "🤗",
     value: null,
   },
 ];
@@ -1069,6 +1070,8 @@ watch([segments, snapshots], persistState, { deep: true });
 
 .life-wheel__label-emoji {
   flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .life-wheel__latest {
