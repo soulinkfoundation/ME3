@@ -7,6 +7,7 @@ import {
   isPluginEnabled,
   pluginInfoText,
   pluginNavEmoji,
+  sortPluginsForDisplay,
   type PluginRecord,
 } from "../utils/plugins";
 
@@ -32,7 +33,9 @@ const emit = defineEmits<{
 }>();
 
 const visiblePlugins = computed(() =>
-  props.plugins.filter((plugin) => !isPluginComingSoon(plugin)),
+  sortPluginsForDisplay(
+    props.plugins.filter((plugin) => !isPluginComingSoon(plugin)),
+  ),
 );
 
 const busyPluginIdSet = computed(() => new Set(props.busyPluginIds));

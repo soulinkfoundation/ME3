@@ -197,13 +197,22 @@ function normalizeEmailDomain(value: string): string {
     .replace(/^[.-]+|[.-]+$/g, "");
 }
 
+function canAutofillEmailDomain(value: string): boolean {
+  const cleaned = normalizeEmailDomain(value);
+  return (
+    Boolean(cleaned) &&
+    cleaned !== "localhost" &&
+    !cleaned.endsWith(".localhost") &&
+    cleaned !== "workers.dev" &&
+    !cleaned.endsWith(".workers.dev") &&
+    cleaned !== "local" &&
+    !cleaned.endsWith(".local")
+  );
+}
+
 function inferDomainFromHost(hostname: string): string {
   const inferred = normalizeEmailDomain(hostname);
-  if (
-    !inferred ||
-    inferred === "localhost" ||
-    inferred.endsWith(".workers.dev")
-  ) {
+  if (!canAutofillEmailDomain(inferred)) {
     return "";
   }
   const parts = inferred.split(".");
@@ -324,10 +333,12 @@ async function loadEmailDefaults() {
       response.mailbox?.aliasLocalPart ||
       response.suggestedAliasLocalPart ||
       normalizedHandle.value;
-    const inferredDomain =
-      normalizeEmailDomain(
-        response.mailbox?.aliasAddress?.split("@")[1] || "",
-      ) || inferDomainFromHost(window.location.hostname);
+    const mailboxDomain = normalizeEmailDomain(
+      response.mailbox?.aliasAddress?.split("@")[1] || "",
+    );
+    const inferredDomain = canAutofillEmailDomain(mailboxDomain)
+      ? mailboxDomain
+      : inferDomainFromHost(window.location.hostname);
     if (!domain.value && inferredDomain) domain.value = inferredDomain;
     if (
       !emailAddress.value &&
@@ -662,7 +673,7 @@ onBeforeUnmount(clearUsernameCheck);
               type="submit"
               :disabled="!profileCanContinue"
             >
-              {{ isPublishing ? "Publishing..." : "Continue" }}
+              {{ isPublishing ? "Publishing..." : "Next →" }}
             </button>
           </div>
         </form>
@@ -676,25 +687,32 @@ onBeforeUnmount(clearUsernameCheck);
         <div class="step-copy">
           <h1 id="email-title">Set up email</h1>
           <p>
-            ME3 uses Cloudflare for email by default. Custom senders can be
-            configured in
-            <RouterLink
-              to="/account?section=mailbox"
+            Set your custom domain and email address here. Then ensure you
+            <a
+              href="https://developers.cloudflare.com/fundamentals/manage-domains/add-site/"
               target="_blank"
               rel="noopener noreferrer"
-              >settings.</RouterLink
+              >onboard that domain</a
             >
+            and configure
+            <a
+              href="https://developers.cloudflare.com/email-routing/"
+              target="_blank"
+              rel="noopener noreferrer"
+              >email routing</a
+            >
+            in your Cloudflare account later.
           </p>
         </div>
 
         <form class="start-form" autocomplete="off" @submit.prevent="saveEmail">
           <label class="field" for="start-domain">
-            <span>Domain</span>
+            <span>Custom Domain</span>
             <input
               id="start-domain"
               v-model="domain"
               type="text"
-              placeholder="your-domain.com"
+              placeholder="example.com"
               inputmode="url"
               autocomplete="off"
               autocapitalize="off"
@@ -709,7 +727,7 @@ onBeforeUnmount(clearUsernameCheck);
               id="start-email"
               v-model="emailAddress"
               type="email"
-              placeholder="you@your-domain.com"
+              placeholder="you@example.com"
               autocomplete="email"
               spellcheck="false"
             />
@@ -734,18 +752,18 @@ onBeforeUnmount(clearUsernameCheck);
 
           <div class="step-nav split">
             <button class="nav-btn back" type="button" @click="goToStep(1)">
-              Back
+              ← Back
             </button>
             <div class="nav-actions-right">
               <button class="nav-btn ghost" type="button" @click="skipEmail">
-                Skip for now
+                Skip
               </button>
               <button
                 class="nav-btn next"
                 type="submit"
                 :disabled="!emailCanSave"
               >
-                {{ emailSaving ? "Saving..." : "Save email" }}
+                {{ emailSaving ? "Saving..." : "Next →" }}
               </button>
             </div>
           </div>
@@ -785,11 +803,11 @@ onBeforeUnmount(clearUsernameCheck);
 
         <div class="step-nav split">
           <button class="nav-btn back" type="button" @click="goToStep(2)">
-            Back
+            ← Back
           </button>
           <div class="nav-actions-right">
             <button class="nav-btn ghost" type="button" @click="skipPlugins">
-              Skip for now
+              Skip
             </button>
             <button
               class="nav-btn next"
@@ -797,7 +815,7 @@ onBeforeUnmount(clearUsernameCheck);
               :disabled="!pluginsCanContinue"
               @click="savePlugins"
             >
-              {{ pluginsSaving ? "Saving..." : "Save plugins" }}
+              {{ pluginsSaving ? "Saving..." : "Next →" }}
             </button>
           </div>
         </div>
@@ -827,14 +845,14 @@ onBeforeUnmount(clearUsernameCheck);
 
         <div class="step-nav split">
           <button class="nav-btn back" type="button" @click="goToStep(3)">
-            Back
+            ← Back
           </button>
           <div class="nav-actions-right">
             <button class="nav-btn ghost" type="button" @click="finish">
-              Skip for now
+              Skip
             </button>
             <button class="nav-btn next" type="button" @click="finish">
-              Finish
+              Finish →
             </button>
           </div>
         </div>
@@ -1125,7 +1143,7 @@ onBeforeUnmount(clearUsernameCheck);
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  padding-top: 18px;
+  padding-top: 40px;
 }
 
 .step-nav.split {
@@ -1140,17 +1158,13 @@ onBeforeUnmount(clearUsernameCheck);
 }
 
 .nav-btn {
-  min-height: 48px;
-  padding: 0 22px;
+  padding: 14px 28px;
   border: 0;
-  border-radius: var(--ui-radius-md, 10px);
+  border-radius: 10px;
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
-  transition:
-    transform 0.2s ease,
-    opacity 0.2s ease,
-    background-color 0.2s ease;
+  transition: all 0.2s;
 }
 
 .nav-btn.next {
@@ -1160,17 +1174,26 @@ onBeforeUnmount(clearUsernameCheck);
 
 .nav-btn.back,
 .nav-btn.ghost {
-  background: var(--ui-surface-muted, var(--color-border));
+  background: var(--color-border);
   color: var(--ui-text, var(--color-text));
 }
 
 .nav-btn.ghost {
   background: transparent;
-  border: 1px solid var(--ui-border, var(--color-border));
+  border: 2px solid var(--ui-text, var(--color-text));
+}
+
+.nav-btn.back:hover:not(:disabled) {
+  background: var(--ui-text-muted, var(--color-text-muted));
+  color: var(--ui-bg, var(--color-bg));
+}
+
+.nav-btn.ghost:hover:not(:disabled) {
+  background: var(--ui-text, var(--color-text));
+  color: var(--ui-bg, var(--color-bg));
 }
 
 .nav-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
   opacity: 0.92;
 }
 

@@ -65,6 +65,21 @@ export const RECOMMENDED_START_PLUGIN_ID_SET = new Set<string>(
   RECOMMENDED_START_PLUGIN_IDS,
 );
 
+const pluginDisplayOrder = [
+  "me3.agent-chat",
+  "me3.mission-control",
+  "me3.journal",
+  "me3.calendar",
+  "me3.accounts",
+  "me3.local-executor",
+  "me3.landing-pages",
+  "me3.social-publishing",
+];
+
+const pluginDisplayRank = new Map(
+  pluginDisplayOrder.map((pluginId, index) => [pluginId, index]),
+);
+
 const pluginNavEmojis: Record<string, string> = {
   "me3.mission-control": "🚀",
   "me3.journal": "📝",
@@ -107,4 +122,12 @@ export function isLocalExecutorPlugin(plugin: PluginRecord) {
 
 export function pluginNavEmoji(plugin: PluginRecord) {
   return pluginNavEmojis[plugin.id] || "🧩";
+}
+
+export function sortPluginsForDisplay(plugins: readonly PluginRecord[]) {
+  return [...plugins].sort((a, b) => {
+    const aRank = pluginDisplayRank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+    const bRank = pluginDisplayRank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+    return aRank - bRank || a.name.localeCompare(b.name);
+  });
 }
