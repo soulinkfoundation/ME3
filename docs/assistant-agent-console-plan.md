@@ -8,6 +8,10 @@ Tracking: `me3-8it`.
 
 Related follow-up: `me3-kid` tracks the robust composer-only voice dictation adapter.
 
+Related decision plan: [`docs/assistant-chat-history-model-plan.md`](assistant-chat-history-model-plan.md)
+tracks assistant thread history, refresh persistence, the `/assistant` secondary side panel, and
+Mission Control project grouping.
+
 ## Progress Update
 
 As of 2026-06-02:

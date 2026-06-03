@@ -185,6 +185,8 @@ Detailed reference docs:
 - `docs/assistant-jobs-and-agent-skills.md`: skill/recipe/job/capability boundary.
 - `docs/assistant-agent-console-plan.md`: `/assistant` full agent console direction,
   model selection, attachments, voice dictation, jobs builder, and launcher split.
+- `docs/assistant-chat-history-model-plan.md`: assistant thread history, `/assistant`
+  secondary side panel, refresh persistence, and Mission Control project grouping.
 - `docs/inbox-watch-rules-plan.md`: Inbox Watch multiple rules, mixed timing, and
   approval-first outcomes plan.
 - `docs/agent-context-roadmap.md`: native context and memory design reference.
