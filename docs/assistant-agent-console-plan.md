@@ -52,12 +52,13 @@ As of 2026-06-03:
   - Basic incompatible-send handling is in place for unsupported/error attachments and image/model
     compatibility; the remaining backend vision-routing work stays under `me3-8it.4`.
 - Attachments are partially implemented and still tracked by dedicated beads:
-  - Composer paperclip/file picker, removable chips, client-side text-like file reading, and
-    request metadata are in place under `me3-8it.3`.
-  - Remaining `me3-8it.3` work is persisted upload records, PDF extraction, image routing, and
-    fuller size/type validation.
-  - `me3-8it.4` continues model/attachment compatibility explanations, especially once image
-    routing is available.
+  - Composer paperclip/file picker, removable chips, typed upload records, server-side text
+    extraction, image storage references, size/type validation, request manifests, and runtime
+    attachment references are in place under `me3-8it.3`.
+  - Remaining `me3-8it.3` work is PDF extraction and true provider multimodal message shaping for
+    image bytes.
+  - `me3-8it.4` continues model/attachment compatibility explanations, especially large-context
+    warnings and owner-facing model switch/remove paths.
 - Audit metadata is partially implemented:
   - Chat turns record route/thread/model/attachment-count metadata.
   - Streaming turns record stream route metadata.
@@ -89,10 +90,11 @@ launcher removes the old quick-panel milestone and narrows QA to `/assistant`, S
 shared harness routes.
 
 1. Finish attachments (`me3-8it.3` and `me3-8it.4`).
-   - Add typed/persisted upload records instead of composer-only text injection.
+   - Verify typed upload records in local authenticated QA.
    - Add PDF extraction if the dependency path is reliable.
-   - Route images only through vision-capable models.
-   - Keep pre-send explanations for unsupported type/model combinations.
+   - Shape provider-specific multimodal messages so stored image bytes reach vision-capable
+     providers instead of only sending attachment references.
+   - Add large-context warnings and model switch/remove paths for oversized text.
 
 2. Finish audit and observability (`me3-8it.6`).
    - Continue tightening stream outcome visibility as the UI/history model evolves.
@@ -507,8 +509,10 @@ Notes:
 - `/assistant/chat/turn/stream` is the streaming product endpoint used by the assistant page.
 - `/agent/sandbox` is a legacy alias.
 - Message text and selected model are wired.
-- Text-like attachments are currently injected as readable turn context; persisted typed attachment
-  records and richer context references are still pending.
+- Text-like attachments upload to typed records, are extracted server-side, and are injected as
+  readable turn context; attachment references are passed through audit and runtime dispatch.
+- Image attachments upload to typed records with storage refs and remain gated to vision-capable
+  models; provider-specific multimodal payloads are still pending.
 - Copy, retry, edit/resend, streaming, and stop are wired.
 - Chat history, refresh resilience, and conversation organization are owned by `me3-3ic`.
 

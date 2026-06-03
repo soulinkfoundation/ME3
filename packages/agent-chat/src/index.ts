@@ -71,6 +71,19 @@ export type AgentSandboxDispatchInput = {
   messageText: string;
   replyToMessageId?: string | number | null;
   selectedModel?: AgentChatModelSelection | null;
+  attachments?: AgentChatAttachmentReference[];
+};
+
+export type AgentChatAttachmentReference = {
+  id?: string | null;
+  name?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
+  kind?: "text" | "image" | string | null;
+  status?: string | null;
+  storageKey?: string | null;
+  hasText?: boolean | null;
+  textTruncated?: boolean | null;
 };
 
 export type AgentChatModelSelection = {
@@ -606,8 +619,16 @@ export function isAgentSandboxDispatchInput(
     typeof input.sourceEventId === "string" &&
     typeof input.turnId === "string" &&
     typeof input.messageText === "string" &&
-    isValidAgentChatModelSelection(input.selectedModel)
+    isValidAgentChatModelSelection(input.selectedModel) &&
+    isValidAgentChatAttachments(input.attachments)
   );
+}
+
+function isValidAgentChatAttachments(
+  value: unknown,
+): value is AgentChatAttachmentReference[] | null | undefined {
+  if (value === undefined || value === null) return true;
+  return Array.isArray(value);
 }
 
 function isValidAgentChatModelSelection(
@@ -1508,18 +1529,22 @@ export async function dispatchAgentSandboxTurn(
   }
 
   const route = await resolveAiRoute(env, input.userId, input.selectedModel);
+  const runtimeMessageText = appendAgentAttachmentReferenceContext(
+    input.messageText,
+    input.attachments,
+  );
   const recent = await loadRecentMessages(env, input.userId, input.threadId);
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
   const agentContext = await loadCoreChatAgentContext(env, {
     ownerId: input.userId,
     owner,
     recent,
-    messageText: input.messageText,
+    messageText: runtimeMessageText,
   });
   const messages = buildChatMessages(
     owner,
     recent,
-    input.messageText,
+    runtimeMessageText,
     knowledgeContext,
     agentContext?.prompt ?? null,
   );
@@ -1562,6 +1587,54 @@ export async function dispatchAgentSandboxTurn(
 
   await storage.put(resultKey, response);
   return response;
+}
+
+function appendAgentAttachmentReferenceContext(
+  messageText: string,
+  attachments: AgentSandboxDispatchInput["attachments"],
+) {
+  const references = normalizeAgentAttachmentReferences(attachments);
+  if (references.length === 0) return messageText;
+  const rendered = references
+    .map((attachment, index) =>
+      [
+        `${index + 1}. ${attachment.name || "Attachment"}`,
+        `kind=${attachment.kind || "unknown"}`,
+        `type=${attachment.mimeType || "unknown"}`,
+        `size=${typeof attachment.size === "number" ? attachment.size : "unknown"}`,
+        attachment.hasText ? "text=available" : null,
+        attachment.textTruncated ? "text=truncated" : null,
+        attachment.storageKey ? `storageRef=${attachment.storageKey}` : null,
+      ]
+        .filter(Boolean)
+        .join("; "),
+    )
+    .join("\n");
+  return `${messageText}\n\nAssistant attachment references:\n${rendered}`;
+}
+
+function normalizeAgentAttachmentReferences(
+  attachments: AgentSandboxDispatchInput["attachments"],
+): AgentChatAttachmentReference[] {
+  if (!Array.isArray(attachments)) return [];
+  return attachments
+    .filter((attachment) => attachment && typeof attachment === "object")
+    .map((attachment) => ({
+      id: normalizeNullableText((attachment as AgentChatAttachmentReference).id),
+      name: normalizeNullableText((attachment as AgentChatAttachmentReference).name),
+      mimeType: normalizeNullableText((attachment as AgentChatAttachmentReference).mimeType),
+      size:
+        typeof (attachment as AgentChatAttachmentReference).size === "number" &&
+        Number.isFinite((attachment as AgentChatAttachmentReference).size)
+          ? Math.max(0, Math.round((attachment as AgentChatAttachmentReference).size || 0))
+          : null,
+      kind: normalizeNullableText((attachment as AgentChatAttachmentReference).kind),
+      status: normalizeNullableText((attachment as AgentChatAttachmentReference).status),
+      storageKey: normalizeNullableText((attachment as AgentChatAttachmentReference).storageKey),
+      hasText: Boolean((attachment as AgentChatAttachmentReference).hasText),
+      textTruncated: Boolean((attachment as AgentChatAttachmentReference).textTruncated),
+    }))
+    .filter((attachment) => attachment.status === "ready" && Boolean(attachment.id));
 }
 
 async function maybeHandleCoreToolTurn(

@@ -324,8 +324,27 @@ type AssistantAttachmentDraft = {
   size: number;
   kind: AssistantAttachmentKind;
   text: string | null;
-  status: "ready" | "reading" | "error";
+  status: "ready" | "uploading" | "error";
   error: string | null;
+  storageKey: string | null;
+  textTruncated: boolean;
+};
+type AssistantAttachmentUploadResponse = {
+  ok: boolean;
+  attachments: Array<{
+    id: string;
+    name: string;
+    filename: string;
+    mimeType: string;
+    size: number;
+    kind: "text" | "image";
+    status: "ready";
+    storageKey: string | null;
+    hasText: boolean;
+    text: string | null;
+    textTruncated: boolean;
+    createdAt: string;
+  }>;
 };
 type AssistantThreadMessagesResponse = {
   thread: AssistantThread;
@@ -457,8 +476,9 @@ const starterPrompts = [
   { label: "Update my site", icon: "🌐" },
 ];
 const assistantAttachmentLimit = 4;
-const assistantAttachmentMaxBytes = 1_000_000;
-const assistantAttachmentTextBudget = 16_000;
+const assistantAttachmentMaxBytes = 10_000_000;
+const assistantTextAttachmentMaxBytes = 1_000_000;
+const assistantAttachmentTextBudget = 48_000;
 
 const sortedJobs = computed(() =>
   [...jobs.value].sort((a, b) => {
@@ -621,17 +641,20 @@ const assistantConsoleMessages = computed(() =>
   chatMessages.value.filter((message) => message.id !== "assistant-ready"),
 );
 const assistantAttachmentsReady = computed(() =>
-  assistantAttachments.value.every((attachment) => attachment.status !== "reading"),
+  assistantAttachments.value.every((attachment) => attachment.status !== "uploading"),
 );
 const assistantTextAttachments = computed(() =>
   assistantAttachments.value.filter(
     (attachment) => attachment.kind === "text" && attachment.status === "ready",
   ),
 );
+const assistantReadyAttachments = computed(() =>
+  assistantAttachments.value.filter((attachment) => attachment.status === "ready"),
+);
 const assistantAttachmentIssue = computed(() => {
   const errored = assistantAttachments.value.find((attachment) => attachment.status === "error");
   if (errored?.error) return errored.error;
-  if (!assistantAttachmentsReady.value) return "Reading attachments...";
+  if (!assistantAttachmentsReady.value) return "Uploading attachments...";
 
   const unsupported = assistantAttachments.value.find(
     (attachment) => attachment.kind === "unsupported",
@@ -643,9 +666,6 @@ const assistantAttachmentIssue = computed(() => {
   const hasImage = assistantAttachments.value.some((attachment) => attachment.kind === "image");
   if (hasImage && !selectedModel.value.capabilities.includes("vision")) {
     return "Switch to a vision-capable model before sending images.";
-  }
-  if (hasImage) {
-    return "Image attachment upload is staged, but image-to-model routing is not wired yet.";
   }
 
   return "";
@@ -672,7 +692,7 @@ const assistantThreadListEmpty = computed(
 
 const canSendAssistantMessage = computed(
   () =>
-    (assistantDraft.value.trim().length > 0 || assistantTextAttachments.value.length > 0) &&
+    (assistantDraft.value.trim().length > 0 || assistantReadyAttachments.value.length > 0) &&
     !assistantSending.value &&
     !assistantThreadLoading.value &&
     !assistantAttachmentIssue.value,
@@ -1075,8 +1095,10 @@ async function addAssistantAttachments(files: File[]) {
       size: file.size,
       kind: classifyAssistantAttachment(file),
       text: null,
-      status: "reading",
+      status: "uploading",
       error: null,
+      storageKey: null,
+      textTruncated: false,
     };
     assistantAttachments.value.push(draft);
 
@@ -1086,18 +1108,42 @@ async function addAssistantAttachments(files: File[]) {
       continue;
     }
 
-    if (draft.kind === "text") {
-      try {
-        draft.text = (await file.text()).slice(0, assistantAttachmentTextBudget);
-        draft.status = "ready";
-      } catch {
-        draft.status = "error";
-        draft.error = `Could not read ${draft.name}.`;
-      }
+    if (draft.kind === "text" && file.size > assistantTextAttachmentMaxBytes) {
+      draft.status = "error";
+      draft.error = `${draft.name} is too large to read as text. Use files under ${formatFileSize(assistantTextAttachmentMaxBytes)} for now.`;
       continue;
     }
 
-    draft.status = "ready";
+    if (draft.kind === "unsupported") {
+      draft.status = "error";
+      draft.error = `${draft.name} is not supported yet. Use text, markdown, JSON, CSV, XML, or images.`;
+      continue;
+    }
+
+    try {
+      const formData = new FormData();
+      formData.append("attachments", file);
+      const threadId = routeThreadId();
+      if (threadId) formData.append("threadId", threadId);
+      const response = await api.upload<AssistantAttachmentUploadResponse>(
+        "/assistant/attachments",
+        formData,
+      );
+      const uploaded = response.attachments[0];
+      if (!uploaded) throw new Error("Attachment upload did not return a record.");
+      draft.id = uploaded.id;
+      draft.name = uploaded.name || uploaded.filename || draft.name;
+      draft.mimeType = uploaded.mimeType || draft.mimeType;
+      draft.size = uploaded.size;
+      draft.kind = uploaded.kind;
+      draft.text = uploaded.text ? uploaded.text.slice(0, assistantAttachmentTextBudget) : null;
+      draft.storageKey = uploaded.storageKey;
+      draft.textTruncated = Boolean(uploaded.textTruncated);
+      draft.status = "ready";
+    } catch (err) {
+      draft.status = "error";
+      draft.error = messageFromUnknown(err, `Could not upload ${draft.name}.`);
+    }
   }
 }
 
@@ -1131,7 +1177,7 @@ function classifyAssistantAttachment(file: File): AssistantAttachmentKind {
 function buildAssistantMessageWithAttachments(text: string) {
   const normalized = text.trim();
   const attachments = assistantTextAttachments.value;
-  if (attachments.length === 0) return normalized;
+  if (attachments.length === 0) return normalized || "Review the attached files.";
 
   const base = normalized || "Review the attached files.";
   const renderedAttachments = attachments
@@ -1157,6 +1203,9 @@ function serializeAssistantAttachmentsForTurn() {
     size: attachment.size,
     kind: attachment.kind,
     status: attachment.status,
+    storageKey: attachment.storageKey,
+    hasText: Boolean(attachment.text),
+    textTruncated: attachment.textTruncated,
   }));
 }
 
@@ -2907,7 +2956,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               />
               <span class="assistant-attachment__name">{{ attachment.name }}</span>
               <span class="assistant-attachment__meta">
-                {{ attachment.status === 'reading' ? 'Reading' : formatFileSize(attachment.size) }}
+                {{ attachment.status === 'uploading' ? 'Uploading' : formatFileSize(attachment.size) }}
               </span>
               <button
                 type="button"

@@ -41,6 +41,20 @@ type StoredAssistantThread = {
   created_at: string;
   updated_at: string;
 };
+type StoredAssistantAttachment = {
+  id: string;
+  owner_id: string;
+  thread_id: string | null;
+  filename: string;
+  mime_type: string;
+  size: number;
+  kind: "text" | "image";
+  status: "ready" | "error" | "deleted";
+  storage_key: string | null;
+  extracted_text: string | null;
+  text_truncated: number;
+  metadata_json: string;
+};
 type StoredMissionProject = {
   id: string;
   user_id: string;
@@ -231,6 +245,7 @@ type StoredContentItem = {
 function createEnv(): Env & {
   owner: StoredOwner | null;
   assistantThreads: StoredAssistantThread[];
+  assistantAttachments: StoredAssistantAttachment[];
   missionProjects: StoredMissionProject[];
   messages: StoredMessage[];
   mailbox: DbMailboxAlias | null;
@@ -265,6 +280,7 @@ function createEnv(): Env & {
   const state = {
     owner: null as StoredOwner | null,
     assistantThreads: [] as StoredAssistantThread[],
+    assistantAttachments: [] as StoredAssistantAttachment[],
     missionProjects: [] as StoredMissionProject[],
     messages: [] as StoredMessage[],
     mailbox: null as DbMailboxAlias | null,
@@ -447,6 +463,23 @@ function createEnv(): Env & {
                   content: values[3] as string,
                   threadId: sql.includes("thread_id") ? (values[4] as string | null) : null,
                   created_at: "2026-05-11T10:07:00Z",
+                });
+              }
+
+              if (sql.includes("INSERT INTO assistant_attachments")) {
+                state.assistantAttachments.push({
+                  id: values[0] as string,
+                  owner_id: values[1] as string,
+                  thread_id: values[2] as string | null,
+                  filename: values[3] as string,
+                  mime_type: values[4] as string,
+                  size: values[5] as number,
+                  kind: values[6] as "text" | "image",
+                  status: "ready",
+                  storage_key: values[7] as string | null,
+                  extracted_text: values[8] as string | null,
+                  text_truncated: values[9] as number,
+                  metadata_json: values[10] as string,
                 });
               }
 
@@ -1856,6 +1889,9 @@ function createEnv(): Env & {
     get assistantThreads() {
       return state.assistantThreads;
     },
+    get assistantAttachments() {
+      return state.assistantAttachments;
+    },
     get missionProjects() {
       return state.missionProjects;
     },
@@ -3014,6 +3050,109 @@ describe("ME3 Core Worker auth", () => {
     expect(env.messages).toMatchObject([{ ownerId: "owner", content: "Hello" }]);
   });
 
+  it("uploads typed assistant text attachments with extracted text", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const form = new FormData();
+    form.append(
+      "attachments",
+      new File(["# Notes\n\nRemember the launch checklist."], "notes.md", {
+        type: "text/markdown",
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/attachments", {
+        method: "POST",
+        headers: { Cookie: session },
+        body: form,
+      }),
+      env,
+    );
+    const payload = (await response.json()) as {
+      ok: boolean;
+      attachments: Array<Record<string, unknown>>;
+    };
+
+    expect(response.status).toBe(201);
+    expect(payload.ok).toBe(true);
+    expect(payload.attachments[0]).toMatchObject({
+      name: "notes.md",
+      mimeType: "text/markdown",
+      kind: "text",
+      status: "ready",
+      hasText: true,
+      text: "# Notes\n\nRemember the launch checklist.",
+      textTruncated: false,
+    });
+    expect(env.assistantAttachments[0]).toMatchObject({
+      owner_id: "owner",
+      filename: "notes.md",
+      mime_type: "text/markdown",
+      kind: "text",
+      storage_key: null,
+      extracted_text: "# Notes\n\nRemember the launch checklist.",
+      text_truncated: 0,
+    });
+  });
+
+  it("stores assistant image attachments in R2 when configured", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const storedObjects: Array<{
+      key: string;
+      value: ArrayBuffer | ReadableStream | string;
+      options?: R2PutOptions;
+    }> = [];
+    env.SITE_ASSETS = {
+      put: vi.fn(async (key: string, value: ArrayBuffer | ReadableStream | string, options?: R2PutOptions) => {
+        storedObjects.push({ key, value, options });
+        return null;
+      }),
+    } as unknown as R2Bucket;
+
+    const form = new FormData();
+    form.append(
+      "attachments",
+      new File([new Uint8Array([137, 80, 78, 71])], "diagram.png", {
+        type: "image/png",
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/attachments", {
+        method: "POST",
+        headers: { Cookie: session },
+        body: form,
+      }),
+      env,
+    );
+    const payload = (await response.json()) as {
+      ok: boolean;
+      attachments: Array<Record<string, unknown>>;
+    };
+
+    expect(response.status).toBe(201);
+    expect(payload.attachments[0]).toMatchObject({
+      name: "diagram.png",
+      mimeType: "image/png",
+      kind: "image",
+      status: "ready",
+      hasText: false,
+    });
+    expect(storedObjects[0]?.key).toContain("assistant/owner/attachments/");
+    expect(env.assistantAttachments[0]).toMatchObject({
+      owner_id: "owner",
+      filename: "diagram.png",
+      mime_type: "image/png",
+      kind: "image",
+      extracted_text: null,
+    });
+    expect(env.assistantAttachments[0]?.storage_key).toContain(
+      "assistant/owner/attachments/",
+    );
+  });
+
   it("dispatches owner assistant chat turns through the agent runtime", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
@@ -3131,6 +3270,18 @@ describe("ME3 Core Worker auth", () => {
         model: "gpt-test",
         optionId: "openai-gpt-test",
       },
+      attachments: [
+        {
+          id: "att-1",
+          name: "notes.md",
+          mimeType: "text/markdown",
+          size: 128,
+          kind: "text",
+          status: "ready",
+          hasText: false,
+          textTruncated: false,
+        },
+      ],
     });
   });
 

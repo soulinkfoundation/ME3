@@ -496,6 +496,10 @@ const INBOUND_EMAIL_PROVIDER_ID = "cloudflare-email-routing";
 const MAX_INBOUND_EMAIL_BYTES = 1024 * 1024;
 const MAX_MAILBOX_ATTACHMENT_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_MAILBOX_ATTACHMENT_UPLOAD_COUNT = 10;
+const MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES = 1 * 1024 * 1024;
+const MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT = 4;
+const MAX_ASSISTANT_EXTRACTED_TEXT_CHARS = 48_000;
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -1252,6 +1256,144 @@ app.post("/api/assistant/voice/transcribe", async (c) => {
   }
 });
 
+app.post("/api/assistant/attachments", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const form = await c.req.formData().catch((): FormData | null => null);
+  if (!form) return c.json({ ok: false, error: "Attachment upload is invalid" }, 400);
+
+  const files = form
+    .getAll("attachments")
+    .filter((entry): entry is File => entry instanceof File);
+  if (files.length === 0) return c.json({ ok: false, error: "Choose at least one attachment" }, 400);
+  if (files.length > MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT) {
+    return c.json(
+      {
+        ok: false,
+        error: `Upload up to ${MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT} attachments at a time`,
+      },
+      400,
+    );
+  }
+
+  const threadIdInput = form.get("threadId");
+  const threadId =
+    typeof threadIdInput === "string" && threadIdInput.trim()
+      ? threadIdInput.trim()
+      : null;
+  if (threadId) {
+    const thread = await getAssistantThread(c.env, ownerId, threadId);
+    if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+  }
+
+  const uploaded = [];
+  for (const [index, file] of files.entries()) {
+    const filename = sanitizeAttachmentFilename(file.name, `attachment-${index + 1}`);
+    const mimeType = normalizeAssistantAttachmentMimeType(file, filename);
+    const kind = classifyAssistantUploadKind(filename, mimeType);
+    if (!kind) {
+      return c.json(
+        {
+          ok: false,
+          error: `${filename} is not supported yet. Use text, markdown, JSON, CSV, XML, or images.`,
+        },
+        400,
+      );
+    }
+    if (file.size > MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES) {
+      return c.json(
+        {
+          ok: false,
+          error: `${filename} is larger than ${formatByteLimit(MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES)}`,
+        },
+        400,
+      );
+    }
+    if (kind === "text" && file.size > MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES) {
+      return c.json(
+        {
+          ok: false,
+          error: `${filename} is too large to read as text. Use files under ${formatByteLimit(MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES)} for now.`,
+        },
+        400,
+      );
+    }
+    if (kind === "image" && !c.env.SITE_ASSETS) {
+      return c.json(
+        { ok: false, error: "Assistant image attachment storage is not configured" },
+        503,
+      );
+    }
+
+    const id = crypto.randomUUID();
+    let storageKey: string | null = null;
+    let extractedText: string | null = null;
+    let textTruncated = 0;
+
+    if (kind === "text") {
+      const text = await file.text();
+      extractedText = text.slice(0, MAX_ASSISTANT_EXTRACTED_TEXT_CHARS);
+      textTruncated = text.length > MAX_ASSISTANT_EXTRACTED_TEXT_CHARS ? 1 : 0;
+    } else if (c.env.SITE_ASSETS) {
+      storageKey = [
+        "assistant",
+        ownerId,
+        "attachments",
+        new Date().toISOString().slice(0, 10),
+        `${id}-${filename}`,
+      ].join("/");
+      await c.env.SITE_ASSETS.put(storageKey, await file.arrayBuffer(), {
+        httpMetadata: { contentType: mimeType },
+        customMetadata: {
+          ownerId,
+          threadId: threadId || "",
+          filename,
+          kind,
+        },
+      });
+    }
+
+    await c.env.DB.prepare(
+      `INSERT INTO assistant_attachments
+         (id, owner_id, thread_id, filename, mime_type, size, kind, status,
+          storage_key, extracted_text, text_truncated, metadata_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)`,
+    )
+      .bind(
+        id,
+        ownerId,
+        threadId,
+        filename,
+        mimeType,
+        file.size,
+        kind,
+        storageKey,
+        extractedText,
+        textTruncated,
+        JSON.stringify({ source: "assistant-composer" }),
+      )
+      .run();
+
+    uploaded.push({
+      id,
+      name: filename,
+      filename,
+      mimeType,
+      size: file.size,
+      kind,
+      status: "ready",
+      storageKey,
+      hasText: Boolean(extractedText),
+      text: extractedText,
+      textTruncated: Boolean(textTruncated),
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  return c.json({ ok: true, attachments: uploaded }, 201);
+});
+
 app.get("/api/assistant/jobs/recipes", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -1808,6 +1950,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
   }
   const requestedThreadId = normalizeAssistantThreadId(body.threadId);
   const requestedProjectId = normalizeNullableText(body.projectId);
+  const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
 
   const runtime = c.env.ME3_USER_AGENT;
   if (!runtime) {
@@ -1847,7 +1990,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
       requestedProjectId,
       selectedModel: selectedModel || null,
       attachmentCount: Array.isArray(body.attachments) ? body.attachments.length : 0,
-      attachmentManifest: createAssistantAttachmentAuditManifest(body.attachments),
+      attachmentManifest,
     },
   });
 
@@ -1867,6 +2010,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
         messageText: turn.messageText,
         replyToMessageId: turn.replyToMessageId,
         selectedModel,
+        attachments: attachmentManifest,
       }),
     },
   );
@@ -2011,6 +2155,7 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
               messageText: turn.messageText,
               replyToMessageId: turn.replyToMessageId,
               selectedModel,
+              attachments: attachmentManifest,
             }),
           },
         );
@@ -2125,6 +2270,9 @@ type AssistantAttachmentAuditManifestItem = {
   size: number | null;
   kind: string | null;
   status: string | null;
+  storageKey: string | null;
+  hasText: boolean;
+  textTruncated: boolean;
 };
 
 function createAssistantAttachmentAuditManifest(
@@ -2145,7 +2293,53 @@ function createAssistantAttachmentAuditManifest(
           : null,
       kind: normalizeAssistantAuditText(attachment.kind),
       status: normalizeAssistantAuditText(attachment.status),
+      storageKey: normalizeAssistantAuditText(attachment.storageKey),
+      hasText: Boolean(attachment.hasText),
+      textTruncated: Boolean(attachment.textTruncated),
     }));
+}
+
+function classifyAssistantUploadKind(
+  filename: string,
+  mimeType: string,
+): "text" | "image" | null {
+  const normalizedMime = mimeType.toLowerCase();
+  const normalizedName = filename.toLowerCase();
+  if (normalizedMime.startsWith("image/")) return "image";
+  if (
+    normalizedMime.startsWith("text/") ||
+    normalizedMime === "application/json" ||
+    normalizedMime === "application/xml" ||
+    normalizedMime === "application/csv" ||
+    normalizedName.endsWith(".md") ||
+    normalizedName.endsWith(".markdown") ||
+    normalizedName.endsWith(".csv") ||
+    normalizedName.endsWith(".tsv") ||
+    normalizedName.endsWith(".json") ||
+    normalizedName.endsWith(".txt") ||
+    normalizedName.endsWith(".xml")
+  ) {
+    return "text";
+  }
+  return null;
+}
+
+function normalizeAssistantAttachmentMimeType(file: File, filename: string) {
+  const explicit = file.type.trim();
+  if (explicit) return explicit;
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
+  if (lower.endsWith(".csv")) return "text/csv";
+  if (lower.endsWith(".tsv")) return "text/tab-separated-values";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".xml")) return "application/xml";
+  if (lower.endsWith(".txt")) return "text/plain";
+  return "application/octet-stream";
+}
+
+function formatByteLimit(bytes: number) {
+  if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} KB`;
+  return `${Math.round(bytes / 100_000) / 10} MB`;
 }
 
 function normalizeAssistantAuditText(value: unknown): string | null {
