@@ -3036,6 +3036,63 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  it("streams owner assistant chat turns through server-sent events", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const runtimeFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        auditId: null,
+        turnId: "turn-1",
+        specialist: "core.agent-chat",
+        replyText: "Hello from the streaming route.",
+        model: "test-model",
+        source: "fallback",
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      }),
+    );
+
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: "Stream this",
+          attachments: [{ id: "att-1", kind: "text" }],
+        }),
+      }),
+      env,
+    );
+    const streamText = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(streamText).toContain("event: status");
+    expect(streamText).toContain("event: thread");
+    expect(streamText).toContain("event: delta");
+    expect(streamText).toContain("Hello from the streaming route.");
+    expect(streamText).toContain("event: done");
+    expect(streamText).toContain(env.assistantThreads[0]?.id);
+    expect(JSON.parse(env.agentEvents[0]?.raw_json || "{}")).toMatchObject({
+      route: "/api/assistant/chat/turn/stream",
+      stream: true,
+      attachmentCount: 1,
+    });
+  });
+
   it("loads persisted assistant thread messages for refresh resilience", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

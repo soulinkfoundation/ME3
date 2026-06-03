@@ -63,6 +63,11 @@ export class ApiError extends Error {
   }
 }
 
+export type ApiStreamEvent = {
+  event: string
+  data: unknown
+}
+
 async function request<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -104,6 +109,108 @@ async function request<T>(
   }
 
   return data as T
+}
+
+async function streamEvents(
+  endpoint: string,
+  body: unknown,
+  onEvent: (event: ApiStreamEvent) => void,
+  options: RequestInit = {}
+): Promise<void> {
+  const headers: Record<string, string> = {
+    Accept: 'text/event-stream',
+  }
+
+  if (options.headers) {
+    Object.assign(headers, options.headers as Record<string, string>)
+  }
+
+  headers['Content-Type'] = 'application/json'
+
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    credentials: 'include',
+  })
+
+  if (!response.ok) {
+    const text = await response.text()
+    const data = text
+      ? (() => {
+          try {
+            return JSON.parse(text)
+          } catch {
+            return { error: text }
+          }
+        })()
+      : {}
+    throw new ApiError(
+      sanitizeErrorMessage(data.error, 'Request failed'),
+      response.status
+    )
+  }
+
+  if (!response.body) return
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    buffer += decoder.decode(chunk.value, { stream: true })
+    buffer = flushStreamEventBuffer(buffer, onEvent)
+  }
+
+  buffer += decoder.decode()
+  flushStreamEventBuffer(`${buffer}\n\n`, onEvent)
+}
+
+function flushStreamEventBuffer(
+  buffer: string,
+  onEvent: (event: ApiStreamEvent) => void
+): string {
+  let cursor = buffer.indexOf('\n\n')
+  while (cursor >= 0) {
+    const raw = buffer.slice(0, cursor)
+    buffer = buffer.slice(cursor + 2)
+    emitStreamEvent(raw, onEvent)
+    cursor = buffer.indexOf('\n\n')
+  }
+  return buffer
+}
+
+function emitStreamEvent(
+  raw: string,
+  onEvent: (event: ApiStreamEvent) => void
+) {
+  const lines = raw.split(/\r?\n/)
+  let event = 'message'
+  const data: string[] = []
+
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      event = line.slice(6).trim() || event
+    } else if (line.startsWith('data:')) {
+      data.push(line.slice(5).trimStart())
+    }
+  }
+
+  if (data.length === 0) return
+  const rawData = data.join('\n')
+  onEvent({
+    event,
+    data: (() => {
+      try {
+        return JSON.parse(rawData)
+      } catch {
+        return rawData
+      }
+    })(),
+  })
 }
 
 function apiUrl(base: string, endpoint: string): string {
@@ -194,6 +301,8 @@ export const api = {
       body: JSON.stringify(body),
     })
   },
+
+  streamEvents,
 
   put<T>(endpoint: string, body?: unknown): Promise<T> {
     return request<T>(endpoint, {

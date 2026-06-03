@@ -300,6 +300,12 @@ type AssistantChatTurnModelSelection = {
   model: string;
   optionId: string | null;
 };
+type AssistantChatTurnStreamEvent =
+  | "status"
+  | "thread"
+  | "delta"
+  | "done"
+  | "error";
 type AssistantThreadRow = {
   id: string;
   owner_id: string;
@@ -1731,7 +1737,164 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
   return c.json({ ...payload, threadId: thread.id });
 }
 
+async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  if (!(await isCorePluginEnabled(c.env, "me3.agent-chat"))) {
+    return c.json(
+      { ok: false, error: "Agent Chat plugin is disabled" },
+      403,
+    );
+  }
+
+  const body = await c.req
+    .json<AssistantChatTurnBody>()
+    .catch((): AssistantChatTurnBody => ({}));
+  const messageText =
+    typeof body.messageText === "string" ? body.messageText.trim() : "";
+  if (!messageText) {
+    return c.json({ ok: false, error: "Message text is required" }, 400);
+  }
+  const selectedModel = parseAssistantChatTurnModelSelection(body.model);
+  if (selectedModel && "error" in selectedModel) {
+    return c.json({ ok: false, error: selectedModel.error }, 400);
+  }
+
+  const runtime = c.env.ME3_USER_AGENT;
+  if (!runtime) {
+    return c.json(
+      { ok: false, error: "Agent chat runtime is not configured" },
+      503,
+    );
+  }
+
+  const requestedThreadId = normalizeAssistantThreadId(body.threadId);
+  const replyToMessageId =
+    typeof body.replyToMessageId === "string" ||
+    typeof body.replyToMessageId === "number"
+      ? body.replyToMessageId
+      : null;
+  const attachmentCount = Array.isArray(body.attachments) ? body.attachments.length : 0;
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: AssistantChatTurnStreamEvent, data: Record<string, unknown>) => {
+        controller.enqueue(
+          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+        );
+      };
+
+      try {
+        send("status", { state: "started" });
+        const thread = await resolveAssistantThreadForTurn(
+          c.env,
+          ownerId,
+          requestedThreadId,
+          messageText,
+        );
+        if (!thread) {
+          send("error", { ok: false, error: "Assistant thread is required" });
+          return;
+        }
+        if ("error" in thread) {
+          send("error", { ok: false, error: thread.error, status: thread.status });
+          return;
+        }
+
+        send("thread", { threadId: thread.id });
+
+        const turn = await createAgentSandboxTurnRecord(c.env, {
+          userId: ownerId,
+          messageText,
+          replyToMessageId,
+          metadata: {
+            surface: "assistant",
+            route: c.req.path,
+            stream: true,
+            threadId: thread.id,
+            requestedThreadId,
+            selectedModel: selectedModel || null,
+            attachmentCount,
+          },
+        });
+
+        const id = runtime.idFromName(ownerId);
+        const stub = runtime.get(id);
+        const response = await stub.fetch(
+          "https://me3-core-user-agent.internal/dispatch/sandbox",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: c.req.raw.signal,
+            body: JSON.stringify({
+              userId: ownerId,
+              connectionId: turn.connection.id,
+              sourceEventId: turn.sourceEvent.id,
+              turnId: turn.turnId,
+              threadId: thread.id,
+              messageText: turn.messageText,
+              replyToMessageId: turn.replyToMessageId,
+              selectedModel,
+            }),
+          },
+        );
+
+        const payload = (await response.json().catch(() => null)) as
+          | Record<string, unknown>
+          | null;
+
+        if (!response.ok || payload?.ok !== true) {
+          send("error", {
+            ok: false,
+            error:
+              typeof payload?.error === "string"
+                ? payload.error
+                : `Agent chat runtime request failed (${response.status})`,
+          });
+          return;
+        }
+
+        await touchAssistantThread(c.env, ownerId, thread.id);
+        const replyText = typeof payload.replyText === "string" ? payload.replyText : "";
+        for (const chunk of splitAssistantStreamText(replyText)) {
+          send("delta", { text: chunk });
+        }
+        send("done", { ...payload, threadId: thread.id });
+      } catch (error) {
+        if (c.req.raw.signal.aborted) return;
+        send("error", {
+          ok: false,
+          error: error instanceof Error ? error.message : "Assistant stream failed",
+        });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
+}
+
+function splitAssistantStreamText(text: string) {
+  const normalized = text || "";
+  if (!normalized) return [""];
+  const chunks: string[] = [];
+  for (let cursor = 0; cursor < normalized.length; cursor += 80) {
+    chunks.push(normalized.slice(cursor, cursor + 80));
+  }
+  return chunks;
+}
+
 app.post("/api/assistant/chat/turn", handleAssistantChatTurn);
+app.post("/api/assistant/chat/turn/stream", handleAssistantChatTurnStream);
 app.post("/api/agent/sandbox", handleAssistantChatTurn);
 
 app.post("/api/agent/channels/soulink/dispatch", async (c) => {

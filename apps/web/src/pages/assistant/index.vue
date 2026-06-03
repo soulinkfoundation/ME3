@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { definePage } from "unplugin-vue-router/runtime";
-import { api } from "../../api";
+import { api, type ApiStreamEvent } from "../../api";
 import Button from "../../components/Button.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import { useAgentChat } from "../../composables/useAgentChat";
@@ -393,7 +393,6 @@ const voiceAudioChunks: Blob[] = [];
 let voiceStopTimeout: number | null = null;
 let voiceDiscardRecording = false;
 let assistantAbortController: AbortController | null = null;
-let cancelAssistantReveal: (() => void) | null = null;
 
 const defaultDailyBriefingTemplate =
   "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -1113,59 +1112,90 @@ async function submitAssistantText(
   assistantSending.value = true;
   assistantAwaitingResponse.value = true;
   await scrollAssistantToBottom();
+  const assistantMessageId = newAssistantMessageId("assistant");
+  let assistantMessageStarted = false;
 
   try {
-    const result = await api.post<AgentSandboxResponse>("/assistant/chat/turn", {
-      messageText: normalized,
-      threadId: assistantThreadId.value,
-      attachments,
-      model: selectedModel.value
-        ? {
-            providerId: selectedModel.value.providerId,
-            model: selectedModel.value.model,
-            optionId: selectedModel.value.id,
-          }
-        : null,
-    }, {
-      signal: abortController.signal,
-    });
-    assistantAwaitingResponse.value = false;
-    if (result.threadId) {
-      assistantThreadId.value = result.threadId;
-    }
+    let result: AgentSandboxResponse | null = null;
 
-    const assistantMessageId = newAssistantMessageId("assistant");
-    agentChat.appendMessage({
-      id: assistantMessageId,
-      role: "assistant",
-      text: "",
-      meta: formatAgentRuntimeMetadata(result, {
-        showRuntimeMetadata: import.meta.env.DEV,
-      }),
-      detail: formatAgentRuntimeDetail(result),
-      inboxLink: result.emailAction?.kind === "drafted",
-      rolodexLink: result.contactsChanged === true,
-      reminderLink:
-        result.reminderAction?.kind === "created" ||
-        result.reminderAction?.kind === "updated",
-      actionHref: result.contentAction?.kind === "saved" ? "/assistant" : null,
-      actionLabel:
-        result.contentAction?.kind === "saved" ? "Open content bank" : null,
-    });
-    if (result.threadId) {
-      await setRouteThreadId(result.threadId);
+    const ensureAssistantMessage = () => {
+      if (assistantMessageStarted) return;
+      assistantMessageStarted = true;
+      assistantAwaitingResponse.value = false;
+      agentChat.appendMessage({
+        id: assistantMessageId,
+        role: "assistant",
+        text: "",
+      });
+    };
+
+    await api.streamEvents(
+      "/assistant/chat/turn/stream",
+      {
+        messageText: normalized,
+        threadId: assistantThreadId.value,
+        attachments,
+        model: selectedModel.value
+          ? {
+              providerId: selectedModel.value.providerId,
+              model: selectedModel.value.model,
+              optionId: selectedModel.value.id,
+            }
+          : null,
+      },
+      (event) => {
+        const data = streamEventRecord(event);
+
+        if (event.event === "thread") {
+          const threadId = typeof data.threadId === "string" ? data.threadId : "";
+          if (threadId) {
+            assistantThreadId.value = threadId;
+          }
+          return;
+        }
+
+        if (event.event === "delta") {
+          ensureAssistantMessage();
+          const message = chatMessages.value.find((item) => item.id === assistantMessageId);
+          if (message && typeof data.text === "string") {
+            message.text += data.text;
+          }
+          void scrollAssistantToBottom();
+          return;
+        }
+
+        if (event.event === "done") {
+          ensureAssistantMessage();
+          result = data as unknown as AgentSandboxResponse;
+          applyAssistantResultToMessage(assistantMessageId, result);
+          return;
+        }
+
+        if (event.event === "error") {
+          throw new Error(
+            typeof data.error === "string" ? data.error : "Assistant stream failed",
+          );
+        }
+      },
+      {
+        signal: abortController.signal,
+      },
+    );
+
+    assistantAwaitingResponse.value = false;
+    const completedResult = result as AgentSandboxResponse | null;
+    if (!completedResult) {
+      throw new Error("Assistant stream ended before the turn completed.");
+    }
+    if (completedResult.threadId) {
+      assistantThreadId.value = completedResult.threadId;
+      await setRouteThreadId(completedResult.threadId);
       void loadAssistantThreads();
     }
-    await revealAssistantReply(assistantMessageId, resolveAgentReplyText(result.replyText));
   } catch (err) {
     assistantAwaitingResponse.value = false;
     if (isAbortError(err)) {
-      agentChat.appendMessage({
-        id: newAssistantMessageId("assistant"),
-        role: "assistant",
-        text: "Stopped.",
-        detail: "ME3 stopped before the assistant finished replying.",
-      });
+      setAssistantStoppedMessage(assistantMessageId, assistantMessageStarted);
       return;
     }
     const message = messageFromUnknown(err, "Failed to reach ME3 right now.");
@@ -1180,7 +1210,6 @@ async function submitAssistantText(
     if (assistantAbortController === abortController) {
       assistantAbortController = null;
     }
-    cancelAssistantReveal = null;
     assistantAwaitingResponse.value = false;
     assistantSending.value = false;
     await scrollAssistantToBottom();
@@ -1202,69 +1231,57 @@ async function sendAssistantMessage() {
   await submitAssistantText(text, attachments);
 }
 
-function stopAssistantTurn() {
-  if (!assistantSending.value) return;
-  cancelAssistantReveal?.();
-  assistantAbortController?.abort();
+function streamEventRecord(event: ApiStreamEvent): Record<string, unknown> {
+  return event.data && typeof event.data === "object" && !Array.isArray(event.data)
+    ? (event.data as Record<string, unknown>)
+    : {};
 }
 
-async function revealAssistantReply(messageId: string, replyText: string) {
-  const fullText = replyText.trim() || "Done.";
+function applyAssistantResultToMessage(messageId: string, result: AgentSandboxResponse) {
   const message = chatMessages.value.find((item) => item.id === messageId);
   if (!message) return;
-
-  let cursor = 0;
-  let timeoutId: number | null = null;
-  let stopped = false;
-
-  await new Promise<void>((resolve) => {
-    cancelAssistantReveal = () => {
-      stopped = true;
-      if (timeoutId !== null) {
-        window.clearTimeout(timeoutId);
-      }
-      if (!message.text.trim()) {
-        message.text = "Stopped.";
-      }
-      message.detail = appendAssistantDetail(
-        message.detail,
-        "Stopped while the response was being shown.",
-      );
-      resolve();
-    };
-
-    const step = () => {
-      if (stopped) return;
-      cursor = Math.min(fullText.length, cursor + revealChunkSize(fullText, cursor));
-      message.text = fullText.slice(0, cursor);
-      void scrollAssistantToBottom();
-
-      if (cursor >= fullText.length) {
-        resolve();
-        return;
-      }
-
-      timeoutId = window.setTimeout(step, 18);
-    };
-
-    step();
-  });
-
-  if (cancelAssistantReveal) {
-    cancelAssistantReveal = null;
+  if (!message.text.trim()) {
+    message.text = resolveAgentReplyText(result.replyText);
   }
+  message.meta = formatAgentRuntimeMetadata(result, {
+    showRuntimeMetadata: import.meta.env.DEV,
+  });
+  message.detail = formatAgentRuntimeDetail(result);
+  message.inboxLink = result.emailAction?.kind === "drafted";
+  message.rolodexLink = result.contactsChanged === true;
+  message.reminderLink =
+    result.reminderAction?.kind === "created" ||
+    result.reminderAction?.kind === "updated";
+  message.actionHref = result.contentAction?.kind === "saved" ? "/assistant" : null;
+  message.actionLabel =
+    result.contentAction?.kind === "saved" ? "Open content bank" : null;
 }
 
-function revealChunkSize(text: string, cursor: number) {
-  const remaining = text.length - cursor;
-  if (remaining > 800) return 18;
-  if (remaining > 300) return 12;
-  return 8;
+function setAssistantStoppedMessage(messageId: string, messageStarted: boolean) {
+  const stoppedDetail = "ME3 stopped before the assistant finished replying.";
+  if (!messageStarted) {
+    agentChat.appendMessage({
+      id: messageId,
+      role: "assistant",
+      text: "Stopped.",
+      detail: stoppedDetail,
+    });
+    return;
+  }
+
+  const message = chatMessages.value.find((item) => item.id === messageId);
+  if (!message) return;
+  if (!message.text.trim()) {
+    message.text = "Stopped.";
+  }
+  message.detail = message.detail?.trim()
+    ? `${message.detail}\n${stoppedDetail}`
+    : stoppedDetail;
 }
 
-function appendAssistantDetail(current: string | null | undefined, next: string) {
-  const trimmed = current?.trim();
-  return trimmed ? `${trimmed}\n${next}` : next;
+function stopAssistantTurn() {
+  if (!assistantSending.value) return;
+  assistantAbortController?.abort();
 }
 
 function isAbortError(err: unknown) {
