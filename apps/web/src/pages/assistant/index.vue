@@ -414,6 +414,7 @@ const assistantScrollerRef = ref<HTMLDivElement | null>(null);
 const assistantAttachmentInputRef = ref<HTMLInputElement | null>(null);
 const assistantAttachments = ref<AssistantAttachmentDraft[]>([]);
 const assistantAttachmentNotice = ref("");
+const assistantComposerDragDepth = ref(0);
 const assistantModelStorageKey = "me3.assistant.selectedModelId";
 const storedAssistantModelId = getStoredAssistantModelId();
 const initialAssistantModelId = storedAssistantModelId || "workers-qwen3-30b";
@@ -676,6 +677,7 @@ const assistantAttachmentIssue = computed(() => {
 
   return "";
 });
+const assistantComposerDragActive = computed(() => assistantComposerDragDepth.value > 0);
 const assistantSelectedThread = computed(() =>
   assistantThreads.value.find((thread) => thread.id === assistantThreadId.value) || null,
 );
@@ -1076,6 +1078,38 @@ async function onAssistantAttachmentChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = Array.from(input.files || []);
   input.value = "";
+  if (files.length === 0) return;
+  await addAssistantAttachments(files);
+}
+
+function assistantDragHasFiles(event: DragEvent) {
+  return Array.from(event.dataTransfer?.types || []).includes("Files");
+}
+
+function onAssistantComposerDragEnter(event: DragEvent) {
+  if (assistantSending.value || !assistantDragHasFiles(event)) return;
+  event.preventDefault();
+  assistantComposerDragDepth.value += 1;
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+}
+
+function onAssistantComposerDragOver(event: DragEvent) {
+  if (assistantSending.value || !assistantDragHasFiles(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+}
+
+function onAssistantComposerDragLeave(event: DragEvent) {
+  if (!assistantDragHasFiles(event)) return;
+  event.preventDefault();
+  assistantComposerDragDepth.value = Math.max(0, assistantComposerDragDepth.value - 1);
+}
+
+async function onAssistantComposerDrop(event: DragEvent) {
+  if (assistantSending.value || !assistantDragHasFiles(event)) return;
+  event.preventDefault();
+  assistantComposerDragDepth.value = 0;
+  const files = Array.from(event.dataTransfer?.files || []);
   if (files.length === 0) return;
   await addAssistantAttachments(files);
 }
@@ -2928,7 +2962,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
           </article>
         </div>
 
-        <footer class="assistant-composer" aria-label="Message composer">
+        <footer
+          class="assistant-composer"
+          :class="{ 'assistant-composer--drag-active': assistantComposerDragActive }"
+          aria-label="Message composer"
+          @dragenter="onAssistantComposerDragEnter"
+          @dragover="onAssistantComposerDragOver"
+          @dragleave="onAssistantComposerDragLeave"
+          @drop="onAssistantComposerDrop"
+        >
           <label class="sr-only" for="assistant-console-input">
             Message ME3
           </label>
@@ -4456,6 +4498,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.08));
   transform: translateX(-50%);
+}
+
+.assistant-composer--drag-active {
+  border-color: color-mix(in oklab, var(--ui-accent) 65%, var(--ui-border));
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--ui-accent) 7%, transparent),
+      color-mix(in oklab, var(--ui-accent) 7%, transparent)
+    ),
+    var(--ui-surface);
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--ui-accent) 14%, transparent),
+    var(--ui-shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.08));
 }
 
 .assistant-composer__bottom,
