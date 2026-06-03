@@ -4367,6 +4367,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 <style scoped>
 .assistant-page {
+  --assistant-composer-clearance: clamp(230px, 28vh, 320px);
+
   position: relative;
   isolation: isolate;
   display: block;
@@ -4884,7 +4886,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  padding: 28px 0 146px;
+  padding: 28px 0 var(--assistant-composer-clearance);
 }
 
 .assistant-empty-state {
@@ -6281,6 +6283,10 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  .assistant-page {
+    --assistant-composer-clearance: clamp(250px, 32vh, 360px);
+  }
+
   .assistant-timeline {
     padding-top: 18px;
   }
