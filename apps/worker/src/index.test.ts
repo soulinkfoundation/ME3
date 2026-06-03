@@ -2335,6 +2335,78 @@ describe("ME3 Core Worker auth", () => {
     expect(body.updateManifestUrl).toContain("updates/stable.json");
   });
 
+  it("serves the published site profile at the root me.json discovery path", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    env.ME3_SITE_USERNAME = "owner";
+
+    const response = await app.fetch(new Request("https://kieranbutler.com/me.json"), env);
+    const body = (await response.json()) as { name: string; handle: string };
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(body.name).toBe("Booking Owner");
+    expect(body.handle).toBe("owner");
+  });
+
+  it("serves the published site profile at the well-known me.json discovery path", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    env.ME3_SITE_USERNAME = "owner";
+
+    const response = await app.fetch(
+      new Request("https://kieranbutler.com/.well-known/me.json"),
+      env,
+    );
+    const body = (await response.json()) as { name: string; handle: string };
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(body.name).toBe("Booking Owner");
+    expect(body.handle).toBe("owner");
+  });
+
+  it("falls back to a Core owner me.json before a site is published", async () => {
+    const env = createEnv();
+    env.ME3_SITE_USERNAME = "owner";
+    env.owner = {
+      id: "owner",
+      email: "owner@example.com",
+      name: "ME3 Core Owner",
+      username: "owner",
+      bio: "Core identity",
+      avatar_url: null,
+      timezone: "Europe/Dublin",
+      locale: null,
+      password_hash: null,
+    };
+    env.sites.push({
+      id: "site-draft",
+      user_id: "owner",
+      username: "owner",
+      site_type: "profile",
+      template_id: "me3",
+      custom_domain: null,
+      custom_domain_status: null,
+      custom_domain_cf_id: null,
+      created_at: "2026-06-03T10:00:00Z",
+      updated_at: "2026-06-03T10:00:00Z",
+      published_at: null,
+    });
+
+    const response = await app.fetch(new Request("https://me3.example/me.json"), env);
+    const body = (await response.json()) as {
+      name: string;
+      username: string;
+      intents: { chat: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.name).toBe("ME3 Core Owner");
+    expect(body.username).toBe("owner");
+    expect(body.intents.chat).toBe("http://localhost:8787/api/assistant/chat");
+  });
+
   it("bootstraps the owner and sets an httpOnly session cookie", async () => {
     const env = createEnv();
 

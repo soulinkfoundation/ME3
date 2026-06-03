@@ -5956,6 +5956,14 @@ app.get("/me/*", async (c) => {
   return serveDefaultPublicSitePath(c.env, c.req.raw, requestedPath);
 });
 
+app.get("/me.json", async (c) => {
+  return serveMeJsonResponse(c.env, c.req.raw);
+});
+
+app.get("/.well-known/me.json", async (c) => {
+  return serveMeJsonResponse(c.env, c.req.raw);
+});
+
 app.notFound(async (c) => {
   if (await isPublicSiteHost(c.env, c.req.url)) {
     return servePublicSiteRequest(c.env, c.req.raw);
@@ -5964,24 +5972,6 @@ app.notFound(async (c) => {
     return c.env.ASSETS.fetch(c.req.raw);
   }
   return c.text("Not found", 404);
-});
-
-app.get("/.well-known/me.json", async (c) => {
-  const owner = await getOwnerProfile(c.env, "owner");
-  const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
-  const webOrigin = getCoreWebOrigin(c.env, c.req.url);
-
-  return c.json({
-    id: apiOrigin,
-    type: "Person",
-    name: owner?.name ?? "ME3 Core Owner",
-    username: owner?.username ?? "owner",
-    bio: owner?.bio ?? "Personal AI assistant powered by ME3 Core.",
-    url: webOrigin,
-    intents: {
-      chat: `${apiOrigin}/api/assistant/chat`,
-    },
-  });
 });
 
 function createEmptyPublishManifest(): PublishManifest {
@@ -6335,6 +6325,35 @@ async function serveDefaultPublicSitePath(
   });
 
   return serveSiteFileResponse(env, site, requestedPath, true);
+}
+
+async function serveMeJsonResponse(env: Env, request: Request): Promise<Response> {
+  const site = await getPublicSiteForHost(env, new URL(request.url).hostname);
+  if (site?.published_at) {
+    const siteResponse = await serveSiteFileResponse(env, site, "me.json", true);
+    if (siteResponse.ok) return siteResponse;
+  }
+
+  const owner = await getOwnerProfile(env, "owner");
+  const apiOrigin = getCoreApiOrigin(env, request.url);
+  const webOrigin = getCoreWebOrigin(env, request.url);
+
+  return new Response(
+    JSON.stringify({
+      id: apiOrigin,
+      type: "Person",
+      name: owner?.name ?? "ME3 Core Owner",
+      username: owner?.username ?? "owner",
+      bio: owner?.bio ?? "Personal AI assistant powered by ME3 Core.",
+      url: webOrigin,
+      intents: {
+        chat: `${apiOrigin}/api/assistant/chat`,
+      },
+    }),
+    {
+      headers: { "Content-Type": "application/json" },
+    },
+  );
 }
 
 async function getPublicSiteForHost(env: Env, rawHost: string): Promise<DbSite | null> {
