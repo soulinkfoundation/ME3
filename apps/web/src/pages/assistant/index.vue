@@ -2972,7 +2972,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
       aria-label="Close chat history"
       @click="assistantHistoryDrawerOpen = false"
     />
-    <Teleport to="#app-side-nav-mobile-page-controls">
+    <Teleport v-if="!assistantHistoryDrawerOpen" to="#app-side-nav-mobile-page-controls">
       <div class="assistant-mobile-nav">
         <button
           type="button"
@@ -4855,12 +4855,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 :global(.app-root:has(.assistant-page--history-open) .app-side-nav-mobile-bar) {
-  z-index: 40;
+  visibility: hidden;
+  opacity: 0;
   pointer-events: none;
-}
-
-:global(.app-root:has(.assistant-page--history-open) .app-side-nav-shell) {
-  z-index: 0;
 }
 
 .assistant-mobile-nav__actions {
