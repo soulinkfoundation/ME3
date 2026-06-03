@@ -320,7 +320,7 @@ function labelPositionStyle(midAngle: number) {
   return {
     left: `${x}%`,
     top: `${y}%`,
-    transform,
+    "--life-wheel-label-transform": transform,
   };
 }
 
@@ -1050,6 +1050,7 @@ watch([segments, snapshots], persistState, { deep: true });
   line-height: 1.15;
   text-align: left;
   white-space: nowrap;
+  transform: var(--life-wheel-label-transform, translate(-50%, -50%));
   cursor: pointer;
   pointer-events: auto;
 }
