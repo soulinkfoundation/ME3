@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import IconPicker from "../IconPicker.vue";
 import UiIcon from "../UiIcon.vue";
+import { isUiIconName, type UiIconName } from "../../utils/icons";
 
 type WheelSegment = {
   id: string;
@@ -173,8 +175,8 @@ function cloneDefaultSegments() {
 }
 
 function normalizeSegmentEmoji(segmentId: string, value: unknown, fallback: string) {
-  const emoji =
-    typeof value === "string" && value.trim() ? value.trim().slice(0, 4) : fallback;
+  const raw = typeof value === "string" && value.trim() ? value.trim() : fallback;
+  const emoji = isUiIconName(raw) ? raw : raw.slice(0, 4);
   return legacyDefaultEmojiById[segmentId]?.[emoji] || emoji;
 }
 
@@ -603,7 +605,14 @@ watch([segments, snapshots], persistState, { deep: true });
               @pointerleave="handlePointerLeave"
               @click="setSegmentValue(segment.id, segment.value || 5)"
             >
-              <span class="life-wheel__label-emoji">{{ segment.emoji }}</span>
+              <span class="life-wheel__label-emoji" aria-hidden="true">
+                <UiIcon
+                  v-if="isUiIconName(segment.emoji)"
+                  :name="segment.emoji as UiIconName"
+                  :size="18"
+                />
+                <template v-else>{{ segment.emoji }}</template>
+              </span>
               <span>{{ segment.label }}<template v-if="segment.value"> ({{ segment.value }}/10)</template></span>
             </button>
           </div>
@@ -654,7 +663,7 @@ watch([segments, snapshots], persistState, { deep: true });
             </div>
           </header>
 
-          <div class="life-wheel-modal__body">
+          <div class="life-wheel-modal__body life-wheel-modal__body--edit">
             <div class="life-wheel__segment-list">
               <article
                 v-for="segment in segments"
@@ -662,11 +671,10 @@ watch([segments, snapshots], persistState, { deep: true });
                 class="life-wheel__segment-editor"
               >
                 <div class="life-wheel__segment-editor-top">
-                  <input
+                  <IconPicker
                     v-model="segment.emoji"
-                    class="life-wheel__emoji-input"
+                    class="life-wheel__area-icon-picker"
                     :aria-label="`${segment.label} icon`"
-                    maxlength="4"
                   />
                   <input
                     v-model="segment.label"
@@ -754,7 +762,17 @@ watch([segments, snapshots], persistState, { deep: true });
               class="life-wheel-modal__note"
             >
               <span>
-                <strong>{{ segment.emoji }} {{ segment.label }}</strong>
+                <strong>
+                  <span class="life-wheel-modal__inline-icon" aria-hidden="true">
+                    <UiIcon
+                      v-if="isUiIconName(segment.emoji)"
+                      :name="segment.emoji as UiIconName"
+                      :size="16"
+                    />
+                    <template v-else>{{ segment.emoji }}</template>
+                  </span>
+                  {{ segment.label }}
+                </strong>
                 <small>{{ segment.value }}/10</small>
               </span>
               <input
@@ -823,7 +841,17 @@ watch([segments, snapshots], persistState, { deep: true });
                     class="life-wheel-history__swatch"
                     :style="{ background: segment.color }"
                   />
-                  <span>{{ segment.emoji }} {{ segment.label }}</span>
+                  <span class="life-wheel-history__segment-label">
+                    <span class="life-wheel-history__inline-icon" aria-hidden="true">
+                      <UiIcon
+                        v-if="isUiIconName(segment.emoji)"
+                        :name="segment.emoji as UiIconName"
+                        :size="14"
+                      />
+                      <template v-else>{{ segment.emoji }}</template>
+                    </span>
+                    {{ segment.label }}
+                  </span>
                   <strong>{{ segment.value || "Unset" }}/10</strong>
                   <small v-if="segment.notes">{{ segment.notes }}</small>
                 </div>
@@ -1096,7 +1124,7 @@ watch([segments, snapshots], persistState, { deep: true });
 .life-wheel__segment-list {
   display: grid;
   gap: 7px;
-  overflow: auto;
+  overflow: visible;
 }
 
 .life-wheel__segment-editor {
@@ -1117,7 +1145,6 @@ watch([segments, snapshots], persistState, { deep: true });
   gap: 6px;
 }
 
-.life-wheel__emoji-input,
 .life-wheel__text-input,
 .life-wheel__helper-input,
 .life-wheel-modal__note input {
@@ -1132,9 +1159,37 @@ watch([segments, snapshots], persistState, { deep: true });
   outline: none;
 }
 
-.life-wheel__emoji-input {
+.life-wheel__area-icon-picker {
+  --color-bg: var(--ui-bg);
+  --color-border: var(--ui-border);
+  --color-text: var(--ui-text);
+  --color-text-muted: var(--ui-text-muted);
   width: 42px;
-  text-align: center;
+}
+
+.life-wheel__area-icon-picker :deep(.icon-picker-trigger) {
+  gap: 0;
+}
+
+.life-wheel__area-icon-picker :deep(.trigger-btn) {
+  width: 42px;
+  height: 34px;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+}
+
+.life-wheel__area-icon-picker :deep(.current-icon .emoji) {
+  font-size: 18px;
+}
+
+.life-wheel__area-icon-picker :deep(.clear-btn) {
+  display: none;
+}
+
+.life-wheel__area-icon-picker :deep(.picker-dropdown) {
+  z-index: 120;
 }
 
 .life-wheel__text-input {
@@ -1148,7 +1203,6 @@ watch([segments, snapshots], persistState, { deep: true });
   color: var(--ui-text-muted);
 }
 
-.life-wheel__emoji-input:focus,
 .life-wheel__text-input:focus,
 .life-wheel__helper-input:focus,
 .life-wheel-modal__note input:focus {
@@ -1214,6 +1268,7 @@ watch([segments, snapshots], persistState, { deep: true });
 
 .life-wheel-modal__dialog--wide {
   width: min(760px, 100%);
+  overflow: visible;
 }
 
 .life-wheel-modal__header {
@@ -1239,6 +1294,10 @@ watch([segments, snapshots], persistState, { deep: true });
   padding: 16px;
 }
 
+.life-wheel-modal__body--edit {
+  overflow: visible;
+}
+
 .life-wheel-modal__note {
   display: grid;
   gap: 7px;
@@ -1254,6 +1313,14 @@ watch([segments, snapshots], persistState, { deep: true });
 .life-wheel-modal__note small {
   color: var(--ui-text-muted);
   font-weight: 800;
+}
+
+.life-wheel-modal__inline-icon,
+.life-wheel-history__inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: -0.15em;
 }
 
 .life-wheel-modal__note input {

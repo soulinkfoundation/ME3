@@ -13,6 +13,7 @@ import {
 
 const props = defineProps<{
   modelValue: string;
+  ariaLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -82,6 +83,8 @@ const filteredIconNames = computed(() => {
         type="button"
         class="trigger-btn"
         :class="{ 'has-value': hasValue }"
+        :aria-label="props.ariaLabel || 'Choose icon or emoji'"
+        :title="props.ariaLabel || 'Choose icon or emoji'"
         @click="togglePicker"
       >
         <span v-if="hasValue" class="current-icon">
@@ -111,6 +114,7 @@ const filteredIconNames = computed(() => {
         type="button"
         class="clear-btn"
         title="Remove icon"
+        aria-label="Remove icon"
         @click="clearIcon"
       >
         <svg
