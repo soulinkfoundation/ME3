@@ -4371,13 +4371,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
   isolation: isolate;
   display: block;
   box-sizing: border-box;
-  height: 100vh;
-  height: 100dvh;
-  max-height: 100dvh;
+  min-height: 100vh;
+  min-height: 100dvh;
   padding: 0 14px 18px;
   background: var(--ui-bg);
   color: var(--ui-text);
-  overflow: hidden;
 }
 
 .assistant-page--history-collapsed {
@@ -4464,6 +4462,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: transparent;
   color: var(--ui-text-muted);
   cursor: pointer;
+}
+
+.assistant-mobile-nav__button {
+  pointer-events: auto;
 }
 
 .assistant-history__collapse {
@@ -4712,12 +4714,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  height: 100%;
-  max-height: 100%;
   width: min(820px, 100%);
   margin: 0 auto;
   padding: 0;
-  overflow: hidden;
 }
 
 .assistant-topbar {
@@ -4737,12 +4736,18 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 :global(#app-side-nav-mobile-page-controls:has(.assistant-mobile-nav)) {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 50;
   min-height: var(--app-shell-mobile-nav-height);
   height: var(--app-shell-mobile-nav-height);
   padding: var(--workspace-topbar-padding-block) 8px
     var(--workspace-topbar-padding-block)
     var(--app-shell-mobile-nav-leading-padding);
   align-items: center;
+  pointer-events: none;
 }
 
 :global(.app-root:has(.assistant-page--history-open) .app-side-nav-mobile-bar) {
@@ -4870,8 +4875,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex: 1;
   width: min(600px, 100%);
   max-width: 600px;
-  height: 100%;
-  max-height: 100%;
   min-height: 0;
   margin: 0 auto;
 }
@@ -4879,12 +4882,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-timeline {
   display: flex;
   flex-direction: column;
-  flex: 1;
   gap: 14px;
   min-height: 0;
   padding: 28px 0 146px;
-  overflow-y: auto;
-  scrollbar-width: thin;
 }
 
 .assistant-empty-state {
@@ -4971,8 +4971,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-message--assistant .assistant-message__bubble {
   width: 100%;
   max-width: 100%;
-  border-width: 1px 0;
-  border-color: var(--ui-border);
+  border: 0;
   border-radius: 0;
   padding: 12px 0;
   background: transparent;
