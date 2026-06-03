@@ -189,6 +189,8 @@ Detailed reference docs:
 - `docs/assistant-jobs-capability-registry.md`: capability registry reference.
 - `docs/assistant-jobs-safety.md`: safety and approval policy reference.
 - `docs/assistant-jobs-heartbeat.md`: heartbeat and reconciliation reference.
+- `docs/assistant-job-builder-plan.md`: chat-guided `/assistant` job builder
+  product and implementation plan.
 - `docs/assistant-job-creation-capability.md`: custom job builder reference.
 - `docs/assistant-jobs-and-agent-skills.md`: skill/recipe/job/capability boundary.
 - `docs/assistant-agent-console-plan.md`: `/assistant` full agent console direction,
