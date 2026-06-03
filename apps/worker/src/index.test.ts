@@ -2484,6 +2484,29 @@ describe("ME3 Core Worker auth", () => {
     expect(body.error).toBe("Not found");
   });
 
+  it("allows owner auth endpoints through loopback api aliases during local development", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    env.ME3_SITE_USERNAME = "owner";
+    env.CORE_WEB_ORIGIN = "http://localhost:4000";
+    env.CORE_API_ORIGIN = "http://localhost:8787";
+
+    const response = await app.fetch(
+      new Request("http://127.0.0.1:8787/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: "owner@example.com",
+          password: "wrong-password",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(401);
+    expect(body.error).toBe("Invalid email or password");
+  });
+
   it("bootstraps the owner and sets an httpOnly session cookie", async () => {
     const env = createEnv();
 

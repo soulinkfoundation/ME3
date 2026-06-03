@@ -6099,6 +6099,21 @@ function normalizeHost(value: string | null | undefined): string {
   return (value || "").trim().toLowerCase().replace(/:\d+$/, "");
 }
 
+function isLoopbackHost(host: string): boolean {
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
+}
+
+function hostsMatch(first: string, second: string): boolean {
+  if (!first || !second) return false;
+  if (first === second) return true;
+  return isLoopbackHost(first) && isLoopbackHost(second);
+}
+
 function normalizeDomain(value: unknown): string {
   if (typeof value !== "string") return "";
   const trimmed = value.trim().toLowerCase();
@@ -6297,7 +6312,9 @@ async function isPublicSiteHost(env: Env, requestUrl: string): Promise<boolean> 
   if (!requestHost) return false;
   const configuredAdminHost = normalizeHost(env.ME3_ADMIN_HOST) || hostnameFromUrl(env.CORE_WEB_ORIGIN);
   const configuredApiHost = normalizeHost(env.ME3_API_HOST) || hostnameFromUrl(env.CORE_API_ORIGIN);
-  if (requestHost === configuredAdminHost || requestHost === configuredApiHost) return false;
+  if (hostsMatch(requestHost, configuredAdminHost) || hostsMatch(requestHost, configuredApiHost)) {
+    return false;
+  }
 
   const siteHost = getSiteHost(env);
   if (siteHost && requestHost === siteHost) return true;
@@ -6326,7 +6343,7 @@ async function isPublicSiteHost(env: Env, requestUrl: string): Promise<boolean> 
 
   const inferredAdminHost = getAdminHost(env, undefined, site.custom_domain);
   const inferredApiHost = getApiHost(env);
-  return requestHost !== inferredAdminHost && requestHost !== inferredApiHost;
+  return !hostsMatch(requestHost, inferredAdminHost) && !hostsMatch(requestHost, inferredApiHost);
 }
 
 function getInferredRootPublicSiteHost(env: Env): string {
