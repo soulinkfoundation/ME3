@@ -9,6 +9,7 @@ export const MISSION_CONTROL_RUNTIME = {
   notes: [
     "Core bundles Mission Control as the default first-party owner workspace.",
     "Private memory, local daemon access, and run history stay plugin-owned and owner-scoped.",
+    "Personal coaching surfaces such as Wheel of Life stay private and can later feed owner-approved agent context.",
     "Calendar writes are best-effort and keep local capture state when Calendar setup is missing.",
   ],
 } as const;

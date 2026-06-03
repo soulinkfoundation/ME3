@@ -291,7 +291,7 @@ export const ME3_CAPABILITIES: readonly Me3Capability[] = [
     approvalMode: "owner_approval",
     sideEffect: "internal_write",
     dataBoundary: "Mission Control data is private, owner-scoped, and plugin-owned.",
-    appRoutes: ["/mission-control"],
+    appRoutes: ["/mission-control", "/mission-control/wheel-of-life"],
     agentToolIds: [
       "mission.task.create",
       "mission.memory.write",

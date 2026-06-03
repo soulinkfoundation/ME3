@@ -8,7 +8,7 @@ import {
   watch,
 } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
-import { useRoute, useRouter } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { API_BASE, ApiError, api } from "../api";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
@@ -2019,6 +2019,14 @@ onBeforeUnmount(() => {
         >
           <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
         </button>
+        <RouterLink
+          class="icon-button mission-control__wheel-link"
+          to="/mission-control/wheel-of-life"
+          aria-label="Open Wheel of Life"
+          title="Open Wheel of Life"
+        >
+          <UiIcon name="ShipWheel" :size="18" />
+        </RouterLink>
 
         <div class="settings-menu" @click.stop>
         <button
@@ -3417,6 +3425,7 @@ onBeforeUnmount(() => {
   height: 36px;
   place-items: center;
   border-radius: var(--ui-radius-sm);
+  text-decoration: none;
 }
 
 .icon-button:hover,

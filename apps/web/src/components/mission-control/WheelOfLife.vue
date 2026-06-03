@@ -1,0 +1,1329 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import UiIcon from "../UiIcon.vue";
+
+type WheelSegment = {
+  id: string;
+  label: string;
+  helper: string;
+  color: string;
+  emoji: string;
+  value: number | null;
+};
+
+type SnapshotSegment = {
+  id: string;
+  label: string;
+  helper: string;
+  color: string;
+  emoji: string;
+  value: number | null;
+  notes: string;
+};
+
+type WheelSnapshot = {
+  id: string;
+  createdAt: string;
+  segments: SnapshotSegment[];
+};
+
+type StoredWheelState = {
+  schemaVersion: 1;
+  segments: WheelSegment[];
+  snapshots: WheelSnapshot[];
+};
+
+const STORAGE_KEY = "me3.missionControl.wheelOfLife.v1";
+const MIN_SEGMENTS = 6;
+const MAX_SEGMENTS = 8;
+const OUTER_RADIUS = 108;
+const VIEWBOX_MIN = -154;
+const VIEWBOX_SIZE = 308;
+const WHEEL_CENTER = VIEWBOX_MIN + VIEWBOX_SIZE / 2;
+
+const defaultSegments: WheelSegment[] = [
+  {
+    id: "health",
+    label: "Health",
+    helper: "Physical, mental and emotional wellbeing",
+    color: "#26806f",
+    emoji: "💙",
+    value: null,
+  },
+  {
+    id: "spirituality",
+    label: "Spirituality",
+    helper:
+      "Meaning, purpose, felt sense of connection to something greater than yourself",
+    color: "#7c3aed",
+    emoji: "✨",
+    value: null,
+  },
+  {
+    id: "work",
+    label: "Work",
+    helper: "What you do, how you serve others",
+    color: "#2563eb",
+    emoji: "🧭",
+    value: null,
+  },
+  {
+    id: "finances",
+    label: "Finances",
+    helper: "Money",
+    color: "#ca8a04",
+    emoji: "◌",
+    value: null,
+  },
+  {
+    id: "home",
+    label: "Home",
+    helper: "Environment, living situation",
+    color: "#c2410c",
+    emoji: "⌂",
+    value: null,
+  },
+  {
+    id: "joy",
+    label: "Joy",
+    helper: "What you do for fun",
+    color: "#be123c",
+    emoji: "✦",
+    value: null,
+  },
+];
+
+const wheelSvg = ref<SVGSVGElement | null>(null);
+const segments = ref<WheelSegment[]>([]);
+const snapshots = ref<WheelSnapshot[]>([]);
+const hoverSegmentId = ref("");
+const hoverRating = ref<number | null>(null);
+const saveModalOpen = ref(false);
+const historyModalOpen = ref(false);
+const snapshotNotes = ref<Record<string, string>>({});
+
+const rings = computed(() =>
+  Array.from({ length: 10 }, (_, index) => ({
+    id: `ring-${index + 1}`,
+    radius: ((index + 1) / 10) * OUTER_RADIUS,
+    strong: index === 9,
+  })),
+);
+
+const wheelSegments = computed(() => {
+  const total = segments.value.length;
+  return segments.value.map((segment, index) => {
+    const startAngle = (index / total) * 360;
+    const endAngle = ((index + 1) / total) * 360;
+    const midAngle = (startAngle + endAngle) / 2;
+    const valueRadius = ((segment.value || 0) / 10) * OUTER_RADIUS;
+    const isHovered = hoverSegmentId.value === segment.id;
+    const activeRating = isHovered ? hoverRating.value : null;
+    const hoverRadius = ((activeRating || 0) / 10) * OUTER_RADIUS;
+
+    return {
+      ...segment,
+      index,
+      startAngle,
+      endAngle,
+      midAngle,
+      divider: polarPoint(startAngle, OUTER_RADIUS),
+      hitPath: sectorPath(OUTER_RADIUS, startAngle, endAngle),
+      valuePath: valueRadius > 0 ? sectorPath(valueRadius, startAngle, endAngle) : "",
+      hoverPath:
+        isHovered && hoverRadius > 0
+          ? sectorPath(hoverRadius, startAngle, endAngle)
+          : "",
+      hoverLabelPoint: polarPoint(
+        midAngle,
+        Math.max(14, ((activeRating || 1) - 0.5) * (OUTER_RADIUS / 10)),
+      ),
+      labelStyle: labelPositionStyle(midAngle),
+    };
+  });
+});
+
+const allSegmentsScored = computed(() =>
+  segments.value.every((segment) => segment.value !== null),
+);
+
+const averageScore = computed(() => {
+  const scored = segments.value.filter((segment) => segment.value !== null);
+  if (!scored.length) return null;
+  const total = scored.reduce((sum, segment) => sum + (segment.value || 0), 0);
+  return total / scored.length;
+});
+
+const latestSnapshot = computed(() => snapshots.value[0] || null);
+const historyAvailable = computed(() => snapshots.value.length > 1);
+
+function createId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function cloneDefaultSegments() {
+  return defaultSegments.map((segment) => ({ ...segment }));
+}
+
+function sanitizeSegment(input: Partial<WheelSegment>, index: number): WheelSegment {
+  const fallback = defaultSegments[index] || {
+    id: createId("area"),
+    label: "New area",
+    helper: "Personal context",
+    color: "#26806f",
+    emoji: "✦",
+    value: null,
+  };
+  const value = Number(input.value);
+  return {
+    id: typeof input.id === "string" && input.id ? input.id : fallback.id,
+    label:
+      typeof input.label === "string" && input.label.trim()
+        ? input.label.trim().slice(0, 36)
+        : fallback.label,
+    helper:
+      typeof input.helper === "string" && input.helper.trim()
+        ? input.helper.trim().slice(0, 180)
+        : fallback.helper,
+    color:
+      typeof input.color === "string" && /^#[0-9a-fA-F]{6}$/.test(input.color)
+        ? input.color
+        : fallback.color,
+    emoji:
+      typeof input.emoji === "string" && input.emoji.trim()
+        ? input.emoji.trim().slice(0, 4)
+        : fallback.emoji,
+    value: Number.isInteger(value) && value >= 1 && value <= 10 ? value : null,
+  };
+}
+
+function sanitizeSegments(input: unknown): WheelSegment[] {
+  const incoming = Array.isArray(input) ? input : [];
+  const sanitized = incoming
+    .slice(0, MAX_SEGMENTS)
+    .map((segment, index) => sanitizeSegment(segment as Partial<WheelSegment>, index));
+
+  const byId = new Set(sanitized.map((segment) => segment.id));
+  for (const segment of defaultSegments) {
+    if (sanitized.length >= MIN_SEGMENTS) break;
+    if (!byId.has(segment.id)) sanitized.push({ ...segment });
+  }
+
+  return sanitized.length >= MIN_SEGMENTS ? sanitized : cloneDefaultSegments();
+}
+
+function sanitizeSnapshots(input: unknown): WheelSnapshot[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((snapshot): WheelSnapshot | null => {
+      if (!snapshot || typeof snapshot !== "object") return null;
+      const source = snapshot as Partial<WheelSnapshot>;
+      if (typeof source.id !== "string" || typeof source.createdAt !== "string") {
+        return null;
+      }
+      const sourceSegments = Array.isArray(source.segments) ? source.segments : [];
+      return {
+        id: source.id,
+        createdAt: source.createdAt,
+        segments: sourceSegments.map((segment, index) => {
+          const clean = sanitizeSegment(segment as Partial<WheelSegment>, index);
+          return {
+            ...clean,
+            notes:
+              typeof (segment as Partial<SnapshotSegment>).notes === "string"
+                ? (segment as Partial<SnapshotSegment>).notes?.slice(0, 600) || ""
+                : "",
+          };
+        }),
+      };
+    })
+    .filter((snapshot): snapshot is WheelSnapshot => Boolean(snapshot))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+function loadStoredState(): StoredWheelState {
+  if (typeof window === "undefined") {
+    return {
+      schemaVersion: 1,
+      segments: cloneDefaultSegments(),
+      snapshots: [],
+    };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) throw new Error("Missing wheel state");
+    const parsed = JSON.parse(raw) as Partial<StoredWheelState>;
+    return {
+      schemaVersion: 1,
+      segments: sanitizeSegments(parsed.segments),
+      snapshots: sanitizeSnapshots(parsed.snapshots),
+    };
+  } catch {
+    return {
+      schemaVersion: 1,
+      segments: cloneDefaultSegments(),
+      snapshots: [],
+    };
+  }
+}
+
+function persistState() {
+  if (typeof window === "undefined") return;
+  const payload: StoredWheelState = {
+    schemaVersion: 1,
+    segments: segments.value,
+    snapshots: snapshots.value,
+  };
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+}
+
+function polarPoint(angleDeg: number, radius: number) {
+  const angle = ((angleDeg - 90) * Math.PI) / 180;
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
+  };
+}
+
+function sectorPath(radius: number, startAngle: number, endAngle: number) {
+  const start = polarPoint(startAngle, radius);
+  const end = polarPoint(endAngle, radius);
+  const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+  return `M ${WHEEL_CENTER} ${WHEEL_CENTER} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
+}
+
+function labelPositionStyle(midAngle: number) {
+  const angle = ((midAngle - 90) * Math.PI) / 180;
+  const x = 50 + Math.cos(angle) * 47;
+  const y = 50 + Math.sin(angle) * 47;
+  return {
+    left: `${x}%`,
+    top: `${y}%`,
+  };
+}
+
+function ratingFromPointer(event: PointerEvent) {
+  if (!wheelSvg.value) return null;
+  const rect = wheelSvg.value.getBoundingClientRect();
+  const x = ((event.clientX - rect.left) / rect.width) * VIEWBOX_SIZE + VIEWBOX_MIN;
+  const y = ((event.clientY - rect.top) / rect.height) * VIEWBOX_SIZE + VIEWBOX_MIN;
+  const radius = Math.hypot(x - WHEEL_CENTER, y - WHEEL_CENTER);
+  if (radius > OUTER_RADIUS + 1) return null;
+  return Math.min(10, Math.max(1, Math.ceil(radius / (OUTER_RADIUS / 10))));
+}
+
+function setSegmentValue(segmentId: string, value: number | null) {
+  const segment = segments.value.find((item) => item.id === segmentId);
+  if (!segment) return;
+  segment.value = value === null ? null : Math.min(10, Math.max(1, value));
+}
+
+function handlePointerMove(event: PointerEvent, segmentId: string) {
+  hoverSegmentId.value = segmentId;
+  hoverRating.value = ratingFromPointer(event);
+}
+
+function handlePointerLeave() {
+  hoverSegmentId.value = "";
+  hoverRating.value = null;
+}
+
+function handleSegmentClick(event: PointerEvent, segmentId: string) {
+  const rating = ratingFromPointer(event);
+  if (!rating) return;
+  setSegmentValue(segmentId, rating);
+}
+
+function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
+  const segment = segments.value.find((item) => item.id === segmentId);
+  if (!segment) return;
+
+  if (event.key === "Home") {
+    event.preventDefault();
+    setSegmentValue(segmentId, 1);
+    return;
+  }
+  if (event.key === "End") {
+    event.preventDefault();
+    setSegmentValue(segmentId, 10);
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    setSegmentValue(segmentId, segment.value || 5);
+    return;
+  }
+  if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+    event.preventDefault();
+    setSegmentValue(segmentId, (segment.value || 0) + 1);
+    return;
+  }
+  if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+    event.preventDefault();
+    setSegmentValue(segmentId, (segment.value || 2) - 1);
+  }
+}
+
+function addSegment() {
+  if (segments.value.length >= MAX_SEGMENTS) return;
+  const palette = ["#0f766e", "#9333ea", "#0e7490", "#b45309", "#be185d"];
+  segments.value.push({
+    id: createId("area"),
+    label: `Area ${segments.value.length + 1}`,
+    helper: "Personal context",
+    color: palette[segments.value.length % palette.length],
+    emoji: "✦",
+    value: null,
+  });
+}
+
+function removeSegment(segmentId: string) {
+  if (segments.value.length <= MIN_SEGMENTS) return;
+  segments.value = segments.value.filter((segment) => segment.id !== segmentId);
+}
+
+function openSaveModal() {
+  if (!allSegmentsScored.value) return;
+  snapshotNotes.value = Object.fromEntries(
+    segments.value.map((segment) => [segment.id, ""]),
+  );
+  saveModalOpen.value = true;
+  nextTick(() => {
+    document.querySelector<HTMLInputElement>("[data-wheel-note-input]")?.focus();
+  });
+}
+
+function saveSnapshot() {
+  const snapshot: WheelSnapshot = {
+    id: createId("snapshot"),
+    createdAt: new Date().toISOString(),
+    segments: segments.value.map((segment) => ({
+      id: segment.id,
+      label: segment.label,
+      helper: segment.helper,
+      color: segment.color,
+      emoji: segment.emoji,
+      value: segment.value,
+      notes: snapshotNotes.value[segment.id]?.trim() || "",
+    })),
+  };
+  snapshots.value = [snapshot, ...snapshots.value];
+  saveModalOpen.value = false;
+  snapshotNotes.value = {};
+}
+
+function closeModals() {
+  saveModalOpen.value = false;
+  historyModalOpen.value = false;
+}
+
+function formatSnapshotDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Saved snapshot";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function snapshotAverage(snapshot: WheelSnapshot) {
+  const scored = snapshot.segments.filter((segment) => segment.value !== null);
+  if (!scored.length) return "No score";
+  const total = scored.reduce((sum, segment) => sum + (segment.value || 0), 0);
+  return `${(total / scored.length).toFixed(1)}/10`;
+}
+
+function handleGlobalKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") closeModals();
+}
+
+onMounted(() => {
+  const stored = loadStoredState();
+  segments.value = stored.segments;
+  snapshots.value = stored.snapshots;
+  window.addEventListener("keydown", handleGlobalKeydown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleGlobalKeydown);
+});
+
+watch([segments, snapshots], persistState, { deep: true });
+</script>
+
+<template>
+  <section class="life-wheel" aria-labelledby="life-wheel-title">
+    <header class="life-wheel__header">
+      <div class="life-wheel__heading">
+        <h1 id="life-wheel-title">Wheel of Life</h1>
+        <p>
+          Private coaching context
+          <span v-if="averageScore !== null"> · {{ averageScore.toFixed(1) }}/10 average</span>
+        </p>
+      </div>
+      <div class="life-wheel__actions">
+        <button
+          type="button"
+          class="life-wheel__icon-button"
+          :disabled="!historyAvailable"
+          aria-label="View snapshot history"
+          title="View snapshot history"
+          @click="historyModalOpen = true"
+        >
+          <UiIcon name="History" :size="18" />
+        </button>
+        <button
+          type="button"
+          class="life-wheel__save"
+          :disabled="!allSegmentsScored"
+          @click="openSaveModal"
+        >
+          <UiIcon name="Save" :size="16" aria-hidden="true" />
+          <span>Save snapshot</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="life-wheel__workspace">
+      <div class="life-wheel__stage">
+        <div class="life-wheel__canvas">
+          <svg
+            ref="wheelSvg"
+            class="life-wheel__svg"
+            :viewBox="`${VIEWBOX_MIN} ${VIEWBOX_MIN} ${VIEWBOX_SIZE} ${VIEWBOX_SIZE}`"
+            aria-label="Wheel of Life score selector"
+            @pointerleave="handlePointerLeave"
+          >
+            <g class="life-wheel__values" aria-hidden="true">
+              <path
+                v-for="segment in wheelSegments"
+                :key="`${segment.id}-value`"
+                :d="segment.valuePath"
+                :fill="segment.color"
+                :opacity="segment.valuePath ? 0.32 : 0"
+              />
+              <path
+                v-for="segment in wheelSegments"
+                :key="`${segment.id}-hover`"
+                :d="segment.hoverPath"
+                :fill="segment.color"
+                :opacity="segment.hoverPath ? 0.2 : 0"
+              />
+            </g>
+
+            <g class="life-wheel__grid" aria-hidden="true">
+              <circle
+                v-for="ring in rings"
+                :key="ring.id"
+                :r="ring.radius"
+                :class="{ 'is-outer': ring.strong }"
+              />
+              <line
+                v-for="segment in wheelSegments"
+                :key="`${segment.id}-divider`"
+                :x1="WHEEL_CENTER"
+                :y1="WHEEL_CENTER"
+                :x2="segment.divider.x"
+                :y2="segment.divider.y"
+              />
+              <circle r="2.6" class="life-wheel__center-dot" />
+            </g>
+
+            <g>
+              <path
+                v-for="segment in wheelSegments"
+                :key="`${segment.id}-hit`"
+                class="life-wheel__hit-area"
+                :d="segment.hitPath"
+                fill="transparent"
+                tabindex="0"
+                role="button"
+                :aria-label="`${segment.label}, ${segment.value ? `${segment.value} of 10` : 'not scored'}`"
+                @pointermove="handlePointerMove($event, segment.id)"
+                @click="handleSegmentClick($event, segment.id)"
+                @keydown="handleSegmentKeydown($event, segment.id)"
+              >
+                <title>{{ segment.helper }}</title>
+              </path>
+            </g>
+
+            <g class="life-wheel__hover-number" aria-hidden="true">
+              <text
+                v-for="segment in wheelSegments"
+                v-show="hoverSegmentId === segment.id && hoverRating"
+                :key="`${segment.id}-hover-number`"
+                :x="segment.hoverLabelPoint.x"
+                :y="segment.hoverLabelPoint.y"
+              >
+                {{ hoverRating }}
+              </text>
+            </g>
+          </svg>
+
+          <div class="life-wheel__labels">
+            <button
+              v-for="segment in wheelSegments"
+              :key="`${segment.id}-label`"
+              type="button"
+              class="life-wheel__label"
+              :class="{ 'is-active': hoverSegmentId === segment.id }"
+              :style="segment.labelStyle"
+              :aria-label="`${segment.label}${segment.value ? `, ${segment.value} of 10` : ', not scored'}. ${segment.helper}`"
+              :title="segment.helper"
+              @pointerenter="hoverSegmentId = segment.id"
+              @pointerleave="handlePointerLeave"
+              @click="setSegmentValue(segment.id, segment.value || 5)"
+            >
+              <span class="life-wheel__label-emoji">{{ segment.emoji }}</span>
+              <span>{{ segment.label }}<template v-if="segment.value"> ({{ segment.value }}/10)</template></span>
+            </button>
+          </div>
+        </div>
+
+        <p v-if="latestSnapshot" class="life-wheel__latest">
+          Last saved {{ formatSnapshotDate(latestSnapshot.createdAt) }}
+        </p>
+      </div>
+
+      <aside class="life-wheel__panel" aria-label="Wheel segments">
+        <div class="life-wheel__panel-header">
+          <h2>Areas</h2>
+          <button
+            type="button"
+            class="life-wheel__mini-button"
+            :disabled="segments.length >= MAX_SEGMENTS"
+            @click="addSegment"
+          >
+            <UiIcon name="Plus" :size="15" aria-hidden="true" />
+            <span>Add</span>
+          </button>
+        </div>
+
+        <div class="life-wheel__segment-list">
+          <article
+            v-for="segment in segments"
+            :key="segment.id"
+            class="life-wheel__segment-editor"
+          >
+            <div class="life-wheel__segment-editor-top">
+              <input
+                v-model="segment.emoji"
+                class="life-wheel__emoji-input"
+                :aria-label="`${segment.label} icon`"
+                maxlength="4"
+              />
+              <input
+                v-model="segment.label"
+                class="life-wheel__text-input"
+                :aria-label="`${segment.label} label`"
+                maxlength="36"
+              />
+              <input
+                v-model="segment.color"
+                class="life-wheel__color-input"
+                type="color"
+                :aria-label="`${segment.label} color`"
+              />
+              <button
+                type="button"
+                class="life-wheel__remove-button"
+                :disabled="segments.length <= MIN_SEGMENTS"
+                :aria-label="`Remove ${segment.label}`"
+                @click="removeSegment(segment.id)"
+              >
+                <UiIcon name="Trash2" :size="15" />
+              </button>
+            </div>
+            <input
+              v-model="segment.helper"
+              class="life-wheel__helper-input"
+              :aria-label="`${segment.label} helper text`"
+              maxlength="180"
+            />
+            <div class="life-wheel__score-row">
+              <input
+                :id="`score-${segment.id}`"
+                type="range"
+                min="1"
+                max="10"
+                :value="segment.value || 1"
+                :aria-label="`${segment.label} score`"
+                @input="
+                  setSegmentValue(
+                    segment.id,
+                    Number(($event.target as HTMLInputElement).value),
+                  )
+                "
+              />
+              <output :for="`score-${segment.id}`">
+                {{ segment.value ? `${segment.value}/10` : "Unset" }}
+              </output>
+            </div>
+          </article>
+        </div>
+      </aside>
+    </div>
+
+    <Teleport to="body">
+      <div
+        v-if="saveModalOpen"
+        class="life-wheel-modal"
+        role="presentation"
+        @click.self="saveModalOpen = false"
+      >
+        <section
+          class="life-wheel-modal__dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="save-wheel-title"
+        >
+          <header class="life-wheel-modal__header">
+            <div>
+              <h2 id="save-wheel-title">Save snapshot</h2>
+              <p>Optional notes stay with this private entry.</p>
+            </div>
+            <button
+              type="button"
+              class="life-wheel__icon-button"
+              aria-label="Close"
+              @click="saveModalOpen = false"
+            >
+              <UiIcon name="X" :size="18" />
+            </button>
+          </header>
+          <div class="life-wheel-modal__body">
+            <label
+              v-for="(segment, index) in segments"
+              :key="segment.id"
+              class="life-wheel-modal__note"
+            >
+              <span>
+                <strong>{{ segment.emoji }} {{ segment.label }}</strong>
+                <small>{{ segment.value }}/10</small>
+              </span>
+              <input
+                v-model="snapshotNotes[segment.id]"
+                :data-wheel-note-input="index === 0 ? true : undefined"
+                :placeholder="`Notes for ${segment.label}`"
+                maxlength="600"
+              />
+            </label>
+          </div>
+          <footer class="life-wheel-modal__footer">
+            <button type="button" class="life-wheel__mini-button" @click="saveModalOpen = false">
+              Cancel
+            </button>
+            <button type="button" class="life-wheel__save" @click="saveSnapshot">
+              <UiIcon name="Check" :size="16" aria-hidden="true" />
+              <span>Confirm save</span>
+            </button>
+          </footer>
+        </section>
+      </div>
+
+      <div
+        v-if="historyModalOpen"
+        class="life-wheel-modal"
+        role="presentation"
+        @click.self="historyModalOpen = false"
+      >
+        <section
+          class="life-wheel-modal__dialog life-wheel-modal__dialog--wide"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="wheel-history-title"
+        >
+          <header class="life-wheel-modal__header">
+            <div>
+              <h2 id="wheel-history-title">Snapshot history</h2>
+              <p>{{ snapshots.length }} saved entries</p>
+            </div>
+            <button
+              type="button"
+              class="life-wheel__icon-button"
+              aria-label="Close"
+              @click="historyModalOpen = false"
+            >
+              <UiIcon name="X" :size="18" />
+            </button>
+          </header>
+          <div class="life-wheel-history">
+            <article
+              v-for="snapshot in snapshots"
+              :key="snapshot.id"
+              class="life-wheel-history__item"
+            >
+              <header>
+                <strong>{{ formatSnapshotDate(snapshot.createdAt) }}</strong>
+                <span>{{ snapshotAverage(snapshot) }}</span>
+              </header>
+              <div class="life-wheel-history__segments">
+                <div
+                  v-for="segment in snapshot.segments"
+                  :key="`${snapshot.id}-${segment.id}`"
+                  class="life-wheel-history__segment"
+                >
+                  <span
+                    class="life-wheel-history__swatch"
+                    :style="{ background: segment.color }"
+                  />
+                  <span>{{ segment.emoji }} {{ segment.label }}</span>
+                  <strong>{{ segment.value || "Unset" }}/10</strong>
+                  <small v-if="segment.notes">{{ segment.notes }}</small>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+      </div>
+    </Teleport>
+  </section>
+</template>
+
+<style scoped>
+.life-wheel {
+  display: grid;
+  gap: 20px;
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  color: var(--ui-text);
+}
+
+.life-wheel__header,
+.life-wheel__workspace,
+.life-wheel__panel,
+.life-wheel-modal__dialog {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+}
+
+.life-wheel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+}
+
+.life-wheel__heading {
+  min-width: 0;
+}
+
+.life-wheel__heading h1,
+.life-wheel__panel-header h2,
+.life-wheel-modal__header h2 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.life-wheel__heading p,
+.life-wheel__latest,
+.life-wheel-modal__header p {
+  margin: 5px 0 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.life-wheel__actions,
+.life-wheel__panel-header,
+.life-wheel__segment-editor-top,
+.life-wheel__score-row,
+.life-wheel-modal__header,
+.life-wheel-modal__footer,
+.life-wheel-history__item header {
+  display: flex;
+  align-items: center;
+}
+
+.life-wheel__actions {
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.life-wheel__icon-button,
+.life-wheel__save,
+.life-wheel__mini-button,
+.life-wheel__remove-button {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.life-wheel__icon-button {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+}
+
+.life-wheel__save,
+.life-wheel__mini-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.life-wheel__save {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
+}
+
+.life-wheel__icon-button:hover:not(:disabled),
+.life-wheel__mini-button:hover:not(:disabled),
+.life-wheel__remove-button:hover:not(:disabled) {
+  background: var(--ui-surface-muted);
+}
+
+.life-wheel__save:hover:not(:disabled) {
+  background: var(--ui-accent-strong);
+  border-color: var(--ui-accent-strong);
+}
+
+.life-wheel__icon-button:disabled,
+.life-wheel__save:disabled,
+.life-wheel__mini-button:disabled,
+.life-wheel__remove-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.life-wheel__workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 0;
+  overflow: hidden;
+}
+
+.life-wheel__stage {
+  display: grid;
+  align-content: center;
+  min-height: 640px;
+  padding: 28px;
+}
+
+.life-wheel__canvas {
+  position: relative;
+  display: grid;
+  width: min(640px, 100%);
+  aspect-ratio: 1;
+  place-items: center;
+  margin: 0 auto;
+}
+
+.life-wheel__svg {
+  display: block;
+  width: 74%;
+  max-width: 500px;
+  aspect-ratio: 1;
+  overflow: visible;
+}
+
+.life-wheel__grid circle,
+.life-wheel__grid line {
+  fill: none;
+  stroke: color-mix(in oklab, var(--ui-text-muted), transparent 58%);
+  stroke-width: 0.65;
+  vector-effect: non-scaling-stroke;
+}
+
+.life-wheel__grid circle.is-outer {
+  stroke: var(--ui-text);
+  stroke-width: 1.6;
+}
+
+.life-wheel__center-dot {
+  fill: var(--ui-text);
+  stroke: none;
+}
+
+.life-wheel__hit-area {
+  cursor: crosshair;
+  outline: none;
+}
+
+.life-wheel__hit-area:focus-visible {
+  stroke: var(--ui-accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.life-wheel__hover-number text,
+.life-wheel__hover-number {
+  fill: var(--ui-text);
+  font-size: 9px;
+  font-weight: 800;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+
+.life-wheel__labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.life-wheel__label {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  max-width: min(190px, 34%);
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: color-mix(in oklab, var(--ui-surface), transparent 8%);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-align: left;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.life-wheel__label span:last-child {
+  overflow-wrap: anywhere;
+}
+
+.life-wheel__label:hover,
+.life-wheel__label.is-active {
+  border-color: var(--ui-border);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.life-wheel__label-emoji {
+  flex: 0 0 auto;
+}
+
+.life-wheel__latest {
+  text-align: center;
+}
+
+.life-wheel__panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+}
+
+.life-wheel__panel-header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.life-wheel__segment-list {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+}
+
+.life-wheel__segment-editor {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.life-wheel__segment-editor:last-child {
+  border-bottom: 0;
+}
+
+.life-wheel__segment-editor-top {
+  gap: 6px;
+}
+
+.life-wheel__emoji-input,
+.life-wheel__text-input,
+.life-wheel__helper-input,
+.life-wheel-modal__note input {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.life-wheel__emoji-input {
+  width: 42px;
+  text-align: center;
+}
+
+.life-wheel__text-input {
+  flex: 1;
+  padding: 0 9px;
+  font-weight: 700;
+}
+
+.life-wheel__helper-input {
+  width: 100%;
+  padding: 0 9px;
+  color: var(--ui-text-muted);
+}
+
+.life-wheel__emoji-input:focus,
+.life-wheel__text-input:focus,
+.life-wheel__helper-input:focus,
+.life-wheel-modal__note input:focus {
+  border-color: var(--ui-accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ui-accent), transparent 82%);
+}
+
+.life-wheel__color-input {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.life-wheel__remove-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--ui-text-muted);
+}
+
+.life-wheel__score-row {
+  gap: 10px;
+}
+
+.life-wheel__score-row input[type="range"] {
+  min-width: 0;
+  flex: 1;
+  accent-color: var(--ui-accent);
+}
+
+.life-wheel__score-row output {
+  width: 54px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.life-wheel-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in oklab, #000, transparent 54%);
+}
+
+.life-wheel-modal__dialog {
+  display: grid;
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  overflow: hidden;
+  box-shadow: 0 24px 70px color-mix(in oklab, #000, transparent 70%);
+}
+
+.life-wheel-modal__dialog--wide {
+  width: min(840px, 100%);
+}
+
+.life-wheel-modal__header {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.life-wheel-modal__body,
+.life-wheel-history {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding: 16px;
+}
+
+.life-wheel-modal__note {
+  display: grid;
+  gap: 7px;
+}
+
+.life-wheel-modal__note span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.life-wheel-modal__note small {
+  color: var(--ui-text-muted);
+  font-weight: 800;
+}
+
+.life-wheel-modal__note input {
+  width: 100%;
+  padding: 0 10px;
+}
+
+.life-wheel-modal__footer {
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.life-wheel-history {
+  gap: 12px;
+}
+
+.life-wheel-history__item {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.life-wheel-history__item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.life-wheel-history__item header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.life-wheel-history__item header span {
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.life-wheel-history__segments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.life-wheel-history__segment {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ui-text);
+  font-size: 13px;
+}
+
+.life-wheel-history__segment small {
+  grid-column: 2 / 4;
+  color: var(--ui-text-muted);
+  line-height: 1.35;
+}
+
+.life-wheel-history__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+@media (max-width: 959px) {
+  .life-wheel__header,
+  .life-wheel__workspace {
+    border-radius: var(--ui-radius-md);
+  }
+
+  .life-wheel__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .life-wheel__workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .life-wheel__stage {
+    min-height: auto;
+    padding: 18px 10px 8px;
+  }
+
+  .life-wheel__canvas {
+    width: min(100%, 560px);
+  }
+
+  .life-wheel__svg {
+    width: 78%;
+  }
+
+  .life-wheel__labels {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 10px;
+    pointer-events: auto;
+  }
+
+  .life-wheel__label {
+    position: static;
+    max-width: 100%;
+    transform: none;
+  }
+
+  .life-wheel__panel {
+    border-width: 1px 0 0;
+  }
+
+  .life-wheel-history__segments {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .life-wheel__actions {
+    width: 100%;
+  }
+
+  .life-wheel__save {
+    flex: 1;
+  }
+
+  .life-wheel__segment-editor-top {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) 34px 34px;
+  }
+
+  .life-wheel-modal {
+    padding: 10px;
+  }
+}
+</style>
