@@ -3040,7 +3040,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   {{ selectedModelSetup.statusLabel }}
                 </RouterLink>
                 <span
-                  v-else
+                  v-else-if="selectedModelSetup.statusLabel !== 'Ready'"
                   class="model-picker__status"
                   :class="selectedModelSetup.className"
                 >
