@@ -2510,6 +2510,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
         </button>
         <button
           type="button"
+          class="assistant-history__new-chat"
+          @click="startNewAssistantChat(null)"
+        >
+          <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
+          <span>New chat</span>
+        </button>
+        <button
+          type="button"
           class="assistant-history__icon-button assistant-history__close"
           aria-label="Close chat history"
           title="Close"
@@ -2521,16 +2529,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
       <div v-if="!assistantHistoryCollapsed" class="assistant-history__body">
         <nav class="assistant-history__topnav" aria-label="Assistant tools">
-          <button
-            type="button"
-            class="assistant-history__nav-row"
-            @click="startNewAssistantChat(null)"
-          >
-            <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
-            <span>New chat</span>
-          </button>
           <form class="assistant-history__search" @submit.prevent="applyAssistantThreadSearch">
-            <UiIcon name="Search" :size="15" aria-hidden="true" />
+            <UiIcon name="Search" :size="16" aria-hidden="true" />
             <input
               v-model="assistantThreadSearchDraft"
               type="search"
@@ -3752,14 +3752,33 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-history__header {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 4px;
   min-width: 0;
+}
+
+.assistant-history__new-chat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 520;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .assistant-history__nav-row:hover,
 .assistant-history__project-row:hover,
 .assistant-history__thread:hover,
+.assistant-history__new-chat:hover,
 .assistant-history__icon-button:hover {
   background: color-mix(in oklab, var(--ui-surface) 64%, transparent);
   color: var(--ui-text);
@@ -3786,6 +3805,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-history__close {
   display: inline-flex;
+  margin-left: auto;
 }
 
 .assistant-history__body {

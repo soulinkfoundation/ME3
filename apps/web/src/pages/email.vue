@@ -1803,31 +1803,31 @@ onBeforeUnmount(() => {
         />
         <button
           type="submit"
-          class="mail-search__button"
+          class="mail-search__button mail-mobile-icon-btn"
           :disabled="loading"
           aria-label="Search mail"
           title="Search"
         >
-          <UiIcon name="Search" :size="15" aria-hidden="true" />
+          <UiIcon name="Search" :size="18" aria-hidden="true" />
         </button>
         <button
           type="button"
           class="compose-btn compose-btn--mobile-nav"
           aria-label="Compose"
-          title="Compose"
           @click="openComposeModal()"
         >
-          <UiIcon name="Pencil" :size="16" aria-hidden="true" />
+          <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
+          <span class="compose-btn__label">Compose</span>
         </button>
         <button
           type="button"
-          class="mail-search__button mail-search__button--refresh"
+          class="mail-search__button mail-search__button--refresh mail-mobile-icon-btn"
           :disabled="loading"
           aria-label="Refresh conversations"
           title="Refresh"
           @click="refreshMessagesPage"
         >
-          <UiIcon name="RefreshCw" :size="15" aria-hidden="true" />
+          <UiIcon name="RefreshCw" :size="18" aria-hidden="true" />
         </button>
       </form>
     </Teleport>
@@ -1960,13 +1960,19 @@ onBeforeUnmount(() => {
                 class="mail-rail"
                 :class="{ 'mail-rail--mobile-hidden': mobileThreadOpen }"
               >
-                <nav class="folder-nav" aria-label="Mailbox folders">
+                <nav
+                  class="folder-nav"
+                  role="tablist"
+                  aria-label="Mailbox folders"
+                >
                   <button
                     v-for="key in emailTabOrder"
                     :key="key"
                     type="button"
+                    role="tab"
                     class="folder-btn"
                     :class="{ 'folder-btn--active': activeTab === key }"
+                    :aria-selected="activeTab === key"
                     :aria-label="emailTabConfig[key].label"
                     @click="switchTab(key)"
                   >
@@ -3030,52 +3036,100 @@ onBeforeUnmount(() => {
 }
 
 .mail-search--mobile-nav {
-  grid-template-columns: minmax(0, 1fr) 42px 42px 42px;
+  grid-template-columns: minmax(0, 1fr) 36px auto 36px;
   width: 100%;
 }
 
-.mail-search--mobile-nav .mail-search__input,
-.mail-search--mobile-nav .mail-search__button,
-.mail-search--mobile-nav .compose-btn--mobile-nav {
-  height: 42px;
+.mail-search--mobile-nav .mail-search__input {
+  height: 36px;
 }
 
-.mail-search--mobile-nav .mail-search__button,
-.mail-search--mobile-nav .compose-btn--mobile-nav {
+.mail-search--mobile-nav .mail-mobile-icon-btn {
   flex: 0 0 auto;
-  width: 42px;
-  padding: 0;
-}
-
-:global(
-  #app-side-nav-mobile-page-controls
-    .mail-search--mobile-nav
-    .mail-search__button:not(.mail-search__button--refresh)
-) {
-  width: 42px;
-  height: 42px;
-  padding: 0;
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-accent-contrast);
-}
-
-:global(
-  #app-side-nav-mobile-page-controls
-    .mail-search--mobile-nav
-    .compose-btn--mobile-nav
-) {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   margin: 0;
   padding: 0;
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-accent-contrast);
 }
 
-.compose-btn--mobile-nav .compose-btn__label {
-  display: none;
+.mail-search--mobile-nav
+  .mail-search__button:not(.mail-search__button--refresh) {
+  border: 0;
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.mail-search--mobile-nav
+  .mail-search__button:not(.mail-search__button--refresh):hover:not(:disabled) {
+  border: 0;
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.mail-search--mobile-nav .compose-btn--mobile-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  width: auto;
+  height: 36px;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mail-search--mobile-nav .compose-btn--mobile-nav:hover:not(:disabled) {
+  border-color: var(--ui-border, var(--color-border));
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text, var(--color-text));
+}
+
+.mail-search--mobile-nav .compose-btn--mobile-nav:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
+}
+
+.mail-mobile-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+}
+
+.mail-mobile-icon-btn:hover:not(:disabled) {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.mail-mobile-icon-btn:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
+}
+
+.mail-search--mobile-nav .mail-search__button--refresh {
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.mail-search--mobile-nav .mail-search__button--refresh:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
 }
 
 .mail-search__button {
@@ -3200,9 +3254,8 @@ onBeforeUnmount(() => {
 }
 
 .mail-workspace {
-  display: grid;
-  grid-template-columns: 210px minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
 }
@@ -3212,34 +3265,54 @@ onBeforeUnmount(() => {
 .thread-pane {
   min-width: 0;
   min-height: 0;
-  border-right: 1px solid var(--color-border);
 }
 
 .mail-rail {
-  grid-column: 1;
-  grid-row: 1 / -1;
-  position: sticky;
-  top: 0;
-  align-self: start;
-  height: 100dvh;
-  max-height: 100dvh;
-  overflow: hidden;
-  padding: 14px 10px;
-  background: var(--color-bg-subtle);
+  order: 1;
+  position: static;
+  z-index: 3;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  width: 100%;
+  height: auto;
+  max-height: none;
+  box-sizing: border-box;
+  padding: 4px 8px 0;
+  background: var(--color-bg);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 8px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (min-width: 768px) {
+  .mail-rail {
+    justify-content: center;
+  }
+}
+
+.mail-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.mail-rail--mobile-hidden,
+.conversation-list--mobile-hidden {
+  display: none;
 }
 
 .conversation-list {
-  grid-column: 2;
-  grid-row: 1;
-  height: 100%;
+  order: 2;
+  flex: 1 1 auto;
   overflow: hidden;
 }
 
 .thread-pane {
-  grid-column: 2;
-  grid-row: 1;
+  order: 3;
   display: none;
-  height: 100%;
+  flex: 1 1 auto;
   overflow: hidden;
 }
 
@@ -3309,38 +3382,63 @@ onBeforeUnmount(() => {
 }
 
 .folder-nav {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 0;
+  width: max-content;
+  flex-shrink: 0;
+}
+
+.folder-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .folder-btn {
-  display: flex;
+  position: relative;
+  z-index: 0;
+  display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  min-height: 38px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
+  gap: 6px;
+  margin: 0 0 -1px;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px 6px 0 0;
+  background: var(--color-bg);
   color: var(--color-text-muted);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    color 0.12s,
+    background 0.12s;
 }
 
-.folder-btn:hover,
-.folder-btn--active {
-  background: var(--color-bg);
+.folder-btn + .folder-btn {
+  margin-left: -1px;
+}
+
+.folder-btn:hover:not(.folder-btn--active) {
+  z-index: 1;
   color: var(--color-text);
-  border-color: var(--color-border);
+}
+
+.folder-btn--active {
+  z-index: 2;
+  margin-bottom: -1px;
+  border-bottom-color: transparent;
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+  font-weight: 700;
 }
 
 .folder-btn__main {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -3349,19 +3447,29 @@ onBeforeUnmount(() => {
 }
 
 .folder-count {
-  min-width: 24px;
-  padding: 2px 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 999px;
   background: var(--color-border);
-  color: var(--color-text);
-  font-size: 12px;
+  color: var(--color-text-muted);
+  font-size: 11px;
   font-weight: 700;
+}
+
+.folder-btn--active .folder-count {
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
 }
 
 .conversation-list {
   display: flex;
   flex-direction: column;
   background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
 }
 
 .conversation-list__head {
@@ -3634,10 +3742,6 @@ onBeforeUnmount(() => {
 
 .thread-pane--mobile-open {
   display: flex;
-}
-
-.conversation-list--mobile-hidden {
-  display: none;
 }
 
 .thread-pane--empty {
@@ -4564,43 +4668,10 @@ onBeforeUnmount(() => {
 }
 
 /* Mobile */
-@media (max-width: 1320px) {
-  .mail-workspace {
-    grid-template-columns: 200px minmax(0, 1fr);
-  }
-
-  .thread-pane {
-    border-right: none;
-  }
-}
-
 @media (max-width: 980px) {
   .inbox-toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
   }
-
-  .mail-workspace {
-    grid-template-columns: 190px minmax(260px, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-    min-height: 0;
-  }
-
-  .mail-rail {
-    grid-column: 1;
-    grid-row: 1 / -1;
-  }
-
-  .conversation-list {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .thread-pane {
-    grid-column: 2;
-    grid-row: 1;
-    border-top: 0;
-  }
-
 }
 
 @media (max-width: 640px) {
@@ -4619,112 +4690,8 @@ onBeforeUnmount(() => {
     gap: 2px;
   }
 
-  .mail-workspace {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-  }
-
   .inbox-panel {
     height: calc(100dvh - var(--app-shell-mobile-nav-height));
-  }
-
-  .mail-rail,
-  .conversation-list,
-  .thread-pane {
-    border-right: none;
-  }
-
-  .mail-rail {
-    order: 1;
-    position: static;
-    z-index: 3;
-    display: block;
-    width: 100%;
-    height: auto;
-    max-height: none;
-    box-sizing: border-box;
-    padding: 10px 12px;
-    background: var(--color-bg-subtle);
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior-x: contain;
-    scroll-padding-inline: 12px;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .mail-rail::-webkit-scrollbar {
-    display: none;
-  }
-
-  .mail-rail--mobile-hidden,
-  .conversation-list--mobile-hidden {
-    display: none;
-  }
-
-  .folder-nav {
-    display: flex;
-    flex-wrap: nowrap;
-    align-items: center;
-    gap: 6px;
-    width: max-content;
-    min-width: 100%;
-  }
-
-  .folder-nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .folder-btn {
-    flex: 0 0 auto;
-    width: auto;
-    min-height: 38px;
-    padding: 0 12px;
-    justify-content: flex-start;
-    border-color: transparent;
-    background: transparent;
-    color: var(--color-text-muted);
-    font-size: 14px;
-    white-space: nowrap;
-  }
-
-  .folder-btn:hover,
-  .folder-btn--active {
-    background: var(--color-bg);
-    color: var(--color-text);
-    border-color: var(--color-border);
-  }
-
-  .folder-btn__main {
-    gap: 8px;
-  }
-
-  .folder-btn__label-full {
-    display: inline;
-  }
-
-  .folder-btn__label-mobile {
-    display: none;
-  }
-
-  .folder-count {
-    display: inline-flex;
-    background: var(--color-bg-muted);
-    color: var(--color-text-muted);
-    font-size: 12px;
-  }
-
-  .folder-btn--active .folder-count {
-    color: var(--color-text);
-  }
-
-  .conversation-list {
-    order: 2;
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow: hidden;
   }
 
   .conversation-list__head {
@@ -4795,16 +4762,7 @@ onBeforeUnmount(() => {
   }
 
   .thread-pane {
-    order: 3;
-    display: none;
     height: calc(100dvh - var(--app-shell-mobile-nav-height));
-    min-height: 0;
-    overflow: hidden;
-    border-top: 0;
-  }
-
-  .thread-pane--mobile-open {
-    display: flex;
   }
 
   .thread-back-btn {

@@ -1942,31 +1942,32 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <button
-        v-if="activeSection === 'projects' && selectedProjectDetail"
-        type="button"
-        class="mission-control__assistant-link"
-        @click="openAssistantForSelectedProject"
-      >
-        <UiIcon name="MessagesSquare" :size="15" aria-hidden="true" />
-        <span>Ask assistant</span>
-      </button>
       <div v-if="activeSection !== 'projects'" class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
       </div>
 
-      <button
-        v-if="primarySections.length > 1"
-        type="button"
-        class="icon-button mission-control__section-cycle"
-        :aria-label="mobilePrimarySectionCycleLabel"
-        :title="mobilePrimarySectionCycleLabel"
-        @click="cyclePrimarySection"
-      >
-        <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
-      </button>
+      <div class="mission-control__topbar-trailing">
+        <button
+          v-if="activeSection === 'projects' && selectedProjectDetail"
+          type="button"
+          class="mission-control__assistant-link"
+          @click="openAssistantForSelectedProject"
+        >
+          <UiIcon name="MessagesSquare" :size="15" aria-hidden="true" />
+          <span>Ask assistant</span>
+        </button>
+        <button
+          v-if="primarySections.length > 1"
+          type="button"
+          class="icon-button mission-control__section-cycle"
+          :aria-label="mobilePrimarySectionCycleLabel"
+          :title="mobilePrimarySectionCycleLabel"
+          @click="cyclePrimarySection"
+        >
+          <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
+        </button>
 
-      <div class="settings-menu" @click.stop>
+        <div class="settings-menu" @click.stop>
         <button
           type="button"
           class="icon-button"
@@ -1997,6 +1998,7 @@ onBeforeUnmount(() => {
           >
             <span>{{ sectionLabels[section] }}</span>
           </button>
+        </div>
         </div>
       </div>
     </header>
@@ -2042,12 +2044,6 @@ onBeforeUnmount(() => {
                   <span>{{ column.tasks.length }}</span>
                 </div>
 
-                <div
-                  v-if="column.tasks.length === 0"
-                  class="project-board__empty"
-                >
-                  No tasks
-                </div>
                 <article
                   v-for="task in column.tasks"
                   :key="task.id"
@@ -3167,7 +3163,7 @@ onBeforeUnmount(() => {
   top: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 36px 36px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   box-sizing: border-box;
@@ -3176,6 +3172,16 @@ onBeforeUnmount(() => {
   padding: var(--workspace-topbar-padding-block) 0;
   background: color-mix(in oklab, var(--ui-bg), transparent 4%);
   backdrop-filter: blur(16px);
+}
+
+.mission-control__topbar-trailing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  flex-shrink: 0;
 }
 
 .mission-control__project-switcher,
@@ -3187,8 +3193,6 @@ onBeforeUnmount(() => {
 }
 
 .mission-control__assistant-link {
-  grid-column: 2;
-  grid-row: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3208,16 +3212,6 @@ onBeforeUnmount(() => {
 .mission-control__assistant-link:hover {
   background: var(--ui-surface-muted);
   color: var(--ui-text);
-}
-
-.mission-control__section-cycle {
-  grid-column: 3;
-  grid-row: 1;
-}
-
-.settings-menu {
-  grid-column: 4;
-  grid-row: 1;
 }
 
 .mission-control__section-tab,
@@ -3327,8 +3321,6 @@ onBeforeUnmount(() => {
 
 .mission-control__section-cycle {
   display: inline-grid;
-  grid-column: 2;
-  grid-row: 1;
 }
 
 .mission-control__topbar .icon-button {
@@ -3343,9 +3335,6 @@ onBeforeUnmount(() => {
 
 .settings-menu {
   position: relative;
-  grid-column: 3;
-  grid-row: 1;
-  justify-self: end;
 }
 
 .settings-menu__dropdown {
@@ -3756,14 +3745,9 @@ onBeforeUnmount(() => {
 }
 
 .project-board__column-header span,
-.project-board__empty,
 .project-task-card__meta {
   color: var(--ui-text-muted);
   font-size: 12px;
-}
-
-.project-board__empty {
-  padding: 10px 0;
 }
 
 .local-project-summary {

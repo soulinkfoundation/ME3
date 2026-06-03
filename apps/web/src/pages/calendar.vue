@@ -151,6 +151,9 @@ const statusMessage = ref("");
 const updatingReminderId = ref<string | null>(null);
 const cancellingBookingId = ref<string | null>(null);
 const deletingEventId = ref<string | null>(null);
+/** Matches `.cal-shell` stacked layout at `max-width: 1100px`. */
+const CALENDAR_COMPACT_MAX_WIDTH_PX = 1100;
+
 const rangeMode = ref<CalendarRangeMode>("month");
 const monthCursor = ref(new Date());
 const dayCursor = ref(new Date());
@@ -1503,7 +1506,9 @@ function handleWindowClick() {
 }
 
 onMounted(async () => {
-  mobileMediaQuery = window.matchMedia("(max-width: 959px)");
+  mobileMediaQuery = window.matchMedia(
+    `(max-width: ${CALENDAR_COMPACT_MAX_WIDTH_PX}px)`,
+  );
   applyCalendarViewportDefaults(mobileMediaQuery.matches);
   mobileMediaQuery.addEventListener("change", onMobileCalendarChange);
   window.addEventListener("keydown", handleWindowKeydown);
@@ -1564,35 +1569,25 @@ onBeforeUnmount(() => {
             @today="pickCalendarToday"
           />
         </div>
-        <Button
-          tone="outline"
-          shape="soft"
-          size="compact"
-          icon-only
+        <button
           type="button"
+          class="cal-mobile-icon-btn"
           :aria-label="mobileRangeCycleLabel"
           :title="mobileRangeCycleLabel"
           @click="cycleRangeMode"
         >
-          <template #icon>
-            <UiIcon :name="mobileRangeIcon" :size="18" aria-hidden="true" />
-          </template>
-        </Button>
+          <UiIcon :name="mobileRangeIcon" :size="18" aria-hidden="true" />
+        </button>
         <div class="cal-mobile-create-wrap">
-          <Button
-            tone="green"
-            shape="soft"
-            size="compact"
-            icon-only
+          <button
             type="button"
+            class="cal-mobile-icon-btn"
             aria-label="Create calendar item"
             title="Create calendar item"
             @click="toggleCreateMenu"
           >
-            <template #icon>
-              <UiIcon name="Plus" :size="18" aria-hidden="true" />
-            </template>
-          </Button>
+            <UiIcon name="Plus" :size="18" aria-hidden="true" />
+          </button>
           <div v-if="showCreateMenu" class="cal-create-menu cal-create-menu--mobile-nav">
             <button type="button" @click="openCreateMode('booking')">
               New booking
@@ -3072,6 +3067,30 @@ onBeforeUnmount(() => {
   .cal-filters {
     grid-column: 1 / -1;
   }
+}
+
+.cal-mobile-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  cursor: pointer;
+}
+
+.cal-mobile-icon-btn:hover:not(:disabled) {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.cal-mobile-icon-btn:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
 }
 
 .cal-mobile-create-wrap {
