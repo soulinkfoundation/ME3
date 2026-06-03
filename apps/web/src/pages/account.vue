@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import CustomDomain from "../components/CustomDomain.vue";
@@ -1635,6 +1635,16 @@ function closeDeleteModal() {
   showDeleteModal.value = false;
 }
 
+async function scrollToRouteHash() {
+  if (!route.hash) return;
+  await nextTick();
+  window.requestAnimationFrame(() => {
+    document
+      .getElementById(route.hash.slice(1))
+      ?.scrollIntoView({ block: "start" });
+  });
+}
+
 async function deleteAccount() {
   if (deleteLoading.value) return;
   if (deleteConfirmInput.value.trim() !== "DELETE") {
@@ -1694,6 +1704,7 @@ onMounted(async () => {
   ) {
     openSection.value.advanced = true;
   }
+  await scrollToRouteHash();
 });
 </script>
 
@@ -2306,7 +2317,11 @@ onMounted(async () => {
                 </p>
               </section>
 
-              <section v-if="showAiModelSection" class="advanced-subsection">
+              <section
+                v-if="showAiModelSection"
+                id="account-ai-model"
+                class="advanced-subsection"
+              >
                 <div class="advanced-subsection__header">
                   <h3>AI model</h3>
                   <StatusBadge :tone="aiSettingsSummaryStatusClass">

@@ -3005,11 +3005,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </div>
 
             <div class="assistant-composer__right">
-              <label class="model-picker">
+              <div class="model-picker">
                 <span class="sr-only">Model</span>
                 <select
                   v-model="selectedModelId"
                   class="model-picker__select"
+                  aria-label="Model"
                   :title="selectedModelTitle"
                   @change="handleAssistantModelChange"
                 >
@@ -3022,13 +3023,23 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     {{ model.optionLabel }}
                   </option>
                 </select>
+                <RouterLink
+                  v-if="selectedModelSetup.statusLabel === 'Setup needed'"
+                  class="model-picker__status model-picker__status--link"
+                  :class="selectedModelSetup.className"
+                  to="/account?section=ai#account-ai-model"
+                  title="Configure AI models"
+                >
+                  {{ selectedModelSetup.statusLabel }}
+                </RouterLink>
                 <span
+                  v-else
                   class="model-picker__status"
                   :class="selectedModelSetup.className"
                 >
                   {{ selectedModelSetup.statusLabel }}
                 </span>
-              </label>
+              </div>
               <button
                 type="button"
                 class="composer-icon-button"
@@ -4183,6 +4194,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .model-picker__status--setup {
   color: var(--ui-warning, #b26a00);
+}
+
+.model-picker__status--link {
+  text-decoration: none;
+}
+
+.model-picker__status--link:hover,
+.model-picker__status--link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .model-picker__status--unknown {
