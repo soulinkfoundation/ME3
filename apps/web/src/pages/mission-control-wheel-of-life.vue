@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
-import { RouterLink } from "vue-router";
 import WheelOfLife from "../components/mission-control/WheelOfLife.vue";
-import UiIcon from "../components/UiIcon.vue";
 
 definePage({
   path: "/mission-control/wheel-of-life",
@@ -20,10 +18,6 @@ definePage({
 <template>
   <main class="wheel-life-page">
     <header class="wheel-life-page__topbar">
-      <RouterLink class="wheel-life-page__back" to="/mission-control">
-        <UiIcon name="ArrowLeft" :size="18" aria-hidden="true" />
-        <span>Mission Control</span>
-      </RouterLink>
       <div class="wheel-life-page__title">Wheel of Life</div>
     </header>
 
@@ -46,36 +40,16 @@ definePage({
   position: sticky;
   top: 0;
   z-index: 20;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
+  justify-content: flex-end;
   min-height: var(--workspace-topbar-height);
   padding: var(--workspace-topbar-padding-block) 0;
   background: color-mix(in oklab, var(--ui-bg), transparent 4%);
   backdrop-filter: blur(16px);
 }
 
-.wheel-life-page__back {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  padding: 0 10px;
-  border-radius: var(--ui-radius-sm);
-  color: var(--ui-text-muted);
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.wheel-life-page__back:hover {
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
-}
-
 .wheel-life-page__title {
-  grid-column: 2;
   color: var(--ui-text);
   font-size: 15px;
   font-weight: 700;
@@ -88,19 +62,7 @@ definePage({
   }
 
   .wheel-life-page__topbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
     padding-left: var(--app-shell-mobile-nav-leading-padding);
-  }
-
-  .wheel-life-page__title {
-    grid-column: 2;
-  }
-}
-
-@media (max-width: 560px) {
-  .wheel-life-page__back span {
-    display: none;
   }
 }
 </style>
