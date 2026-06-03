@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRouter, useRoute } from "vue-router";
 import BrandLogo from "../components/BrandLogo.vue";
+import LandingGrids from "../components/LandingGrids.vue";
 import UiIcon from "../components/UiIcon.vue";
 import { api } from "../api";
 import { useAuthStore } from "../stores/auth";
@@ -321,6 +322,7 @@ onMounted(loadConfig);
 
 <template>
   <div class="login">
+    <LandingGrids />
     <main class="login__main">
       <BrandLogo class="login__logo" alt="me3" />
 
@@ -539,6 +541,8 @@ onMounted(loadConfig);
 
 <style scoped>
 .login {
+  position: relative;
+  isolation: isolate;
   min-height: 100dvh;
   background: var(--ui-bg, var(--color-bg));
   color: var(--ui-text, var(--color-text));
@@ -552,6 +556,8 @@ onMounted(loadConfig);
 }
 
 .login__main {
+  position: relative;
+  z-index: 1;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;

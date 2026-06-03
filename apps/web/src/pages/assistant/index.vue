@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api, type ApiStreamEvent } from "../../api";
 import Button from "../../components/Button.vue";
+import LandingGrids from "../../components/LandingGrids.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import { useAgentChat } from "../../composables/useAgentChat";
 import { useAppToast } from "../../composables/useAppToast";
@@ -2505,6 +2506,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
       'assistant-page--history-open': assistantHistoryDrawerOpen,
     }"
   >
+    <LandingGrids />
     <button
       v-if="assistantHistoryDrawerOpen"
       type="button"
@@ -3007,22 +3009,27 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <div class="assistant-composer__right">
               <div class="model-picker">
                 <span class="sr-only">Model</span>
-                <select
-                  v-model="selectedModelId"
-                  class="model-picker__select"
-                  aria-label="Model"
-                  :title="selectedModelTitle"
-                  @change="handleAssistantModelChange"
-                >
-                  <option
-                    v-for="model in assistantModelOptions"
-                    :key="model.option.id"
-                    :value="model.option.id"
-                    :title="model.optionTitle"
+                <span class="model-picker__select-wrap">
+                  <span class="model-picker__select-sizer" aria-hidden="true">
+                    {{ selectedModel.label }}
+                  </span>
+                  <select
+                    v-model="selectedModelId"
+                    class="model-picker__select"
+                    aria-label="Model"
+                    :title="selectedModelTitle"
+                    @change="handleAssistantModelChange"
                   >
-                    {{ model.optionLabel }}
-                  </option>
-                </select>
+                    <option
+                      v-for="model in assistantModelOptions"
+                      :key="model.option.id"
+                      :value="model.option.id"
+                      :title="model.optionTitle"
+                    >
+                      {{ model.optionLabel }}
+                    </option>
+                  </select>
+                </span>
                 <RouterLink
                   v-if="selectedModelSetup.statusLabel === 'Setup needed'"
                   class="model-picker__status model-picker__status--link"
@@ -3772,6 +3779,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 <style scoped>
 .assistant-page {
+  position: relative;
+  isolation: isolate;
   display: block;
   min-height: 100vh;
   padding: 0 14px 18px;
@@ -4099,6 +4108,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-main {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -4161,17 +4172,45 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-width: 0;
 }
 
-.model-picker__select {
+.model-picker__select-wrap {
+  position: relative;
+  display: inline-block;
   max-width: min(30vw, 154px);
+  min-width: 0;
+  vertical-align: middle;
+}
+
+.model-picker__select,
+.model-picker__select-sizer {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.model-picker__select-sizer {
+  display: block;
+  min-height: 32px;
+  overflow: hidden;
+  padding: 0 22px 0 6px;
+  text-overflow: ellipsis;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.model-picker__select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
   min-height: 32px;
   border: 0;
   border-radius: 999px;
   padding: 0 18px 0 6px;
   background: transparent;
   color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .model-picker__status {
