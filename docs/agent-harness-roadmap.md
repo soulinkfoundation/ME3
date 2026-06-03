@@ -1,6 +1,6 @@
 # ME3 Agent Harness Roadmap
 
-Last updated: 2026-06-02
+Last updated: 2026-06-03
 
 This document is the source of truth for the medium-term ME3 Core agent harness work.
 Update it whenever chat actions, Assistant Jobs, context/memory, Mission Control outputs,
@@ -15,6 +15,7 @@ publishing. The owner-facing UI should stay simple; internal terms can remain in
 
 - Chat: ask the assistant to do something now. `/assistant` is the full chat, agent,
   model-selection, attachment, and future conversational jobs-builder workspace.
+- Portable chat: use Soulink for on-the-go assistant messaging and notifications.
 - Assistant Jobs: create and manage repeatable jobs. The Jobs modal remains the manual
   management and tuning surface for saved jobs.
 - Mission Control: review results, approvals, tasks, memory, runs, and activity.
@@ -44,6 +45,7 @@ results, drafts, approvals, setup, and history.
 | Area                      | State                                                                                                                                                                                                                                                                                       | Main Risk                                                                                                                                                                                       | Tracking                                             |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | Core chat actions         | Partial parity. Reminder create/list and booking lookup have started.                                                                                                                                                                                                                       | Hosted actions could be ported unevenly without shared capability/audit policy.                                                                                                                 | `me3-tlt`                                            |
+| Assistant console         | `/assistant` is the active in-app agent console with model selection, streaming/stop controls, retry/edit/resend basics, staged attachments, and Jobs modal access. The old floating launcher is disabled.                                                                                   | Remaining console work should stay focused on attachments, history/organization, QA, action cards, and job-builder flow rather than duplicate launcher behavior.                                 | `me3-8it`, `me3-3ic`, `me3-kid`                      |
 | Assistant Jobs            | Schema, API, UI, starter recipes, runner lifecycle, Mission Control activity writes, schedule editing/dispatch, Daily Briefing owner notification, and Inbox Watch mailbox-backed execution exist.                                                                                          | Jobs still look more complete than they are: heartbeat/reconciliation, richer model/provider adapters, and QA remain unfinished.                                                                | `me3-wsn`                                            |
 | Setup readiness           | Validation supports setup requirements. Owner notifications resolve from active Soulink, email resolves from an active mailbox, and calendar resolves from the enabled Calendar plugin.                                                                                                     | Future plugin-owned capabilities need the same resolver pattern so job setup does not drift from Account/Plugins state.                                                                         | `me3-wsn.26`                                         |
 | Starter job QA            | Final manual QA pass. Daily Briefing and Invoice and Receipt Triage are satisfactory for now. Weekly Review and Inbox Watch run and write Mission Control activity, but still need sharper owner-facing outcomes.                                                                           | Custom builder would expose unfinished behavior if started before Weekly Review and Inbox Watch outcomes are designed.                                                                          | `me3-wsn.25`, `me3-wsn.15`, `me3-wsn.30`             |
@@ -63,6 +65,12 @@ assistant Stream chat in Soulink, Soulink relays owner messages to
 post owner notifications through Soulink's `/api/me3/assistant-channel/notify` route. Remaining
 reply failures should be treated as harness/model-provider issues unless channel logs show a
 transport error.
+
+The floating in-app `AgentChatLauncher.vue` is no longer part of the active product direction. It is
+disabled behind `AGENT_LAUNCHER_UI_ENABLED` in `apps/web/src/App.vue` and should be treated as
+legacy fallback code unless a new, specific quick-entry use case emerges. Do not build new harness
+features around the launcher; route in-app work through `/assistant` and portable work through
+Soulink.
 
 ## Roadmap
 
@@ -184,9 +192,9 @@ Detailed reference docs:
 - `docs/assistant-job-creation-capability.md`: custom job builder reference.
 - `docs/assistant-jobs-and-agent-skills.md`: skill/recipe/job/capability boundary.
 - `docs/assistant-agent-console-plan.md`: `/assistant` full agent console direction,
-  model selection, attachments, voice dictation, jobs builder, and launcher split.
+  model selection, attachments, voice dictation, jobs builder, and retired launcher stance.
 - `docs/assistant-chat-history-model-plan.md`: assistant thread history, `/assistant`
-  secondary side panel, refresh persistence, and Mission Control project grouping.
+  navigation/organization, refresh persistence, and Mission Control project grouping.
 - `docs/inbox-watch-rules-plan.md`: Inbox Watch multiple rules, mixed timing, and
   approval-first outcomes plan.
 - `docs/agent-context-roadmap.md`: native context and memory design reference.

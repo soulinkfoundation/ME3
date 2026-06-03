@@ -9,8 +9,8 @@ Tracking: `me3-8it`.
 Related follow-up: `me3-kid` tracks the robust composer-only voice dictation adapter.
 
 Related decision plan: [`docs/assistant-chat-history-model-plan.md`](assistant-chat-history-model-plan.md)
-tracks assistant thread history, refresh persistence, the `/assistant` secondary side panel, and
-Mission Control project grouping.
+tracks assistant thread history, refresh persistence, conversation organization, and Mission Control
+project grouping.
 
 Related implementation beads:
 
@@ -27,21 +27,21 @@ As of 2026-06-03:
 
 - Milestone 1 shell is implemented:
   - `/assistant` is a full-screen assistant console.
-  - The global launcher is hidden there.
+  - The global launcher is disabled app-wide behind `AGENT_LAUNCHER_UI_ENABLED`.
   - The Jobs modal remains available from the composer and keeps the existing starter/tuning flows.
   - The bottom composer, model selector, starter prompts, and message timeline are in place.
 - Milestone 2 is partially implemented:
   - `/api/assistant/chat/turn` is now the product-facing chat route.
   - `/api/assistant/chat/turn/stream` streams assistant replies as server-sent events.
   - `/api/agent/sandbox` remains as a legacy alias.
-  - `/assistant`, the launcher, and wizard helper calls use the product chat route family.
+  - `/assistant` and wizard helper calls use the product chat route family.
   - The assistant page sends the selected model with each turn.
   - The Worker validates selected model payloads and forwards them to the runtime.
   - The runtime respects selected provider/model when provided.
   - Copy, retry, and edit/resend basics are implemented in the assistant UI.
   - Streaming and stop controls are implemented and tracked as closed by `me3-8it.2`.
   - Stop uses request abort and leaves a clear stopped/partial-message state.
-  - Refresh-resilient conversation history and side-panel organization are owned by `me3-3ic`.
+  - Refresh-resilient conversation history and conversation organization are owned by `me3-3ic`.
 - Milestone 3 is partially implemented:
   - The model picker exists in the assistant composer and is wired to chat turns.
   - The picker reads provider setup state from `/ai-settings`.
@@ -64,11 +64,15 @@ As of 2026-06-03:
   - Chat turns now record redacted attachment manifests without raw file content.
   - Streaming turns now record completed, failed, and stopped outcomes in sandbox audit metadata.
   - `me3-8it.6` remains open for richer ME3-native action-card audit records.
-- Voice mode has a dedicated implementation bead:
-  - `me3-kid` should build the robust composer-only voice dictation adapter with provider/plugin
-    architecture.
-- Chat history and UI organization are split into `me3-3ic` and
-  [`docs/assistant-chat-history-model-plan.md`](assistant-chat-history-model-plan.md).
+- Voice mode is implemented:
+  - `me3-kid` delivered composer-only voice dictation with the provider/plugin adapter shape.
+- Chat history and UI organization have a decision/implementation plan:
+  - `me3-3ic` is closed with follow-up beads for project grouping, search/export/retention, and
+    Soulink history reconciliation.
+  - [`docs/assistant-chat-history-model-plan.md`](assistant-chat-history-model-plan.md) remains the
+    detailed reference.
+- The old floating `AgentChatLauncher.vue` is no longer an active milestone; it remains disabled in
+  `App.vue` as legacy fallback code.
 
 Current QA coverage:
 
@@ -80,7 +84,9 @@ Current QA coverage:
 
 ## What's Left
 
-The essential remaining work is now mostly outside the base chat loop:
+The essential remaining work is now mostly outside the base chat loop. Retiring the floating
+launcher removes the old quick-panel milestone and narrows QA to `/assistant`, Soulink, and the
+shared harness routes.
 
 1. Finish attachments (`me3-8it.3` and `me3-8it.4`).
    - Add typed/persisted upload records instead of composer-only text injection.
@@ -100,14 +106,21 @@ The essential remaining work is now mostly outside the base chat loop:
    - Re-run browser visual QA once the Playwright profile lock is clear.
 
 4. Continue parallel tracks.
-   - Voice dictation adapter and composer UI state live under `me3-kid`.
-   - Chat history, side-panel organization, and conversation ownership live under `me3-3ic`.
+   - Voice dictation is implemented; keep future work to provider polish and QA rather than
+     rebuilding the adapter.
+   - Base chat history is implemented; remaining history work is project grouping,
+     search/export/retention, and Soulink relationship cleanup.
    - Chat-based job builder and ME3-native action cards remain future milestones after the console
      foundation is stable.
 
+No active launcher work remains. Do not spend time simplifying the floating panel, passing
+current-page context into it, or duplicating assistant controls there unless a new product decision
+reopens that surface.
+
 This document replaces the earlier agent chat launcher plan. The new product direction is that
-`/assistant` becomes ME3's full chat, agent, and model interface. The floating
-`AgentChatLauncher.vue` remains useful, but only as a lightweight companion on other pages.
+`/assistant` becomes ME3's full in-app chat, agent, and model interface. Soulink is the portable
+assistant channel. The floating `AgentChatLauncher.vue` is disabled for now and should not drive new
+planning unless a concrete quick-entry need reappears.
 
 If this document disagrees with the agent harness roadmap, the harness roadmap wins.
 
@@ -124,7 +137,6 @@ The important split:
 
 - `/assistant`: the full chat, agent, LLM, and future jobs-builder interface.
 - Jobs modal: the manual management and tuning surface for active or draft jobs.
-- `AgentChatLauncher.vue`: a smaller chat entry point on other pages, hidden on `/assistant`.
 - Mission Control: the durable workspace for tasks, projects, results, approvals, memory, runs,
   activity, and journal.
 - Soulink: the portable assistant chat for quick capture, notifications, and messaging away from
@@ -152,21 +164,22 @@ These are the main product choices to answer before or during implementation:
 
 ## Current Baseline
 
-The current `/assistant` route is primarily an Assistant Jobs page:
+The current `/assistant` route is now the active in-app assistant console:
 
-- It already sets `hideAgentLauncher: true`, which is still correct.
+- It keeps `hideAgentLauncher: true`, and the launcher is also disabled app-wide in `App.vue`.
 - It loads jobs and starter recipes.
-- It has a top Jobs button and mobile Jobs button.
-- It opens a Jobs modal with starter jobs, active jobs, toggles, and detail editing.
-- It has specific manual controls for Daily Briefing schedule/message settings and Inbox Watch
-  rules.
+- It has Jobs controls in the assistant flow and opens the existing Jobs modal.
+- It keeps starter jobs, active jobs, toggles, detail editing, Daily Briefing controls, and Inbox
+  Watch rules available through the modal.
+- It has a centered message timeline, bottom composer, model picker, starter prompts, attachment
+  chips, streaming/stop controls, retry/copy/edit/resend basics, and staged voice UI.
 
 The floating `AgentChatLauncher.vue` currently:
 
-- Opens as a global panel outside `/assistant`.
-- Sends text turns to `/agent/sandbox`.
-- Displays basic assistant/user messages plus simple action links.
-- Uses shared `useAgentChat` state.
+- Is imported by `App.vue` but disabled by `AGENT_LAUNCHER_UI_ENABLED = false`.
+- Should be treated as legacy fallback code, not an active user surface.
+- Should not receive new model picker, attachment, voice, jobs-builder, or harness features unless
+  the product direction changes again.
 
 Existing supporting pieces:
 
@@ -177,8 +190,8 @@ Existing supporting pieces:
 - Assistant Jobs already have schema, API, starter recipes, run records, setup validation, and
   Mission Control activity writes.
 
-The phase-one job is to keep those working pieces, but rebuild the page hierarchy around a real
-agent chat console.
+The remaining phase-one job is to finish the console capabilities without reintroducing a competing
+in-app assistant surface.
 
 ## Primary Use Cases
 
@@ -263,22 +276,20 @@ Update my site
 
 These should be small actions, not a big hero.
 
-## AgentChatLauncher Role
+## Retired Launcher Role
 
-`AgentChatLauncher.vue` should be simplified after `/assistant` becomes the full console.
+`AgentChatLauncher.vue` is not part of the active assistant-console plan.
 
-Recommended behavior:
+Current stance:
 
-- Hidden on `/assistant`.
-- Available on other authenticated pages.
-- Opens a small composer or mini chat panel.
-- Sends quick ME3 commands with current-page context.
-- Offers a clear path to "Open full assistant" for attachments, model changes, job building, and
-  longer work.
-- Avoids duplicating the full model picker, attachment manager, voice mode, and jobs builder unless
-  those controls are proven necessary outside `/assistant`.
+- Disabled app-wide by `AGENT_LAUNCHER_UI_ENABLED = false` in `apps/web/src/App.vue`.
+- Kept only as legacy fallback code while `/assistant` becomes the full in-app agent console.
+- Not a destination for new model picker, attachment, voice, jobs-builder, or action-card work.
+- If quick-entry is needed later, define it as a new product decision with clear page-context,
+  routing, audit, and handoff requirements.
 
-The launcher becomes the quick command affordance. `/assistant` becomes the workshop.
+The active split is simpler: `/assistant` is the in-app console; Soulink is the portable assistant
+channel.
 
 ## Model Selection
 
@@ -460,6 +471,7 @@ Goal: make `/assistant` visually and structurally become the primary chat consol
 Tasks:
 
 - [x] Keep `hideAgentLauncher: true` on `/assistant`.
+- [x] Disable the floating launcher app-wide while `/assistant` is the active in-app surface.
 - [x] Change page metadata from "Assistant Jobs" to "Assistant".
 - [x] Preserve the existing Jobs modal and data-loading logic.
 - [x] Add a centered chat timeline to `/assistant`.
@@ -472,7 +484,7 @@ Acceptance:
 
 - `/assistant` opens to a polished chat interface.
 - The Jobs modal still works.
-- The floating launcher remains hidden on this page.
+- The floating launcher does not compete with the assistant page.
 - No job management behavior regresses.
 
 ### Milestone 2: Conversation Runtime And Streaming
@@ -498,7 +510,7 @@ Notes:
 - Text-like attachments are currently injected as readable turn context; persisted typed attachment
   records and richer context references are still pending.
 - Copy, retry, edit/resend, streaming, and stop are wired.
-- Chat history, refresh resilience, and side-panel organization are owned by `me3-3ic`.
+- Chat history, refresh resilience, and conversation organization are owned by `me3-3ic`.
 
 Acceptance:
 
@@ -627,22 +639,26 @@ Acceptance:
 - Sensitive changes require approval.
 - Outputs link to Mission Control, Email, Calendar, Contacts, or the site editor as appropriate.
 
-### Milestone 8: Simplified Global Launcher
+### Milestone 8: Retired Global Launcher
 
-Goal: make `AgentChatLauncher.vue` complement the full assistant page.
+Status: retired for now.
+
+Goal: keep the disabled launcher from shaping the assistant roadmap.
 
 Tasks:
 
-- Reduce the launcher to a lightweight quick command/chat surface.
-- Add "Open full assistant" from the launcher.
-- Pass current-page context to `/assistant` when opening it.
-- Avoid duplicating model picker, full attachments, voice, and job builder unless needed later.
+- Keep `AGENT_LAUNCHER_UI_ENABLED = false` unless a clear quick-entry use case reappears.
+- Do not add new harness features to `AgentChatLauncher.vue`.
+- If the code becomes maintenance drag, remove it in a dedicated cleanup after confirming no page
+  still depends on `useAgentChat` launcher state.
+- Route in-app assistant work through `/assistant`; route portable chat and notifications through
+  Soulink.
 
 Acceptance:
 
-- The launcher is useful on other pages.
-- Complex work naturally moves to `/assistant`.
-- `/assistant` remains the one full-featured agent console.
+- `/assistant` remains the only full-featured in-app agent console.
+- Soulink remains the portable assistant channel.
+- The disabled launcher does not create duplicate UX, QA, or planning obligations.
 
 ## Alignment With Agent Harness Roadmap
 
@@ -690,4 +706,4 @@ The new assistant page is working when:
 - ME3-native actions show clear draft/result/approval cards.
 - Mission Control remains the durable place for tasks, results, approvals, memory, runs, and
   activity.
-- The global launcher feels like a lightweight shortcut, not a second competing assistant app.
+- The disabled global launcher does not compete with `/assistant` or add duplicate QA scope.
