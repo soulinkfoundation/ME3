@@ -40,6 +40,15 @@ const OUTER_RADIUS = 108;
 const VIEWBOX_MIN = -154;
 const VIEWBOX_SIZE = 308;
 const WHEEL_CENTER = VIEWBOX_MIN + VIEWBOX_SIZE / 2;
+const LABEL_RADIUS_PERCENT = 36;
+
+const legacyDefaultEmojiById: Record<string, Record<string, string>> = {
+  health: { "💙": "❤️" },
+  spirituality: { "✨": "🌿" },
+  work: { "🧭": "💼" },
+  finances: { "◌": "💰" },
+  home: { "⌂": "🏡" },
+};
 
 const defaultSegments: WheelSegment[] = [
   {
@@ -47,7 +56,7 @@ const defaultSegments: WheelSegment[] = [
     label: "Health",
     helper: "Physical, mental and emotional wellbeing",
     color: "#26806f",
-    emoji: "💙",
+    emoji: "❤️",
     value: null,
   },
   {
@@ -56,7 +65,7 @@ const defaultSegments: WheelSegment[] = [
     helper:
       "Meaning, purpose, felt sense of connection to something greater than yourself",
     color: "#7c3aed",
-    emoji: "✨",
+    emoji: "🌿",
     value: null,
   },
   {
@@ -64,7 +73,7 @@ const defaultSegments: WheelSegment[] = [
     label: "Work",
     helper: "What you do, how you serve others",
     color: "#2563eb",
-    emoji: "🧭",
+    emoji: "💼",
     value: null,
   },
   {
@@ -72,7 +81,7 @@ const defaultSegments: WheelSegment[] = [
     label: "Finances",
     helper: "Money",
     color: "#ca8a04",
-    emoji: "◌",
+    emoji: "💰",
     value: null,
   },
   {
@@ -80,7 +89,7 @@ const defaultSegments: WheelSegment[] = [
     label: "Home",
     helper: "Environment, living situation",
     color: "#c2410c",
-    emoji: "⌂",
+    emoji: "🏡",
     value: null,
   },
   {
@@ -162,6 +171,12 @@ function cloneDefaultSegments() {
   return defaultSegments.map((segment) => ({ ...segment }));
 }
 
+function normalizeSegmentEmoji(segmentId: string, value: unknown, fallback: string) {
+  const emoji =
+    typeof value === "string" && value.trim() ? value.trim().slice(0, 4) : fallback;
+  return legacyDefaultEmojiById[segmentId]?.[emoji] || emoji;
+}
+
 function sanitizeSegment(input: Partial<WheelSegment>, index: number): WheelSegment {
   const fallback = defaultSegments[index] || {
     id: createId("area"),
@@ -186,10 +201,11 @@ function sanitizeSegment(input: Partial<WheelSegment>, index: number): WheelSegm
       typeof input.color === "string" && /^#[0-9a-fA-F]{6}$/.test(input.color)
         ? input.color
         : fallback.color,
-    emoji:
-      typeof input.emoji === "string" && input.emoji.trim()
-        ? input.emoji.trim().slice(0, 4)
-        : fallback.emoji,
+    emoji: normalizeSegmentEmoji(
+      typeof input.id === "string" && input.id ? input.id : fallback.id,
+      input.emoji,
+      fallback.emoji,
+    ),
     value: Number.isInteger(value) && value >= 1 && value <= 10 ? value : null,
   };
 }
@@ -292,8 +308,8 @@ function sectorPath(radius: number, startAngle: number, endAngle: number) {
 
 function labelPositionStyle(midAngle: number) {
   const angle = ((midAngle - 90) * Math.PI) / 180;
-  const x = 50 + Math.cos(angle) * 47;
-  const y = 50 + Math.sin(angle) * 47;
+  const x = 50 + Math.cos(angle) * LABEL_RADIUS_PERCENT;
+  const y = 50 + Math.sin(angle) * LABEL_RADIUS_PERCENT;
   return {
     left: `${x}%`,
     top: `${y}%`,
@@ -863,24 +879,18 @@ watch([segments, snapshots], persistState, { deep: true });
 }
 
 .life-wheel__actions {
-  position: sticky;
-  top: 14px;
   z-index: 22;
   justify-self: end;
   display: flex;
   gap: 8px;
   margin-bottom: -44px;
-  padding: 2px;
-  border-radius: var(--ui-radius-md);
-  background: color-mix(in oklab, var(--ui-bg), transparent 10%);
-  backdrop-filter: blur(14px);
 }
 
 .life-wheel__icon-button,
 .life-wheel__save,
 .life-wheel__mini-button,
 .life-wheel__remove-button {
-  border: 1px solid var(--ui-border);
+  border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
   background: transparent;
   color: var(--ui-text);
@@ -908,9 +918,13 @@ watch([segments, snapshots], persistState, { deep: true });
 }
 
 .life-wheel__save {
-  border-color: var(--ui-accent);
   background: var(--ui-accent);
   color: var(--ui-accent-contrast);
+}
+
+.life-wheel__mini-button,
+.life-wheel__remove-button {
+  border-color: var(--ui-border);
 }
 
 .life-wheel__icon-button:hover:not(:disabled),
@@ -921,7 +935,6 @@ watch([segments, snapshots], persistState, { deep: true });
 
 .life-wheel__save:hover:not(:disabled) {
   background: var(--ui-accent-strong);
-  border-color: var(--ui-accent-strong);
 }
 
 .life-wheel__icon-button:disabled,
@@ -1290,7 +1303,6 @@ watch([segments, snapshots], persistState, { deep: true });
 
 @media (max-width: 959px) {
   .life-wheel__actions {
-    top: 10px;
     margin-bottom: -40px;
   }
 
