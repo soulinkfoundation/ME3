@@ -300,6 +300,17 @@ type AssistantThread = {
 type AssistantThreadsResponse = {
   threads: AssistantThread[];
 };
+type AssistantAttachmentKind = "text" | "image" | "unsupported";
+type AssistantAttachmentDraft = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: AssistantAttachmentKind;
+  text: string | null;
+  status: "ready" | "reading" | "error";
+  error: string | null;
+};
 type AssistantThreadMessagesResponse = {
   thread: {
     id: string;
@@ -363,6 +374,9 @@ const assistantRecentOpen = ref(true);
 const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
+const assistantAttachmentInputRef = ref<HTMLInputElement | null>(null);
+const assistantAttachments = ref<AssistantAttachmentDraft[]>([]);
+const assistantAttachmentNotice = ref("");
 const assistantModelStorageKey = "me3.assistant.selectedModelId";
 const storedAssistantModelId = getStoredAssistantModelId();
 const initialAssistantModelId = storedAssistantModelId || "workers-qwen3-30b";
@@ -426,6 +440,9 @@ const starterPrompts = [
   { label: "Review my week", icon: "📅" },
   { label: "Update my site", icon: "🌐" },
 ];
+const assistantAttachmentLimit = 4;
+const assistantAttachmentMaxBytes = 1_000_000;
+const assistantAttachmentTextBudget = 16_000;
 
 const sortedJobs = computed(() =>
   [...jobs.value].sort((a, b) => {
@@ -587,6 +604,36 @@ const selectedModelTitle = computed(() => {
 const assistantConsoleMessages = computed(() =>
   chatMessages.value.filter((message) => message.id !== "assistant-ready"),
 );
+const assistantAttachmentsReady = computed(() =>
+  assistantAttachments.value.every((attachment) => attachment.status !== "reading"),
+);
+const assistantTextAttachments = computed(() =>
+  assistantAttachments.value.filter(
+    (attachment) => attachment.kind === "text" && attachment.status === "ready",
+  ),
+);
+const assistantAttachmentIssue = computed(() => {
+  const errored = assistantAttachments.value.find((attachment) => attachment.status === "error");
+  if (errored?.error) return errored.error;
+  if (!assistantAttachmentsReady.value) return "Reading attachments...";
+
+  const unsupported = assistantAttachments.value.find(
+    (attachment) => attachment.kind === "unsupported",
+  );
+  if (unsupported) {
+    return `${unsupported.name} is not a supported assistant attachment yet. Use text, markdown, JSON, CSV, or images.`;
+  }
+
+  const hasImage = assistantAttachments.value.some((attachment) => attachment.kind === "image");
+  if (hasImage && !selectedModel.value.capabilities.includes("vision")) {
+    return "Switch to a vision-capable model before sending images.";
+  }
+  if (hasImage) {
+    return "Image attachment upload is staged, but image-to-model routing is not wired yet.";
+  }
+
+  return "";
+});
 const assistantPinnedThreads = computed(() =>
   assistantThreads.value.filter((thread) => thread.pinnedAt),
 );
@@ -596,9 +643,10 @@ const assistantRecentThreads = computed(() =>
 
 const canSendAssistantMessage = computed(
   () =>
-    assistantDraft.value.trim().length > 0 &&
+    (assistantDraft.value.trim().length > 0 || assistantTextAttachments.value.length > 0) &&
     !assistantSending.value &&
-    !assistantThreadLoading.value,
+    !assistantThreadLoading.value &&
+    !assistantAttachmentIssue.value,
 );
 const canUseVoiceDictation = computed(
   () => !assistantSending.value && voiceDictationState.value !== "processing",
@@ -790,6 +838,131 @@ function useStarterPrompt(prompt: string) {
   });
 }
 
+function openAssistantAttachmentPicker() {
+  if (assistantSending.value) return;
+  assistantAttachmentInputRef.value?.click();
+}
+
+async function onAssistantAttachmentChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (files.length === 0) return;
+  await addAssistantAttachments(files);
+}
+
+async function addAssistantAttachments(files: File[]) {
+  assistantAttachmentNotice.value = "";
+  const slots = assistantAttachmentLimit - assistantAttachments.value.length;
+  if (slots <= 0) {
+    assistantAttachmentNotice.value = `Attach up to ${assistantAttachmentLimit} files.`;
+    return;
+  }
+
+  const accepted = files.slice(0, slots);
+  if (files.length > slots) {
+    assistantAttachmentNotice.value = `Only ${slots} more file${slots === 1 ? "" : "s"} can be attached.`;
+  }
+
+  for (const file of accepted) {
+    const draft: AssistantAttachmentDraft = {
+      id: crypto.randomUUID(),
+      name: file.name || "Attachment",
+      mimeType: file.type || "application/octet-stream",
+      size: file.size,
+      kind: classifyAssistantAttachment(file),
+      text: null,
+      status: "reading",
+      error: null,
+    };
+    assistantAttachments.value.push(draft);
+
+    if (file.size > assistantAttachmentMaxBytes) {
+      draft.status = "error";
+      draft.error = `${draft.name} is too large. Use files under ${formatFileSize(assistantAttachmentMaxBytes)} for now.`;
+      continue;
+    }
+
+    if (draft.kind === "text") {
+      try {
+        draft.text = (await file.text()).slice(0, assistantAttachmentTextBudget);
+        draft.status = "ready";
+      } catch {
+        draft.status = "error";
+        draft.error = `Could not read ${draft.name}.`;
+      }
+      continue;
+    }
+
+    draft.status = "ready";
+  }
+}
+
+function removeAssistantAttachment(id: string) {
+  assistantAttachments.value = assistantAttachments.value.filter(
+    (attachment) => attachment.id !== id,
+  );
+}
+
+function classifyAssistantAttachment(file: File): AssistantAttachmentKind {
+  const mimeType = file.type.toLowerCase();
+  const name = file.name.toLowerCase();
+  if (mimeType.startsWith("image/")) return "image";
+  if (
+    mimeType.startsWith("text/") ||
+    mimeType === "application/json" ||
+    mimeType === "application/xml" ||
+    name.endsWith(".md") ||
+    name.endsWith(".markdown") ||
+    name.endsWith(".csv") ||
+    name.endsWith(".tsv") ||
+    name.endsWith(".json") ||
+    name.endsWith(".txt") ||
+    name.endsWith(".xml")
+  ) {
+    return "text";
+  }
+  return "unsupported";
+}
+
+function buildAssistantMessageWithAttachments(text: string) {
+  const normalized = text.trim();
+  const attachments = assistantTextAttachments.value;
+  if (attachments.length === 0) return normalized;
+
+  const base = normalized || "Review the attached files.";
+  const renderedAttachments = attachments
+    .map((attachment) => {
+      const content = attachment.text?.trim() || "(No readable text.)";
+      return [
+        `File: ${attachment.name}`,
+        `Type: ${attachment.mimeType || "unknown"}`,
+        "Content:",
+        content,
+      ].join("\n");
+    })
+    .join("\n\n---\n\n");
+
+  return `${base}\n\nAttached file context:\n\n${renderedAttachments}`;
+}
+
+function serializeAssistantAttachmentsForTurn() {
+  return assistantAttachments.value.map((attachment) => ({
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    kind: attachment.kind,
+    status: attachment.status,
+  }));
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1_000) return `${bytes} B`;
+  if (bytes < 1_000_000) return `${Math.round(bytes / 100) / 10} KB`;
+  return `${Math.round(bytes / 100_000) / 10} MB`;
+}
+
 async function loadAiSettings() {
   aiSettingsLoading.value = true;
   aiSettingsError.value = "";
@@ -922,7 +1095,10 @@ function assistantMessageIndex(message: (typeof chatMessages.value)[number]) {
   return chatMessages.value.indexOf(message);
 }
 
-async function submitAssistantText(text: string) {
+async function submitAssistantText(
+  text: string,
+  attachments = serializeAssistantAttachmentsForTurn(),
+) {
   const normalized = text.trim();
   if (!normalized || assistantSending.value) return;
 
@@ -942,6 +1118,7 @@ async function submitAssistantText(text: string) {
     const result = await api.post<AgentSandboxResponse>("/assistant/chat/turn", {
       messageText: normalized,
       threadId: assistantThreadId.value,
+      attachments,
       model: selectedModel.value
         ? {
             providerId: selectedModel.value.providerId,
@@ -1016,10 +1193,13 @@ async function submitAssistantText(text: string) {
 async function sendAssistantMessage() {
   if (!canSendAssistantMessage.value) return;
 
-  const text = assistantDraft.value.trim();
+  const attachments = serializeAssistantAttachmentsForTurn();
+  const text = buildAssistantMessageWithAttachments(assistantDraft.value);
   assistantDraft.value = "";
+  assistantAttachments.value = [];
+  assistantAttachmentNotice.value = "";
   autosizeAssistantComposer();
-  await submitAssistantText(text);
+  await submitAssistantText(text, attachments);
 }
 
 function stopAssistantTurn() {
@@ -2385,14 +2565,55 @@ function messageFromUnknown(err: unknown, fallback: string) {
             @keydown="onAssistantComposerKeydown"
             @input="autosizeAssistantComposer"
           />
+          <div
+            v-if="assistantAttachments.length > 0"
+            class="assistant-attachments"
+            aria-label="Attached files"
+          >
+            <span
+              v-for="attachment in assistantAttachments"
+              :key="attachment.id"
+              class="assistant-attachment"
+              :class="{
+                'assistant-attachment--error': attachment.status === 'error',
+              }"
+            >
+              <UiIcon
+                :name="attachment.kind === 'image' ? 'Image' : 'FileText'"
+                :size="14"
+                aria-hidden="true"
+              />
+              <span class="assistant-attachment__name">{{ attachment.name }}</span>
+              <span class="assistant-attachment__meta">
+                {{ attachment.status === 'reading' ? 'Reading' : formatFileSize(attachment.size) }}
+              </span>
+              <button
+                type="button"
+                class="assistant-attachment__remove"
+                :aria-label="`Remove ${attachment.name}`"
+                @click="removeAssistantAttachment(attachment.id)"
+              >
+                <UiIcon name="X" :size="12" aria-hidden="true" />
+              </button>
+            </span>
+          </div>
           <div class="assistant-composer__bottom">
             <div class="assistant-composer__left">
+              <input
+                ref="assistantAttachmentInputRef"
+                class="sr-only"
+                type="file"
+                multiple
+                accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,text/*,application/json,application/xml,image/*"
+                @change="onAssistantAttachmentChange"
+              />
               <button
                 type="button"
                 class="composer-icon-button"
                 title="Add attachment"
                 aria-label="Add attachment"
-                disabled
+                :disabled="assistantSending"
+                @click="openAssistantAttachmentPicker"
               >
                 <span class="composer-icon-button__emoji" aria-hidden="true">📎</span>
               </button>
@@ -2467,11 +2688,30 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </div>
           </div>
           <div
-            v-if="voiceDictationStatusText"
+            v-if="
+              voiceDictationStatusText ||
+              assistantAttachmentNotice ||
+              assistantAttachmentIssue
+            "
             class="assistant-composer__meta"
           >
-            <span class="assistant-composer__voice-status">
+            <span
+              v-if="voiceDictationStatusText"
+              class="assistant-composer__voice-status"
+            >
               {{ voiceDictationStatusText }}
+            </span>
+            <span
+              v-if="assistantAttachmentNotice"
+              class="assistant-composer__attachment-status"
+            >
+              {{ assistantAttachmentNotice }}
+            </span>
+            <span
+              v-if="assistantAttachmentIssue"
+              class="assistant-composer__attachment-status"
+            >
+              {{ assistantAttachmentIssue }}
             </span>
           </div>
           <p v-if="assistantError" class="assistant-error">
@@ -3688,6 +3928,66 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: color-mix(in oklab, var(--ui-text-muted) 70%, transparent);
 }
 
+.assistant-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.assistant-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 28px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 0 4px 0 9px;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.assistant-attachment--error {
+  border-color: color-mix(in oklab, var(--ui-warning, #b26a00) 45%, var(--ui-border));
+  color: var(--ui-warning, #b26a00);
+}
+
+.assistant-attachment__name {
+  min-width: 0;
+  max-width: 170px;
+  overflow: hidden;
+  color: var(--ui-text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-attachment__meta {
+  flex: 0 0 auto;
+  color: inherit;
+}
+
+.assistant-attachment__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.assistant-attachment__remove:hover {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+
 .composer-icon-button,
 .assistant-send {
   display: inline-flex;
@@ -3766,6 +4066,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-composer__voice-status {
   color: var(--ui-accent-strong);
   font-weight: 700;
+}
+
+.assistant-composer__attachment-status {
+  color: var(--ui-text-muted);
+  font-weight: 650;
 }
 
 .assistant-error {
