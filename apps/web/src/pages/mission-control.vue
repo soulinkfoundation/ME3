@@ -350,6 +350,8 @@ const projectTaskDetailSaving = ref(false);
 const projectTaskDetailError = ref("");
 const weeklyReviewCarryOverIds = ref<Set<string>>(new Set());
 const weeklyReviewMemoryIds = ref<Set<string>>(new Set());
+const weeklyReviewReminderIds = ref<Set<string>>(new Set());
+const weeklyReviewCustomMemory = ref("");
 const weeklyReviewCompletedOpen = ref(false);
 const weeklyReviewSubmitting = ref(false);
 const accountsType = ref<FinancialEntryType>("expense");
@@ -1248,6 +1250,8 @@ function resetWeeklyReviewSelection(task: MissionTask | null) {
       .filter((item) => item.checked)
       .map((item) => item.id) || [],
   );
+  weeklyReviewReminderIds.value = new Set();
+  weeklyReviewCustomMemory.value = "";
   weeklyReviewCompletedOpen.value = false;
 }
 
@@ -1265,6 +1269,13 @@ function toggleWeeklyReviewMemory(suggestionId: string) {
   weeklyReviewMemoryIds.value = next;
 }
 
+function toggleWeeklyReviewReminder(reminderId: string) {
+  const next = new Set(weeklyReviewReminderIds.value);
+  if (next.has(reminderId)) next.delete(reminderId);
+  else next.add(reminderId);
+  weeklyReviewReminderIds.value = next;
+}
+
 function weeklyReviewCardLabel(task: MissionTask): string {
   const review = weeklyReviewMetadata(task);
   if (!review) return "";
@@ -1275,6 +1286,41 @@ function weeklyReviewCardLabel(task: MissionTask): string {
   if (review.memorySuggestions.length)
     parts.push(`${review.memorySuggestions.length} memories`);
   return parts.join(" / ");
+}
+
+function ordinalDay(day: number): string {
+  if (day >= 11 && day <= 13) return `${day}th`;
+  const last = day % 10;
+  if (last === 1) return `${day}st`;
+  if (last === 2) return `${day}nd`;
+  if (last === 3) return `${day}rd`;
+  return `${day}th`;
+}
+
+function formatWeekdayDate(value: string, includeYear: boolean): string {
+  const date = new Date(`${value.slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  const weekday = new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    timeZone: "UTC",
+  }).format(date);
+  const month = new Intl.DateTimeFormat("en-GB", {
+    month: "long",
+    timeZone: "UTC",
+  }).format(date);
+  const year = date.getUTCFullYear();
+  return `${weekday} ${ordinalDay(date.getUTCDate())} ${month}${includeYear ? ` ${year}` : ""}`;
+}
+
+function formatWeeklyReviewRange(review: WeeklyReviewView): string {
+  if (!review.weekStart || !review.weekEnd) return review.weekLabel;
+  const start = new Date(`${review.weekStart}T12:00:00Z`);
+  const end = new Date(`${review.weekEnd}T12:00:00Z`);
+  const sameYear =
+    !Number.isNaN(start.getTime()) &&
+    !Number.isNaN(end.getTime()) &&
+    start.getUTCFullYear() === end.getUTCFullYear();
+  return `${formatWeekdayDate(review.weekStart, !sameYear)} - ${formatWeekdayDate(review.weekEnd, true)}`;
 }
 
 function syncProjectTaskDetailDraft(task: MissionTask) {
@@ -1434,6 +1480,12 @@ async function submitSelectedWeeklyReview() {
           pattern: item.pattern,
           note: item.note,
           checked: weeklyReviewMemoryIds.value.has(item.id),
+        })),
+        customMemory: weeklyReviewCustomMemory.value.trim() || null,
+        reminders: review.reminders.map((item) => ({
+          id: item.id,
+          checked: weeklyReviewReminderIds.value.has(item.id),
+          reschedule: "tomorrow",
         })),
       },
     );
@@ -2765,7 +2817,7 @@ onBeforeUnmount(() => {
             <span
               v-if="selectedProjectTaskWeeklyReview"
               class="weekly-review-badge"
-              >{{ selectedProjectTaskWeeklyReview.weekLabel }}</span
+              >{{ formatWeeklyReviewRange(selectedProjectTaskWeeklyReview) }}</span
             >
             <span
               v-if="isLocalProject(selectedProjectTaskDetailProject)"
@@ -2838,20 +2890,32 @@ onBeforeUnmount(() => {
                 </p>
               </section>
 
-              <section
-                v-if="selectedProjectTaskWeeklyReview.memorySuggestions.length"
-                class="weekly-review-panel__section"
-              >
+              <section class="weekly-review-panel__section">
                 <div class="weekly-review-panel__section-header">
-                  <h3>Memory suggestions</h3>
-                  <span>
+                  <h3>Important memory</h3>
+                  <span v-if="selectedProjectTaskWeeklyReview.memorySuggestions.length">
                     {{ weeklyReviewMemoryIds.size }} /
                     {{
                       selectedProjectTaskWeeklyReview.memorySuggestions.length
                     }}
                   </span>
                 </div>
-                <div class="weekly-review-checklist">
+                <label class="weekly-review-memory-field">
+                  <span>Add one important fact or data point from this week</span>
+                  <textarea
+                    v-model="weeklyReviewCustomMemory"
+                    rows="3"
+                    placeholder="e.g. A decision, preference, recurring pattern, or important context worth remembering"
+                    :disabled="
+                      weeklyReviewSubmitting ||
+                      Boolean(selectedProjectTaskWeeklyReview.submittedAt)
+                    "
+                  />
+                </label>
+                <div
+                  v-if="selectedProjectTaskWeeklyReview.memorySuggestions.length"
+                  class="weekly-review-checklist"
+                >
                   <label
                     v-for="item in selectedProjectTaskWeeklyReview.memorySuggestions"
                     :key="item.id"
@@ -2872,6 +2936,9 @@ onBeforeUnmount(() => {
                     </span>
                   </label>
                 </div>
+                <p v-else class="weekly-review-panel__empty">
+                  No automatic memory suggestions met the stricter bar this week.
+                </p>
               </section>
 
               <section
@@ -2880,19 +2947,36 @@ onBeforeUnmount(() => {
               >
                 <div class="weekly-review-panel__section-header">
                   <h3>Reminders</h3>
-                  <span>{{ selectedProjectTaskWeeklyReview.reminders.length }}</span>
+                  <span>
+                    {{ weeklyReviewReminderIds.size }} /
+                    {{ selectedProjectTaskWeeklyReview.reminders.length }}
+                    reschedule
+                  </span>
                 </div>
-                <ul class="weekly-review-list">
-                  <li
+                <div class="weekly-review-checklist">
+                  <label
                     v-for="item in selectedProjectTaskWeeklyReview.reminders"
                     :key="item.id"
+                    class="weekly-review-check"
                   >
-                    <strong>{{ item.title }}</strong>
-                    <span v-if="item.remindAt">
-                      {{ formatShortDate(item.remindAt) }}
+                    <input
+                      type="checkbox"
+                      :checked="weeklyReviewReminderIds.has(item.id)"
+                      :disabled="
+                        weeklyReviewSubmitting ||
+                        Boolean(selectedProjectTaskWeeklyReview.submittedAt)
+                      "
+                      @change="toggleWeeklyReviewReminder(item.id)"
+                    />
+                    <span>
+                      <strong>{{ item.title }}</strong>
+                      <small>
+                        {{ item.remindAt ? formatShortDate(item.remindAt) : "Pending" }}
+                        / reschedule for tomorrow
+                      </small>
                     </span>
-                  </li>
-                </ul>
+                  </label>
+                </div>
               </section>
 
               <section
@@ -4409,6 +4493,27 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
+.weekly-review-memory-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.weekly-review-memory-field span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.weekly-review-memory-field textarea {
+  min-width: 0;
+  width: 100%;
+  resize: vertical;
+}
+
 .weekly-review-list {
   display: grid;
   gap: 6px;
@@ -4454,7 +4559,8 @@ onBeforeUnmount(() => {
 
 .field input,
 .field select,
-.field textarea {
+.field textarea,
+.weekly-review-memory-field textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--ui-border);
@@ -4478,7 +4584,8 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-.field textarea {
+.field textarea,
+.weekly-review-memory-field textarea {
   resize: vertical;
   padding: 10px;
   line-height: 1.5;
@@ -4486,7 +4593,8 @@ onBeforeUnmount(() => {
 
 .field input:focus,
 .field select:focus,
-.field textarea:focus {
+.field textarea:focus,
+.weekly-review-memory-field textarea:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
 }

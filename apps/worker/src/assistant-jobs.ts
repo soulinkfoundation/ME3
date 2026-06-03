@@ -1847,7 +1847,7 @@ async function sendWeeklyReviewOwnerNotificationIfConnected(
   if (existingEvent?.status === "sent" || existingEvent?.status === "pending") return;
 
   const review = await buildWeeklyReviewResult(env, input.userId, input.run.id);
-  const message = `Weekly Review is ready: ${review.openTasks.length} open tasks, ${review.completedTasks.length} completed, ${review.reminders.length} reminders, ${review.memorySuggestions.length} memory suggestions.`;
+  const message = formatWeeklyReviewReadyMessage(review);
   const eventId = await insertOwnerNotificationChannelEvent(env, {
     connection,
     providerEventId,
@@ -1913,7 +1913,7 @@ async function resolveOwnerNotificationMessage(
 ) {
   if (isWeeklyReviewJob(input.job, input.draft)) {
     const review = await buildWeeklyReviewResult(env, input.userId, input.run.id);
-    return `Weekly Review is ready: ${review.openTasks.length} open tasks, ${review.completedTasks.length} completed, ${review.reminders.length} reminders, ${review.memorySuggestions.length} memory suggestions.`;
+    return formatWeeklyReviewReadyMessage(review);
   }
 
   if (input.job.recipe_id === "daily-briefing" || input.draft.recipeId === "daily-briefing") {
@@ -3710,42 +3710,15 @@ function suggestWeeklyReviewMemory(
   memoryRows: WeeklyReviewMemoryRow[],
   openTasks: Me3AgentContextTask[],
 ) {
-  const sourceLines = [
-    ...openTasks.slice(0, 6).map((task) => `Ongoing task pattern: ${task.title}`),
-  ];
-  const existing = memoryRows
-    .map((row) => `${row.title || ""} ${row.body}`.toLowerCase())
-    .join("\n");
-  const fallback = [
-    "Review recurring open tasks during weekly planning.",
-    "Keep project notes specific enough to turn into next actions.",
-    "Check whether repeated reminders indicate a routine worth protecting.",
-  ];
-  const candidates = (sourceLines.length ? sourceLines : fallback)
-    .map((line, index) => {
-      const body = truncateText(line, 180);
-      const duplicate = existing.includes(body.toLowerCase().slice(0, 48));
-      const pattern = sourceLines.filter((other) => sharedSignificantWordCount(line, other) >= 2).length > 1;
-      const note = duplicate
-        ? "Similar to existing memory; review before adding."
-        : pattern
-          ? "Repeated pattern across this review."
-          : "New weekly-review suggestion.";
-      return {
-        id: `weekly-memory-${index + 1}`,
-        title: duplicate ? "Possible duplicate" : pattern ? "Repeated pattern" : "Weekly note",
-        body,
-        memoryKind: pattern ? "learning" : "owner_note",
-        duplicate,
-        pattern,
-        note,
-        checked: !duplicate,
-      };
-    })
-    .filter((item, index, all) =>
-      all.findIndex((other) => other.body.toLowerCase() === item.body.toLowerCase()) === index,
-    );
-  return candidates.slice(0, 5);
+  void memoryRows;
+  void openTasks;
+  return [];
+}
+
+function formatWeeklyReviewReadyMessage(review: Awaited<ReturnType<typeof buildWeeklyReviewResult>>) {
+  const openLabel = `${review.openTasks.length} open task${review.openTasks.length === 1 ? "" : "s"}`;
+  const completedLabel = `${review.completedTasks.length} completed`;
+  return `📊 Your weekly review is ready in Mission Control 🚀. You have ${openLabel}, and ${completedLabel} over the last 7 days.`;
 }
 
 function sharedSignificantWordCount(left: string, right: string) {
@@ -4717,7 +4690,7 @@ async function summarizeAssistantJobRunOutput(
   }
   if (isWeeklyReviewJob(job, draft)) {
     const review = await buildWeeklyReviewResult(env, userId, "");
-    return `Weekly Review is ready: ${review.openTasks.length} open tasks, ${review.completedTasks.length} completed, ${review.reminders.length} reminders, ${review.memorySuggestions.length} memory suggestions.`;
+    return formatWeeklyReviewReadyMessage(review);
   }
   if (
     job.recipe_id === "email-triage" ||

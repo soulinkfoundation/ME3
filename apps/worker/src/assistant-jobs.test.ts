@@ -175,7 +175,7 @@ describe("assistant jobs persistence", () => {
       },
     });
     expect(env.__state.missionAgentRuns[0]?.prompt_summary).toBe(
-      "Weekly Review is ready: 0 open tasks, 0 completed, 0 reminders, 3 memory suggestions.",
+      "📊 Your weekly review is ready in Mission Control 🚀. You have 0 open tasks, and 0 completed over the last 7 days.",
     );
     expect(env.__state.missionAgentRuns[0]?.prompt_summary).not.toContain(
       "ME3 agent context packet",
@@ -186,12 +186,7 @@ describe("assistant jobs persistence", () => {
         openTasks: [],
         completedTasks: [],
         reminders: [],
-        memorySuggestions: expect.arrayContaining([
-          expect.objectContaining({
-            body: expect.any(String),
-            note: expect.any(String),
-          }),
-        ]),
+        memorySuggestions: [],
       },
     });
     expect(env.__state.tasks).toContainEqual(

@@ -259,6 +259,12 @@ type WeeklyReviewMemoryInput = {
   checked?: unknown;
 };
 
+type WeeklyReviewReminderInput = {
+  id?: unknown;
+  checked?: unknown;
+  reschedule?: unknown;
+};
+
 type ParsedWeeklyReviewResult = NonNullable<ReturnType<typeof parseWeeklyReviewResult>>;
 
 const PERSONAL_PROJECT_ID = "mission-project-personal";
@@ -922,6 +928,12 @@ async function submitWeeklyReviewPayload(
         (item) => item && item.checked === true && normalizeNullableText(item.body),
       )
     : [];
+  const customMemoryBody = normalizeNullableText(body.customMemory);
+  const selectedReminders = Array.isArray(body.reminders)
+    ? (body.reminders as WeeklyReviewReminderInput[]).filter(
+        (item) => item && item.checked === true && typeof item.id === "string",
+      )
+    : [];
   const now = new Date().toISOString();
   const carriedTaskIds = options.review.openTasks
     .map((task) => normalizeNullableText(task.id))
@@ -943,6 +955,19 @@ async function submitWeeklyReviewPayload(
   }
 
   const memoryIds: string[] = [];
+  if (customMemoryBody) {
+    const result = await createMissionMemory(env, userId, {
+      memoryKind: "owner_note",
+      scopeKind: "owner",
+      title: "Weekly Review note",
+      body: customMemoryBody,
+      confidence: 1,
+      sourceKind: "manual",
+      sourceRef: `${options.runId}:custom-memory`,
+    });
+    memoryIds.push(result.memory.id);
+  }
+
   for (const suggestion of selectedMemory.slice(0, 5)) {
     const result = await createMissionMemory(env, userId, {
       memoryKind: normalizeMemoryKind(suggestion.memoryKind) || "owner_note",
@@ -954,6 +979,23 @@ async function submitWeeklyReviewPayload(
       sourceRef: `${options.runId}:${normalizeNullableText(suggestion.id) || crypto.randomUUID()}`,
     });
     memoryIds.push(result.memory.id);
+  }
+
+  const rescheduledReminderIds: string[] = [];
+  const tomorrow = addDays(options.review.reviewDate, 1);
+  for (const reminder of selectedReminders) {
+    const reminderId = normalizeNullableText(reminder.id);
+    if (!reminderId) continue;
+    const remindAt = reminder.reschedule === "tomorrow" ? `${tomorrow}T09:00:00.000Z` : null;
+    if (!remindAt) continue;
+    const result = await env.DB.prepare(
+      `UPDATE user_reminders
+       SET remind_at = ?, status = 'pending', updated_at = datetime('now')
+       WHERE id = ? AND user_id = ? AND status = 'pending'`,
+    )
+      .bind(remindAt, reminderId, userId)
+      .run();
+    if ((result.meta?.changes || 0) > 0) rescheduledReminderIds.push(reminderId);
   }
 
   if (options.task) {
@@ -972,6 +1014,7 @@ async function submitWeeklyReviewPayload(
             submittedAt: now,
             carriedTaskIds,
             memoryIds,
+            rescheduledReminderIds,
           },
         }),
         options.task.id,
@@ -984,12 +1027,12 @@ async function submitWeeklyReviewPayload(
     pluginId: "me3.mission-control",
     activityType: "weekly_review.submitted",
     title: "Weekly Review submitted",
-    summary: `${carriedTaskIds.length} task${carriedTaskIds.length === 1 ? "" : "s"} carried over; ${memoryIds.length} memory suggestion${memoryIds.length === 1 ? "" : "s"} queued.`,
+    summary: `${carriedTaskIds.length} task${carriedTaskIds.length === 1 ? "" : "s"} carried over; ${memoryIds.length} memory note${memoryIds.length === 1 ? "" : "s"} queued; ${rescheduledReminderIds.length} reminder${rescheduledReminderIds.length === 1 ? "" : "s"} rescheduled.`,
     status: "succeeded",
     relatedId: options.task?.id || options.runId,
   });
 
-  return { ok: true, carriedTaskIds, memoryIds };
+  return { ok: true, carriedTaskIds, memoryIds, rescheduledReminderIds };
 }
 
 export async function clearMissionActivity(env: Env, userId: string) {
