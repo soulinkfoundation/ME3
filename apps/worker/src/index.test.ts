@@ -3081,6 +3081,71 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  it("lists active assistant threads for the assistant history panel", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.assistantThreads.push(
+      {
+        id: "thread-older",
+        owner_id: "owner",
+        title: "Older chat",
+        origin_surface: "assistant",
+        project_id: null,
+        status: "active",
+        pinned_at: null,
+        archived_at: null,
+        deleted_at: null,
+        last_message_at: "2026-05-10T10:00:00Z",
+        created_at: "2026-05-10T09:00:00Z",
+        updated_at: "2026-05-10T10:00:00Z",
+      },
+      {
+        id: "thread-newer",
+        owner_id: "owner",
+        title: "Newer chat",
+        origin_surface: "assistant",
+        project_id: null,
+        status: "active",
+        pinned_at: null,
+        archived_at: null,
+        deleted_at: null,
+        last_message_at: "2026-05-11T10:00:00Z",
+        created_at: "2026-05-11T09:00:00Z",
+        updated_at: "2026-05-11T10:00:00Z",
+      },
+      {
+        id: "thread-archived",
+        owner_id: "owner",
+        title: "Archived chat",
+        origin_surface: "assistant",
+        project_id: null,
+        status: "archived",
+        pinned_at: null,
+        archived_at: "2026-05-11T11:00:00Z",
+        deleted_at: null,
+        last_message_at: "2026-05-11T08:00:00Z",
+        created_at: "2026-05-11T07:00:00Z",
+        updated_at: "2026-05-11T11:00:00Z",
+      },
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/threads", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      threads: [
+        { id: "thread-newer", title: "Newer chat", status: "active" },
+        { id: "thread-older", title: "Older chat", status: "active" },
+      ],
+    });
+  });
+
   it("rejects unsupported assistant chat model selections", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

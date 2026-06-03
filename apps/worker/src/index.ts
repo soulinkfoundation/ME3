@@ -1589,7 +1589,9 @@ app.get("/api/assistant/threads", async (c) => {
             archived_at, deleted_at, last_message_at, created_at, updated_at
      FROM assistant_threads
      WHERE owner_id = ? AND status = ?
-     ORDER BY pinned_at DESC NULLS LAST, last_message_at DESC NULLS LAST, updated_at DESC
+     ORDER BY pinned_at IS NULL, pinned_at DESC,
+              last_message_at IS NULL, last_message_at DESC,
+              updated_at DESC
      LIMIT ?`,
   )
     .bind(ownerId, status, limit)

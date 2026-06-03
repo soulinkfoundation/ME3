@@ -284,6 +284,22 @@ type AssistantThreadMessage = {
   text: string;
   createdAt: string;
 };
+type AssistantThread = {
+  id: string;
+  title: string;
+  originSurface: "assistant" | "launcher" | "soulink" | "job" | "system";
+  projectId: string | null;
+  status: "active" | "archived" | "deleted";
+  pinnedAt: string | null;
+  archivedAt: string | null;
+  deletedAt: string | null;
+  lastMessageAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+type AssistantThreadsResponse = {
+  threads: AssistantThread[];
+};
 type AssistantThreadMessagesResponse = {
   thread: {
     id: string;
@@ -337,6 +353,13 @@ const assistantAwaitingResponse = ref(false);
 const assistantError = ref<string | null>(null);
 const assistantThreadId = ref<string | null>(null);
 const assistantThreadLoading = ref(false);
+const assistantThreads = ref<AssistantThread[]>([]);
+const assistantThreadsLoading = ref(false);
+const assistantThreadsError = ref("");
+const assistantHistoryCollapsed = ref(false);
+const assistantHistoryDrawerOpen = ref(false);
+const assistantPinnedOpen = ref(true);
+const assistantRecentOpen = ref(true);
 const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
@@ -561,6 +584,12 @@ const selectedModelTitle = computed(() => {
 const assistantConsoleMessages = computed(() =>
   chatMessages.value.filter((message) => message.id !== "assistant-ready"),
 );
+const assistantPinnedThreads = computed(() =>
+  assistantThreads.value.filter((thread) => thread.pinnedAt),
+);
+const assistantRecentThreads = computed(() =>
+  assistantThreads.value.filter((thread) => !thread.pinnedAt),
+);
 
 const canSendAssistantMessage = computed(
   () =>
@@ -612,8 +641,24 @@ async function loadPage() {
     loadJobs(),
     loadRecipes(),
     loadAiSettings(),
+    loadAssistantThreads(),
     loadAssistantThreadFromRoute(),
   ]);
+}
+
+async function loadAssistantThreads() {
+  assistantThreadsLoading.value = true;
+  assistantThreadsError.value = "";
+  try {
+    const response = await api.get<AssistantThreadsResponse>(
+      "/assistant/threads?status=active&limit=60",
+    );
+    assistantThreads.value = response.threads || [];
+  } catch (err) {
+    assistantThreadsError.value = messageFromUnknown(err, "Chats could not load.");
+  } finally {
+    assistantThreadsLoading.value = false;
+  }
 }
 
 function routeThreadId() {
@@ -630,6 +675,54 @@ async function setRouteThreadId(threadId: string) {
       thread: threadId,
     },
   });
+}
+
+async function startNewAssistantChat() {
+  assistantThreadId.value = null;
+  assistantError.value = null;
+  assistantHistoryDrawerOpen.value = false;
+  agentChat.resetMessages();
+  await router.replace({
+    query: {
+      ...route.query,
+      thread: undefined,
+    },
+  });
+  await nextTick();
+  assistantComposerRef.value?.focus();
+}
+
+async function selectAssistantThread(threadId: string) {
+  if (!threadId || assistantThreadId.value === threadId) {
+    assistantHistoryDrawerOpen.value = false;
+    return;
+  }
+  assistantHistoryDrawerOpen.value = false;
+  await setRouteThreadId(threadId);
+}
+
+function toggleAssistantHistoryCollapsed() {
+  assistantHistoryCollapsed.value = !assistantHistoryCollapsed.value;
+}
+
+function formatAssistantThreadTime(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const thatDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((today.getTime() - thatDay.getTime()) / 86_400_000);
+  if (diffDays === 0) {
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return date.toLocaleDateString([], { weekday: "short" });
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function threadTitle(thread: AssistantThread) {
+  return thread.title?.trim() || "New chat";
 }
 
 async function loadAssistantThreadFromRoute() {
@@ -858,6 +951,7 @@ async function submitAssistantText(text: string) {
     });
     if (result.threadId) {
       await setRouteThreadId(result.threadId);
+      void loadAssistantThreads();
     }
     await revealAssistantReply(assistantMessageId, resolveAgentReplyText(result.replyText));
   } catch (err) {
@@ -1922,7 +2016,197 @@ function messageFromUnknown(err: unknown, fallback: string) {
 </script>
 
 <template>
-  <div class="assistant-page">
+  <div
+    class="assistant-page"
+    :class="{
+      'assistant-page--history-collapsed': assistantHistoryCollapsed,
+      'assistant-page--history-open': assistantHistoryDrawerOpen,
+    }"
+  >
+    <button
+      v-if="assistantHistoryDrawerOpen"
+      type="button"
+      class="assistant-history-backdrop"
+      aria-label="Close chat history"
+      @click="assistantHistoryDrawerOpen = false"
+    />
+    <Teleport to="#app-side-nav-mobile-page-controls">
+      <div class="assistant-mobile-nav">
+        <button
+          type="button"
+          class="assistant-mobile-nav__button"
+          aria-label="Open chat history"
+          @click="assistantHistoryDrawerOpen = true"
+        >
+          <UiIcon name="MessagesSquare" :size="18" aria-hidden="true" />
+        </button>
+        <p class="assistant-mobile-nav__title">Assistant</p>
+        <button
+          type="button"
+          class="assistant-mobile-nav__button"
+          aria-label="New chat"
+          @click="startNewAssistantChat"
+        >
+          <UiIcon name="Plus" :size="18" aria-hidden="true" />
+        </button>
+      </div>
+    </Teleport>
+    <aside
+      class="assistant-history"
+      :class="{
+        'assistant-history--collapsed': assistantHistoryCollapsed,
+        'assistant-history--open': assistantHistoryDrawerOpen,
+      }"
+      aria-label="Assistant chat history"
+    >
+      <header class="assistant-history__header">
+        <button
+          type="button"
+          class="assistant-history__new"
+          :class="{ 'assistant-history__new--collapsed': assistantHistoryCollapsed }"
+          :aria-label="assistantHistoryCollapsed ? 'New chat' : undefined"
+          title="New chat"
+          @click="startNewAssistantChat"
+        >
+          <UiIcon name="Plus" :size="16" aria-hidden="true" />
+          <span class="assistant-history__new-label">New chat</span>
+        </button>
+        <button
+          type="button"
+          class="assistant-history__icon-button assistant-history__collapse"
+          :aria-label="
+            assistantHistoryCollapsed
+              ? 'Expand chat history'
+              : 'Collapse chat history'
+          "
+          :title="
+            assistantHistoryCollapsed
+              ? 'Expand chat history'
+              : 'Collapse chat history'
+          "
+          @click="toggleAssistantHistoryCollapsed"
+        >
+          <UiIcon
+            :name="assistantHistoryCollapsed ? 'ChevronRight' : 'ChevronLeft'"
+            :size="16"
+            aria-hidden="true"
+          />
+        </button>
+        <button
+          type="button"
+          class="assistant-history__icon-button assistant-history__close"
+          aria-label="Close chat history"
+          title="Close"
+          @click="assistantHistoryDrawerOpen = false"
+        >
+          <UiIcon name="X" :size="16" aria-hidden="true" />
+        </button>
+      </header>
+
+      <div v-if="!assistantHistoryCollapsed" class="assistant-history__body">
+        <p v-if="assistantThreadsError" class="assistant-history__message">
+          {{ assistantThreadsError }}
+        </p>
+        <p
+          v-else-if="assistantThreadsLoading && assistantThreads.length === 0"
+          class="assistant-history__message"
+        >
+          Loading chats...
+        </p>
+
+        <section
+          v-if="assistantPinnedThreads.length > 0"
+          class="assistant-history__section"
+        >
+          <button
+            type="button"
+            class="assistant-history__section-toggle"
+            :aria-expanded="assistantPinnedOpen"
+            @click="assistantPinnedOpen = !assistantPinnedOpen"
+          >
+            <span>Pinned</span>
+            <UiIcon
+              :name="assistantPinnedOpen ? 'ChevronDown' : 'ChevronRight'"
+              :size="14"
+              aria-hidden="true"
+            />
+          </button>
+          <nav
+            v-if="assistantPinnedOpen"
+            class="assistant-history__list"
+            aria-label="Pinned chats"
+          >
+            <button
+              v-for="thread in assistantPinnedThreads"
+              :key="thread.id"
+              type="button"
+              class="assistant-history__thread"
+              :class="{ 'is-active': assistantThreadId === thread.id }"
+              :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
+              @click="selectAssistantThread(thread.id)"
+            >
+              <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
+              <span class="assistant-history__thread-main">
+                <span class="assistant-history__thread-title">
+                  {{ threadTitle(thread) }}
+                </span>
+                <span class="assistant-history__thread-meta">
+                  {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
+                </span>
+              </span>
+            </button>
+          </nav>
+        </section>
+
+        <section class="assistant-history__section">
+          <button
+            type="button"
+            class="assistant-history__section-toggle"
+            :aria-expanded="assistantRecentOpen"
+            @click="assistantRecentOpen = !assistantRecentOpen"
+          >
+            <span>Recent</span>
+            <UiIcon
+              :name="assistantRecentOpen ? 'ChevronDown' : 'ChevronRight'"
+              :size="14"
+              aria-hidden="true"
+            />
+          </button>
+          <nav
+            v-if="assistantRecentOpen"
+            class="assistant-history__list"
+            aria-label="Recent chats"
+          >
+            <button
+              v-for="thread in assistantRecentThreads"
+              :key="thread.id"
+              type="button"
+              class="assistant-history__thread"
+              :class="{ 'is-active': assistantThreadId === thread.id }"
+              :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
+              @click="selectAssistantThread(thread.id)"
+            >
+              <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
+              <span class="assistant-history__thread-main">
+                <span class="assistant-history__thread-title">
+                  {{ threadTitle(thread) }}
+                </span>
+                <span class="assistant-history__thread-meta">
+                  {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
+                </span>
+              </span>
+            </button>
+            <p
+              v-if="!assistantThreadsLoading && assistantRecentThreads.length === 0"
+              class="assistant-history__message"
+            >
+              No saved chats yet.
+            </p>
+          </nav>
+        </section>
+      </div>
+    </aside>
+
     <main
       class="assistant-main"
       aria-label="Assistant console"
@@ -2834,13 +3118,192 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 <style scoped>
 .assistant-page {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 24px;
   min-height: 100vh;
-  padding: 0 24px;
+  padding: 0 24px 0 0;
   background: var(--ui-bg);
   color: var(--ui-text);
+}
+
+.assistant-page--history-collapsed {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.assistant-history {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+  max-height: 100vh;
+  border-right: 1px solid var(--ui-border);
+  padding: 14px 10px;
+  background: var(--ui-surface-muted);
+  overflow: hidden;
+}
+
+.assistant-history__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.assistant-history__new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 0 12px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.assistant-history__new:hover,
+.assistant-history__thread:hover,
+.assistant-history__section-toggle:hover,
+.assistant-history__icon-button:hover {
+  border-color: color-mix(in oklab, var(--ui-accent) 36%, var(--ui-border));
+  color: var(--ui-text);
+}
+
+.assistant-history__new--collapsed {
+  width: 42px;
+  flex: 0 0 42px;
+  padding: 0;
+}
+
+.assistant-history__new--collapsed .assistant-history__new-label {
+  display: none;
+}
+
+.assistant-history__icon-button,
+.assistant-mobile-nav__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.assistant-history__close {
+  display: none;
+}
+
+.assistant-history__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding-top: 16px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.assistant-history__section {
+  display: grid;
+  gap: 6px;
+}
+
+.assistant-history__section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 0 8px;
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.assistant-history__list {
+  display: grid;
+  gap: 4px;
+}
+
+.assistant-history__thread {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assistant-history__thread.is-active {
+  border-color: var(--ui-border);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+
+.assistant-history__thread-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.assistant-history__thread-title,
+.assistant-history__thread-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-history__thread-title {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.assistant-history__thread-meta,
+.assistant-history__message {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.assistant-history__message {
+  margin: 0;
+  padding: 8px;
+}
+
+.assistant-history-backdrop {
+  display: none;
 }
 
 .assistant-main {
@@ -3993,8 +4456,64 @@ button:disabled {
 
 @media (max-width: 959px) {
   .assistant-page {
-    gap: 0;
+    display: block;
     padding: 0 14px 18px;
+  }
+
+  .assistant-history {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 70;
+    width: min(300px, calc(100vw - 56px));
+    max-width: calc(100vw - 56px);
+    height: 100dvh;
+    max-height: 100dvh;
+    transform: translateX(-102%);
+    transition: transform 0.18s ease;
+    box-shadow: var(--ui-shadow-md);
+  }
+
+  .assistant-history--open {
+    transform: translateX(0);
+  }
+
+  .assistant-history--collapsed {
+    width: min(300px, calc(100vw - 56px));
+  }
+
+  .assistant-history--collapsed .assistant-history__body {
+    display: flex;
+  }
+
+  .assistant-page--history-collapsed {
+    display: block;
+  }
+
+  .assistant-history__new--collapsed {
+    flex: 1 1 auto;
+    width: auto;
+    padding: 0 12px;
+  }
+
+  .assistant-history__new--collapsed .assistant-history__new-label {
+    display: inline;
+  }
+
+  .assistant-history__collapse {
+    display: none;
+  }
+
+  .assistant-history__close {
+    display: inline-flex;
+  }
+
+  .assistant-history-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: block;
+    border: 0;
+    background: color-mix(in oklab, var(--ui-bg) 42%, transparent);
   }
 
   .assistant-main {
@@ -4030,10 +4549,12 @@ button:disabled {
     position: relative;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
+    gap: 10px;
     width: 100%;
     min-width: 0;
     min-height: 36px;
+    padding: 10px 0 4px;
   }
 
   .assistant-mobile-nav__actions {
