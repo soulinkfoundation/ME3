@@ -333,6 +333,7 @@ const inboxWatchRulesDraft = ref<InboxWatchRuleForm[]>([]);
 const inboxWatchRulesNotice = ref("");
 const assistantDraft = ref("");
 const assistantSending = ref(false);
+const assistantAwaitingResponse = ref(false);
 const assistantError = ref<string | null>(null);
 const assistantThreadId = ref<string | null>(null);
 const assistantThreadLoading = ref(false);
@@ -351,6 +352,8 @@ const voiceMediaStream = ref<MediaStream | null>(null);
 const voiceAudioChunks: Blob[] = [];
 let voiceStopTimeout: number | null = null;
 let voiceDiscardRecording = false;
+let assistantAbortController: AbortController | null = null;
+let cancelAssistantReveal: (() => void) | null = null;
 
 const defaultDailyBriefingTemplate =
   "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -805,12 +808,15 @@ async function submitAssistantText(text: string) {
   if (!normalized || assistantSending.value) return;
 
   assistantError.value = null;
+  const abortController = new AbortController();
+  assistantAbortController = abortController;
   agentChat.appendMessage({
     id: newAssistantMessageId("user"),
     role: "user",
     text: normalized,
   });
   assistantSending.value = true;
+  assistantAwaitingResponse.value = true;
   await scrollAssistantToBottom();
 
   try {
@@ -824,15 +830,19 @@ async function submitAssistantText(text: string) {
             optionId: selectedModel.value.id,
           }
         : null,
+    }, {
+      signal: abortController.signal,
     });
+    assistantAwaitingResponse.value = false;
     if (result.threadId) {
       assistantThreadId.value = result.threadId;
     }
 
+    const assistantMessageId = newAssistantMessageId("assistant");
     agentChat.appendMessage({
-      id: newAssistantMessageId("assistant"),
+      id: assistantMessageId,
       role: "assistant",
-      text: resolveAgentReplyText(result.replyText),
+      text: "",
       meta: formatAgentRuntimeMetadata(result, {
         showRuntimeMetadata: import.meta.env.DEV,
       }),
@@ -849,7 +859,18 @@ async function submitAssistantText(text: string) {
     if (result.threadId) {
       await setRouteThreadId(result.threadId);
     }
+    await revealAssistantReply(assistantMessageId, resolveAgentReplyText(result.replyText));
   } catch (err) {
+    assistantAwaitingResponse.value = false;
+    if (isAbortError(err)) {
+      agentChat.appendMessage({
+        id: newAssistantMessageId("assistant"),
+        role: "assistant",
+        text: "Stopped.",
+        detail: "ME3 stopped before the assistant finished replying.",
+      });
+      return;
+    }
     const message = messageFromUnknown(err, "Failed to reach ME3 right now.");
     assistantError.value = message;
     agentChat.appendMessage({
@@ -859,6 +880,11 @@ async function submitAssistantText(text: string) {
       detail: message,
     });
   } finally {
+    if (assistantAbortController === abortController) {
+      assistantAbortController = null;
+    }
+    cancelAssistantReveal = null;
+    assistantAwaitingResponse.value = false;
     assistantSending.value = false;
     await scrollAssistantToBottom();
     await nextTick();
@@ -874,6 +900,79 @@ async function sendAssistantMessage() {
   assistantDraft.value = "";
   autosizeAssistantComposer();
   await submitAssistantText(text);
+}
+
+function stopAssistantTurn() {
+  if (!assistantSending.value) return;
+  cancelAssistantReveal?.();
+  assistantAbortController?.abort();
+}
+
+async function revealAssistantReply(messageId: string, replyText: string) {
+  const fullText = replyText.trim() || "Done.";
+  const message = chatMessages.value.find((item) => item.id === messageId);
+  if (!message) return;
+
+  let cursor = 0;
+  let timeoutId: number | null = null;
+  let stopped = false;
+
+  await new Promise<void>((resolve) => {
+    cancelAssistantReveal = () => {
+      stopped = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      if (!message.text.trim()) {
+        message.text = "Stopped.";
+      }
+      message.detail = appendAssistantDetail(
+        message.detail,
+        "Stopped while the response was being shown.",
+      );
+      resolve();
+    };
+
+    const step = () => {
+      if (stopped) return;
+      cursor = Math.min(fullText.length, cursor + revealChunkSize(fullText, cursor));
+      message.text = fullText.slice(0, cursor);
+      void scrollAssistantToBottom();
+
+      if (cursor >= fullText.length) {
+        resolve();
+        return;
+      }
+
+      timeoutId = window.setTimeout(step, 18);
+    };
+
+    step();
+  });
+
+  if (cancelAssistantReveal) {
+    cancelAssistantReveal = null;
+  }
+}
+
+function revealChunkSize(text: string, cursor: number) {
+  const remaining = text.length - cursor;
+  if (remaining > 800) return 18;
+  if (remaining > 300) return 12;
+  return 8;
+}
+
+function appendAssistantDetail(current: string | null | undefined, next: string) {
+  const trimmed = current?.trim();
+  return trimmed ? `${trimmed}\n${next}` : next;
+}
+
+function isAbortError(err: unknown) {
+  return (
+    err instanceof DOMException && err.name === "AbortError"
+  ) || (
+    err instanceof Error && err.name === "AbortError"
+  );
 }
 
 async function copyAssistantMessage(
@@ -1947,7 +2046,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
           </article>
 
           <article
-            v-if="assistantSending"
+            v-if="assistantSending && assistantAwaitingResponse"
             class="assistant-message assistant-message--assistant"
           >
             <div class="assistant-message__bubble assistant-message__bubble--pending">
@@ -2048,11 +2147,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <button
                 type="button"
                 class="assistant-send"
-                :disabled="!canSendAssistantMessage"
-                :aria-label="assistantSending ? 'Sending' : 'Send message'"
-                @click="sendAssistantMessage"
+                :class="{ 'assistant-send--stop': assistantSending }"
+                :disabled="assistantSending ? false : !canSendAssistantMessage"
+                :aria-label="assistantSending ? 'Stop response' : 'Send message'"
+                @click="assistantSending ? stopAssistantTurn() : sendAssistantMessage()"
               >
-                <UiIcon name="ArrowUp" :size="18" />
+                <UiIcon :name="assistantSending ? 'Square' : 'ArrowUp'" :size="18" />
               </button>
             </div>
           </div>
@@ -3147,8 +3247,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-surface);
 }
 
+.assistant-send--stop {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
 .assistant-send:not(:disabled):hover {
   background: var(--ui-text);
+}
+
+.assistant-send--stop:not(:disabled):hover {
+  background: var(--ui-border);
 }
 
 .assistant-send:focus-visible {
