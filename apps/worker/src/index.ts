@@ -1693,6 +1693,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
       requestedThreadId,
       selectedModel: selectedModel || null,
       attachmentCount: Array.isArray(body.attachments) ? body.attachments.length : 0,
+      attachmentManifest: createAssistantAttachmentAuditManifest(body.attachments),
     },
   });
 
@@ -1776,6 +1777,7 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
       ? body.replyToMessageId
       : null;
   const attachmentCount = Array.isArray(body.attachments) ? body.attachments.length : 0;
+  const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -1785,6 +1787,14 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
           encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
         );
       };
+      let auditContext:
+        | {
+            connectionId: string;
+            sourceEventId: string;
+            turnId: string;
+            threadId: string;
+          }
+        | null = null;
 
       try {
         send("status", { state: "started" });
@@ -1817,8 +1827,15 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
             requestedThreadId,
             selectedModel: selectedModel || null,
             attachmentCount,
+            attachmentManifest,
           },
         });
+        auditContext = {
+          connectionId: turn.connection.id,
+          sourceEventId: turn.sourceEvent.id,
+          turnId: turn.turnId,
+          threadId: thread.id,
+        };
 
         const id = runtime.idFromName(ownerId);
         const stub = runtime.get(id);
@@ -1846,6 +1863,22 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
           | null;
 
         if (!response.ok || payload?.ok !== true) {
+          await insertAssistantChatStreamAuditEvent(c.env, {
+            ownerId,
+            connectionId: turn.connection.id,
+            sourceEventId: turn.sourceEvent.id,
+            turnId: turn.turnId,
+            threadId: thread.id,
+            route: c.req.path,
+            outcome: "failed",
+            selectedModel: selectedModel || null,
+            attachmentCount,
+            attachmentManifest,
+            error:
+              typeof payload?.error === "string"
+                ? payload.error
+                : `Agent chat runtime request failed (${response.status})`,
+          });
           send("error", {
             ok: false,
             error:
@@ -1861,9 +1894,54 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
         for (const chunk of splitAssistantStreamText(replyText)) {
           send("delta", { text: chunk });
         }
+        await insertAssistantChatStreamAuditEvent(c.env, {
+          ownerId,
+          connectionId: turn.connection.id,
+          sourceEventId: turn.sourceEvent.id,
+          turnId: turn.turnId,
+          threadId: thread.id,
+          route: c.req.path,
+          outcome: "completed",
+          selectedModel: selectedModel || null,
+          attachmentCount,
+          attachmentManifest,
+          error: null,
+        });
         send("done", { ...payload, threadId: thread.id });
       } catch (error) {
-        if (c.req.raw.signal.aborted) return;
+        if (c.req.raw.signal.aborted) {
+          if (auditContext) {
+            await insertAssistantChatStreamAuditEvent(c.env, {
+              ownerId,
+              connectionId: auditContext.connectionId,
+              sourceEventId: auditContext.sourceEventId,
+              turnId: auditContext.turnId,
+              threadId: auditContext.threadId,
+              route: c.req.path,
+              outcome: "stopped",
+              selectedModel: selectedModel || null,
+              attachmentCount,
+              attachmentManifest,
+              error: null,
+            });
+          }
+          return;
+        }
+        if (auditContext) {
+          await insertAssistantChatStreamAuditEvent(c.env, {
+            ownerId,
+            connectionId: auditContext.connectionId,
+            sourceEventId: auditContext.sourceEventId,
+            turnId: auditContext.turnId,
+            threadId: auditContext.threadId,
+            route: c.req.path,
+            outcome: "failed",
+            selectedModel: selectedModel || null,
+            attachmentCount,
+            attachmentManifest,
+            error: error instanceof Error ? error.message : "Assistant stream failed",
+          });
+        }
         send("error", {
           ok: false,
           error: error instanceof Error ? error.message : "Assistant stream failed",
@@ -1881,6 +1959,95 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
       Connection: "keep-alive",
     },
   });
+}
+
+type AssistantAttachmentAuditManifestItem = {
+  id: string | null;
+  name: string | null;
+  mimeType: string | null;
+  size: number | null;
+  kind: string | null;
+  status: string | null;
+};
+
+function createAssistantAttachmentAuditManifest(
+  attachments: unknown,
+): AssistantAttachmentAuditManifestItem[] {
+  if (!Array.isArray(attachments)) return [];
+  return attachments
+    .filter((attachment): attachment is Record<string, unknown> =>
+      Boolean(attachment && typeof attachment === "object" && !Array.isArray(attachment)),
+    )
+    .map((attachment) => ({
+      id: normalizeAssistantAuditText(attachment.id),
+      name: normalizeAssistantAuditText(attachment.name),
+      mimeType: normalizeAssistantAuditText(attachment.mimeType),
+      size:
+        typeof attachment.size === "number" && Number.isFinite(attachment.size)
+          ? Math.max(0, Math.round(attachment.size))
+          : null,
+      kind: normalizeAssistantAuditText(attachment.kind),
+      status: normalizeAssistantAuditText(attachment.status),
+    }));
+}
+
+function normalizeAssistantAuditText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+async function insertAssistantChatStreamAuditEvent(
+  env: Env,
+  input: {
+    ownerId: string;
+    connectionId: string;
+    sourceEventId: string;
+    turnId: string;
+    threadId: string;
+    route: string;
+    outcome: "completed" | "failed" | "stopped";
+    selectedModel: ReturnType<typeof parseAssistantChatTurnModelSelection> | null;
+    attachmentCount: number;
+    attachmentManifest: AssistantAttachmentAuditManifestItem[];
+    error: string | null;
+  },
+) {
+  try {
+    await insertProviderChannelEvent(env, {
+      channel: "sandbox",
+      connectionId: input.connectionId,
+      direction: "system",
+      eventType: "message",
+      status:
+        input.outcome === "completed"
+          ? "sent"
+          : input.outcome === "stopped"
+            ? "skipped"
+            : "failed",
+      providerEventId: `${input.sourceEventId}:stream:${input.outcome}`,
+      providerMessageId: null,
+      replyToMessageId: null,
+      textBody: null,
+      rawJson: {
+        runtime: "sandbox",
+        surface: "assistant",
+        route: input.route,
+        stream: true,
+        streamOutcome: input.outcome,
+        turnId: input.turnId,
+        threadId: input.threadId,
+        ownerId: input.ownerId,
+        sourceEventId: input.sourceEventId,
+        selectedModel: input.selectedModel,
+        attachmentCount: input.attachmentCount,
+        attachmentManifest: input.attachmentManifest,
+      },
+      errorMessage: input.error,
+    });
+  } catch {
+    // Stream outcome audit should not break the user-visible chat response.
+  }
 }
 
 function splitAssistantStreamText(text: string) {
@@ -7275,7 +7442,7 @@ async function getAgentChannelEventByProviderEventId(
 }
 
 type ProviderChannelEventInput = {
-  channel: "soulink";
+  channel: "sandbox" | "soulink";
   connectionId: string;
   direction: "inbound" | "outbound" | "system";
   eventType: "start" | "message" | "link" | "send" | "error";

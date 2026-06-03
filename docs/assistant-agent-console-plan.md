@@ -61,8 +61,9 @@ As of 2026-06-03:
 - Audit metadata is partially implemented:
   - Chat turns record route/thread/model/attachment-count metadata.
   - Streaming turns record stream route metadata.
-  - `me3-8it.6` remains open for stopped-turn outcomes, full attachment manifests, and richer
-    action-card audit records.
+  - Chat turns now record redacted attachment manifests without raw file content.
+  - Streaming turns now record completed, failed, and stopped outcomes in sandbox audit metadata.
+  - `me3-8it.6` remains open for richer ME3-native action-card audit records.
 - Voice mode has a dedicated implementation bead:
   - `me3-kid` should build the robust composer-only voice dictation adapter with provider/plugin
     architecture.
@@ -88,8 +89,8 @@ The essential remaining work is now mostly outside the base chat loop:
    - Keep pre-send explanations for unsupported type/model combinations.
 
 2. Finish audit and observability (`me3-8it.6`).
-   - Record stopped-stream outcomes clearly.
-   - Add attachment manifests without storing unnecessary raw sensitive content.
+   - Continue tightening stream outcome visibility as the UI/history model evolves.
+   - Keep attachment manifests redacted as persisted upload records land.
    - Extend audit records for richer ME3-native action cards.
 
 3. Add focused QA coverage (`me3-8it.7`).

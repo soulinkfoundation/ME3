@@ -2982,6 +2982,17 @@ describe("ME3 Core Worker auth", () => {
             model: "gpt-test",
             optionId: "openai-gpt-test",
           },
+          attachments: [
+            {
+              id: "att-1",
+              name: "notes.md",
+              mimeType: "text/markdown",
+              size: 128.4,
+              kind: "text",
+              status: "ready",
+              text: "do not audit raw attachment text",
+            },
+          ],
         }),
       }),
       env,
@@ -3020,8 +3031,21 @@ describe("ME3 Core Worker auth", () => {
         model: "gpt-test",
         optionId: "openai-gpt-test",
       },
-      attachmentCount: 0,
+      attachmentCount: 1,
+      attachmentManifest: [
+        {
+          id: "att-1",
+          name: "notes.md",
+          mimeType: "text/markdown",
+          size: 128,
+          kind: "text",
+          status: "ready",
+        },
+      ],
     });
+    expect(JSON.parse(env.agentEvents[0]?.raw_json || "{}")).not.toHaveProperty(
+      "attachmentManifest.0.text",
+    );
     expect(runtimeFetch).toHaveBeenCalledOnce();
     const runtimeInit = runtimeCalls[0]?.[1] || {};
     expect(JSON.parse(String(runtimeInit.body))).toMatchObject({
@@ -3090,6 +3114,73 @@ describe("ME3 Core Worker auth", () => {
       route: "/api/assistant/chat/turn/stream",
       stream: true,
       attachmentCount: 1,
+      attachmentManifest: [
+        {
+          id: "att-1",
+          kind: "text",
+        },
+      ],
+    });
+    expect(env.agentEvents[1]).toMatchObject({
+      channel: "sandbox",
+      direction: "system",
+      event_type: "message",
+      status: "sent",
+    });
+    expect(JSON.parse(env.agentEvents[1]?.raw_json || "{}")).toMatchObject({
+      route: "/api/assistant/chat/turn/stream",
+      stream: true,
+      streamOutcome: "completed",
+      attachmentCount: 1,
+      attachmentManifest: [
+        {
+          id: "att-1",
+          kind: "text",
+        },
+      ],
+    });
+  });
+
+  it("records stopped owner assistant streams in sandbox audit metadata", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const abortController = new AbortController();
+    const runtimeFetch = vi.fn(async () => {
+      abortController.abort();
+      throw new DOMException("The operation was aborted.", "AbortError");
+    });
+
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        signal: abortController.signal,
+        body: JSON.stringify({ messageText: "Stop this" }),
+      }),
+      env,
+    );
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(env.agentEvents[1]).toMatchObject({
+      channel: "sandbox",
+      direction: "system",
+      event_type: "message",
+      status: "skipped",
+    });
+    expect(JSON.parse(env.agentEvents[1]?.raw_json || "{}")).toMatchObject({
+      route: "/api/assistant/chat/turn/stream",
+      stream: true,
+      streamOutcome: "stopped",
+      threadId: env.assistantThreads[0]?.id,
     });
   });
 
