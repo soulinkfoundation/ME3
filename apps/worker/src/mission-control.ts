@@ -248,7 +248,7 @@ type MissionSetupItem = {
 
 type WeeklyReviewTaskInput = {
   id?: unknown;
-  checked?: unknown;
+  action?: unknown;
 };
 
 type WeeklyReviewMemoryInput = {
@@ -916,11 +916,18 @@ async function submitWeeklyReviewPayload(
   },
 ) {
   const body = isRecord(options.input) ? options.input : {};
-  const carryOverIds = new Set(
+  const taskActions = new Map<string, "archive" | "done">(
     Array.isArray(body.tasks)
       ? (body.tasks as WeeklyReviewTaskInput[])
-          .filter((item) => item && item.checked === true && typeof item.id === "string")
-          .map((item) => String(item.id))
+          .map((item) => {
+            const id = normalizeNullableText(item.id);
+            const action =
+              item.action === "archive" || item.action === "done"
+                ? item.action
+                : null;
+            return id && action ? ([id, action] as const) : null;
+          })
+          .filter((item): item is readonly [string, "archive" | "done"] => Boolean(item))
       : [],
   );
   const selectedMemory = Array.isArray(body.memorySuggestions)
@@ -935,24 +942,44 @@ async function submitWeeklyReviewPayload(
       )
     : [];
   const now = new Date().toISOString();
-  const carriedTaskIds = options.review.openTasks
-    .map((task) => normalizeNullableText(task.id))
-    .filter((taskId): taskId is string => taskId !== null)
-    .filter((taskId) => carryOverIds.has(taskId));
+  const actionableTaskIds = new Set(
+    options.review.openTasks
+      .map((task) => normalizeNullableText(task.id))
+      .filter((taskId): taskId is string => taskId !== null),
+  );
+  const archivedTaskIds: string[] = [];
+  const completedTaskIds: string[] = [];
 
-  for (const taskId of carriedTaskIds) {
+  for (const [taskId, action] of taskActions) {
+    if (!actionableTaskIds.has(taskId)) continue;
     const task = await getMissionTask(env, userId, taskId);
     if (!task || task.archived_at || task.status === "done" || task.status === "cancelled") {
       continue;
     }
-    await env.DB.prepare(
+    if (action === "archive") {
+      const result = await env.DB.prepare(
+        `UPDATE mission_tasks
+         SET archived_at = datetime('now'), updated_at = datetime('now')
+         WHERE id = ? AND user_id = ?`,
+      )
+        .bind(taskId, userId)
+        .run();
+      if ((result.meta?.changes || 0) > 0) archivedTaskIds.push(taskId);
+      continue;
+    }
+    const result = await env.DB.prepare(
       `UPDATE mission_tasks
-       SET scheduled_for = ?, updated_at = datetime('now')
+       SET status = 'done', updated_at = datetime('now')
        WHERE id = ? AND user_id = ?`,
     )
-      .bind(options.review.reviewDate, taskId, userId)
+      .bind(taskId, userId)
       .run();
+    if ((result.meta?.changes || 0) > 0) completedTaskIds.push(taskId);
   }
+
+  const reviewedTaskIds = Array.from(
+    new Set([...archivedTaskIds, ...completedTaskIds]),
+  );
 
   const memoryIds: string[] = [];
   if (customMemoryBody) {
@@ -1012,7 +1039,9 @@ async function submitWeeklyReviewPayload(
           weeklyReview: {
             ...reviewMetadata,
             submittedAt: now,
-            carriedTaskIds,
+            reviewedTaskIds,
+            archivedTaskIds,
+            completedTaskIds,
             memoryIds,
             rescheduledReminderIds,
           },
@@ -1027,12 +1056,19 @@ async function submitWeeklyReviewPayload(
     pluginId: "me3.mission-control",
     activityType: "weekly_review.submitted",
     title: "Weekly Review submitted",
-    summary: `${carriedTaskIds.length} task${carriedTaskIds.length === 1 ? "" : "s"} carried over; ${memoryIds.length} memory note${memoryIds.length === 1 ? "" : "s"} queued; ${rescheduledReminderIds.length} reminder${rescheduledReminderIds.length === 1 ? "" : "s"} rescheduled.`,
+    summary: `${archivedTaskIds.length} task${archivedTaskIds.length === 1 ? "" : "s"} archived; ${completedTaskIds.length} marked done; ${memoryIds.length} memory note${memoryIds.length === 1 ? "" : "s"} queued; ${rescheduledReminderIds.length} reminder${rescheduledReminderIds.length === 1 ? "" : "s"} rescheduled.`,
     status: "succeeded",
     relatedId: options.task?.id || options.runId,
   });
 
-  return { ok: true, carriedTaskIds, memoryIds, rescheduledReminderIds };
+  return {
+    ok: true,
+    reviewedTaskIds,
+    archivedTaskIds,
+    completedTaskIds,
+    memoryIds,
+    rescheduledReminderIds,
+  };
 }
 
 export async function clearMissionActivity(env: Env, userId: string) {

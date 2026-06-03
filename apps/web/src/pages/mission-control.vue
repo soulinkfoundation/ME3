@@ -71,8 +71,9 @@ type WeeklyReviewTaskItem = {
   dueAt: string | null;
   completedAt: string | null;
   status: string | null;
-  suggestedCarryOver: boolean;
 };
+
+type WeeklyReviewTaskCleanupAction = "archive" | "done";
 
 type WeeklyReviewMemorySuggestion = {
   id: string;
@@ -348,7 +349,9 @@ const projectTaskDetailDraft = ref<ProjectTaskDetailDraft>({
 });
 const projectTaskDetailSaving = ref(false);
 const projectTaskDetailError = ref("");
-const weeklyReviewCarryOverIds = ref<Set<string>>(new Set());
+const weeklyReviewTaskActions = ref<
+  Record<string, WeeklyReviewTaskCleanupAction>
+>({});
 const weeklyReviewMemoryIds = ref<Set<string>>(new Set());
 const weeklyReviewReminderIds = ref<Set<string>>(new Set());
 const weeklyReviewCustomMemory = ref("");
@@ -1149,7 +1152,6 @@ function weeklyReviewTaskItem(value: unknown): WeeklyReviewTaskItem | null {
     dueAt: nullableTextValue(record.dueAt),
     completedAt: nullableTextValue(record.completedAt),
     status: nullableTextValue(record.status),
-    suggestedCarryOver: boolValue(record.suggestedCarryOver, true),
   };
 }
 
@@ -1240,11 +1242,7 @@ function weeklyReviewMetadata(task: MissionTask | null | undefined): WeeklyRevie
 
 function resetWeeklyReviewSelection(task: MissionTask | null) {
   const review = weeklyReviewMetadata(task);
-  weeklyReviewCarryOverIds.value = new Set(
-    review?.openTasks
-      .filter((item) => item.suggestedCarryOver)
-      .map((item) => item.id) || [],
-  );
+  weeklyReviewTaskActions.value = {};
   weeklyReviewMemoryIds.value = new Set(
     review?.memorySuggestions
       .filter((item) => item.checked)
@@ -1255,11 +1253,14 @@ function resetWeeklyReviewSelection(task: MissionTask | null) {
   weeklyReviewCompletedOpen.value = false;
 }
 
-function toggleWeeklyReviewTask(taskId: string) {
-  const next = new Set(weeklyReviewCarryOverIds.value);
-  if (next.has(taskId)) next.delete(taskId);
-  else next.add(taskId);
-  weeklyReviewCarryOverIds.value = next;
+function setWeeklyReviewTaskAction(
+  taskId: string,
+  action: WeeklyReviewTaskCleanupAction,
+) {
+  const next = { ...weeklyReviewTaskActions.value };
+  if (next[taskId] === action) delete next[taskId];
+  else next[taskId] = action;
+  weeklyReviewTaskActions.value = next;
 }
 
 function toggleWeeklyReviewMemory(suggestionId: string) {
@@ -1469,7 +1470,7 @@ async function submitSelectedWeeklyReview() {
       {
         tasks: review.openTasks.map((item) => ({
           id: item.id,
-          checked: weeklyReviewCarryOverIds.value.has(item.id),
+          action: weeklyReviewTaskActions.value[item.id] || null,
         })),
         memorySuggestions: review.memorySuggestions.map((item) => ({
           id: item.id,
@@ -2850,31 +2851,22 @@ onBeforeUnmount(() => {
 
               <section class="weekly-review-panel__section">
                 <div class="weekly-review-panel__section-header">
-                  <h3>Carry over</h3>
-                  <span>
-                    {{ weeklyReviewCarryOverIds.size }} /
-                    {{ selectedProjectTaskWeeklyReview.openTasks.length }}
-                  </span>
+                  <h3>Open task cleanup</h3>
+                  <span>{{ selectedProjectTaskWeeklyReview.openTasks.length }}</span>
                 </div>
+                <p class="weekly-review-panel__hint">
+                  Archive stale tasks or mark finished work done. Anything untouched stays on the board.
+                </p>
                 <div
                   v-if="selectedProjectTaskWeeklyReview.openTasks.length"
-                  class="weekly-review-checklist"
+                  class="weekly-review-task-list"
                 >
-                  <label
+                  <div
                     v-for="item in selectedProjectTaskWeeklyReview.openTasks"
                     :key="item.id"
-                    class="weekly-review-check"
+                    class="weekly-review-task-row"
                   >
-                    <input
-                      type="checkbox"
-                      :checked="weeklyReviewCarryOverIds.has(item.id)"
-                      :disabled="
-                        weeklyReviewSubmitting ||
-                        Boolean(selectedProjectTaskWeeklyReview.submittedAt)
-                      "
-                      @change="toggleWeeklyReviewTask(item.id)"
-                    />
-                    <span>
+                    <div class="weekly-review-task-row__body">
                       <strong>{{ item.title }}</strong>
                       <small>
                         {{ projectName(item.projectId) }}
@@ -2882,11 +2874,46 @@ onBeforeUnmount(() => {
                           / due {{ formatShortDate(item.dueAt) }}
                         </template>
                       </small>
-                    </span>
-                  </label>
+                    </div>
+                    <div
+                      class="weekly-review-task-row__actions"
+                      aria-label="Task cleanup action"
+                    >
+                      <button
+                        type="button"
+                        class="text-button"
+                        :class="{
+                          'is-selected':
+                            weeklyReviewTaskActions[item.id] === 'archive',
+                        }"
+                        :disabled="
+                          weeklyReviewSubmitting ||
+                          Boolean(selectedProjectTaskWeeklyReview.submittedAt)
+                        "
+                        @click="setWeeklyReviewTaskAction(item.id, 'archive')"
+                      >
+                        Archive
+                      </button>
+                      <button
+                        type="button"
+                        class="text-button"
+                        :class="{
+                          'is-selected':
+                            weeklyReviewTaskActions[item.id] === 'done',
+                        }"
+                        :disabled="
+                          weeklyReviewSubmitting ||
+                          Boolean(selectedProjectTaskWeeklyReview.submittedAt)
+                        "
+                        @click="setWeeklyReviewTaskAction(item.id, 'done')"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <p v-else class="weekly-review-panel__empty">
-                  No open tasks to carry over.
+                  No open tasks to clean up.
                 </p>
               </section>
 
@@ -4408,11 +4435,16 @@ onBeforeUnmount(() => {
 
 .weekly-review-panel__summary,
 .weekly-review-panel__empty,
-.weekly-review-panel__done {
+.weekly-review-panel__done,
+.weekly-review-panel__hint {
   margin: 0;
   color: var(--ui-text-muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.weekly-review-panel__hint {
+  font-size: 12px;
 }
 
 .weekly-review-panel__done {
@@ -4491,6 +4523,61 @@ onBeforeUnmount(() => {
 
 .weekly-review-check--memory small {
   overflow-wrap: anywhere;
+}
+
+.weekly-review-task-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.weekly-review-task-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+}
+
+.weekly-review-task-row__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.weekly-review-task-row__body strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.weekly-review-task-row__body small {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.weekly-review-task-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.weekly-review-task-row__actions .text-button {
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.weekly-review-task-row__actions .text-button.is-selected {
+  border-color: transparent;
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
 }
 
 .weekly-review-memory-field {

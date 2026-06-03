@@ -49,7 +49,7 @@ Example:
 6. The generated Weekly Review task appears in the ordinary task list/board.
 7. Owner opens the task detail modal.
 8. The modal detects `metadata.kind === "weekly_review"` and renders the review UI:
-   - Open tasks with carry-over checkboxes.
+   - Open tasks with explicit Archive and Done cleanup actions.
    - Completed tasks collapsed.
    - Reminder count/list with a simple reschedule action.
    - Short review summary.
@@ -107,7 +107,10 @@ The handler should:
 
 - Validate the task belongs to the owner.
 - Validate `metadata.kind === "weekly_review"`.
-- Carry over selected existing tasks by setting `scheduled_for` or another future planning field.
+- Apply explicit cleanup actions to selected existing tasks:
+  - archive redundant/stale tasks;
+  - mark finished tasks done;
+  - leave untouched tasks on the board.
 - Create selected memory suggestions as `sourceKind: "agent"` and `reviewStatus: "needs_review"`.
 - Mark the Weekly Review task `done`.
 - Record `weekly_review.submitted` activity.
@@ -152,7 +155,7 @@ Extend the existing task detail modal:
 - Submit button lives in the modal footer or review section.
 - After submit, refresh project tasks and memory.
 - Include a textarea for a custom owner-authored weekly memory.
-- Let pending reminders be selected for a simple carry-forward action such as reschedule tomorrow.
+- Let pending reminders be selected for a simple reschedule action such as tomorrow.
 
 ### 4. Remove Journal Language
 
