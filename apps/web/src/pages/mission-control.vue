@@ -61,6 +61,48 @@ type MissionTask = {
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  metadata: Record<string, unknown>;
+};
+
+type WeeklyReviewTaskItem = {
+  id: string;
+  title: string;
+  projectId: string | null;
+  dueAt: string | null;
+  completedAt: string | null;
+  status: string | null;
+  suggestedCarryOver: boolean;
+};
+
+type WeeklyReviewMemorySuggestion = {
+  id: string;
+  title: string;
+  body: string;
+  memoryKind: string;
+  duplicate: boolean;
+  pattern: boolean;
+  note: string;
+  checked: boolean;
+};
+
+type WeeklyReviewReminderItem = {
+  id: string;
+  title: string;
+  remindAt: string | null;
+  status: string | null;
+};
+
+type WeeklyReviewView = {
+  reviewDate: string;
+  weekStart: string;
+  weekEnd: string;
+  weekLabel: string;
+  summary: string;
+  openTasks: WeeklyReviewTaskItem[];
+  completedTasks: WeeklyReviewTaskItem[];
+  reminders: WeeklyReviewReminderItem[];
+  memorySuggestions: WeeklyReviewMemorySuggestion[];
+  submittedAt: string | null;
 };
 
 type MissionApproval = {
@@ -306,6 +348,10 @@ const projectTaskDetailDraft = ref<ProjectTaskDetailDraft>({
 });
 const projectTaskDetailSaving = ref(false);
 const projectTaskDetailError = ref("");
+const weeklyReviewCarryOverIds = ref<Set<string>>(new Set());
+const weeklyReviewMemoryIds = ref<Set<string>>(new Set());
+const weeklyReviewCompletedOpen = ref(false);
+const weeklyReviewSubmitting = ref(false);
 const accountsType = ref<FinancialEntryType>("expense");
 const accountsEntries = ref<FinancialEntry[]>([]);
 const accountsCategories = ref<FinancialCategory[]>([]);
@@ -461,6 +507,12 @@ const selectedProjectTaskDetailProject = computed(() =>
     ? projectForTask(selectedProjectTaskDetail.value)
     : null,
 );
+const selectedProjectTaskWeeklyReview = computed(() =>
+  weeklyReviewMetadata(selectedProjectTaskDetail.value),
+);
+const selectedProjectTaskIsWeeklyReview = computed(() =>
+  Boolean(selectedProjectTaskWeeklyReview.value),
+);
 const selectedProjectTaskLatestRun = computed(() => {
   const taskId = selectedProjectTaskDetail.value?.id;
   if (!taskId) return null;
@@ -503,8 +555,16 @@ const projectTaskCreateDisabled = computed(
 const projectTaskDetailSaveDisabled = computed(
   () =>
     projectTaskDetailSaving.value ||
+    weeklyReviewSubmitting.value ||
     !selectedProjectTaskDetail.value ||
     !projectTaskDetailDraft.value.title.trim(),
+);
+const weeklyReviewSubmitDisabled = computed(
+  () =>
+    weeklyReviewSubmitting.value ||
+    !selectedProjectTaskDetail.value ||
+    !selectedProjectTaskWeeklyReview.value ||
+    Boolean(selectedProjectTaskWeeklyReview.value.submittedAt),
 );
 const accountsPage = computed(
   () => Math.floor(accountsOffset.value / ACCOUNTS_PAGE_SIZE) + 1,
@@ -1046,6 +1106,168 @@ function resetProjectTaskComposer() {
   projectTaskProjectId.value = "";
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function textValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function nullableTextValue(value: unknown): string | null {
+  const text = textValue(value);
+  return text || null;
+}
+
+function boolValue(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function weeklyReviewTaskItem(value: unknown): WeeklyReviewTaskItem | null {
+  const record = recordValue(value);
+  if (!record) return null;
+  const id = textValue(record.id);
+  const title = textValue(record.title);
+  if (!id || !title) return null;
+  return {
+    id,
+    title,
+    projectId: nullableTextValue(record.projectId),
+    dueAt: nullableTextValue(record.dueAt),
+    completedAt: nullableTextValue(record.completedAt),
+    status: nullableTextValue(record.status),
+    suggestedCarryOver: boolValue(record.suggestedCarryOver, true),
+  };
+}
+
+function weeklyReviewMemorySuggestion(
+  value: unknown,
+  index: number,
+): WeeklyReviewMemorySuggestion | null {
+  const record = recordValue(value);
+  if (!record) return null;
+  const title = textValue(record.title);
+  const body = textValue(record.body);
+  if (!title || !body) return null;
+  return {
+    id: textValue(record.id) || `suggestion-${index}`,
+    title,
+    body,
+    memoryKind: textValue(record.memoryKind) || "preference",
+    duplicate: boolValue(record.duplicate),
+    pattern: boolValue(record.pattern),
+    note: textValue(record.note),
+    checked: boolValue(record.checked, true),
+  };
+}
+
+function weeklyReviewReminderItem(value: unknown): WeeklyReviewReminderItem | null {
+  const record = recordValue(value);
+  if (!record) return null;
+  const id = textValue(record.id);
+  const title = textValue(record.title);
+  if (!id || !title) return null;
+  return {
+    id,
+    title,
+    remindAt: nullableTextValue(record.remindAt),
+    status: nullableTextValue(record.status),
+  };
+}
+
+function weeklyReviewMetadata(task: MissionTask | null | undefined): WeeklyReviewView | null {
+  const metadata = recordValue(task?.metadata);
+  const review = recordValue(metadata?.weeklyReview);
+  if (!metadata || !review || metadata.kind !== "weekly_review") return null;
+  const weekStart = textValue(review.weekStart);
+  const weekEnd = textValue(review.weekEnd);
+  const reviewDate = textValue(review.reviewDate) || weekEnd || weekStart;
+  const weekLabel =
+    textValue(review.weekLabel) ||
+    [weekStart, weekEnd].filter(Boolean).join(" to ") ||
+    "Weekly Review";
+  const openTasks = Array.isArray(review.openTasks)
+    ? review.openTasks
+        .map((item) => weeklyReviewTaskItem(item))
+        .filter((item): item is WeeklyReviewTaskItem => Boolean(item))
+    : [];
+  const completedTasks = Array.isArray(review.completedTasks)
+    ? review.completedTasks
+        .map((item) => weeklyReviewTaskItem(item))
+        .filter((item): item is WeeklyReviewTaskItem => Boolean(item))
+    : [];
+  const reminders = Array.isArray(review.reminders)
+    ? review.reminders
+        .map((item) => weeklyReviewReminderItem(item))
+        .filter((item): item is WeeklyReviewReminderItem => Boolean(item))
+    : [];
+  const memorySuggestions = Array.isArray(review.memorySuggestions)
+    ? review.memorySuggestions
+        .map((item, index) => weeklyReviewMemorySuggestion(item, index))
+        .filter(
+          (item): item is WeeklyReviewMemorySuggestion => Boolean(item),
+        )
+    : [];
+
+  return {
+    reviewDate,
+    weekStart,
+    weekEnd,
+    weekLabel,
+    summary:
+      textValue(review.journalSummary) ||
+      `Review ${weekLabel.toLowerCase()}.`,
+    openTasks,
+    completedTasks,
+    reminders,
+    memorySuggestions,
+    submittedAt: nullableTextValue(review.submittedAt),
+  };
+}
+
+function resetWeeklyReviewSelection(task: MissionTask | null) {
+  const review = weeklyReviewMetadata(task);
+  weeklyReviewCarryOverIds.value = new Set(
+    review?.openTasks
+      .filter((item) => item.suggestedCarryOver)
+      .map((item) => item.id) || [],
+  );
+  weeklyReviewMemoryIds.value = new Set(
+    review?.memorySuggestions
+      .filter((item) => item.checked)
+      .map((item) => item.id) || [],
+  );
+  weeklyReviewCompletedOpen.value = false;
+}
+
+function toggleWeeklyReviewTask(taskId: string) {
+  const next = new Set(weeklyReviewCarryOverIds.value);
+  if (next.has(taskId)) next.delete(taskId);
+  else next.add(taskId);
+  weeklyReviewCarryOverIds.value = next;
+}
+
+function toggleWeeklyReviewMemory(suggestionId: string) {
+  const next = new Set(weeklyReviewMemoryIds.value);
+  if (next.has(suggestionId)) next.delete(suggestionId);
+  else next.add(suggestionId);
+  weeklyReviewMemoryIds.value = next;
+}
+
+function weeklyReviewCardLabel(task: MissionTask): string {
+  const review = weeklyReviewMetadata(task);
+  if (!review) return "";
+  const parts = [
+    `${review.openTasks.length} open`,
+    `${review.completedTasks.length} done`,
+  ];
+  if (review.memorySuggestions.length)
+    parts.push(`${review.memorySuggestions.length} memories`);
+  return parts.join(" / ");
+}
+
 function syncProjectTaskDetailDraft(task: MissionTask) {
   projectTaskDetailDraft.value = {
     title: task.title,
@@ -1062,12 +1284,18 @@ function openProjectTaskDetail(task: MissionTask) {
   selectedProjectTaskDetailId.value = task.id;
   projectTaskDetailError.value = "";
   syncProjectTaskDetailDraft(task);
+  resetWeeklyReviewSelection(task);
 }
 
 function closeProjectTaskDetail(options: { force?: boolean } = {}) {
-  if (projectTaskDetailSaving.value && !options.force) return;
+  if (
+    (projectTaskDetailSaving.value || weeklyReviewSubmitting.value) &&
+    !options.force
+  )
+    return;
   selectedProjectTaskDetailId.value = "";
   projectTaskDetailError.value = "";
+  resetWeeklyReviewSelection(null);
 }
 
 function openProjectTaskComposer(status: ProjectBoardStatus) {
@@ -1144,7 +1372,13 @@ async function runProjectTaskLocally(task: MissionTask) {
 async function saveProjectTaskDetail() {
   const task = selectedProjectTaskDetail.value;
   const title = projectTaskDetailDraft.value.title.trim();
-  if (!task || !title || projectTaskDetailSaving.value) return;
+  if (
+    !task ||
+    !title ||
+    projectTaskDetailSaving.value ||
+    selectedProjectTaskIsWeeklyReview.value
+  )
+    return;
   projectTaskDetailSaving.value = true;
   projectTaskDetailError.value = "";
   try {
@@ -1165,6 +1399,43 @@ async function saveProjectTaskDetail() {
       e instanceof ApiError ? e.message : "Could not update task";
   } finally {
     projectTaskDetailSaving.value = false;
+  }
+}
+
+async function submitSelectedWeeklyReview() {
+  const task = selectedProjectTaskDetail.value;
+  const review = selectedProjectTaskWeeklyReview.value;
+  if (!task || !review || weeklyReviewSubmitDisabled.value) return;
+  weeklyReviewSubmitting.value = true;
+  projectTaskDetailError.value = "";
+  try {
+    await api.post(
+      `/mission-control/tasks/${encodeURIComponent(task.id)}/weekly-review/submit`,
+      {
+        tasks: review.openTasks.map((item) => ({
+          id: item.id,
+          checked: weeklyReviewCarryOverIds.value.has(item.id),
+        })),
+        memorySuggestions: review.memorySuggestions.map((item) => ({
+          id: item.id,
+          title: item.title,
+          body: item.body,
+          memoryKind: item.memoryKind,
+          duplicate: item.duplicate,
+          pattern: item.pattern,
+          note: item.note,
+          checked: weeklyReviewMemoryIds.value.has(item.id),
+        })),
+      },
+    );
+    await Promise.all([loadProjectTasks(), loadMemoryAndSources()]);
+    closeProjectTaskDetail({ force: true });
+    toastSuccess("Weekly Review submitted");
+  } catch (e) {
+    projectTaskDetailError.value =
+      e instanceof ApiError ? e.message : "Could not submit Weekly Review";
+  } finally {
+    weeklyReviewSubmitting.value = false;
   }
 }
 
@@ -1797,6 +2068,11 @@ onBeforeUnmount(() => {
                 >
                   <p>{{ task.title }}</p>
                   <div class="project-task-card__meta">
+                    <span
+                      v-if="weeklyReviewMetadata(task)"
+                      class="weekly-review-badge"
+                      >Weekly Review</span
+                    >
                     <span class="project-task-card__project">
                       <img
                         v-if="projectForTask(task)?.icon"
@@ -1814,6 +2090,12 @@ onBeforeUnmount(() => {
                       {{ formatShortDate(task.dueAt || task.scheduledFor) }}
                     </span>
                   </div>
+                  <span
+                    v-if="weeklyReviewMetadata(task)"
+                    class="project-task-card__review-counts"
+                  >
+                    {{ weeklyReviewCardLabel(task) }}
+                  </span>
                   <div class="project-task-card__actions">
                     <button
                       v-if="isLocalProject(projectForTask(task))"
@@ -2456,10 +2738,20 @@ onBeforeUnmount(() => {
           role="dialog"
           aria-modal="true"
           aria-labelledby="task-detail-modal-title"
-          @submit.prevent="saveProjectTaskDetail"
+          @submit.prevent="
+            selectedProjectTaskIsWeeklyReview
+              ? submitSelectedWeeklyReview()
+              : saveProjectTaskDetail()
+          "
         >
           <div class="mission-modal__header">
-            <h2 id="task-detail-modal-title">Task details</h2>
+            <h2 id="task-detail-modal-title">
+              {{
+                selectedProjectTaskIsWeeklyReview
+                  ? "Weekly Review"
+                  : "Task details"
+              }}
+            </h2>
             <button
               type="button"
               class="icon-button quiet"
@@ -2472,6 +2764,11 @@ onBeforeUnmount(() => {
 
           <div class="task-detail-modal__context">
             <span>{{ projectName(selectedProjectTaskDetail.projectId) }}</span>
+            <span
+              v-if="selectedProjectTaskWeeklyReview"
+              class="weekly-review-badge"
+              >{{ selectedProjectTaskWeeklyReview.weekLabel }}</span
+            >
             <span
               v-if="isLocalProject(selectedProjectTaskDetailProject)"
               class="local-project-badge"
@@ -2495,37 +2792,191 @@ onBeforeUnmount(() => {
             <p>{{ selectedProjectTaskLatestRunSummary }}</p>
           </div>
 
-          <label class="field">
-            <span>Title</span>
-            <input
-              v-model="projectTaskDetailDraft.title"
-              type="text"
-              autocomplete="off"
-              autofocus
-            />
-          </label>
+          <template v-if="selectedProjectTaskWeeklyReview">
+            <div class="weekly-review-panel">
+              <p class="weekly-review-panel__summary">
+                {{ selectedProjectTaskWeeklyReview.summary }}
+              </p>
 
-          <label class="field">
-            <span>Status</span>
-            <select v-model="projectTaskDetailDraft.status">
-              <option
-                v-for="status in projectBoardStatuses"
-                :key="status.id"
-                :value="status.id"
+              <section class="weekly-review-panel__section">
+                <div class="weekly-review-panel__section-header">
+                  <h3>Carry over</h3>
+                  <span>
+                    {{ weeklyReviewCarryOverIds.size }} /
+                    {{ selectedProjectTaskWeeklyReview.openTasks.length }}
+                  </span>
+                </div>
+                <div
+                  v-if="selectedProjectTaskWeeklyReview.openTasks.length"
+                  class="weekly-review-checklist"
+                >
+                  <label
+                    v-for="item in selectedProjectTaskWeeklyReview.openTasks"
+                    :key="item.id"
+                    class="weekly-review-check"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="weeklyReviewCarryOverIds.has(item.id)"
+                      :disabled="
+                        weeklyReviewSubmitting ||
+                        Boolean(selectedProjectTaskWeeklyReview.submittedAt)
+                      "
+                      @change="toggleWeeklyReviewTask(item.id)"
+                    />
+                    <span>
+                      <strong>{{ item.title }}</strong>
+                      <small>
+                        {{ projectName(item.projectId) }}
+                        <template v-if="item.dueAt">
+                          / due {{ formatShortDate(item.dueAt) }}
+                        </template>
+                      </small>
+                    </span>
+                  </label>
+                </div>
+                <p v-else class="weekly-review-panel__empty">
+                  No open tasks to carry over.
+                </p>
+              </section>
+
+              <section
+                v-if="selectedProjectTaskWeeklyReview.memorySuggestions.length"
+                class="weekly-review-panel__section"
               >
-                {{ status.label }}
-              </option>
-            </select>
-          </label>
+                <div class="weekly-review-panel__section-header">
+                  <h3>Memory suggestions</h3>
+                  <span>
+                    {{ weeklyReviewMemoryIds.size }} /
+                    {{
+                      selectedProjectTaskWeeklyReview.memorySuggestions.length
+                    }}
+                  </span>
+                </div>
+                <div class="weekly-review-checklist">
+                  <label
+                    v-for="item in selectedProjectTaskWeeklyReview.memorySuggestions"
+                    :key="item.id"
+                    class="weekly-review-check weekly-review-check--memory"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="weeklyReviewMemoryIds.has(item.id)"
+                      :disabled="
+                        weeklyReviewSubmitting ||
+                        Boolean(selectedProjectTaskWeeklyReview.submittedAt)
+                      "
+                      @change="toggleWeeklyReviewMemory(item.id)"
+                    />
+                    <span>
+                      <strong>{{ item.title }}</strong>
+                      <small>{{ item.body }}</small>
+                    </span>
+                  </label>
+                </div>
+              </section>
 
-          <label class="field">
-            <span>Notes</span>
-            <textarea
-              v-model="projectTaskDetailDraft.description"
-              rows="5"
-              placeholder="Add detail for the runner or reviewer"
-            />
-          </label>
+              <section
+                v-if="selectedProjectTaskWeeklyReview.reminders.length"
+                class="weekly-review-panel__section"
+              >
+                <div class="weekly-review-panel__section-header">
+                  <h3>Reminders</h3>
+                  <span>{{ selectedProjectTaskWeeklyReview.reminders.length }}</span>
+                </div>
+                <ul class="weekly-review-list">
+                  <li
+                    v-for="item in selectedProjectTaskWeeklyReview.reminders"
+                    :key="item.id"
+                  >
+                    <strong>{{ item.title }}</strong>
+                    <span v-if="item.remindAt">
+                      {{ formatShortDate(item.remindAt) }}
+                    </span>
+                  </li>
+                </ul>
+              </section>
+
+              <section
+                v-if="selectedProjectTaskWeeklyReview.completedTasks.length"
+                class="weekly-review-panel__section"
+              >
+                <button
+                  type="button"
+                  class="weekly-review-collapse"
+                  @click="
+                    weeklyReviewCompletedOpen = !weeklyReviewCompletedOpen
+                  "
+                >
+                  <span>
+                    Completed this week
+                    ({{ selectedProjectTaskWeeklyReview.completedTasks.length }})
+                  </span>
+                  <UiIcon
+                    :name="
+                      weeklyReviewCompletedOpen
+                        ? 'ChevronUp'
+                        : 'ChevronDown'
+                    "
+                    :size="15"
+                  />
+                </button>
+                <ul
+                  v-if="weeklyReviewCompletedOpen"
+                  class="weekly-review-list"
+                >
+                  <li
+                    v-for="item in selectedProjectTaskWeeklyReview.completedTasks"
+                    :key="item.id"
+                  >
+                    <strong>{{ item.title }}</strong>
+                    <span>{{ projectName(item.projectId) }}</span>
+                  </li>
+                </ul>
+              </section>
+
+              <p
+                v-if="selectedProjectTaskWeeklyReview.submittedAt"
+                class="weekly-review-panel__done"
+              >
+                Submitted {{ formatDateTime(selectedProjectTaskWeeklyReview.submittedAt) }}
+              </p>
+            </div>
+          </template>
+
+          <template v-else>
+            <label class="field">
+              <span>Title</span>
+              <input
+                v-model="projectTaskDetailDraft.title"
+                type="text"
+                autocomplete="off"
+                autofocus
+              />
+            </label>
+
+            <label class="field">
+              <span>Status</span>
+              <select v-model="projectTaskDetailDraft.status">
+                <option
+                  v-for="status in projectBoardStatuses"
+                  :key="status.id"
+                  :value="status.id"
+                >
+                  {{ status.label }}
+                </option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Notes</span>
+              <textarea
+                v-model="projectTaskDetailDraft.description"
+                rows="5"
+                placeholder="Add detail for the runner or reviewer"
+              />
+            </label>
+          </template>
 
           <p v-if="projectTaskDetailError" class="mission-modal__error">
             {{ projectTaskDetailError }}
@@ -2547,12 +2998,25 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="text-button"
-                :disabled="projectTaskDetailSaving"
+                :disabled="projectTaskDetailSaving || weeklyReviewSubmitting"
                 @click="closeProjectTaskDetail()"
               >
                 Cancel
               </button>
               <button
+                v-if="selectedProjectTaskIsWeeklyReview"
+                type="submit"
+                class="text-button text-button--primary"
+                :disabled="weeklyReviewSubmitDisabled"
+              >
+                {{
+                  weeklyReviewSubmitting
+                    ? "Submitting..."
+                    : "Submit review"
+                }}
+              </button>
+              <button
+                v-else
                 type="submit"
                 class="text-button text-button--primary"
                 :disabled="projectTaskDetailSaveDisabled"
@@ -3367,6 +3831,24 @@ onBeforeUnmount(() => {
   color: var(--ui-accent);
 }
 
+.weekly-review-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in oklab, var(--ui-accent), var(--ui-border) 60%);
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-accent);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.project-task-card__review-counts {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .project-task-card__actions {
   display: flex;
   align-items: center;
@@ -3786,6 +4268,134 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.weekly-review-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.weekly-review-panel__summary,
+.weekly-review-panel__empty,
+.weekly-review-panel__done {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.weekly-review-panel__done {
+  color: var(--ui-accent);
+  font-weight: 700;
+}
+
+.weekly-review-panel__section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.weekly-review-panel__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.weekly-review-panel__section-header h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.weekly-review-panel__section-header span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.weekly-review-checklist {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.weekly-review-check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.weekly-review-check input {
+  margin-top: 2px;
+}
+
+.weekly-review-check span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.weekly-review-check strong,
+.weekly-review-list strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.weekly-review-check small,
+.weekly-review-list span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.weekly-review-check--memory small {
+  overflow-wrap: anywhere;
+}
+
+.weekly-review-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.weekly-review-list li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+}
+
+.weekly-review-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .field {

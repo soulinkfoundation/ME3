@@ -194,6 +194,23 @@ describe("assistant jobs persistence", () => {
         ]),
       },
     });
+    expect(env.__state.tasks).toContainEqual(
+      expect.objectContaining({
+        id: expect.stringContaining("weekly-review-task:owner:"),
+        title: expect.stringContaining("Weekly Review:"),
+        status: "review",
+        source_kind: "agent",
+        source_ref: expect.stringContaining("weekly-review:"),
+      }),
+    );
+    expect(JSON.parse(env.__state.tasks[0]?.metadata_json as string)).toMatchObject({
+      kind: "weekly_review",
+      weeklyReview: {
+        assistantJobRunId: run.run.id,
+        missionAgentRunId: `assistant-job-run:${run.run.id}`,
+        submittedAt: null,
+      },
+    });
 
     await archiveAssistantJob(env, "owner", created.job.id);
     const afterArchive = await listAssistantJobs(env, "owner");
@@ -1383,7 +1400,7 @@ class FakeStatement {
           project_id: values[2] as string | null,
           title: values[3] as string,
           description: values[4] as string | null,
-          status: "backlog",
+          status: sql.includes("'review'") ? "review" : "backlog",
           priority: values[5] as number,
           due_at: values[6] as string | null,
           scheduled_for: values[7] as string | null,
@@ -1397,6 +1414,22 @@ class FakeStatement {
         });
       }
       return { success: true };
+    }
+
+    if (sql.includes("UPDATE mission_tasks") && sql.includes("metadata_json = ?")) {
+      const task = this.state.tasks.find(
+        (item) => item.id === values[6] && item.user_id === values[7],
+      );
+      if (task) {
+        task.title = values[0] as string;
+        task.description = values[1] as string | null;
+        if (task.status !== "done") task.status = "review";
+        task.priority = values[2] as number;
+        task.scheduled_for = values[3] as string | null;
+        task.metadata_json = values[4] as string;
+        task.updated_at = values[5] as string;
+      }
+      return { success: true, meta: { changes: task ? 1 : 0 } };
     }
 
     if (sql.includes("INSERT INTO mailbox_messages")) {
@@ -1788,13 +1821,25 @@ class FakeStatement {
       };
     }
     if (sql.includes("FROM mission_tasks")) {
+      if (sql.includes("status = 'done'")) {
+        return {
+          results: this.state.tasks.filter(
+            (task) =>
+              task.user_id === values[0] &&
+              task.archived_at == null &&
+              task.status === "done" &&
+              !String(task.source_ref || "").startsWith("weekly-review:"),
+          ) as T[],
+        };
+      }
       return {
         results: this.state.tasks.filter(
           (task) =>
             task.user_id === values[0] &&
             task.archived_at == null &&
             task.status !== "done" &&
-            task.status !== "cancelled",
+            task.status !== "cancelled" &&
+            !String(task.source_ref || "").startsWith("weekly-review:"),
         ) as T[],
       };
     }

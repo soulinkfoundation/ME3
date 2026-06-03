@@ -259,6 +259,8 @@ type WeeklyReviewMemoryInput = {
   checked?: unknown;
 };
 
+type ParsedWeeklyReviewResult = NonNullable<ReturnType<typeof parseWeeklyReviewResult>>;
+
 const PERSONAL_PROJECT_ID = "mission-project-personal";
 const DEFAULT_OWNER_TIMEZONE = "UTC";
 const ACTIVE_TASK_STATUSES: MissionTaskStatus[] = ["backlog", "in_progress", "review"];
@@ -860,7 +862,54 @@ export async function submitMissionWeeklyReview(
   const review = parseWeeklyReviewResult(parseJsonRecord(reviewRun.result_json).weeklyReview);
   if (!review) throw new MissionControlInputError("Weekly Review result is not available", 404);
 
-  const body = isRecord(input) ? input : {};
+  return submitWeeklyReviewPayload(env, userId, {
+    runId,
+    input,
+    review,
+    task: null,
+  });
+}
+
+export async function submitMissionWeeklyReviewTask(
+  env: Env,
+  userId: string,
+  taskId: string,
+  input: unknown,
+) {
+  const task = await getMissionTask(env, userId, taskId);
+  if (!task || task.archived_at) throw new MissionControlInputError("Weekly Review task not found", 404);
+  const metadata = parseJsonRecord(task.metadata_json);
+  const reviewMetadata = metadata.weeklyReview;
+  const review = parseWeeklyReviewResult(reviewMetadata);
+  if (!review || metadata.kind !== "weekly_review") {
+    throw new MissionControlInputError("Task is not a Weekly Review", 409);
+  }
+  const reviewRecord = isRecord(reviewMetadata) ? reviewMetadata : {};
+  const runId =
+    normalizeNullableText(reviewRecord.assistantJobRunId) ||
+    normalizeNullableText(reviewRecord.missionAgentRunId) ||
+    task.source_ref ||
+    task.id;
+
+  return submitWeeklyReviewPayload(env, userId, {
+    runId,
+    input,
+    review,
+    task,
+  });
+}
+
+async function submitWeeklyReviewPayload(
+  env: Env,
+  userId: string,
+  options: {
+    runId: string;
+    input: unknown;
+    review: ParsedWeeklyReviewResult;
+    task: MissionTaskRow | null;
+  },
+) {
+  const body = isRecord(options.input) ? options.input : {};
   const carryOverIds = new Set(
     Array.isArray(body.tasks)
       ? (body.tasks as WeeklyReviewTaskInput[])
@@ -874,7 +923,7 @@ export async function submitMissionWeeklyReview(
       )
     : [];
   const now = new Date().toISOString();
-  const carriedTaskIds = review.openTasks
+  const carriedTaskIds = options.review.openTasks
     .map((task) => normalizeNullableText(task.id))
     .filter((taskId): taskId is string => taskId !== null)
     .filter((taskId) => carryOverIds.has(taskId));
@@ -889,7 +938,7 @@ export async function submitMissionWeeklyReview(
        SET scheduled_for = ?, updated_at = datetime('now')
        WHERE id = ? AND user_id = ?`,
     )
-      .bind(review.reviewDate, taskId, userId)
+      .bind(options.review.reviewDate, taskId, userId)
       .run();
   }
 
@@ -902,9 +951,33 @@ export async function submitMissionWeeklyReview(
       body: normalizeNullableText(suggestion.body),
       confidence: 0.75,
       sourceKind: "agent",
-      sourceRef: `${runId}:${normalizeNullableText(suggestion.id) || crypto.randomUUID()}`,
+      sourceRef: `${options.runId}:${normalizeNullableText(suggestion.id) || crypto.randomUUID()}`,
     });
     memoryIds.push(result.memory.id);
+  }
+
+  if (options.task) {
+    const metadata = parseJsonRecord(options.task.metadata_json);
+    const reviewMetadata = isRecord(metadata.weeklyReview) ? metadata.weeklyReview : {};
+    await env.DB.prepare(
+      `UPDATE mission_tasks
+       SET status = 'done', metadata_json = ?, updated_at = datetime('now')
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(
+        JSON.stringify({
+          ...metadata,
+          weeklyReview: {
+            ...reviewMetadata,
+            submittedAt: now,
+            carriedTaskIds,
+            memoryIds,
+          },
+        }),
+        options.task.id,
+        userId,
+      )
+      .run();
   }
 
   await appendMissionPluginActivity(env, userId, {
@@ -913,7 +986,7 @@ export async function submitMissionWeeklyReview(
     title: "Weekly Review submitted",
     summary: `${carriedTaskIds.length} task${carriedTaskIds.length === 1 ? "" : "s"} carried over; ${memoryIds.length} memory suggestion${memoryIds.length === 1 ? "" : "s"} queued.`,
     status: "succeeded",
-    relatedId: runId,
+    relatedId: options.task?.id || options.runId,
   });
 
   return { ok: true, carriedTaskIds, memoryIds };

@@ -108,6 +108,7 @@ import {
   resolveMissionApproval,
   startMissionDaemonPairing,
   submitMissionWeeklyReview,
+  submitMissionWeeklyReviewTask,
   suggestMissionMemory,
   updateMissionContextSource,
   updateMissionMemory,
@@ -2062,6 +2063,26 @@ app.post("/api/mission-control/tasks/:id/local-run", async (c) => {
       return missionControlErrorResponse(c, error);
     }
     return localExecutorErrorResponse(c, error);
+  }
+});
+
+app.post("/api/mission-control/tasks/:id/weekly-review/submit", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await submitMissionWeeklyReviewTask(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        await c.req.json().catch(() => ({})),
+      ),
+    );
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
   }
 });
 

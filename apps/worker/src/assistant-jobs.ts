@@ -2036,6 +2036,7 @@ async function createAssistantJobMissionActivity(
     defaultActivityType === "assistant_job.review_packet" &&
     isWeeklyReviewJob(input.job, input.draft)
   ) {
+    await upsertWeeklyReviewMissionTask(env, input, generated.metadata?.weeklyReview);
     await sendWeeklyReviewOwnerNotificationIfConnected(env, input).catch(() => null);
   }
 
@@ -2047,6 +2048,77 @@ async function createAssistantJobMissionActivity(
     status: "succeeded",
     externalRef: activityId,
   });
+}
+
+async function upsertWeeklyReviewMissionTask(
+  env: Env,
+  input: {
+    userId: string;
+    job: AssistantJobRow;
+    run: AssistantJobRunRow;
+    draft: AssistantJobDraft;
+    action: AssistantJobAction;
+    capability: AssistantCapability;
+    idempotencyKey: string;
+  },
+  reviewValue: unknown,
+) {
+  const review = isRecord(reviewValue)
+    ? reviewValue
+    : await buildWeeklyReviewResult(env, input.userId, input.run.id);
+  const weekStart = normalizeOptionalText(review.weekStart) || new Date().toISOString().slice(0, 10);
+  const weekEnd = normalizeOptionalText(review.weekEnd) || weekStart;
+  const taskId = `weekly-review-task:${input.userId}:${weekStart}:${weekEnd}`;
+  const sourceRef = `weekly-review:${weekStart}:${weekEnd}`;
+  const title = `Weekly Review: ${weekStart} to ${weekEnd}`;
+  const summary =
+    normalizeOptionalText(review.journalSummary) ||
+    `Review ${weekStart} to ${weekEnd}.`;
+  const now = new Date().toISOString();
+  const metadata = missionOutputMetadata(input, {
+    kind: "weekly_review",
+    weeklyReview: {
+      ...review,
+      taskId,
+      missionAgentRunId: missionAgentRunIdForAssistantJobRun(input.run.id),
+      assistantJobRunId: input.run.id,
+      submittedAt: null,
+    },
+  });
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO mission_tasks
+       (id, user_id, project_id, title, description, status, priority, due_at, scheduled_for,
+        source_kind, source_ref, approval_id, metadata_json, created_at, updated_at, archived_at)
+     VALUES (?, ?, ?, ?, ?, 'review', ?, ?, ?, 'agent', ?, NULL, ?, ?, ?, NULL)`,
+  )
+    .bind(
+      taskId,
+      input.userId,
+      input.draft.destination.projectId || input.draft.scope.projectId || input.job.project_id || "mission-project-personal",
+      title,
+      summary,
+      2,
+      null,
+      weekEnd,
+      sourceRef,
+      stringifyJson(metadata),
+      now,
+      now,
+    )
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE mission_tasks
+     SET title = ?, description = ?, status = CASE
+           WHEN status = 'done' THEN status
+           ELSE 'review'
+         END,
+         priority = ?, scheduled_for = ?, metadata_json = ?, updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(title, summary, 2, weekEnd, stringifyJson(metadata), now, taskId, input.userId)
+    .run();
 }
 
 async function buildGeneratedMissionActivity(
@@ -2988,6 +3060,7 @@ async function loadAssistantJobTasksContext(
        WHERE user_id = ?
          AND archived_at IS NULL
          AND status NOT IN ('done', 'cancelled')
+         AND (source_ref IS NULL OR source_ref NOT LIKE 'weekly-review:%')
        ORDER BY priority ASC, COALESCE(due_at, scheduled_for, updated_at) ASC
        LIMIT 50`,
     )
@@ -3575,6 +3648,7 @@ async function loadWeeklyReviewCompletedTasks(
      FROM mission_tasks
      WHERE user_id = ?
        AND status = 'done'
+       AND (source_ref IS NULL OR source_ref NOT LIKE 'weekly-review:%')
        AND substr(updated_at, 1, 10) >= ?
        AND substr(updated_at, 1, 10) <= ?
      ORDER BY updated_at DESC
