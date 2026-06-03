@@ -1654,9 +1654,9 @@ function assistantJobBuilderReplyText(action: AssistantJobBuilderAction) {
   const setupText = action.explanation.setupWarnings.length
     ? " It needs setup before it can activate."
     : action.validation.status === "valid"
-      ? " It is ready to save and activate."
+      ? " You can save and activate it when ready."
       : "";
-  return `${action.explanation.summary} Review the draft below, then save it when it looks right.${setupText}`;
+  return `Here is a draft job.${setupText}`;
 }
 
 async function persistAssistantTurnMessages(

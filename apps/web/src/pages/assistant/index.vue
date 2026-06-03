@@ -288,6 +288,10 @@ type AssistantJobSavedBuilderAction = Extract<
   AssistantJobBuilderAction,
   { kind: "job_saved" }
 >;
+type AssistantJobBuilderSentenceSegment = {
+  text: string;
+  strong?: boolean;
+};
 
 type InboxWatchTiming = "immediate" | "daily_digest" | "weekly_digest" | "manual";
 type InboxWatchInferredLabel =
@@ -1826,19 +1830,6 @@ function assistantJobStatusLabel(
   return labels[status] || status;
 }
 
-function assistantJobBuilderTriggerLabel(draft: AssistantJobDraft) {
-  const trigger = draft.trigger;
-  if (trigger.kind === "manual") return "Manual run";
-  if (trigger.kind === "event") return "When a matching event happens";
-  if (trigger.cadence === "daily") return `Daily${trigger.localTime ? ` at ${trigger.localTime}` : ""}`;
-  if (trigger.cadence === "weekly") {
-    const day = weekdayOptions.find((option) => option.value === trigger.dayOfWeek)?.label;
-    return `Weekly${day ? ` on ${day}` : ""}${trigger.localTime ? ` at ${trigger.localTime}` : ""}`;
-  }
-  if (trigger.cadence === "monthly") return `Monthly${trigger.localTime ? ` at ${trigger.localTime}` : ""}`;
-  return "Custom schedule";
-}
-
 function assistantJobBuilderDestinationLabel(draft: AssistantJobDraft) {
   const labels: Record<AssistantJobDraft["destination"]["landing"], string> = {
     review_packet: "Mission Control review",
@@ -1852,8 +1843,135 @@ function assistantJobBuilderDestinationLabel(draft: AssistantJobDraft) {
   return labels[draft.destination.landing] || "Mission Control";
 }
 
-function assistantJobBuilderList(values: string[]) {
-  return values.length ? values : ["Nothing extra."];
+function assistantJobBuilderWhenPhrase(draft: AssistantJobDraft) {
+  const trigger = draft.trigger;
+  if (trigger.kind === "manual") return "when you run it";
+  if (trigger.kind === "event") return "when a matching event happens";
+  if (trigger.cadence === "daily") {
+    return trigger.localTime ? `daily at ${trigger.localTime}` : "daily";
+  }
+  if (trigger.cadence === "weekly") {
+    const day = weekdayOptions.find((option) => option.value === trigger.dayOfWeek)?.label;
+    const parts = ["weekly", day ? `on ${day}` : "", trigger.localTime ? `at ${trigger.localTime}` : ""]
+      .filter(Boolean)
+      .join(" ");
+    return parts || "weekly";
+  }
+  if (trigger.cadence === "monthly") {
+    return trigger.localTime ? `monthly at ${trigger.localTime}` : "monthly";
+  }
+  return "on its custom schedule";
+}
+
+function assistantJobBuilderToolNames(draft: AssistantJobDraft) {
+  const recipeTools: Record<string, string[]> = {
+    "weekly-review": [
+      "Mission Control Projects",
+      "Mission Control Tasks",
+      "Mission Control Approvals",
+      "Mission Control Reviews",
+    ],
+    "daily-briefing": [
+      "Mission Control Tasks",
+      "Mission Control Approvals",
+      "Mission Control Reviews",
+      "Owner Notifications",
+    ],
+    "email-triage": [
+      "Email",
+      "Mission Control Reviews",
+      "Mission Control Tasks",
+    ],
+    "invoice-receipt-triage": [
+      "Email",
+      "Accounts",
+      "Mission Control Reviews",
+    ],
+  };
+  const fromRecipe = draft.recipeId ? recipeTools[draft.recipeId] : null;
+  if (fromRecipe) return fromRecipe;
+
+  const names = new Set<string>();
+  for (const action of draft.actions) {
+    const [namespace] = action.capabilityId.split(".");
+    if (namespace === "mission") names.add("Mission Control");
+    if (namespace === "message") names.add("Owner Notifications");
+    if (namespace === "email") names.add("Email");
+    if (namespace === "accounts") names.add("Accounts");
+    if (namespace === "calendar") names.add("Calendar");
+  }
+  return names.size ? Array.from(names) : ["ME3"];
+}
+
+function assistantJobBuilderToolPhrase(draft: AssistantJobDraft) {
+  return formatHumanList(assistantJobBuilderToolNames(draft));
+}
+
+function assistantJobBuilderSentenceSegments(
+  action: Extract<AssistantJobBuilderAction, { kind: "job_draft" }>,
+): AssistantJobBuilderSentenceSegment[] {
+  const draft = action.draft;
+  const when = assistantJobBuilderWhenPhrase(draft);
+  const fallbackDestination = assistantJobBuilderDestinationLabel(draft);
+  const byRecipe: Record<string, AssistantJobBuilderSentenceSegment[]> = {
+    "weekly-review": [
+      { text: "This job will review " },
+      { text: "your projects, tasks, and pending approvals for the week", strong: true },
+      { text: " " },
+      { text: when, strong: true },
+      { text: " and create " },
+      { text: "a weekly review in Mission Control", strong: true },
+      { text: " for you to review." },
+    ],
+    "daily-briefing": [
+      { text: "This job will review " },
+      { text: "today's tasks and approvals", strong: true },
+      { text: " " },
+      { text: when, strong: true },
+      { text: " and create " },
+      { text: "a daily briefing in Mission Control", strong: true },
+      { text: " for you to start the day." },
+    ],
+    "email-triage": [
+      { text: "This job will check " },
+      { text: "your connected email for messages that match your rules", strong: true },
+      { text: " " },
+      { text: when, strong: true },
+      { text: " and create " },
+      { text: "an inbox review in Mission Control", strong: true },
+      { text: " for you to act on." },
+    ],
+    "invoice-receipt-triage": [
+      { text: "This job will find " },
+      { text: "receipts and invoices in your connected email", strong: true },
+      { text: " " },
+      { text: when, strong: true },
+      { text: " and create " },
+      { text: "Accounts entries with a Mission Control review", strong: true },
+      { text: " for anything that needs checking." },
+    ],
+  };
+
+  const sentence = draft.recipeId ? byRecipe[draft.recipeId] : null;
+  if (sentence) return sentence;
+
+  return [
+    { text: "This job will run " },
+    { text: draft.purpose, strong: true },
+    { text: " " },
+    { text: when, strong: true },
+    { text: " and create " },
+    { text: fallbackDestination, strong: true },
+    { text: " for you to review." },
+  ];
+}
+
+function formatHumanList(values: string[]) {
+  const unique = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  if (unique.length === 0) return "";
+  if (unique.length === 1) return unique[0] || "";
+  if (unique.length === 2) return `${unique[0]} and ${unique[1]}`;
+  return `${unique.slice(0, -1).join(", ")}, and ${unique[unique.length - 1]}`;
 }
 
 function setAssistantStoppedMessage(messageId: string, messageStarted: boolean) {
@@ -3200,7 +3318,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <div class="job-builder-card__header">
                   <div>
                     <h3>{{ message.jobBuilderAction.draft.name }}</h3>
-                    <p>{{ message.jobBuilderAction.draft.purpose }}</p>
                   </div>
                   <span
                     class="job-builder-card__status"
@@ -3209,34 +3326,18 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     {{ assistantJobStatusLabel(message.jobBuilderAction.validation.status) }}
                   </span>
                 </div>
-                <dl class="job-builder-card__facts">
-                  <div>
-                    <dt>Trigger</dt>
-                    <dd>{{ assistantJobBuilderTriggerLabel(message.jobBuilderAction.draft) }}</dd>
-                  </div>
-                  <div>
-                    <dt>Reads</dt>
-                    <dd>
-                      {{ assistantJobBuilderList(message.jobBuilderAction.explanation.reads).join(", ") }}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Creates</dt>
-                    <dd>
-                      {{ assistantJobBuilderList(message.jobBuilderAction.explanation.writes).join(", ") }}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Asks before</dt>
-                    <dd>
-                      {{ assistantJobBuilderList(message.jobBuilderAction.explanation.approvalRequired).join(", ") }}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Destination</dt>
-                    <dd>{{ assistantJobBuilderDestinationLabel(message.jobBuilderAction.draft) }}</dd>
-                  </div>
-                </dl>
+                <p class="job-builder-card__sentence">
+                  <template
+                    v-for="(segment, segmentIndex) in assistantJobBuilderSentenceSegments(message.jobBuilderAction)"
+                    :key="`${segment.text}-${segmentIndex}`"
+                  >
+                    <strong v-if="segment.strong">{{ segment.text }}</strong>
+                    <span v-else>{{ segment.text }}</span>
+                  </template>
+                </p>
+                <p class="job-builder-card__tools">
+                  Uses {{ assistantJobBuilderToolPhrase(message.jobBuilderAction.draft) }}.
+                </p>
                 <ul
                   v-if="message.jobBuilderAction.explanation.setupWarnings.length"
                   class="job-builder-card__warnings"
@@ -5090,32 +5191,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: color-mix(in oklab, #a32323 80%, var(--ui-text));
 }
 
-.job-builder-card__facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 14px;
-  margin: 0;
-}
-
-.job-builder-card__facts div {
-  min-width: 0;
-}
-
-.job-builder-card__facts dt {
-  margin: 0 0 2px;
-  color: var(--ui-text-muted);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
-.job-builder-card__facts dd {
+.job-builder-card__sentence {
   margin: 0;
   color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.job-builder-card__sentence strong {
+  font-weight: 800;
+}
+
+.job-builder-card__tools {
+  margin: -4px 0 0;
+  color: var(--ui-text-muted);
   font-size: 13px;
   line-height: 1.35;
-  overflow-wrap: anywhere;
 }
 
 .job-builder-card__warnings {
