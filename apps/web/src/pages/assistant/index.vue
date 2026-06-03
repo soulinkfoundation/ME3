@@ -607,15 +607,20 @@ const aiProviderById = computed(() => {
 const assistantModelOptions = computed(() =>
   AI_AGENT_MODEL_OPTIONS.map((option) => {
     const setup = setupStateForModel(option);
+    const optionTitle = [
+      option.label,
+      option.runtimeLabel,
+      setup.statusLabel,
+      capabilitySummary(option.capabilities),
+      option.description,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
     return {
       option,
-      optionLabel: [
-        option.label,
-        setup.statusLabel,
-        capabilitySummary(option.capabilities),
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      optionLabel: option.label,
+      optionTitle,
     };
   }),
 );
@@ -3012,6 +3017,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     v-for="model in assistantModelOptions"
                     :key="model.option.id"
                     :value="model.option.id"
+                    :title="model.optionTitle"
                   >
                     {{ model.optionLabel }}
                   </option>
