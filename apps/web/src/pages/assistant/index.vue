@@ -324,6 +324,7 @@ type AssistantAttachmentDraft = {
   mimeType: string;
   size: number;
   kind: AssistantAttachmentKind;
+  previewUrl: string | null;
   text: string | null;
   status: "ready" | "uploading" | "error";
   error: string | null;
@@ -399,12 +400,15 @@ const assistantThreadLoading = ref(false);
 const assistantThreads = ref<AssistantThread[]>([]);
 const assistantThreadsLoading = ref(false);
 const assistantThreadsError = ref("");
+const archivedThreadsModalOpen = ref(false);
+const archivedAssistantThreads = ref<AssistantThread[]>([]);
+const archivedAssistantThreadsLoading = ref(false);
+const archivedAssistantThreadsError = ref("");
 const assistantProjects = ref<MissionProject[]>([]);
 const assistantProjectsLoading = ref(false);
 const assistantProjectsError = ref("");
 const assistantThreadSearchDraft = ref("");
 const assistantThreadSearch = ref("");
-const assistantThreadStatusFilter = ref<"active" | "archived">("active");
 const assistantThreadActionId = ref<string | null>(null);
 const assistantHistoryCollapsed = ref(false);
 const assistantHistoryDrawerOpen = ref(false);
@@ -725,6 +729,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopVoiceDictation({ discard: true });
+  clearAssistantAttachments();
   window.removeEventListener("keydown", handleWindowKeydown);
 });
 
@@ -760,7 +765,7 @@ async function loadAssistantThreads() {
   assistantThreadsError.value = "";
   try {
     const params = new URLSearchParams({
-      status: assistantThreadStatusFilter.value,
+      status: "active",
       limit: "80",
     });
     const search = assistantThreadSearch.value.trim();
@@ -853,12 +858,6 @@ async function clearAssistantThreadSearch() {
   await loadAssistantThreads();
 }
 
-async function setAssistantThreadStatusFilter(status: "active" | "archived") {
-  if (assistantThreadStatusFilter.value === status) return;
-  assistantThreadStatusFilter.value = status;
-  await loadAssistantThreads();
-}
-
 async function updateAssistantThreadProject(projectId: string | null) {
   const thread = assistantSelectedThread.value;
   if (!thread || assistantThreadActionId.value) return;
@@ -900,8 +899,16 @@ async function archiveAssistantThread(thread: AssistantThread) {
     if (assistantThreadId.value === thread.id && nextStatus === "archived") {
       await startNewAssistantChat(null);
     }
-    if (assistantThreadStatusFilter.value === nextStatus) {
+    if (nextStatus === "active") {
       upsertAssistantThread(response.thread);
+      archivedAssistantThreads.value = archivedAssistantThreads.value.filter(
+        (item) => item.id !== response.thread.id,
+      );
+    } else {
+      archivedAssistantThreads.value = [
+        response.thread,
+        ...archivedAssistantThreads.value.filter((item) => item.id !== response.thread.id),
+      ];
     }
   } catch (err) {
     assistantThreadsError.value = messageFromUnknown(err, "Chat could not update.");
@@ -911,9 +918,9 @@ async function archiveAssistantThread(thread: AssistantThread) {
 }
 
 async function deleteAssistantThread(thread: AssistantThread) {
-  if (assistantThreadActionId.value) return;
+  if (assistantThreadActionId.value) return false;
   const confirmed = window.confirm(`Delete "${threadTitle(thread)}"? This removes transcript text.`);
-  if (!confirmed) return;
+  if (!confirmed) return false;
   assistantThreadActionId.value = thread.id;
   try {
     await api.delete(`/assistant/threads/${encodeURIComponent(thread.id)}`);
@@ -921,11 +928,52 @@ async function deleteAssistantThread(thread: AssistantThread) {
     if (assistantThreadId.value === thread.id) {
       await startNewAssistantChat(null);
     }
+    return true;
   } catch (err) {
     assistantThreadsError.value = messageFromUnknown(err, "Chat could not be deleted.");
+    return false;
   } finally {
     assistantThreadActionId.value = null;
   }
+}
+
+async function loadArchivedAssistantThreads() {
+  archivedAssistantThreadsLoading.value = true;
+  archivedAssistantThreadsError.value = "";
+  try {
+    const response = await api.get<AssistantThreadsResponse>(
+      "/assistant/threads?status=archived&limit=80",
+    );
+    archivedAssistantThreads.value = response.threads || [];
+  } catch (err) {
+    archivedAssistantThreadsError.value = messageFromUnknown(
+      err,
+      "Archived chats could not load.",
+    );
+  } finally {
+    archivedAssistantThreadsLoading.value = false;
+  }
+}
+
+async function openArchivedThreadsModal() {
+  archivedThreadsModalOpen.value = true;
+  await loadArchivedAssistantThreads();
+}
+
+function closeArchivedThreadsModal() {
+  archivedThreadsModalOpen.value = false;
+}
+
+async function restoreArchivedAssistantThread(thread: AssistantThread) {
+  await archiveAssistantThread(thread);
+}
+
+async function deleteArchivedAssistantThread(thread: AssistantThread) {
+  const deleted = await deleteAssistantThread(thread);
+  if (!deleted) return;
+  archivedAssistantThreads.value = archivedAssistantThreads.value.filter(
+    (item) => item.id !== thread.id,
+  );
 }
 
 async function exportAssistantThread(thread: AssistantThread) {
@@ -1000,6 +1048,13 @@ function formatAssistantThreadTime(value: string | null) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function formatAssistantMessageTime(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function threadTitle(thread: AssistantThread) {
   return thread.title?.trim() || "New chat";
 }
@@ -1021,13 +1076,21 @@ async function loadAssistantThreadFromRoute() {
     );
     if (assistantThreadId.value !== threadId) return;
     if (response.thread) {
-      upsertAssistantThread(response.thread);
+      if (response.thread.status === "active") {
+        upsertAssistantThread(response.thread);
+      } else {
+        archivedAssistantThreads.value = [
+          response.thread,
+          ...archivedAssistantThreads.value.filter((item) => item.id !== response.thread.id),
+        ];
+      }
     }
     agentChat.replaceMessages(
       response.messages.map((message) => ({
         id: message.id,
         role: message.role,
         text: message.text,
+        createdAt: message.createdAt,
       })),
     );
   } catch (err) {
@@ -1134,6 +1197,9 @@ async function addAssistantAttachments(files: File[]) {
       mimeType: file.type || "application/octet-stream",
       size: file.size,
       kind: classifyAssistantAttachment(file),
+      previewUrl: file.type.toLowerCase().startsWith("image/")
+        ? window.URL.createObjectURL(file)
+        : null,
       text: null,
       status: "uploading",
       error: null,
@@ -1188,9 +1254,21 @@ async function addAssistantAttachments(files: File[]) {
 }
 
 function removeAssistantAttachment(id: string) {
-  assistantAttachments.value = assistantAttachments.value.filter(
-    (attachment) => attachment.id !== id,
-  );
+  const attachment = assistantAttachments.value.find((item) => item.id === id);
+  revokeAssistantAttachmentPreview(attachment);
+  assistantAttachments.value = assistantAttachments.value.filter((item) => item.id !== id);
+}
+
+function clearAssistantAttachments() {
+  assistantAttachments.value.forEach((attachment) => {
+    revokeAssistantAttachmentPreview(attachment);
+  });
+  assistantAttachments.value = [];
+}
+
+function revokeAssistantAttachmentPreview(attachment: AssistantAttachmentDraft | undefined) {
+  if (!attachment?.previewUrl) return;
+  window.URL.revokeObjectURL(attachment.previewUrl);
 }
 
 function classifyAssistantAttachment(file: File): AssistantAttachmentKind {
@@ -1401,6 +1479,7 @@ async function submitAssistantText(
     id: newAssistantMessageId("user"),
     role: "user",
     text: normalized,
+    createdAt: new Date().toISOString(),
   });
   assistantSending.value = true;
   assistantAwaitingResponse.value = true;
@@ -1419,6 +1498,7 @@ async function submitAssistantText(
         id: assistantMessageId,
         role: "assistant",
         text: "",
+        createdAt: new Date().toISOString(),
       });
     };
 
@@ -1498,6 +1578,7 @@ async function submitAssistantText(
       id: newAssistantMessageId("assistant"),
       role: "assistant",
       text: "I couldn't complete that turn just yet.",
+      createdAt: new Date().toISOString(),
       detail: message,
     });
   } finally {
@@ -1519,7 +1600,7 @@ async function sendAssistantMessage() {
   const attachments = serializeAssistantAttachmentsForTurn();
   const text = buildAssistantMessageWithAttachments(assistantDraft.value);
   assistantDraft.value = "";
-  assistantAttachments.value = [];
+  clearAssistantAttachments();
   assistantAttachmentNotice.value = "";
   autosizeAssistantComposer();
   await submitAssistantText(text, attachments);
@@ -1558,6 +1639,7 @@ function setAssistantStoppedMessage(messageId: string, messageStarted: boolean) 
       id: messageId,
       role: "assistant",
       text: "Stopped.",
+      createdAt: new Date().toISOString(),
       detail: stoppedDetail,
     });
     return;
@@ -2695,27 +2777,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
           </div>
         </div>
 
-        <div class="assistant-history__filter" role="tablist" aria-label="Chat status">
-          <button
-            type="button"
-            role="tab"
-            :aria-selected="assistantThreadStatusFilter === 'active'"
-            :class="{ 'is-active': assistantThreadStatusFilter === 'active' }"
-            @click="setAssistantThreadStatusFilter('active')"
-          >
-            Active
-          </button>
-          <button
-            type="button"
-            role="tab"
-            :aria-selected="assistantThreadStatusFilter === 'archived'"
-            :class="{ 'is-active': assistantThreadStatusFilter === 'archived' }"
-            @click="setAssistantThreadStatusFilter('archived')"
-          >
-            Archived
-          </button>
-        </div>
-
         <p v-if="assistantThreadsError" class="assistant-history__message">
           {{ assistantThreadsError }}
         </p>
@@ -2822,6 +2883,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </p>
           </nav>
         </section>
+
+        <div class="assistant-history__footer">
+          <button
+            type="button"
+            class="assistant-history__archive-button"
+            @click="openArchivedThreadsModal"
+          >
+            <UiIcon name="Archive" :size="15" aria-hidden="true" />
+            <span>Archived</span>
+          </button>
+        </div>
       </div>
     </aside>
 
@@ -2898,6 +2970,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </div>
             </div>
             <div class="assistant-message__tools" aria-label="Message actions">
+              <span
+                v-if="formatAssistantMessageTime(message.createdAt)"
+                class="assistant-message__time"
+              >
+                {{ formatAssistantMessageTime(message.createdAt) }}
+              </span>
               <button
                 v-if="message.role === 'assistant'"
                 type="button"
@@ -2935,6 +3013,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <UiIcon name="Pencil" :size="14" />
               </button>
               <button
+                v-if="message.role === 'user'"
                 type="button"
                 class="assistant-message-tool"
                 aria-label="Retry from here"
@@ -2986,21 +3065,32 @@ function messageFromUnknown(err: unknown, fallback: string) {
               :class="{
                 'assistant-attachment--error': attachment.status === 'error',
               }"
-              :title="attachment.error || `${attachment.name} · ${formatFileSize(attachment.size)}`"
+              :title="
+                attachment.error ||
+                `${attachment.name} · ${formatFileSize(attachment.size)}`
+              "
             >
+              <img
+                v-if="attachment.kind === 'image' && attachment.previewUrl"
+                class="assistant-attachment__thumb"
+                :src="attachment.previewUrl"
+                alt=""
+              />
               <UiIcon
+                v-else
                 :name="attachment.kind === 'image' ? 'Image' : 'FileText'"
                 :size="14"
                 aria-hidden="true"
               />
               <span class="assistant-attachment__name">{{ attachment.name }}</span>
-              <span class="assistant-attachment__meta">
+              <span
+                v-if="attachment.status !== 'uploading'"
+                class="assistant-attachment__meta"
+              >
                 {{
-                  attachment.status === 'uploading'
-                    ? 'Uploading'
-                    : attachment.status === 'error'
-                      ? 'Failed'
-                      : formatFileSize(attachment.size)
+                  attachment.status === 'error'
+                    ? 'Failed'
+                    : formatFileSize(attachment.size)
                 }}
               </span>
               <button
@@ -3148,6 +3238,92 @@ function messageFromUnknown(err: unknown, fallback: string) {
         </footer>
       </section>
     </main>
+
+    <Teleport to="body">
+      <div
+        v-if="archivedThreadsModalOpen"
+        class="assistant-modal"
+        @click.self="closeArchivedThreadsModal"
+      >
+        <section
+          class="assistant-modal__dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="archived-chats-title"
+        >
+          <header class="assistant-modal__header">
+            <div class="assistant-modal__header-copy">
+              <h2 id="archived-chats-title">Archived Chats</h2>
+              <p>Restore a chat to bring it back into the side nav.</p>
+            </div>
+            <button
+              type="button"
+              class="modal-close"
+              aria-label="Close"
+              @click="closeArchivedThreadsModal"
+            >
+              <UiIcon name="X" :size="20" />
+            </button>
+          </header>
+
+          <p v-if="archivedAssistantThreadsError" class="assistant-history__message">
+            {{ archivedAssistantThreadsError }}
+          </p>
+          <p
+            v-else-if="archivedAssistantThreadsLoading"
+            class="assistant-history__message"
+          >
+            Loading archived chats...
+          </p>
+          <div v-else class="assistant-archived-list" role="list">
+            <article
+              v-for="thread in archivedAssistantThreads"
+              :key="thread.id"
+              class="assistant-archived-thread"
+              role="listitem"
+            >
+              <button
+                type="button"
+                class="assistant-archived-thread__main"
+                @click="selectAssistantThread(thread.id); closeArchivedThreadsModal()"
+              >
+                <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
+                <span>
+                  <strong>{{ threadTitle(thread) }}</strong>
+                  <small>{{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}</small>
+                </span>
+              </button>
+              <div class="assistant-archived-thread__actions">
+                <button
+                  type="button"
+                  title="Restore chat"
+                  aria-label="Restore chat"
+                  :disabled="assistantThreadActionId === thread.id"
+                  @click="restoreArchivedAssistantThread(thread)"
+                >
+                  <UiIcon name="ArchiveRestore" :size="15" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  title="Delete chat"
+                  aria-label="Delete chat"
+                  :disabled="assistantThreadActionId === thread.id"
+                  @click="deleteArchivedAssistantThread(thread)"
+                >
+                  <UiIcon name="Trash2" :size="15" aria-hidden="true" />
+                </button>
+              </div>
+            </article>
+            <p
+              v-if="archivedAssistantThreads.length === 0"
+              class="assistant-history__message"
+            >
+              No archived chats.
+            </p>
+          </div>
+        </section>
+      </div>
+    </Teleport>
 
     <Teleport to="body">
       <div
@@ -4027,8 +4203,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font-size: 13px;
 }
 
-.assistant-history__actions,
-.assistant-history__filter {
+.assistant-history__actions {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -4040,29 +4215,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-history__actions button:hover,
 .assistant-history__search button:hover {
-  background: var(--ui-surface);
-  color: var(--ui-text);
-}
-
-.assistant-history__filter {
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  padding: 2px;
-}
-
-.assistant-history__filter button {
-  flex: 1 1 0;
-  min-height: 26px;
-  border: 0;
-  border-radius: calc(var(--ui-radius-sm) - 2px);
-  background: transparent;
-  color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.assistant-history__filter button.is-active {
   background: var(--ui-surface);
   color: var(--ui-text);
 }
@@ -4130,6 +4282,33 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-history__message {
   margin: 0;
   padding: 8px;
+}
+
+.assistant-history__footer {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.assistant-history__archive-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 0 8px;
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.assistant-history__archive-button:hover {
+  background: var(--ui-surface);
+  color: var(--ui-text);
 }
 
 .assistant-history-backdrop {
@@ -4290,8 +4469,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-console {
   display: block;
   flex: 1;
+  width: min(600px, 100%);
+  max-width: 600px;
   height: auto;
   min-height: 0;
+  margin: 0 auto;
 }
 
 .assistant-timeline {
@@ -4377,12 +4559,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-message__bubble {
   display: grid;
   gap: 6px;
-  max-width: min(680px, 88%);
+  max-width: 88%;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-md);
   padding: 12px 14px;
   background: var(--ui-surface);
   color: var(--ui-text);
+}
+
+.assistant-message--assistant .assistant-message__bubble {
+  width: 100%;
+  max-width: 100%;
+  border-width: 1px 0;
+  border-color: var(--ui-border);
+  border-radius: 0;
+  padding: 12px 0;
+  background: transparent;
 }
 
 .assistant-message--user .assistant-message__bubble {
@@ -4428,10 +4620,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-message__tools {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   min-height: 24px;
   padding: 0 4px;
   color: var(--ui-text-muted);
+}
+
+.assistant-message__time {
+  font-size: 11px;
+  line-height: 1;
 }
 
 .assistant-message-tool {
@@ -4445,6 +4642,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: transparent;
   color: inherit;
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.assistant-message:hover .assistant-message-tool,
+.assistant-message:focus-within .assistant-message-tool {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .assistant-message-tool:hover:not(:disabled) {
@@ -4567,10 +4773,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  min-height: 28px;
+  min-height: 30px;
   border: 1px solid var(--ui-border);
   border-radius: 999px;
-  padding: 0 4px 0 9px;
+  padding: 2px 4px 2px 9px;
   background: var(--ui-surface-muted);
   color: var(--ui-text-muted);
   font-size: 12px;
@@ -4580,6 +4786,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-attachment--error {
   border-color: color-mix(in oklab, var(--ui-warning, #b26a00) 45%, var(--ui-border));
   color: var(--ui-warning, #b26a00);
+}
+
+.assistant-attachment__thumb {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  object-fit: cover;
 }
 
 .assistant-attachment__name {
@@ -4691,6 +4905,86 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-composer__attachment-status {
   color: var(--ui-text-muted);
   font-weight: 650;
+}
+
+.assistant-archived-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.assistant-archived-thread {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 8px;
+  background: var(--ui-surface-muted);
+}
+
+.assistant-archived-thread__main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assistant-archived-thread__main span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.assistant-archived-thread__main strong,
+.assistant-archived-thread__main small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-archived-thread__main strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.assistant-archived-thread__main small {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+}
+
+.assistant-archived-thread__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.assistant-archived-thread__actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.assistant-archived-thread__actions button:hover:not(:disabled) {
+  background: var(--ui-surface);
+  color: var(--ui-text);
 }
 
 .assistant-error {

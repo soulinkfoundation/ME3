@@ -4,6 +4,7 @@ export type AgentChatMessage = {
   id?: string;
   role: "user" | "assistant";
   text: string;
+  createdAt?: string | null;
   meta?: string | null;
   detail?: string | null;
   inboxLink?: boolean;
