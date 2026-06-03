@@ -363,8 +363,11 @@ const assistantRecentOpen = ref(true);
 const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
-const selectedModelId = ref("workers-qwen3-30b");
-const selectedModelTouched = ref(false);
+const assistantModelStorageKey = "me3.assistant.selectedModelId";
+const storedAssistantModelId = getStoredAssistantModelId();
+const initialAssistantModelId = storedAssistantModelId || "workers-qwen3-30b";
+const selectedModelId = ref(initialAssistantModelId);
+const selectedModelTouched = ref(Boolean(storedAssistantModelId));
 const aiSettingsLoading = ref(false);
 const aiSettingsError = ref("");
 const aiProviders = ref<AiProviderRecord[]>([]);
@@ -823,6 +826,29 @@ function applyDefaultChatModel(settings: AiSettingsResponse) {
 
 function handleAssistantModelChange() {
   selectedModelTouched.value = true;
+  persistAssistantModelId(selectedModelId.value);
+}
+
+function getStoredAssistantModelId() {
+  if (typeof window === "undefined") return null;
+  try {
+    const value = window.localStorage.getItem(assistantModelStorageKey);
+    return AI_AGENT_MODEL_OPTIONS.some((option) => option.id === value)
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistAssistantModelId(modelId: string) {
+  if (typeof window === "undefined") return;
+  if (!AI_AGENT_MODEL_OPTIONS.some((option) => option.id === modelId)) return;
+  try {
+    window.localStorage.setItem(assistantModelStorageKey, modelId);
+  } catch {
+    // Losing local preference persistence should not block chat.
+  }
 }
 
 function setupStateForModel(option: AiAgentModelOption | undefined) {
