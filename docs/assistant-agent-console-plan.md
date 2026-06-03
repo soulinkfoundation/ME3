@@ -32,23 +32,37 @@ As of 2026-06-03:
   - The bottom composer, model selector, starter prompts, and message timeline are in place.
 - Milestone 2 is partially implemented:
   - `/api/assistant/chat/turn` is now the product-facing chat route.
+  - `/api/assistant/chat/turn/stream` streams assistant replies as server-sent events.
   - `/api/agent/sandbox` remains as a legacy alias.
-  - `/assistant`, the launcher, and wizard helper calls use the new endpoint.
+  - `/assistant`, the launcher, and wizard helper calls use the product chat route family.
   - The assistant page sends the selected model with each turn.
   - The Worker validates selected model payloads and forwards them to the runtime.
   - The runtime respects selected provider/model when provided.
   - Copy, retry, and edit/resend basics are implemented in the assistant UI.
-  - Streaming and stop are now tracked as `me3-8it.2`.
+  - Streaming and stop controls are implemented and tracked as closed by `me3-8it.2`.
+  - Stop uses request abort and leaves a clear stopped/partial-message state.
+  - Refresh-resilient conversation history and side-panel organization are owned by `me3-3ic`.
 - Milestone 3 is partially implemented:
   - The model picker exists in the assistant composer and is wired to chat turns.
   - The picker reads provider setup state from `/ai-settings`.
   - The picker shows ready/setup/unknown status in the composer.
   - `AI_AGENT_MODEL_OPTIONS` now carries local capability metadata for text, vision, long context,
     reasoning, and tool use.
-  - Provider grouping/filtering, model persistence, and incompatible send handling are still pending.
-- Attachments now have dedicated implementation beads:
-  - `me3-8it.3` covers composer attachment upload/typed records.
-  - `me3-8it.4` covers pre-send model compatibility explanations.
+  - Assistant model selection persists locally and is tracked as closed by `me3-8it.5`.
+  - Basic incompatible-send handling is in place for unsupported/error attachments and image/model
+    compatibility; the remaining backend vision-routing work stays under `me3-8it.4`.
+- Attachments are partially implemented and still tracked by dedicated beads:
+  - Composer paperclip/file picker, removable chips, client-side text-like file reading, and
+    request metadata are in place under `me3-8it.3`.
+  - Remaining `me3-8it.3` work is persisted upload records, PDF extraction, image routing, and
+    fuller size/type validation.
+  - `me3-8it.4` continues model/attachment compatibility explanations, especially once image
+    routing is available.
+- Audit metadata is partially implemented:
+  - Chat turns record route/thread/model/attachment-count metadata.
+  - Streaming turns record stream route metadata.
+  - `me3-8it.6` remains open for stopped-turn outcomes, full attachment manifests, and richer
+    action-card audit records.
 - Voice mode has a dedicated implementation bead:
   - `me3-kid` should build the robust composer-only voice dictation adapter with provider/plugin
     architecture.
@@ -59,8 +73,36 @@ Current QA coverage:
 
 - `pnpm build`
 - Focused Worker tests for `/assistant/chat/turn`, `/agent/sandbox` alias behavior, selected model
-  validation, and selected Workers AI model routing.
-- In-app browser visual checks for the assistant shell/composer.
+  validation, selected Workers AI model routing, audit metadata, and streaming SSE behavior.
+- In-app browser visual checks for the assistant shell/composer have been used, though the latest
+  streaming smoke pass was blocked by an existing Playwright profile lock.
+
+## What's Left
+
+The essential remaining work is now mostly outside the base chat loop:
+
+1. Finish attachments (`me3-8it.3` and `me3-8it.4`).
+   - Add typed/persisted upload records instead of composer-only text injection.
+   - Add PDF extraction if the dependency path is reliable.
+   - Route images only through vision-capable models.
+   - Keep pre-send explanations for unsupported type/model combinations.
+
+2. Finish audit and observability (`me3-8it.6`).
+   - Record stopped-stream outcomes clearly.
+   - Add attachment manifests without storing unnecessary raw sensitive content.
+   - Extend audit records for richer ME3-native action cards.
+
+3. Add focused QA coverage (`me3-8it.7`).
+   - Keep Worker coverage for JSON and streaming turns.
+   - Add web-level coverage around composer attachments, model compatibility, stop, retry, and
+     edit/resend.
+   - Re-run browser visual QA once the Playwright profile lock is clear.
+
+4. Continue parallel tracks.
+   - Voice dictation adapter and composer UI state live under `me3-kid`.
+   - Chat history, side-panel organization, and conversation ownership live under `me3-3ic`.
+   - Chat-based job builder and ME3-native action cards remain future milestones after the console
+     foundation is stable.
 
 This document replaces the earlier agent chat launcher plan. The new product direction is that
 `/assistant` becomes ME3's full chat, agent, and model interface. The floating
@@ -441,17 +483,20 @@ Tasks:
 - [x] Decide whether to extend `/agent/sandbox` or create a new `/assistant/chat/turn` endpoint.
 - [~] Add a typed turn request with message text, selected model, attachments, and context
   references.
-- [ ] Add streaming responses if feasible. Tracked by `me3-8it.2`.
-- [~] Add stop, retry, copy, and edit/resend basics.
+- [x] Add streaming responses. Tracked by closed bead `me3-8it.2`.
+- [x] Add stop, retry, copy, and edit/resend basics.
 - [ ] Persist conversation turns enough for refresh resilience. Tracked by `me3-3ic`.
 - [ ] Continue writing structured chat/action audit events. Tracked by `me3-8it.6`.
 
 Notes:
 
 - `/assistant/chat/turn` is the product endpoint.
+- `/assistant/chat/turn/stream` is the streaming product endpoint used by the assistant page.
 - `/agent/sandbox` is a legacy alias.
-- Message text and selected model are wired; attachments and context references are still pending.
-- Copy, retry, and edit/resend are wired; stop is still pending.
+- Message text and selected model are wired.
+- Text-like attachments are currently injected as readable turn context; persisted typed attachment
+  records and richer context references are still pending.
+- Copy, retry, edit/resend, streaming, and stop are wired.
 - Chat history, refresh resilience, and side-panel organization are owned by `me3-3ic`.
 
 Acceptance:
@@ -468,11 +513,11 @@ Tasks:
 
 - [x] Use `AI_AGENT_MODEL_OPTIONS` as the first catalog source.
 - [x] Show configured/unconfigured provider state.
-- [~] Respect Account defaults.
-- [ ] Persist the current assistant page selection. Tracked by `me3-8it.5`.
+- [x] Respect Account defaults.
+- [x] Persist the current assistant page selection. Tracked by closed bead `me3-8it.5`.
 - [x] Add model capability metadata for text, vision, long context, reasoning, and tool use.
-- [ ] Block or explain incompatible sends, such as image attachment to a text-only model. Tracked by
-  `me3-8it.4`.
+- [~] Block or explain incompatible sends, such as image attachment to a text-only model. Tracked by
+  open bead `me3-8it.4`.
 
 Notes:
 
@@ -480,6 +525,8 @@ Notes:
 - `/assistant` sends the selected model per turn.
 - The picker loads setup state from `/ai-settings` and shows ready/setup/unknown status.
 - Local capability metadata exists in `AI_AGENT_MODEL_OPTIONS`.
+- `/assistant` restores a valid saved model id from localStorage and lets Account defaults seed
+  first use when no assistant-local selection exists.
 - Other chat surfaces omit model selection and continue to use Account/default routing.
 - Verify provider capability labels against current provider docs before using them for hard
   enforcement in attachment flows.
@@ -496,20 +543,21 @@ Goal: let the model read useful files and images.
 
 Tasks:
 
-- [ ] Add composer attachment UI. Tracked by `me3-8it.3`.
+- [~] Add composer attachment UI. Tracked by `me3-8it.3`.
 - [ ] Add upload endpoint and typed attachment records. Tracked by `me3-8it.3`.
-- [ ] Implement text extraction for common text-like files. Tracked by `me3-8it.3`.
+- [~] Implement text extraction for common text-like files. Tracked by `me3-8it.3`.
 - [ ] Add PDF extraction if the dependency path is reliable. Tracked by `me3-8it.3`.
 - [ ] Add image handling for vision-capable model routes. Tracked by `me3-8it.3`.
-- [ ] Add size/type validation. Tracked by `me3-8it.3`.
+- [~] Add size/type validation. Tracked by `me3-8it.3`.
 - [ ] Add attachment references to context manifests and run records. Tracked by `me3-8it.3` and
   `me3-8it.6`.
 
 Acceptance:
 
-- The owner can attach at least images and text-like files.
-- The model receives extracted/readable content.
-- Unsupported attachment/model combinations fail clearly before send.
+- The owner can attach text-like files today and see removable chips.
+- The model receives extracted/readable text-like content today.
+- Unsupported/error attachments fail clearly before send today.
+- Full acceptance still requires persisted typed records and vision-capable image routing.
 
 ### Milestone 5: Voice Dictation
 
