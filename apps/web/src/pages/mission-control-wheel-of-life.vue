@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
 import { RouterLink } from "vue-router";
-import WheelOfLife from "../../components/mission-control/WheelOfLife.vue";
-import UiIcon from "../../components/UiIcon.vue";
+import WheelOfLife from "../components/mission-control/WheelOfLife.vue";
+import UiIcon from "../components/UiIcon.vue";
 
 definePage({
+  path: "/mission-control/wheel-of-life",
   meta: {
     requiresAuth: true,
     requiresWorkspace: true,
