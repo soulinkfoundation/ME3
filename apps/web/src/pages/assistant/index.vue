@@ -4368,6 +4368,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 <style scoped>
 .assistant-page {
   --assistant-composer-clearance: clamp(230px, 28vh, 320px);
+  --assistant-header-clearance: calc(var(--app-shell-mobile-nav-height) + 18px);
 
   position: relative;
   isolation: isolate;
@@ -4742,7 +4743,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   top: 0;
   right: 0;
   left: 0;
-  z-index: 50;
+  z-index: 45;
   min-height: var(--app-shell-mobile-nav-height);
   height: var(--app-shell-mobile-nav-height);
   padding: var(--workspace-topbar-padding-block) 8px
@@ -4886,7 +4887,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  padding: 28px 0 var(--assistant-composer-clearance);
+  padding: var(--assistant-header-clearance) 0 var(--assistant-composer-clearance);
 }
 
 .assistant-empty-state {
@@ -6285,10 +6286,11 @@ button:disabled {
 @media (max-width: 760px) {
   .assistant-page {
     --assistant-composer-clearance: clamp(250px, 32vh, 360px);
+    --assistant-header-clearance: calc(var(--app-shell-mobile-nav-height) + 14px);
   }
 
   .assistant-timeline {
-    padding-top: 18px;
+    padding-top: var(--assistant-header-clearance);
   }
 
   .assistant-empty-state {
