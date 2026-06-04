@@ -116,6 +116,7 @@ const dashboard = ref<MissionDashboardResponse | null>(null);
 const loading = ref(true);
 const error = ref("");
 const missionStatementDraft = ref("");
+const missionStatementEditing = ref(false);
 const missionStatementSaving = ref(false);
 const dashboardEditing = ref(false);
 const cardDrafts = ref<DashboardCardInstance[]>([]);
@@ -199,6 +200,15 @@ function quickActionDestinationLabel(link: DashboardQuickLink): string {
   return contribution?.label || link.destinationId;
 }
 
+function missionStatementDisplayText(): string {
+  return (
+    missionStatementDraft.value.trim() ||
+    missionStatement.value?.missionStatement.trim() ||
+    missionStatement.value?.placeholder ||
+    ""
+  );
+}
+
 function syncDashboardDrafts() {
   cardDrafts.value = [...(dashboard.value?.cards || [])]
     .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -218,6 +228,11 @@ function closeDashboardEditor() {
   draggedCardId.value = "";
   draggedQuickActionId.value = "";
   syncDashboardDrafts();
+}
+
+function startMissionStatementEdit() {
+  missionStatementDraft.value = dashboard.value?.missionStatement || "";
+  missionStatementEditing.value = true;
 }
 
 function moveCard(index: number, direction: -1 | 1) {
@@ -356,6 +371,7 @@ async function saveMissionStatement() {
       },
     );
     missionStatementDraft.value = dashboard.value.missionStatement;
+    missionStatementEditing.value = false;
     toastSuccess("Mission statement saved");
   } catch (err) {
     toastFromUnknown(err, "Mission statement could not be saved");
@@ -413,17 +429,6 @@ onMounted(() => {
         @click="dashboardEditing ? closeDashboardEditor() : openDashboardEditor()"
       >
         <UiIcon :name="dashboardEditing ? 'X' : 'SlidersHorizontal'" :size="18" />
-      </Button>
-      <Button
-        color="ghost"
-        shape="soft"
-        size="compact"
-        icon-only
-        to="/mission-control/wheel-of-life"
-        aria-label="Open Wheel of Life"
-        title="Open Wheel of Life"
-      >
-        <UiIcon name="ShipWheel" :size="18" />
       </Button>
     </header>
 
@@ -530,7 +535,10 @@ onMounted(() => {
           </div>
           <template v-if="cardComponentKey(card) === 'DailyBriefingCard'">
             <header class="dashboard-card__header">
-              <h2>Daily Briefing</h2>
+              <h2 class="dashboard-card__title">
+                <UiIcon name="Sun" :size="16" />
+                <span>Daily Briefing</span>
+              </h2>
               <span v-if="dailyBriefing?.createdAt">
                 {{ formatDashboardDate(dailyBriefing.createdAt) }}
               </span>
@@ -548,35 +556,74 @@ onMounted(() => {
 
           <template v-else-if="cardComponentKey(card) === 'MissionStatementCard'">
             <header class="dashboard-card__header">
-              <h2>Mission Statement</h2>
+              <h2 class="dashboard-card__title">
+                <UiIcon name="Rocket" :size="16" />
+                <span>Mission Statement</span>
+              </h2>
+              <Button
+                v-if="!missionStatementEditing"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Edit mission statement"
+                title="Edit mission statement"
+                @click="startMissionStatementEdit"
+              >
+                <UiIcon name="Pencil" :size="16" />
+              </Button>
+              <Button
+                v-else
+                color="accent"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Save mission statement"
+                title="Save mission statement"
+                :disabled="missionStatementSaving"
+                @click="saveMissionStatement"
+              >
+                <UiIcon name="Save" :size="16" />
+              </Button>
             </header>
-            <form class="mission-statement-form" @submit.prevent="saveMissionStatement">
+            <form
+              v-if="missionStatementEditing"
+              class="mission-statement-form"
+              @submit.prevent="saveMissionStatement"
+            >
               <textarea
                 v-model="missionStatementDraft"
                 :placeholder="missionStatement?.placeholder"
                 rows="6"
               />
-              <div class="mission-statement-form__footer">
-                <span>Plain text, private to this Core.</span>
-                <Button
-                  color="accent"
-                  shape="soft"
-                  size="compact"
-                  type="submit"
-                  :disabled="missionStatementSaving"
-                >
-                  {{ missionStatementSaving ? "Saving..." : "Save" }}
-                </Button>
-              </div>
             </form>
+            <p v-else class="mission-statement-display">
+              {{ missionStatementDisplayText() }}
+            </p>
           </template>
 
           <template v-else-if="cardComponentKey(card) === 'WheelSnapshotCard'">
             <header class="dashboard-card__header">
-              <h2>Wheel of Life</h2>
-              <span v-if="wheelSnapshot?.snapshot">
-                {{ formatDashboardDate(wheelSnapshot.snapshot.createdAt) }}
-              </span>
+              <h2 class="dashboard-card__title">
+                <UiIcon name="ShipWheel" :size="16" />
+                <span>Wheel of Life</span>
+              </h2>
+              <div class="dashboard-card__header-actions">
+                <span v-if="wheelSnapshot?.snapshot">
+                  {{ formatDashboardDate(wheelSnapshot.snapshot.createdAt) }}
+                </span>
+                <Button
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  to="/mission-control/wheel-of-life"
+                  aria-label="Open Wheel of Life"
+                  title="Open Wheel of Life"
+                >
+                  <UiIcon name="Pencil" :size="16" />
+                </Button>
+              </div>
             </header>
             <div v-if="wheelSnapshot?.snapshot" class="wheel-summary">
               <div
@@ -1160,12 +1207,36 @@ onMounted(() => {
   line-height: 1.25;
 }
 
-.dashboard-card__header span,
+.dashboard-card__title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard-card__title svg {
+  flex: 0 0 auto;
+  color: var(--ui-accent);
+}
+
+.dashboard-card__title span {
+  overflow-wrap: anywhere;
+}
+
+.dashboard-card__header > span,
+.dashboard-card__header-actions span,
 .dashboard-card p,
 .dashboard-empty p {
   color: var(--ui-text-muted);
   font-size: 13px;
   line-height: 1.55;
+}
+
+.dashboard-card__header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
 }
 
 .dashboard-card__body {
@@ -1203,16 +1274,11 @@ onMounted(() => {
   outline-offset: 1px;
 }
 
-.mission-statement-form__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.mission-statement-form__footer span {
-  color: var(--ui-text-muted);
-  font-size: 12px;
+.mission-statement-display {
+  color: var(--ui-text);
+  font-size: 20px;
+  line-height: 1.4;
+  white-space: pre-wrap;
 }
 
 .wheel-summary {
@@ -1273,14 +1339,8 @@ onMounted(() => {
     grid-column: auto;
   }
 
-  .mission-statement-form__footer,
   .wheel-summary__row {
     grid-template-columns: 1fr;
-  }
-
-  .mission-statement-form__footer {
-    display: grid;
-    justify-items: start;
   }
 }
 </style>
