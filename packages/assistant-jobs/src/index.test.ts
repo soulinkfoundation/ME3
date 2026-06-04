@@ -12,7 +12,7 @@ import {
 } from "./index";
 
 describe("assistant jobs package", () => {
-  it("validates Core v1 starter recipes when owner notifications are ready", () => {
+  it("validates Core v1 starter recipes", () => {
     const coreRecipes = ASSISTANT_JOB_STARTER_RECIPES.filter(
       (recipe) => recipe.firstVersion === "core_v1",
     );
@@ -31,15 +31,15 @@ describe("assistant jobs package", () => {
     }
   });
 
-  it("marks notification-backed starters as setup-gated when notifications are missing", () => {
+  it("allows Daily Briefing to run without owner notifications", () => {
     const dailyBriefing = getAssistantJobStarterRecipe("daily-briefing");
     if (!dailyBriefing) throw new Error("Missing daily-briefing recipe");
 
     const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(dailyBriefing));
 
-    expect(validation.status).toBe("needs_setup");
-    expect(validation.errors.map((error) => error.code)).toContain("setup_missing");
-    expect(validation.permissionSummary.setupRequirements).toContain("owner_notifications");
+    expect(validation.status).toBe("valid");
+    expect(validation.errors).toEqual([]);
+    expect(validation.permissionSummary.setupRequirements).not.toContain("owner_notifications");
   });
 
   it("marks provider-backed recipes as setup-gated", () => {

@@ -621,6 +621,38 @@ describe("assistant jobs persistence", () => {
     });
   });
 
+  it("runs daily briefing without a connected owner channel", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createAssistantJobsEnv();
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "daily-briefing" });
+    expect(created.job.status).toBe("active");
+    expect(created.validation.status).toBe("valid");
+
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+
+    expect(run.run.status).toBe("succeeded");
+    expect(run.actionResults).toContainEqual(
+      expect.objectContaining({
+        actionId: "notify-owner",
+        capabilityId: "message.owner.notify",
+        status: "skipped",
+      }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(env.__state.channelEvents).toHaveLength(0);
+    expect(env.__state.pluginActivities[0]).toMatchObject({
+      activity_type: "assistant_job.review_packet",
+      title: expect.stringContaining("Daily Briefing"),
+    });
+    expect(JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)).toMatchObject({
+      dailyBriefing: {
+        message: expect.stringContaining("☀️ Good morning, Kieran."),
+      },
+    });
+  });
+
   it("customizes the daily briefing notification template", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ ok: true, messageId: "stream-message-1" }), {

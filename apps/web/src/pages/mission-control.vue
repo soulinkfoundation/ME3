@@ -25,13 +25,16 @@ type DashboardCardInstance = {
   cardId: string;
   pluginId: string;
   enabled: boolean;
+  available?: boolean;
   size: DashboardCardSize;
   sortOrder: number;
 };
 
 type DashboardCardContribution = {
   id: string;
+  pluginId: string;
   label: string;
+  componentKey: string;
   defaultSize: DashboardCardSize;
 };
 
@@ -42,6 +45,7 @@ type DashboardQuickLink = {
   enabled: boolean;
   sortOrder: number;
   destinationId: string;
+  available?: boolean;
 };
 
 type DashboardDestination = {
@@ -88,8 +92,21 @@ type MissionDashboardResponse = {
     "mission.daily-briefing": DailyBriefingCardData;
     "mission.mission-statement": MissionStatementCardData;
     "mission.wheel-latest-snapshot": WheelSnapshotCardData;
+    [cardId: string]: unknown;
   };
 };
+
+const dashboardCardRegistry = new Set([
+  "DailyBriefingCard",
+  "MissionStatementCard",
+  "WheelSnapshotCard",
+  "ProjectsSummaryCard",
+  "AccountsSummaryCard",
+  "CalendarTodayCard",
+  "JournalLatestEntryCard",
+  "SocialQueueSummaryCard",
+  "SitesBlogSummaryCard",
+]);
 
 const { toastFromUnknown, toastSuccess } = useAppToast();
 const dashboard = ref<MissionDashboardResponse | null>(null);
@@ -106,22 +123,32 @@ const draggedQuickActionId = ref("");
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
-    .filter((card) => card.enabled)
+    .filter((card) => card.enabled && card.available !== false && isRenderableDashboardCard(card))
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const quickLinks = computed(() =>
   (dashboard.value?.quickLinks || [])
-    .filter((link) => link.enabled && dashboard.value?.destinations[link.destinationId])
+    .filter((link) => link.enabled && link.available !== false && dashboard.value?.destinations[link.destinationId])
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const visibleCards = computed(() =>
   (dashboardEditing.value ? cardDrafts.value : cards.value)
-    .filter((card) => card.enabled)
+    .filter((card) => card.enabled && card.available !== false && isRenderableDashboardCard(card))
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const visibleQuickLinks = computed(() =>
   (dashboardEditing.value ? quickActionDrafts.value : quickLinks.value)
-    .filter((link) => link.enabled && dashboard.value?.destinations[link.destinationId])
+    .filter((link) => link.enabled && link.available !== false && dashboard.value?.destinations[link.destinationId])
+    .sort((a, b) => a.sortOrder - b.sortOrder),
+);
+const availableCardDrafts = computed(() =>
+  cardDrafts.value
+    .filter((card) => card.available !== false && isRenderableDashboardCard(card))
+    .sort((a, b) => a.sortOrder - b.sortOrder),
+);
+const availableQuickActionDrafts = computed(() =>
+  quickActionDrafts.value
+    .filter((link) => link.available !== false && dashboard.value?.destinations[link.destinationId])
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const dailyBriefing = computed(
@@ -140,6 +167,18 @@ function cardLabel(card: DashboardCardInstance): string {
     (item) => item.id === card.cardId,
   );
   return contribution?.label || card.cardId;
+}
+
+function cardComponentKey(card: DashboardCardInstance): string {
+  const contribution = dashboard.value?.availableCards.find(
+    (item) => item.id === card.cardId,
+  );
+  return contribution?.componentKey || "";
+}
+
+function isRenderableDashboardCard(card: DashboardCardInstance): boolean {
+  const key = cardComponentKey(card);
+  return Boolean(key && dashboardCardRegistry.has(key));
 }
 
 function quickLinkPath(link: DashboardQuickLink): string {
@@ -199,19 +238,11 @@ function moveCardById(cardId: string, direction: -1 | 1) {
   moveCard(index, direction);
 }
 
-function moveQuickAction(index: number, direction: -1 | 1) {
-  const nextIndex = index + direction;
-  if (nextIndex < 0 || nextIndex >= quickActionDrafts.value.length) return;
-  const next = [...quickActionDrafts.value];
-  const current = next[index];
-  const target = next[nextIndex];
-  if (!current || !target) return;
-  next[index] = target;
-  next[nextIndex] = current;
-  quickActionDrafts.value = next.map((link, sortOrder) => ({
-    ...link,
-    sortOrder,
-  }));
+function moveVisibleCard(index: number, direction: -1 | 1) {
+  const source = availableCardDrafts.value[index];
+  const target = availableCardDrafts.value[index + direction];
+  if (!source || !target) return;
+  reorderCards(source.cardId, target.cardId);
 }
 
 function updateCardDraft(
@@ -224,12 +255,20 @@ function updateCardDraft(
 }
 
 function updateQuickActionDraft(
-  index: number,
+  linkId: string,
   patch: Partial<Pick<DashboardQuickLink, "label" | "icon" | "enabled">>,
 ) {
+  const index = quickActionDrafts.value.findIndex((link) => link.id === linkId);
   const current = quickActionDrafts.value[index];
   if (!current) return;
   quickActionDrafts.value[index] = { ...current, ...patch };
+}
+
+function moveVisibleQuickAction(index: number, direction: -1 | 1) {
+  const source = availableQuickActionDrafts.value[index];
+  const target = availableQuickActionDrafts.value[index + direction];
+  if (!source || !target) return;
+  reorderQuickActions(source.id, target.id);
 }
 
 function setCardDropTarget(targetCardId: string) {
@@ -476,7 +515,7 @@ onMounted(() => {
               <UiIcon name="EyeOff" :size="15" />
             </Button>
           </div>
-          <template v-if="card.cardId === 'mission.daily-briefing'">
+          <template v-if="cardComponentKey(card) === 'DailyBriefingCard'">
             <header class="dashboard-card__header">
               <h2>Daily Briefing</h2>
               <span v-if="dailyBriefing?.createdAt">
@@ -494,7 +533,7 @@ onMounted(() => {
             </div>
           </template>
 
-          <template v-else-if="card.cardId === 'mission.mission-statement'">
+          <template v-else-if="cardComponentKey(card) === 'MissionStatementCard'">
             <header class="dashboard-card__header">
               <h2>Mission Statement</h2>
             </header>
@@ -519,7 +558,7 @@ onMounted(() => {
             </form>
           </template>
 
-          <template v-else-if="card.cardId === 'mission.wheel-latest-snapshot'">
+          <template v-else-if="cardComponentKey(card) === 'WheelSnapshotCard'">
             <header class="dashboard-card__header">
               <h2>Wheel of Life</h2>
               <span v-if="wheelSnapshot?.snapshot">
@@ -545,6 +584,72 @@ onMounted(() => {
                 to="/mission-control/wheel-of-life"
               >
                 Open Wheel
+              </Button>
+            </div>
+          </template>
+          <template v-else-if="cardComponentKey(card) === 'ProjectsSummaryCard'">
+            <header class="dashboard-card__header">
+              <h2>Projects</h2>
+            </header>
+            <div class="dashboard-empty">
+              <p>Project summary data will appear here once the card data endpoint is wired.</p>
+              <Button color="outline" shape="soft" size="compact" to="/mission-control/projects">
+                Open Projects
+              </Button>
+            </div>
+          </template>
+          <template v-else-if="cardComponentKey(card) === 'AccountsSummaryCard'">
+            <header class="dashboard-card__header">
+              <h2>Accounts</h2>
+            </header>
+            <div class="dashboard-empty">
+              <p>Accounts summary data will appear here once the ledger card endpoint is wired.</p>
+              <Button color="outline" shape="soft" size="compact" to="/accounts">
+                Open Accounts
+              </Button>
+            </div>
+          </template>
+          <template v-else-if="cardComponentKey(card) === 'CalendarTodayCard'">
+            <header class="dashboard-card__header">
+              <h2>Today</h2>
+            </header>
+            <div class="dashboard-empty">
+              <p>Calendar summary data will appear here once the calendar card endpoint is wired.</p>
+              <Button color="outline" shape="soft" size="compact" to="/calendar">
+                Open Calendar
+              </Button>
+            </div>
+          </template>
+          <template v-else-if="cardComponentKey(card) === 'JournalLatestEntryCard'">
+            <header class="dashboard-card__header">
+              <h2>Journal</h2>
+            </header>
+            <div class="dashboard-empty">
+              <p>Latest journal data will appear here once the journal card endpoint is wired.</p>
+              <Button color="outline" shape="soft" size="compact" to="/journal">
+                Open Journal
+              </Button>
+            </div>
+          </template>
+          <template v-else-if="cardComponentKey(card) === 'SocialQueueSummaryCard'">
+            <header class="dashboard-card__header">
+              <h2>Social Queue</h2>
+            </header>
+            <div class="dashboard-empty">
+              <p>Queued social content will appear here once the social card endpoint is wired.</p>
+              <Button color="outline" shape="soft" size="compact" to="/social">
+                Open Social
+              </Button>
+            </div>
+          </template>
+          <template v-else-if="cardComponentKey(card) === 'SitesBlogSummaryCard'">
+            <header class="dashboard-card__header">
+              <h2>Blog</h2>
+            </header>
+            <div class="dashboard-empty">
+              <p>Blog draft data will appear here once the site card endpoint is wired.</p>
+              <Button color="outline" shape="soft" size="compact" to="/build">
+                Open Builder
               </Button>
             </div>
           </template>
@@ -587,7 +692,7 @@ onMounted(() => {
         </header>
         <div class="quick-action-editor__rows">
           <div
-            v-for="(card, index) in cardDrafts"
+            v-for="(card, index) in availableCardDrafts"
             :key="card.cardId"
             class="quick-action-editor__row dashboard-card-editor__row"
             :class="{ 'is-disabled': !card.enabled }"
@@ -631,7 +736,7 @@ onMounted(() => {
                 icon-only
                 aria-label="Move card up"
                 :disabled="index === 0"
-                @click="moveCard(index, -1)"
+                @click="moveVisibleCard(index, -1)"
               >
                 <UiIcon name="ChevronUp" :size="15" />
               </Button>
@@ -641,8 +746,8 @@ onMounted(() => {
                 size="compact"
                 icon-only
                 aria-label="Move card down"
-                :disabled="index === cardDrafts.length - 1"
-                @click="moveCard(index, 1)"
+                :disabled="index === availableCardDrafts.length - 1"
+                @click="moveVisibleCard(index, 1)"
               >
                 <UiIcon name="ChevronDown" :size="15" />
               </Button>
@@ -661,7 +766,7 @@ onMounted(() => {
         </header>
         <div class="quick-action-editor__rows">
           <div
-            v-for="(link, index) in quickActionDrafts"
+            v-for="(link, index) in availableQuickActionDrafts"
             :key="link.id"
             class="quick-action-editor__row"
             :class="{ 'is-disabled': !link.enabled }"
@@ -676,7 +781,7 @@ onMounted(() => {
                 type="checkbox"
                 :checked="link.enabled"
                 @change="
-                  updateQuickActionDraft(index, {
+                  updateQuickActionDraft(link.id, {
                     enabled: ($event.target as HTMLInputElement).checked,
                   })
                 "
@@ -690,7 +795,7 @@ onMounted(() => {
                   :value="link.label"
                   type="text"
                   @input="
-                    updateQuickActionDraft(index, {
+                    updateQuickActionDraft(link.id, {
                       label: ($event.target as HTMLInputElement).value,
                     })
                   "
@@ -702,7 +807,7 @@ onMounted(() => {
                   :value="link.icon"
                   type="text"
                   @input="
-                    updateQuickActionDraft(index, {
+                    updateQuickActionDraft(link.id, {
                       icon: ($event.target as HTMLInputElement).value,
                     })
                   "
@@ -720,7 +825,7 @@ onMounted(() => {
                 icon-only
                 aria-label="Move quick action up"
                 :disabled="index === 0"
-                @click="moveQuickAction(index, -1)"
+                @click="moveVisibleQuickAction(index, -1)"
               >
                 <UiIcon name="ChevronUp" :size="15" />
               </Button>
@@ -730,8 +835,8 @@ onMounted(() => {
                 size="compact"
                 icon-only
                 aria-label="Move quick action down"
-                :disabled="index === quickActionDrafts.length - 1"
-                @click="moveQuickAction(index, 1)"
+                :disabled="index === availableQuickActionDrafts.length - 1"
+                @click="moveVisibleQuickAction(index, 1)"
               >
                 <UiIcon name="ChevronDown" :size="15" />
               </Button>

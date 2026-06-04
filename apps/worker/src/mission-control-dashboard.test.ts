@@ -72,11 +72,20 @@ describe("Mission Control dashboard settings", () => {
 
     const dashboard = await getMissionDashboard(env, "owner");
 
-    expect(dashboard.cards.map((card) => card.cardId)).toEqual([
+    expect(
+      dashboard.cards.filter((card) => card.enabled).map((card) => card.cardId),
+    ).toEqual([
       "mission.daily-briefing",
       "mission.mission-statement",
       "mission.wheel-latest-snapshot",
     ]);
+    expect(dashboard.availableCards.map((card) => card.id)).toEqual(
+      expect.arrayContaining([
+        "mission.projects-summary",
+        "journal.latest-entry",
+        "social.queue-summary",
+      ]),
+    );
     expect(dashboard.quickLinks.map((link) => link.destinationId)).toEqual([
       "mission.projects",
       "assistant.chat",
@@ -195,11 +204,47 @@ describe("Mission Control dashboard settings", () => {
       dashboard.data["mission.wheel-latest-snapshot"]?.snapshot?.segments[0],
     ).toMatchObject({ id: "health", notes: "Slept well." });
   });
+
+  it("preserves inactive plugin dashboard settings while marking them unavailable", async () => {
+    const env = createDashboardEnv({
+      dashboardSettings: {
+        cards_json: JSON.stringify([
+          {
+            cardId: "journal.latest-entry",
+            enabled: true,
+            size: "medium",
+            sortOrder: 0,
+          },
+        ]),
+        quick_links_json: JSON.stringify([
+          {
+            id: "journal.today",
+            label: "Journal",
+            icon: "BookOpen",
+            enabled: true,
+            sortOrder: 0,
+            destinationId: "journal.today",
+          },
+        ]),
+      },
+    });
+
+    const dashboard = await getMissionDashboard(env, "owner");
+
+    expect(dashboard.availableCards.map((card) => card.id)).not.toContain(
+      "journal.latest-entry",
+    );
+    expect(dashboard.cards.find((card) => card.cardId === "journal.latest-entry"))
+      .toMatchObject({ enabled: true, available: false });
+    expect(dashboard.quickLinks.find((link) => link.id === "journal.today"))
+      .toMatchObject({ enabled: true, available: false });
+  });
 });
 
 function createDashboardEnv(options: {
   enabledPlugins?: string[];
   activity?: Array<Record<string, unknown> & { id: string; user_id: string }>;
+  dashboardSettings?: Partial<DashboardSettingsRow>;
 } = {}) {
   const settings = new Map<string, DashboardSettingsRow>();
   const wheelSettings = new Map<string, WheelSettingsRow>();
@@ -221,10 +266,29 @@ function createDashboardEnv(options: {
       },
     ]),
   );
+  if (options.dashboardSettings) {
+    settings.set("owner", {
+      user_id: "owner",
+      cards_json: options.dashboardSettings.cards_json || "[]",
+      quick_links_json: options.dashboardSettings.quick_links_json || "[]",
+      settings_json: options.dashboardSettings.settings_json || "{}",
+      mission_statement: options.dashboardSettings.mission_statement || null,
+      created_at: "2026-06-04 08:00:00",
+      updated_at: "2026-06-04 08:00:00",
+    });
+  }
 
   const db = {
     prepare(sql: string) {
       return {
+        async all<T>() {
+          if (sql.includes("plugin_installations")) {
+            return {
+              results: Array.from(pluginInstallations.values()) as T[],
+            };
+          }
+          return { results: [] as T[] };
+        },
         bind(...values: unknown[]) {
           return {
             async first<T>() {
@@ -246,6 +310,11 @@ function createDashboardEnv(options: {
               return null;
             },
             async all<T>() {
+              if (sql.includes("plugin_installations")) {
+                return {
+                  results: Array.from(pluginInstallations.values()) as T[],
+                };
+              }
               if (sql.includes("mission_wheel_snapshots")) {
                 const userId = String(values[0]);
                 const limit = Number(values[1] || 50);

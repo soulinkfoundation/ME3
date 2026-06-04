@@ -649,7 +649,10 @@ export async function listAssistantJobs(env: Env, userId: string, status?: strin
     ? env.DB.prepare(query).bind(userId, normalizedStatus, hiddenRecipeId)
     : env.DB.prepare(query).bind(userId, hiddenRecipeId);
   const rows = await stmt.all<AssistantJobRow>();
-  return { jobs: rows.results.map(serializeJob) };
+  const reconciledRows = await Promise.all(
+    rows.results.map((row) => reconcileAssistantJobReadiness(env, userId, row)),
+  );
+  return { jobs: reconciledRows.map(serializeJob) };
 }
 
 export async function listAssistantJobIngressEvents(
@@ -955,7 +958,11 @@ export async function updateAssistantJobIngressEvent(
 }
 
 export async function getAssistantJob(env: Env, userId: string, jobId: string) {
-  const job = await requireAssistantJob(env, userId, jobId);
+  const job = await reconcileAssistantJobReadiness(
+    env,
+    userId,
+    await requireAssistantJob(env, userId, jobId),
+  );
   const version = job.current_version_id
     ? await getAssistantJobVersion(env, userId, job.current_version_id)
     : null;
@@ -978,6 +985,50 @@ export async function getAssistantJob(env: Env, userId: string, jobId: string) {
     version,
     runs: serializedRuns,
   };
+}
+
+async function reconcileAssistantJobReadiness(
+  env: Env,
+  userId: string,
+  row: AssistantJobRow,
+): Promise<AssistantJobRow> {
+  if (row.status !== "needs_setup" || row.recipe_id !== "daily-briefing" || !row.current_version_id) {
+    return row;
+  }
+
+  const version = await getAssistantJobVersion(env, userId, row.current_version_id);
+  if (!version) return row;
+
+  const draft = normalizeAssistantJobDraft({
+    draft: {
+      name: version.name,
+      purpose: version.purpose,
+      recipeId: row.recipe_id,
+      trigger: version.trigger,
+      scope: version.scope,
+      rules: version.rules,
+      actions: version.actions,
+      approvalPolicy: version.approvalPolicy,
+      destination: version.destination,
+      capabilityIds: version.capabilityIds,
+      recommendedSkillIds: version.recommendedSkillIds,
+      requiredSkillIds: version.requiredSkillIds,
+      projectId: row.project_id,
+    },
+  });
+  const validation = await validateAssistantJobDraftForUser(env, userId, draft);
+  if (validation.status !== "valid") return row;
+
+  const setupState = { validationStatus: validation.status, errors: validation.errors };
+  await env.DB.prepare(
+    `UPDATE assistant_jobs
+     SET status = 'active', setup_state_json = ?, updated_at = ?
+     WHERE id = ? AND user_id = ? AND status = 'needs_setup'`,
+  )
+    .bind(stringifyJson(setupState), new Date().toISOString(), row.id, userId)
+    .run();
+
+  return (await getAssistantJobRow(env, userId, row.id)) || row;
 }
 
 export async function executeAssistantJobRun(env: Env, userId: string, runId: string) {
@@ -1830,6 +1881,16 @@ async function createAssistantJobOwnerNotification(
 ) {
   const connection = await getActiveOwnerNotificationConnection(env, input.userId);
   if (!connection) {
+    if (input.job.recipe_id === "daily-briefing" || input.draft.recipeId === "daily-briefing") {
+      return insertAssistantJobActionResult(env, {
+        runId: input.run.id,
+        actionId: input.action.id,
+        capabilityId: input.capability.id,
+        idempotencyKey: input.idempotencyKey,
+        status: "skipped",
+        errorMessage: "Soulink is not connected; Daily Briefing remains available in Mission Control.",
+      });
+    }
     return insertAssistantJobActionResult(env, {
       runId: input.run.id,
       actionId: input.action.id,

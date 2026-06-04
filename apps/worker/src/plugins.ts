@@ -43,6 +43,24 @@ export type CorePluginManifestSummary = {
   permissions: { id: string; label: string }[];
   routes: { id: string; path: string; methods: string[]; auth: string }[];
   uiSlots: { id: string; slot: string; label: string }[];
+  dashboardCards?: {
+    id: string;
+    label: string;
+    componentKey: string;
+    defaultEnabled: boolean;
+    defaultSize: "small" | "medium" | "wide";
+    dataEndpoint?: string;
+    requiresPluginIds?: string[];
+    requiresCapabilityIds?: string[];
+  }[];
+  dashboardQuickActions?: {
+    id: string;
+    label: string;
+    icon: string;
+    defaultEnabled: boolean;
+    destinationId: string;
+    requiresPluginIds?: string[];
+  }[];
   agentTools: { id: string; label: string; sideEffect: string; approvalMode: string }[];
   secrets: { name: string; label: string; required: boolean }[];
   migrations: { id: string; path: string; destructive: boolean; description?: string }[];
@@ -177,6 +195,26 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       id: "social.article-share",
       slot: "site.editor",
       label: "Share article",
+    },
+  ],
+  dashboardCards: [
+    {
+      id: "social.queue-summary",
+      label: "Social Queue",
+      componentKey: "SocialQueueSummaryCard",
+      defaultEnabled: false,
+      defaultSize: "medium",
+      requiresPluginIds: ["me3.social-publishing"],
+    },
+  ],
+  dashboardQuickActions: [
+    {
+      id: "social.schedule",
+      label: "Schedule a post",
+      icon: "Send",
+      defaultEnabled: true,
+      destinationId: "social.schedule",
+      requiresPluginIds: ["me3.social-publishing"],
     },
   ],
   agentTools: [
@@ -388,6 +426,47 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       label: "Pending approvals",
     },
   ],
+  dashboardCards: [
+    {
+      id: "mission.daily-briefing",
+      label: "Daily Briefing",
+      componentKey: "DailyBriefingCard",
+      defaultEnabled: true,
+      defaultSize: "medium",
+      dataEndpoint: "/api/mission-control/dashboard/cards/mission.daily-briefing",
+    },
+    {
+      id: "mission.mission-statement",
+      label: "Mission Statement",
+      componentKey: "MissionStatementCard",
+      defaultEnabled: true,
+      defaultSize: "medium",
+    },
+    {
+      id: "mission.wheel-latest-snapshot",
+      label: "Wheel of Life Snapshot",
+      componentKey: "WheelSnapshotCard",
+      defaultEnabled: true,
+      defaultSize: "medium",
+      dataEndpoint: "/api/mission-control/dashboard/cards/mission.wheel-latest-snapshot",
+    },
+    {
+      id: "mission.projects-summary",
+      label: "Projects Summary",
+      componentKey: "ProjectsSummaryCard",
+      defaultEnabled: false,
+      defaultSize: "medium",
+    },
+  ],
+  dashboardQuickActions: [
+    {
+      id: "mission.projects",
+      label: "View Projects",
+      icon: "ListChecks",
+      defaultEnabled: true,
+      destinationId: "mission.projects",
+    },
+  ],
   agentTools: [
     {
       id: "mission.task.create",
@@ -521,6 +600,16 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
       label: "Calendar",
     },
   ],
+  dashboardCards: [
+    {
+      id: "calendar.today",
+      label: "Calendar Today",
+      componentKey: "CalendarTodayCard",
+      defaultEnabled: false,
+      defaultSize: "medium",
+      requiresPluginIds: ["me3.calendar"],
+    },
+  ],
   agentTools: [
     {
       id: "calendar.event.create",
@@ -639,6 +728,26 @@ const ACCOUNTS_PLUGIN: CorePluginManifestSummary = {
       label: "Accounts setup",
     },
   ],
+  dashboardCards: [
+    {
+      id: "accounts.summary",
+      label: "Accounts Summary",
+      componentKey: "AccountsSummaryCard",
+      defaultEnabled: false,
+      defaultSize: "medium",
+      requiresPluginIds: [ACCOUNTS_PLUGIN_ID],
+    },
+  ],
+  dashboardQuickActions: [
+    {
+      id: "accounts.ledger",
+      label: "Open Accounts",
+      icon: "WalletCards",
+      defaultEnabled: true,
+      destinationId: "accounts.ledger",
+      requiresPluginIds: [ACCOUNTS_PLUGIN_ID],
+    },
+  ],
   agentTools: [
     {
       id: "accounts.entry.create",
@@ -713,6 +822,15 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
       id: "agent.chat.launcher",
       slot: "app.shell",
       label: "Agent chat launcher",
+    },
+  ],
+  dashboardQuickActions: [
+    {
+      id: "assistant.chat",
+      label: "Chat with ME3",
+      icon: "MessageCircle",
+      defaultEnabled: true,
+      destinationId: "assistant.chat",
     },
   ],
   agentTools: [
@@ -810,6 +928,26 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
       id: "sites.landing-pages.builder",
       slot: "sites.builder",
       label: "Landing page builder",
+    },
+  ],
+  dashboardCards: [
+    {
+      id: "sites.blog-summary",
+      label: "Blog",
+      componentKey: "SitesBlogSummaryCard",
+      defaultEnabled: false,
+      defaultSize: "medium",
+      requiresPluginIds: ["me3.landing-pages"],
+    },
+  ],
+  dashboardQuickActions: [
+    {
+      id: "sites.blog",
+      label: "Write a blog",
+      icon: "FileText",
+      defaultEnabled: true,
+      destinationId: "sites.blog",
+      requiresPluginIds: ["me3.landing-pages"],
     },
   ],
   agentTools: [
@@ -990,6 +1128,26 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
       id: "journal.nav",
       slot: "dashboard.nav",
       label: "Journal",
+    },
+  ],
+  dashboardCards: [
+    {
+      id: "journal.latest-entry",
+      label: "Latest Journal Entry",
+      componentKey: "JournalLatestEntryCard",
+      defaultEnabled: false,
+      defaultSize: "medium",
+      requiresPluginIds: [JOURNAL_PLUGIN_ID],
+    },
+  ],
+  dashboardQuickActions: [
+    {
+      id: "journal.today",
+      label: "Add Journal Entry",
+      icon: "BookOpen",
+      defaultEnabled: true,
+      destinationId: "journal.today",
+      requiresPluginIds: [JOURNAL_PLUGIN_ID],
     },
   ],
   agentTools: [],

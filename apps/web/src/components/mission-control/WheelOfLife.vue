@@ -56,7 +56,7 @@ const OUTER_RADIUS = 108;
 const VIEWBOX_MIN = -154;
 const VIEWBOX_SIZE = 308;
 const WHEEL_CENTER = VIEWBOX_MIN + VIEWBOX_SIZE / 2;
-const LABEL_RADIUS_PERCENT = 33;
+const LABEL_RADIUS_PERCENT = 27;
 
 const legacyDefaultEmojiById: Record<string, Record<string, string>> = {
   health: { "💙": "❤️" },
@@ -408,12 +408,11 @@ function labelPositionStyle(midAngle: number) {
   const cos = Math.cos(angle);
   const x = 50 + cos * LABEL_RADIUS_PERCENT;
   const y = 50 + Math.sin(angle) * LABEL_RADIUS_PERCENT;
-  const transformX = cos > 0.7 ? "0%" : cos < -0.7 ? "-100%" : "-50%";
   const mobileNudge = cos > 0.7 ? "-18%" : cos < -0.7 ? "18%" : "0%";
   return {
     left: `${x}%`,
     top: `${y}%`,
-    "--life-wheel-label-transform-x": transformX,
+    "--life-wheel-label-transform-x": "-50%",
     "--life-wheel-label-mobile-nudge": mobileNudge,
   };
 }
@@ -740,7 +739,6 @@ watch(snapshots, persistState, { deep: true });
           Last saved {{ formatSnapshotDate(latestSnapshot.createdAt) }}
         </p>
         <p v-else-if="loading" class="life-wheel__latest">Loading Wheel...</p>
-        <p v-if="syncError" class="life-wheel__sync-error">{{ syncError }}</p>
       </div>
     </div>
 
@@ -1130,8 +1128,8 @@ watch(snapshots, persistState, { deep: true });
 
 .life-wheel__svg {
   display: block;
-  width: 84%;
-  max-width: 720px;
+  width: 100%;
+  max-width: 780px;
   aspect-ratio: 1;
   overflow: visible;
 }
@@ -1192,7 +1190,7 @@ watch(snapshots, persistState, { deep: true });
   padding: 5px 6px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
-  background: color-mix(in oklab, var(--ui-surface), transparent 28%);
+  background: var(--ui-surface);
   color: var(--ui-text);
   font: inherit;
   font-size: 12px;
@@ -1263,13 +1261,6 @@ watch(snapshots, persistState, { deep: true });
 }
 
 .life-wheel__latest {
-  text-align: center;
-}
-
-.life-wheel__sync-error {
-  margin: -4px 0 0;
-  color: var(--ui-text-muted);
-  font-size: 12px;
   text-align: center;
 }
 
@@ -1575,7 +1566,7 @@ watch(snapshots, persistState, { deep: true });
   }
 
   .life-wheel__svg {
-    width: 84%;
+    width: 100%;
   }
 
   .life-wheel-history__segments {
@@ -1603,7 +1594,7 @@ watch(snapshots, persistState, { deep: true });
     max-width: 22%;
     gap: 1px;
     padding: 3px 2px;
-    background: color-mix(in oklab, var(--ui-surface), transparent 18%);
+    background: var(--ui-surface);
     font-size: 9px;
   }
 

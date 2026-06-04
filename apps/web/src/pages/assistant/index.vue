@@ -2948,7 +2948,7 @@ function setupMessageForJob(job: AssistantJob) {
     )
     .replace(
       /^Missing setup requirement:\s*owner_notifications\.?$/i,
-      "Notifications setup is needed.",
+      "Connect Soulink in account settings.",
     )
     .replace(
       /^Missing setup requirement:\s*local_executor\.?$/i,
@@ -6569,17 +6569,22 @@ button:disabled {
 
   .job-row {
     align-items: flex-start;
-    flex-wrap: wrap;
+    position: relative;
+    min-height: 82px;
+    padding: 12px 86px 12px 12px;
   }
 
   .job-row__main {
-    flex-basis: calc(100% - 33px);
+    flex: 1 1 auto;
   }
 
   .job-row__actions {
-    width: 100%;
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: auto;
     justify-content: flex-end;
-    padding-top: 2px;
+    padding-top: 0;
   }
 
   .detail-facts__meta {
@@ -6622,10 +6627,11 @@ button:disabled {
     flex-direction: column;
     gap: 12px;
     width: 100%;
-    max-height: min(92dvh, 100%);
+    height: 100dvh;
+    max-height: 100dvh;
     align-self: stretch;
     padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
-    border-radius: var(--ui-radius-lg) var(--ui-radius-lg) 0 0;
+    border-radius: 0;
   }
 
   .assistant-modal__header {

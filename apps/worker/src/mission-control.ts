@@ -8,7 +8,7 @@ import {
 } from "@me3-core/plugin-mission-control";
 import { getUtcMsForLocalTime, normalizeTimeZone } from "./calendar";
 import { hasConfiguredAiProvider } from "./ai-providers";
-import { isCorePluginEnabled } from "./plugins";
+import { isCorePluginEnabled, listCorePluginRecords } from "./plugins";
 import {
   createLocalExecutorPolicy,
   createLocalExecutorRun,
@@ -190,6 +190,7 @@ type DashboardCardInstance = {
   cardId: string;
   pluginId: string;
   enabled: boolean;
+  available: boolean;
   size: DashboardCardSize;
   sortOrder: number;
   config?: Record<string, unknown>;
@@ -213,6 +214,7 @@ type DashboardQuickLink = {
   sortOrder: number;
   destinationId: string;
   requiresPluginId?: string;
+  available: boolean;
 };
 
 type AgentChannelConnectionRow = {
@@ -345,6 +347,7 @@ type WeeklyReviewReminderInput = {
 };
 
 type ParsedWeeklyReviewResult = NonNullable<ReturnType<typeof parseWeeklyReviewResult>>;
+type DashboardPluginRecord = Awaited<ReturnType<typeof listCorePluginRecords>>[number];
 
 const PERSONAL_PROJECT_ID = "mission-project-personal";
 const DEFAULT_OWNER_TIMEZONE = "UTC";
@@ -403,79 +406,17 @@ const DEFAULT_MISSION_WHEEL_SEGMENTS: MissionWheelSegment[] = [
     value: null,
   },
 ];
-const DASHBOARD_CARD_CONTRIBUTIONS: DashboardCardContribution[] = [
-  {
-    id: "mission.daily-briefing",
-    pluginId: "me3.mission-control",
-    label: "Daily Briefing",
-    componentKey: "DailyBriefingCard",
-    defaultEnabled: true,
-    defaultSize: "medium",
-    dataEndpoint: "/api/mission-control/dashboard/cards/mission.daily-briefing",
-  },
-  {
-    id: "mission.mission-statement",
-    pluginId: "me3.mission-control",
-    label: "Mission Statement",
-    componentKey: "MissionStatementCard",
-    defaultEnabled: true,
-    defaultSize: "medium",
-  },
-  {
-    id: "mission.wheel-latest-snapshot",
-    pluginId: "me3.mission-control",
-    label: "Wheel of Life Snapshot",
-    componentKey: "WheelSnapshotCard",
-    defaultEnabled: true,
-    defaultSize: "medium",
-    dataEndpoint: "/api/mission-control/dashboard/cards/mission.wheel-latest-snapshot",
-  },
-];
-const DASHBOARD_QUICK_ACTION_CONTRIBUTIONS: DashboardQuickActionContribution[] = [
-  {
-    id: "mission.projects",
-    pluginId: "me3.mission-control",
-    label: "View Projects",
-    icon: "ListChecks",
-    defaultEnabled: true,
-    destinationId: "mission.projects",
-  },
-  {
-    id: "assistant.chat",
-    pluginId: "me3.core",
-    label: "Chat with ME3",
-    icon: "MessageCircle",
-    defaultEnabled: true,
-    destinationId: "assistant.chat",
-  },
-  {
-    id: "journal.today",
-    pluginId: "me3.journal",
-    label: "Add Journal Entry",
-    icon: "BookOpen",
-    defaultEnabled: true,
-    destinationId: "journal.today",
-    requiresPluginIds: ["me3.journal"],
-  },
-  {
-    id: "social.schedule",
-    pluginId: "me3.social-publishing",
-    label: "Schedule a post",
-    icon: "Send",
-    defaultEnabled: true,
-    destinationId: "social.schedule",
-    requiresPluginIds: ["me3.social-publishing"],
-  },
-  {
-    id: "sites.blog",
-    pluginId: "me3.landing-pages",
-    label: "Write a blog",
-    icon: "FileText",
-    defaultEnabled: true,
-    destinationId: "sites.blog",
-    requiresPluginIds: ["me3.landing-pages"],
-  },
-];
+const DASHBOARD_CARD_COMPONENT_KEYS = new Set([
+  "DailyBriefingCard",
+  "MissionStatementCard",
+  "WheelSnapshotCard",
+  "ProjectsSummaryCard",
+  "AccountsSummaryCard",
+  "CalendarTodayCard",
+  "JournalLatestEntryCard",
+  "SocialQueueSummaryCard",
+  "SitesBlogSummaryCard",
+]);
 const DASHBOARD_DESTINATIONS: Record<string, { path: string; requiresPluginId?: string }> = {
   "mission.projects": { path: "/mission-control/projects" },
   "assistant.chat": { path: "/assistant" },
@@ -484,6 +425,23 @@ const DASHBOARD_DESTINATIONS: Record<string, { path: string; requiresPluginId?: 
   "sites.blog": { path: "/build", requiresPluginId: "me3.landing-pages" },
   "accounts.ledger": { path: "/accounts", requiresPluginId: "me3.accounts" },
 };
+const DASHBOARD_CONTRIBUTION_ORDER = [
+  "mission.daily-briefing",
+  "mission.mission-statement",
+  "mission.wheel-latest-snapshot",
+  "mission.projects-summary",
+  "mission.projects",
+  "assistant.chat",
+  "journal.latest-entry",
+  "journal.today",
+  "social.queue-summary",
+  "social.schedule",
+  "sites.blog-summary",
+  "sites.blog",
+  "accounts.summary",
+  "accounts.ledger",
+  "calendar.today",
+];
 
 export async function listMissionProjects(env: Env, userId: string) {
   await ensurePersonalProject(env, userId);
@@ -980,19 +938,36 @@ export async function listMissionPluginActivity(env: Env, userId: string, limitI
 }
 
 export async function getMissionDashboard(env: Env, userId: string) {
-  const [row, enabledPluginIds, latestDailyBriefing, latestWheelSnapshot] = await Promise.all([
+  const [row, pluginRecords, latestDailyBriefing, latestWheelSnapshot] = await Promise.all([
     getOrCreateMissionDashboardSettingsRow(env, userId),
-    getEnabledDashboardPluginIds(env),
+    listCorePluginRecords(env),
     getLatestMissionDailyBriefing(env, userId),
     getLatestMissionWheelSnapshot(env, userId),
   ]);
+  const allCardContributions = dashboardCardContributionsFromPlugins(pluginRecords);
+  const allQuickActionContributions =
+    dashboardQuickActionContributionsFromPlugins(pluginRecords);
+  const enabledPluginIds = pluginRecords
+    .filter((plugin) => plugin.enabled && plugin.status === "installed")
+    .map((plugin) => plugin.id);
   const enabledPlugins = new Set(enabledPluginIds);
-  const cardContributions = availableDashboardCardContributions(enabledPlugins);
-  const quickActionContributions = availableDashboardQuickActionContributions(enabledPlugins);
+  const cardContributions = availableDashboardCardContributions(
+    allCardContributions,
+    enabledPlugins,
+  );
+  const quickActionContributions = availableDashboardQuickActionContributions(
+    allQuickActionContributions,
+    enabledPlugins,
+  );
   const missionStatement = row.mission_statement || DEFAULT_MISSION_STATEMENT;
-  const cards = resolveDashboardCards(parseJsonArray(row.cards_json), cardContributions);
+  const cards = resolveDashboardCards(
+    parseJsonArray(row.cards_json),
+    allCardContributions,
+    cardContributions,
+  );
   const quickLinks = resolveDashboardQuickLinks(
     parseJsonArray(row.quick_links_json),
+    allQuickActionContributions,
     quickActionContributions,
   );
   const settings = normalizeDashboardSettings(parseJsonRecord(row.settings_json));
@@ -1036,6 +1011,7 @@ export async function updateMissionDashboard(
       ? existing.cards
       : resolveDashboardCards(
           Array.isArray(body.cards) ? body.cards : [],
+          dashboardCardContributionsFromDashboard(existing),
           existing.availableCards,
           { includeMissingDefaults: false },
         );
@@ -1044,6 +1020,7 @@ export async function updateMissionDashboard(
       ? existing.quickLinks
       : resolveDashboardQuickLinks(
           Array.isArray(body.quickLinks) ? body.quickLinks : [],
+          dashboardQuickActionContributionsFromDashboard(existing),
           existing.availableQuickActions,
           { includeMissingDefaults: false },
         );
@@ -1927,15 +1904,26 @@ async function getOrCreateMissionDashboardSettingsRow(env: Env, userId: string) 
     .first<MissionDashboardSettingsRow>();
   if (existing) return existing;
 
-  const enabledPluginIds = await getEnabledDashboardPluginIds(env);
+  const pluginRecords = await listCorePluginRecords(env);
+  const enabledPluginIds = pluginRecords
+    .filter((plugin) => plugin.enabled && plugin.status === "installed")
+    .map((plugin) => plugin.id);
   const enabledPlugins = new Set(enabledPluginIds);
+  const allCardContributions = dashboardCardContributionsFromPlugins(pluginRecords);
+  const allQuickActionContributions =
+    dashboardQuickActionContributionsFromPlugins(pluginRecords);
   const cards = resolveDashboardCards(
     [],
-    availableDashboardCardContributions(enabledPlugins),
+    allCardContributions,
+    availableDashboardCardContributions(allCardContributions, enabledPlugins),
   );
   const quickLinks = resolveDashboardQuickLinks(
     [],
-    availableDashboardQuickActionContributions(enabledPlugins),
+    allQuickActionContributions,
+    availableDashboardQuickActionContributions(
+      allQuickActionContributions,
+      enabledPlugins,
+    ),
   );
   const settings = normalizeDashboardSettings({});
 
@@ -2216,19 +2204,102 @@ async function getLatestMissionDailyBriefing(env: Env, userId: string) {
 }
 
 function availableDashboardCardContributions(
+  contributions: DashboardCardContribution[],
   enabledPlugins: Set<string>,
 ): DashboardCardContribution[] {
-  return DASHBOARD_CARD_CONTRIBUTIONS.filter((card) =>
+  return contributions.filter((card) =>
+    enabledPlugins.has(card.pluginId) &&
     dashboardRequirementsMet(card.requiresPluginIds, enabledPlugins),
   );
 }
 
 function availableDashboardQuickActionContributions(
+  contributions: DashboardQuickActionContribution[],
   enabledPlugins: Set<string>,
 ): DashboardQuickActionContribution[] {
-  return DASHBOARD_QUICK_ACTION_CONTRIBUTIONS.filter((action) =>
+  return contributions.filter((action) =>
+    enabledPlugins.has(action.pluginId) &&
     dashboardRequirementsMet(action.requiresPluginIds, enabledPlugins),
   );
+}
+
+function dashboardCardContributionsFromPlugins(
+  pluginRecords: DashboardPluginRecord[],
+): DashboardCardContribution[] {
+  const contributions = new Map<string, DashboardCardContribution>();
+  for (const plugin of pluginRecords) {
+    for (const card of plugin.dashboardCards || []) {
+      if (!DASHBOARD_CARD_COMPONENT_KEYS.has(card.componentKey)) continue;
+      if (contributions.has(card.id)) continue;
+      contributions.set(card.id, { ...card, pluginId: plugin.id });
+    }
+  }
+  return sortDashboardContributions(Array.from(contributions.values()));
+}
+
+function dashboardQuickActionContributionsFromPlugins(
+  pluginRecords: DashboardPluginRecord[],
+): DashboardQuickActionContribution[] {
+  const contributions = new Map<string, DashboardQuickActionContribution>();
+  for (const plugin of pluginRecords) {
+    for (const action of plugin.dashboardQuickActions || []) {
+      if (!DASHBOARD_DESTINATIONS[action.destinationId]) continue;
+      if (contributions.has(action.id)) continue;
+      contributions.set(action.id, { ...action, pluginId: plugin.id });
+    }
+  }
+  return sortDashboardContributions(Array.from(contributions.values()));
+}
+
+function sortDashboardContributions<T extends { id: string }>(items: T[]): T[] {
+  return [...items].sort(
+    (a, b) =>
+      dashboardContributionOrder(a.id) - dashboardContributionOrder(b.id) ||
+      a.id.localeCompare(b.id),
+  );
+}
+
+function dashboardContributionOrder(id: string) {
+  const index = DASHBOARD_CONTRIBUTION_ORDER.indexOf(id);
+  return index < 0 ? 999 : index;
+}
+
+function dashboardCardContributionsFromDashboard(dashboard: {
+  availableCards: DashboardCardContribution[];
+  cards: DashboardCardInstance[];
+}) {
+  const byId = new Map(dashboard.availableCards.map((card) => [card.id, card]));
+  for (const card of dashboard.cards) {
+    if (byId.has(card.cardId)) continue;
+    byId.set(card.cardId, {
+      id: card.cardId,
+      pluginId: card.pluginId,
+      label: card.cardId,
+      componentKey: "UnavailableCard",
+      defaultEnabled: false,
+      defaultSize: card.size,
+    });
+  }
+  return Array.from(byId.values());
+}
+
+function dashboardQuickActionContributionsFromDashboard(dashboard: {
+  availableQuickActions: DashboardQuickActionContribution[];
+  quickLinks: DashboardQuickLink[];
+}) {
+  const byId = new Map(dashboard.availableQuickActions.map((action) => [action.id, action]));
+  for (const link of dashboard.quickLinks) {
+    if (byId.has(link.id)) continue;
+    byId.set(link.id, {
+      id: link.id,
+      pluginId: link.requiresPluginId || "me3.core",
+      label: link.label,
+      icon: link.icon,
+      defaultEnabled: false,
+      destinationId: link.destinationId,
+    });
+  }
+  return Array.from(byId.values());
 }
 
 function dashboardRequirementsMet(
@@ -2241,22 +2312,24 @@ function dashboardRequirementsMet(
 function resolveDashboardCards(
   stored: unknown[],
   contributions: DashboardCardContribution[],
+  availableContributions: DashboardCardContribution[] = contributions,
   options: { includeMissingDefaults?: boolean } = {},
 ): DashboardCardInstance[] {
   const includeMissingDefaults = options.includeMissingDefaults !== false;
   const contributionById = new Map(contributions.map((item) => [item.id, item]));
+  const availableContributionIds = new Set(availableContributions.map((item) => item.id));
   const cards: DashboardCardInstance[] = [];
   const seen = new Set<string>();
 
   for (const item of stored) {
-    const card = normalizeDashboardCardInstance(item, contributionById);
+    const card = normalizeDashboardCardInstance(item, contributionById, availableContributionIds);
     if (!card || seen.has(card.cardId)) continue;
     seen.add(card.cardId);
     cards.push(card);
   }
 
   if (includeMissingDefaults) {
-    for (const contribution of contributions) {
+    for (const contribution of availableContributions) {
       if (seen.has(contribution.id)) continue;
       cards.push(defaultDashboardCardInstance(contribution, cards.length));
     }
@@ -2270,6 +2343,7 @@ function resolveDashboardCards(
 function normalizeDashboardCardInstance(
   value: unknown,
   contributionById: Map<string, DashboardCardContribution>,
+  availableContributionIds: Set<string>,
 ): DashboardCardInstance | null {
   if (!isRecord(value)) return null;
   const cardId = normalizeNullableText(value.cardId);
@@ -2284,6 +2358,7 @@ function normalizeDashboardCardInstance(
     cardId,
     pluginId: contribution.pluginId,
     enabled: value.enabled === undefined ? contribution.defaultEnabled : value.enabled === true,
+    available: availableContributionIds.has(cardId),
     size: normalizeDashboardCardSize(value.size) || contribution.defaultSize,
     sortOrder,
     config: isRecord(value.config) ? value.config : undefined,
@@ -2299,6 +2374,7 @@ function defaultDashboardCardInstance(
     cardId: contribution.id,
     pluginId: contribution.pluginId,
     enabled: contribution.defaultEnabled,
+    available: true,
     size: contribution.defaultSize,
     sortOrder,
   };
@@ -2307,22 +2383,24 @@ function defaultDashboardCardInstance(
 function resolveDashboardQuickLinks(
   stored: unknown[],
   contributions: DashboardQuickActionContribution[],
+  availableContributions: DashboardQuickActionContribution[] = contributions,
   options: { includeMissingDefaults?: boolean } = {},
 ): DashboardQuickLink[] {
   const includeMissingDefaults = options.includeMissingDefaults !== false;
   const contributionById = new Map(contributions.map((item) => [item.id, item]));
+  const availableContributionIds = new Set(availableContributions.map((item) => item.id));
   const links: DashboardQuickLink[] = [];
   const seen = new Set<string>();
 
   for (const item of stored) {
-    const link = normalizeDashboardQuickLink(item, contributionById);
+    const link = normalizeDashboardQuickLink(item, contributionById, availableContributionIds);
     if (!link || seen.has(link.id)) continue;
     seen.add(link.id);
     links.push(link);
   }
 
   if (includeMissingDefaults) {
-    for (const contribution of contributions) {
+    for (const contribution of availableContributions) {
       if (seen.has(contribution.id)) continue;
       links.push(defaultDashboardQuickLink(contribution, links.length));
     }
@@ -2336,6 +2414,7 @@ function resolveDashboardQuickLinks(
 function normalizeDashboardQuickLink(
   value: unknown,
   contributionById: Map<string, DashboardQuickActionContribution>,
+  availableContributionIds: Set<string>,
 ): DashboardQuickLink | null {
   if (!isRecord(value)) return null;
   const id = normalizeNullableText(value.id);
@@ -2352,6 +2431,7 @@ function normalizeDashboardQuickLink(
     sortOrder: normalizeSortOrder(value.sortOrder),
     destinationId,
     requiresPluginId: destination.requiresPluginId,
+    available: availableContributionIds.has(id),
   };
 }
 
@@ -2368,6 +2448,7 @@ function defaultDashboardQuickLink(
     sortOrder,
     destinationId: contribution.destinationId,
     requiresPluginId: destination?.requiresPluginId,
+    available: true,
   };
 }
 

@@ -1028,9 +1028,8 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
       "mission.approval.read",
       "mission.review_packet.create",
       "mission.activity.create",
-      "message.owner.notify",
     ],
-    optionalCapabilityIds: [],
+    optionalCapabilityIds: ["message.owner.notify"],
     recommendedSkillIds: [],
     requiredSkillIds: [],
     defaultDraft: draft({
@@ -1603,6 +1602,9 @@ export function validateAssistantJobDraft(
     }
 
     for (const setupRequirement of capability.requiresSetup) {
+      if (isOptionalSetupRequirementForDraft(draft, action, capability, setupRequirement)) {
+        continue;
+      }
       if (!readySetupRequirements.has(setupRequirement)) {
         errors.push({
           code: "setup_missing",
@@ -1661,6 +1663,9 @@ export function buildAssistantJobPermissionSummary(
     }
 
     for (const setupRequirement of capability.requiresSetup) {
+      if (isOptionalSetupRequirementForDraft(draft, action, capability, setupRequirement)) {
+        continue;
+      }
       setupRequirements.add(setupRequirement);
     }
 
@@ -1689,6 +1694,20 @@ export function buildAssistantJobPermissionSummary(
       new Set([...draft.recommendedSkillIds, ...draft.requiredSkillIds]),
     ),
   };
+}
+
+function isOptionalSetupRequirementForDraft(
+  draft: AssistantJobDraft,
+  action: AssistantJobAction,
+  capability: AssistantCapability,
+  setupRequirement: string,
+) {
+  return (
+    draft.recipeId === "daily-briefing" &&
+    action.capabilityId === "message.owner.notify" &&
+    capability.id === "message.owner.notify" &&
+    setupRequirement === "owner_notifications"
+  );
 }
 
 function assistantJobContextScope(
