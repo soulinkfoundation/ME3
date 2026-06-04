@@ -4823,8 +4823,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     <div>
                       <h4>Sources</h4>
                       <p>
-                        Ordered by importance. Missing essentials are
-                        highlighted.
+                        This is the important data your assistant keeps in
+                        memory about you. The more it knows, the better it can
+                        assist you.
                       </p>
                     </div>
                     <span>{{ assistantSourceRows.length }}</span>
@@ -4901,8 +4902,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     <div>
                       <h4>Saved memory</h4>
                       <p>
-                        Approved private notes. ME3 only uses the ones that
-                        match the current chat or job.
+                        Add important notes you want your assistant to remember
+                        here.
                       </p>
                     </div>
                     <span>{{ assistantMemory.length }}</span>
@@ -5057,19 +5058,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   class="assistant-settings-row assistant-settings-row--activity"
                 >
                   <div class="assistant-settings-row__main">
-                    <span class="assistant-settings-row__kind">{{
-                      item.kind
-                    }}</span>
-                    <h4>{{ item.title }}</h4>
+                    <div class="assistant-settings-row__activity-head">
+                      <span class="assistant-settings-row__kind">{{
+                        item.kind
+                      }}</span>
+                      <h4>{{ item.title }}</h4>
+                      <span v-if="item.status" class="status-badge">
+                        {{ item.status }}
+                      </span>
+                      <span class="assistant-settings-row__time">{{
+                        formatAssistantSettingsDate(item.createdAt)
+                      }}</span>
+                    </div>
                     <p>{{ item.summary || "No summary yet" }}</p>
-                  </div>
-                  <div class="assistant-settings-row__aside">
-                    <span v-if="item.status" class="status-badge">
-                      {{ item.status }}
-                    </span>
-                    <span>{{
-                      formatAssistantSettingsDate(item.createdAt)
-                    }}</span>
                   </div>
                 </article>
               </template>
@@ -7053,6 +7054,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-settings-dialog {
+  position: relative;
   max-height: min(760px, calc(100vh - 48px));
 }
 
@@ -7061,7 +7063,31 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
+  scrollbar-color: color-mix(in oklab, var(--ui-text-muted) 38%, transparent)
+    transparent;
+  scrollbar-width: thin;
+}
+
+.assistant-settings::-webkit-scrollbar,
+.assistant-settings__panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.assistant-settings::-webkit-scrollbar-track,
+.assistant-settings__panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.assistant-settings::-webkit-scrollbar-thumb,
+.assistant-settings__panel::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--ui-text-muted) 30%, transparent);
+}
+
+.assistant-settings::-webkit-scrollbar-thumb:hover,
+.assistant-settings__panel::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--ui-text-muted) 44%, transparent);
 }
 
 .assistant-settings__tabs {
@@ -7075,13 +7101,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-width: 0;
   max-height: min(620px, calc(100vh - 190px));
   overflow: auto;
-  padding-right: 4px;
+  padding-right: 10px;
+  scrollbar-color: color-mix(in oklab, var(--ui-text-muted) 38%, transparent)
+    transparent;
+  scrollbar-width: thin;
 }
 
 .assistant-settings__panel-header,
 .assistant-settings__block-header,
 .assistant-settings-row,
 .assistant-settings-row__heading,
+.assistant-settings-row__activity-head,
 .assistant-settings-row__actions,
 .assistant-settings__header-actions,
 .assistant-settings-row__aside {
@@ -7262,13 +7292,43 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-accent);
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.assistant-settings-row__activity-head {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 7px;
+  min-width: 0;
 }
 
 .assistant-settings-row--activity .assistant-settings-row__main p {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 2;
+}
+
+.assistant-settings-row--activity {
+  padding: 10px 0;
+}
+
+.assistant-settings-row--activity .assistant-settings-row__main {
+  width: 100%;
+  gap: 4px;
+}
+
+.assistant-settings-row--activity h4 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.assistant-settings-row__time {
+  margin-left: auto;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .assistant-settings-row__aside {
@@ -7941,6 +8001,13 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.assistant-settings-dialog .assistant-modal__header--icon-only {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+}
+
 .assistant-modal__header-copy {
   min-width: 0;
 }
@@ -8238,6 +8305,10 @@ button:disabled {
   .assistant-settings-row__aside {
     align-items: flex-start;
     text-align: left;
+  }
+
+  .assistant-settings-row__time {
+    margin-left: 0;
   }
 }
 
