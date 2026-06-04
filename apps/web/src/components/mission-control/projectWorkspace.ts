@@ -1,3 +1,5 @@
+import { resolveUiIconName, type UiIconName } from "../../utils/icons";
+
 export type MissionProject = {
   id: string;
   name: string;
@@ -138,6 +140,10 @@ export const activeProjectTaskStatuses: ProjectBoardStatus[] = [
 
 export const PROJECT_TASK_PAGE_SIZE = 50;
 
+function projectIconValue(project: MissionProject | null | undefined): string {
+  return textValue(project?.icon);
+}
+
 export function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -155,6 +161,43 @@ export function nullableTextValue(value: unknown): string | null {
 
 export function boolValue(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+export function projectIconSource(
+  project: MissionProject | null | undefined,
+): string {
+  return projectIconValue(project);
+}
+
+export function isProjectIconLogo(
+  project: MissionProject | null | undefined,
+): boolean {
+  const icon = projectIconValue(project);
+  return (
+    icon.startsWith("data:image/") ||
+    icon.startsWith("http://") ||
+    icon.startsWith("https://") ||
+    icon.startsWith("/") ||
+    icon.startsWith("blob:")
+  );
+}
+
+export function projectUiIconName(
+  project: MissionProject | null | undefined,
+): UiIconName | null {
+  if (isProjectIconLogo(project)) return null;
+  const resolved = resolveUiIconName(projectIconValue(project));
+  return resolved as UiIconName | null;
+}
+
+export function projectEmojiIcon(
+  project: MissionProject | null | undefined,
+): string {
+  const icon = projectIconValue(project);
+  if (!icon || isProjectIconLogo(project) || projectUiIconName(project)) {
+    return "";
+  }
+  return /\p{Extended_Pictographic}/u.test(icon) ? icon : "";
 }
 
 export function weeklyReviewTaskItem(

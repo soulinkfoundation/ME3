@@ -4,11 +4,13 @@ import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
 import Button from "../components/Button.vue";
 import UiIcon from "../components/UiIcon.vue";
+import WorkspaceTabs from "../components/WorkspaceTabs.vue";
 import { API_BASE, ApiError, api } from "../api";
 import { useAppToast } from "../composables/useAppToast";
 import { useInboxDraftCount } from "../composables/useInboxDraftCount";
 import { useAuthStore } from "../stores/auth";
 import { useContactsStore, type Contact } from "../stores/contacts";
+import type { UiIconName } from "../utils/icons";
 
 definePage({
   meta: {
@@ -480,6 +482,36 @@ const emailTabOrder: EmailTab[] = [
   "archive",
   "trash",
 ];
+const emailTabIcons: Record<EmailTab, UiIconName> = {
+  inbox: "Inbox",
+  drafts: "FileText",
+  sent: "Send",
+  archive: "Archive",
+  trash: "Trash2",
+};
+const mailFolderTabs = computed(() => {
+  const tabs: Array<{
+    id: Tab;
+    label: string;
+    icon: UiIconName;
+    count?: number | null;
+    ariaLabel?: string;
+  }> = emailTabOrder.map((key) => ({
+    id: key,
+    label: emailTabConfig[key].label,
+    icon: emailTabIcons[key],
+    count: getVisibleFolderCount(key),
+    ariaLabel: emailTabConfig[key].label,
+  }));
+  tabs.push({
+    id: "contacts",
+    label: "Contacts",
+    icon: "UsersRound",
+    count: contacts.value.length > 0 ? contacts.value.length : null,
+    ariaLabel: "Contacts",
+  });
+  return tabs;
+});
 
 function isEmailTab(tab: Tab): tab is EmailTab {
   return tab !== "telegram" && tab !== "contacts";
@@ -1227,6 +1259,12 @@ function switchTab(tab: Tab) {
     void loadContactsPage({ syncSoulink: !soulinkSyncAttempted.value });
   } else {
     void loadMessages();
+  }
+}
+
+function switchMailFolderTab(tabId: string) {
+  if (tabId === "contacts" || emailTabOrder.includes(tabId as EmailTab)) {
+    switchTab(tabId as Tab);
   }
 }
 
@@ -2277,71 +2315,12 @@ onBeforeUnmount(() => {
               :class="{ 'mail-workspace--has-thread': selectedMessage }"
             >
               <aside class="mail-rail">
-                <nav
-                  class="folder-nav"
-                  role="tablist"
+                <WorkspaceTabs
+                  :tabs="mailFolderTabs"
+                  :model-value="activeTab"
                   aria-label="Mailbox folders"
-                >
-                  <button
-                    v-for="key in emailTabOrder"
-                    :key="key"
-                    type="button"
-                    role="tab"
-                    class="folder-btn"
-                    :class="{ 'folder-btn--active': activeTab === key }"
-                    :aria-selected="activeTab === key"
-                    :aria-label="emailTabConfig[key].label"
-                    @click="switchTab(key)"
-                  >
-                    <span class="folder-btn__main">
-                      <UiIcon
-                        :name="
-                          key === 'inbox'
-                            ? 'Inbox'
-                            : key === 'sent'
-                              ? 'Send'
-                              : key === 'drafts'
-                                ? 'FileText'
-                                : key === 'archive'
-                                  ? 'Archive'
-                                  : 'Trash2'
-                        "
-                        :size="16"
-                        aria-hidden="true"
-                      />
-                      <span class="folder-btn__label-full">
-                        {{ emailTabConfig[key].label }}
-                      </span>
-                      <span class="folder-btn__label-mobile">
-                        {{ emailTabConfig[key].label }}
-                      </span>
-                    </span>
-                    <span
-                      v-if="getVisibleFolderCount(key) !== null"
-                      class="folder-count"
-                    >
-                      {{ getVisibleFolderCount(key) }}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    class="folder-btn"
-                    :class="{ 'folder-btn--active': activeTab === 'contacts' }"
-                    :aria-selected="activeTab === 'contacts'"
-                    aria-label="Contacts"
-                    @click="switchTab('contacts')"
-                  >
-                    <span class="folder-btn__main">
-                      <UiIcon name="UsersRound" :size="16" aria-hidden="true" />
-                      <span class="folder-btn__label-full">Contacts</span>
-                      <span class="folder-btn__label-mobile">Contacts</span>
-                    </span>
-                    <span v-if="contacts.length > 0" class="folder-count">
-                      {{ contacts.length }}
-                    </span>
-                  </button>
-                </nav>
+                  @update:model-value="switchMailFolderTab"
+                />
               </aside>
 
               <section
@@ -3864,89 +3843,6 @@ onBeforeUnmount(() => {
 .compose-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.folder-nav {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: flex-end;
-  width: max-content;
-  flex-shrink: 0;
-}
-
-.folder-nav::-webkit-scrollbar {
-  display: none;
-}
-
-.folder-btn {
-  position: relative;
-  z-index: 0;
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 -1px;
-  padding: 6px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px 6px 0 0;
-  background: var(--color-bg);
-  color: var(--color-text-muted);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    color 0.12s,
-    background 0.12s;
-}
-
-.folder-btn + .folder-btn {
-  margin-inline-start: 4px;
-}
-
-.folder-btn:hover:not(.folder-btn--active) {
-  z-index: 1;
-  color: var(--color-text);
-}
-
-.folder-btn--active {
-  z-index: 2;
-  margin-bottom: -1px;
-  border-bottom-color: transparent;
-  background: var(--color-bg-subtle);
-  color: var(--color-text);
-  font-weight: 700;
-}
-
-.folder-btn__main {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.folder-btn__label-mobile {
-  display: none;
-}
-
-.folder-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--color-border);
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.folder-btn--active .folder-count {
-  background: var(--color-bg-subtle);
-  color: var(--color-text-muted);
 }
 
 .conversation-list {

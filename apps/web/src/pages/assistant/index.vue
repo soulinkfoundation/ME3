@@ -6,6 +6,7 @@ import { api, type ApiStreamEvent } from "../../api";
 import Button from "../../components/Button.vue";
 import LandingGrids from "../../components/LandingGrids.vue";
 import UiIcon from "../../components/UiIcon.vue";
+import WorkspaceTabs from "../../components/WorkspaceTabs.vue";
 import { useAgentChat } from "../../composables/useAgentChat";
 import { useAppToast } from "../../composables/useAppToast";
 import {
@@ -19,6 +20,7 @@ import {
   type AiAgentModelOption,
   type AiAgentModelProviderId,
 } from "../../utils/aiModelCatalog";
+import type { UiIconName } from "../../utils/icons";
 
 definePage({
   meta: {
@@ -932,6 +934,27 @@ const assistantActivityItems = computed<AssistantActivityViewItem[]>(() => {
       })),
   ];
 });
+const assistantSettingsTabs = computed<
+  Array<{
+    id: AssistantSettingsSection;
+    label: string;
+    icon: UiIconName;
+    count: number;
+  }>
+>(() => [
+  {
+    id: "context",
+    label: "Context",
+    icon: "Brain",
+    count: assistantContextItemCount.value,
+  },
+  {
+    id: "activity",
+    label: "Activity",
+    icon: "Activity",
+    count: assistantActivityItems.value.length,
+  },
+]);
 
 const canSendAssistantMessage = computed(
   () =>
@@ -1229,6 +1252,12 @@ async function setAssistantSettingsSection(section: AssistantSettingsSection) {
     return;
   }
   await openAssistantSettings(section);
+}
+
+function setAssistantSettingsSectionFromTab(section: string) {
+  if (section === "context" || section === "activity") {
+    void setAssistantSettingsSection(section);
+  }
 }
 
 function resetAssistantSettingsScroll() {
@@ -4399,36 +4428,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
           </header>
 
           <div class="assistant-settings">
-            <nav
-              class="assistant-settings__nav"
-              role="tablist"
+            <WorkspaceTabs
+              class="assistant-settings__tabs"
+              :tabs="assistantSettingsTabs"
+              :model-value="assistantSettingsSection"
               aria-label="Assistant settings"
-            >
-              <button
-                type="button"
-                class="assistant-settings__tab"
-                :class="{ 'is-active': assistantSettingsSection === 'context' }"
-                role="tab"
-                :aria-selected="assistantSettingsSection === 'context'"
-                @click="setAssistantSettingsSection('context')"
-              >
-                <UiIcon name="Brain" :size="16" aria-hidden="true" />
-                <span>Context</span>
-                <strong>{{ assistantContextItemCount }}</strong>
-              </button>
-              <button
-                type="button"
-                class="assistant-settings__tab"
-                :class="{ 'is-active': assistantSettingsSection === 'activity' }"
-                role="tab"
-                :aria-selected="assistantSettingsSection === 'activity'"
-                @click="setAssistantSettingsSection('activity')"
-              >
-                <UiIcon name="Activity" :size="16" aria-hidden="true" />
-                <span>Activity</span>
-                <strong>{{ assistantActivityItems.length }}</strong>
-              </button>
-            </nav>
+              @update:model-value="setAssistantSettingsSectionFromTab"
+            />
 
             <section
               v-if="assistantSettingsSection === 'context'"
@@ -6599,56 +6605,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-settings {
-  display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   min-height: 0;
   overflow: hidden;
 }
 
-.assistant-settings__nav {
-  display: grid;
-  align-content: start;
-  gap: 4px;
-  min-width: 0;
-  padding-top: 2px;
-}
-
-.assistant-settings__tab {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  padding: 6px 8px;
-  background: transparent;
-  color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-  cursor: pointer;
-}
-
-.assistant-settings__tab span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.assistant-settings__tab strong {
-  color: inherit;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.assistant-settings__tab:hover,
-.assistant-settings__tab.is-active {
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
+.assistant-settings__tabs {
+  max-width: 100%;
 }
 
 .assistant-settings__panel {
@@ -7750,29 +7715,16 @@ button:disabled {
   }
 
   .assistant-settings {
-    grid-template-columns: 1fr;
-    gap: 12px;
     flex: 1 1 auto;
     overflow: auto;
   }
 
-  .assistant-settings__nav {
+  .assistant-settings__tabs {
     position: sticky;
     top: 0;
     z-index: 2;
-    display: flex;
-    gap: 4px;
-    height: 42px;
-    min-height: 42px;
-    overflow-x: auto;
-    overflow-y: hidden;
     padding-bottom: 2px;
     background: var(--ui-surface);
-  }
-
-  .assistant-settings__tab {
-    flex: 0 0 auto;
-    min-width: 132px;
   }
 
   .assistant-settings__panel {

@@ -3,14 +3,17 @@ import Button from "../Button.vue";
 import UiIcon from "../UiIcon.vue";
 import {
   formatShortDate,
+  isProjectIconLogo,
   isLocalProject,
   localProjectPath,
+  projectEmojiIcon,
   projectForTask,
+  projectIconSource,
   projectTaskComposerProjectLabel,
+  projectUiIconName,
   weeklyReviewCardLabel,
   weeklyReviewMetadata,
 } from "./projectWorkspace";
-import { resolveUiIconName, type UiIconName } from "../../utils/icons";
 import type {
   MissionProject,
   MissionTask,
@@ -56,15 +59,6 @@ const emit = defineEmits<{
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement | HTMLSelectElement).value;
 }
-
-function projectIconName(project: MissionProject | null): UiIconName {
-  return (resolveUiIconName(project?.icon || "") ||
-    "BriefcaseBusiness") as UiIconName;
-}
-
-function isProjectLogo(project: MissionProject | null): boolean {
-  return Boolean(project?.icon?.startsWith("data:image/"));
-}
 </script>
 
 <template>
@@ -96,11 +90,22 @@ function isProjectLogo(project: MissionProject | null): boolean {
           <div class="project-task-group__title-wrap">
             <span class="project-task-group__visual" aria-hidden="true">
               <img
-                v-if="isProjectLogo(group.project)"
-                :src="group.project?.icon || ''"
+                v-if="isProjectIconLogo(group.project)"
+                :src="projectIconSource(group.project)"
                 alt=""
               />
-              <UiIcon v-else :name="projectIconName(group.project)" :size="15" />
+              <UiIcon
+                v-else-if="projectUiIconName(group.project)"
+                :name="projectUiIconName(group.project)!"
+                :size="15"
+              />
+              <span
+                v-else-if="projectEmojiIcon(group.project)"
+                class="project-task-group__emoji"
+              >
+                {{ projectEmojiIcon(group.project) }}
+              </span>
+              <UiIcon v-else name="BriefcaseBusiness" :size="15" />
             </span>
             <h2>{{ group.label }}</h2>
             <span v-if="isLocalProject(group.project)" class="local-project-badge"
@@ -371,7 +376,7 @@ function isProjectLogo(project: MissionProject | null): boolean {
   height: 22px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid var(--ui-border);
+  border: 0;
   border-radius: var(--ui-radius-sm);
   color: var(--ui-text-muted);
 }
@@ -381,6 +386,11 @@ function isProjectLogo(project: MissionProject | null): boolean {
   height: 100%;
   border-radius: inherit;
   object-fit: cover;
+}
+
+.project-task-group__emoji {
+  font-size: 16px;
+  line-height: 1;
 }
 
 .project-task-group__edit {

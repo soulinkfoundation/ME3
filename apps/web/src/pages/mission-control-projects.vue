@@ -62,7 +62,6 @@ type MissionSection =
   | "memory"
   | "sources";
 type PrimaryMissionSection = "projects" | "accounts";
-type SettingsMissionSection = "activity" | "memory" | "sources";
 
 type MissionApproval = {
   id: string;
@@ -189,10 +188,12 @@ const { toastFromUnknown, toastSuccess } = useAppToast();
 const isAccountsRoute = computed(() => route.path === "/accounts");
 
 const basePrimarySections: PrimaryMissionSection[] = ["projects"];
-const settingsSections: SettingsMissionSection[] = ["activity", "memory", "sources"];
 const sectionIds: MissionSection[] = [
-  ...basePrimarySections,
-  ...settingsSections,
+  "projects",
+  "accounts",
+  "activity",
+  "memory",
+  "sources",
 ];
 const sectionLabels: Record<MissionSection, string> = {
   projects: "Projects",
@@ -223,7 +224,6 @@ const projectPickerOpen = ref(false);
 const memoryDraft = ref("");
 const memoryActionId = ref("");
 const sourceDraft = ref("");
-const settingsMenuOpen = ref(false);
 const projectModalOpen = ref(false);
 const projectModalMode = ref<"add" | "edit">("add");
 const editingProjectId = ref("");
@@ -349,10 +349,6 @@ const activityItems = computed<ActivityViewItem[]>(() => {
       })),
   ];
 });
-const settingsSectionActive = computed(() =>
-  !isAccountsRoute.value &&
-    settingsSections.includes(activeSection.value as SettingsMissionSection),
-);
 const mobilePrimarySectionCycleLabel = computed(() =>
   activeSection.value === "accounts" ? "Switch to projects" : "Switch to accounts",
 );
@@ -908,7 +904,6 @@ async function loadMoreProjectTasks() {
 }
 
 function toggleProjectPicker() {
-  settingsMenuOpen.value = false;
   projectPickerOpen.value = !projectPickerOpen.value;
 }
 
@@ -925,7 +920,6 @@ function selectProjectDetail(projectId: string) {
 
 function setSection(section: MissionSection) {
   activeSection.value = section;
-  settingsMenuOpen.value = false;
   projectPickerOpen.value = false;
   if (section !== "projects") resetProjectTaskComposer();
   void router.replace({
@@ -1098,14 +1092,14 @@ function resetProjectTaskComposer() {
   projectTaskComposerProjectId.value = null;
 }
 
-function setKanbanEnabled(enabled: boolean) {
+function toggleKanbanView() {
+  const enabled = projectTaskViewMode.value !== "kanban";
   kanbanEnabled.value = enabled;
-  if (!enabled) projectTaskViewMode.value = "list";
   window.localStorage.setItem(
     PROJECTS_KANBAN_ENABLED_STORAGE_KEY,
     enabled ? "1" : "0",
   );
-  if (activeSection.value === "projects") void loadProjectTasks();
+  setProjectTaskViewMode(enabled ? "kanban" : "list");
 }
 
 function setProjectTaskViewMode(mode: "list" | "kanban") {
@@ -1664,7 +1658,6 @@ function handleWindowKeydown(event: KeyboardEvent) {
     closeAccountsModal();
     return;
   }
-  if (event.key === "Escape") settingsMenuOpen.value = false;
 }
 
 function handleWindowClick() {
@@ -1721,7 +1714,7 @@ onMounted(() => {
   }
   kanbanEnabled.value =
     window.localStorage.getItem(PROJECTS_KANBAN_ENABLED_STORAGE_KEY) === "1";
-  projectTaskViewMode.value = "list";
+  projectTaskViewMode.value = kanbanEnabled.value ? "kanban" : "list";
   void loadMissionControlWorkspace();
   void loadPluginCapabilities();
   if (activeSection.value === "projects") {
@@ -1774,67 +1767,31 @@ onBeforeUnmount(() => {
           <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
         </Button>
         <Button
+          v-if="activeSection === 'projects' && !isAccountsRoute"
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          :active="projectTaskViewMode === 'kanban'"
+          :aria-pressed="projectTaskViewMode === 'kanban'"
+          aria-label="Toggle Kanban board"
+          title="Toggle Kanban board"
+          @click="toggleKanbanView"
+        >
+          <UiIcon name="SquareKanban" :size="18" />
+        </Button>
+        <Button
           v-if="!isAccountsRoute"
           color="ghost"
           shape="soft"
           size="compact"
           icon-only
-          to="/mission-control/wheel-of-life"
-          aria-label="Open Wheel of Life"
-          title="Open Wheel of Life"
+          to="/mission-control"
+          aria-label="Close projects"
+          title="Close projects"
         >
-          <UiIcon name="ShipWheel" :size="18" />
+          <UiIcon name="X" :size="18" />
         </Button>
-
-        <div v-if="!isAccountsRoute" class="settings-menu" @click.stop>
-          <Button
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            :active="settingsMenuOpen || settingsSectionActive"
-            aria-label="Mission Control settings"
-            :aria-expanded="settingsMenuOpen"
-            aria-haspopup="menu"
-            @click="
-              settingsMenuOpen = !settingsMenuOpen;
-              projectPickerOpen = false;
-            "
-          >
-            <UiIcon name="Settings" :size="18" />
-          </Button>
-          <div
-            v-if="settingsMenuOpen"
-            class="settings-menu__dropdown"
-            role="menu"
-          >
-            <button
-              v-for="section in settingsSections"
-              :key="section"
-              type="button"
-              class="settings-menu__item"
-              :class="{ 'is-active': activeSection === section }"
-              role="menuitem"
-              @click="setSection(section)"
-            >
-              <span>{{ sectionLabels[section] }}</span>
-            </button>
-            <button
-              type="button"
-              class="settings-menu__item settings-menu__item--toggle"
-              role="menuitemcheckbox"
-              :aria-checked="kanbanEnabled"
-              @click="setKanbanEnabled(!kanbanEnabled)"
-            >
-              <span>Kanban board</span>
-              <UiIcon
-                :name="kanbanEnabled ? 'Check' : 'Plus'"
-                :size="15"
-                aria-hidden="true"
-              />
-            </button>
-          </div>
-        </div>
       </div>
     </header>
 
@@ -2609,60 +2566,6 @@ onBeforeUnmount(() => {
   display: inline-grid;
 }
 
-.settings-menu {
-  position: relative;
-}
-
-.settings-menu__dropdown {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 30;
-  width: 230px;
-  padding: 6px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface);
-  box-shadow: 0 18px 50px color-mix(in oklab, #000, transparent 86%);
-}
-
-.settings-menu__item {
-  display: grid;
-  width: 100%;
-  min-height: 38px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.settings-menu__item span {
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.settings-menu__item:hover,
-.settings-menu__item.is-active {
-  background: var(--ui-surface-muted);
-}
-
-.settings-menu__item--toggle {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-  border-top: 1px solid var(--ui-border);
-  border-radius: 0 0 var(--ui-radius-sm) var(--ui-radius-sm);
-}
-
-.settings-menu__item--toggle svg {
-  color: var(--ui-text-muted);
-}
-
 .mission-control__message {
   width: min(700px, 100%);
   padding: 8px 12px;
@@ -3222,11 +3125,6 @@ onBeforeUnmount(() => {
 
   .memory-row__actions .me3-btn {
     width: auto;
-  }
-
-  .settings-menu__dropdown {
-    right: 0;
-    width: min(230px, calc(100vw - 28px));
   }
 
   .mission-modal {

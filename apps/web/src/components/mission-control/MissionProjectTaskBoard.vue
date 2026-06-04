@@ -3,11 +3,15 @@ import Button from "../Button.vue";
 import UiIcon from "../UiIcon.vue";
 import {
   formatShortDate,
+  isProjectIconLogo,
   isLocalProject,
   localProjectPath,
+  projectEmojiIcon,
   projectForTask,
+  projectIconSource,
   projectName,
   projectTaskComposerProjectLabel,
+  projectUiIconName,
   weeklyReviewCardLabel,
   weeklyReviewMetadata,
 } from "./projectWorkspace";
@@ -123,12 +127,32 @@ function inputValue(event: Event): string {
                 >Weekly Review</span
               >
               <span class="project-task-card__project">
-                <img
-                  v-if="projectForTask(projects, task)?.icon"
-                  :src="projectForTask(projects, task)?.icon || ''"
-                  alt=""
-                />
-                <span>{{ projectName(projects, task.projectId) }}</span>
+                <span
+                  v-if="
+                    isProjectIconLogo(projectForTask(projects, task)) ||
+                    projectUiIconName(projectForTask(projects, task)) ||
+                    projectEmojiIcon(projectForTask(projects, task))
+                  "
+                  class="project-task-card__project-visual"
+                  aria-hidden="true"
+                >
+                  <img
+                    v-if="isProjectIconLogo(projectForTask(projects, task))"
+                    :src="projectIconSource(projectForTask(projects, task))"
+                    alt=""
+                  />
+                  <UiIcon
+                    v-else-if="projectUiIconName(projectForTask(projects, task))"
+                    :name="projectUiIconName(projectForTask(projects, task))!"
+                    :size="14"
+                  />
+                  <span v-else class="project-task-card__project-emoji">
+                    {{ projectEmojiIcon(projectForTask(projects, task)) }}
+                  </span>
+                </span>
+                <span class="project-task-card__project-label">
+                  {{ projectName(projects, task.projectId) }}
+                </span>
               </span>
               <span
                 v-if="isLocalProject(projectForTask(projects, task))"
@@ -421,15 +445,28 @@ function inputValue(event: Event): string {
   font-weight: 650;
 }
 
-.project-task-card__project img {
+.project-task-card__project-visual {
+  display: inline-grid;
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
+  place-items: center;
+  color: var(--ui-text-muted);
+}
+
+.project-task-card__project-visual img {
+  width: 100%;
+  height: 100%;
   border-radius: 4px;
   object-fit: cover;
 }
 
-.project-task-card__project span {
+.project-task-card__project-emoji {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.project-task-card__project-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
