@@ -37,7 +37,6 @@ definePage({
 @media (max-width: 959px) {
   .wheel-life-page {
     padding: 0 14px;
-    padding-left: var(--app-shell-mobile-nav-leading-padding);
   }
 }
 </style>

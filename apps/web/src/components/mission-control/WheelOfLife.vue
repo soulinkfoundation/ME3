@@ -314,16 +314,13 @@ function labelPositionStyle(midAngle: number) {
   const cos = Math.cos(angle);
   const x = 50 + cos * LABEL_RADIUS_PERCENT;
   const y = 50 + Math.sin(angle) * LABEL_RADIUS_PERCENT;
-  const transform =
-    cos > 0.7
-      ? "translate(0, -50%)"
-      : cos < -0.7
-        ? "translate(-100%, -50%)"
-        : "translate(-50%, -50%)";
+  const transformX = cos > 0.7 ? "0%" : cos < -0.7 ? "-100%" : "-50%";
+  const mobileNudge = cos > 0.7 ? "-18%" : cos < -0.7 ? "18%" : "0%";
   return {
     left: `${x}%`,
     top: `${y}%`,
-    "--life-wheel-label-transform": transform,
+    "--life-wheel-label-transform-x": transformX,
+    "--life-wheel-label-mobile-nudge": mobileNudge,
   };
 }
 
@@ -613,7 +610,10 @@ watch([segments, snapshots], persistState, { deep: true });
                 />
                 <template v-else>{{ segment.emoji }}</template>
               </span>
-              <span>{{ segment.label }}<template v-if="segment.value"> ({{ segment.value }}/10)</template></span>
+              <span class="life-wheel__label-name">{{ segment.label }}</span>
+              <span v-if="segment.value" class="life-wheel__label-score">
+                {{ segment.value }}/10
+              </span>
             </button>
           </div>
         </div>
@@ -1079,14 +1079,33 @@ watch([segments, snapshots], persistState, { deep: true });
   line-height: 1.15;
   text-align: left;
   white-space: nowrap;
-  transform: var(--life-wheel-label-transform, translate(-50%, -50%));
+  transform: translate(
+    calc(
+      var(--life-wheel-label-transform-x, -50%) +
+        var(--life-wheel-label-active-nudge, 0%)
+    ),
+    -50%
+  );
   cursor: pointer;
   pointer-events: auto;
 }
 
-.life-wheel__label span:last-child {
+.life-wheel__label-name,
+.life-wheel__label-score {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.life-wheel__label-score {
+  flex: 0 0 auto;
+}
+
+.life-wheel__label-score::before {
+  content: "(";
+}
+
+.life-wheel__label-score::after {
+  content: ")";
 }
 
 .life-wheel__label:hover,
@@ -1411,21 +1430,6 @@ watch([segments, snapshots], persistState, { deep: true });
     width: 84%;
   }
 
-  .life-wheel__labels {
-    position: static;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 6px;
-    margin-top: 10px;
-    pointer-events: auto;
-  }
-
-  .life-wheel__label {
-    position: static;
-    max-width: 100%;
-    transform: none;
-  }
   .life-wheel-history__segments {
     grid-template-columns: 1fr;
   }
@@ -1435,6 +1439,43 @@ watch([segments, snapshots], persistState, { deep: true });
   .life-wheel__actions {
     justify-self: stretch;
     justify-content: flex-end;
+  }
+
+  .life-wheel__canvas {
+    width: min(100%, 430px);
+  }
+
+  .life-wheel__svg {
+    width: 80%;
+  }
+
+  .life-wheel__label {
+    --life-wheel-label-active-nudge: var(--life-wheel-label-mobile-nudge, 0%);
+    width: 66px;
+    max-width: 22%;
+    flex-direction: column;
+    gap: 1px;
+    align-items: center;
+    padding: 3px 2px;
+    background: color-mix(in oklab, var(--ui-surface), transparent 18%);
+    font-size: 9px;
+    line-height: 1.05;
+    text-align: center;
+  }
+
+  .life-wheel__label-emoji {
+    font-size: 15px;
+  }
+
+  .life-wheel__label-name,
+  .life-wheel__label-score {
+    display: block;
+    width: 100%;
+  }
+
+  .life-wheel__label-score::before,
+  .life-wheel__label-score::after {
+    content: "";
   }
 
   .life-wheel__save {
