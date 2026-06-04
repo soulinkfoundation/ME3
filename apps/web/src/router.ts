@@ -103,6 +103,22 @@ router.beforeEach(async (to, _from, next) => {
     return;
   }
 
+  if (
+    (to.path === "/mission-control" || to.path === "/mission-control/") &&
+    to.query.section === "projects"
+  ) {
+    next({
+      path: "/mission-control/projects",
+      query: {
+        ...to.query,
+        section: undefined,
+      },
+      hash: to.hash,
+      replace: true,
+    });
+    return;
+  }
+
   if (to.path === "/socials" || to.path === "/socials/") {
     next({
       path: "/assistant",
