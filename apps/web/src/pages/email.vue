@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
+import Button from "../components/Button.vue";
 import UiIcon from "../components/UiIcon.vue";
 import { API_BASE, ApiError, api } from "../api";
 import { useAppToast } from "../composables/useAppToast";
@@ -2092,39 +2093,45 @@ onBeforeUnmount(() => {
           type="search"
           :placeholder="mobileSearchLabel"
         />
-        <button
-          type="submit"
-          class="mail-search__button mail-mobile-icon-btn"
+        <Button color="ghost" shape="soft" size="compact" icon-only class="mail-mobile-icon-btn" type="submit"
           :disabled="mobileSearchDisabled"
           :aria-label="mobileSearchLabel"
           title="Search"
         >
           <UiIcon name="Search" :size="18" aria-hidden="true" />
-        </button>
-        <button
+        </Button>
+        <Button
           v-if="activeTab !== 'contacts'"
+          color="outline"
+          shape="soft"
+          size="compact"
+          class="mail-mobile-compose-btn"
           type="button"
-          class="compose-btn compose-btn--mobile-nav"
           aria-label="Compose"
           @click="openComposeModal()"
         >
-          <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
-          <span class="compose-btn__label">Compose</span>
-        </button>
-        <button
+          <template #icon>
+            <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
+          </template>
+          Compose
+        </Button>
+        <Button
           v-else
+          color="outline"
+          shape="soft"
+          size="compact"
+          class="mail-mobile-compose-btn"
           type="button"
-          class="compose-btn compose-btn--mobile-nav"
           aria-label="Add contact"
           @click="openContactModal"
         >
-          <UiIcon name="Plus" :size="16" aria-hidden="true" />
-          <span class="compose-btn__label">Add</span>
-        </button>
-        <button
+          <template #icon>
+            <UiIcon name="Plus" :size="16" aria-hidden="true" />
+          </template>
+          Add
+        </Button>
+        <Button color="ghost" shape="soft" size="compact" icon-only class="mail-mobile-icon-btn" type="button"
           v-if="activeTab !== 'contacts' || canSyncSoulinkContacts"
-          type="button"
-          class="mail-search__button mail-search__button--refresh mail-mobile-icon-btn"
           :disabled="activeTab === 'contacts' ? soulinkSyncing : loading"
           :aria-label="
             activeTab === 'contacts'
@@ -2139,7 +2146,7 @@ onBeforeUnmount(() => {
           "
         >
           <UiIcon name="RefreshCw" :size="18" aria-hidden="true" />
-        </button>
+        </Button>
       </form>
     </Teleport>
 
@@ -2205,10 +2212,8 @@ onBeforeUnmount(() => {
                   </template>
                 </p>
                 <div class="telegram-thread__actions">
-                  <button
+                  <Button color="outline" shape="soft" size="compact" type="button"
                     v-if="telegramHasMore"
-                    type="button"
-                    class="telegram-load-older"
                     :disabled="telegramLoadingMore || telegramClearing"
                     @click="loadMoreTelegramTurns"
                   >
@@ -2217,15 +2222,13 @@ onBeforeUnmount(() => {
                         ? "Loading older…"
                         : "Load older messages"
                     }}
-                  </button>
-                  <button
-                    type="button"
-                    class="telegram-clear-btn"
+                  </Button>
+                  <Button color="danger" shape="soft" size="compact" type="button"
                     :disabled="telegramClearing || telegramLoadingMore"
                     @click="clearTelegramHistory"
                   >
                     {{ telegramClearing ? "Clearing…" : "Clear history" }}
-                  </button>
+                  </Button>
                 </div>
               </div>
               <p
@@ -2406,9 +2409,7 @@ onBeforeUnmount(() => {
                       <p>{{ contactMetaLine(contact) }}</p>
                     </div>
                     <div class="contact-row__actions">
-                      <button
-                        type="button"
-                        class="contacts-icon-btn"
+                      <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                         :disabled="!contact.email"
                         :title="
                           contact.email ? `Email ${contact.name}` : 'No email yet'
@@ -2419,7 +2420,7 @@ onBeforeUnmount(() => {
                         @click="composeContact(contact)"
                       >
                         <UiIcon name="Mail" :size="16" aria-hidden="true" />
-                      </button>
+                      </Button>
                       <a
                         v-if="contactSoulinkUrl(contact)"
                         class="contacts-icon-btn contacts-icon-link"
@@ -2498,41 +2499,33 @@ onBeforeUnmount(() => {
                       <span>{{ selectedMessageCount || "Select" }}</span>
                     </label>
                     <div class="bulk-mail-actions">
-                      <button
+                      <Button color="outline" shape="soft" size="compact" type="button"
                         v-if="selectedMessageCount === 0"
-                        type="button"
-                        class="bulk-mail-btn"
                         :disabled="inboxBusy || !hasReadMessagesOnPage"
                         @click="selectReadMessagesOnPage"
                       >
                         Read
-                      </button>
+                      </Button>
                       <template v-else>
-                        <button
+                        <Button color="outline" shape="soft" size="compact" type="button"
                           v-if="activeTab === 'archive' || activeTab === 'trash'"
-                          type="button"
-                          class="bulk-mail-btn"
                           :disabled="inboxBusy"
                           title="Restore selected"
                           @click="moveSelectedMessages('inbox')"
                         >
                           <UiIcon name="Inbox" :size="14" aria-hidden="true" />
                           Restore
-                        </button>
-                        <button
+                        </Button>
+                        <Button color="outline" shape="soft" size="compact" type="button"
                           v-else
-                          type="button"
-                          class="bulk-mail-btn"
                           :disabled="inboxBusy"
                           title="Archive selected"
                           @click="moveSelectedMessages('archive')"
                         >
                           <UiIcon name="Archive" :size="14" aria-hidden="true" />
                           Archive
-                        </button>
-                        <button
-                          type="button"
-                          class="bulk-mail-btn bulk-mail-btn--danger"
+                        </Button>
+                        <Button color="danger" shape="soft" size="compact" type="button"
                           :disabled="inboxBusy"
                           :title="
                             activeTab === 'trash'
@@ -2547,15 +2540,13 @@ onBeforeUnmount(() => {
                         >
                           <UiIcon name="Trash2" :size="14" aria-hidden="true" />
                           {{ activeTab === "trash" ? "Delete" : "Trash" }}
-                        </button>
-                        <button
-                          type="button"
-                          class="bulk-mail-btn"
+                        </Button>
+                        <Button color="outline" shape="soft" size="compact" type="button"
                           :disabled="inboxBusy"
                           @click="clearSelectedMessages"
                         >
                           Clear
-                        </button>
+                        </Button>
                       </template>
                     </div>
                   </div>
@@ -2674,23 +2665,21 @@ onBeforeUnmount(() => {
 
                 <div v-if="!loading" class="pagination pagination--split">
                   <div class="pagination-nav">
-                    <button
-                      class="page-btn"
+                    <Button color="ghost" shape="soft" size="small" icon-only type="button"
                       :disabled="currentPage <= 1"
                       @click="prevPage"
                     >
                       ◂
-                    </button>
+                    </Button>
                     <span class="page-label"
                       >{{ currentPage }} of {{ totalPages }}</span
                     >
-                    <button
-                      class="page-btn"
+                    <Button color="ghost" shape="soft" size="small" icon-only type="button"
                       :disabled="currentPage >= totalPages"
                       @click="nextPage"
                     >
                       ▸
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </section>
@@ -2701,18 +2690,14 @@ onBeforeUnmount(() => {
                 :class="{ 'thread-pane--mobile-open': mobileThreadOpen }"
               >
                 <header class="thread-toolbar">
-                  <button
-                    type="button"
-                    class="thread-back-btn"
+                  <Button color="ghost" shape="soft" size="compact" type="button"
                     @click="mobileThreadOpen = false"
                   >
                     <UiIcon name="ArrowLeft" :size="17" aria-hidden="true" />
                     Back
-                  </button>
+                  </Button>
                   <div class="thread-actions">
-                    <button
-                      type="button"
-                      class="icon-btn"
+                    <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       title="Reply"
                       :disabled="
                         inboxBusy ||
@@ -2721,10 +2706,8 @@ onBeforeUnmount(() => {
                       @click="openComposeModal(selectedMessage)"
                     >
                       <UiIcon name="Reply" :size="16" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      class="icon-btn"
+                    </Button>
+                    <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       title="Forward"
                       :disabled="
                         inboxBusy ||
@@ -2733,33 +2716,27 @@ onBeforeUnmount(() => {
                       @click="openComposeModal(selectedMessage, 'forward')"
                     >
                       <UiIcon name="Forward" :size="16" aria-hidden="true" />
-                    </button>
-                    <button
+                    </Button>
+                    <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       v-if="
                         selectedMessage.folder === 'archive' ||
                         selectedMessage.folder === 'trash'
                       "
-                      type="button"
-                      class="icon-btn"
                       title="Restore to inbox"
                       :disabled="inboxBusy"
                       @click="moveMessage(selectedMessage, 'inbox')"
                     >
                       <UiIcon name="Inbox" :size="16" aria-hidden="true" />
-                    </button>
-                    <button
+                    </Button>
+                    <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       v-else
-                      type="button"
-                      class="icon-btn"
                       title="Archive"
                       :disabled="inboxBusy"
                       @click="moveMessage(selectedMessage, 'archive')"
                     >
                       <UiIcon name="Archive" :size="16" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      class="icon-btn"
+                    </Button>
+                    <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       :title="
                         selectedThreadIsUnread ? 'Mark read' : 'Mark unread'
                       "
@@ -2769,10 +2746,8 @@ onBeforeUnmount(() => {
                       "
                     >
                       <UiIcon name="Mail" :size="16" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      class="icon-btn"
+                    </Button>
+                    <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       title="Move to trash"
                       :disabled="
                         inboxBusy || selectedMessage.folder === 'trash'
@@ -2780,7 +2755,7 @@ onBeforeUnmount(() => {
                       @click="moveMessage(selectedMessage, 'trash')"
                     >
                       <UiIcon name="Trash2" :size="16" aria-hidden="true" />
-                    </button>
+                    </Button>
                   </div>
                 </header>
 
@@ -2849,10 +2824,8 @@ onBeforeUnmount(() => {
                         </div>
                         <div class="message-card__header-actions">
                           <span>{{ formatRelativeDate(message.createdAt) }}</span>
-                          <button
+                          <Button color="outline" shape="soft" size="compact" type="button"
                             v-if="message.unsubscribeAction"
-                            type="button"
-                            class="unsubscribe-btn"
                             :disabled="inboxBusy"
                             @click="unsubscribeFromMessage(message)"
                           >
@@ -2862,7 +2835,7 @@ onBeforeUnmount(() => {
                                 ? "Unsubscribing..."
                                 : "Unsubscribe"
                             }}
-                          </button>
+                          </Button>
                         </div>
                       </div>
 
@@ -2922,8 +2895,7 @@ onBeforeUnmount(() => {
                         "
                         class="message-card__actions"
                       >
-                        <button
-                          class="action-btn action-btn--approve"
+                        <Button color="primary" shape="soft" size="compact" type="button"
                           :disabled="inboxBusy"
                           @click="approveMessage(message)"
                         >
@@ -2931,21 +2903,19 @@ onBeforeUnmount(() => {
                           {{
                             actionPending === message.id ? "Sending…" : "Send"
                           }}
-                        </button>
-                        <button
-                          class="action-btn action-btn--reject"
+                        </Button>
+                        <Button color="outline" shape="soft" size="compact" type="button"
                           :disabled="inboxBusy"
                           @click="openComposeModal(message)"
                         >
                           Edit
-                        </button>
-                        <button
-                          class="action-btn action-btn--reject"
+                        </Button>
+                        <Button color="outline" shape="soft" size="compact" type="button"
                           :disabled="inboxBusy"
                           @click="rejectMessage(message)"
                         >
                           Reject
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   </article>
@@ -2976,15 +2946,13 @@ onBeforeUnmount(() => {
       <form class="contact-modal__card" @submit.prevent="saveManualContact">
         <header class="compose-modal__head">
           <h2 id="contact-modal-title">Add contact</h2>
-          <button
-            type="button"
-            class="icon-btn"
+          <Button color="ghost" shape="soft" size="compact" icon-only type="button"
             aria-label="Close add contact"
             :disabled="contactSaving"
             @click="closeContactModal"
           >
             <UiIcon name="X" :size="16" aria-hidden="true" />
-          </button>
+          </Button>
         </header>
         <label class="compose-field">
           <span>Name</span>
@@ -3007,17 +2975,13 @@ onBeforeUnmount(() => {
         </label>
         <p v-if="contactError" class="compose-error">{{ contactError }}</p>
         <footer class="compose-modal__actions">
-          <button
-            type="button"
-            class="action-btn action-btn--reject"
+          <Button color="outline" shape="soft" size="compact" type="button"
             :disabled="contactSaving"
             @click="closeContactModal"
           >
             Cancel
-          </button>
-          <button
-            type="submit"
-            class="action-btn action-btn--approve"
+          </Button>
+          <Button color="primary" shape="soft" size="compact" type="submit"
             :disabled="
               contactSaving ||
               !contactForm.name.trim() ||
@@ -3025,7 +2989,7 @@ onBeforeUnmount(() => {
             "
           >
             {{ contactSaving ? "Adding…" : "Add contact" }}
-          </button>
+          </Button>
         </footer>
       </form>
     </div>
@@ -3041,15 +3005,13 @@ onBeforeUnmount(() => {
       <form class="compose-modal__card" @submit.prevent="saveDraft(false)">
         <header class="compose-modal__head">
           <h2 id="compose-title">{{ getComposeTitle() }}</h2>
-          <button
-            type="button"
-            class="icon-btn"
+          <Button color="ghost" shape="soft" size="compact" icon-only type="button"
             aria-label="Close compose"
             :disabled="composeSending"
             @click="closeComposeModal"
           >
             <UiIcon name="X" :size="16" aria-hidden="true" />
-          </button>
+          </Button>
         </header>
         <label
           v-if="outboundSenderOptions.length > 1"
@@ -3178,30 +3140,24 @@ onBeforeUnmount(() => {
               <small v-if="formatAttachmentSize(attachment.size)">
                 {{ formatAttachmentSize(attachment.size) }}
               </small>
-              <button
-                type="button"
-                class="compose-attachment-remove"
+              <Button color="ghost" shape="pill" size="small" icon-only class="compose-attachment-remove" type="button"
                 :aria-label="`Remove ${formatAttachmentName(attachment, index)}`"
                 @click="removeUploadedAttachment(index)"
               >
                 <UiIcon name="X" :size="13" aria-hidden="true" />
-              </button>
+              </Button>
             </span>
           </div>
         </div>
         <p v-if="composeError" class="compose-error">{{ composeError }}</p>
         <footer class="compose-modal__actions">
-          <button
-            type="button"
-            class="action-btn action-btn--reject"
+          <Button color="outline" shape="soft" size="compact" type="button"
             :disabled="composeSending"
             @click="closeComposeModal"
           >
             Cancel
-          </button>
-          <button
-            type="button"
-            class="action-btn action-btn--reject"
+          </Button>
+          <Button color="outline" shape="soft" size="compact" type="button"
             :disabled="
               composeSending ||
               !composeForm.to.trim() ||
@@ -3215,10 +3171,8 @@ onBeforeUnmount(() => {
                 ? "Saving…"
                 : getComposePrimaryDraftLabel()
             }}
-          </button>
-          <button
-            type="button"
-            class="action-btn action-btn--approve"
+          </Button>
+          <Button color="primary" shape="soft" size="compact" type="button"
             :disabled="
               composeSending ||
               !composeForm.to.trim() ||
@@ -3229,7 +3183,7 @@ onBeforeUnmount(() => {
           >
             <UiIcon name="Send" :size="14" aria-hidden="true" />
             {{ composeSending ? "Sending…" : "Send" }}
-          </button>
+          </Button>
         </footer>
       </form>
     </div>
@@ -3598,36 +3552,32 @@ onBeforeUnmount(() => {
   color: var(--ui-text-muted, var(--color-text-muted));
 }
 
-.mail-search--mobile-nav .compose-btn--mobile-nav {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+.mail-search--mobile-nav .mail-mobile-compose-btn {
   flex: 0 0 auto;
-  width: auto;
-  height: 36px;
-  margin: 0;
-  padding: 0 10px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface, var(--color-bg));
-  color: var(--ui-text, var(--color-text));
-  font: inherit;
+  gap: 6px;
+  min-height: 36px;
+  padding-inline: 10px;
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
-  cursor: pointer;
-}
-
-.mail-search--mobile-nav .compose-btn--mobile-nav:hover:not(:disabled) {
+  background: var(--ui-surface, var(--color-bg));
   border-color: var(--ui-border, var(--color-border));
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
   color: var(--ui-text, var(--color-text));
 }
 
-.mail-search--mobile-nav .compose-btn--mobile-nav:focus-visible {
-  outline: 2px solid var(--color-text);
-  outline-offset: 2px;
+.mail-search--mobile-nav .mail-mobile-compose-btn:hover:not(:disabled),
+.mail-search--mobile-nav .mail-mobile-compose-btn:focus-visible {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  border-color: var(--ui-border, var(--color-border));
+  color: var(--ui-text, var(--color-text));
+}
+
+.mail-search--mobile-nav .mail-mobile-compose-btn :deep(.me3-btn__icon),
+.mail-search--mobile-nav .mail-mobile-compose-btn :deep(.me3-btn__label) {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  color: inherit;
 }
 
 .mail-mobile-icon-btn {
@@ -3950,10 +3900,6 @@ onBeforeUnmount(() => {
   transition:
     color 0.12s,
     background 0.12s;
-}
-
-.folder-btn + .folder-btn {
-  margin-left: -1px;
 }
 
 .folder-btn:hover:not(.folder-btn--active) {

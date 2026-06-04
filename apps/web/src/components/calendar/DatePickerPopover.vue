@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import Button from "../Button.vue";
 import UiIcon from "../UiIcon.vue";
 
 type DatePickerCell = {
@@ -87,23 +88,31 @@ function formatDateLabel(value: string): string {
 <template>
   <div class="date-picker-popover" role="dialog" :aria-label="ariaLabel">
     <div class="date-picker-popover__header">
-      <button
-        type="button"
-        class="date-picker-popover__icon-button"
+      <Button
+        color="ghost"
+        shape="soft"
+        size="small"
+        icon-only
         aria-label="Previous month"
+        title="Previous month"
+        type="button"
         @click="emit('move-month', -1)"
       >
         <UiIcon name="ChevronLeft" :size="16" />
-      </button>
+      </Button>
       <strong>{{ monthLabel }}</strong>
-      <button
-        type="button"
-        class="date-picker-popover__icon-button"
+      <Button
+        color="ghost"
+        shape="soft"
+        size="small"
+        icon-only
         aria-label="Next month"
+        title="Next month"
+        type="button"
         @click="emit('move-month', 1)"
       >
         <UiIcon name="ChevronRight" :size="16" />
-      </button>
+      </Button>
     </div>
     <div class="date-picker-popover__weekdays" aria-hidden="true">
       <span v-for="(weekday, index) in weekdays" :key="`${weekday}-${index}`">
@@ -129,17 +138,25 @@ function formatDateLabel(value: string): string {
       </button>
     </div>
     <div class="date-picker-popover__actions">
-      <button type="button" class="date-picker-popover__text-button" @click="emit('today')">
-        {{ todayActionLabel }}
-      </button>
-      <button
-        v-if="secondaryActionLabel"
+      <Button
+        color="ghost"
+        shape="soft"
+        size="small"
         type="button"
-        class="date-picker-popover__text-button date-picker-popover__text-button--primary"
+        @click="emit('today')"
+      >
+        {{ todayActionLabel }}
+      </Button>
+      <Button
+        v-if="secondaryActionLabel"
+        color="primary"
+        shape="soft"
+        size="small"
+        type="button"
         @click="emit('secondary-action')"
       >
         {{ secondaryActionLabel }}
-      </button>
+      </Button>
     </div>
   </div>
 </template>
@@ -168,27 +185,12 @@ function formatDateLabel(value: string): string {
   gap: 8px;
 }
 
-.date-picker-popover__icon-button,
-.date-picker-popover__text-button,
 .date-picker-popover__day {
   border: 1px solid transparent;
   background: transparent;
   color: inherit;
   font: inherit;
   cursor: pointer;
-}
-
-.date-picker-popover__icon-button {
-  display: inline-grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: var(--ui-radius-sm);
-}
-
-.date-picker-popover__icon-button:hover {
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
 }
 
 .date-picker-popover__header strong {
@@ -250,22 +252,6 @@ function formatDateLabel(value: string): string {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-}
-
-.date-picker-popover__text-button {
-  display: inline-flex;
-  min-height: 32px;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--ui-radius-sm);
-  color: var(--ui-text-muted);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.date-picker-popover__text-button:hover,
-.date-picker-popover__text-button--primary {
-  color: var(--ui-accent);
 }
 
 @media (max-width: 760px) {

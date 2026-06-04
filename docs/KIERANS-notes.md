@@ -68,10 +68,11 @@ Cloudflare has a skill called 'building-ai-agent-on-cloudflare' see https://gith
 
 This is clunky right now but it works.
 
-1. git clone your me3 repo to your computer if you havn't already
-2. open terminal or command prompt and cd into it i.e `cd /Users/youusername/yourprojects/yourME3repo`
+1. git clone your me3 repo to your computer
+2. open terminal/command prompt and open path to it i.e. `cd /Users/youusername/yourprojects/yourME3repo`
 3. run this command: `node packages/local-executor/bin/me3-local-executor.mjs pair --api....`
-4. Configure your local LLM of choice (opencode, claude and codex are supported).
+4. Configure your local AI agent (opencode, claude and codex are supported but they need to be up and running).
    `node packages/local-executor/bin/me3-local-executor.mjs config init --provider opencode`
-5. Add a project of type 'local' from /mission-control and point it to your local project folder.
-6. Add a task via https://yourME3url.com/mission-control selecting the project you just added.
+5. Visit https://yourME3url.com/mission-control -> 'Projects' tab, and add a new project of type 'local' + your local project folder path.
+6. Add a task to the project you just added.
+7. Your local-runner will run the task in accordance with the rules in your AGENTS.md for that project repo.

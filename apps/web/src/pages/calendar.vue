@@ -1532,14 +1532,19 @@ onBeforeUnmount(() => {
     <Teleport to="#app-side-nav-mobile-page-controls">
       <div v-if="!loading && !error" class="cal-mobile-nav-controls" @click.stop>
         <div class="cal-period-switcher cal-period-switcher--mobile" aria-label="Calendar period">
-          <button
-            type="button"
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
             class="cal-arrow"
             aria-label="Previous period"
+            title="Previous period"
+            type="button"
             @click="onToolbarPrev"
           >
             <UiIcon name="ChevronLeft" :size="18" aria-hidden="true" />
-          </button>
+          </Button>
           <button
             type="button"
             class="cal-period-title"
@@ -1550,14 +1555,19 @@ onBeforeUnmount(() => {
           >
             {{ mobileToolbarTitle }}
           </button>
-          <button
-            type="button"
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
             class="cal-arrow"
             aria-label="Next period"
+            title="Next period"
+            type="button"
             @click="onToolbarNext"
           >
             <UiIcon name="ChevronRight" :size="18" aria-hidden="true" />
-          </button>
+          </Button>
           <DatePickerPopover
             v-if="calendarPickerOpen"
             :month-key="calendarPickerMonth"
@@ -1569,25 +1579,33 @@ onBeforeUnmount(() => {
             @today="pickCalendarToday"
           />
         </div>
-        <button
-          type="button"
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
           class="cal-mobile-icon-btn"
           :aria-label="mobileRangeCycleLabel"
           :title="mobileRangeCycleLabel"
+          type="button"
           @click="cycleRangeMode"
         >
           <UiIcon :name="mobileRangeIcon" :size="18" aria-hidden="true" />
-        </button>
+        </Button>
         <div class="cal-mobile-create-wrap">
-          <button
-            type="button"
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
             class="cal-mobile-icon-btn"
             aria-label="Create calendar item"
             title="Create calendar item"
+            type="button"
             @click="toggleCreateMenu"
           >
             <UiIcon name="Plus" :size="18" aria-hidden="true" />
-          </button>
+          </Button>
           <div v-if="showCreateMenu" class="cal-create-menu cal-create-menu--mobile-nav">
             <button type="button" @click="openCreateMode('booking')">
               New booking
@@ -1630,14 +1648,19 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="cal-period-switcher" aria-label="Calendar period">
-          <button
-            type="button"
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
             class="cal-arrow"
             aria-label="Previous period"
+            title="Previous period"
+            type="button"
             @click="onToolbarPrev"
           >
             <UiIcon name="ChevronLeft" :size="20" aria-hidden="true" />
-          </button>
+          </Button>
           <button
             type="button"
             class="cal-period-title"
@@ -1648,14 +1671,19 @@ onBeforeUnmount(() => {
           >
             {{ activeToolbarTitle }}
           </button>
-          <button
-            type="button"
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
             class="cal-arrow"
             aria-label="Next period"
+            title="Next period"
+            type="button"
             @click="onToolbarNext"
           >
             <UiIcon name="ChevronRight" :size="20" aria-hidden="true" />
-          </button>
+          </Button>
           <DatePickerPopover
             v-if="calendarPickerOpen"
             :month-key="calendarPickerMonth"
@@ -2599,26 +2627,7 @@ onBeforeUnmount(() => {
 }
 
 .cal-arrow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  cursor: pointer;
-}
-
-.cal-arrow:hover:not(:disabled) {
-  background: var(--ui-surface-muted);
-}
-
-.cal-arrow:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
+  flex: 0 0 auto;
 }
 
 .cal-period-title {
@@ -3070,27 +3079,7 @@ onBeforeUnmount(() => {
 }
 
 .cal-mobile-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  cursor: pointer;
-}
-
-.cal-mobile-icon-btn:hover:not(:disabled) {
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.cal-mobile-icon-btn:focus-visible {
-  outline: 2px solid var(--color-text);
-  outline-offset: 2px;
+  flex: 0 0 auto;
 }
 
 .cal-mobile-create-wrap {

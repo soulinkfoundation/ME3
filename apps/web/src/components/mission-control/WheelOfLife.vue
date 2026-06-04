@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import Button from "../Button.vue";
 import IconPicker from "../IconPicker.vue";
 import UiIcon from "../UiIcon.vue";
 import { isUiIconName, type UiIconName } from "../../utils/icons";
@@ -481,35 +482,29 @@ watch([segments, snapshots], persistState, { deep: true });
     <h1 id="life-wheel-title" class="life-wheel__sr-only">Wheel of Life</h1>
 
     <div class="life-wheel__actions" aria-label="Wheel of Life actions">
-      <button
-        type="button"
-        class="life-wheel__icon-button"
+      <Button color="ghost" shape="soft" size="compact" icon-only type="button"
         :disabled="!historyAvailable"
         aria-label="View snapshot history"
         title="View snapshot history"
         @click="historyModalOpen = true"
       >
         <UiIcon name="History" :size="18" />
-      </button>
-      <button
-        type="button"
-        class="life-wheel__icon-button"
+      </Button>
+      <Button color="ghost" shape="soft" size="compact" icon-only type="button"
         aria-label="Edit wheel segments"
         title="Edit wheel segments"
         @click="editModalOpen = true"
       >
         <UiIcon name="Pencil" :size="18" />
-      </button>
-      <button
-        type="button"
-        class="life-wheel__icon-button"
+      </Button>
+      <Button color="ghost" shape="soft" size="compact" icon-only type="button"
         :disabled="!allSegmentsScored"
         aria-label="Save snapshot"
         title="Save snapshot"
         @click="openSaveModal"
       >
         <UiIcon name="Save" :size="18" />
-      </button>
+      </Button>
     </div>
 
     <div class="life-wheel__workspace">
@@ -652,14 +647,12 @@ watch([segments, snapshots], persistState, { deep: true });
                 <UiIcon name="Plus" :size="15" aria-hidden="true" />
                 <span>Add</span>
               </button>
-              <button
-                type="button"
-                class="life-wheel__icon-button"
+              <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                 aria-label="Close"
                 @click="editModalOpen = false"
               >
                 <UiIcon name="X" :size="18" />
-              </button>
+              </Button>
             </div>
           </header>
 
@@ -746,14 +739,12 @@ watch([segments, snapshots], persistState, { deep: true });
               <h2 id="save-wheel-title">Save snapshot</h2>
               <p>Optional notes stay with this private entry.</p>
             </div>
-            <button
-              type="button"
-              class="life-wheel__icon-button"
+            <Button color="ghost" shape="soft" size="compact" icon-only type="button"
               aria-label="Close"
               @click="saveModalOpen = false"
             >
               <UiIcon name="X" :size="18" />
-            </button>
+            </Button>
           </header>
           <div class="life-wheel-modal__body">
             <label
@@ -812,14 +803,12 @@ watch([segments, snapshots], persistState, { deep: true });
               <h2 id="wheel-history-title">Snapshot history</h2>
               <p>{{ snapshots.length }} saved entries</p>
             </div>
-            <button
-              type="button"
-              class="life-wheel__icon-button"
+            <Button color="ghost" shape="soft" size="compact" icon-only type="button"
               aria-label="Close"
               @click="historyModalOpen = false"
             >
               <UiIcon name="X" :size="18" />
-            </button>
+            </Button>
           </header>
           <div class="life-wheel-history">
             <article

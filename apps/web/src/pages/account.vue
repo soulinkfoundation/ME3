@@ -1839,9 +1839,9 @@ onMounted(async () => {
                   disabled
                 />
               </label>
-              <button class="button secondary" type="button" @click="logout">
+              <Button color="secondary" shape="soft" size="compact" type="button" @click="logout">
                 Sign out
-              </button>
+              </Button>
             </div>
           </div>
         </section>
@@ -2579,13 +2579,9 @@ onMounted(async () => {
                 sites, and associated data. This action cannot be undone.
               </p>
             </div>
-            <button
-              class="button danger"
-              type="button"
-              @click="openDeleteModal"
-            >
+            <Button color="danger" shape="soft" size="compact" type="button" @click="openDeleteModal">
               Delete
-            </button>
+            </Button>
           </div>
         </section>
       </template>
@@ -2607,15 +2603,20 @@ onMounted(async () => {
             <div>
               <h2 id="local-executor-modal-title">Connect to your local computer</h2>
             </div>
-            <button
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
               class="modal-close"
               type="button"
               aria-label="Close Local Executor setup"
+              title="Close"
               :disabled="localExecutorPairingBusy"
               @click="closeLocalExecutorSetup"
             >
-              ×
-            </button>
+              <UiIcon name="X" :size="18" aria-hidden="true" />
+            </Button>
           </div>
 
           <p v-if="!localExecutorPluginEnabled" class="local-executor-note">
@@ -2842,14 +2843,20 @@ onMounted(async () => {
       <div class="modal">
         <div class="modal-header">
           <h2>Delete account</h2>
-          <button
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
             class="modal-close"
             type="button"
+            aria-label="Close"
+            title="Close"
             :disabled="deleteLoading"
             @click="closeDeleteModal"
           >
-            ×
-          </button>
+            <UiIcon name="X" :size="18" aria-hidden="true" />
+          </Button>
         </div>
 
         <p class="hint">
@@ -2873,22 +2880,26 @@ onMounted(async () => {
         </div>
 
         <div class="modal-actions">
-          <button
-            class="button secondary"
+          <Button
+            color="secondary"
+            shape="soft"
+            size="compact"
             type="button"
             :disabled="deleteLoading"
             @click="closeDeleteModal"
           >
             Cancel
-          </button>
-          <button
-            class="button danger"
+          </Button>
+          <Button
+            color="danger"
+            shape="soft"
+            size="compact"
             type="button"
             :disabled="deleteLoading || deleteConfirmInput.trim() !== 'DELETE'"
             @click="deleteAccount"
           >
             {{ deleteLoading ? "Deleting..." : "Delete account" }}
-          </button>
+          </Button>
         </div>
 
         <p v-if="deleteError" class="error">{{ deleteError }}</p>

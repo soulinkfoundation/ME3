@@ -3020,22 +3020,32 @@ function messageFromUnknown(err: unknown, fallback: string) {
     />
     <Teleport v-if="!assistantHistoryDrawerOpen" to="#app-side-nav-mobile-page-controls">
       <div class="assistant-mobile-nav">
-        <button
-          type="button"
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
           class="assistant-mobile-nav__button"
           aria-label="Open chat history"
+          title="Open chat history"
+          type="button"
           @click="assistantHistoryDrawerOpen = true"
         >
           <UiIcon name="MessagesSquare" :size="18" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
           class="assistant-mobile-nav__button"
           aria-label="New chat"
+          title="New chat"
+          type="button"
           @click="startNewAssistantChat(null)"
         >
           <UiIcon name="Plus" :size="18" aria-hidden="true" />
-        </button>
+        </Button>
       </div>
     </Teleport>
     <aside
@@ -3047,9 +3057,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
       aria-label="Assistant chat history"
     >
       <header class="assistant-history__header">
-        <button
-          type="button"
-          class="assistant-history__icon-button assistant-history__collapse"
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          class="assistant-history__collapse"
           :aria-label="
             assistantHistoryCollapsed
               ? 'Expand chat history'
@@ -3060,6 +3073,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               ? 'Expand chat history'
               : 'Collapse chat history'
           "
+          type="button"
           @click="toggleAssistantHistoryCollapsed"
         >
           <UiIcon
@@ -3067,24 +3081,33 @@ function messageFromUnknown(err: unknown, fallback: string) {
             :size="16"
             aria-hidden="true"
           />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
           class="assistant-history__new-chat"
+          type="button"
           @click="startNewAssistantChat(null)"
         >
-          <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
-          <span>New chat</span>
-        </button>
-        <button
-          type="button"
-          class="assistant-history__icon-button assistant-history__close"
+          <template #icon>
+            <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
+          </template>
+          New chat
+        </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          class="assistant-history__close"
           aria-label="Close chat history"
           title="Close"
+          type="button"
           @click="assistantHistoryDrawerOpen = false"
         >
           <UiIcon name="X" :size="16" aria-hidden="true" />
-        </button>
+        </Button>
       </header>
 
       <div v-if="!assistantHistoryCollapsed" class="assistant-history__body">
@@ -3640,25 +3663,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,text/*,application/json,application/xml,image/*"
                 @change="onAssistantAttachmentChange"
               />
-              <button
-                type="button"
-                class="composer-icon-button"
+              <Button color="ghost" shape="pill" size="small" icon-only class="composer-icon-button" type="button"
                 title="Add attachment"
                 aria-label="Add attachment"
                 :disabled="assistantSending"
                 @click="openAssistantAttachmentPicker"
               >
                 <UiIcon name="Paperclip" :size="18" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                class="composer-icon-button"
+              </Button>
+              <Button color="ghost" shape="pill" size="small" icon-only class="composer-icon-button" type="button"
                 title="Jobs"
                 aria-label="Jobs"
                 @click="openConfigureJobsModal"
               >
                 <UiIcon name="BriefcaseBusiness" :size="18" aria-hidden="true" />
-              </button>
+              </Button>
             </div>
 
             <div class="assistant-composer__right">
@@ -3702,10 +3721,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   {{ selectedModelSetup.statusLabel }}
                 </span>
               </div>
-              <button
-                type="button"
+              <Button
+                :color="voiceDictationState === 'listening' ? 'accent' : 'ghost'"
+                shape="pill"
+                size="small"
+                icon-only
                 class="composer-icon-button"
-                :class="{ 'composer-icon-button--listening': voiceDictationState === 'listening' }"
                 :title="
                   voiceDictationState === 'listening'
                     ? 'Stop dictation'
@@ -3718,23 +3739,28 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 "
                 :aria-pressed="voiceDictationState === 'listening'"
                 :disabled="!canUseVoiceDictation || voiceDictationState === 'unsupported'"
+                type="button"
                 @click="toggleVoiceDictation"
               >
                 <UiIcon
                   :name="voiceDictationState === 'listening' ? 'MicOff' : 'Mic'"
                   :size="17"
                 />
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                :color="assistantSending ? 'secondary' : 'primary'"
+                shape="pill"
+                size="small"
+                icon-only
                 class="assistant-send"
                 :class="{ 'assistant-send--stop': assistantSending }"
                 :disabled="assistantSending ? false : !canSendAssistantMessage"
                 :aria-label="assistantSending ? 'Stop response' : 'Send message'"
+                type="button"
                 @click="assistantSending ? stopAssistantTurn() : sendAssistantMessage()"
               >
                 <UiIcon :name="assistantSending ? 'Square' : 'ArrowUp'" :size="18" />
-              </button>
+              </Button>
             </div>
           </div>
           <div
@@ -3772,14 +3798,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <h2 id="archived-chats-title">Archived Chats</h2>
               <p>Restore a chat to bring it back into the side nav.</p>
             </div>
-            <button
-              type="button"
-              class="modal-close"
+            <Button color="ghost" shape="soft" size="compact" icon-only type="button"
               aria-label="Close"
               @click="closeArchivedThreadsModal"
             >
               <UiIcon name="X" :size="20" />
-            </button>
+            </Button>
           </header>
 
           <p v-if="archivedAssistantThreadsError" class="assistant-history__message">
@@ -3873,14 +3897,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <UiIcon name="Plus" :size="15" aria-hidden="true" />
                 <span>Set up a job</span>
               </button>
-              <button
-                type="button"
-                class="modal-close"
+              <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                 aria-label="Close"
                 @click="closeConfigureJobsModal"
               >
                 <UiIcon name="X" :size="20" />
-              </button>
+              </Button>
             </div>
           </header>
 
@@ -3952,15 +3974,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     />
                     <span class="job-toggle__track" aria-hidden="true" />
                   </label>
-                  <button
-                    type="button"
-                    class="icon-button"
+                  <Button color="ghost" shape="soft" size="small" icon-only type="button"
                     title="Job detail"
                     aria-label="Open job detail"
                     @click.stop="openJob(row.job.id)"
                   >
                     <UiIcon name="Pencil" :size="16" />
-                  </button>
+                  </Button>
                 </div>
               </article>
 
@@ -4047,14 +4067,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <h2 id="recipe-ingredients-title">Recipe ingredients</h2>
               <p>ME3 features currently available to starter recipes.</p>
             </div>
-            <button
-              type="button"
-              class="modal-close"
+            <Button color="ghost" shape="soft" size="compact" icon-only type="button"
               aria-label="Close"
               @click="closeRecipeIngredientsModal"
             >
               <UiIcon name="X" :size="20" />
-            </button>
+            </Button>
           </header>
 
           <div v-if="loadingRecipes" class="empty-row">
@@ -4147,14 +4165,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </div>
                 <p>{{ jobDetailPurpose(selectedJob) }}</p>
               </div>
-              <button
-                type="button"
-                class="modal-close"
+              <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                 aria-label="Close"
                 @click="closeDetailModal"
               >
                 <UiIcon name="X" :size="20" />
-              </button>
+              </Button>
             </header>
 
             <div v-if="selectedJob.status === 'needs_setup'" class="notice">
@@ -4239,14 +4255,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       >
                         Save
                       </Button>
-                      <button
-                        type="button"
-                        class="icon-button"
+                      <Button color="ghost" shape="soft" size="small" icon-only type="button"
                         aria-label="Cancel schedule edit"
                         @click="cancelScheduleInlineEdit"
                       >
                         <UiIcon name="X" :size="14" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </dd>
@@ -4257,15 +4271,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   <span>{{
                     formatTrigger(selectedJob.triggerSummary)
                   }}</span>
-                  <button
-                    type="button"
-                    class="icon-button"
+                  <Button color="ghost" shape="soft" size="small" icon-only type="button"
                     title="Edit schedule"
                     aria-label="Edit schedule"
                     @click="openScheduleInlineEdit"
                   >
                     <UiIcon name="Pencil" :size="14" />
-                  </button>
+                  </Button>
                 </dd>
                 <dd v-else>
                   {{ formatTrigger(selectedJob.triggerSummary) }}
@@ -4350,16 +4362,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       />
                       <span class="job-toggle__track" aria-hidden="true" />
                     </label>
-                    <button
-                      type="button"
-                      class="icon-button"
+                    <Button color="ghost" shape="soft" size="small" icon-only type="button"
                       title="Remove rule"
                       aria-label="Remove rule"
                       :disabled="inboxWatchRulesDraft.length <= 1"
                       @click="removeInboxWatchRule(rule.id)"
                     >
                       <UiIcon name="Trash2" :size="16" />
-                    </button>
+                    </Button>
                   </div>
 
                   <div class="inbox-watch-grid">
@@ -4475,15 +4485,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
             >
               <div class="briefing-settings__header">
                 <h3 id="briefing-customise-title">Customise message</h3>
-                <button
-                  type="button"
-                  class="icon-button"
+                <Button color="ghost" shape="soft" size="small" icon-only type="button"
                   title="Restore default"
                   aria-label="Restore default message"
                   @click="resetDailyBriefingTemplate"
                 >
                   <UiIcon name="RefreshCw" :size="16" />
-                </button>
+                </Button>
               </div>
 
               <div class="briefing-settings__columns">
@@ -4686,28 +4694,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-history__nav-row:hover,
 .assistant-history__project-row:hover,
 .assistant-history__thread:hover,
-.assistant-history__new-chat:hover,
-.assistant-history__icon-button:hover {
+.assistant-history__new-chat:hover {
   background: color-mix(in oklab, var(--ui-surface) 64%, transparent);
   color: var(--ui-text);
 }
 
-.assistant-history__icon-button,
 .assistant-mobile-nav__button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text-muted);
-  cursor: pointer;
-}
-
-.assistant-mobile-nav__button {
   pointer-events: auto;
 }
 
@@ -5615,47 +5608,18 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .composer-icon-button,
 .assistant-send {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ui-text-muted);
-  cursor: pointer;
 }
 
-.composer-icon-button:hover:not(:disabled) {
-  background: transparent;
-  color: var(--ui-text);
-}
-
-.composer-icon-button--listening,
-.composer-icon-button--listening:hover:not(:disabled) {
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-strong);
-}
-
-.composer-icon-button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.composer-icon-button:disabled:hover {
-  background: transparent;
-  color: var(--ui-text-muted);
-}
-
-.assistant-send {
+.assistant-send.me3-btn--primary {
   background: color-mix(in oklab, var(--ui-text-muted) 80%, var(--ui-surface));
+  border-color: transparent;
   color: var(--ui-surface);
 }
 
-.assistant-send--stop {
+.assistant-send--stop.me3-btn--secondary {
   background: var(--ui-surface-muted);
+  border-color: transparent;
   color: var(--ui-text);
 }
 
@@ -5994,24 +5958,6 @@ button:focus-visible {
 .job-toggle__input:disabled + .job-toggle__track {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  cursor: pointer;
-}
-
-.icon-button:hover {
-  background: var(--ui-surface-muted);
 }
 
 button:disabled {
@@ -6586,16 +6532,7 @@ button:disabled {
 }
 
 .modal-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .assistant-modal__footer {

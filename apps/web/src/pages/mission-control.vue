@@ -1986,14 +1986,17 @@ onBeforeUnmount(() => {
           >
             No projects yet. Personal tasks will still appear in All.
           </div>
-          <button
+          <Button
+            color="primary"
+            shape="soft"
+            size="compact"
+            class="project-picker-popover__add"
             type="button"
-            class="text-button text-button--primary project-picker-popover__add"
             @click="openProjectModal"
           >
             <UiIcon name="Plus" :size="15" />
             Add project
-          </button>
+          </Button>
         </div>
       </div>
       <div v-if="activeSection !== 'projects'" class="mission-control__section-title">
@@ -2178,9 +2181,8 @@ onBeforeUnmount(() => {
                           : "Run locally"
                       }}
                     </button>
-                    <button
+                    <Button color="ghost" shape="soft" size="compact" icon-only
                       type="button"
-                      class="icon-button quiet"
                       aria-label="Archive task"
                       :disabled="
                         projectTaskActionId === task.id ||
@@ -2189,7 +2191,7 @@ onBeforeUnmount(() => {
                       @click.stop="archiveProjectTask(task)"
                     >
                       <UiIcon name="X" :size="15" />
-                    </button>
+                    </Button>
                   </div>
                 </article>
                 <form
@@ -2222,23 +2224,20 @@ onBeforeUnmount(() => {
                     @keydown.esc.prevent="cancelProjectTaskComposer"
                   />
                   <div class="project-task-composer__actions">
-                    <button
+                    <Button color="ghost" shape="soft" size="compact" icon-only
                       type="button"
-                      class="icon-button quiet"
                       aria-label="Cancel task"
                       :disabled="projectTaskSaving"
                       @click="cancelProjectTaskComposer"
                     >
                       <UiIcon name="X" :size="15" />
-                    </button>
-                    <button
-                      type="submit"
-                      class="icon-button"
+                    </Button>
+                    <Button color="accent" shape="soft" size="compact" icon-only type="submit"
                       aria-label="Add task"
                       :disabled="projectTaskCreateDisabled"
                     >
                       <UiIcon name="Plus" :size="16" />
-                    </button>
+                    </Button>
                   </div>
                 </form>
                 <button
@@ -2283,12 +2282,11 @@ onBeforeUnmount(() => {
             </p>
           </div>
         </div>
-        <router-link
-          class="text-button text-button--primary"
+        <Button color="primary" shape="soft" size="compact"
           to="/account?section=plugins&blocked=me3.accounts"
         >
           Open plugin settings
-        </router-link>
+        </Button>
       </div>
 
       <div v-else class="accounts-workspace">
@@ -2316,39 +2314,35 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div class="accounts-toolbar__actions">
-            <button
+            <Button color="outline" shape="soft" size="compact"
               type="button"
-              class="text-button"
               @click="chooseAccountsImportFile"
             >
               <UiIcon name="Upload" :size="13" />
               {{ accountsImporting ? "Importing..." : "Import CSV" }}
-            </button>
-            <button
+            </Button>
+            <Button color="outline" shape="soft" size="compact"
               type="button"
-              class="text-button"
               @click="exportAccountsCsv"
             >
               <UiIcon name="Download" :size="13" />
               Export CSV
-            </button>
-            <button
+            </Button>
+            <Button color="primary" shape="soft" size="compact"
               type="button"
-              class="text-button text-button--primary"
               :disabled="accountsSyncing || !accountsStripeConfigured"
               @click="syncAccountsStripe"
             >
               <UiIcon name="RefreshCw" :size="13" />
               {{ accountsSyncing ? "Syncing..." : "Sync Stripe" }}
-            </button>
-            <button
+            </Button>
+            <Button color="primary" shape="soft" size="compact"
               type="button"
-              class="text-button text-button--primary"
               @click="openAccountsModal"
             >
               <UiIcon name="Plus" :size="13" />
               Add entry
-            </button>
+            </Button>
             <input
               ref="accountsImportInput"
               type="file"
@@ -2419,13 +2413,12 @@ onBeforeUnmount(() => {
             <option value="stripe">Stripe</option>
             <option value="email_triage">Email triage</option>
           </select>
-          <button
+          <Button color="outline" shape="soft" size="compact"
             type="button"
-            class="text-button"
             @click="applyAccountsFilters"
           >
             Search
-          </button>
+          </Button>
         </div>
 
         <p v-if="accountsError" class="mission-control__message is-error">
@@ -2465,14 +2458,13 @@ onBeforeUnmount(() => {
                 accountStatusLabel(entry.status)
               }}</span>
               <span>{{ accountSourceLabel(entry.source) }}</span>
-              <button
+              <Button color="ghost" shape="soft" size="compact" icon-only
                 type="button"
-                class="icon-button quiet"
                 aria-label="Delete entry"
                 @click="deleteAccountEntry(entry)"
               >
                 <UiIcon name="Trash2" :size="15" />
-              </button>
+              </Button>
             </article>
           </template>
         </div>
@@ -2480,24 +2472,22 @@ onBeforeUnmount(() => {
         <div class="accounts-pagination">
           <span>{{ accountsEntryCountLabel }} - page {{ accountsPage }}</span>
           <div>
-            <button
+            <Button color="ghost" shape="soft" size="compact" icon-only
               type="button"
-              class="icon-button quiet"
               :disabled="!accountsHasPrevious"
               aria-label="Previous page"
               @click="pageAccounts(-1)"
             >
               <UiIcon name="ChevronLeft" :size="18" />
-            </button>
-            <button
+            </Button>
+            <Button color="ghost" shape="soft" size="compact" icon-only
               type="button"
-              class="icon-button quiet"
               :disabled="!accountsHasNext"
               aria-label="Next page"
               @click="pageAccounts(1)"
             >
               <UiIcon name="ChevronRight" :size="18" />
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -2511,14 +2501,13 @@ onBeforeUnmount(() => {
             <p>Approvals, runs, and Mission Control updates.</p>
           </div>
           <div class="activity-header__actions">
-            <button
+            <Button color="danger" shape="soft" size="compact"
               type="button"
-              class="text-button text-button--danger"
               :disabled="activityItems.length === 0 || clearingActivity"
               @click="clearActivity"
             >
               {{ clearingActivity ? "Clearing" : "Clear activity" }}
-            </button>
+            </Button>
             <span>{{ activityItems.length }}</span>
           </div>
         </div>
@@ -2544,10 +2533,9 @@ onBeforeUnmount(() => {
               v-if="item.canCancelLocalRun || item.canRetryLocalRun"
               class="activity-row__actions"
             >
-              <button
+              <Button color="outline" shape="soft" size="compact"
                 v-if="item.canRetryLocalRun"
                 type="button"
-                class="text-button"
                 :disabled="
                   Boolean(
                     item.localExecutorRunId &&
@@ -2563,11 +2551,10 @@ onBeforeUnmount(() => {
                     ? "Queuing"
                     : "Retry"
                 }}
-              </button>
-              <button
+              </Button>
+              <Button color="danger" shape="soft" size="compact"
                 v-if="item.canCancelLocalRun"
                 type="button"
-                class="text-button text-button--danger"
                 :disabled="
                   Boolean(
                     item.localExecutorRunId &&
@@ -2583,7 +2570,7 @@ onBeforeUnmount(() => {
                     ? "Cancelling"
                     : "Cancel"
                 }}
-              </button>
+              </Button>
             </div>
           </div>
         </article>
@@ -2602,9 +2589,9 @@ onBeforeUnmount(() => {
             type="text"
             placeholder="Private memory"
           />
-          <button type="submit" class="icon-button" aria-label="Add memory">
+          <Button color="accent" shape="soft" size="compact" icon-only type="submit" aria-label="Add memory">
             <UiIcon name="Plus" :size="18" />
-          </button>
+          </Button>
         </form>
         <div v-if="memory.length === 0" class="empty-row">
           No private memory yet.
@@ -2635,25 +2622,23 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="detail-row__aside memory-row__actions">
-            <button
+            <Button color="primary" shape="soft" size="compact"
               v-if="item.reviewStatus === 'needs_review'"
               type="button"
-              class="text-button text-button--primary"
               :disabled="memoryActionId === item.id"
               @click="approveMemory(item)"
             >
               <UiIcon name="Check" :size="14" />
               Approve
-            </button>
-            <button
+            </Button>
+            <Button color="danger" shape="soft" size="compact"
               type="button"
-              class="text-button text-button--danger"
               :disabled="memoryActionId === item.id"
               @click="forgetMemory(item)"
             >
               <UiIcon name="Trash2" :size="14" />
               Forget
-            </button>
+            </Button>
           </div>
         </article>
       </div>
@@ -2671,9 +2656,9 @@ onBeforeUnmount(() => {
             type="text"
             placeholder="Source name or URL"
           />
-          <button type="submit" class="icon-button" aria-label="Add source">
+          <Button color="accent" shape="soft" size="compact" icon-only type="submit" aria-label="Add source">
             <UiIcon name="Plus" :size="18" />
-          </button>
+          </Button>
         </form>
         <article v-for="source in sources" :key="source.id" class="detail-row">
           <div>
@@ -2703,14 +2688,13 @@ onBeforeUnmount(() => {
         >
           <div class="mission-modal__header">
             <h2 id="project-modal-title">Add project</h2>
-            <button
+            <Button color="ghost" shape="soft" size="compact" icon-only
               type="button"
-              class="icon-button quiet"
               aria-label="Close"
               @click="closeProjectModal"
             >
               <UiIcon name="X" :size="18" />
-            </button>
+            </Button>
           </div>
 
           <label class="field">
@@ -2762,13 +2746,12 @@ onBeforeUnmount(() => {
           <div v-if="projectLogoData" class="project-logo-preview">
             <img :src="projectLogoData" alt="" />
             <span>{{ projectLogoName }}</span>
-            <button
+            <Button color="outline" shape="soft" size="compact"
               type="button"
-              class="text-button"
               @click="removeProjectLogo"
             >
               Remove
-            </button>
+            </Button>
           </div>
 
           <p v-if="projectError" class="mission-modal__error">
@@ -2776,20 +2759,18 @@ onBeforeUnmount(() => {
           </p>
 
           <div class="mission-modal__actions">
-            <button
+            <Button color="outline" shape="soft" size="compact"
               type="button"
-              class="text-button"
               @click="closeProjectModal"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button color="primary" shape="soft" size="compact"
               type="submit"
-              class="text-button text-button--primary"
               :disabled="projectCreateDisabled"
             >
               {{ projectSaving ? "Adding..." : "Add project" }}
-            </button>
+            </Button>
           </div>
         </form>
       </div>
@@ -2819,14 +2800,13 @@ onBeforeUnmount(() => {
                   : "Task details"
               }}
             </h2>
-            <button
+            <Button color="ghost" shape="soft" size="compact" icon-only
               type="button"
-              class="icon-button quiet"
               aria-label="Close"
               @click="closeProjectTaskDetail()"
             >
               <UiIcon name="X" :size="18" />
-            </button>
+            </Button>
           </div>
 
           <div class="task-detail-modal__context">
@@ -2895,13 +2875,12 @@ onBeforeUnmount(() => {
                       class="weekly-review-task-row__actions"
                       aria-label="Task cleanup action"
                     >
-                      <button
+                      <Button
+                        color="outline"
+                        shape="soft"
+                        size="compact"
                         type="button"
-                        class="text-button"
-                        :class="{
-                          'is-selected':
-                            weeklyReviewTaskActions[item.id] === 'archive',
-                        }"
+                        :active="weeklyReviewTaskActions[item.id] === 'archive'"
                         :disabled="
                           weeklyReviewSubmitting ||
                           Boolean(selectedProjectTaskWeeklyReview.submittedAt)
@@ -2909,14 +2888,13 @@ onBeforeUnmount(() => {
                         @click="setWeeklyReviewTaskAction(item.id, 'archive')"
                       >
                         Archive
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        color="outline"
+                        shape="soft"
+                        size="compact"
                         type="button"
-                        class="text-button"
-                        :class="{
-                          'is-selected':
-                            weeklyReviewTaskActions[item.id] === 'done',
-                        }"
+                        :active="weeklyReviewTaskActions[item.id] === 'done'"
                         :disabled="
                           weeklyReviewSubmitting ||
                           Boolean(selectedProjectTaskWeeklyReview.submittedAt)
@@ -2924,7 +2902,7 @@ onBeforeUnmount(() => {
                         @click="setWeeklyReviewTaskAction(item.id, 'done')"
                       >
                         Done
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -3108,9 +3086,8 @@ onBeforeUnmount(() => {
           </p>
 
           <div class="mission-modal__actions task-detail-modal__actions">
-            <button
+            <Button color="danger" shape="soft" size="compact"
               type="button"
-              class="text-button text-button--danger"
               :disabled="
                 projectTaskDetailSaving ||
                 projectTaskActionId === selectedProjectTaskDetail.id
@@ -3118,20 +3095,18 @@ onBeforeUnmount(() => {
               @click="archiveSelectedProjectTask"
             >
               Archive
-            </button>
+            </Button>
             <div class="task-detail-modal__primary-actions">
-              <button
+              <Button color="outline" shape="soft" size="compact"
                 type="button"
-                class="text-button"
                 :disabled="projectTaskDetailSaving || weeklyReviewSubmitting"
                 @click="closeProjectTaskDetail()"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button color="primary" shape="soft" size="compact"
                 v-if="selectedProjectTaskIsWeeklyReview"
                 type="submit"
-                class="text-button text-button--primary"
                 :disabled="weeklyReviewSubmitDisabled"
               >
                 {{
@@ -3139,15 +3114,14 @@ onBeforeUnmount(() => {
                     ? "Submitting..."
                     : "Submit review"
                 }}
-              </button>
-              <button
+              </Button>
+              <Button color="primary" shape="soft" size="compact"
                 v-else
                 type="submit"
-                class="text-button text-button--primary"
                 :disabled="projectTaskDetailSaveDisabled"
               >
                 {{ projectTaskDetailSaving ? "Saving..." : "Save" }}
-              </button>
+              </Button>
             </div>
           </div>
         </form>
@@ -3168,14 +3142,13 @@ onBeforeUnmount(() => {
         >
           <div class="mission-modal__header">
             <h2 id="accounts-modal-title">Add account entry</h2>
-            <button
+            <Button color="ghost" shape="soft" size="compact" icon-only
               type="button"
-              class="icon-button quiet"
               aria-label="Close"
               @click="closeAccountsModal"
             >
               <UiIcon name="X" :size="18" />
-            </button>
+            </Button>
           </div>
 
           <div class="accounts-modal__grid">
@@ -3253,20 +3226,18 @@ onBeforeUnmount(() => {
           </p>
 
           <div class="mission-modal__actions">
-            <button
+            <Button color="outline" shape="soft" size="compact"
               type="button"
-              class="text-button"
               @click="closeAccountsModal"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button color="primary" shape="soft" size="compact"
               type="submit"
-              class="text-button text-button--primary"
               :disabled="accountsFormDisabled"
             >
               {{ accountsSaving ? "Adding..." : "Add entry" }}
-            </button>
+            </Button>
           </div>
         </form>
       </div>
@@ -3341,22 +3312,15 @@ onBeforeUnmount(() => {
   color: var(--ui-text);
 }
 
-.mission-control__section-tab,
-.mission-control__project-label,
-.icon-button,
-.text-button {
+.mission-control__section-tab {
   border: 1px solid transparent;
   background: transparent;
-  color: inherit;
+  color: var(--ui-text-muted);
   font: inherit;
   cursor: pointer;
-}
-
-.mission-control__section-tab {
   min-height: 36px;
   padding: 6px 12px;
   border-radius: var(--ui-radius-sm);
-  color: var(--ui-text-muted);
   font-size: 13px;
   font-weight: 650;
   white-space: nowrap;
@@ -3389,8 +3353,13 @@ onBeforeUnmount(() => {
   min-width: 0;
   min-height: 36px;
   padding: 6px 10px;
+  border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
   line-height: 1.2;
+  cursor: pointer;
 }
 
 .mission-control__project-label:hover,
@@ -3427,38 +3396,8 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.icon-button {
-  display: inline-grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border-radius: var(--ui-radius-sm);
-  text-decoration: none;
-}
-
-.icon-button:hover,
-.icon-button.is-active {
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-contrast);
-}
-
-.icon-button.quiet:hover {
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
-}
-
 .mission-control__section-cycle {
   display: inline-grid;
-}
-
-.mission-control__topbar .icon-button {
-  color: var(--ui-text-muted);
-}
-
-.mission-control__topbar .icon-button:hover,
-.mission-control__topbar .icon-button.is-active {
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
 }
 
 .settings-menu {
@@ -3647,7 +3586,7 @@ onBeforeUnmount(() => {
   outline-offset: 1px;
 }
 
-.project-task-composer .icon-button:disabled,
+.project-task-composer .me3-btn:disabled,
 .project-column-add:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -3795,7 +3734,7 @@ onBeforeUnmount(() => {
   min-width: 116px;
 }
 
-.memory-row__actions .text-button {
+.memory-row__actions .me3-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3822,7 +3761,7 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.activity-row__actions .text-button {
+.activity-row__actions .me3-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -4044,12 +3983,12 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
-.project-task-card__actions .icon-button {
+.project-task-card__actions .me3-btn {
   width: 28px;
   height: 28px;
 }
 
-.project-task-card__actions .icon-button:disabled {
+.project-task-card__actions .me3-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -4074,12 +4013,12 @@ onBeforeUnmount(() => {
   gap: 4px;
 }
 
-.project-task-composer__actions .icon-button {
+.project-task-composer__actions .me3-btn {
   width: 30px;
   height: 30px;
 }
 
-.project-task-composer__actions .icon-button[type="submit"] {
+.project-task-composer__actions .me3-btn[type="submit"] {
   background: var(--ui-accent);
   color: var(--ui-accent-contrast);
 }
@@ -4136,7 +4075,7 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
-.accounts-toolbar__actions .text-button {
+.accounts-toolbar__actions .me3-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -4147,7 +4086,7 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
-.accounts-pagination .text-button {
+.accounts-pagination .me3-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -4255,7 +4194,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.accounts-table__row .icon-button {
+.accounts-table__row .me3-btn {
   width: 30px;
   height: 30px;
 }
@@ -4313,41 +4252,6 @@ onBeforeUnmount(() => {
   justify-self: center;
   width: auto;
   min-width: 180px;
-}
-
-.text-button {
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-}
-
-.text-button:hover {
-  background: var(--ui-surface-muted);
-}
-
-.text-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.text-button--primary {
-  border-color: transparent;
-  background: var(--ui-accent);
-  color: var(--ui-accent-contrast);
-}
-
-.text-button--primary:hover {
-  background: var(--ui-accent-strong);
-}
-
-.text-button--danger {
-  border-color: color-mix(in oklab, #b91c1c, var(--ui-border) 60%);
-  color: #b91c1c;
-}
-
-.text-button--danger:hover {
-  background: color-mix(in oklab, #b91c1c, transparent 92%);
 }
 
 .mission-modal {
@@ -4586,12 +4490,12 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
-.weekly-review-task-row__actions .text-button {
+.weekly-review-task-row__actions .me3-btn {
   min-height: 30px;
   padding: 4px 8px;
 }
 
-.weekly-review-task-row__actions .text-button.is-selected {
+.weekly-review-task-row__actions .me3-btn.me3-btn--active {
   border-color: transparent;
   background: var(--ui-accent);
   color: var(--ui-accent-contrast);
@@ -4801,7 +4705,7 @@ onBeforeUnmount(() => {
     min-width: 0;
   }
 
-  .memory-row__actions .text-button {
+  .memory-row__actions .me3-btn {
     width: auto;
   }
 

@@ -9,6 +9,7 @@ import {
 } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../api";
+import Button from "../components/Button.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import TiptapEditor from "../components/TiptapEditor.vue";
 import UiIcon from "../components/UiIcon.vue";
@@ -276,14 +277,18 @@ onBeforeUnmount(() => {
     <header class="journal__topbar">
       <div class="journal__topbar-spacer" />
       <div class="journal__day-switcher" aria-label="Selected day" @click.stop>
-        <button
-          type="button"
-          class="journal-icon-button"
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
           aria-label="Previous day"
+          title="Previous day"
+          type="button"
           @click="setDate(addDays(selectedDate, -1))"
         >
           <UiIcon name="ChevronLeft" :size="18" />
-        </button>
+        </Button>
         <button
           type="button"
           class="journal__day-label"
@@ -294,14 +299,18 @@ onBeforeUnmount(() => {
         >
           <strong>{{ selectedDateLabel }}</strong>
         </button>
-        <button
-          type="button"
-          class="journal-icon-button"
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
           aria-label="Next day"
+          title="Next day"
+          type="button"
           @click="setDate(addDays(selectedDate, 1))"
         >
           <UiIcon name="ChevronRight" :size="18" />
-        </button>
+        </Button>
         <DatePickerPopover
           v-if="datePickerOpen"
           :month-key="datePickerMonth"
@@ -315,16 +324,21 @@ onBeforeUnmount(() => {
           @secondary-action="toggleArchive"
         />
       </div>
-      <button
-        type="button"
-        class="journal__archive-button journal-icon-button"
-        :class="{ 'is-active': archiveOpen }"
+      <Button
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        class="journal__archive-button"
+        :active="archiveOpen"
         aria-label="Archive"
         :aria-pressed="archiveOpen ? 'true' : 'false'"
+        title="Archive"
+        type="button"
         @click="toggleArchive"
       >
         <UiIcon name="Archive" :size="16" />
-      </button>
+      </Button>
     </header>
 
     <div class="journal__workspace">
@@ -428,9 +442,7 @@ onBeforeUnmount(() => {
   justify-self: center;
 }
 
-.journal-icon-button,
-.journal__day-label,
-.journal__archive-button {
+.journal__day-label {
   border: 1px solid transparent;
   background: transparent;
   color: var(--ui-text, var(--color-text));
@@ -438,21 +450,12 @@ onBeforeUnmount(() => {
   border-radius: var(--ui-radius-sm, 8px);
 }
 
-.journal-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
+.journal__archive-button {
+  justify-self: end;
 }
 
-.journal-icon-button:focus,
-.journal-icon-button:focus-visible,
 .journal__day-label:focus,
-.journal__day-label:focus-visible,
-.journal__archive-button:focus,
-.journal__archive-button:focus-visible {
+.journal__day-label:focus-visible {
   outline: none;
 }
 
@@ -477,14 +480,7 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
-.journal__archive-button {
-  justify-self: end;
-}
-
-.journal-icon-button:hover,
-.journal__day-label:hover,
-.journal__archive-button:hover,
-.journal__archive-button.is-active {
+.journal__day-label:hover {
   background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
@@ -693,9 +689,5 @@ onBeforeUnmount(() => {
     font-size: 14px;
   }
 
-  .journal-icon-button {
-    width: 32px;
-    height: 32px;
-  }
 }
 </style>
