@@ -98,6 +98,7 @@ import {
   deleteMissionContextSource,
   deleteMissionMemory,
   getMissionDaemonStatus,
+  getMissionDashboard,
   getMissionSetup,
   listMissionAgentRuns,
   listMissionApprovals,
@@ -113,6 +114,7 @@ import {
   submitMissionWeeklyReviewTask,
   suggestMissionMemory,
   updateMissionContextSource,
+  updateMissionDashboard,
   updateMissionMemory,
   updateMissionProject,
   updateMissionTask,
@@ -3018,6 +3020,38 @@ app.get("/api/mission-control/projects", async (c) => {
 
   try {
     return c.json({ projects: await listMissionProjects(c.env, ownerId) });
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.get("/api/mission-control/dashboard", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(await getMissionDashboard(c.env, ownerId));
+  } catch (error) {
+    return missionControlErrorResponse(c, error);
+  }
+});
+
+app.patch("/api/mission-control/dashboard", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const blocked = await requireMissionControlPlugin(c);
+  if (blocked) return blocked;
+
+  try {
+    return c.json(
+      await updateMissionDashboard(
+        c.env,
+        ownerId,
+        await c.req.json().catch(() => ({})),
+      ),
+    );
   } catch (error) {
     return missionControlErrorResponse(c, error);
   }

@@ -136,6 +136,60 @@ type MissionPluginActivityRow = {
   created_at: string;
 };
 
+type MissionDashboardSettingsRow = {
+  user_id: string;
+  cards_json: string;
+  quick_links_json: string;
+  settings_json: string;
+  mission_statement: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type DashboardCardSize = "small" | "medium" | "wide";
+
+type DashboardCardContribution = {
+  id: string;
+  pluginId: string;
+  label: string;
+  componentKey: string;
+  defaultEnabled: boolean;
+  defaultSize: DashboardCardSize;
+  dataEndpoint?: string;
+  requiresPluginIds?: string[];
+  requiresCapabilityIds?: string[];
+};
+
+type DashboardCardInstance = {
+  instanceId: string;
+  cardId: string;
+  pluginId: string;
+  enabled: boolean;
+  size: DashboardCardSize;
+  sortOrder: number;
+  config?: Record<string, unknown>;
+};
+
+type DashboardQuickActionContribution = {
+  id: string;
+  pluginId: string;
+  label: string;
+  icon: string;
+  defaultEnabled: boolean;
+  destinationId: string;
+  requiresPluginIds?: string[];
+};
+
+type DashboardQuickLink = {
+  id: string;
+  label: string;
+  icon: string;
+  enabled: boolean;
+  sortOrder: number;
+  destinationId: string;
+  requiresPluginId?: string;
+};
+
 type AgentChannelConnectionRow = {
   id: string;
 };
@@ -270,6 +324,89 @@ type ParsedWeeklyReviewResult = NonNullable<ReturnType<typeof parseWeeklyReviewR
 const PERSONAL_PROJECT_ID = "mission-project-personal";
 const DEFAULT_OWNER_TIMEZONE = "UTC";
 const ACTIVE_TASK_STATUSES: MissionTaskStatus[] = ["backlog", "in_progress", "review"];
+const DEFAULT_MISSION_STATEMENT =
+  "I am here to help [who/what] become [desired change] by being [way of being] and creating [work/service], guided by [values].";
+const DASHBOARD_CARD_CONTRIBUTIONS: DashboardCardContribution[] = [
+  {
+    id: "mission.daily-briefing",
+    pluginId: "me3.mission-control",
+    label: "Daily Briefing",
+    componentKey: "DailyBriefingCard",
+    defaultEnabled: true,
+    defaultSize: "medium",
+    dataEndpoint: "/api/mission-control/dashboard/cards/mission.daily-briefing",
+  },
+  {
+    id: "mission.mission-statement",
+    pluginId: "me3.mission-control",
+    label: "Mission Statement",
+    componentKey: "MissionStatementCard",
+    defaultEnabled: true,
+    defaultSize: "medium",
+  },
+  {
+    id: "mission.wheel-latest-snapshot",
+    pluginId: "me3.mission-control",
+    label: "Wheel of Life Snapshot",
+    componentKey: "WheelSnapshotCard",
+    defaultEnabled: true,
+    defaultSize: "medium",
+    dataEndpoint: "/api/mission-control/dashboard/cards/mission.wheel-latest-snapshot",
+  },
+];
+const DASHBOARD_QUICK_ACTION_CONTRIBUTIONS: DashboardQuickActionContribution[] = [
+  {
+    id: "mission.projects",
+    pluginId: "me3.mission-control",
+    label: "View Projects",
+    icon: "ListChecks",
+    defaultEnabled: true,
+    destinationId: "mission.projects",
+  },
+  {
+    id: "assistant.chat",
+    pluginId: "me3.core",
+    label: "Chat with ME3",
+    icon: "MessageCircle",
+    defaultEnabled: true,
+    destinationId: "assistant.chat",
+  },
+  {
+    id: "journal.today",
+    pluginId: "me3.journal",
+    label: "Add Journal Entry",
+    icon: "BookOpen",
+    defaultEnabled: true,
+    destinationId: "journal.today",
+    requiresPluginIds: ["me3.journal"],
+  },
+  {
+    id: "social.schedule",
+    pluginId: "me3.social-publishing",
+    label: "Schedule a post",
+    icon: "Send",
+    defaultEnabled: true,
+    destinationId: "social.schedule",
+    requiresPluginIds: ["me3.social-publishing"],
+  },
+  {
+    id: "sites.blog",
+    pluginId: "me3.landing-pages",
+    label: "Write a blog",
+    icon: "FileText",
+    defaultEnabled: true,
+    destinationId: "sites.blog",
+    requiresPluginIds: ["me3.landing-pages"],
+  },
+];
+const DASHBOARD_DESTINATIONS: Record<string, { path: string; requiresPluginId?: string }> = {
+  "mission.projects": { path: "/mission-control/projects" },
+  "assistant.chat": { path: "/assistant" },
+  "journal.today": { path: "/journal", requiresPluginId: "me3.journal" },
+  "social.schedule": { path: "/social", requiresPluginId: "me3.social-publishing" },
+  "sites.blog": { path: "/build", requiresPluginId: "me3.landing-pages" },
+  "accounts.ledger": { path: "/accounts", requiresPluginId: "me3.accounts" },
+};
 
 export async function listMissionProjects(env: Env, userId: string) {
   await ensurePersonalProject(env, userId);
@@ -763,6 +900,102 @@ export async function listMissionPluginActivity(env: Env, userId: string, limitI
     .bind(userId, limit)
     .all<MissionPluginActivityRow>();
   return (rows.results || []).map(serializePluginActivity);
+}
+
+export async function getMissionDashboard(env: Env, userId: string) {
+  const [row, enabledPluginIds, latestDailyBriefing] = await Promise.all([
+    getOrCreateMissionDashboardSettingsRow(env, userId),
+    getEnabledDashboardPluginIds(env),
+    getLatestMissionDailyBriefing(env, userId),
+  ]);
+  const enabledPlugins = new Set(enabledPluginIds);
+  const cardContributions = availableDashboardCardContributions(enabledPlugins);
+  const quickActionContributions = availableDashboardQuickActionContributions(enabledPlugins);
+  const missionStatement = row.mission_statement || DEFAULT_MISSION_STATEMENT;
+  const cards = resolveDashboardCards(parseJsonArray(row.cards_json), cardContributions);
+  const quickLinks = resolveDashboardQuickLinks(
+    parseJsonArray(row.quick_links_json),
+    quickActionContributions,
+  );
+  const settings = normalizeDashboardSettings(parseJsonRecord(row.settings_json));
+
+  return {
+    availableCards: cardContributions,
+    availableQuickActions: quickActionContributions,
+    destinations: DASHBOARD_DESTINATIONS,
+    cards,
+    quickLinks,
+    settings,
+    missionStatement,
+    data: {
+      "mission.daily-briefing": latestDailyBriefing,
+      "mission.mission-statement": {
+        missionStatement,
+        placeholder: DEFAULT_MISSION_STATEMENT,
+      },
+      "mission.wheel-latest-snapshot": {
+        snapshot: null,
+        source: "pending_server_storage",
+      },
+    },
+    updatedAt: normalizeDbDateTime(row.updated_at),
+  };
+}
+
+export async function updateMissionDashboard(
+  env: Env,
+  userId: string,
+  input: unknown,
+) {
+  const body = isRecord(input) ? input : {};
+  const existing = await getMissionDashboard(env, userId);
+  const missionStatement =
+    body.missionStatement === undefined
+      ? existing.missionStatement
+      : normalizeMissionStatement(body.missionStatement);
+  const cards =
+    body.cards === undefined
+      ? existing.cards
+      : resolveDashboardCards(
+          Array.isArray(body.cards) ? body.cards : [],
+          existing.availableCards,
+          { includeMissingDefaults: false },
+        );
+  const quickLinks =
+    body.quickLinks === undefined
+      ? existing.quickLinks
+      : resolveDashboardQuickLinks(
+          Array.isArray(body.quickLinks) ? body.quickLinks : [],
+          existing.availableQuickActions,
+          { includeMissingDefaults: false },
+        );
+  const settings = normalizeDashboardSettings({
+    ...existing.settings,
+    ...(isRecord(body.settings) ? body.settings : {}),
+    ...(body.kanbanEnabled === undefined ? {} : { kanbanEnabled: body.kanbanEnabled }),
+  });
+
+  await env.DB.prepare(
+    `INSERT INTO mission_dashboard_settings
+       (user_id, cards_json, quick_links_json, settings_json, mission_statement, updated_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(user_id) DO UPDATE SET
+       cards_json = excluded.cards_json,
+       quick_links_json = excluded.quick_links_json,
+       settings_json = excluded.settings_json,
+       mission_statement = excluded.mission_statement,
+       updated_at = datetime('now')`,
+  )
+    .bind(
+      userId,
+      JSON.stringify(cards),
+      JSON.stringify(quickLinks),
+      JSON.stringify(settings),
+      missionStatement,
+    )
+    .run();
+
+  return getMissionDashboard(env, userId);
 }
 
 async function getMissionControlDailyBriefing(env: Env, userId: string, date: string) {
@@ -1517,6 +1750,54 @@ async function getMissionContextSource(env: Env, userId: string, sourceId: strin
     .first<MissionContextSourceRow>();
 }
 
+async function getOrCreateMissionDashboardSettingsRow(env: Env, userId: string) {
+  const existing = await env.DB.prepare(
+    `SELECT user_id, cards_json, quick_links_json, settings_json,
+            mission_statement, created_at, updated_at
+     FROM mission_dashboard_settings
+     WHERE user_id = ?`,
+  )
+    .bind(userId)
+    .first<MissionDashboardSettingsRow>();
+  if (existing) return existing;
+
+  const enabledPluginIds = await getEnabledDashboardPluginIds(env);
+  const enabledPlugins = new Set(enabledPluginIds);
+  const cards = resolveDashboardCards(
+    [],
+    availableDashboardCardContributions(enabledPlugins),
+  );
+  const quickLinks = resolveDashboardQuickLinks(
+    [],
+    availableDashboardQuickActionContributions(enabledPlugins),
+  );
+  const settings = normalizeDashboardSettings({});
+
+  await env.DB.prepare(
+    `INSERT INTO mission_dashboard_settings
+       (user_id, cards_json, quick_links_json, settings_json, mission_statement)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO NOTHING`,
+  )
+    .bind(
+      userId,
+      JSON.stringify(cards),
+      JSON.stringify(quickLinks),
+      JSON.stringify(settings),
+      DEFAULT_MISSION_STATEMENT,
+    )
+    .run();
+
+  return (await env.DB.prepare(
+    `SELECT user_id, cards_json, quick_links_json, settings_json,
+            mission_statement, created_at, updated_at
+     FROM mission_dashboard_settings
+     WHERE user_id = ?`,
+  )
+    .bind(userId)
+    .first<MissionDashboardSettingsRow>()) as MissionDashboardSettingsRow;
+}
+
 async function ensurePersonalProject(env: Env, userId: string) {
   const existing = await env.DB.prepare(
     `SELECT id, user_id, name, slug, description, status, color, icon, source_kind,
@@ -1661,6 +1942,204 @@ async function appendMissionDaemonAudit(
       JSON.stringify(input.payload || {}),
     )
     .run();
+}
+
+async function getEnabledDashboardPluginIds(env: Env): Promise<string[]> {
+  const enabled = ["me3.core", "me3.mission-control"];
+  for (const pluginId of ["me3.journal", "me3.social-publishing", "me3.landing-pages", "me3.accounts"]) {
+    if (await isCorePluginEnabled(env, pluginId).catch(() => false)) {
+      enabled.push(pluginId);
+    }
+  }
+  return enabled;
+}
+
+async function getLatestMissionDailyBriefing(env: Env, userId: string) {
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, plugin_id, activity_type, title, summary, status,
+            related_id, metadata_json, created_at
+     FROM mission_plugin_activity
+     WHERE user_id = ?
+       AND activity_type = 'assistant_job.review_packet'
+     ORDER BY created_at DESC
+     LIMIT 20`,
+  )
+    .bind(userId)
+    .all<MissionPluginActivityRow>()
+    .catch(() => ({ results: [] as MissionPluginActivityRow[] }));
+
+  for (const row of rows.results || []) {
+    const activity = serializePluginActivity(row);
+    const briefing = parseDailyBriefingMetadata(activity.metadata);
+    if (!briefing) continue;
+    return {
+      id: activity.id,
+      title: activity.title,
+      message: briefing.message,
+      date: briefing.date,
+      createdAt: activity.createdAt,
+      status: activity.status,
+      relatedId: activity.relatedId,
+    };
+  }
+
+  return null;
+}
+
+function availableDashboardCardContributions(
+  enabledPlugins: Set<string>,
+): DashboardCardContribution[] {
+  return DASHBOARD_CARD_CONTRIBUTIONS.filter((card) =>
+    dashboardRequirementsMet(card.requiresPluginIds, enabledPlugins),
+  );
+}
+
+function availableDashboardQuickActionContributions(
+  enabledPlugins: Set<string>,
+): DashboardQuickActionContribution[] {
+  return DASHBOARD_QUICK_ACTION_CONTRIBUTIONS.filter((action) =>
+    dashboardRequirementsMet(action.requiresPluginIds, enabledPlugins),
+  );
+}
+
+function dashboardRequirementsMet(
+  pluginIds: string[] | undefined,
+  enabledPlugins: Set<string>,
+) {
+  return (pluginIds || []).every((pluginId) => enabledPlugins.has(pluginId));
+}
+
+function resolveDashboardCards(
+  stored: unknown[],
+  contributions: DashboardCardContribution[],
+  options: { includeMissingDefaults?: boolean } = {},
+): DashboardCardInstance[] {
+  const includeMissingDefaults = options.includeMissingDefaults !== false;
+  const contributionById = new Map(contributions.map((item) => [item.id, item]));
+  const cards: DashboardCardInstance[] = [];
+  const seen = new Set<string>();
+
+  for (const item of stored) {
+    const card = normalizeDashboardCardInstance(item, contributionById);
+    if (!card || seen.has(card.cardId)) continue;
+    seen.add(card.cardId);
+    cards.push(card);
+  }
+
+  if (includeMissingDefaults) {
+    for (const contribution of contributions) {
+      if (seen.has(contribution.id)) continue;
+      cards.push(defaultDashboardCardInstance(contribution, cards.length));
+    }
+  }
+
+  return cards
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.cardId.localeCompare(b.cardId))
+    .map((card, index) => ({ ...card, sortOrder: index }));
+}
+
+function normalizeDashboardCardInstance(
+  value: unknown,
+  contributionById: Map<string, DashboardCardContribution>,
+): DashboardCardInstance | null {
+  if (!isRecord(value)) return null;
+  const cardId = normalizeNullableText(value.cardId);
+  if (!cardId) return null;
+  const contribution = contributionById.get(cardId);
+  if (!contribution) return null;
+  const sortOrder = normalizeSortOrder(value.sortOrder);
+  return {
+    instanceId:
+      normalizeNullableText(value.instanceId) ||
+      `dashboard-card-${cardId}`,
+    cardId,
+    pluginId: contribution.pluginId,
+    enabled: value.enabled === undefined ? contribution.defaultEnabled : value.enabled === true,
+    size: normalizeDashboardCardSize(value.size) || contribution.defaultSize,
+    sortOrder,
+    config: isRecord(value.config) ? value.config : undefined,
+  };
+}
+
+function defaultDashboardCardInstance(
+  contribution: DashboardCardContribution,
+  sortOrder: number,
+): DashboardCardInstance {
+  return {
+    instanceId: `dashboard-card-${contribution.id}`,
+    cardId: contribution.id,
+    pluginId: contribution.pluginId,
+    enabled: contribution.defaultEnabled,
+    size: contribution.defaultSize,
+    sortOrder,
+  };
+}
+
+function resolveDashboardQuickLinks(
+  stored: unknown[],
+  contributions: DashboardQuickActionContribution[],
+  options: { includeMissingDefaults?: boolean } = {},
+): DashboardQuickLink[] {
+  const includeMissingDefaults = options.includeMissingDefaults !== false;
+  const contributionById = new Map(contributions.map((item) => [item.id, item]));
+  const links: DashboardQuickLink[] = [];
+  const seen = new Set<string>();
+
+  for (const item of stored) {
+    const link = normalizeDashboardQuickLink(item, contributionById);
+    if (!link || seen.has(link.id)) continue;
+    seen.add(link.id);
+    links.push(link);
+  }
+
+  if (includeMissingDefaults) {
+    for (const contribution of contributions) {
+      if (seen.has(contribution.id)) continue;
+      links.push(defaultDashboardQuickLink(contribution, links.length));
+    }
+  }
+
+  return links
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
+    .map((link, index) => ({ ...link, sortOrder: index }));
+}
+
+function normalizeDashboardQuickLink(
+  value: unknown,
+  contributionById: Map<string, DashboardQuickActionContribution>,
+): DashboardQuickLink | null {
+  if (!isRecord(value)) return null;
+  const id = normalizeNullableText(value.id);
+  if (!id) return null;
+  const contribution = contributionById.get(id);
+  const destinationId = normalizeNullableText(value.destinationId) || contribution?.destinationId;
+  if (!destinationId || !DASHBOARD_DESTINATIONS[destinationId]) return null;
+  const destination = DASHBOARD_DESTINATIONS[destinationId];
+  return {
+    id,
+    label: normalizeNullableText(value.label) || contribution?.label || id,
+    icon: normalizeDashboardIcon(value.icon) || contribution?.icon || "Circle",
+    enabled: value.enabled === undefined ? contribution?.defaultEnabled !== false : value.enabled === true,
+    sortOrder: normalizeSortOrder(value.sortOrder),
+    destinationId,
+    requiresPluginId: destination.requiresPluginId,
+  };
+}
+
+function defaultDashboardQuickLink(
+  contribution: DashboardQuickActionContribution,
+  sortOrder: number,
+): DashboardQuickLink {
+  const destination = DASHBOARD_DESTINATIONS[contribution.destinationId];
+  return {
+    id: contribution.id,
+    label: contribution.label,
+    icon: contribution.icon,
+    enabled: contribution.defaultEnabled,
+    sortOrder,
+    destinationId: contribution.destinationId,
+    requiresPluginId: destination?.requiresPluginId,
+  };
 }
 
 function serializeProject(row: MissionProjectRow) {
@@ -1964,6 +2443,34 @@ function normalizeListLimit(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(100, Math.round(parsed)));
+}
+
+function normalizeSortOrder(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(999, Math.round(parsed)));
+}
+
+function normalizeDashboardCardSize(value: unknown): DashboardCardSize | null {
+  return value === "small" || value === "medium" || value === "wide" ? value : null;
+}
+
+function normalizeDashboardIcon(value: unknown): string | null {
+  const text = normalizeNullableText(value);
+  if (!text || !/^[A-Za-z][A-Za-z0-9-]{0,40}$/.test(text)) return null;
+  return text;
+}
+
+function normalizeMissionStatement(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_MISSION_STATEMENT;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 2000) : DEFAULT_MISSION_STATEMENT;
+}
+
+function normalizeDashboardSettings(value: Record<string, unknown>) {
+  return {
+    kanbanEnabled: value.kanbanEnabled === true,
+  };
 }
 
 function activeTaskSortValue(row: MissionTaskRow): string {
