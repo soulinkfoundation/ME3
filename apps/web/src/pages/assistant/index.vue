@@ -602,6 +602,7 @@ const assistantThreadSearch = ref("");
 const assistantThreadActionId = ref<string | null>(null);
 const assistantHistoryCollapsed = ref(false);
 const assistantHistoryDrawerOpen = ref(false);
+const collapsedAssistantProjectIds = ref(new Set<string>());
 const assistantSettingsModalOpen = ref(false);
 const assistantSettingsSection = ref<AssistantSettingsSection>("context");
 const assistantSettingsError = ref("");
@@ -1176,6 +1177,17 @@ async function selectAssistantThread(threadId: string) {
 
 function toggleAssistantHistoryCollapsed() {
   assistantHistoryCollapsed.value = !assistantHistoryCollapsed.value;
+}
+
+function assistantProjectExpanded(projectId: string) {
+  return !collapsedAssistantProjectIds.value.has(projectId);
+}
+
+function toggleAssistantProject(projectId: string) {
+  const next = new Set(collapsedAssistantProjectIds.value);
+  if (next.has(projectId)) next.delete(projectId);
+  else next.add(projectId);
+  collapsedAssistantProjectIds.value = next;
 }
 
 async function applyAssistantThreadSearch() {
@@ -3750,19 +3762,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
           >
             <UiIcon name="Plus" :size="18" aria-hidden="true" />
           </Button>
-          <Button
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            class="assistant-mobile-nav__button"
-            aria-label="Assistant settings"
-            title="Assistant settings"
-            type="button"
-            @click="openAssistantSettings('context')"
-          >
-            <UiIcon name="Brain" :size="18" aria-hidden="true" />
-          </Button>
         </div>
       </div>
     </Teleport>
@@ -3914,23 +3913,36 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 'is-active':
                   routeProjectId() === group.project.id && !assistantThreadId,
               }"
-              :aria-label="`Start a new chat in ${group.project.name}`"
-              @click="startNewAssistantChat(group.project.id)"
+              :aria-expanded="assistantProjectExpanded(group.project.id)"
+              :aria-controls="`assistant-project-${group.project.id}-chats`"
+              @click="toggleAssistantProject(group.project.id)"
             >
+              <UiIcon
+                :name="
+                  assistantProjectExpanded(group.project.id)
+                    ? 'ChevronDown'
+                    : 'ChevronRight'
+                "
+                :size="14"
+                aria-hidden="true"
+              />
               <UiIcon name="Folder" :size="15" aria-hidden="true" />
               <span>{{ group.project.name }}</span>
-              <span
-                v-if="group.threads.length"
-                class="assistant-history__count"
-              >
-                {{ group.threads.length }}
-              </span>
-              <span class="assistant-history__project-add" aria-hidden="true">
-                <UiIcon name="Plus" :size="14" />
-              </span>
+            </button>
+            <button
+              type="button"
+              class="assistant-history__project-add"
+              :aria-label="`Start a new chat in ${group.project.name}`"
+              :title="`Start a new chat in ${group.project.name}`"
+              @click="startNewAssistantChat(group.project.id)"
+            >
+              <UiIcon name="Plus" :size="14" aria-hidden="true" />
             </button>
             <nav
-              v-if="group.threads.length"
+              v-if="
+                group.threads.length && assistantProjectExpanded(group.project.id)
+              "
+              :id="`assistant-project-${group.project.id}-chats`"
               class="assistant-history__list assistant-history__list--nested"
               :aria-label="`${group.project.name} chats`"
             >
@@ -5950,8 +5962,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: transparent;
   color: var(--ui-text-muted);
   font: inherit;
-  font-size: 13px;
-  font-weight: 520;
+  font-size: 12px;
+  font-weight: 400;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -6076,11 +6088,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history__list--nested {
+  grid-column: 1 / -1;
   margin-left: 12px;
 }
 
 .assistant-history__project-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
   gap: 2px;
 }
 
@@ -6092,30 +6106,31 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: auto;
-  opacity: 0;
+  width: 28px;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 0;
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+  opacity: 0.72;
   transition: opacity 0.14s ease;
 }
 
-.assistant-history__count + .assistant-history__project-add {
-  margin-left: 0;
-}
-
-.assistant-history__project-row:hover .assistant-history__project-add,
-.assistant-history__project-row:focus-visible .assistant-history__project-add {
+.assistant-history__project-group:hover .assistant-history__project-add,
+.assistant-history__project-group:focus-within .assistant-history__project-add,
+.assistant-history__project-add:hover,
+.assistant-history__project-add:focus-visible {
   opacity: 1;
+  background: color-mix(in oklab, var(--ui-surface) 64%, transparent);
+  color: var(--ui-text);
 }
 
 .assistant-history__project-row.is-active,
 .assistant-history__thread-row.is-active {
   background: var(--ui-surface);
   color: var(--ui-text);
-}
-
-.assistant-history__count {
-  margin-left: auto;
-  color: var(--ui-text-muted);
-  font-size: 11px;
 }
 
 .assistant-history__thread-main {
@@ -6172,23 +6187,29 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history__footer {
-  display: grid;
-  gap: 2px;
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin-top: auto;
   padding-top: 8px;
   border-top: 1px solid var(--ui-border);
+  background: var(--ui-page);
 }
 
 .assistant-history__archive-button,
 .assistant-history__footer-button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
-  width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 30px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
-  padding: 0 8px;
+  padding: 0 6px;
   background: transparent;
   color: var(--ui-text-muted);
   font: inherit;
