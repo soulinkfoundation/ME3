@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
 import UiIcon from "../components/UiIcon.vue";
-import { API_BASE, api } from "../api";
+import { API_BASE, ApiError, api } from "../api";
 import { useAppToast } from "../composables/useAppToast";
 import { useInboxDraftCount } from "../composables/useInboxDraftCount";
 import { useAuthStore } from "../stores/auth";
@@ -1116,6 +1116,12 @@ async function syncSoulinkContacts() {
           }.`
         : "Soulink contacts are up to date.";
   } catch (err) {
+    if (err instanceof ApiError && err.status === 409) {
+      soulinkContactsConnected.value = false;
+      soulinkSyncError.value = "";
+      soulinkSyncNotice.value = "";
+      return;
+    }
     soulinkSyncError.value =
       err instanceof Error ? err.message : "Failed to sync Soulink contacts";
   } finally {
@@ -2344,11 +2350,14 @@ onBeforeUnmount(() => {
                   v-if="!soulinkContactsConnected"
                   class="contacts-sync-note"
                 >
-                  You can sync other ME3 contacts here by connecting to
+                  You can sync your Soulink contacts here by connecting to
                   Soulink in
-                  <router-link to="/account" class="empty-hint-link">
-                    account settings
-                  </router-link>.
+                  <router-link
+                    to="/account?section=advanced"
+                    class="empty-hint-link"
+                  >
+                    Settings -> Advanced
+                  </router-link>
                 </div>
                 <div
                   v-else-if="soulinkSyncError"
