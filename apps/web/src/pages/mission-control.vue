@@ -803,7 +803,7 @@ onMounted(() => {
                 aria-label="Open Wheel of Life"
                 title="Open Wheel of Life"
               >
-                <UiIcon name="Pencil" :size="16" />
+                <UiIcon name="Eye" :size="16" />
               </Button>
             </div>
             <div v-if="wheelSnapshot?.snapshot" class="wheel-summary">
