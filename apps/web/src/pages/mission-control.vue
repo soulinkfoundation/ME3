@@ -5,9 +5,19 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../api";
 import Button from "../components/Button.vue";
 import IconPicker from "../components/IconPicker.vue";
+import {
+  activeProjectTaskStatuses,
+  missionTasksUrl,
+  projectBoardStatuses,
+} from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
 import { resolveUiIconName, type UiIconName } from "../utils/icons";
+import type {
+  MissionProject,
+  MissionTask,
+  ProjectBoardStatus,
+} from "../components/mission-control/projectWorkspace";
 
 definePage({
   meta: {
@@ -78,6 +88,19 @@ type WheelSnapshotCardData = {
   source: string;
 };
 
+type MissionTasksResponse = {
+  tasks: MissionTask[];
+  nextCursor: string | null;
+  limit: number;
+};
+
+type ProjectDashboardSummary = {
+  id: string;
+  label: string;
+  total: number;
+  counts: Record<ProjectBoardStatus, number>;
+};
+
 type MissionDashboardResponse = {
   cards: DashboardCardInstance[];
   availableCards: DashboardCardContribution[];
@@ -127,36 +150,66 @@ const draggedCardId = ref("");
 const draggedQuickActionId = ref("");
 const cardPickerOpen = ref(false);
 const quickActionPickerOpen = ref(false);
+const dashboardProjects = ref<MissionProject[]>([]);
+const dashboardProjectTasks = ref<MissionTask[]>([]);
+const projectsSummaryLoading = ref(false);
+const projectsSummaryError = ref("");
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
-    .filter((card) => card.enabled && card.available !== false && isRenderableDashboardCard(card))
+    .filter(
+      (card) =>
+        card.enabled &&
+        card.available !== false &&
+        isRenderableDashboardCard(card),
+    )
     .map((card) => ({ ...card, size: "medium" as const }))
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const quickLinks = computed(() =>
   (dashboard.value?.quickLinks || [])
-    .filter((link) => link.enabled && link.available !== false && dashboard.value?.destinations[link.destinationId])
+    .filter(
+      (link) =>
+        link.enabled &&
+        link.available !== false &&
+        dashboard.value?.destinations[link.destinationId],
+    )
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const visibleCards = computed(() =>
   (dashboardEditing.value ? cardDrafts.value : cards.value)
-    .filter((card) => card.enabled && card.available !== false && isRenderableDashboardCard(card))
+    .filter(
+      (card) =>
+        card.enabled &&
+        card.available !== false &&
+        isRenderableDashboardCard(card),
+    )
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const visibleQuickLinks = computed(() =>
   (dashboardEditing.value ? quickActionDrafts.value : quickLinks.value)
-    .filter((link) => link.enabled && link.available !== false && dashboard.value?.destinations[link.destinationId])
+    .filter(
+      (link) =>
+        link.enabled &&
+        link.available !== false &&
+        dashboard.value?.destinations[link.destinationId],
+    )
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const availableCardDrafts = computed(() =>
   cardDrafts.value
-    .filter((card) => card.available !== false && isRenderableDashboardCard(card))
+    .filter(
+      (card) => card.available !== false && isRenderableDashboardCard(card),
+    )
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const availableQuickActionDrafts = computed(() =>
   quickActionDrafts.value
-    .filter((link) => link.available !== false && dashboard.value?.destinations[link.destinationId])
+    .filter(
+      (link) =>
+        link.available !== false &&
+        dashboard.value?.destinations[link.destinationId],
+    )
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const addableCardDrafts = computed(() =>
@@ -174,7 +227,60 @@ const missionStatement = computed(
 const wheelSnapshot = computed(
   () => dashboard.value?.data["mission.wheel-latest-snapshot"] || null,
 );
-const wheelSegments = computed(() => wheelSnapshot.value?.snapshot?.segments || []);
+const wheelSegments = computed(
+  () => wheelSnapshot.value?.snapshot?.segments || [],
+);
+const activeDashboardProjectTasks = computed(() =>
+  dashboardProjectTasks.value.filter((task) =>
+    activeProjectTaskStatuses.includes(task.status as ProjectBoardStatus),
+  ),
+);
+const totalOpenProjectTasks = computed(
+  () => activeDashboardProjectTasks.value.length,
+);
+const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
+  const activeProjects = dashboardProjects.value.filter(
+    (project) => project.status === "active",
+  );
+  const projectIds = new Set(activeProjects.map((project) => project.id));
+  const createCounts = (): Record<ProjectBoardStatus, number> =>
+    Object.fromEntries(
+      projectBoardStatuses.map((status) => [status.id, 0]),
+    ) as Record<ProjectBoardStatus, number>;
+  const summaries = activeProjects.map((project) => ({
+    id: project.id,
+    label: project.name,
+    total: 0,
+    counts: createCounts(),
+  }));
+  const summaryById = new Map(summaries.map((summary) => [summary.id, summary]));
+  const personalSummary: ProjectDashboardSummary = {
+    id: "personal",
+    label: "Personal",
+    total: 0,
+    counts: createCounts(),
+  };
+
+  for (const task of activeDashboardProjectTasks.value) {
+    const summary =
+      task.projectId && projectIds.has(task.projectId)
+        ? summaryById.get(task.projectId)
+        : personalSummary;
+    if (!summary) continue;
+    const status = task.status as ProjectBoardStatus;
+    summary.total += 1;
+    summary.counts[status] += 1;
+  }
+
+  const next = summaries.filter((summary) => summary.total > 0);
+  if (personalSummary.total > 0) next.push(personalSummary);
+  return next
+    .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
+    .slice(0, 4);
+});
+const visibleProjectStatuses = computed(() =>
+  projectBoardStatuses.filter((status) => status.id !== "done"),
+);
 
 function cardLabel(card: DashboardCardInstance): string {
   const contribution = dashboard.value?.availableCards.find(
@@ -196,7 +302,10 @@ function isRenderableDashboardCard(card: DashboardCardInstance): boolean {
 }
 
 function quickLinkPath(link: DashboardQuickLink): string {
-  return dashboard.value?.destinations[link.destinationId]?.path || "/mission-control";
+  return (
+    dashboard.value?.destinations[link.destinationId]?.path ||
+    "/mission-control"
+  );
 }
 
 function quickLinkIcon(link: DashboardQuickLink): UiIconName {
@@ -217,6 +326,16 @@ function missionStatementDisplayText(): string {
     missionStatement.value?.placeholder ||
     ""
   );
+}
+
+function projectStatusCountLabel(
+  summary: ProjectDashboardSummary,
+  status: ProjectBoardStatus,
+): string {
+  const count = summary.counts[status];
+  const label =
+    projectBoardStatuses.find((item) => item.id === status)?.label || status;
+  return `${label} ${count}`;
 }
 
 function syncDashboardDrafts() {
@@ -271,7 +390,9 @@ function nextEnabledCardSortOrder(): number {
 }
 
 function nextEnabledQuickActionSortOrder(): number {
-  return Math.max(-1, ...visibleQuickLinks.value.map((link) => link.sortOrder)) + 1;
+  return (
+    Math.max(-1, ...visibleQuickLinks.value.map((link) => link.sortOrder)) + 1
+  );
 }
 
 function addCardDraft(cardId: string) {
@@ -329,14 +450,19 @@ function reorderCards(sourceCardId: string, targetCardId: string) {
 }
 
 function reorderQuickActions(sourceLinkId: string, targetLinkId: string) {
-  const next = [...quickActionDrafts.value].sort((a, b) => a.sortOrder - b.sortOrder);
+  const next = [...quickActionDrafts.value].sort(
+    (a, b) => a.sortOrder - b.sortOrder,
+  );
   const sourceIndex = next.findIndex((link) => link.id === sourceLinkId);
   const targetIndex = next.findIndex((link) => link.id === targetLinkId);
   if (sourceIndex < 0 || targetIndex < 0) return;
   const [source] = next.splice(sourceIndex, 1);
   if (!source) return;
   next.splice(targetIndex, 0, source);
-  quickActionDrafts.value = next.map((link, sortOrder) => ({ ...link, sortOrder }));
+  quickActionDrafts.value = next.map((link, sortOrder) => ({
+    ...link,
+    sortOrder,
+  }));
 }
 
 function formatDashboardDate(value: string | null | undefined): string {
@@ -370,9 +496,39 @@ async function loadDashboard() {
     missionStatementDraft.value = dashboard.value.missionStatement;
     syncDashboardDrafts();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "Mission Control could not load.";
+    error.value =
+      err instanceof Error ? err.message : "Mission Control could not load.";
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadProjectsSummary() {
+  projectsSummaryLoading.value = true;
+  projectsSummaryError.value = "";
+  try {
+    const projectsResponse = await api.get<{ projects: MissionProject[] }>(
+      "/mission-control/projects",
+    );
+    const tasks: MissionTask[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 4; page += 1) {
+      const tasksResponse: MissionTasksResponse = await api.get(
+        missionTasksUrl({ active: true, cursor }),
+      );
+      tasks.push(...(tasksResponse.tasks || []));
+      cursor = tasksResponse.nextCursor || null;
+      if (!cursor) break;
+    }
+    dashboardProjects.value = projectsResponse.projects || [];
+    dashboardProjectTasks.value = tasks;
+  } catch (err) {
+    projectsSummaryError.value =
+      err instanceof Error ? err.message : "Project stats could not load.";
+    dashboardProjects.value = [];
+    dashboardProjectTasks.value = [];
+  } finally {
+    projectsSummaryLoading.value = false;
   }
 }
 
@@ -429,6 +585,7 @@ async function saveDashboardLayout() {
 onMounted(() => {
   cleanLegacySectionQuery();
   void loadDashboard();
+  void loadProjectsSummary();
 });
 </script>
 
@@ -454,11 +611,18 @@ onMounted(() => {
         shape="soft"
         size="compact"
         icon-only
-        :aria-label="dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'"
+        :aria-label="
+          dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'
+        "
         :title="dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'"
-        @click="dashboardEditing ? closeDashboardEditor() : openDashboardEditor()"
+        @click="
+          dashboardEditing ? closeDashboardEditor() : openDashboardEditor()
+        "
       >
-        <UiIcon :name="dashboardEditing ? 'X' : 'SlidersHorizontal'" :size="18" />
+        <UiIcon
+          :name="dashboardEditing ? 'X' : 'SlidersHorizontal'"
+          :size="18"
+        />
       </Button>
     </header>
 
@@ -530,13 +694,20 @@ onMounted(() => {
             </p>
             <div v-else class="dashboard-empty">
               <p>No Daily Briefing has landed yet.</p>
-              <Button color="outline" shape="soft" size="compact" to="/assistant">
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                to="/assistant"
+              >
                 Configure Daily Briefing
               </Button>
             </div>
           </template>
 
-          <template v-else-if="cardComponentKey(card) === 'MissionStatementCard'">
+          <template
+            v-else-if="cardComponentKey(card) === 'MissionStatementCard'"
+          >
             <header class="dashboard-card__header">
               <h2 class="dashboard-card__title">
                 <UiIcon name="Rocket" :size="16" />
@@ -600,7 +771,8 @@ onMounted(() => {
               </h2>
               <div class="dashboard-card__header-actions">
                 <span v-if="wheelSnapshot?.snapshot">
-                  Saved {{ formatDashboardDate(wheelSnapshot.snapshot.createdAt) }}
+                  Saved
+                  {{ formatDashboardDate(wheelSnapshot.snapshot.createdAt) }}
                 </span>
               </div>
             </header>
@@ -640,24 +812,92 @@ onMounted(() => {
               </Button>
             </div>
           </template>
-          <template v-else-if="cardComponentKey(card) === 'ProjectsSummaryCard'">
+          <template
+            v-else-if="cardComponentKey(card) === 'ProjectsSummaryCard'"
+          >
             <header class="dashboard-card__header">
-              <h2>Projects</h2>
+              <h2 class="dashboard-card__title">
+                <UiIcon name="BriefcaseBusiness" :size="16" />
+                <span>Projects</span>
+              </h2>
+              <div class="dashboard-card__header-actions">
+                <span>{{ totalOpenProjectTasks }} open</span>
+              </div>
             </header>
-            <div class="dashboard-empty">
-              <p>Project summary data will appear here once the card data endpoint is wired.</p>
-              <Button color="outline" shape="soft" size="compact" to="/mission-control/projects">
+            <div v-if="projectsSummaryLoading" class="dashboard-empty">
+              <p>Loading project stats...</p>
+            </div>
+            <div v-else-if="projectsSummaryError" class="dashboard-empty">
+              <p>{{ projectsSummaryError }}</p>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                to="/mission-control/projects"
+              >
+                Open Projects
+              </Button>
+            </div>
+            <div v-else-if="projectSummaries.length" class="project-summary">
+              <div
+                v-for="summary in projectSummaries"
+                :key="summary.id"
+                class="project-summary__row"
+              >
+                <div class="project-summary__main">
+                  <strong>{{ summary.label }}</strong>
+                  <span>{{ summary.total }} open tasks</span>
+                </div>
+                <div class="project-summary__stats">
+                  <span
+                    v-for="status in visibleProjectStatuses"
+                    :key="status.id"
+                    :class="{ 'is-empty': summary.counts[status.id] === 0 }"
+                  >
+                    {{ projectStatusCountLabel(summary, status.id) }}
+                  </span>
+                </div>
+              </div>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                to="/mission-control/projects"
+              >
+                Open Projects
+              </Button>
+            </div>
+            <div v-else class="dashboard-empty">
+              <p>
+                No open project tasks yet.
+              </p>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                to="/mission-control/projects"
+              >
                 Open Projects
               </Button>
             </div>
           </template>
-          <template v-else-if="cardComponentKey(card) === 'AccountsSummaryCard'">
+          <template
+            v-else-if="cardComponentKey(card) === 'AccountsSummaryCard'"
+          >
             <header class="dashboard-card__header">
               <h2>Accounts</h2>
             </header>
             <div class="dashboard-empty">
-              <p>Accounts summary data will appear here once the ledger card endpoint is wired.</p>
-              <Button color="outline" shape="soft" size="compact" to="/accounts">
+              <p>
+                Accounts summary data will appear here once the ledger card
+                endpoint is wired.
+              </p>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                to="/accounts"
+              >
                 Open Accounts
               </Button>
             </div>
@@ -667,40 +907,63 @@ onMounted(() => {
               <h2>Today</h2>
             </header>
             <div class="dashboard-empty">
-              <p>Calendar summary data will appear here once the calendar card endpoint is wired.</p>
-              <Button color="outline" shape="soft" size="compact" to="/calendar">
+              <p>
+                Calendar summary data will appear here once the calendar card
+                endpoint is wired.
+              </p>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                to="/calendar"
+              >
                 Open Calendar
               </Button>
             </div>
           </template>
-          <template v-else-if="cardComponentKey(card) === 'JournalLatestEntryCard'">
+          <template
+            v-else-if="cardComponentKey(card) === 'JournalLatestEntryCard'"
+          >
             <header class="dashboard-card__header">
               <h2>Journal</h2>
             </header>
             <div class="dashboard-empty">
-              <p>Latest journal data will appear here once the journal card endpoint is wired.</p>
+              <p>
+                Latest journal data will appear here once the journal card
+                endpoint is wired.
+              </p>
               <Button color="outline" shape="soft" size="compact" to="/journal">
                 Open Journal
               </Button>
             </div>
           </template>
-          <template v-else-if="cardComponentKey(card) === 'SocialQueueSummaryCard'">
+          <template
+            v-else-if="cardComponentKey(card) === 'SocialQueueSummaryCard'"
+          >
             <header class="dashboard-card__header">
               <h2>Social Queue</h2>
             </header>
             <div class="dashboard-empty">
-              <p>Queued social content will appear here once the social card endpoint is wired.</p>
+              <p>
+                Queued social content will appear here once the social card
+                endpoint is wired.
+              </p>
               <Button color="outline" shape="soft" size="compact" to="/social">
                 Open Social
               </Button>
             </div>
           </template>
-          <template v-else-if="cardComponentKey(card) === 'SitesBlogSummaryCard'">
+          <template
+            v-else-if="cardComponentKey(card) === 'SitesBlogSummaryCard'"
+          >
             <header class="dashboard-card__header">
               <h2>Blog</h2>
             </header>
             <div class="dashboard-empty">
-              <p>Blog draft data will appear here once the site card endpoint is wired.</p>
+              <p>
+                Blog draft data will appear here once the site card endpoint is
+                wired.
+              </p>
               <Button color="outline" shape="soft" size="compact" to="/build">
                 Open Builder
               </Button>
@@ -776,7 +1039,12 @@ onMounted(() => {
       class="dashboard-modal-backdrop"
       @click.self="cardPickerOpen = false"
     >
-      <section class="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="add-card-title">
+      <section
+        class="dashboard-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-card-title"
+      >
         <header class="dashboard-modal__header">
           <h2 id="add-card-title">Add card</h2>
           <Button
@@ -803,7 +1071,12 @@ onMounted(() => {
               <strong>{{ cardLabel(card) }}</strong>
               <span>{{ card.pluginId }}</span>
             </div>
-            <Button color="accent" shape="soft" size="compact" @click="addCardDraft(card.cardId)">
+            <Button
+              color="accent"
+              shape="soft"
+              size="compact"
+              @click="addCardDraft(card.cardId)"
+            >
               Add
             </Button>
           </div>
@@ -816,7 +1089,12 @@ onMounted(() => {
       class="dashboard-modal-backdrop"
       @click.self="quickActionPickerOpen = false"
     >
-      <section class="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="add-action-title">
+      <section
+        class="dashboard-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-action-title"
+      >
         <header class="dashboard-modal__header">
           <h2 id="add-action-title">Add quick action</h2>
           <Button
@@ -831,7 +1109,10 @@ onMounted(() => {
           </Button>
         </header>
         <div class="dashboard-modal__body">
-          <p v-if="!addableQuickActionDrafts.length" class="dashboard-modal__empty">
+          <p
+            v-if="!addableQuickActionDrafts.length"
+            class="dashboard-modal__empty"
+          >
             Every available quick action is already on the dashboard.
           </p>
           <div
@@ -867,7 +1148,12 @@ onMounted(() => {
               <span>Action</span>
               <strong>{{ quickActionDestinationLabel(link) }}</strong>
             </div>
-            <Button color="accent" shape="soft" size="compact" @click="addQuickActionDraft(link.id)">
+            <Button
+              color="accent"
+              shape="soft"
+              size="compact"
+              @click="addQuickActionDraft(link.id)"
+            >
               Add
             </Button>
           </div>
@@ -882,7 +1168,6 @@ onMounted(() => {
   display: flex;
   min-height: 100vh;
   flex-direction: column;
-  gap: 18px;
   box-sizing: border-box;
   padding: 0 24px 40px;
   background: var(--ui-bg);
@@ -957,7 +1242,8 @@ onMounted(() => {
 }
 
 .dashboard-card.is-editing {
-  outline: 1px dashed color-mix(in oklab, var(--ui-accent), var(--ui-border) 45%);
+  outline: 1px dashed
+    color-mix(in oklab, var(--ui-accent), var(--ui-border) 45%);
   outline-offset: -5px;
 }
 
@@ -1124,6 +1410,77 @@ onMounted(() => {
 
 .wheel-summary__row meter {
   width: 100%;
+}
+
+.project-summary {
+  display: grid;
+  gap: 11px;
+  justify-items: start;
+}
+
+.project-summary__row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.project-summary__row:last-of-type {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.project-summary__main {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.project-summary__main strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-summary__main span {
+  flex: 0 0 auto;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.project-summary__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.project-summary__stats span {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 0 8px;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.project-summary__stats span:not(.is-empty) {
+  border-color: color-mix(in oklab, var(--ui-accent), transparent 70%);
+  color: var(--ui-text);
+}
+
+.project-summary__stats span.is-empty {
+  opacity: 0.56;
 }
 
 .dashboard-add-card {
