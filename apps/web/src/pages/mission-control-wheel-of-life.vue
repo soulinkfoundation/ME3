@@ -46,7 +46,7 @@ definePage({
 
 .wheel-life-page__close {
   position: absolute;
-  top: 18px;
+  top: 4px;
   right: 24px;
   z-index: 30;
   display: inline-grid;
@@ -78,7 +78,7 @@ definePage({
   }
 
   .wheel-life-page__close {
-    top: 10px;
+    top: 2px;
     right: 14px;
   }
 }
