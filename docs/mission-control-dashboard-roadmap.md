@@ -11,18 +11,20 @@ New route shape:
 - `/mission-control`: dashboard, default route.
 - `/mission-control/projects`: projects and tasks workspace.
 - `/mission-control/wheel-of-life`: existing full Wheel of Life workspace, retained.
+- `/accounts`: Accounts plugin ledger workspace.
 - `/mission-control?section=projects`: redirect or normalize to `/mission-control/projects`.
 - Legacy settings query sections can keep working during migration, but should move behind a dashboard settings surface or plugin-owned pages over time.
 
 Default dashboard cards:
 
 1. Daily Briefing: latest message from the Assistant Jobs `daily-briefing` recipe.
-2. Mission Statement: editable owner statement, with the suggested prompt shape: `I am here to help ... by ...`.
+2. Mission Statement: editable plain-text owner statement, with placeholder text: `I am here to help [who/what] become [desired change] by being [way of being] and creating [work/service], guided by [values].`
 3. Wheel of Life Snapshot: latest saved wheel snapshot.
 
 Secondary dashboard section:
 
 - Quick action buttons styled like the `/assistant` starter prompts, but implemented with reusable [Button.vue](/Users/kieranbutler/Coding/me3/apps/web/src/components/Button.vue).
+- Quick actions can only point at a curated set of internal destinations. Owners can add, remove, reorder, rename, and choose icons for those destinations, but cannot enter arbitrary routes in the MVP.
 - Defaults should be conditional and owner-editable:
   - `View Projects` -> `/mission-control/projects`.
   - `Write a blog` -> site wizard/blog step when the profile site is published and blog is active.
@@ -32,13 +34,13 @@ Secondary dashboard section:
 
 ## Pushback And Recommendations
 
-Start with ordered cards, not freeform drag-resize layout. Reordering, adding, hiding, and changing card size is enough for the first useful version. True grid editing can come later if users actually need it.
+Support drag-and-drop ordering from the start, but keep the scope tight: reorder cards and quick actions, and provide accessible keyboard/button controls for the same operation. Do not build freeform drag-resize layout in the MVP.
 
 Do not let plugin cards become arbitrary remote UI. The plugin manifest can advertise card availability, but the web app should resolve first-party card component keys from a local registry. This keeps dashboard code auditable and avoids turning plugin metadata into executable UI.
 
 Move Wheel of Life data out of component-local `localStorage` before making the dashboard card depend on it. The card can read localStorage as a temporary bridge, but the stable design should use plugin-owned D1 storage and an API so snapshots follow the owner across devices.
 
-Do not keep full plugin workspaces inside Mission Control long-term. Accounts currently exists as a Mission Control primary tab. In the new model, Accounts should contribute a summary card and quick action, while its full ledger eventually becomes its own plugin page.
+Do not keep full plugin workspaces inside Mission Control long-term. Accounts currently exists as a Mission Control primary tab. In the new model, Accounts should contribute a summary card and quick action, while its full ledger moves to `/accounts`.
 
 Keep the project list visually quieter than the current board. The default projects/tasks view should use one column, project group headers, row dividers, and inline controls. Do not turn each task row into a card.
 
@@ -107,8 +109,7 @@ type DashboardQuickActionContribution = {
   label: string;
   icon: string;
   defaultEnabled: boolean;
-  route?: string;
-  assistantPrompt?: string;
+  destinationId: string;
   requiresPluginIds?: string[];
 };
 ```
@@ -165,12 +166,19 @@ type DashboardQuickLink = {
   icon: string;
   enabled: boolean;
   sortOrder: number;
-  kind: "route" | "assistant_prompt";
-  route?: string;
-  assistantPrompt?: string;
+  destinationId: string;
   requiresPluginId?: string;
 };
 ```
+
+`destinationId` must resolve through a curated registry, for example:
+
+- `mission.projects`
+- `assistant.chat`
+- `journal.today`
+- `social.schedule`
+- `sites.blog`
+- `accounts.ledger`
 
 This JSON-row approach is intentionally simple. Normalize later only if dashboard settings become multi-user, collaborative, or query-heavy.
 
@@ -181,14 +189,14 @@ Add Mission Control dashboard endpoints:
 - `GET /api/mission-control/dashboard`
   - Returns available card contributions, resolved card instances, quick links, dashboard settings, and first-load data for default cards.
 - `PATCH /api/mission-control/dashboard`
-  - Updates card order, card visibility, card size, quick links, mission statement, and view settings such as `kanbanEnabled`.
+  - Updates card order, card visibility, card size, curated quick links, mission statement, and view settings such as `kanbanEnabled`.
 - `GET /api/mission-control/dashboard/cards/:cardId`
   - Optional later endpoint for lazy card refreshes.
 
 Default card data:
 
 - Daily Briefing: latest `mission_plugin_activity` row produced by the `daily-briefing` Assistant Job. If none exists, show an empty state with a path to configure the job in `/assistant`.
-- Mission Statement: stored in `mission_dashboard_settings.mission_statement`.
+- Mission Statement: stored in `mission_dashboard_settings.mission_statement` as plain text.
 - Wheel Snapshot: latest server-backed Wheel of Life snapshot. During migration, a temporary frontend bridge can read the existing localStorage key.
 
 ## Wheel Of Life Follow-Up
@@ -287,8 +295,14 @@ Layout guidance:
    - Add Accounts summary card using existing `/accounts/stats`.
    - Add conditional quick actions for Journal, Social Publishing, Sites/blog, and Assistant.
 
-7. Settings and polish
-   - Add dashboard edit mode for add/remove/reorder cards and quick actions.
+7. Accounts page
+   - Move the full Accounts ledger UI to `/accounts`.
+   - Keep Mission Control integration as a dashboard card and quick action only.
+   - Redirect old Mission Control accounts links safely during the transition.
+
+8. Settings and polish
+   - Add dashboard edit mode for add/remove/drag-reorder cards and quick actions.
+   - Add accessible non-drag reorder controls for keyboard and assistive tech users.
    - Add Mission Control setting for kanban visibility.
    - Verify light/dark mode and mobile/desktop layouts.
 
@@ -307,17 +321,19 @@ Browser verification:
 - `/mission-control` opens to the dashboard.
 - `/mission-control/projects` opens to the grouped task list.
 - `/mission-control?section=projects` redirects or lands safely.
+- `/accounts` opens the Accounts plugin ledger when Accounts is active.
 - Project picker and `Add project` still work.
 - Task create, status update, archive, detail modal, and local-run affordances still work.
 - Kanban is hidden by default and only appears after enabling it in settings.
-- Dashboard cards can be added, removed, reordered, and restored.
+- Dashboard cards can be added, removed, drag-reordered, keyboard-reordered, and restored.
 - Default cards render useful empty states.
-- Quick actions hide or disable cleanly when their required plugins are inactive.
+- Quick actions use only curated internal destinations and hide or disable cleanly when their required plugins are inactive.
 - Light mode, dark mode, desktop, and mobile all remain clean.
 
-## Open Questions
+## Resolved Decisions
 
-- Should Mission Statement be plain text only, or should it support a small structured template with editable variables?
-- Should Accounts get its own `/accounts` page in the same pass, or should the first pass link to the existing temporary Mission Control accounts surface?
-- Should dashboard quick links support arbitrary owner-defined routes in MVP, or only a curated set of internal destinations and assistant prompts?
-- Should card ordering use buttons first for accessibility, with drag-and-drop added later?
+- Mission Statement is plain text only.
+- Mission Statement placeholder: `I am here to help [who/what] become [desired change] by being [way of being] and creating [work/service], guided by [values].`
+- Accounts gets its own `/accounts` page.
+- Dashboard quick actions use only curated internal destinations in the MVP.
+- Card and quick-action ordering supports drag-and-drop from the start, with accessible non-drag controls too.
