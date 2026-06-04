@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import Button from "../Button.vue";
 import IconPicker from "../IconPicker.vue";
 import UiIcon from "../UiIcon.vue";
+import { api } from "../../api";
 import { isUiIconName, type UiIconName } from "../../utils/icons";
 
 type WheelSegment = {
@@ -36,7 +37,19 @@ type StoredWheelState = {
   snapshots: WheelSnapshot[];
 };
 
+type WheelResponse = {
+  settings: {
+    segments: WheelSegment[];
+  };
+  snapshots: WheelSnapshot[];
+};
+
+type WheelSnapshotResponse = {
+  snapshot: WheelSnapshot;
+};
+
 const STORAGE_KEY = "me3.missionControl.wheelOfLife.v1";
+const MIGRATED_STORAGE_KEY = "me3.missionControl.wheelOfLife.v1.serverMigrated";
 const MIN_SEGMENTS = 6;
 const MAX_SEGMENTS = 8;
 const OUTER_RADIUS = 108;
@@ -115,6 +128,10 @@ const editModalOpen = ref(false);
 const saveModalOpen = ref(false);
 const historyModalOpen = ref(false);
 const snapshotNotes = ref<Record<string, string>>({});
+const loading = ref(true);
+const saving = ref(false);
+const syncError = ref("");
+let settingsSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
 const rings = computed(() =>
   Array.from({ length: 10 }, (_, index) => ({
@@ -295,6 +312,82 @@ function persistState() {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
 
+async function loadServerState() {
+  const response = await api.get<WheelResponse>("/mission-control/wheel");
+  return {
+    schemaVersion: 1,
+    segments: sanitizeSegments(response.settings?.segments),
+    snapshots: sanitizeSnapshots(response.snapshots),
+  } satisfies StoredWheelState;
+}
+
+async function migrateLocalSnapshotsIfNeeded(
+  serverState: StoredWheelState,
+  localState: StoredWheelState,
+) {
+  if (typeof window === "undefined") return serverState;
+  if (serverState.snapshots.length || !localState.snapshots.length) return serverState;
+  if (window.localStorage.getItem(MIGRATED_STORAGE_KEY) === "1") return serverState;
+
+  const migratedSnapshots: WheelSnapshot[] = [];
+  for (const snapshot of [...localState.snapshots].reverse()) {
+    try {
+      const response = await api.post<WheelSnapshotResponse>(
+        "/mission-control/wheel/snapshots",
+        {
+          id: snapshot.id,
+          createdAt: snapshot.createdAt,
+          segments: snapshot.segments,
+          notes: Object.fromEntries(
+            snapshot.segments.map((segment) => [segment.id, segment.notes || ""]),
+          ),
+        },
+      );
+      migratedSnapshots.unshift(response.snapshot);
+    } catch {
+      break;
+    }
+  }
+
+  if (migratedSnapshots.length) {
+    window.localStorage.setItem(MIGRATED_STORAGE_KEY, "1");
+    return {
+      schemaVersion: 1,
+      segments: localState.segments,
+      snapshots: sanitizeSnapshots(migratedSnapshots),
+    };
+  }
+
+  return serverState;
+}
+
+async function loadState() {
+  const localState = loadStoredState();
+  try {
+    const serverState = await loadServerState();
+    syncError.value = "";
+    return await migrateLocalSnapshotsIfNeeded(serverState, localState);
+  } catch {
+    syncError.value = "Using this browser's saved Wheel until the server reconnects.";
+    return localState;
+  }
+}
+
+function queueSettingsSync() {
+  if (loading.value) return;
+  if (settingsSyncTimer) clearTimeout(settingsSyncTimer);
+  settingsSyncTimer = setTimeout(async () => {
+    try {
+      await api.patch("/mission-control/wheel/settings", {
+        segments: segments.value,
+      });
+      syncError.value = "";
+    } catch {
+      syncError.value = "Wheel changes are saved in this browser and will retry on reload.";
+    }
+  }, 500);
+}
+
 function polarPoint(angleDeg: number, radius: number) {
   const angle = ((angleDeg - 90) * Math.PI) / 180;
   return {
@@ -416,8 +509,8 @@ function openSaveModal() {
   });
 }
 
-function saveSnapshot() {
-  const snapshot: WheelSnapshot = {
+async function saveSnapshot() {
+  const localSnapshot: WheelSnapshot = {
     id: createId("snapshot"),
     createdAt: new Date().toISOString(),
     segments: segments.value.map((segment) => ({
@@ -430,9 +523,29 @@ function saveSnapshot() {
       notes: snapshotNotes.value[segment.id]?.trim() || "",
     })),
   };
-  snapshots.value = [snapshot, ...snapshots.value];
-  saveModalOpen.value = false;
-  snapshotNotes.value = {};
+  saving.value = true;
+  try {
+    const response = await api.post<WheelSnapshotResponse>(
+      "/mission-control/wheel/snapshots",
+      {
+        id: localSnapshot.id,
+        createdAt: localSnapshot.createdAt,
+        segments: localSnapshot.segments,
+        notes: Object.fromEntries(
+          localSnapshot.segments.map((segment) => [segment.id, segment.notes || ""]),
+        ),
+      },
+    );
+    snapshots.value = [response.snapshot, ...snapshots.value];
+    syncError.value = "";
+  } catch {
+    snapshots.value = [localSnapshot, ...snapshots.value];
+    syncError.value = "Snapshot saved in this browser; server save did not complete.";
+  } finally {
+    saving.value = false;
+    saveModalOpen.value = false;
+    snapshotNotes.value = {};
+  }
 }
 
 function closeModals() {
@@ -463,18 +576,28 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") closeModals();
 }
 
-onMounted(() => {
-  const stored = loadStoredState();
+onMounted(async () => {
+  const stored = await loadState();
   segments.value = stored.segments;
   snapshots.value = stored.snapshots;
+  loading.value = false;
   window.addEventListener("keydown", handleGlobalKeydown);
 });
 
 onBeforeUnmount(() => {
+  if (settingsSyncTimer) clearTimeout(settingsSyncTimer);
   window.removeEventListener("keydown", handleGlobalKeydown);
 });
 
-watch([segments, snapshots], persistState, { deep: true });
+watch(
+  segments,
+  () => {
+    persistState();
+    queueSettingsSync();
+  },
+  { deep: true },
+);
+watch(snapshots, persistState, { deep: true });
 </script>
 
 <template>
@@ -498,9 +621,9 @@ watch([segments, snapshots], persistState, { deep: true });
         <UiIcon name="Pencil" :size="18" />
       </Button>
       <Button color="ghost" shape="soft" size="compact" icon-only type="button"
-        :disabled="!allSegmentsScored"
+        :disabled="!allSegmentsScored || saving"
         aria-label="Save snapshot"
-        title="Save snapshot"
+        :title="saving ? 'Saving snapshot' : 'Save snapshot'"
         @click="openSaveModal"
       >
         <UiIcon name="Save" :size="18" />
@@ -616,6 +739,8 @@ watch([segments, snapshots], persistState, { deep: true });
         <p v-if="latestSnapshot" class="life-wheel__latest">
           Last saved {{ formatSnapshotDate(latestSnapshot.createdAt) }}
         </p>
+        <p v-else-if="loading" class="life-wheel__latest">Loading Wheel...</p>
+        <p v-if="syncError" class="life-wheel__sync-error">{{ syncError }}</p>
       </div>
     </div>
 
@@ -778,9 +903,14 @@ watch([segments, snapshots], persistState, { deep: true });
             <button type="button" class="life-wheel__mini-button" @click="saveModalOpen = false">
               Cancel
             </button>
-            <button type="button" class="life-wheel__save" @click="saveSnapshot">
+            <button
+              type="button"
+              class="life-wheel__save"
+              :disabled="saving"
+              @click="saveSnapshot"
+            >
               <UiIcon name="Check" :size="16" aria-hidden="true" />
-              <span>Confirm save</span>
+              <span>{{ saving ? "Saving..." : "Confirm save" }}</span>
             </button>
           </footer>
         </section>
@@ -1053,21 +1183,22 @@ watch([segments, snapshots], persistState, { deep: true });
 
 .life-wheel__label {
   position: absolute;
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  max-width: min(190px, 34%);
-  gap: 6px;
-  padding: 5px 8px;
+  width: clamp(68px, 10vw, 90px);
+  max-width: 18%;
+  gap: 2px;
+  padding: 5px 6px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
-  background: color-mix(in oklab, var(--ui-surface), transparent 8%);
+  background: color-mix(in oklab, var(--ui-surface), transparent 28%);
   color: var(--ui-text);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
-  line-height: 1.15;
-  text-align: left;
-  white-space: nowrap;
+  line-height: 1.05;
+  text-align: center;
   transform: translate(
     calc(
       var(--life-wheel-label-transform-x, -50%) +
@@ -1081,27 +1212,48 @@ watch([segments, snapshots], persistState, { deep: true });
 
 .life-wheel__label-name,
 .life-wheel__label-score {
+  display: block;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.life-wheel__label-name {
+  white-space: nowrap;
+}
+
 .life-wheel__label-score {
-  flex: 0 0 auto;
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    max-height 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
 }
 
 .life-wheel__label-score::before {
-  content: "(";
+  content: "";
 }
 
 .life-wheel__label-score::after {
-  content: ")";
+  content: "";
 }
 
 .life-wheel__label:hover,
+.life-wheel__label:focus-visible,
 .life-wheel__label.is-active {
   border-color: var(--ui-border);
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-sm);
+}
+
+.life-wheel__label:hover .life-wheel__label-score,
+.life-wheel__label:focus-visible .life-wheel__label-score,
+.life-wheel__label.is-active .life-wheel__label-score {
+  max-height: 1.2em;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .life-wheel__label-emoji {
@@ -1111,6 +1263,13 @@ watch([segments, snapshots], persistState, { deep: true });
 }
 
 .life-wheel__latest {
+  text-align: center;
+}
+
+.life-wheel__sync-error {
+  margin: -4px 0 0;
+  color: var(--ui-text-muted);
+  font-size: 12px;
   text-align: center;
 }
 
@@ -1442,29 +1601,14 @@ watch([segments, snapshots], persistState, { deep: true });
     --life-wheel-label-active-nudge: var(--life-wheel-label-mobile-nudge, 0%);
     width: 66px;
     max-width: 22%;
-    flex-direction: column;
     gap: 1px;
-    align-items: center;
     padding: 3px 2px;
     background: color-mix(in oklab, var(--ui-surface), transparent 18%);
     font-size: 9px;
-    line-height: 1.05;
-    text-align: center;
   }
 
   .life-wheel__label-emoji {
     font-size: 15px;
-  }
-
-  .life-wheel__label-name,
-  .life-wheel__label-score {
-    display: block;
-    width: 100%;
-  }
-
-  .life-wheel__label-score::before,
-  .life-wheel__label-score::after {
-    content: "";
   }
 
   .life-wheel__save {

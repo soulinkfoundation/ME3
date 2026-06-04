@@ -270,6 +270,30 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       auth: "owner",
     },
     {
+      id: "mission.dashboard.api",
+      path: "/api/mission-control/dashboard",
+      methods: ["GET", "PATCH"],
+      auth: "owner",
+    },
+    {
+      id: "mission.wheel.api",
+      path: "/api/mission-control/wheel",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
+      id: "mission.wheel.settings.api",
+      path: "/api/mission-control/wheel/settings",
+      methods: ["PATCH"],
+      auth: "owner",
+    },
+    {
+      id: "mission.wheel.snapshots.api",
+      path: "/api/mission-control/wheel/snapshots",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
       id: "mission.tasks.api",
       path: "/api/mission-control/tasks",
       methods: ["GET", "POST"],

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { getMissionDashboard, updateMissionDashboard } from "./mission-control";
+import {
+  createMissionWheelSnapshot,
+  getMissionDashboard,
+  getMissionWheel,
+  updateMissionDashboard,
+  updateMissionWheelSettings,
+} from "./mission-control";
 import type { Env } from "./types";
 
 type DashboardSettingsRow = {
@@ -21,6 +27,22 @@ type PluginInstallationRow = {
   setup_state_json: string;
   installed_at: string;
   updated_at: string;
+};
+
+type WheelSettingsRow = {
+  user_id: string;
+  segments_json: string;
+  schema_version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type WheelSnapshotRow = {
+  id: string;
+  user_id: string;
+  segments_json: string;
+  notes_json: string;
+  created_at: string;
 };
 
 describe("Mission Control dashboard settings", () => {
@@ -129,6 +151,50 @@ describe("Mission Control dashboard settings", () => {
       destinationId: "mission.projects",
     });
   });
+
+  it("persists Wheel settings and snapshots for the dashboard card", async () => {
+    const env = createDashboardEnv();
+    const segments = [
+      "health",
+      "spirituality",
+      "work",
+      "finances",
+      "home",
+      "joy",
+    ].map((id, index) => ({
+      id,
+      label: id,
+      helper: `${id} helper`,
+      color: "#26806f",
+      emoji: "Circle",
+      value: index + 1,
+    }));
+
+    await updateMissionWheelSettings(env, "owner", { segments });
+    const wheel = await getMissionWheel(env, "owner");
+    expect(wheel.settings.segments.map((segment) => segment.value)).toEqual([
+      1, 2, 3, 4, 5, 6,
+    ]);
+
+    await createMissionWheelSnapshot(env, "owner", {
+      id: "snapshot-1",
+      createdAt: "2026-06-04T09:30:00.000Z",
+      segments,
+      notes: { health: "Slept well." },
+    });
+
+    const dashboard = await getMissionDashboard(env, "owner");
+    expect(dashboard.data["mission.wheel-latest-snapshot"]).toMatchObject({
+      source: "server",
+      snapshot: {
+        id: "snapshot-1",
+        createdAt: "2026-06-04T09:30:00.000Z",
+      },
+    });
+    expect(
+      dashboard.data["mission.wheel-latest-snapshot"]?.snapshot?.segments[0],
+    ).toMatchObject({ id: "health", notes: "Slept well." });
+  });
 });
 
 function createDashboardEnv(options: {
@@ -136,6 +202,8 @@ function createDashboardEnv(options: {
   activity?: Array<Record<string, unknown> & { id: string; user_id: string }>;
 } = {}) {
   const settings = new Map<string, DashboardSettingsRow>();
+  const wheelSettings = new Map<string, WheelSettingsRow>();
+  const wheelSnapshots = new Map<string, WheelSnapshotRow>();
   const enabledPlugins = new Set(options.enabledPlugins || []);
   const activity = options.activity || [];
   const pluginInstallations = new Map<string, PluginInstallationRow>(
@@ -163,12 +231,33 @@ function createDashboardEnv(options: {
               if (sql.includes("mission_dashboard_settings")) {
                 return (settings.get(String(values[0])) || null) as T | null;
               }
+              if (sql.includes("mission_wheel_settings")) {
+                return (wheelSettings.get(String(values[0])) || null) as T | null;
+              }
+              if (sql.includes("mission_wheel_snapshots")) {
+                if (sql.includes("WHERE id = ?")) {
+                  return (wheelSnapshots.get(String(values[0])) || null) as T | null;
+                }
+                return null;
+              }
               if (sql.includes("plugin_installations")) {
                 return (pluginInstallations.get(String(values[0])) || null) as T | null;
               }
               return null;
             },
             async all<T>() {
+              if (sql.includes("mission_wheel_snapshots")) {
+                const userId = String(values[0]);
+                const limit = Number(values[1] || 50);
+                return {
+                  results: Array.from(wheelSnapshots.values())
+                    .filter((row) => row.user_id === userId)
+                    .sort((a, b) =>
+                      String(b.created_at).localeCompare(String(a.created_at)),
+                    )
+                    .slice(0, limit) as T[],
+                };
+              }
               if (sql.includes("mission_plugin_activity")) {
                 return {
                   results: activity
@@ -194,6 +283,26 @@ function createDashboardEnv(options: {
                       : String(values[4]),
                   created_at: "2026-06-04 08:00:00",
                   updated_at: "2026-06-04 08:00:00",
+                });
+              }
+              if (sql.includes("mission_wheel_settings")) {
+                const userId = String(values[0]);
+                wheelSettings.set(userId, {
+                  user_id: userId,
+                  segments_json: String(values[1]),
+                  schema_version: 1,
+                  created_at: "2026-06-04 08:00:00",
+                  updated_at: "2026-06-04 08:00:00",
+                });
+              }
+              if (sql.includes("mission_wheel_snapshots")) {
+                const id = String(values[0]);
+                wheelSnapshots.set(id, {
+                  id,
+                  user_id: String(values[1]),
+                  segments_json: String(values[2]),
+                  notes_json: String(values[3]),
+                  created_at: String(values[4]),
                 });
               }
               return { success: true, meta: { changes: 1 } };
