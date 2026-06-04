@@ -4227,7 +4227,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       </span>
                       <Button
                         v-if="scheduleDraftChanged"
-                        tone="green"
+                        color="primary"
                         shape="soft"
                         size="compact"
                         type="button"
@@ -4304,7 +4304,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   </p>
                 </div>
                 <Button
-                  tone="outline"
+                  color="outline"
                   shape="soft"
                   size="compact"
                   type="button"
@@ -4453,7 +4453,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   {{ inboxWatchRulesNotice }}
                 </span>
                 <Button
-                  tone="green"
+                  color="primary"
                   shape="soft"
                   size="compact"
                   type="button"
@@ -4529,7 +4529,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </span>
               <Button
                 v-if="selectedJobIsDailyBriefing"
-                tone="green"
+                color="primary"
                 shape="soft"
                 size="compact"
                 type="button"
@@ -4543,7 +4543,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </Button>
               <Button
                 v-if="canRun(selectedJob)"
-                tone="green"
+                color="primary"
                 shape="soft"
                 size="compact"
                 type="button"
@@ -4557,7 +4557,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </Button>
               <Button
                 v-if="canToggle(selectedJob)"
-                tone="outline"
+                color="outline"
                 shape="soft"
                 size="compact"
                 type="button"
@@ -4570,7 +4570,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 {{ toggleLabel(selectedJob) }}
               </Button>
               <Button
-                tone="outline"
+                color="outline"
                 shape="soft"
                 size="compact"
                 type="button"
@@ -4583,7 +4583,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 Duplicate
               </Button>
               <Button
-                tone="red"
+                color="danger"
                 shape="soft"
                 size="compact"
                 icon-only

@@ -8,8 +8,9 @@ import {
   watch,
 } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { API_BASE, ApiError, api } from "../api";
+import Button from "../components/Button.vue";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
 import type { UiIconName } from "../utils/icons";
@@ -2009,57 +2010,64 @@ onBeforeUnmount(() => {
           <UiIcon name="MessagesSquare" :size="15" aria-hidden="true" />
           <span>Ask assistant</span>
         </button>
-        <button
+        <Button
           v-if="primarySections.length > 1"
-          type="button"
-          class="icon-button mission-control__section-cycle"
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
           :aria-label="mobilePrimarySectionCycleLabel"
           :title="mobilePrimarySectionCycleLabel"
           @click="cyclePrimarySection"
         >
           <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
-        </button>
-        <RouterLink
-          class="icon-button mission-control__wheel-link"
+        </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
           to="/mission-control/wheel-of-life"
           aria-label="Open Wheel of Life"
           title="Open Wheel of Life"
         >
           <UiIcon name="ShipWheel" :size="18" />
-        </RouterLink>
+        </Button>
 
         <div class="settings-menu" @click.stop>
-        <button
-          type="button"
-          class="icon-button"
-          :class="{ 'is-active': settingsMenuOpen || settingsSectionActive }"
-          aria-label="Mission Control settings"
-          :aria-expanded="settingsMenuOpen"
-          aria-haspopup="menu"
-          @click="
-            settingsMenuOpen = !settingsMenuOpen;
-            projectPickerOpen = false;
-          "
-        >
-          <UiIcon name="Settings" :size="18" />
-        </button>
-        <div
-          v-if="settingsMenuOpen"
-          class="settings-menu__dropdown"
-          role="menu"
-        >
-          <button
-            v-for="section in settingsSections"
-            :key="section"
-            type="button"
-            class="settings-menu__item"
-            :class="{ 'is-active': activeSection === section }"
-            role="menuitem"
-            @click="setSection(section)"
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            :active="settingsMenuOpen || settingsSectionActive"
+            aria-label="Mission Control settings"
+            :aria-expanded="settingsMenuOpen"
+            aria-haspopup="menu"
+            @click="
+              settingsMenuOpen = !settingsMenuOpen;
+              projectPickerOpen = false;
+            "
           >
-            <span>{{ sectionLabels[section] }}</span>
-          </button>
-        </div>
+            <UiIcon name="Settings" :size="18" />
+          </Button>
+          <div
+            v-if="settingsMenuOpen"
+            class="settings-menu__dropdown"
+            role="menu"
+          >
+            <button
+              v-for="section in settingsSections"
+              :key="section"
+              type="button"
+              class="settings-menu__item"
+              :class="{ 'is-active': activeSection === section }"
+              role="menuitem"
+              @click="setSection(section)"
+            >
+              <span>{{ sectionLabels[section] }}</span>
+            </button>
+          </div>
         </div>
       </div>
     </header>

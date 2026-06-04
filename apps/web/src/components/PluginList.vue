@@ -82,7 +82,7 @@ function isPluginOn(plugin: PluginRecord) {
         <div class="plugin-row__actions">
           <Button
             v-if="showLocalExecutorConfig && isLocalExecutorPlugin(plugin)"
-            variant="outline"
+            color="outline"
             size="small"
             shape="soft"
             type="button"

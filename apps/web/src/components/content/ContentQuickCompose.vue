@@ -214,7 +214,7 @@ function orbitTooltip(platform: {
 
     <div class="card__foot compose-actions">
       <Button
-        variant="outline"
+        color="outline"
         :disabled="!canSubmit || saving"
         @click="emit('submit')"
       >
@@ -229,7 +229,7 @@ function orbitTooltip(platform: {
         }}
       </Button>
       <Button
-        variant="primary"
+        color="primary"
         :disabled="!canSubmit || saving"
         @click="emit('submit-now')"
       >
@@ -237,7 +237,7 @@ function orbitTooltip(platform: {
       </Button>
       <Button
         v-if="isEditing"
-        variant="secondary"
+        color="secondary"
         :disabled="saving"
         @click="emit('cancel')"
       >

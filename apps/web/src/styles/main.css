@@ -21,6 +21,13 @@
   --ui-text-muted: var(--color-text-muted);
   --ui-border: var(--color-border);
   --ui-border-strong: var(--color-border-strong);
+  --ui-primary: var(--color-accent);
+  --ui-primary-strong: var(--brand-primary-strong);
+  --ui-primary-soft: var(--brand-primary-soft);
+  --ui-primary-contrast: var(--color-accent-contrast);
+  --ui-secondary: var(--color-bg-subtle);
+  --ui-secondary-strong: var(--color-bg-muted);
+  --ui-secondary-contrast: var(--color-text);
   --ui-accent: var(--color-accent);
   --ui-accent-strong: var(--brand-primary-strong);
   --ui-accent-soft: var(--brand-primary-soft);

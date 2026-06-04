@@ -1670,7 +1670,7 @@ onBeforeUnmount(() => {
         <div class="cal-toolbar-actions">
           <div class="cal-create-wrap">
             <Button
-              tone="green"
+              color="primary"
               shape="soft"
               size="compact"
               type="button"
@@ -2139,7 +2139,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="button"
-              variant="outline"
+              color="outline"
               @click="closeCreateMode"
             >
               Cancel
@@ -2147,7 +2147,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="submit"
-              variant="primary"
+              color="primary"
               :disabled="newEventSubmitting"
             >
               {{
@@ -2206,7 +2206,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="button"
-              variant="outline"
+              color="outline"
               @click="closeCreateMode"
             >
               Cancel
@@ -2214,7 +2214,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="submit"
-              variant="primary"
+              color="primary"
               :disabled="newEventSubmitting"
             >
               {{
@@ -2298,7 +2298,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="button"
-              variant="outline"
+              color="outline"
               @click="closeCreateMode"
             >
               Cancel
@@ -2306,7 +2306,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="submit"
-              variant="primary"
+              color="primary"
               :disabled="newReminderSubmitting"
             >
               {{
@@ -2409,7 +2409,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="button"
-              variant="outline"
+              color="outline"
               @click="closeCreateMode"
             >
               Cancel
@@ -2417,7 +2417,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="submit"
-              variant="primary"
+              color="primary"
               :disabled="newBookingSubmitting"
             >
               {{ newBookingSubmitting ? "Creating…" : "Create booking" }}
@@ -2480,7 +2480,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="button"
-              variant="outline"
+              color="outline"
               @click="closeCreateMode"
             >
               Cancel
@@ -2488,7 +2488,7 @@ onBeforeUnmount(() => {
             <Button
               size="small"
               type="submit"
-              variant="primary"
+              color="primary"
               :disabled="importSubmitting"
             >
               {{ importSubmitting ? "Importing…" : "Import calendar" }}

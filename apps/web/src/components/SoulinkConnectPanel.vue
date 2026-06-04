@@ -226,7 +226,7 @@ defineExpose({
         </a>
         <Button
           v-if="isConnected"
-          variant="outline"
+          color="outline"
           size="compact"
           type="button"
           :disabled="disconnectLoading"
@@ -236,7 +236,7 @@ defineExpose({
         </Button>
         <Button
           v-else
-          variant="primary"
+          color="primary"
           size="compact"
           type="button"
           :disabled="loading || setupLoading || !canConnect"
@@ -280,7 +280,7 @@ defineExpose({
             Open chat
           </a>
           <Button
-            variant="outline"
+            color="outline"
             size="small"
             type="button"
             :disabled="disconnectLoading"
@@ -323,7 +323,7 @@ defineExpose({
 
       <div v-if="!isConnected" class="soulink-actions">
         <Button
-          variant="primary"
+          color="primary"
           size="small"
           type="button"
           :disabled="setupLoading || !canConnect"

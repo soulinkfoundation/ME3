@@ -469,7 +469,7 @@ defineExpose({
                 :placeholder="webhookSecretPlaceholder"
               />
               <Button
-                variant="secondary"
+                color="secondary"
                 size="small"
                 type="button"
                 @click="generateWebhookSecret"
@@ -480,7 +480,7 @@ defineExpose({
           </label>
           <div class="telegram-settings-actions">
             <Button
-              variant="primary"
+              color="primary"
               size="small"
               type="submit"
               :disabled="telegramWebhookSyncDisabled"
@@ -529,7 +529,7 @@ defineExpose({
         </div>
         <div class="telegram-qr-section__footer">
           <Button
-            variant="secondary"
+            color="secondary"
             size="small"
             class="telegram-refresh-btn"
             type="button"
@@ -544,7 +544,7 @@ defineExpose({
           </Button>
           <Button
             v-if="connection?.status === 'active'"
-            variant="outline"
+            color="outline"
             size="small"
             class="telegram-disconnect-btn"
             type="button"

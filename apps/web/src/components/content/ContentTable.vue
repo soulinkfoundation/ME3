@@ -136,7 +136,7 @@ function reorderQueueItem(item: ContentItem, direction: -1 | 1) {
               <td>
                 <div class="action-row">
                   <Button
-                    variant="outline"
+                    color="outline"
                     size="small"
                     :disabled="
                       busyItemId === item.id || reordering || item.status === 'publishing'
@@ -147,7 +147,7 @@ function reorderQueueItem(item: ContentItem, direction: -1 | 1) {
                   </Button>
                   <Button
                     v-if="canQueueItem(item)"
-                    variant="secondary"
+                    color="secondary"
                     size="small"
                     :disabled="busyItemId === item.id || reordering"
                     @click="emit('queue', item)"
@@ -156,7 +156,7 @@ function reorderQueueItem(item: ContentItem, direction: -1 | 1) {
                   </Button>
                   <Button
                     v-if="canUnqueueItem(item)"
-                    variant="secondary"
+                    color="secondary"
                     size="small"
                     :disabled="busyItemId === item.id || reordering"
                     @click="emit('unqueue', item)"
@@ -165,7 +165,7 @@ function reorderQueueItem(item: ContentItem, direction: -1 | 1) {
                   </Button>
                   <Button
                     v-if="canMoveQueueItem(item)"
-                    variant="outline"
+                    color="outline"
                     size="small"
                     :disabled="
                       busyItemId === item.id || reordering || item.queuePosition === 1
@@ -176,7 +176,7 @@ function reorderQueueItem(item: ContentItem, direction: -1 | 1) {
                   </Button>
                   <Button
                     v-if="canMoveQueueItem(item)"
-                    variant="outline"
+                    color="outline"
                     size="small"
                     :disabled="
                       busyItemId === item.id ||
@@ -190,7 +190,7 @@ function reorderQueueItem(item: ContentItem, direction: -1 | 1) {
                   </Button>
                   <Button
                     v-if="canPublishItem(item)"
-                    variant="primary"
+                    color="primary"
                     size="small"
                     :disabled="busyItemId === item.id || reordering"
                     @click="emit('publish', item)"
@@ -198,7 +198,7 @@ function reorderQueueItem(item: ContentItem, direction: -1 | 1) {
                     {{ busyItemId === item.id ? "Publishing..." : "Publish now" }}
                   </Button>
                   <Button
-                    variant="secondary"
+                    color="secondary"
                     size="small"
                     :disabled="
                       busyItemId === item.id || reordering || item.status === 'publishing'

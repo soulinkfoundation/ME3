@@ -2066,7 +2066,7 @@ onMounted(async () => {
 
                 <div class="button-row email-settings__actions">
                   <Button
-                    tone="green"
+                    color="primary"
                     size="compact"
                     type="button"
                     :disabled="unifiedEmailSaveDisabled"
@@ -2079,7 +2079,7 @@ onMounted(async () => {
                     }}
                   </Button>
                   <Button
-                    variant="outline"
+                    color="outline"
                     size="compact"
                     type="button"
                     :disabled="emailProviderTestDisabled"
@@ -2212,7 +2212,7 @@ onMounted(async () => {
                       </StatusBadge>
                       <Button
                         v-if="me3Connection?.connected"
-                        variant="outline"
+                        color="outline"
                         size="compact"
                         type="button"
                         :disabled="
@@ -2229,7 +2229,7 @@ onMounted(async () => {
                       </Button>
                       <Button
                         v-else
-                        tone="green"
+                        color="primary"
                         size="compact"
                         type="button"
                         :disabled="appConnectionsSaving"
@@ -2388,7 +2388,7 @@ onMounted(async () => {
                     </label>
 
                     <Button
-                      tone="green"
+                      color="primary"
                       size="compact"
                       type="button"
                       :disabled="aiSettingsSaveDisabled"
@@ -2480,7 +2480,7 @@ onMounted(async () => {
                         @keydown.enter.prevent="saveCommerceSettings"
                       />
                       <Button
-                        tone="green"
+                        color="primary"
                         size="compact"
                         type="button"
                         :disabled="commerceSaveDisabled"
@@ -2496,7 +2496,7 @@ onMounted(async () => {
 
                   <Button
                     v-if="commerceSettings?.stripe.source === 'stored'"
-                    variant="outline"
+                    color="outline"
                     size="compact"
                     type="button"
                     :disabled="commerceClearDisabled"
@@ -2543,7 +2543,7 @@ onMounted(async () => {
                   </label>
                   <div class="timezone-row__actions">
                     <Button
-                      variant="outline"
+                      color="outline"
                       size="compact"
                       type="button"
                       @click="detectTimezoneValue"
@@ -2551,7 +2551,7 @@ onMounted(async () => {
                       Detect from browser
                     </Button>
                     <Button
-                      tone="green"
+                      color="primary"
                       size="compact"
                       type="button"
                       :disabled="saveDisabled"
@@ -2642,7 +2642,7 @@ onMounted(async () => {
               <div class="local-executor-command">
                 <pre><code>{{ LOCAL_EXECUTOR_CD_COMMAND }}</code></pre>
                 <Button
-                  variant="outline"
+                  color="outline"
                   size="small"
                   shape="soft"
                   type="button"
@@ -2666,7 +2666,7 @@ onMounted(async () => {
                 The code is already inside the command.
               </span>
               <Button
-                tone="green"
+                color="primary"
                 size="compact"
                 shape="soft"
                 type="button"
@@ -2696,7 +2696,7 @@ onMounted(async () => {
               >
                 <pre><code>{{ localExecutorPairingCommand }}</code></pre>
                 <Button
-                  variant="outline"
+                  color="outline"
                   size="small"
                   shape="soft"
                   type="button"
@@ -2723,7 +2723,7 @@ onMounted(async () => {
               <div class="local-executor-command">
                 <pre><code>{{ LOCAL_EXECUTOR_CONFIG_COMMAND }}</code></pre>
                 <Button
-                  variant="outline"
+                  color="outline"
                   size="small"
                   shape="soft"
                   type="button"
@@ -2750,7 +2750,7 @@ onMounted(async () => {
               <div class="local-executor-command">
                 <pre><code>{{ LOCAL_EXECUTOR_RUN_COMMAND }}</code></pre>
                 <Button
-                  variant="outline"
+                  color="outline"
                   size="small"
                   shape="soft"
                   type="button"
@@ -2773,7 +2773,7 @@ onMounted(async () => {
               <div class="local-executor-command">
                 <pre><code>{{ LOCAL_EXECUTOR_KEEP_AWAKE_COMMAND }}</code></pre>
                 <Button
-                  variant="outline"
+                  color="outline"
                   size="small"
                   shape="soft"
                   type="button"
