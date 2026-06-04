@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../api";
 import Button from "../components/Button.vue";
+import IconPicker from "../components/IconPicker.vue";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
 import { resolveUiIconName, type UiIconName } from "../utils/icons";
@@ -124,6 +125,8 @@ const quickActionDrafts = ref<DashboardQuickLink[]>([]);
 const dashboardSaving = ref(false);
 const draggedCardId = ref("");
 const draggedQuickActionId = ref("");
+const cardPickerOpen = ref(false);
+const quickActionPickerOpen = ref(false);
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
@@ -154,6 +157,12 @@ const availableQuickActionDrafts = computed(() =>
   quickActionDrafts.value
     .filter((link) => link.available !== false && dashboard.value?.destinations[link.destinationId])
     .sort((a, b) => a.sortOrder - b.sortOrder),
+);
+const addableCardDrafts = computed(() =>
+  availableCardDrafts.value.filter((card) => !card.enabled),
+);
+const addableQuickActionDrafts = computed(() =>
+  availableQuickActionDrafts.value.filter((link) => !link.enabled),
 );
 const dailyBriefing = computed(
   () => dashboard.value?.data["mission.daily-briefing"] || null,
@@ -227,40 +236,14 @@ function closeDashboardEditor() {
   dashboardEditing.value = false;
   draggedCardId.value = "";
   draggedQuickActionId.value = "";
+  cardPickerOpen.value = false;
+  quickActionPickerOpen.value = false;
   syncDashboardDrafts();
 }
 
 function startMissionStatementEdit() {
   missionStatementDraft.value = dashboard.value?.missionStatement || "";
   missionStatementEditing.value = true;
-}
-
-function moveCard(index: number, direction: -1 | 1) {
-  const nextIndex = index + direction;
-  if (nextIndex < 0 || nextIndex >= cardDrafts.value.length) return;
-  const next = [...cardDrafts.value];
-  const current = next[index];
-  const target = next[nextIndex];
-  if (!current || !target) return;
-  next[index] = target;
-  next[nextIndex] = current;
-  cardDrafts.value = next.map((card, sortOrder) => ({ ...card, sortOrder }));
-}
-
-function moveCardById(cardId: string, direction: -1 | 1) {
-  const ordered = [...cardDrafts.value].sort((a, b) => a.sortOrder - b.sortOrder);
-  const index = ordered.findIndex((card) => card.cardId === cardId);
-  if (index < 0) return;
-  const nextIndex = index + direction;
-  if (nextIndex < 0 || nextIndex >= ordered.length) return;
-  moveCard(index, direction);
-}
-
-function moveVisibleCard(index: number, direction: -1 | 1) {
-  const source = availableCardDrafts.value[index];
-  const target = availableCardDrafts.value[index + direction];
-  if (!source || !target) return;
-  reorderCards(source.cardId, target.cardId);
 }
 
 function updateCardDraft(
@@ -282,11 +265,38 @@ function updateQuickActionDraft(
   quickActionDrafts.value[index] = { ...current, ...patch };
 }
 
-function moveVisibleQuickAction(index: number, direction: -1 | 1) {
-  const source = availableQuickActionDrafts.value[index];
-  const target = availableQuickActionDrafts.value[index + direction];
-  if (!source || !target) return;
-  reorderQuickActions(source.id, target.id);
+function nextEnabledCardSortOrder(): number {
+  return Math.max(-1, ...visibleCards.value.map((card) => card.sortOrder)) + 1;
+}
+
+function nextEnabledQuickActionSortOrder(): number {
+  return Math.max(-1, ...visibleQuickLinks.value.map((link) => link.sortOrder)) + 1;
+}
+
+function addCardDraft(cardId: string) {
+  cardDrafts.value = cardDrafts.value.map((card) =>
+    card.cardId === cardId
+      ? { ...card, enabled: true, sortOrder: nextEnabledCardSortOrder() }
+      : card,
+  );
+  cardPickerOpen.value = false;
+}
+
+function removeCardDraft(cardId: string) {
+  updateCardDraft(cardId, { enabled: false });
+}
+
+function addQuickActionDraft(linkId: string) {
+  quickActionDrafts.value = quickActionDrafts.value.map((link) =>
+    link.id === linkId
+      ? { ...link, enabled: true, sortOrder: nextEnabledQuickActionSortOrder() }
+      : link,
+  );
+  quickActionPickerOpen.value = false;
+}
+
+function removeQuickActionDraft(linkId: string) {
+  updateQuickActionDraft(linkId, { enabled: false });
 }
 
 function setCardDropTarget(targetCardId: string) {
@@ -420,6 +430,19 @@ onMounted(() => {
     <header class="mission-dashboard__topbar">
       <div class="mission-dashboard__topbar-spacer" aria-hidden="true" />
       <Button
+        v-if="dashboardEditing"
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        aria-label="Save dashboard"
+        title="Save dashboard"
+        :disabled="dashboardSaving"
+        @click="saveDashboardLayout"
+      >
+        <UiIcon name="Save" :size="18" />
+      </Button>
+      <Button
         color="ghost"
         shape="soft"
         size="compact"
@@ -443,27 +466,9 @@ onMounted(() => {
         Loading Mission Control...
       </div>
 
-      <div v-if="dashboardEditing" class="dashboard-edit-banner">
-        <span>Edit mode</span>
-        <div>
-          <Button color="ghost" shape="soft" size="compact" @click="closeDashboardEditor">
-            Cancel
-          </Button>
-          <Button
-            color="accent"
-            shape="soft"
-            size="compact"
-            :disabled="dashboardSaving"
-            @click="saveDashboardLayout"
-          >
-            {{ dashboardSaving ? "Saving..." : "Save dashboard" }}
-          </Button>
-        </div>
-      </div>
-
       <div v-if="!loading" class="mission-dashboard__grid">
         <article
-          v-for="(card, index) in visibleCards"
+          v-for="card in visibleCards"
           :key="card.instanceId"
           class="dashboard-card"
           :class="[
@@ -480,13 +485,17 @@ onMounted(() => {
           @drop.prevent="setCardDropTarget(card.cardId)"
         >
           <div v-if="dashboardEditing" class="dashboard-card__edit-controls">
-            <button
-              type="button"
+            <Button
               class="dashboard-drag-handle"
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
               aria-label="Drag card"
+              title="Drag card"
             >
               <UiIcon name="GripVertical" :size="15" />
-            </button>
+            </Button>
             <select
               :value="card.size"
               aria-label="Card size"
@@ -505,30 +514,9 @@ onMounted(() => {
               shape="soft"
               size="compact"
               icon-only
-              aria-label="Move card left"
-              :disabled="index === 0"
-              @click="moveCardById(card.cardId, -1)"
-            >
-              <UiIcon name="ChevronLeft" :size="15" />
-            </Button>
-            <Button
-              color="ghost"
-              shape="soft"
-              size="compact"
-              icon-only
-              aria-label="Move card right"
-              :disabled="index === visibleCards.length - 1"
-              @click="moveCardById(card.cardId, 1)"
-            >
-              <UiIcon name="ChevronRight" :size="15" />
-            </Button>
-            <Button
-              color="ghost"
-              shape="soft"
-              size="compact"
-              icon-only
               aria-label="Remove card"
-              @click="updateCardDraft(card.cardId, { enabled: false })"
+              title="Remove card"
+              @click="removeCardDraft(card.cardId)"
             >
               <UiIcon name="EyeOff" :size="15" />
             </Button>
@@ -610,7 +598,7 @@ onMounted(() => {
               </h2>
               <div class="dashboard-card__header-actions">
                 <span v-if="wheelSnapshot?.snapshot">
-                  {{ formatDashboardDate(wheelSnapshot.snapshot.createdAt) }}
+                  Saved {{ formatDashboardDate(wheelSnapshot.snapshot.createdAt) }}
                 </span>
                 <Button
                   color="ghost"
@@ -714,67 +702,102 @@ onMounted(() => {
             </div>
           </template>
         </article>
+        <button
+          v-if="dashboardEditing"
+          type="button"
+          class="dashboard-add-card"
+          aria-label="Add dashboard card"
+          @click="cardPickerOpen = true"
+        >
+          <UiIcon name="Plus" :size="34" />
+        </button>
       </div>
 
       <div
-        v-if="!loading && visibleQuickLinks.length"
+        v-if="!loading && (visibleQuickLinks.length || dashboardEditing)"
         class="mission-dashboard__quick-actions"
         aria-label="Quick actions"
         @dragover.prevent
       >
-        <Button
+        <div
           v-for="link in visibleQuickLinks"
           :key="link.id"
-          color="outline"
-          shape="pill"
-          size="large"
-          :to="dashboardEditing ? undefined : quickLinkPath(link)"
+          class="dashboard-quick-action-wrap"
           :draggable="dashboardEditing"
           @dragstart="draggedQuickActionId = link.id"
           @dragend="draggedQuickActionId = ''"
           @dragover.prevent
           @drop.prevent="setQuickActionDropTarget(link.id)"
         >
-          <template #icon>
-            <UiIcon :name="quickLinkIcon(link)" :size="17" />
-          </template>
-          {{ link.label }}
-        </Button>
-      </div>
-
-      <section
-        v-if="dashboardEditing"
-        class="quick-action-editor"
-        aria-label="Card settings"
-      >
-        <header class="quick-action-editor__header">
-          <h2>Cards</h2>
-        </header>
-        <div class="quick-action-editor__rows">
-          <div
-            v-for="(card, index) in availableCardDrafts"
-            :key="card.cardId"
-            class="quick-action-editor__row dashboard-card-editor__row"
-            :class="{ 'is-disabled': !card.enabled }"
-            draggable="true"
-            @dragstart="draggedCardId = card.cardId"
-            @dragend="draggedCardId = ''"
-            @dragover.prevent
-            @drop.prevent="setCardDropTarget(card.cardId)"
+          <Button
+            color="outline"
+            shape="pill"
+            size="large"
+            :to="dashboardEditing ? undefined : quickLinkPath(link)"
           >
-            <label class="quick-action-editor__toggle">
-              <input
-                type="checkbox"
-                :checked="card.enabled"
-                @change="
-                  updateCardDraft(card.cardId, {
-                    enabled: ($event.target as HTMLInputElement).checked,
-                  })
-                "
-              />
-              <span>{{ card.enabled ? "Shown" : "Hidden" }}</span>
-            </label>
-            <span class="dashboard-card-editor__label">{{ cardLabel(card) }}</span>
+            <template #icon>
+              <UiIcon :name="quickLinkIcon(link)" :size="17" />
+            </template>
+            {{ link.label }}
+          </Button>
+          <Button
+            v-if="dashboardEditing"
+            class="dashboard-quick-action-remove"
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Remove quick action"
+            title="Remove quick action"
+            @click="removeQuickActionDraft(link.id)"
+          >
+            <UiIcon name="X" :size="14" />
+          </Button>
+        </div>
+        <button
+          v-if="dashboardEditing"
+          type="button"
+          class="dashboard-add-action"
+          aria-label="Add quick action"
+          @click="quickActionPickerOpen = true"
+        >
+          <UiIcon name="Plus" :size="18" />
+        </button>
+      </div>
+    </section>
+
+    <div
+      v-if="cardPickerOpen"
+      class="dashboard-modal-backdrop"
+      @click.self="cardPickerOpen = false"
+    >
+      <section class="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="add-card-title">
+        <header class="dashboard-modal__header">
+          <h2 id="add-card-title">Add card</h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Close add card"
+            @click="cardPickerOpen = false"
+          >
+            <UiIcon name="X" :size="18" />
+          </Button>
+        </header>
+        <div class="dashboard-modal__body">
+          <p v-if="!addableCardDrafts.length" class="dashboard-modal__empty">
+            Every available card is already on the dashboard.
+          </p>
+          <div
+            v-for="card in addableCardDrafts"
+            :key="card.cardId"
+            class="dashboard-modal__row"
+          >
+            <div>
+              <strong>{{ cardLabel(card) }}</strong>
+              <span>{{ card.pluginId }}</span>
+            </div>
             <select
               :value="card.size"
               aria-label="Card size"
@@ -788,137 +811,76 @@ onMounted(() => {
               <option value="medium">Medium</option>
               <option value="wide">Wide</option>
             </select>
-            <div class="quick-action-editor__order">
-              <Button
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                aria-label="Move card up"
-                :disabled="index === 0"
-                @click="moveVisibleCard(index, -1)"
-              >
-                <UiIcon name="ChevronUp" :size="15" />
-              </Button>
-              <Button
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                aria-label="Move card down"
-                :disabled="index === availableCardDrafts.length - 1"
-                @click="moveVisibleCard(index, 1)"
-              >
-                <UiIcon name="ChevronDown" :size="15" />
-              </Button>
-            </div>
+            <Button color="accent" shape="soft" size="compact" @click="addCardDraft(card.cardId)">
+              Add
+            </Button>
           </div>
         </div>
       </section>
+    </div>
 
-      <section
-        v-if="dashboardEditing"
-        class="quick-action-editor"
-        aria-label="Quick action settings"
-      >
-        <header class="quick-action-editor__header">
-          <h2>Quick actions</h2>
-        </header>
-        <div class="quick-action-editor__rows">
-          <div
-            v-for="(link, index) in availableQuickActionDrafts"
-            :key="link.id"
-            class="quick-action-editor__row"
-            :class="{ 'is-disabled': !link.enabled }"
-            draggable="true"
-            @dragstart="draggedQuickActionId = link.id"
-            @dragend="draggedQuickActionId = ''"
-            @dragover.prevent
-            @drop.prevent="setQuickActionDropTarget(link.id)"
+    <div
+      v-if="quickActionPickerOpen"
+      class="dashboard-modal-backdrop"
+      @click.self="quickActionPickerOpen = false"
+    >
+      <section class="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="add-action-title">
+        <header class="dashboard-modal__header">
+          <h2 id="add-action-title">Add quick action</h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Close add quick action"
+            @click="quickActionPickerOpen = false"
           >
-            <label class="quick-action-editor__toggle">
+            <UiIcon name="X" :size="18" />
+          </Button>
+        </header>
+        <div class="dashboard-modal__body">
+          <p v-if="!addableQuickActionDrafts.length" class="dashboard-modal__empty">
+            Every available quick action is already on the dashboard.
+          </p>
+          <div
+            v-for="link in addableQuickActionDrafts"
+            :key="link.id"
+            class="dashboard-modal__row dashboard-modal__row--action"
+          >
+            <label>
+              <span>Name</span>
               <input
-                type="checkbox"
-                :checked="link.enabled"
-                @change="
+                :value="link.label"
+                type="text"
+                @input="
                   updateQuickActionDraft(link.id, {
-                    enabled: ($event.target as HTMLInputElement).checked,
+                    label: ($event.target as HTMLInputElement).value,
                   })
                 "
               />
-              <span>Show</span>
             </label>
-            <div class="quick-action-editor__fields">
-              <label>
-                <span>Name</span>
-                <input
-                  :value="link.label"
-                  type="text"
-                  @input="
-                    updateQuickActionDraft(link.id, {
-                      label: ($event.target as HTMLInputElement).value,
-                    })
-                  "
-                />
-              </label>
-              <label>
-                <span>Icon</span>
-                <input
-                  :value="link.icon"
-                  type="text"
-                  @input="
-                    updateQuickActionDraft(link.id, {
-                      icon: ($event.target as HTMLInputElement).value,
-                    })
-                  "
-                />
-              </label>
-            </div>
-            <span class="quick-action-editor__destination">
+            <label>
+              <span>Icon</span>
+              <IconPicker
+                :model-value="link.icon"
+                :aria-label="`${link.label} icon`"
+                @update:model-value="
+                  updateQuickActionDraft(link.id, {
+                    icon: $event,
+                  })
+                "
+              />
+            </label>
+            <span class="dashboard-modal__destination">
               {{ quickActionDestinationLabel(link) }}
             </span>
-            <div class="quick-action-editor__order">
-              <Button
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                aria-label="Move quick action up"
-                :disabled="index === 0"
-                @click="moveVisibleQuickAction(index, -1)"
-              >
-                <UiIcon name="ChevronUp" :size="15" />
-              </Button>
-              <Button
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                aria-label="Move quick action down"
-                :disabled="index === availableQuickActionDrafts.length - 1"
-                @click="moveVisibleQuickAction(index, 1)"
-              >
-                <UiIcon name="ChevronDown" :size="15" />
-              </Button>
-            </div>
+            <Button color="accent" shape="soft" size="compact" @click="addQuickActionDraft(link.id)">
+              Add
+            </Button>
           </div>
         </div>
-        <div class="quick-action-editor__footer">
-          <Button color="ghost" shape="soft" size="compact" @click="closeDashboardEditor">
-            Cancel
-          </Button>
-          <Button
-            color="accent"
-            shape="soft"
-            size="compact"
-            :disabled="dashboardSaving"
-            @click="saveDashboardLayout"
-          >
-            {{ dashboardSaving ? "Saving..." : "Save dashboard" }}
-          </Button>
-        </div>
       </section>
-    </section>
+    </div>
   </main>
 </template>
 
@@ -983,140 +945,6 @@ onMounted(() => {
   justify-self: center;
 }
 
-.dashboard-edit-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: min(760px, 100%);
-  justify-self: center;
-  padding: 10px 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-}
-
-.dashboard-edit-banner > span {
-  color: var(--ui-text);
-  font-size: 13px;
-  font-weight: 750;
-}
-
-.dashboard-edit-banner > div {
-  display: flex;
-  gap: 6px;
-}
-
-.quick-action-editor {
-  display: grid;
-  width: min(760px, 100%);
-  justify-self: center;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface);
-}
-
-.quick-action-editor__header,
-.quick-action-editor__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.quick-action-editor__header h2 {
-  margin: 0;
-  color: var(--ui-text);
-  font-size: 14px;
-}
-
-.quick-action-editor__rows {
-  display: grid;
-}
-
-.quick-action-editor__row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(120px, auto) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 0;
-  border-top: 1px solid var(--ui-border);
-}
-
-.quick-action-editor__row.is-disabled {
-  opacity: 0.62;
-}
-
-.quick-action-editor__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.quick-action-editor__fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.45fr);
-  gap: 8px;
-  min-width: 0;
-}
-
-.quick-action-editor__fields label {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.quick-action-editor__fields span {
-  color: var(--ui-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.quick-action-editor__fields input {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  min-height: 32px;
-  padding: 0 9px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-bg);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.quick-action-editor__fields input:focus {
-  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 72%);
-  outline-offset: 1px;
-}
-
-.quick-action-editor__destination {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.dashboard-card-editor__row {
-  grid-template-columns: auto minmax(0, 1fr) 130px auto;
-}
-
-.dashboard-card-editor__label {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ui-text);
-  font-size: 13px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dashboard-card-editor__row select,
 .dashboard-card__edit-controls select {
   width: 100%;
   min-height: 32px;
@@ -1126,11 +954,6 @@ onMounted(() => {
   color: var(--ui-text);
   font: inherit;
   font-size: 12px;
-}
-
-.quick-action-editor__order {
-  display: flex;
-  gap: 4px;
 }
 
 .mission-dashboard__grid {
@@ -1161,7 +984,7 @@ onMounted(() => {
 
 .dashboard-card__edit-controls {
   display: grid;
-  grid-template-columns: auto minmax(86px, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(86px, 1fr) auto;
   align-items: center;
   gap: 5px;
   padding-bottom: 10px;
@@ -1169,15 +992,6 @@ onMounted(() => {
 }
 
 .dashboard-drag-handle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-bg);
-  color: var(--ui-text-muted);
   cursor: grab;
 }
 
@@ -1216,7 +1030,7 @@ onMounted(() => {
 
 .dashboard-card__title svg {
   flex: 0 0 auto;
-  color: var(--ui-accent);
+  color: currentColor;
 }
 
 .dashboard-card__title span {
@@ -1299,6 +1113,159 @@ onMounted(() => {
   width: 100%;
 }
 
+.dashboard-add-card {
+  display: grid;
+  min-height: 188px;
+  place-items: center;
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.dashboard-add-card:hover,
+.dashboard-add-card:focus-visible,
+.dashboard-add-action:hover,
+.dashboard-add-action:focus-visible {
+  border-color: var(--ui-accent);
+  color: var(--ui-text);
+  outline: none;
+}
+
+.dashboard-quick-action-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dashboard-quick-action-remove {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  background: var(--ui-surface);
+}
+
+.dashboard-add-action {
+  display: inline-grid;
+  width: 42px;
+  min-height: 38px;
+  place-items: center;
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.dashboard-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in oklab, var(--ui-bg), transparent 18%);
+  backdrop-filter: blur(14px);
+}
+
+.dashboard-modal {
+  display: grid;
+  width: min(640px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.dashboard-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.dashboard-modal__header h2 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 15px;
+}
+
+.dashboard-modal__body {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 16px;
+}
+
+.dashboard-modal__empty {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+}
+
+.dashboard-modal__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.dashboard-modal__row:last-child {
+  border-bottom: 0;
+}
+
+.dashboard-modal__row > div,
+.dashboard-modal__row label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.dashboard-modal__row strong {
+  color: var(--ui-text);
+  font-size: 13px;
+}
+
+.dashboard-modal__row span,
+.dashboard-modal__destination {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.dashboard-modal__row select,
+.dashboard-modal__row input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.dashboard-modal__row input {
+  padding: 0 10px;
+}
+
+.dashboard-modal__row--action {
+  grid-template-columns: minmax(0, 1fr) auto minmax(110px, 0.5fr) auto;
+}
+
 @media (max-width: 959px) {
   .mission-dashboard {
     padding: 0 14px 32px;
@@ -1312,27 +1279,8 @@ onMounted(() => {
     grid-template-columns: 1fr;
   }
 
-  .quick-action-editor__row,
-  .dashboard-card-editor__row,
-  .quick-action-editor__fields {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-edit-banner,
   .dashboard-card__edit-controls {
     grid-template-columns: 1fr;
-  }
-
-  .dashboard-edit-banner {
-    display: grid;
-  }
-
-  .dashboard-edit-banner > div {
-    justify-content: start;
-  }
-
-  .quick-action-editor__order {
-    justify-content: start;
   }
 
   .dashboard-card--wide {
@@ -1340,6 +1288,11 @@ onMounted(() => {
   }
 
   .wheel-summary__row {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-modal__row,
+  .dashboard-modal__row--action {
     grid-template-columns: 1fr;
   }
 }
