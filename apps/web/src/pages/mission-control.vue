@@ -69,6 +69,12 @@ type WheelSnapshotCardData = {
 type MissionDashboardResponse = {
   cards: DashboardCardInstance[];
   quickLinks: DashboardQuickLink[];
+  availableQuickActions: Array<{
+    id: string;
+    label: string;
+    icon: string;
+    destinationId: string;
+  }>;
   destinations: Record<string, DashboardDestination>;
   missionStatement: string;
   data: {
@@ -84,6 +90,9 @@ const loading = ref(true);
 const error = ref("");
 const missionStatementDraft = ref("");
 const missionStatementSaving = ref(false);
+const quickActionsEditing = ref(false);
+const quickActionDrafts = ref<DashboardQuickLink[]>([]);
+const quickActionsSaving = ref(false);
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
@@ -114,6 +123,53 @@ function quickLinkIcon(link: DashboardQuickLink): UiIconName {
   return (resolveUiIconName(link.icon) || "Circle") as UiIconName;
 }
 
+function quickActionDestinationLabel(link: DashboardQuickLink): string {
+  const contribution = dashboard.value?.availableQuickActions.find(
+    (action) => action.id === link.id,
+  );
+  return contribution?.label || link.destinationId;
+}
+
+function syncQuickActionDrafts() {
+  quickActionDrafts.value = [...(dashboard.value?.quickLinks || [])]
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((link, index) => ({ ...link, sortOrder: index }));
+}
+
+function openQuickActionEditor() {
+  syncQuickActionDrafts();
+  quickActionsEditing.value = true;
+}
+
+function closeQuickActionEditor() {
+  quickActionsEditing.value = false;
+  syncQuickActionDrafts();
+}
+
+function moveQuickAction(index: number, direction: -1 | 1) {
+  const nextIndex = index + direction;
+  if (nextIndex < 0 || nextIndex >= quickActionDrafts.value.length) return;
+  const next = [...quickActionDrafts.value];
+  const current = next[index];
+  const target = next[nextIndex];
+  if (!current || !target) return;
+  next[index] = target;
+  next[nextIndex] = current;
+  quickActionDrafts.value = next.map((link, sortOrder) => ({
+    ...link,
+    sortOrder,
+  }));
+}
+
+function updateQuickActionDraft(
+  index: number,
+  patch: Partial<Pick<DashboardQuickLink, "label" | "icon" | "enabled">>,
+) {
+  const current = quickActionDrafts.value[index];
+  if (!current) return;
+  quickActionDrafts.value[index] = { ...current, ...patch };
+}
+
 function formatDashboardDate(value: string | null | undefined): string {
   if (!value) return "";
   const parsed = new Date(value);
@@ -134,6 +190,7 @@ async function loadDashboard() {
       "/mission-control/dashboard",
     );
     missionStatementDraft.value = dashboard.value.missionStatement;
+    syncQuickActionDrafts();
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Mission Control could not load.";
   } finally {
@@ -160,6 +217,31 @@ async function saveMissionStatement() {
   }
 }
 
+async function saveQuickActions() {
+  if (quickActionsSaving.value) return;
+  quickActionsSaving.value = true;
+  try {
+    dashboard.value = await api.patch<MissionDashboardResponse>(
+      "/mission-control/dashboard",
+      {
+        quickLinks: quickActionDrafts.value.map((link, sortOrder) => ({
+          ...link,
+          label: link.label.trim() || quickActionDestinationLabel(link),
+          icon: resolveUiIconName(link.icon) ? link.icon : "Circle",
+          sortOrder,
+        })),
+      },
+    );
+    syncQuickActionDrafts();
+    quickActionsEditing.value = false;
+    toastSuccess("Quick actions saved");
+  } catch (err) {
+    toastFromUnknown(err, "Quick actions could not be saved");
+  } finally {
+    quickActionsSaving.value = false;
+  }
+}
+
 onMounted(() => {
   void loadDashboard();
 });
@@ -169,6 +251,17 @@ onMounted(() => {
   <main class="mission-dashboard">
     <header class="mission-dashboard__topbar">
       <div class="mission-dashboard__topbar-spacer" aria-hidden="true" />
+      <Button
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        aria-label="Customize quick actions"
+        title="Customize quick actions"
+        @click="openQuickActionEditor"
+      >
+        <UiIcon name="SlidersHorizontal" :size="18" />
+      </Button>
       <Button
         color="ghost"
         shape="soft"
@@ -294,6 +387,114 @@ onMounted(() => {
           {{ link.label }}
         </Button>
       </div>
+
+      <section
+        v-if="quickActionsEditing"
+        class="quick-action-editor"
+        aria-label="Quick action settings"
+      >
+        <header class="quick-action-editor__header">
+          <h2>Quick actions</h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Close quick action settings"
+            @click="closeQuickActionEditor"
+          >
+            <UiIcon name="X" :size="16" />
+          </Button>
+        </header>
+        <div class="quick-action-editor__rows">
+          <div
+            v-for="(link, index) in quickActionDrafts"
+            :key="link.id"
+            class="quick-action-editor__row"
+            :class="{ 'is-disabled': !link.enabled }"
+          >
+            <label class="quick-action-editor__toggle">
+              <input
+                type="checkbox"
+                :checked="link.enabled"
+                @change="
+                  updateQuickActionDraft(index, {
+                    enabled: ($event.target as HTMLInputElement).checked,
+                  })
+                "
+              />
+              <span>Show</span>
+            </label>
+            <div class="quick-action-editor__fields">
+              <label>
+                <span>Name</span>
+                <input
+                  :value="link.label"
+                  type="text"
+                  @input="
+                    updateQuickActionDraft(index, {
+                      label: ($event.target as HTMLInputElement).value,
+                    })
+                  "
+                />
+              </label>
+              <label>
+                <span>Icon</span>
+                <input
+                  :value="link.icon"
+                  type="text"
+                  @input="
+                    updateQuickActionDraft(index, {
+                      icon: ($event.target as HTMLInputElement).value,
+                    })
+                  "
+                />
+              </label>
+            </div>
+            <span class="quick-action-editor__destination">
+              {{ quickActionDestinationLabel(link) }}
+            </span>
+            <div class="quick-action-editor__order">
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Move quick action up"
+                :disabled="index === 0"
+                @click="moveQuickAction(index, -1)"
+              >
+                <UiIcon name="ChevronUp" :size="15" />
+              </Button>
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Move quick action down"
+                :disabled="index === quickActionDrafts.length - 1"
+                @click="moveQuickAction(index, 1)"
+              >
+                <UiIcon name="ChevronDown" :size="15" />
+              </Button>
+            </div>
+          </div>
+        </div>
+        <div class="quick-action-editor__footer">
+          <Button color="ghost" shape="soft" size="compact" @click="closeQuickActionEditor">
+            Cancel
+          </Button>
+          <Button
+            color="accent"
+            shape="soft"
+            size="compact"
+            :disabled="quickActionsSaving"
+            @click="saveQuickActions"
+          >
+            {{ quickActionsSaving ? "Saving..." : "Save actions" }}
+          </Button>
+        </div>
+      </section>
     </section>
   </main>
 </template>
@@ -357,6 +558,106 @@ onMounted(() => {
   gap: 8px;
   width: min(640px, 100%);
   justify-self: center;
+}
+
+.quick-action-editor {
+  display: grid;
+  width: min(760px, 100%);
+  justify-self: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+}
+
+.quick-action-editor__header,
+.quick-action-editor__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.quick-action-editor__header h2 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 14px;
+}
+
+.quick-action-editor__rows {
+  display: grid;
+}
+
+.quick-action-editor__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(120px, auto) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--ui-border);
+}
+
+.quick-action-editor__row.is-disabled {
+  opacity: 0.62;
+}
+
+.quick-action-editor__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.quick-action-editor__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.45fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.quick-action-editor__fields label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.quick-action-editor__fields span {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.quick-action-editor__fields input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.quick-action-editor__fields input:focus {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 72%);
+  outline-offset: 1px;
+}
+
+.quick-action-editor__destination {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.quick-action-editor__order {
+  display: flex;
+  gap: 4px;
 }
 
 .mission-dashboard__grid {
@@ -482,6 +783,15 @@ onMounted(() => {
 
   .mission-dashboard__grid {
     grid-template-columns: 1fr;
+  }
+
+  .quick-action-editor__row,
+  .quick-action-editor__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-action-editor__order {
+    justify-content: start;
   }
 
   .dashboard-card--wide {
