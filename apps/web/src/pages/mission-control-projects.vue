@@ -11,8 +11,32 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { useRoute, useRouter } from "vue-router";
 import { API_BASE, ApiError, api } from "../api";
 import Button from "../components/Button.vue";
+import MissionProjectModal from "../components/mission-control/MissionProjectModal.vue";
+import MissionProjectPicker from "../components/mission-control/MissionProjectPicker.vue";
+import MissionProjectTaskBoard from "../components/mission-control/MissionProjectTaskBoard.vue";
+import MissionProjectTaskDetailModal from "../components/mission-control/MissionProjectTaskDetailModal.vue";
+import {
+  appendUniqueTasks,
+  formatDateTime,
+  formatShortDate,
+  isLocalProject,
+  missionTasksUrl,
+  projectBoardStatuses,
+  projectForTask,
+  weeklyReviewMetadata,
+} from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
+import type {
+  LocalExecutorStatusResponse,
+  MissionProject,
+  MissionRun,
+  MissionTask,
+  ProjectBoardColumn,
+  ProjectBoardStatus,
+  ProjectTaskDetailDraft,
+  WeeklyReviewTaskCleanupAction,
+} from "../components/mission-control/projectWorkspace";
 import type { UiIconName } from "../utils/icons";
 
 definePage({
@@ -36,78 +60,6 @@ type MissionSection =
 type PrimaryMissionSection = "projects" | "accounts";
 type SettingsMissionSection = "activity" | "memory" | "sources";
 
-type MissionProject = {
-  id: string;
-  name: string;
-  slug: string;
-  status: "active" | "paused" | "archived";
-  description: string | null;
-  color: string | null;
-  icon: string | null;
-  sourceKind: "manual" | "daemon_repo" | "beads" | "import";
-  sourceRef: string | null;
-  metadata: Record<string, unknown>;
-};
-
-type MissionTask = {
-  id: string;
-  title: string;
-  description: string | null;
-  status: "backlog" | "in_progress" | "review" | "done" | "cancelled";
-  projectId: string | null;
-  dueAt: string | null;
-  scheduledFor: string | null;
-  sourceKind: "manual" | "capture" | "agent" | "beads" | "daemon";
-  sourceRef: string | null;
-  priority: number;
-  createdAt: string;
-  updatedAt: string;
-  archivedAt: string | null;
-  metadata: Record<string, unknown>;
-};
-
-type WeeklyReviewTaskItem = {
-  id: string;
-  title: string;
-  projectId: string | null;
-  dueAt: string | null;
-  completedAt: string | null;
-  status: string | null;
-};
-
-type WeeklyReviewTaskCleanupAction = "archive" | "done";
-
-type WeeklyReviewMemorySuggestion = {
-  id: string;
-  title: string;
-  body: string;
-  memoryKind: string;
-  duplicate: boolean;
-  pattern: boolean;
-  note: string;
-  checked: boolean;
-};
-
-type WeeklyReviewReminderItem = {
-  id: string;
-  title: string;
-  remindAt: string | null;
-  status: string | null;
-};
-
-type WeeklyReviewView = {
-  reviewDate: string;
-  weekStart: string;
-  weekEnd: string;
-  weekLabel: string;
-  summary: string;
-  openTasks: WeeklyReviewTaskItem[];
-  completedTasks: WeeklyReviewTaskItem[];
-  reminders: WeeklyReviewReminderItem[];
-  memorySuggestions: WeeklyReviewMemorySuggestion[];
-  submittedAt: string | null;
-};
-
 type MissionApproval = {
   id: string;
   pluginId: string;
@@ -117,35 +69,6 @@ type MissionApproval = {
   riskLevel: "low" | "medium" | "high";
   status: string;
   requestedAt: string;
-};
-
-type MissionRun = {
-  id: string;
-  title: string;
-  projectId: string | null;
-  taskId: string | null;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  model: string | null;
-  runnerId: string | null;
-  promptSummary: string | null;
-  result: Record<string, unknown>;
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-};
-
-type LocalExecutorStatusResponse = {
-  setup: {
-    ready: boolean;
-    paired: boolean;
-    hasProjectPolicy: boolean;
-    nextAction: string;
-  };
-  pairings: Array<{
-    displayName: string;
-    status: string;
-    lastSeenAt: string | null;
-  }>;
 };
 
 type MissionMemory = {
@@ -256,20 +179,6 @@ type ActivityViewItem = {
   canRetryLocalRun?: boolean;
 };
 
-type ProjectBoardStatus = Exclude<MissionTask["status"], "cancelled">;
-
-type ProjectBoardColumn = {
-  id: ProjectBoardStatus;
-  label: string;
-  tasks: MissionTask[];
-};
-
-type ProjectTaskDetailDraft = {
-  title: string;
-  description: string;
-  status: ProjectBoardStatus;
-};
-
 const route = useRoute();
 const router = useRouter();
 const { toastFromUnknown, toastSuccess } = useAppToast();
@@ -288,16 +197,6 @@ const sectionLabels: Record<MissionSection, string> = {
   memory: "Memory",
   sources: "Sources",
 };
-const projectBoardStatuses: Array<{
-  id: ProjectBoardStatus;
-  label: string;
-}> = [
-  { id: "backlog", label: "Backlog" },
-  { id: "in_progress", label: "Doing" },
-  { id: "review", label: "Review" },
-  { id: "done", label: "Done" },
-];
-const PROJECT_TASK_PAGE_SIZE = 50;
 const ACCOUNTS_PAGE_SIZE = 50;
 
 const activeSection = ref<MissionSection>(
@@ -507,11 +406,6 @@ const selectedProjectTaskDetail = computed(() =>
     ? projectTasks.value.find(
         (task) => task.id === selectedProjectTaskDetailId.value,
       ) || null
-    : null,
-);
-const selectedProjectTaskDetailProject = computed(() =>
-  selectedProjectTaskDetail.value
-    ? projectForTask(selectedProjectTaskDetail.value)
     : null,
 );
 const selectedProjectTaskWeeklyReview = computed(() =>
@@ -1122,126 +1016,6 @@ function resetProjectTaskComposer() {
   projectTaskProjectId.value = "";
 }
 
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function textValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function nullableTextValue(value: unknown): string | null {
-  const text = textValue(value);
-  return text || null;
-}
-
-function boolValue(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function weeklyReviewTaskItem(value: unknown): WeeklyReviewTaskItem | null {
-  const record = recordValue(value);
-  if (!record) return null;
-  const id = textValue(record.id);
-  const title = textValue(record.title);
-  if (!id || !title) return null;
-  return {
-    id,
-    title,
-    projectId: nullableTextValue(record.projectId),
-    dueAt: nullableTextValue(record.dueAt),
-    completedAt: nullableTextValue(record.completedAt),
-    status: nullableTextValue(record.status),
-  };
-}
-
-function weeklyReviewMemorySuggestion(
-  value: unknown,
-  index: number,
-): WeeklyReviewMemorySuggestion | null {
-  const record = recordValue(value);
-  if (!record) return null;
-  const title = textValue(record.title);
-  const body = textValue(record.body);
-  if (!title || !body) return null;
-  return {
-    id: textValue(record.id) || `suggestion-${index}`,
-    title,
-    body,
-    memoryKind: textValue(record.memoryKind) || "preference",
-    duplicate: boolValue(record.duplicate),
-    pattern: boolValue(record.pattern),
-    note: textValue(record.note),
-    checked: boolValue(record.checked, true),
-  };
-}
-
-function weeklyReviewReminderItem(value: unknown): WeeklyReviewReminderItem | null {
-  const record = recordValue(value);
-  if (!record) return null;
-  const id = textValue(record.id);
-  const title = textValue(record.title);
-  if (!id || !title) return null;
-  return {
-    id,
-    title,
-    remindAt: nullableTextValue(record.remindAt),
-    status: nullableTextValue(record.status),
-  };
-}
-
-function weeklyReviewMetadata(task: MissionTask | null | undefined): WeeklyReviewView | null {
-  const metadata = recordValue(task?.metadata);
-  const review = recordValue(metadata?.weeklyReview);
-  if (!metadata || !review || metadata.kind !== "weekly_review") return null;
-  const weekStart = textValue(review.weekStart);
-  const weekEnd = textValue(review.weekEnd);
-  const reviewDate = textValue(review.reviewDate) || weekEnd || weekStart;
-  const weekLabel =
-    textValue(review.weekLabel) ||
-    [weekStart, weekEnd].filter(Boolean).join(" to ") ||
-    "Weekly Review";
-  const openTasks = Array.isArray(review.openTasks)
-    ? review.openTasks
-        .map((item) => weeklyReviewTaskItem(item))
-        .filter((item): item is WeeklyReviewTaskItem => Boolean(item))
-    : [];
-  const completedTasks = Array.isArray(review.completedTasks)
-    ? review.completedTasks
-        .map((item) => weeklyReviewTaskItem(item))
-        .filter((item): item is WeeklyReviewTaskItem => Boolean(item))
-    : [];
-  const reminders = Array.isArray(review.reminders)
-    ? review.reminders
-        .map((item) => weeklyReviewReminderItem(item))
-        .filter((item): item is WeeklyReviewReminderItem => Boolean(item))
-    : [];
-  const memorySuggestions = Array.isArray(review.memorySuggestions)
-    ? review.memorySuggestions
-        .map((item, index) => weeklyReviewMemorySuggestion(item, index))
-        .filter(
-          (item): item is WeeklyReviewMemorySuggestion => Boolean(item),
-        )
-    : [];
-
-  return {
-    reviewDate,
-    weekStart,
-    weekEnd,
-    weekLabel,
-    summary:
-      textValue(review.journalSummary) ||
-      `Review ${weekLabel.toLowerCase()}.`,
-    openTasks,
-    completedTasks,
-    reminders,
-    memorySuggestions,
-    submittedAt: nullableTextValue(review.submittedAt),
-  };
-}
-
 function resetWeeklyReviewSelection(task: MissionTask | null) {
   const review = weeklyReviewMetadata(task);
   weeklyReviewTaskActions.value = {};
@@ -1277,53 +1051,6 @@ function toggleWeeklyReviewReminder(reminderId: string) {
   if (next.has(reminderId)) next.delete(reminderId);
   else next.add(reminderId);
   weeklyReviewReminderIds.value = next;
-}
-
-function weeklyReviewCardLabel(task: MissionTask): string {
-  const review = weeklyReviewMetadata(task);
-  if (!review) return "";
-  const parts = [
-    `${review.openTasks.length} open`,
-    `${review.completedTasks.length} done`,
-  ];
-  if (review.memorySuggestions.length)
-    parts.push(`${review.memorySuggestions.length} memories`);
-  return parts.join(" / ");
-}
-
-function ordinalDay(day: number): string {
-  if (day >= 11 && day <= 13) return `${day}th`;
-  const last = day % 10;
-  if (last === 1) return `${day}st`;
-  if (last === 2) return `${day}nd`;
-  if (last === 3) return `${day}rd`;
-  return `${day}th`;
-}
-
-function formatWeekdayDate(value: string, includeYear: boolean): string {
-  const date = new Date(`${value.slice(0, 10)}T12:00:00Z`);
-  if (Number.isNaN(date.getTime())) return value;
-  const weekday = new Intl.DateTimeFormat("en-GB", {
-    weekday: "long",
-    timeZone: "UTC",
-  }).format(date);
-  const month = new Intl.DateTimeFormat("en-GB", {
-    month: "long",
-    timeZone: "UTC",
-  }).format(date);
-  const year = date.getUTCFullYear();
-  return `${weekday} ${ordinalDay(date.getUTCDate())} ${month}${includeYear ? ` ${year}` : ""}`;
-}
-
-function formatWeeklyReviewRange(review: WeeklyReviewView): string {
-  if (!review.weekStart || !review.weekEnd) return review.weekLabel;
-  const start = new Date(`${review.weekStart}T12:00:00Z`);
-  const end = new Date(`${review.weekEnd}T12:00:00Z`);
-  const sameYear =
-    !Number.isNaN(start.getTime()) &&
-    !Number.isNaN(end.getTime()) &&
-    start.getUTCFullYear() === end.getUTCFullYear();
-  return `${formatWeekdayDate(review.weekStart, !sameYear)} - ${formatWeekdayDate(review.weekEnd, true)}`;
 }
 
 function syncProjectTaskDetailDraft(task: MissionTask) {
@@ -1406,7 +1133,10 @@ async function addProjectTask(status: ProjectBoardStatus) {
 }
 
 async function runProjectTaskLocally(task: MissionTask) {
-  if (!isLocalProject(projectForTask(task)) || projectTaskLocalRunId.value)
+  if (
+    !isLocalProject(projectForTask(projects.value, task)) ||
+    projectTaskLocalRunId.value
+  )
     return;
   projectTaskLocalRunId.value = task.id;
   projectTasksError.value = "";
@@ -1612,35 +1342,6 @@ function replaceProjectTask(next: MissionTask) {
   else projectTasks.value.unshift(next);
 }
 
-function appendUniqueTasks(
-  current: MissionTask[],
-  next: MissionTask[],
-): MissionTask[] {
-  const seen = new Set(current.map((task) => task.id));
-  return [
-    ...current,
-    ...next.filter((task) => {
-      if (seen.has(task.id)) return false;
-      seen.add(task.id);
-      return true;
-    }),
-  ];
-}
-
-function missionTasksUrl(options: {
-  archived?: boolean;
-  projectId?: string;
-  cursor?: string | null;
-}): string {
-  const params = new URLSearchParams({
-    limit: String(PROJECT_TASK_PAGE_SIZE),
-  });
-  if (options.archived) params.set("archived", "1");
-  if (options.projectId) params.set("projectId", options.projectId);
-  if (options.cursor) params.set("cursor", options.cursor);
-  return `/mission-control/tasks?${params.toString()}`;
-}
-
 async function addMemory() {
   const body = memoryDraft.value.trim();
   if (!body) return;
@@ -1712,32 +1413,6 @@ async function addSource() {
   }
 }
 
-function projectName(projectId: string | null): string {
-  if (!projectId) return "Personal";
-  return (
-    projects.value.find((project) => project.id === projectId)?.name ||
-    "Personal"
-  );
-}
-
-function projectTaskComposerProjectLabel(project: MissionProject): string {
-  return isLocalProject(project) ? `${project.name} (Local)` : project.name;
-}
-
-function projectForTask(task: MissionTask): MissionProject | null {
-  if (!task.projectId) return null;
-  return projects.value.find((project) => project.id === task.projectId) || null;
-}
-
-function isLocalProject(project: MissionProject | null | undefined): boolean {
-  return project?.sourceKind === "daemon_repo";
-}
-
-function localProjectPath(project: MissionProject | null | undefined): string {
-  const value = project?.metadata?.localPath;
-  return typeof value === "string" ? value : "";
-}
-
 function emptyAccountsForm(type: FinancialEntryType): AccountsEntryForm {
   return {
     date: todayKey(),
@@ -1771,27 +1446,6 @@ function formatMoney(cents: number, currency: string): string {
     style: "currency",
     currency: currency || "USD",
   }).format((cents || 0) / 100);
-}
-
-function formatDateTime(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function formatShortDate(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(date);
 }
 
 function memoryKindLabel(kind: string): string {
@@ -1930,76 +1584,17 @@ onBeforeUnmount(() => {
 <template>
   <main class="mission-control">
     <header class="mission-control__topbar">
-      <div
+      <MissionProjectPicker
         v-if="activeSection === 'projects'"
-        class="mission-control__project-switcher"
-        aria-label="Selected project"
-        @click.stop
-      >
-        <button
-          type="button"
-          class="mission-control__project-label"
-          :aria-expanded="projectPickerOpen"
-          aria-haspopup="dialog"
-          aria-label="Choose project"
-          @click="toggleProjectPicker"
-        >
-          <strong>{{ selectedProjectDetailLabel }}</strong>
-          <span v-if="selectedProjectIsLocal" class="local-project-badge"
-            >Local</span
-          >
-          <UiIcon
-            name="ChevronDown"
-            :size="15"
-            class="mission-control__project-caret"
-          />
-        </button>
-        <div
-          v-if="projectPickerOpen"
-          class="project-picker-popover"
-          role="dialog"
-          aria-label="Choose project"
-        >
-          <button
-            type="button"
-            class="project-picker-popover__item"
-            :class="{ 'is-active': !selectedProjectDetail }"
-            @click="selectProjectDetail('')"
-          >
-            <span>All</span>
-          </button>
-          <button
-            v-for="project in projects"
-            :key="project.id"
-            type="button"
-            class="project-picker-popover__item"
-            :class="{ 'is-active': selectedProjectDetail?.id === project.id }"
-            @click="selectProjectDetail(project.id)"
-          >
-            <span>{{ project.name }}</span>
-            <span v-if="isLocalProject(project)" class="local-project-badge"
-              >Local</span
-            >
-          </button>
-          <div
-            v-if="projects.length === 0"
-            class="project-picker-popover__empty"
-          >
-            No projects yet. Personal tasks will still appear in All.
-          </div>
-          <Button
-            color="primary"
-            shape="soft"
-            size="compact"
-            class="project-picker-popover__add"
-            type="button"
-            @click="openProjectModal"
-          >
-            <UiIcon name="Plus" :size="15" />
-            Add project
-          </Button>
-        </div>
-      </div>
+        :open="projectPickerOpen"
+        :projects="projects"
+        :selected-project="selectedProjectDetail"
+        :selected-project-label="selectedProjectDetailLabel"
+        :selected-project-is-local="selectedProjectIsLocal"
+        @toggle="toggleProjectPicker"
+        @select="selectProjectDetail"
+        @add-project="openProjectModal"
+      />
       <div v-if="activeSection !== 'projects'" class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
       </div>
@@ -2079,197 +1674,39 @@ onBeforeUnmount(() => {
     <p v-if="error" class="mission-control__message is-error">{{ error }}</p>
 
     <section v-show="activeSection === 'projects'" class="mission-page">
-      <div class="projects-workspace">
-          <div v-if="selectedProjectIsLocal" class="local-project-summary">
-            <div>
-              <strong>Local project</strong>
-              <span>{{ localProjectPath(selectedProjectDetail) }}</span>
-            </div>
-            <div class="local-project-summary__runner">
-              <strong>{{ localExecutorRunnerLabel }}</strong>
-              <span>{{ localExecutorRunnerDetail }}</span>
-            </div>
-          </div>
-
-          <p v-if="projectTasksError" class="mission-control__message is-error">
-            {{ projectTasksError }}
-          </p>
-
-          <div v-if="projectTasksLoading" class="empty-row">
-            Loading project tasks...
-          </div>
-          <template v-else>
-            <div class="project-board" aria-label="Project board">
-              <section
-                v-for="column in projectBoardColumns"
-                :key="column.id"
-                class="project-board__column"
-                :class="{
-                  'is-drop-target': projectTaskDropStatus === column.id,
-                }"
-                :aria-label="column.label"
-                @dragover="handleProjectColumnDragOver($event, column.id)"
-                @dragleave="handleProjectColumnDragLeave($event, column.id)"
-                @drop="dropProjectTask($event, column.id)"
-              >
-                <div class="project-board__column-header">
-                  <h2>{{ column.label }}</h2>
-                  <span>{{ column.tasks.length }}</span>
-                </div>
-
-                <article
-                  v-for="task in column.tasks"
-                  :key="task.id"
-                  class="project-task-card"
-                  :class="{
-                    'is-dragging': draggedProjectTaskId === task.id,
-                    'is-updating':
-                      projectTaskActionId === task.id ||
-                      projectTaskLocalRunId === task.id,
-                  }"
-                  role="button"
-                  tabindex="0"
-                  draggable="true"
-                  :aria-label="`Open details for ${task.title}`"
-                  @click="openProjectTaskDetail(task)"
-                  @keydown.enter.prevent="openProjectTaskDetail(task)"
-                  @keydown.space.prevent="openProjectTaskDetail(task)"
-                  @dragstart="startProjectTaskDrag($event, task)"
-                  @dragend="endProjectTaskDrag"
-                >
-                  <p>{{ task.title }}</p>
-                  <div class="project-task-card__meta">
-                    <span
-                      v-if="weeklyReviewMetadata(task)"
-                      class="weekly-review-badge"
-                      >Weekly Review</span
-                    >
-                    <span class="project-task-card__project">
-                      <img
-                        v-if="projectForTask(task)?.icon"
-                        :src="projectForTask(task)?.icon || ''"
-                        alt=""
-                      />
-                      <span>{{ projectName(task.projectId) }}</span>
-                    </span>
-                    <span
-                      v-if="isLocalProject(projectForTask(task))"
-                      class="local-project-badge"
-                      >Local</span
-                    >
-                    <span v-if="task.dueAt || task.scheduledFor">
-                      {{ formatShortDate(task.dueAt || task.scheduledFor) }}
-                    </span>
-                  </div>
-                  <span
-                    v-if="weeklyReviewMetadata(task)"
-                    class="project-task-card__review-counts"
-                  >
-                    {{ weeklyReviewCardLabel(task) }}
-                  </span>
-                  <div class="project-task-card__actions">
-                    <button
-                      v-if="isLocalProject(projectForTask(task))"
-                      type="button"
-                      class="project-task-card__run"
-                      :disabled="Boolean(projectTaskLocalRunId)"
-                      @click.stop="runProjectTaskLocally(task)"
-                    >
-                      <UiIcon name="Play" :size="14" />
-                      {{
-                        projectTaskLocalRunId === task.id
-                          ? "Queuing..."
-                          : "Run locally"
-                      }}
-                    </button>
-                    <Button color="ghost" shape="soft" size="compact" icon-only
-                      type="button"
-                      aria-label="Archive task"
-                      :disabled="
-                        projectTaskActionId === task.id ||
-                        projectTaskLocalRunId === task.id
-                      "
-                      @click.stop="archiveProjectTask(task)"
-                    >
-                      <UiIcon name="X" :size="15" />
-                    </Button>
-                  </div>
-                </article>
-                <form
-                  v-if="projectTaskComposerStatus === column.id"
-                  class="project-task-composer"
-                  @submit.prevent="addProjectTask(column.id)"
-                >
-                  <select
-                    v-if="!selectedProjectDetail"
-                    v-model="projectTaskProjectId"
-                    class="project-task-composer__project"
-                    aria-label="Task project"
-                    @keydown.esc.prevent="cancelProjectTaskComposer"
-                  >
-                    <option value="">Choose project</option>
-                    <option
-                      v-for="project in projects"
-                      :key="project.id"
-                      :value="project.id"
-                    >
-                      {{ projectTaskComposerProjectLabel(project) }}
-                    </option>
-                  </select>
-                  <input
-                    v-model="projectTaskDraft"
-                    class="project-task-composer__input"
-                    type="text"
-                    placeholder="Task name"
-                    autocomplete="off"
-                    @keydown.esc.prevent="cancelProjectTaskComposer"
-                  />
-                  <div class="project-task-composer__actions">
-                    <Button color="ghost" shape="soft" size="compact" icon-only
-                      type="button"
-                      aria-label="Cancel task"
-                      :disabled="projectTaskSaving"
-                      @click="cancelProjectTaskComposer"
-                    >
-                      <UiIcon name="X" :size="15" />
-                    </Button>
-                    <Button color="accent" shape="soft" size="compact" icon-only type="submit"
-                      aria-label="Add task"
-                      :disabled="projectTaskCreateDisabled"
-                    >
-                      <UiIcon name="Plus" :size="16" />
-                    </Button>
-                  </div>
-                </form>
-                <button
-                  v-else
-                  type="button"
-                  class="project-column-add"
-                  :disabled="projectTaskSaving"
-                  @click="openProjectTaskComposer(column.id)"
-                >
-                  <UiIcon name="Plus" :size="15" />
-                  Add task
-                </button>
-              </section>
-            </div>
-
-            <button
-              v-if="projectTasksNextCursor"
-              type="button"
-              class="load-more-row load-more-row--center"
-              :disabled="projectTasksLoadingMore"
-              @click="loadMoreProjectTasks"
-            >
-              <UiIcon name="ChevronDown" :size="15" />
-              {{
-                projectTasksLoadingMore
-                  ? "Loading more tasks..."
-                  : "Load more tasks"
-              }}
-            </button>
-          </template>
-      </div>
+      <MissionProjectTaskBoard
+        v-model:task-draft="projectTaskDraft"
+        v-model:task-project-id="projectTaskProjectId"
+        :projects="projects"
+        :selected-project="selectedProjectDetail"
+        :selected-project-is-local="selectedProjectIsLocal"
+        :local-executor-runner-label="localExecutorRunnerLabel"
+        :local-executor-runner-detail="localExecutorRunnerDetail"
+        :error="projectTasksError"
+        :loading="projectTasksLoading"
+        :columns="projectBoardColumns"
+        :drop-status="projectTaskDropStatus"
+        :dragged-task-id="draggedProjectTaskId"
+        :action-id="projectTaskActionId"
+        :local-run-id="projectTaskLocalRunId"
+        :saving="projectTaskSaving"
+        :composer-status="projectTaskComposerStatus"
+        :create-disabled="projectTaskCreateDisabled"
+        :next-cursor="projectTasksNextCursor"
+        :loading-more="projectTasksLoadingMore"
+        @column-drag-over="handleProjectColumnDragOver"
+        @column-drag-leave="handleProjectColumnDragLeave"
+        @drop-task="dropProjectTask"
+        @open-detail="openProjectTaskDetail"
+        @task-drag-start="startProjectTaskDrag"
+        @task-drag-end="endProjectTaskDrag"
+        @archive-task="archiveProjectTask"
+        @run-task-locally="runProjectTaskLocally"
+        @add-task="addProjectTask"
+        @open-composer="openProjectTaskComposer"
+        @cancel-composer="cancelProjectTaskComposer"
+        @load-more="loadMoreProjectTasks"
+      />
     </section>
 
     <section v-show="activeSection === 'accounts'" class="mission-page">
@@ -2673,461 +2110,52 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <MissionProjectModal
+      v-model:project-title="projectTitle"
+      v-model:project-description="projectDescription"
+      v-model:project-type="projectType"
+      v-model:project-local-path="projectLocalPath"
+      :open="projectModalOpen"
+      :project-logo-data="projectLogoData"
+      :project-logo-name="projectLogoName"
+      :saving="projectSaving"
+      :error="projectError"
+      :create-disabled="projectCreateDisabled"
+      @choose-logo="chooseProjectLogo"
+      @remove-logo="removeProjectLogo"
+      @close="closeProjectModal"
+      @submit="addProject"
+    />
+
+    <MissionProjectTaskDetailModal
+      v-model:detail-draft="projectTaskDetailDraft"
+      v-model:weekly-review-custom-memory="weeklyReviewCustomMemory"
+      v-model:weekly-review-completed-open="weeklyReviewCompletedOpen"
+      :projects="projects"
+      :task="selectedProjectTaskDetail"
+      :latest-run="selectedProjectTaskLatestRun"
+      :latest-run-summary="selectedProjectTaskLatestRunSummary"
+      :weekly-review="selectedProjectTaskWeeklyReview"
+      :board-statuses="projectBoardStatuses"
+      :weekly-review-task-actions="weeklyReviewTaskActions"
+      :weekly-review-memory-ids="weeklyReviewMemoryIds"
+      :weekly-review-reminder-ids="weeklyReviewReminderIds"
+      :detail-error="projectTaskDetailError"
+      :detail-saving="projectTaskDetailSaving"
+      :weekly-review-submitting="weeklyReviewSubmitting"
+      :task-action-id="projectTaskActionId"
+      :save-disabled="projectTaskDetailSaveDisabled"
+      :submit-disabled="weeklyReviewSubmitDisabled"
+      @close="closeProjectTaskDetail()"
+      @save="saveProjectTaskDetail"
+      @submit="submitSelectedWeeklyReview"
+      @archive="archiveSelectedProjectTask"
+      @set-weekly-review-task-action="setWeeklyReviewTaskAction"
+      @toggle-weekly-review-memory="toggleWeeklyReviewMemory"
+      @toggle-weekly-review-reminder="toggleWeeklyReviewReminder"
+    />
+
     <Teleport to="body">
-      <div
-        v-if="projectModalOpen"
-        class="mission-modal"
-        role="presentation"
-        @click.self="closeProjectModal"
-      >
-        <form
-          class="mission-modal__dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="project-modal-title"
-          @submit.prevent="addProject"
-        >
-          <div class="mission-modal__header">
-            <h2 id="project-modal-title">Add project</h2>
-            <Button color="ghost" shape="soft" size="compact" icon-only
-              type="button"
-              aria-label="Close"
-              @click="closeProjectModal"
-            >
-              <UiIcon name="X" :size="18" />
-            </Button>
-          </div>
-
-          <label class="field">
-            <span>Title</span>
-            <input
-              v-model="projectTitle"
-              type="text"
-              autocomplete="off"
-              autofocus
-            />
-          </label>
-
-          <label class="field">
-            <span>Description</span>
-            <textarea v-model="projectDescription" rows="4" />
-          </label>
-
-          <label class="field">
-            <span>Type</span>
-            <select v-model="projectType">
-              <option value="standard">Standard</option>
-              <option value="local">Local</option>
-            </select>
-          </label>
-
-          <template v-if="projectType === 'local'">
-            <label class="field">
-              <span>Local folder path</span>
-              <input
-                v-model="projectLocalPath"
-                type="text"
-                autocomplete="off"
-                placeholder="e.g. /Users/yourusername/Projects/projectName"
-              />
-            </label>
-
-            <p class="project-modal__hint">
-              Provider setup lives on the local computer. Use the Local
-              Executor plugin Configure button to create or edit
-              <code>~/.me3/local-executor/config.json</code>.
-            </p>
-          </template>
-
-          <label class="field">
-            <span>Logo</span>
-            <input type="file" accept="image/*" @change="chooseProjectLogo" />
-          </label>
-
-          <div v-if="projectLogoData" class="project-logo-preview">
-            <img :src="projectLogoData" alt="" />
-            <span>{{ projectLogoName }}</span>
-            <Button color="outline" shape="soft" size="compact"
-              type="button"
-              @click="removeProjectLogo"
-            >
-              Remove
-            </Button>
-          </div>
-
-          <p v-if="projectError" class="mission-modal__error">
-            {{ projectError }}
-          </p>
-
-          <div class="mission-modal__actions">
-            <Button color="outline" shape="soft" size="compact"
-              type="button"
-              @click="closeProjectModal"
-            >
-              Cancel
-            </Button>
-            <Button color="primary" shape="soft" size="compact"
-              type="submit"
-              :disabled="projectCreateDisabled"
-            >
-              {{ projectSaving ? "Adding..." : "Add project" }}
-            </Button>
-          </div>
-        </form>
-      </div>
-
-      <div
-        v-if="selectedProjectTaskDetail"
-        class="mission-modal"
-        role="presentation"
-        @click.self="closeProjectTaskDetail()"
-      >
-        <form
-          class="mission-modal__dialog task-detail-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="task-detail-modal-title"
-          @submit.prevent="
-            selectedProjectTaskIsWeeklyReview
-              ? submitSelectedWeeklyReview()
-              : saveProjectTaskDetail()
-          "
-        >
-          <div class="mission-modal__header">
-            <h2 id="task-detail-modal-title">
-              {{
-                selectedProjectTaskIsWeeklyReview
-                  ? "Weekly Review"
-                  : "Task details"
-              }}
-            </h2>
-            <Button color="ghost" shape="soft" size="compact" icon-only
-              type="button"
-              aria-label="Close"
-              @click="closeProjectTaskDetail()"
-            >
-              <UiIcon name="X" :size="18" />
-            </Button>
-          </div>
-
-          <div class="task-detail-modal__context">
-            <span>{{ projectName(selectedProjectTaskDetail.projectId) }}</span>
-            <span
-              v-if="selectedProjectTaskWeeklyReview"
-              class="weekly-review-badge"
-              >{{ formatWeeklyReviewRange(selectedProjectTaskWeeklyReview) }}</span
-            >
-            <span
-              v-if="isLocalProject(selectedProjectTaskDetailProject)"
-              class="local-project-badge"
-              >Local</span
-            >
-            <span v-if="selectedProjectTaskDetail.dueAt">
-              {{ formatShortDate(selectedProjectTaskDetail.dueAt) }}
-            </span>
-          </div>
-
-          <div
-            v-if="selectedProjectTaskLatestRun"
-            class="task-detail-modal__run"
-          >
-            <div>
-              <strong>Local run</strong>
-              <span class="status-badge">{{
-                selectedProjectTaskLatestRun.status
-              }}</span>
-            </div>
-            <p>{{ selectedProjectTaskLatestRunSummary }}</p>
-          </div>
-
-          <template v-if="selectedProjectTaskWeeklyReview">
-            <div class="weekly-review-panel">
-              <p class="weekly-review-panel__summary">
-                {{ selectedProjectTaskWeeklyReview.summary }}
-              </p>
-
-              <section class="weekly-review-panel__section">
-                <div class="weekly-review-panel__section-header">
-                  <h3>Open task cleanup</h3>
-                  <span>{{ selectedProjectTaskWeeklyReview.openTasks.length }}</span>
-                </div>
-                <p class="weekly-review-panel__hint">
-                  Archive stale tasks or mark finished work done. Anything untouched stays on the board.
-                </p>
-                <div
-                  v-if="selectedProjectTaskWeeklyReview.openTasks.length"
-                  class="weekly-review-task-list"
-                >
-                  <div
-                    v-for="item in selectedProjectTaskWeeklyReview.openTasks"
-                    :key="item.id"
-                    class="weekly-review-task-row"
-                  >
-                    <div class="weekly-review-task-row__body">
-                      <strong>{{ item.title }}</strong>
-                      <small>
-                        {{ projectName(item.projectId) }}
-                        <template v-if="item.dueAt">
-                          / due {{ formatShortDate(item.dueAt) }}
-                        </template>
-                      </small>
-                    </div>
-                    <div
-                      class="weekly-review-task-row__actions"
-                      aria-label="Task cleanup action"
-                    >
-                      <Button
-                        color="outline"
-                        shape="soft"
-                        size="compact"
-                        type="button"
-                        :active="weeklyReviewTaskActions[item.id] === 'archive'"
-                        :disabled="
-                          weeklyReviewSubmitting ||
-                          Boolean(selectedProjectTaskWeeklyReview.submittedAt)
-                        "
-                        @click="setWeeklyReviewTaskAction(item.id, 'archive')"
-                      >
-                        Archive
-                      </Button>
-                      <Button
-                        color="outline"
-                        shape="soft"
-                        size="compact"
-                        type="button"
-                        :active="weeklyReviewTaskActions[item.id] === 'done'"
-                        :disabled="
-                          weeklyReviewSubmitting ||
-                          Boolean(selectedProjectTaskWeeklyReview.submittedAt)
-                        "
-                        @click="setWeeklyReviewTaskAction(item.id, 'done')"
-                      >
-                        Done
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-                <p v-else class="weekly-review-panel__empty">
-                  No open tasks to clean up.
-                </p>
-              </section>
-
-              <section class="weekly-review-panel__section">
-                <div class="weekly-review-panel__section-header">
-                  <h3>Important memory</h3>
-                  <span v-if="selectedProjectTaskWeeklyReview.memorySuggestions.length">
-                    {{ weeklyReviewMemoryIds.size }} /
-                    {{
-                      selectedProjectTaskWeeklyReview.memorySuggestions.length
-                    }}
-                  </span>
-                </div>
-                <label class="weekly-review-memory-field">
-                  <span>Add one important fact or data point from this week</span>
-                  <textarea
-                    v-model="weeklyReviewCustomMemory"
-                    rows="3"
-                    placeholder="e.g. A decision, preference, recurring pattern, or important context worth remembering"
-                    :disabled="
-                      weeklyReviewSubmitting ||
-                      Boolean(selectedProjectTaskWeeklyReview.submittedAt)
-                    "
-                  />
-                </label>
-                <div
-                  v-if="selectedProjectTaskWeeklyReview.memorySuggestions.length"
-                  class="weekly-review-checklist"
-                >
-                  <label
-                    v-for="item in selectedProjectTaskWeeklyReview.memorySuggestions"
-                    :key="item.id"
-                    class="weekly-review-check weekly-review-check--memory"
-                  >
-                    <input
-                      type="checkbox"
-                      :checked="weeklyReviewMemoryIds.has(item.id)"
-                      :disabled="
-                        weeklyReviewSubmitting ||
-                        Boolean(selectedProjectTaskWeeklyReview.submittedAt)
-                      "
-                      @change="toggleWeeklyReviewMemory(item.id)"
-                    />
-                    <span>
-                      <strong>{{ item.title }}</strong>
-                      <small>{{ item.body }}</small>
-                    </span>
-                  </label>
-                </div>
-                <p v-else class="weekly-review-panel__empty">
-                  No automatic memory suggestions met the stricter bar this week.
-                </p>
-              </section>
-
-              <section
-                v-if="selectedProjectTaskWeeklyReview.reminders.length"
-                class="weekly-review-panel__section"
-              >
-                <div class="weekly-review-panel__section-header">
-                  <h3>Reminders</h3>
-                  <span>
-                    {{ weeklyReviewReminderIds.size }} /
-                    {{ selectedProjectTaskWeeklyReview.reminders.length }}
-                    reschedule
-                  </span>
-                </div>
-                <div class="weekly-review-checklist">
-                  <label
-                    v-for="item in selectedProjectTaskWeeklyReview.reminders"
-                    :key="item.id"
-                    class="weekly-review-check"
-                  >
-                    <input
-                      type="checkbox"
-                      :checked="weeklyReviewReminderIds.has(item.id)"
-                      :disabled="
-                        weeklyReviewSubmitting ||
-                        Boolean(selectedProjectTaskWeeklyReview.submittedAt)
-                      "
-                      @change="toggleWeeklyReviewReminder(item.id)"
-                    />
-                    <span>
-                      <strong>{{ item.title }}</strong>
-                      <small>
-                        {{ item.remindAt ? formatShortDate(item.remindAt) : "Pending" }}
-                        / reschedule for tomorrow
-                      </small>
-                    </span>
-                  </label>
-                </div>
-              </section>
-
-              <section
-                v-if="selectedProjectTaskWeeklyReview.completedTasks.length"
-                class="weekly-review-panel__section"
-              >
-                <button
-                  type="button"
-                  class="weekly-review-collapse"
-                  @click="
-                    weeklyReviewCompletedOpen = !weeklyReviewCompletedOpen
-                  "
-                >
-                  <span>
-                    Completed this week
-                    ({{ selectedProjectTaskWeeklyReview.completedTasks.length }})
-                  </span>
-                  <UiIcon
-                    :name="
-                      weeklyReviewCompletedOpen
-                        ? 'ChevronUp'
-                        : 'ChevronDown'
-                    "
-                    :size="15"
-                  />
-                </button>
-                <ul
-                  v-if="weeklyReviewCompletedOpen"
-                  class="weekly-review-list"
-                >
-                  <li
-                    v-for="item in selectedProjectTaskWeeklyReview.completedTasks"
-                    :key="item.id"
-                  >
-                    <strong>{{ item.title }}</strong>
-                    <span>{{ projectName(item.projectId) }}</span>
-                  </li>
-                </ul>
-              </section>
-
-              <p
-                v-if="selectedProjectTaskWeeklyReview.submittedAt"
-                class="weekly-review-panel__done"
-              >
-                Submitted {{ formatDateTime(selectedProjectTaskWeeklyReview.submittedAt) }}
-              </p>
-            </div>
-          </template>
-
-          <template v-else>
-            <label class="field">
-              <span>Title</span>
-              <input
-                v-model="projectTaskDetailDraft.title"
-                type="text"
-                autocomplete="off"
-                autofocus
-              />
-            </label>
-
-            <label class="field">
-              <span>Status</span>
-              <select v-model="projectTaskDetailDraft.status">
-                <option
-                  v-for="status in projectBoardStatuses"
-                  :key="status.id"
-                  :value="status.id"
-                >
-                  {{ status.label }}
-                </option>
-              </select>
-            </label>
-
-            <label class="field">
-              <span>Notes</span>
-              <textarea
-                v-model="projectTaskDetailDraft.description"
-                rows="5"
-                placeholder="Add detail for the runner or reviewer"
-              />
-            </label>
-          </template>
-
-          <p v-if="projectTaskDetailError" class="mission-modal__error">
-            {{ projectTaskDetailError }}
-          </p>
-
-          <div class="mission-modal__actions task-detail-modal__actions">
-            <Button color="danger" shape="soft" size="compact"
-              type="button"
-              :disabled="
-                projectTaskDetailSaving ||
-                projectTaskActionId === selectedProjectTaskDetail.id
-              "
-              @click="archiveSelectedProjectTask"
-            >
-              Archive
-            </Button>
-            <div class="task-detail-modal__primary-actions">
-              <Button color="outline" shape="soft" size="compact"
-                type="button"
-                :disabled="projectTaskDetailSaving || weeklyReviewSubmitting"
-                @click="closeProjectTaskDetail()"
-              >
-                Cancel
-              </Button>
-              <Button color="primary" shape="soft" size="compact"
-                v-if="selectedProjectTaskIsWeeklyReview"
-                type="submit"
-                :disabled="weeklyReviewSubmitDisabled"
-              >
-                {{
-                  weeklyReviewSubmitting
-                    ? "Submitting..."
-                    : "Submit review"
-                }}
-              </Button>
-              <Button color="primary" shape="soft" size="compact"
-                v-else
-                type="submit"
-                :disabled="projectTaskDetailSaveDisabled"
-              >
-                {{ projectTaskDetailSaving ? "Saving..." : "Save" }}
-              </Button>
-            </div>
-          </div>
-        </form>
-      </div>
-
       <div
         v-if="accountsModalOpen"
         class="mission-modal"
@@ -3340,56 +2368,6 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
-.mission-control__project-switcher {
-  position: relative;
-  display: grid;
-  min-width: 0;
-}
-
-.mission-control__project-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 0;
-  min-height: 36px;
-  padding: 6px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  line-height: 1.2;
-  cursor: pointer;
-}
-
-.mission-control__project-label:hover,
-.mission-control__project-label[aria-expanded="true"] {
-  background: var(--ui-surface-muted);
-}
-
-.mission-control__project-label strong {
-  overflow: hidden;
-  font-size: 15px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mission-control__project-label {
-  max-width: min(260px, calc(100vw - 120px));
-}
-
-.mission-control__project-caret {
-  flex: 0 0 auto;
-  color: var(--ui-text-muted);
-  transition: transform 0.16s ease;
-}
-
-.mission-control__project-label[aria-expanded="true"]
-  .mission-control__project-caret {
-  transform: rotate(180deg);
-}
-
 .detail-row p,
 .simple-sheet__header span,
 .detail-row__aside {
@@ -3442,75 +2420,6 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted);
 }
 
-.project-picker-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 50%;
-  z-index: 30;
-  display: grid;
-  width: 50vw;
-  min-width: min(320px, calc(100vw - 28px));
-  max-width: calc(100vw - 28px);
-  gap: 4px;
-  padding: 6px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface);
-  box-shadow: 0 18px 50px color-mix(in oklab, #000, transparent 86%);
-  transform: translateX(-50%);
-}
-
-.project-picker-popover {
-  width: min(300px, calc(100vw - 28px));
-  min-width: min(240px, calc(100vw - 28px));
-}
-
-.project-picker-popover__item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  min-height: 38px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-  cursor: pointer;
-}
-
-.project-picker-popover__item > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-picker-popover__item:hover,
-.project-picker-popover__item.is-active {
-  background: var(--ui-surface-muted);
-}
-
-.project-picker-popover__empty {
-  padding: 10px;
-  color: var(--ui-text-muted);
-  font-size: 13px;
-}
-
-.project-picker-popover__add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 4px;
-}
-
 .mission-control__message {
   width: min(700px, 100%);
   padding: 8px 12px;
@@ -3536,12 +2445,6 @@ onBeforeUnmount(() => {
   gap: 20px;
 }
 
-.projects-workspace {
-  display: grid;
-  width: min(1120px, 100%);
-  gap: 18px;
-}
-
 .simple-sheet--wide {
   width: min(920px, 100%);
 }
@@ -3557,9 +2460,7 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted);
 }
 
-.inline-form input,
-.project-task-composer__input,
-.project-task-composer__project {
+.inline-form input {
   width: 100%;
   min-width: 0;
   border: 0;
@@ -3569,28 +2470,14 @@ onBeforeUnmount(() => {
   font: inherit;
 }
 
-.inline-form input,
-.project-task-composer__input,
-.project-task-composer__project {
+.inline-form input {
   min-height: 40px;
   padding: 0 12px;
 }
 
-.project-task-composer__input::placeholder {
-  color: var(--ui-text-muted);
-}
-
-.inline-form input:focus,
-.project-task-composer__input:focus,
-.project-task-composer__project:focus {
+.inline-form input:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
-}
-
-.project-task-composer .me3-btn:disabled,
-.project-column-add:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .simple-sheet {
@@ -3648,20 +2535,6 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted);
   color: var(--ui-text-muted);
   font-size: 12px;
-  line-height: 1.2;
-}
-
-.local-project-badge {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  min-height: 20px;
-  padding: 2px 6px;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent);
-  font-size: 12px;
-  font-weight: 650;
   line-height: 1.2;
 }
 
@@ -3770,280 +2643,6 @@ onBeforeUnmount(() => {
   padding: 5px 8px;
   font-size: 13px;
   white-space: nowrap;
-}
-
-.project-board {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(180px, 1fr));
-  gap: 12px;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.project-board__column {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  min-width: 180px;
-  border-radius: var(--ui-radius-md);
-  transition:
-    background-color 0.16s ease,
-    outline-color 0.16s ease;
-}
-
-.project-board__column.is-drop-target {
-  background: color-mix(in oklab, var(--ui-accent-soft), transparent 30%);
-  outline: 1px solid color-mix(in oklab, var(--ui-accent), transparent 55%);
-  outline-offset: 6px;
-}
-
-.project-board__column-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--ui-border);
-}
-
-.project-board__column-header h2 {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.25;
-}
-
-.project-board__column-header span,
-.project-task-card__meta {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-
-.local-project-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-}
-
-.local-project-summary div {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.local-project-summary strong {
-  color: var(--ui-text);
-  font-size: 13px;
-}
-
-.local-project-summary span:not(.status-badge) {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.local-project-summary__runner {
-  justify-items: end;
-  text-align: right;
-}
-
-.project-task-card {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface);
-  cursor: pointer;
-  transition:
-    border-color 0.16s ease,
-    opacity 0.16s ease,
-    transform 0.16s ease;
-}
-
-.project-task-card:active {
-  cursor: grabbing;
-}
-
-.project-task-card:focus-visible {
-  border-color: var(--ui-accent);
-  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
-  outline-offset: 2px;
-}
-
-.project-task-card.is-dragging {
-  border-color: var(--ui-accent);
-  opacity: 0.48;
-  transform: scale(0.98);
-}
-
-.project-task-card.is-updating {
-  opacity: 0.6;
-}
-
-.project-task-card p {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.project-task-card__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.project-task-card__project {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  gap: 5px;
-  font-weight: 650;
-}
-
-.project-task-card__project img {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  border-radius: 4px;
-  object-fit: cover;
-}
-
-.project-task-card__project span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-task-card .local-project-badge {
-  color: var(--ui-accent);
-}
-
-.weekly-review-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 0 6px;
-  border: 1px solid color-mix(in oklab, var(--ui-accent), var(--ui-border) 60%);
-  border-radius: var(--ui-radius-sm);
-  color: var(--ui-accent);
-  font-size: 11px;
-  font-weight: 750;
-}
-
-.project-task-card__review-counts {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.project-task-card__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  min-width: 0;
-}
-
-.project-task-card__run {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 28px;
-  min-width: 0;
-  padding: 0 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-bg);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.project-task-card__run:hover {
-  border-color: color-mix(in oklab, var(--ui-accent), var(--ui-border) 40%);
-  color: var(--ui-accent);
-}
-
-.project-task-card__run:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.project-task-card__actions .me3-btn {
-  width: 28px;
-  height: 28px;
-}
-
-.project-task-card__actions .me3-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.project-task-composer {
-  display: grid;
-  gap: 6px;
-  padding: 6px;
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-}
-
-.project-task-composer__input,
-.project-task-composer__project {
-  min-height: 36px;
-  padding: 0 8px;
-}
-
-.project-task-composer__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 4px;
-}
-
-.project-task-composer__actions .me3-btn {
-  width: 30px;
-  height: 30px;
-}
-
-.project-task-composer__actions .me3-btn[type="submit"] {
-  background: var(--ui-accent);
-  color: var(--ui-accent-contrast);
-}
-
-.project-column-add {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  min-height: 36px;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.project-column-add:hover {
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
 }
 
 .accounts-workspace {
@@ -4220,41 +2819,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.load-more-row {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  min-height: 36px;
-  padding: 7px 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text-muted);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.load-more-row:hover:not(:disabled) {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
-}
-
-.load-more-row:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.load-more-row--center {
-  justify-self: center;
-  width: auto;
-  min-width: 180px;
-}
-
 .mission-modal {
   position: fixed;
   inset: 0;
@@ -4284,8 +2848,7 @@ onBeforeUnmount(() => {
 }
 
 .mission-modal__header,
-.mission-modal__actions,
-.project-logo-preview {
+.mission-modal__actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4302,262 +2865,6 @@ onBeforeUnmount(() => {
   padding-top: 4px;
 }
 
-.task-detail-modal__context {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: -4px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-
-.task-detail-modal__run {
-  display: grid;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-}
-
-.task-detail-modal__run div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.task-detail-modal__run strong {
-  font-size: 13px;
-}
-
-.task-detail-modal__run p {
-  margin: 0;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.task-detail-modal__actions {
-  justify-content: space-between;
-}
-
-.task-detail-modal__primary-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.weekly-review-panel {
-  display: grid;
-  gap: 14px;
-  min-width: 0;
-}
-
-.weekly-review-panel__summary,
-.weekly-review-panel__empty,
-.weekly-review-panel__done,
-.weekly-review-panel__hint {
-  margin: 0;
-  color: var(--ui-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.weekly-review-panel__hint {
-  font-size: 12px;
-}
-
-.weekly-review-panel__done {
-  color: var(--ui-accent);
-  font-weight: 700;
-}
-
-.weekly-review-panel__section {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.weekly-review-panel__section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.weekly-review-panel__section-header h3 {
-  margin: 0;
-  font-size: 13px;
-}
-
-.weekly-review-panel__section-header span {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.weekly-review-checklist {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.weekly-review-check {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
-}
-
-.weekly-review-check input {
-  margin-top: 2px;
-}
-
-.weekly-review-check span {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.weekly-review-check strong,
-.weekly-review-list strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.weekly-review-check small,
-.weekly-review-list span {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.weekly-review-check--memory small {
-  overflow-wrap: anywhere;
-}
-
-.weekly-review-task-list {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.weekly-review-task-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-muted);
-}
-
-.weekly-review-task-row__body {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.weekly-review-task-row__body strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.weekly-review-task-row__body small {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.weekly-review-task-row__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.weekly-review-task-row__actions .me3-btn {
-  min-height: 30px;
-  padding: 4px 8px;
-}
-
-.weekly-review-task-row__actions .me3-btn.me3-btn--active {
-  border-color: transparent;
-  background: var(--ui-accent);
-  color: var(--ui-accent-contrast);
-}
-
-.weekly-review-memory-field {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  color: var(--ui-text);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.weekly-review-memory-field span {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.weekly-review-memory-field textarea {
-  min-width: 0;
-  width: 100%;
-  resize: vertical;
-}
-
-.weekly-review-list {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.weekly-review-list li {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-muted);
-}
-
-.weekly-review-collapse {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
 .field {
   display: grid;
   gap: 6px;
@@ -4568,8 +2875,7 @@ onBeforeUnmount(() => {
 
 .field input,
 .field select,
-.field textarea,
-.weekly-review-memory-field textarea {
+.field textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--ui-border);
@@ -4593,8 +2899,7 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-.field textarea,
-.weekly-review-memory-field textarea {
+.field textarea {
   resize: vertical;
   padding: 10px;
   line-height: 1.5;
@@ -4602,47 +2907,9 @@ onBeforeUnmount(() => {
 
 .field input:focus,
 .field select:focus,
-.field textarea:focus,
-.weekly-review-memory-field textarea:focus {
+.field textarea:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
-}
-
-.project-modal__hint {
-  margin: -6px 0 0;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.project-modal__hint code {
-  color: var(--ui-text);
-  font-family:
-    ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 0.95em;
-}
-
-.project-logo-preview {
-  justify-content: flex-start;
-  padding: 8px;
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-
-.project-logo-preview img {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--ui-radius-sm);
-  object-fit: cover;
-}
-
-.project-logo-preview span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mission-modal__error {
@@ -4666,10 +2933,6 @@ onBeforeUnmount(() => {
     justify-self: stretch;
   }
 
-  .mission-control__project-label {
-    max-width: none;
-  }
-
   .detail-row {
     flex-direction: column;
   }
@@ -4677,15 +2940,6 @@ onBeforeUnmount(() => {
   .detail-row__aside {
     align-items: flex-start;
     text-align: left;
-  }
-
-  .project-board {
-    grid-template-columns: 1fr;
-    overflow-x: visible;
-  }
-
-  .project-board__column {
-    min-width: 0;
   }
 
   .accounts-summary {

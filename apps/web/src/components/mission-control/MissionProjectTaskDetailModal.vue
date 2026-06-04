@@ -1,0 +1,827 @@
+<script setup lang="ts">
+import { computed } from "vue";
+import Button from "../Button.vue";
+import UiIcon from "../UiIcon.vue";
+import {
+  formatDateTime,
+  formatShortDate,
+  formatWeeklyReviewRange,
+  isLocalProject,
+  projectForTask,
+  projectName,
+} from "./projectWorkspace";
+import type {
+  MissionProject,
+  MissionRun,
+  MissionTask,
+  ProjectBoardStatus,
+  ProjectTaskDetailDraft,
+  WeeklyReviewTaskCleanupAction,
+  WeeklyReviewView,
+} from "./projectWorkspace";
+
+const props = defineProps<{
+  projects: MissionProject[];
+  task: MissionTask | null;
+  latestRun: MissionRun | null;
+  latestRunSummary: string;
+  weeklyReview: WeeklyReviewView | null;
+  detailDraft: ProjectTaskDetailDraft;
+  boardStatuses: Array<{ id: ProjectBoardStatus; label: string }>;
+  weeklyReviewTaskActions: Record<string, WeeklyReviewTaskCleanupAction>;
+  weeklyReviewMemoryIds: Set<string>;
+  weeklyReviewReminderIds: Set<string>;
+  weeklyReviewCustomMemory: string;
+  weeklyReviewCompletedOpen: boolean;
+  detailError: string;
+  detailSaving: boolean;
+  weeklyReviewSubmitting: boolean;
+  taskActionId: string;
+  saveDisabled: boolean;
+  submitDisabled: boolean;
+}>();
+
+const emit = defineEmits<{
+  "update:detailDraft": [value: ProjectTaskDetailDraft];
+  "update:weeklyReviewCustomMemory": [value: string];
+  "update:weeklyReviewCompletedOpen": [value: boolean];
+  close: [];
+  save: [];
+  submit: [];
+  archive: [];
+  "set-weekly-review-task-action": [
+    taskId: string,
+    action: WeeklyReviewTaskCleanupAction,
+  ];
+  "toggle-weekly-review-memory": [suggestionId: string];
+  "toggle-weekly-review-reminder": [reminderId: string];
+}>();
+
+const taskProject = computed(() =>
+  props.task ? projectForTask(props.projects, props.task) : null,
+);
+
+function inputValue(event: Event): string {
+  return (event.target as HTMLInputElement | HTMLTextAreaElement).value;
+}
+
+function statusValue(event: Event): ProjectBoardStatus {
+  return (event.target as HTMLSelectElement).value as ProjectBoardStatus;
+}
+
+function updateDetailDraft(patch: Partial<ProjectTaskDetailDraft>) {
+  emit("update:detailDraft", {
+    ...props.detailDraft,
+    ...patch,
+  });
+}
+</script>
+
+<template>
+  <Teleport to="body">
+    <div
+      v-if="task"
+      class="mission-modal"
+      role="presentation"
+      @click.self="emit('close')"
+    >
+      <form
+        class="mission-modal__dialog task-detail-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="task-detail-modal-title"
+        @submit.prevent="weeklyReview ? emit('submit') : emit('save')"
+      >
+        <div class="mission-modal__header">
+          <h2 id="task-detail-modal-title">
+            {{ weeklyReview ? "Weekly Review" : "Task details" }}
+          </h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Close"
+            @click="emit('close')"
+          >
+            <UiIcon name="X" :size="18" />
+          </Button>
+        </div>
+
+        <div class="task-detail-modal__context">
+          <span>{{ projectName(projects, task.projectId) }}</span>
+          <span v-if="weeklyReview" class="weekly-review-badge">{{
+            formatWeeklyReviewRange(weeklyReview)
+          }}</span>
+          <span v-if="isLocalProject(taskProject)" class="local-project-badge"
+            >Local</span
+          >
+          <span v-if="task.dueAt">
+            {{ formatShortDate(task.dueAt) }}
+          </span>
+        </div>
+
+        <div v-if="latestRun" class="task-detail-modal__run">
+          <div>
+            <strong>Local run</strong>
+            <span class="status-badge">{{ latestRun.status }}</span>
+          </div>
+          <p>{{ latestRunSummary }}</p>
+        </div>
+
+        <template v-if="weeklyReview">
+          <div class="weekly-review-panel">
+            <p class="weekly-review-panel__summary">
+              {{ weeklyReview.summary }}
+            </p>
+
+            <section class="weekly-review-panel__section">
+              <div class="weekly-review-panel__section-header">
+                <h3>Open task cleanup</h3>
+                <span>{{ weeklyReview.openTasks.length }}</span>
+              </div>
+              <p class="weekly-review-panel__hint">
+                Archive stale tasks or mark finished work done. Anything
+                untouched stays on the board.
+              </p>
+              <div
+                v-if="weeklyReview.openTasks.length"
+                class="weekly-review-task-list"
+              >
+                <div
+                  v-for="item in weeklyReview.openTasks"
+                  :key="item.id"
+                  class="weekly-review-task-row"
+                >
+                  <div class="weekly-review-task-row__body">
+                    <strong>{{ item.title }}</strong>
+                    <small>
+                      {{ projectName(projects, item.projectId) }}
+                      <template v-if="item.dueAt">
+                        / due {{ formatShortDate(item.dueAt) }}
+                      </template>
+                    </small>
+                  </div>
+                  <div
+                    class="weekly-review-task-row__actions"
+                    aria-label="Task cleanup action"
+                  >
+                    <Button
+                      color="outline"
+                      shape="soft"
+                      size="compact"
+                      type="button"
+                      :active="weeklyReviewTaskActions[item.id] === 'archive'"
+                      :disabled="
+                        weeklyReviewSubmitting ||
+                        Boolean(weeklyReview.submittedAt)
+                      "
+                      @click="
+                        emit(
+                          'set-weekly-review-task-action',
+                          item.id,
+                          'archive',
+                        )
+                      "
+                    >
+                      Archive
+                    </Button>
+                    <Button
+                      color="outline"
+                      shape="soft"
+                      size="compact"
+                      type="button"
+                      :active="weeklyReviewTaskActions[item.id] === 'done'"
+                      :disabled="
+                        weeklyReviewSubmitting ||
+                        Boolean(weeklyReview.submittedAt)
+                      "
+                      @click="
+                        emit('set-weekly-review-task-action', item.id, 'done')
+                      "
+                    >
+                      Done
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <p v-else class="weekly-review-panel__empty">
+                No open tasks to clean up.
+              </p>
+            </section>
+
+            <section class="weekly-review-panel__section">
+              <div class="weekly-review-panel__section-header">
+                <h3>Important memory</h3>
+                <span v-if="weeklyReview.memorySuggestions.length">
+                  {{ weeklyReviewMemoryIds.size }} /
+                  {{ weeklyReview.memorySuggestions.length }}
+                </span>
+              </div>
+              <label class="weekly-review-memory-field">
+                <span>Add one important fact or data point from this week</span>
+                <textarea
+                  :value="weeklyReviewCustomMemory"
+                  rows="3"
+                  placeholder="e.g. A decision, preference, recurring pattern, or important context worth remembering"
+                  :disabled="
+                    weeklyReviewSubmitting ||
+                    Boolean(weeklyReview.submittedAt)
+                  "
+                  @input="
+                    emit('update:weeklyReviewCustomMemory', inputValue($event))
+                  "
+                />
+              </label>
+              <div
+                v-if="weeklyReview.memorySuggestions.length"
+                class="weekly-review-checklist"
+              >
+                <label
+                  v-for="item in weeklyReview.memorySuggestions"
+                  :key="item.id"
+                  class="weekly-review-check weekly-review-check--memory"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="weeklyReviewMemoryIds.has(item.id)"
+                    :disabled="
+                      weeklyReviewSubmitting ||
+                      Boolean(weeklyReview.submittedAt)
+                    "
+                    @change="emit('toggle-weekly-review-memory', item.id)"
+                  />
+                  <span>
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.body }}</small>
+                  </span>
+                </label>
+              </div>
+              <p v-else class="weekly-review-panel__empty">
+                No automatic memory suggestions met the stricter bar this week.
+              </p>
+            </section>
+
+            <section
+              v-if="weeklyReview.reminders.length"
+              class="weekly-review-panel__section"
+            >
+              <div class="weekly-review-panel__section-header">
+                <h3>Reminders</h3>
+                <span>
+                  {{ weeklyReviewReminderIds.size }} /
+                  {{ weeklyReview.reminders.length }}
+                  reschedule
+                </span>
+              </div>
+              <div class="weekly-review-checklist">
+                <label
+                  v-for="item in weeklyReview.reminders"
+                  :key="item.id"
+                  class="weekly-review-check"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="weeklyReviewReminderIds.has(item.id)"
+                    :disabled="
+                      weeklyReviewSubmitting ||
+                      Boolean(weeklyReview.submittedAt)
+                    "
+                    @change="emit('toggle-weekly-review-reminder', item.id)"
+                  />
+                  <span>
+                    <strong>{{ item.title }}</strong>
+                    <small>
+                      {{
+                        item.remindAt ? formatShortDate(item.remindAt) : "Pending"
+                      }}
+                      / reschedule for tomorrow
+                    </small>
+                  </span>
+                </label>
+              </div>
+            </section>
+
+            <section
+              v-if="weeklyReview.completedTasks.length"
+              class="weekly-review-panel__section"
+            >
+              <button
+                type="button"
+                class="weekly-review-collapse"
+                @click="
+                  emit(
+                    'update:weeklyReviewCompletedOpen',
+                    !weeklyReviewCompletedOpen,
+                  )
+                "
+              >
+                <span>
+                  Completed this week
+                  ({{ weeklyReview.completedTasks.length }})
+                </span>
+                <UiIcon
+                  :name="
+                    weeklyReviewCompletedOpen ? 'ChevronUp' : 'ChevronDown'
+                  "
+                  :size="15"
+                />
+              </button>
+              <ul v-if="weeklyReviewCompletedOpen" class="weekly-review-list">
+                <li v-for="item in weeklyReview.completedTasks" :key="item.id">
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ projectName(projects, item.projectId) }}</span>
+                </li>
+              </ul>
+            </section>
+
+            <p v-if="weeklyReview.submittedAt" class="weekly-review-panel__done">
+              Submitted {{ formatDateTime(weeklyReview.submittedAt) }}
+            </p>
+          </div>
+        </template>
+
+        <template v-else>
+          <label class="field">
+            <span>Title</span>
+            <input
+              :value="detailDraft.title"
+              type="text"
+              autocomplete="off"
+              autofocus
+              @input="updateDetailDraft({ title: inputValue($event) })"
+            />
+          </label>
+
+          <label class="field">
+            <span>Status</span>
+            <select
+              :value="detailDraft.status"
+              @change="updateDetailDraft({ status: statusValue($event) })"
+            >
+              <option
+                v-for="status in boardStatuses"
+                :key="status.id"
+                :value="status.id"
+              >
+                {{ status.label }}
+              </option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Notes</span>
+            <textarea
+              :value="detailDraft.description"
+              rows="5"
+              placeholder="Add detail for the runner or reviewer"
+              @input="updateDetailDraft({ description: inputValue($event) })"
+            />
+          </label>
+        </template>
+
+        <p v-if="detailError" class="mission-modal__error">
+          {{ detailError }}
+        </p>
+
+        <div class="mission-modal__actions task-detail-modal__actions">
+          <Button
+            color="danger"
+            shape="soft"
+            size="compact"
+            type="button"
+            :disabled="detailSaving || taskActionId === task.id"
+            @click="emit('archive')"
+          >
+            Archive
+          </Button>
+          <div class="task-detail-modal__primary-actions">
+            <Button
+              color="outline"
+              shape="soft"
+              size="compact"
+              type="button"
+              :disabled="detailSaving || weeklyReviewSubmitting"
+              @click="emit('close')"
+            >
+              Cancel
+            </Button>
+            <Button
+              v-if="weeklyReview"
+              color="primary"
+              shape="soft"
+              size="compact"
+              type="submit"
+              :disabled="submitDisabled"
+            >
+              {{ weeklyReviewSubmitting ? "Submitting..." : "Submit review" }}
+            </Button>
+            <Button
+              v-else
+              color="primary"
+              shape="soft"
+              size="compact"
+              type="submit"
+              :disabled="saveDisabled"
+            >
+              {{ detailSaving ? "Saving..." : "Save" }}
+            </Button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </Teleport>
+</template>
+
+<style scoped>
+.mission-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in oklab, #000, transparent 64%);
+}
+
+.mission-modal__dialog {
+  display: grid;
+  width: min(460px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  gap: 14px;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  box-shadow: 0 24px 80px color-mix(in oklab, #000, transparent 78%);
+}
+
+.mission-modal__header,
+.mission-modal__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mission-modal__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.mission-modal__actions {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.task-detail-modal__context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -4px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+.task-detail-modal__run {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.task-detail-modal__run div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-detail-modal__run strong {
+  font-size: 13px;
+}
+
+.task-detail-modal__run p {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-detail-modal__actions {
+  justify-content: space-between;
+}
+
+.task-detail-modal__primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 6px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.local-project-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 20px;
+  padding: 2px 6px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.weekly-review-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in oklab, var(--ui-accent), var(--ui-border) 60%);
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-accent);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.weekly-review-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.weekly-review-panel__summary,
+.weekly-review-panel__empty,
+.weekly-review-panel__done,
+.weekly-review-panel__hint {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.weekly-review-panel__hint {
+  font-size: 12px;
+}
+
+.weekly-review-panel__done {
+  color: var(--ui-accent);
+  font-weight: 700;
+}
+
+.weekly-review-panel__section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.weekly-review-panel__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.weekly-review-panel__section-header h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.weekly-review-panel__section-header span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.weekly-review-checklist {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.weekly-review-check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.weekly-review-check input {
+  margin-top: 2px;
+}
+
+.weekly-review-check span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.weekly-review-check strong,
+.weekly-review-list strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.weekly-review-check small,
+.weekly-review-list span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.weekly-review-check--memory small {
+  overflow-wrap: anywhere;
+}
+
+.weekly-review-task-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.weekly-review-task-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+}
+
+.weekly-review-task-row__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.weekly-review-task-row__body strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.weekly-review-task-row__body small {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.weekly-review-task-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.weekly-review-task-row__actions .me3-btn {
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.weekly-review-task-row__actions .me3-btn.me3-btn--active {
+  border-color: transparent;
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
+}
+
+.weekly-review-memory-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.weekly-review-memory-field span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.weekly-review-memory-field textarea {
+  min-width: 0;
+  width: 100%;
+  resize: vertical;
+}
+
+.weekly-review-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.weekly-review-list li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+}
+
+.weekly-review-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.field input,
+.field select,
+.field textarea,
+.weekly-review-memory-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+}
+
+.field input,
+.field select {
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.field textarea,
+.weekly-review-memory-field textarea {
+  resize: vertical;
+  padding: 10px;
+  line-height: 1.5;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.weekly-review-memory-field textarea:focus {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 1px;
+}
+
+.mission-modal__error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+@media (max-width: 959px) {
+  .mission-modal {
+    padding: 14px;
+  }
+}
+</style>
