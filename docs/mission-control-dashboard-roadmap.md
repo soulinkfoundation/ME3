@@ -7,16 +7,39 @@ Planning source: refactor/redesign session on 2026-06-04.
 Completed on 2026-06-04:
 
 - Bead epic `me3-j1e` and child implementation tasks are created.
-- `/mission-control` now renders the dashboard shell with placeholder default cards.
 - `/mission-control/projects` now hosts the existing projects workspace.
 - Internal project links now use `/mission-control/projects`; `/mission-control?section=projects` is not preserved as a redirect.
 - Shared [Button.vue](/Users/kieranbutler/Coding/me3/apps/web/src/components/Button.vue) text buttons now match the smaller rounded `/assistant` starter prompt feel more closely.
-- Dashboard quick actions currently render as emoji pill buttons.
-- Dashboard cards render as a three-column desktop grid and one column on mobile.
+- [mission-control-projects.vue](/Users/kieranbutler/Coding/me3/apps/web/src/pages/mission-control-projects.vue) has been split into reusable project picker, project modal, task board/list, task detail modal, and shared workspace helpers.
+- `/mission-control/projects` defaults to a grouped one-column active task list. Active tasks are `backlog`, `in_progress`, and `review`; Kanban is opt-in through Mission Control settings.
+- `/api/mission-control/tasks?active=1` supports the default active project task list.
+- `mission_dashboard_settings` exists with owner-scoped dashboard card, quick action, Mission Statement, and view settings persistence.
+- `GET /api/mission-control/dashboard` and `PATCH /api/mission-control/dashboard` return and persist default card instances, quick links, Mission Statement, and `kanbanEnabled`.
+- `/mission-control` now renders API-backed default cards for Daily Briefing, Mission Statement, and Wheel of Life Snapshot.
+- Mission Statement editing persists plain text through the dashboard settings API.
+- Quick actions use curated internal destination IDs, render through [Button.vue](/Users/kieranbutler/Coding/me3/apps/web/src/components/Button.vue), and can be shown/hidden, renamed, icon-edited, reordered, and saved.
+- Dashboard edit mode supports card show/hide, restore, resize, drag ordering, button ordering, quick-action drag ordering, and accessible button ordering.
 
 Recommended next implementation bead:
 
-- `me3-j1e.3`: extract the existing projects workspace components from [mission-control-projects.vue](/Users/kieranbutler/Coding/me3/apps/web/src/pages/mission-control-projects.vue), especially project picker, project modal, task detail modal, task board, and shared task helpers. This should make `me3-j1e.1` much safer.
+- `me3-j1e.6`: persist Wheel of Life settings and snapshots in plugin-owned D1 storage, then update the full Wheel page and dashboard snapshot card to use the shared API.
+- After that, `me3-j1e.8` should add the richer plugin dashboard contribution contract, `me3-j1e.11` should move the Accounts ledger to `/accounts`, and `me3-j1e.10` should do end-to-end QA and polish.
+
+Remaining open beads:
+
+- `me3-j1e.6`: Persist Wheel of Life snapshots for dashboard use.
+- `me3-j1e.8`: Add plugin dashboard contribution contract.
+- `me3-j1e.11`: Move Accounts ledger to `/accounts`.
+- `me3-j1e.10`: Mission Control dashboard QA and polish.
+
+## Local Browser Testing
+
+When the in-app browser is logged out during local Mission Control testing, use the local test account:
+
+- Email: `test@test.com`
+- Password: `test12345`
+
+These credentials are for local development/browser QA only. Do not use or document production credentials.
 
 ## Product Direction
 
