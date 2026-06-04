@@ -348,6 +348,7 @@ export function appendUniqueTasks(
 export function missionTasksUrl(options: {
   active?: boolean;
   archived?: boolean;
+  status?: MissionTask["status"];
   projectId?: string;
   cursor?: string | null;
 }): string {
@@ -356,6 +357,7 @@ export function missionTasksUrl(options: {
   });
   if (options.active) params.set("active", "1");
   if (options.archived) params.set("archived", "1");
+  if (options.status) params.set("status", options.status);
   if (options.projectId) params.set("projectId", options.projectId);
   if (options.cursor) params.set("cursor", options.cursor);
   return `/mission-control/tasks?${params.toString()}`;

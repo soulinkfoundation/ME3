@@ -235,9 +235,6 @@ const activeDashboardProjectTasks = computed(() =>
     activeProjectTaskStatuses.includes(task.status as ProjectBoardStatus),
   ),
 );
-const totalOpenProjectTasks = computed(
-  () => activeDashboardProjectTasks.value.length,
-);
 const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
   const activeProjects = dashboardProjects.value.filter(
     (project) => project.status === "active",
@@ -599,37 +596,50 @@ onMounted(() => {
   <main class="mission-dashboard">
     <header class="mission-dashboard__topbar">
       <div class="mission-dashboard__topbar-spacer" aria-hidden="true" />
-      <Button
-        v-if="dashboardEditing"
-        color="ghost"
-        shape="soft"
-        size="compact"
-        icon-only
-        aria-label="Save dashboard"
-        title="Save dashboard"
-        :disabled="dashboardSaving"
-        @click="saveDashboardLayout"
-      >
-        <UiIcon name="Save" :size="18" />
-      </Button>
-      <Button
-        color="ghost"
-        shape="soft"
-        size="compact"
-        icon-only
-        :aria-label="
-          dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'
-        "
-        :title="dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'"
-        @click="
-          dashboardEditing ? closeDashboardEditor() : openDashboardEditor()
-        "
-      >
-        <UiIcon
-          :name="dashboardEditing ? 'X' : 'SlidersHorizontal'"
-          :size="18"
-        />
-      </Button>
+      <div class="mission-dashboard__topbar-actions">
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          to="/mission-control/projects"
+          aria-label="Open Projects"
+          title="Open Projects"
+        >
+          <UiIcon name="FolderDot" :size="18" />
+        </Button>
+        <Button
+          v-if="dashboardEditing"
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          aria-label="Save dashboard"
+          title="Save dashboard"
+          :disabled="dashboardSaving"
+          @click="saveDashboardLayout"
+        >
+          <UiIcon name="Save" :size="18" />
+        </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          :aria-label="
+            dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'
+          "
+          :title="dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'"
+          @click="
+            dashboardEditing ? closeDashboardEditor() : openDashboardEditor()
+          "
+        >
+          <UiIcon
+            :name="dashboardEditing ? 'X' : 'SlidersHorizontal'"
+            :size="18"
+          />
+        </Button>
+      </div>
     </header>
 
     <section
@@ -823,12 +833,9 @@ onMounted(() => {
           >
             <header class="dashboard-card__header">
               <h2 class="dashboard-card__title">
-                <UiIcon name="BriefcaseBusiness" :size="16" />
+                <UiIcon name="FolderDot" :size="16" />
                 <span>Projects</span>
               </h2>
-              <div class="dashboard-card__header-actions">
-                <span>{{ totalOpenProjectTasks }} open</span>
-              </div>
             </header>
             <div v-if="!dashboardEditing" class="dashboard-card__actions">
               <Button
@@ -868,7 +875,6 @@ onMounted(() => {
                   <RouterLink :to="projectSummaryPath(summary)">
                     {{ summary.label }}
                   </RouterLink>
-                  <span>{{ summary.total }} open tasks</span>
                 </div>
                 <div class="project-summary__stats">
                   <span
@@ -1193,7 +1199,7 @@ onMounted(() => {
   top: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   min-height: var(--workspace-topbar-height);
@@ -1204,6 +1210,12 @@ onMounted(() => {
 
 .mission-dashboard__topbar-spacer {
   min-width: 0;
+}
+
+.mission-dashboard__topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .mission-dashboard__workspace {
@@ -1467,13 +1479,6 @@ onMounted(() => {
 
 .project-summary__main a:hover {
   color: var(--ui-accent);
-}
-
-.project-summary__main span {
-  flex: 0 0 auto;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 650;
 }
 
 .project-summary__stats {

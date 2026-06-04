@@ -18,6 +18,7 @@ import MissionProjectTaskDetailModal from "../components/mission-control/Mission
 import MissionProjectTaskList from "../components/mission-control/MissionProjectTaskList.vue";
 import {
   activeProjectTasks,
+  activeProjectTaskStatuses,
   appendUniqueTasks,
   formatDateTime,
   groupProjectTasks,
@@ -26,6 +27,7 @@ import {
   missionTasksUrl,
   projectBoardStatuses,
   projectForTask,
+  projectName,
   weeklyReviewMetadata,
 } from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
@@ -241,9 +243,15 @@ const projectTasksLoading = ref(false);
 const projectTasksLoadingMore = ref(false);
 const projectTasksError = ref("");
 const projectTasksNextCursor = ref<string | null>(null);
+const completedProjectTasks = ref<MissionTask[]>([]);
+const completedProjectTasksLoading = ref(false);
+const completedProjectTasksLoadingMore = ref(false);
+const completedProjectTasksError = ref("");
+const completedProjectTasksNextCursor = ref<string | null>(null);
 const localExecutorStatus = ref<LocalExecutorStatusResponse | null>(null);
 const kanbanEnabled = ref(false);
 const projectTaskViewMode = ref<"list" | "kanban">("list");
+const projectCompletedOpen = ref(false);
 const projectTaskDraft = ref("");
 const projectTaskProjectId = ref("");
 const projectTaskSaving = ref(false);
@@ -411,7 +419,11 @@ const selectedProjectTaskDetail = computed(() =>
   selectedProjectTaskDetailId.value
     ? projectTasks.value.find(
         (task) => task.id === selectedProjectTaskDetailId.value,
-      ) || null
+      ) ||
+      completedProjectTasks.value.find(
+        (task) => task.id === selectedProjectTaskDetailId.value,
+      ) ||
+      null
     : null,
 );
 const selectedProjectTaskWeeklyReview = computed(() =>
@@ -442,12 +454,16 @@ const selectedProjectTaskLatestRunSummary = computed(() => {
   return "Local run cancelled.";
 });
 const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
-  projectBoardStatuses.map((column) => ({
-    ...column,
-    tasks: selectedProjectTasks.value.filter(
-      (task) => task.status === column.id,
-    ),
-  })),
+  projectBoardStatuses
+    .filter((column) =>
+      activeProjectTaskStatuses.includes(column.id as ProjectBoardStatus),
+    )
+    .map((column) => ({
+      ...column,
+      tasks: selectedProjectTasks.value.filter(
+        (task) => task.status === column.id,
+      ),
+    })),
 );
 const projectTaskListGroups = computed<ProjectTaskListGroup[]>(() =>
   groupProjectTasks(
@@ -465,6 +481,14 @@ const projectTaskCreateDisabled = computed(
     !projectTaskComposerStatus.value ||
     !projectTaskDraft.value.trim() ||
     Boolean(!selectedProjectDetail.value && !projectTaskProjectId.value),
+);
+const projectViewToggleLabel = computed(() =>
+  projectTaskViewMode.value === "kanban"
+    ? "Switch to list view"
+    : "Switch to Kanban board",
+);
+const projectViewToggleIcon = computed<UiIconName>(() =>
+  projectTaskViewMode.value === "kanban" ? "List" : "SquareKanban",
 );
 const projectTaskDetailSaveDisabled = computed(
   () =>
@@ -848,12 +872,11 @@ async function loadProjectTasks(
   projectId = selectedProjectTaskScopeId.value,
 ) {
   const scopeId = projectId || "";
-  const active = projectTaskViewMode.value !== "kanban";
   projectTasksLoading.value = true;
   projectTasksError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ active, projectId: scopeId }),
+      missionTasksUrl({ active: true, projectId: scopeId }),
     );
     if (selectedProjectTaskScopeId.value !== scopeId) return;
     projectTasks.value = response.tasks || [];
@@ -865,6 +888,29 @@ async function loadProjectTasks(
     projectTasksNextCursor.value = null;
   } finally {
     projectTasksLoading.value = false;
+  }
+}
+
+async function loadCompletedProjectTasks(
+  projectId = selectedProjectTaskScopeId.value,
+) {
+  const scopeId = projectId || "";
+  completedProjectTasksLoading.value = true;
+  completedProjectTasksError.value = "";
+  try {
+    const response = await api.get<MissionTasksResponse>(
+      missionTasksUrl({ status: "done", projectId: scopeId }),
+    );
+    if (selectedProjectTaskScopeId.value !== scopeId) return;
+    completedProjectTasks.value = response.tasks || [];
+    completedProjectTasksNextCursor.value = response.nextCursor || null;
+  } catch (e) {
+    completedProjectTasksError.value =
+      e instanceof ApiError ? e.message : "Completed tasks could not load";
+    completedProjectTasks.value = [];
+    completedProjectTasksNextCursor.value = null;
+  } finally {
+    completedProjectTasksLoading.value = false;
   }
 }
 
@@ -881,13 +927,12 @@ async function loadLocalExecutorStatus() {
 async function loadMoreProjectTasks() {
   const projectId = selectedProjectTaskScopeId.value;
   const cursor = projectTasksNextCursor.value;
-  const active = projectTaskViewMode.value !== "kanban";
   if (!cursor || projectTasksLoadingMore.value) return;
   projectTasksLoadingMore.value = true;
   projectTasksError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ active, projectId, cursor }),
+      missionTasksUrl({ active: true, projectId, cursor }),
     );
     if (selectedProjectTaskScopeId.value !== projectId) return;
     projectTasks.value = appendUniqueTasks(
@@ -900,6 +945,30 @@ async function loadMoreProjectTasks() {
       e instanceof ApiError ? e.message : "Could not load more project tasks";
   } finally {
     projectTasksLoadingMore.value = false;
+  }
+}
+
+async function loadMoreCompletedProjectTasks() {
+  const projectId = selectedProjectTaskScopeId.value;
+  const cursor = completedProjectTasksNextCursor.value;
+  if (!cursor || completedProjectTasksLoadingMore.value) return;
+  completedProjectTasksLoadingMore.value = true;
+  completedProjectTasksError.value = "";
+  try {
+    const response = await api.get<MissionTasksResponse>(
+      missionTasksUrl({ status: "done", projectId, cursor }),
+    );
+    if (selectedProjectTaskScopeId.value !== projectId) return;
+    completedProjectTasks.value = appendUniqueTasks(
+      completedProjectTasks.value,
+      response.tasks || [],
+    );
+    completedProjectTasksNextCursor.value = response.nextCursor || null;
+  } catch (e) {
+    completedProjectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not load more completed tasks";
+  } finally {
+    completedProjectTasksLoadingMore.value = false;
   }
 }
 
@@ -1093,6 +1162,7 @@ function resetProjectTaskComposer() {
 }
 
 function toggleKanbanView() {
+  projectCompletedOpen.value = false;
   const enabled = projectTaskViewMode.value !== "kanban";
   kanbanEnabled.value = enabled;
   window.localStorage.setItem(
@@ -1102,10 +1172,19 @@ function toggleKanbanView() {
   setProjectTaskViewMode(enabled ? "kanban" : "list");
 }
 
+function toggleCompletedProjectTasks() {
+  projectCompletedOpen.value = !projectCompletedOpen.value;
+  projectPickerOpen.value = false;
+  resetProjectTaskComposer();
+  closeProjectTaskDetail();
+  if (projectCompletedOpen.value) void loadCompletedProjectTasks();
+}
+
 function setProjectTaskViewMode(mode: "list" | "kanban") {
   const nextMode = mode === "kanban" && kanbanEnabled.value ? "kanban" : "list";
   if (projectTaskViewMode.value === nextMode) return;
   projectTaskViewMode.value = nextMode;
+  projectCompletedOpen.value = false;
   resetProjectTaskComposer();
   closeProjectTaskDetail();
   void loadProjectTasks();
@@ -1361,6 +1440,18 @@ async function setProjectTaskStatus(
       { status },
     );
     replaceProjectTask(response.task);
+    if (response.task.status === "done") {
+      completedProjectTasks.value = [
+        response.task,
+        ...completedProjectTasks.value.filter(
+          (item) => item.id !== response.task.id,
+        ),
+      ];
+    } else {
+      completedProjectTasks.value = completedProjectTasks.value.filter(
+        (item) => item.id !== response.task.id,
+      );
+    }
   } catch (e) {
     projectTasksError.value =
       e instanceof ApiError ? e.message : "Could not update task";
@@ -1452,6 +1543,16 @@ async function archiveSelectedProjectTask() {
 }
 
 function replaceProjectTask(next: MissionTask) {
+  if (
+    next.archivedAt ||
+    !activeProjectTaskStatuses.includes(next.status as ProjectBoardStatus)
+  ) {
+    projectTasks.value = projectTasks.value.filter((item) => item.id !== next.id);
+    if (selectedProjectTaskDetailId.value === next.id && next.status === "done") {
+      selectedProjectTaskDetailId.value = "";
+    }
+    return;
+  }
   const index = projectTasks.value.findIndex((item) => item.id === next.id);
   if (index >= 0) projectTasks.value.splice(index, 1, next);
   else projectTasks.value.unshift(next);
@@ -1700,7 +1801,10 @@ watch(activeSection, (section) => {
 
 watch(selectedProjectDetailId, (next, previous) => {
   if (next === previous) return;
-  if (activeSection.value === "projects") void loadProjectTasks(next);
+  if (activeSection.value === "projects") {
+    void loadProjectTasks(next);
+    if (projectCompletedOpen.value) void loadCompletedProjectTasks(next);
+  }
 });
 
 onMounted(() => {
@@ -1772,13 +1876,25 @@ onBeforeUnmount(() => {
           shape="soft"
           size="compact"
           icon-only
-          :active="projectTaskViewMode === 'kanban'"
-          :aria-pressed="projectTaskViewMode === 'kanban'"
-          aria-label="Toggle Kanban board"
-          title="Toggle Kanban board"
+          :active="projectCompletedOpen"
+          :aria-pressed="projectCompletedOpen"
+          aria-label="Completed tasks"
+          title="Completed tasks"
+          @click="toggleCompletedProjectTasks"
+        >
+          <UiIcon name="Archive" :size="18" />
+        </Button>
+        <Button
+          v-if="activeSection === 'projects' && !isAccountsRoute"
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          :aria-label="projectViewToggleLabel"
+          :title="projectViewToggleLabel"
           @click="toggleKanbanView"
         >
-          <UiIcon name="SquareKanban" :size="18" />
+          <UiIcon :name="projectViewToggleIcon" :size="18" />
         </Button>
         <Button
           v-if="!isAccountsRoute"
@@ -1799,35 +1915,85 @@ onBeforeUnmount(() => {
 
     <section v-show="activeSection === 'projects'" class="mission-page">
       <div class="mission-projects-shell">
-        <div
-          v-if="kanbanEnabled"
-          class="mission-projects-view-switcher"
-          role="tablist"
-          aria-label="Project task view"
-        >
-          <button
-            type="button"
-            class="mission-control__section-tab"
-            :class="{ 'is-active': projectTaskViewMode === 'list' }"
-            role="tab"
-            :aria-selected="projectTaskViewMode === 'list'"
-            @click="setProjectTaskViewMode('list')"
+        <section v-if="projectCompletedOpen" class="completed-tasks-view">
+          <header class="completed-tasks-view__header">
+            <div>
+              <h2>Completed tasks</h2>
+              <p>
+                Done tasks
+                <template v-if="selectedProjectDetail">
+                  for {{ selectedProjectDetail.name }}
+                </template>
+              </p>
+            </div>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
+              aria-label="Refresh completed tasks"
+              title="Refresh completed tasks"
+              :disabled="completedProjectTasksLoading"
+              @click="loadCompletedProjectTasks"
+            >
+              <UiIcon name="RefreshCw" :size="16" />
+            </Button>
+          </header>
+          <p
+            v-if="completedProjectTasksError"
+            class="mission-control__message is-error"
           >
-            List
-          </button>
-          <button
+            {{ completedProjectTasksError }}
+          </p>
+          <div v-if="completedProjectTasksLoading" class="empty-row">
+            Loading completed tasks...
+          </div>
+          <div v-else-if="completedProjectTasks.length === 0" class="empty-row">
+            No completed tasks yet.
+          </div>
+          <div v-else class="completed-tasks-table-wrap">
+            <table class="completed-tasks-table">
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Project</th>
+                  <th>Completed</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="task in completedProjectTasks"
+                  :key="task.id"
+                  tabindex="0"
+                  @click="openProjectTaskDetail(task)"
+                  @keydown.enter.prevent="openProjectTaskDetail(task)"
+                  @keydown.space.prevent="openProjectTaskDetail(task)"
+                >
+                  <td>
+                    <strong>{{ task.title }}</strong>
+                    <span v-if="task.description">{{ task.description }}</span>
+                  </td>
+                  <td>{{ projectName(projects, task.projectId) }}</td>
+                  <td>{{ formatShortDate(task.updatedAt) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <Button
+            v-if="completedProjectTasksNextCursor"
+            color="outline"
+            shape="soft"
+            size="compact"
             type="button"
-            class="mission-control__section-tab"
-            :class="{ 'is-active': projectTaskViewMode === 'kanban' }"
-            role="tab"
-            :aria-selected="projectTaskViewMode === 'kanban'"
-            @click="setProjectTaskViewMode('kanban')"
+            :disabled="completedProjectTasksLoadingMore"
+            @click="loadMoreCompletedProjectTasks"
           >
-            Kanban
-          </button>
-        </div>
+            {{ completedProjectTasksLoadingMore ? "Loading..." : "Load more" }}
+          </Button>
+        </section>
         <MissionProjectTaskList
-          v-if="projectTaskViewMode === 'list'"
+          v-else-if="projectTaskViewMode === 'list'"
           v-model:task-draft="projectTaskDraft"
           v-model:task-project-id="projectTaskProjectId"
           :projects="projects"
@@ -2592,20 +2758,98 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
-.mission-projects-view-switcher {
-  display: inline-flex;
-  justify-self: center;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface);
-}
-
 .simple-sheet {
   display: grid;
   width: min(700px, 100%);
   gap: 20px;
+}
+
+.completed-tasks-view {
+  display: grid;
+  width: min(760px, 100%);
+  gap: 14px;
+}
+
+.completed-tasks-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.completed-tasks-view__header h2,
+.completed-tasks-view__header p {
+  margin: 0;
+}
+
+.completed-tasks-view__header h2 {
+  color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.completed-tasks-view__header p {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.completed-tasks-table-wrap {
+  overflow-x: auto;
+  border-top: 1px solid var(--ui-border);
+}
+
+.completed-tasks-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  color: var(--ui-text);
+  font-size: 13px;
+}
+
+.completed-tasks-table th,
+.completed-tasks-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--ui-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.completed-tasks-table th {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.completed-tasks-table tbody tr {
+  cursor: pointer;
+}
+
+.completed-tasks-table tbody tr:hover,
+.completed-tasks-table tbody tr:focus-visible {
+  background: var(--ui-surface-muted);
+  outline: none;
+}
+
+.completed-tasks-table td:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.completed-tasks-table strong,
+.completed-tasks-table span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.completed-tasks-table span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .simple-sheet--wide {
