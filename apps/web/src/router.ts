@@ -169,6 +169,38 @@ router.beforeEach(async (to, _from, next) => {
     return;
   }
 
+  const missionSection = Array.isArray(to.query.section)
+    ? to.query.section[0]
+    : to.query.section;
+  if (
+    (to.path === "/mission-control" ||
+      to.path === "/mission-control/" ||
+      to.path === "/mission-control/projects" ||
+      to.path === "/mission-control/projects/") &&
+    (missionSection === "memory" ||
+      missionSection === "sources" ||
+      missionSection === "activity" ||
+      missionSection === "approvals" ||
+      missionSection === "runs")
+  ) {
+    const { section: _section, ...query } = to.query;
+    next({
+      path: "/assistant",
+      query: {
+        ...query,
+        settings:
+          missionSection === "activity" ||
+          missionSection === "approvals" ||
+          missionSection === "runs"
+            ? "activity"
+            : "context",
+      },
+      hash: to.hash,
+      replace: true,
+    });
+    return;
+  }
+
   const jobDeepLinkPrefix = to.path.startsWith("/agent/jobs/")
     ? "/agent/jobs/"
     : to.path.startsWith("/assistant/jobs/")

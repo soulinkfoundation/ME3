@@ -418,6 +418,69 @@ type MissionProject = {
 type MissionProjectsResponse = {
   projects: MissionProject[];
 };
+type MissionApproval = {
+  id: string;
+  pluginId: string;
+  actionId: string;
+  title: string;
+  summary: string | null;
+  riskLevel: "low" | "medium" | "high";
+  status: string;
+  requestedAt: string;
+};
+type MissionRun = {
+  id: string;
+  title: string;
+  promptSummary: string | null;
+  status: string;
+  model: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  result?: Record<string, unknown> | null;
+};
+type MissionActivity = {
+  id: string;
+  title: string;
+  summary: string | null;
+  status: string | null;
+  relatedId: string | null;
+  createdAt: string;
+};
+type MissionMemory = {
+  id: string;
+  memoryKind: string;
+  scopeKind: string;
+  scopeId: string | null;
+  title: string | null;
+  body: string;
+  confidence: number;
+  sourceKind: string;
+  sourceRef: string | null;
+  reviewStatus: "active" | "needs_review" | "archived";
+  createdAt: string;
+  updatedAt: string;
+};
+type MissionContextSource = {
+  id: string;
+  sourceKind: string;
+  label: string;
+  description: string | null;
+  visibility: "public" | "private";
+  status: "active" | "setup_required" | "paused" | "failed" | "archived";
+  sourceRef: string | null;
+};
+type MissionMemoryResponse = { memory: MissionMemory[] };
+type MissionSourcesResponse = { sources: MissionContextSource[] };
+type AssistantSettingsSection = "context" | "activity";
+type AssistantActivityViewItem = {
+  id: string;
+  kind: string;
+  title: string;
+  summary: string | null;
+  status: string | null;
+  createdAt: string;
+};
 type AssistantThreadExportResponse = {
   thread: AssistantThread;
   messages: AssistantThreadMessage[];
@@ -519,6 +582,20 @@ const assistantThreadSearch = ref("");
 const assistantThreadActionId = ref<string | null>(null);
 const assistantHistoryCollapsed = ref(false);
 const assistantHistoryDrawerOpen = ref(false);
+const assistantSettingsModalOpen = ref(false);
+const assistantSettingsSection = ref<AssistantSettingsSection>("context");
+const assistantSettingsError = ref("");
+const assistantMemory = ref<MissionMemory[]>([]);
+const assistantSources = ref<MissionContextSource[]>([]);
+const assistantContextLoading = ref(false);
+const assistantActivityLoading = ref(false);
+const assistantPendingApprovals = ref<MissionApproval[]>([]);
+const assistantRecentRuns = ref<MissionRun[]>([]);
+const assistantRecentActivity = ref<MissionActivity[]>([]);
+const assistantMemoryDraft = ref("");
+const assistantSourceDraft = ref("");
+const assistantMemoryActionId = ref("");
+const assistantClearingActivity = ref(false);
 const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
 const assistantScrollerRef = ref<HTMLDivElement | null>(null);
@@ -811,6 +888,50 @@ const assistantThreadListEmpty = computed(
     assistantThreads.value.length === 0 &&
     !assistantThreadsError.value,
 );
+const assistantContextItemCount = computed(
+  () => assistantMemory.value.length + assistantSources.value.length,
+);
+const assistantActivityItems = computed<AssistantActivityViewItem[]>(() => {
+  const visibleRunIds = new Set(
+    assistantRecentRuns.value
+      .flatMap((run) => [
+        run.id,
+        typeof run.result?.assistantJobRunId === "string"
+          ? run.result.assistantJobRunId
+          : null,
+      ])
+      .filter(Boolean),
+  );
+
+  return [
+    ...assistantPendingApprovals.value.map((approval) => ({
+      id: `approval:${approval.id}`,
+      kind: "Approval",
+      title: approval.title,
+      summary: approval.summary || approval.actionId,
+      status: approval.riskLevel,
+      createdAt: approval.requestedAt,
+    })),
+    ...assistantRecentRuns.value.map((run) => ({
+      id: `run:${run.id}`,
+      kind: "Run",
+      title: run.title,
+      summary: run.promptSummary || run.model || "Run summary pending",
+      status: run.status,
+      createdAt: run.finishedAt || run.startedAt || run.createdAt,
+    })),
+    ...assistantRecentActivity.value
+      .filter((item) => !item.relatedId || !visibleRunIds.has(item.relatedId))
+      .map((item) => ({
+        id: `activity:${item.id}`,
+        kind: "Activity",
+        title: item.title,
+        summary: item.summary,
+        status: item.status,
+        createdAt: item.createdAt,
+      })),
+  ];
+});
 
 const canSendAssistantMessage = computed(
   () =>
@@ -834,6 +955,7 @@ onMounted(() => {
     voiceDictationState.value = "unsupported";
   }
   void loadPage();
+  void syncAssistantSettingsFromRoute();
   window.addEventListener("keydown", handleWindowKeydown);
 });
 
@@ -855,6 +977,12 @@ watch(
   () => {
     if (assistantThreadId.value === routeThreadId()) return;
     void loadAssistantThreadFromRoute();
+  },
+);
+watch(
+  () => route.query.settings,
+  () => {
+    void syncAssistantSettingsFromRoute();
   },
 );
 
@@ -1047,6 +1175,246 @@ async function openArchivedThreadsModal() {
 
 function closeArchivedThreadsModal() {
   archivedThreadsModalOpen.value = false;
+}
+
+function routeAssistantSettingsSection(): AssistantSettingsSection | null {
+  const value = route.query.settings;
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === "activity") return "activity";
+  if (raw === "context" || raw === "memory" || raw === "sources") return "context";
+  return null;
+}
+
+async function syncAssistantSettingsFromRoute() {
+  const section = routeAssistantSettingsSection();
+  if (!section) {
+    if (assistantSettingsModalOpen.value) {
+      assistantSettingsModalOpen.value = false;
+    }
+    return;
+  }
+  await openAssistantSettings(section, { updateRoute: false });
+}
+
+async function openAssistantSettings(
+  section: AssistantSettingsSection = "context",
+  options: { updateRoute?: boolean } = {},
+) {
+  assistantSettingsSection.value = section;
+  assistantSettingsModalOpen.value = true;
+  assistantHistoryDrawerOpen.value = false;
+  assistantSettingsError.value = "";
+  if (options.updateRoute !== false && routeAssistantSettingsSection() !== section) {
+    void router.replace({
+      query: {
+        ...route.query,
+        settings: section,
+      },
+    });
+  }
+  await loadAssistantSettingsSection(section);
+  resetAssistantSettingsScroll();
+}
+
+function closeAssistantSettingsModal() {
+  assistantSettingsModalOpen.value = false;
+  const { settings: _settings, context: _context, section: _section, ...query } = route.query;
+  void router.replace({ query });
+}
+
+async function setAssistantSettingsSection(section: AssistantSettingsSection) {
+  if (assistantSettingsSection.value === section) {
+    await loadAssistantSettingsSection(section);
+    resetAssistantSettingsScroll();
+    return;
+  }
+  await openAssistantSettings(section);
+}
+
+function resetAssistantSettingsScroll() {
+  void nextTick(() => {
+    document.querySelector<HTMLElement>(".assistant-settings")?.scrollTo({
+      top: 0,
+      left: 0,
+    });
+  });
+}
+
+async function loadAssistantSettingsSection(section: AssistantSettingsSection) {
+  if (section === "activity") {
+    await loadAssistantActivity();
+    return;
+  }
+  await loadAssistantContext();
+}
+
+async function loadAssistantContext() {
+  assistantContextLoading.value = true;
+  assistantSettingsError.value = "";
+  try {
+    const [memoryResponse, sourceResponse] = await Promise.all([
+      api.get<MissionMemoryResponse>("/mission-control/memory"),
+      api.get<MissionSourcesResponse>("/mission-control/context-sources"),
+    ]);
+    assistantMemory.value = memoryResponse.memory || [];
+    assistantSources.value = sourceResponse.sources || [];
+  } catch (err) {
+    assistantSettingsError.value = messageFromUnknown(
+      err,
+      "Context could not load.",
+    );
+  } finally {
+    assistantContextLoading.value = false;
+  }
+}
+
+async function loadAssistantActivity() {
+  assistantActivityLoading.value = true;
+  assistantSettingsError.value = "";
+  try {
+    const [approvalsResponse, runsResponse, activityResponse] =
+      await Promise.all([
+        api.get<{ approvals: MissionApproval[] }>(
+          "/mission-control/approvals?status=pending",
+        ),
+        api.get<{ runs: MissionRun[] }>(
+          "/mission-control/agent-runs?limit=50",
+        ),
+        api.get<{ activity: MissionActivity[] }>(
+          "/mission-control/plugin-activity?limit=50",
+        ),
+      ]);
+    assistantPendingApprovals.value = approvalsResponse.approvals || [];
+    assistantRecentRuns.value = runsResponse.runs || [];
+    assistantRecentActivity.value = activityResponse.activity || [];
+  } catch (err) {
+    assistantSettingsError.value = messageFromUnknown(
+      err,
+      "Activity could not load.",
+    );
+  } finally {
+    assistantActivityLoading.value = false;
+  }
+}
+
+async function addAssistantMemory() {
+  const body = assistantMemoryDraft.value.trim();
+  if (!body || assistantMemoryActionId.value) return;
+  assistantMemoryActionId.value = "new";
+  assistantSettingsError.value = "";
+  try {
+    await api.post("/mission-control/memory", {
+      body,
+      memoryKind: "owner_note",
+    });
+    assistantMemoryDraft.value = "";
+    await loadAssistantContext();
+    toastSuccess("Memory saved");
+  } catch (err) {
+    assistantSettingsError.value = messageFromUnknown(
+      err,
+      "Could not save memory.",
+    );
+  } finally {
+    assistantMemoryActionId.value = "";
+  }
+}
+
+async function approveAssistantMemory(item: MissionMemory) {
+  if (assistantMemoryActionId.value) return;
+  assistantMemoryActionId.value = item.id;
+  assistantSettingsError.value = "";
+  try {
+    const response = await api.post<{ memory: MissionMemory }>(
+      `/mission-control/memory/${encodeURIComponent(item.id)}/approve`,
+      {},
+    );
+    replaceAssistantMemory(response.memory);
+    toastSuccess("Memory approved");
+  } catch (err) {
+    assistantSettingsError.value = messageFromUnknown(
+      err,
+      "Could not approve memory.",
+    );
+  } finally {
+    assistantMemoryActionId.value = "";
+  }
+}
+
+async function forgetAssistantMemory(item: MissionMemory) {
+  if (assistantMemoryActionId.value) return;
+  assistantMemoryActionId.value = item.id;
+  assistantSettingsError.value = "";
+  try {
+    await api.delete<{ ok: true }>(
+      `/mission-control/memory/${encodeURIComponent(item.id)}`,
+    );
+    assistantMemory.value = assistantMemory.value.filter(
+      (entry) => entry.id !== item.id,
+    );
+    toastSuccess("Memory forgotten");
+  } catch (err) {
+    assistantSettingsError.value = messageFromUnknown(
+      err,
+      "Could not forget memory.",
+    );
+  } finally {
+    assistantMemoryActionId.value = "";
+  }
+}
+
+function replaceAssistantMemory(next: MissionMemory) {
+  const index = assistantMemory.value.findIndex((item) => item.id === next.id);
+  if (index >= 0) assistantMemory.value.splice(index, 1, next);
+  else assistantMemory.value.unshift(next);
+}
+
+async function addAssistantSource() {
+  const label = assistantSourceDraft.value.trim();
+  if (!label) return;
+  assistantSettingsError.value = "";
+  try {
+    await api.post("/mission-control/context-sources", {
+      label,
+      sourceKind: label.startsWith("http") ? "url" : "provider",
+      sourceRef: label.startsWith("http") ? label : null,
+    });
+    assistantSourceDraft.value = "";
+    await loadAssistantContext();
+    toastSuccess("Source saved");
+  } catch (err) {
+    assistantSettingsError.value = messageFromUnknown(
+      err,
+      "Could not save source.",
+    );
+  }
+}
+
+async function clearAssistantActivity() {
+  if (assistantActivityItems.value.length === 0 || assistantClearingActivity.value) return;
+  const confirmed = window.confirm(
+    "Clear assistant activity? This removes run and plugin activity history from this view.",
+  );
+  if (!confirmed) return;
+
+  assistantClearingActivity.value = true;
+  assistantSettingsError.value = "";
+  try {
+    await api.delete<{
+      cleared: { agentRuns: number; pluginActivity: number };
+    }>("/mission-control/activity");
+    assistantPendingApprovals.value = [];
+    assistantRecentRuns.value = [];
+    assistantRecentActivity.value = [];
+    toastSuccess("Activity cleared");
+  } catch (err) {
+    assistantSettingsError.value = messageFromUnknown(
+      err,
+      "Activity could not be cleared.",
+    );
+  } finally {
+    assistantClearingActivity.value = false;
+  }
 }
 
 async function restoreArchivedAssistantThread(thread: AssistantThread) {
@@ -2549,6 +2917,7 @@ function insertDailyBriefingVariable(value: string) {
 }
 
 function openConfigureJobsModal() {
+  assistantHistoryDrawerOpen.value = false;
   configureJobsModalOpen.value = true;
 }
 
@@ -2573,6 +2942,10 @@ function closeDetailModal() {
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key !== "Escape") return;
+  if (assistantSettingsModalOpen.value) {
+    closeAssistantSettingsModal();
+    return;
+  }
   if (detailModalOpen.value) {
     if (scheduleInlineEditing.value) {
       cancelScheduleInlineEdit();
@@ -2965,6 +3338,71 @@ function cleanPlainText(value: string) {
     .trim();
 }
 
+function assistantMemoryKindLabel(kind: string) {
+  return kind
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function assistantMemoryStatusLabel(status: MissionMemory["reviewStatus"]) {
+  if (status === "needs_review") return "Needs review";
+  if (status === "archived") return "Archived";
+  return "Active";
+}
+
+function assistantMemorySourceLabel(item: MissionMemory) {
+  if (item.sourceKind === "agent") {
+    return item.sourceRef
+      ? `Assistant suggestion: ${item.sourceRef}`
+      : "Assistant suggestion";
+  }
+  if (item.sourceKind === "daemon")
+    return item.sourceRef ? `Local runner: ${item.sourceRef}` : "Local runner";
+  if (item.sourceKind === "import")
+    return item.sourceRef ? `Import: ${item.sourceRef}` : "Import";
+  return item.sourceRef ? `Manual: ${item.sourceRef}` : "Manual";
+}
+
+function assistantMemoryScopeLabel(item: MissionMemory) {
+  return item.scopeId
+    ? `${assistantMemoryKindLabel(item.scopeKind)}: ${item.scopeId}`
+    : assistantMemoryKindLabel(item.scopeKind);
+}
+
+function assistantSourceKindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    public_me_json: "Public profile",
+    private_memory: "Private memory",
+    core_table: "ME3 data",
+    plugin_table: "Plugin data",
+    daemon_directory: "Local directory",
+    daemon_repo: "Local repository",
+    provider: "Provider",
+    upload: "Upload",
+    url: "URL",
+  };
+  return labels[kind] || assistantMemoryKindLabel(kind);
+}
+
+function assistantSourceStatusLabel(status: MissionContextSource["status"]) {
+  if (status === "setup_required") return "Setup needed";
+  return assistantMemoryKindLabel(status);
+}
+
+function formatAssistantSettingsDate(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function jobDetailPurpose(job: AssistantJob) {
   if (job.recipeId === "daily-briefing") {
     return "Sends a customised message to your mission control dashboard or Soulink when connected.";
@@ -3033,21 +3471,75 @@ function messageFromUnknown(err: unknown, fallback: string) {
         >
           <UiIcon name="MessagesSquare" :size="18" aria-hidden="true" />
         </Button>
-        <Button
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          class="assistant-mobile-nav__button"
-          aria-label="New chat"
-          title="New chat"
-          type="button"
-          @click="startNewAssistantChat(null)"
-        >
-          <UiIcon name="Plus" :size="18" aria-hidden="true" />
-        </Button>
+        <div class="assistant-mobile-nav__actions">
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            class="assistant-mobile-nav__button"
+            aria-label="Jobs"
+            title="Jobs"
+            type="button"
+            @click="openConfigureJobsModal"
+          >
+            <UiIcon name="BriefcaseBusiness" :size="18" aria-hidden="true" />
+          </Button>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            class="assistant-mobile-nav__button"
+            aria-label="New chat"
+            title="New chat"
+            type="button"
+            @click="startNewAssistantChat(null)"
+          >
+            <UiIcon name="Plus" :size="18" aria-hidden="true" />
+          </Button>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            class="assistant-mobile-nav__button"
+            aria-label="Assistant settings"
+            title="Assistant settings"
+            type="button"
+            @click="openAssistantSettings('context')"
+          >
+            <UiIcon name="Settings" :size="18" aria-hidden="true" />
+          </Button>
+        </div>
       </div>
     </Teleport>
+    <div class="assistant-page-tools" aria-label="Assistant tools">
+      <Button
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        type="button"
+        aria-label="Jobs"
+        title="Jobs"
+        @click="openConfigureJobsModal"
+      >
+        <UiIcon name="BriefcaseBusiness" :size="18" aria-hidden="true" />
+      </Button>
+      <Button
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        type="button"
+        aria-label="Assistant settings"
+        title="Assistant settings"
+        @click="openAssistantSettings('context')"
+      >
+        <UiIcon name="Settings" :size="18" aria-hidden="true" />
+      </Button>
+    </div>
     <aside
       class="assistant-history"
       :class="{
@@ -3323,6 +3815,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
           >
             <UiIcon name="Archive" :size="15" aria-hidden="true" />
             <span>Archived</span>
+          </button>
+          <button
+            type="button"
+            class="assistant-history__footer-button"
+            @click="openConfigureJobsModal"
+          >
+            <UiIcon name="BriefcaseBusiness" :size="15" aria-hidden="true" />
+            <span>Jobs</span>
+          </button>
+          <button
+            type="button"
+            class="assistant-history__footer-button"
+            @click="openAssistantSettings('context')"
+          >
+            <UiIcon name="Settings" :size="15" aria-hidden="true" />
+            <span>Settings</span>
           </button>
         </div>
       </div>
@@ -3671,13 +4179,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
               >
                 <UiIcon name="Paperclip" :size="18" aria-hidden="true" />
               </Button>
-              <Button color="ghost" shape="pill" size="small" icon-only class="composer-icon-button" type="button"
-                title="Jobs"
-                aria-label="Jobs"
-                @click="openConfigureJobsModal"
-              >
-                <UiIcon name="BriefcaseBusiness" :size="18" aria-hidden="true" />
-              </Button>
             </div>
 
             <div class="assistant-composer__right">
@@ -3860,6 +4361,327 @@ function messageFromUnknown(err: unknown, fallback: string) {
             >
               No archived chats.
             </p>
+          </div>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="assistantSettingsModalOpen"
+        class="assistant-modal"
+        @click.self="closeAssistantSettingsModal"
+      >
+        <section
+          class="assistant-modal__dialog assistant-modal__dialog--wide assistant-settings-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assistant-settings-title"
+        >
+          <header class="assistant-modal__header">
+            <div class="assistant-modal__header-copy">
+              <h2 id="assistant-settings-title">Assistant settings</h2>
+              <p>Context and activity for ME3.</p>
+            </div>
+            <div class="assistant-modal__header-actions">
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                aria-label="Close"
+                @click="closeAssistantSettingsModal"
+              >
+                <UiIcon name="X" :size="20" />
+              </Button>
+            </div>
+          </header>
+
+          <div class="assistant-settings">
+            <nav
+              class="assistant-settings__nav"
+              role="tablist"
+              aria-label="Assistant settings"
+            >
+              <button
+                type="button"
+                class="assistant-settings__tab"
+                :class="{ 'is-active': assistantSettingsSection === 'context' }"
+                role="tab"
+                :aria-selected="assistantSettingsSection === 'context'"
+                @click="setAssistantSettingsSection('context')"
+              >
+                <UiIcon name="Brain" :size="16" aria-hidden="true" />
+                <span>Context</span>
+                <strong>{{ assistantContextItemCount }}</strong>
+              </button>
+              <button
+                type="button"
+                class="assistant-settings__tab"
+                :class="{ 'is-active': assistantSettingsSection === 'activity' }"
+                role="tab"
+                :aria-selected="assistantSettingsSection === 'activity'"
+                @click="setAssistantSettingsSection('activity')"
+              >
+                <UiIcon name="Activity" :size="16" aria-hidden="true" />
+                <span>Activity</span>
+                <strong>{{ assistantActivityItems.length }}</strong>
+              </button>
+            </nav>
+
+            <section
+              v-if="assistantSettingsSection === 'context'"
+              class="assistant-settings__panel"
+              role="tabpanel"
+            >
+              <div class="assistant-settings__panel-header">
+                <div>
+                  <h3>Context</h3>
+                  <p>Memory and sources ME3 can use.</p>
+                </div>
+                <Button
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  type="button"
+                  aria-label="Refresh context"
+                  title="Refresh"
+                  :disabled="assistantContextLoading"
+                  @click="loadAssistantContext"
+                >
+                  <UiIcon name="RefreshCw" :size="16" />
+                </Button>
+              </div>
+
+              <p
+                v-if="assistantSettingsError"
+                class="assistant-settings__error"
+                role="alert"
+              >
+                {{ assistantSettingsError }}
+              </p>
+
+              <div v-if="assistantContextLoading" class="empty-row">
+                Loading context...
+              </div>
+              <template v-else>
+                <section class="assistant-settings__block">
+                  <header class="assistant-settings__block-header">
+                    <div>
+                      <h4>Memory</h4>
+                      <p>Durable notes waiting for review or already active.</p>
+                    </div>
+                    <span>{{ assistantMemory.length }}</span>
+                  </header>
+                  <form
+                    class="assistant-settings-inline-form"
+                    @submit.prevent="addAssistantMemory"
+                  >
+                    <input
+                      v-model="assistantMemoryDraft"
+                      type="text"
+                      placeholder="Add private memory"
+                      aria-label="Add private memory"
+                    />
+                    <Button
+                      color="accent"
+                      shape="soft"
+                      size="compact"
+                      icon-only
+                      type="submit"
+                      aria-label="Add memory"
+                      :disabled="!assistantMemoryDraft.trim() || Boolean(assistantMemoryActionId)"
+                    >
+                      <UiIcon name="Plus" :size="18" />
+                    </Button>
+                  </form>
+                  <div v-if="assistantMemory.length === 0" class="empty-row">
+                    No private memory yet.
+                  </div>
+                  <article
+                    v-for="item in assistantMemory"
+                    :key="item.id"
+                    class="assistant-settings-row assistant-settings-row--memory"
+                    :class="{
+                      'assistant-settings-row--pending':
+                        item.reviewStatus === 'needs_review',
+                    }"
+                  >
+                    <div class="assistant-settings-row__main">
+                      <div class="assistant-settings-row__heading">
+                        <h4>{{ item.title || assistantMemoryKindLabel(item.memoryKind) }}</h4>
+                        <span
+                          class="status-badge"
+                          :class="`status-badge--${item.reviewStatus}`"
+                        >
+                          {{ assistantMemoryStatusLabel(item.reviewStatus) }}
+                        </span>
+                      </div>
+                      <p>{{ item.body }}</p>
+                      <div class="assistant-settings-row__meta">
+                        <span>{{ assistantMemorySourceLabel(item) }}</span>
+                        <span>{{ assistantMemoryScopeLabel(item) }}</span>
+                        <span>{{ formatAssistantSettingsDate(item.updatedAt) }}</span>
+                      </div>
+                    </div>
+                    <div class="assistant-settings-row__actions">
+                      <Button
+                        v-if="item.reviewStatus === 'needs_review'"
+                        color="primary"
+                        shape="soft"
+                        size="compact"
+                        type="button"
+                        :disabled="assistantMemoryActionId === item.id"
+                        @click="approveAssistantMemory(item)"
+                      >
+                        <UiIcon name="Check" :size="14" />
+                        Approve
+                      </Button>
+                      <Button
+                        color="danger"
+                        shape="soft"
+                        size="compact"
+                        type="button"
+                        :disabled="assistantMemoryActionId === item.id"
+                        @click="forgetAssistantMemory(item)"
+                      >
+                        <UiIcon name="Trash2" :size="14" />
+                        Forget
+                      </Button>
+                    </div>
+                  </article>
+                </section>
+
+                <section class="assistant-settings__block">
+                  <header class="assistant-settings__block-header">
+                    <div>
+                      <h4>Sources</h4>
+                      <p>Inventoried places context can come from.</p>
+                    </div>
+                    <span>{{ assistantSources.length }}</span>
+                  </header>
+                  <form
+                    class="assistant-settings-inline-form"
+                    @submit.prevent="addAssistantSource"
+                  >
+                    <input
+                      v-model="assistantSourceDraft"
+                      type="text"
+                      placeholder="Source name or URL"
+                      aria-label="Add context source"
+                    />
+                    <Button
+                      color="accent"
+                      shape="soft"
+                      size="compact"
+                      icon-only
+                      type="submit"
+                      aria-label="Add source"
+                      :disabled="!assistantSourceDraft.trim()"
+                    >
+                      <UiIcon name="Plus" :size="18" />
+                    </Button>
+                  </form>
+                  <div v-if="assistantSources.length === 0" class="empty-row">
+                    No context sources yet.
+                  </div>
+                  <article
+                    v-for="source in assistantSources"
+                    :key="source.id"
+                    class="assistant-settings-row"
+                  >
+                    <div class="assistant-settings-row__main">
+                      <div class="assistant-settings-row__heading">
+                        <h4>{{ source.label }}</h4>
+                        <span class="status-badge">
+                          {{ assistantSourceStatusLabel(source.status) }}
+                        </span>
+                      </div>
+                      <p>
+                        {{ source.description || source.sourceRef || assistantSourceKindLabel(source.sourceKind) }}
+                      </p>
+                      <div class="assistant-settings-row__meta">
+                        <span>{{ assistantSourceKindLabel(source.sourceKind) }}</span>
+                        <span>{{ source.visibility }}</span>
+                      </div>
+                    </div>
+                  </article>
+                </section>
+              </template>
+            </section>
+
+            <section
+              v-else
+              class="assistant-settings__panel"
+              role="tabpanel"
+            >
+              <div class="assistant-settings__panel-header">
+                <div>
+                  <h3>Activity</h3>
+                  <p>Approvals, runs, and assistant updates.</p>
+                </div>
+                <div class="assistant-settings__header-actions">
+                  <Button
+                    color="ghost"
+                    shape="soft"
+                    size="compact"
+                    icon-only
+                    type="button"
+                    aria-label="Refresh activity"
+                    title="Refresh"
+                    :disabled="assistantActivityLoading"
+                    @click="loadAssistantActivity"
+                  >
+                    <UiIcon name="RefreshCw" :size="16" />
+                  </Button>
+                  <Button
+                    color="danger"
+                    shape="soft"
+                    size="compact"
+                    type="button"
+                    :disabled="assistantActivityItems.length === 0 || assistantClearingActivity"
+                    @click="clearAssistantActivity"
+                  >
+                    {{ assistantClearingActivity ? "Clearing" : "Clear" }}
+                  </Button>
+                </div>
+              </div>
+
+              <p
+                v-if="assistantSettingsError"
+                class="assistant-settings__error"
+                role="alert"
+              >
+                {{ assistantSettingsError }}
+              </p>
+              <div v-if="assistantActivityLoading" class="empty-row">
+                Loading activity...
+              </div>
+              <div v-else-if="assistantActivityItems.length === 0" class="empty-row">
+                No activity yet.
+              </div>
+              <template v-else>
+                <article
+                  v-for="item in assistantActivityItems"
+                  :key="item.id"
+                  class="assistant-settings-row assistant-settings-row--activity"
+                >
+                  <div class="assistant-settings-row__main">
+                    <span class="assistant-settings-row__kind">{{ item.kind }}</span>
+                    <h4>{{ item.title }}</h4>
+                    <p>{{ item.summary || "No summary yet" }}</p>
+                  </div>
+                  <div class="assistant-settings-row__aside">
+                    <span v-if="item.status" class="status-badge">
+                      {{ item.status }}
+                    </span>
+                    <span>{{ formatAssistantSettingsDate(item.createdAt) }}</span>
+                  </div>
+                </article>
+              </template>
+            </section>
           </div>
         </section>
       </div>
@@ -4633,6 +5455,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: block;
 }
 
+.assistant-page-tools {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 42;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in oklab, var(--ui-bg) 86%, transparent);
+  backdrop-filter: blur(14px);
+}
+
 .assistant-history {
   position: fixed;
   inset: 0 auto 0 0;
@@ -4909,15 +5746,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history__footer {
+  display: grid;
+  gap: 2px;
   margin-top: auto;
   padding-top: 8px;
   border-top: 1px solid var(--ui-border);
 }
 
-.assistant-history__archive-button {
+.assistant-history__archive-button,
+.assistant-history__footer-button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  width: 100%;
   min-height: 30px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
@@ -4930,7 +5771,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   cursor: pointer;
 }
 
-.assistant-history__archive-button:hover {
+.assistant-history__archive-button:hover,
+.assistant-history__footer-button:hover {
   background: var(--ui-surface);
   color: var(--ui-text);
 }
@@ -4994,7 +5836,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-mobile-nav__actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 
 .assistant-topbar__actions {
@@ -5749,6 +6594,262 @@ function messageFromUnknown(err: unknown, fallback: string) {
   line-height: 1.5;
 }
 
+.assistant-settings-dialog {
+  max-height: min(760px, calc(100vh - 48px));
+}
+
+.assistant-settings {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 18px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.assistant-settings__nav {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.assistant-settings__tab {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assistant-settings__tab span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-settings__tab strong {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.assistant-settings__tab:hover,
+.assistant-settings__tab.is-active {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.assistant-settings__panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+  max-height: min(620px, calc(100vh - 190px));
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.assistant-settings__panel-header,
+.assistant-settings__block-header,
+.assistant-settings-row,
+.assistant-settings-row__heading,
+.assistant-settings-row__actions,
+.assistant-settings__header-actions,
+.assistant-settings-row__aside {
+  display: flex;
+  align-items: center;
+}
+
+.assistant-settings__panel-header,
+.assistant-settings__block-header,
+.assistant-settings-row {
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.assistant-settings__panel-header {
+  min-height: 38px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.assistant-settings__panel-header h3,
+.assistant-settings__panel-header p,
+.assistant-settings__block-header h4,
+.assistant-settings__block-header p,
+.assistant-settings-row h4,
+.assistant-settings-row p {
+  margin: 0;
+}
+
+.assistant-settings__panel-header h3,
+.assistant-settings__block-header h4,
+.assistant-settings-row h4 {
+  color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.assistant-settings__panel-header p,
+.assistant-settings__block-header p,
+.assistant-settings-row p,
+.assistant-settings-row__meta,
+.assistant-settings-row__aside {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assistant-settings__header-actions {
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.assistant-settings__block {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.assistant-settings__block + .assistant-settings__block {
+  padding-top: 6px;
+}
+
+.assistant-settings__block-header {
+  padding-bottom: 8px;
+}
+
+.assistant-settings__block-header span {
+  flex: 0 0 auto;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.assistant-settings-inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 6px;
+  align-items: center;
+  margin: 2px 0 4px;
+  padding: 5px;
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.assistant-settings-inline-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  padding: 0 10px;
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.assistant-settings-inline-form input:focus {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 1px;
+}
+
+.assistant-settings-row {
+  align-items: flex-start;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.assistant-settings-row--pending {
+  border-color: color-mix(in oklab, #b45309, var(--ui-border) 72%);
+}
+
+.assistant-settings-row__main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.assistant-settings-row__heading {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.assistant-settings-row p {
+  overflow-wrap: anywhere;
+}
+
+.assistant-settings-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.assistant-settings-row__meta span {
+  overflow-wrap: anywhere;
+}
+
+.assistant-settings-row__actions {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 104px;
+}
+
+.assistant-settings-row__actions .me3-btn {
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.assistant-settings-row__kind {
+  color: var(--ui-accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.assistant-settings-row--activity .assistant-settings-row__main p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.assistant-settings-row__aside {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  text-align: right;
+}
+
+.assistant-settings__error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--ui-radius-sm);
+  background: color-mix(in oklab, #e53935 10%, var(--ui-surface));
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .needs-you {
   display: inline-flex;
   align-items: center;
@@ -5986,6 +7087,7 @@ button:disabled {
 }
 
 .status-badge--needs_setup,
+.status-badge--needs_review,
 .status-badge--failing {
   border: 1px solid color-mix(in oklab, #d97706 45%, var(--ui-border));
   background: color-mix(in oklab, #d97706 12%, var(--ui-surface));
@@ -6550,6 +7652,10 @@ button:disabled {
     --assistant-header-clearance: calc(var(--app-shell-mobile-nav-height) + 14px);
   }
 
+  .assistant-page-tools {
+    display: none;
+  }
+
   .assistant-timeline {
     padding-top: var(--assistant-header-clearance);
   }
@@ -6641,6 +7747,58 @@ button:disabled {
 
   .assistant-modal__header h2 {
     font-size: 16px;
+  }
+
+  .assistant-settings {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    flex: 1 1 auto;
+    overflow: auto;
+  }
+
+  .assistant-settings__nav {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    gap: 4px;
+    height: 42px;
+    min-height: 42px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 2px;
+    background: var(--ui-surface);
+  }
+
+  .assistant-settings__tab {
+    flex: 0 0 auto;
+    min-width: 132px;
+  }
+
+  .assistant-settings__panel {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .assistant-settings-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .assistant-settings-row__actions {
+    flex-direction: row;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .assistant-settings-row__actions .me3-btn {
+    width: auto;
+  }
+
+  .assistant-settings-row__aside {
+    align-items: flex-start;
+    text-align: left;
   }
 }
 
