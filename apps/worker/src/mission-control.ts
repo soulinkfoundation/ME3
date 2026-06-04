@@ -2102,7 +2102,8 @@ async function ensureBaselineContextSources(env: Env, userId: string) {
       id: `mission-source-private-memory-${userId}`,
       kind: "private_memory",
       label: "Private memory",
-      description: "Approved private notes ME3 can match to the current chat or job.",
+      description:
+        "During Weekly Review, you can save important details for ME3 to remember and use when relevant.",
       visibility: "private",
       status: "active",
       sourceRef: "/mission-control?settings=context",
