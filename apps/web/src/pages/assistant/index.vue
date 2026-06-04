@@ -605,6 +605,8 @@ const collapsedAssistantProjectIds = ref(new Set<string>());
 const assistantSettingsModalOpen = ref(false);
 const assistantSettingsSection = ref<AssistantSettingsSection>("context");
 const assistantSettingsError = ref("");
+const assistantSkillsModalOpen = ref(false);
+const assistantSkillUrlDraft = ref("");
 const assistantMemory = ref<MissionMemory[]>([]);
 const assistantSources = ref<MissionContextSource[]>([]);
 const assistantContextLoading = ref(false);
@@ -1013,6 +1015,57 @@ const assistantSettingsTabs = computed<
   },
 ]);
 
+const assistantSkillInstallSources = [
+  {
+    id: "repo",
+    icon: "GitBranch",
+    title: "Repository or URL",
+    description:
+      "Install a skill bundle from a trusted Git repository or direct skill URL.",
+  },
+  {
+    id: "upload",
+    icon: "Upload",
+    title: "Upload",
+    description:
+      "Import a skill folder, ZIP archive, or single SKILL.md file for review.",
+  },
+] satisfies Array<{
+  id: string;
+  icon: UiIconName;
+  title: string;
+  description: string;
+}>;
+
+const assistantSkillDetailRows = [
+  {
+    id: "playbooks",
+    icon: "BookOpen",
+    title: "Playbooks, not permissions",
+    description:
+      "Skills teach ME3 how to approach specialist work, but account access still comes from connected tools.",
+  },
+  {
+    id: "loading",
+    icon: "SearchCheck",
+    title: "Loaded only when useful",
+    description:
+      "ME3 can keep skills lightweight by reading full instructions only when a chat or job matches.",
+  },
+  {
+    id: "safety",
+    icon: "ShieldCheck",
+    title: "Actions stay approved",
+    description:
+      "A skill can suggest an action, but ME3 still uses the shared setup, approval, and audit layer.",
+  },
+] satisfies Array<{
+  id: string;
+  icon: UiIconName;
+  title: string;
+  description: string;
+}>;
+
 const canSendAssistantMessage = computed(
   () =>
     (assistantDraft.value.trim().length > 0 ||
@@ -1317,6 +1370,7 @@ async function openAssistantSettings(
 ) {
   assistantSettingsSection.value = section;
   assistantSettingsModalOpen.value = true;
+  assistantSkillsModalOpen.value = false;
   assistantHistoryDrawerOpen.value = false;
   assistantSettingsError.value = "";
   if (
@@ -1343,6 +1397,17 @@ function closeAssistantSettingsModal() {
     ...query
   } = route.query;
   void router.replace({ query });
+}
+
+function openAssistantSkillsModal() {
+  assistantSkillsModalOpen.value = true;
+  assistantSettingsModalOpen.value = false;
+  assistantHistoryDrawerOpen.value = false;
+}
+
+function closeAssistantSkillsModal() {
+  assistantSkillsModalOpen.value = false;
+  assistantSkillUrlDraft.value = "";
 }
 
 async function setAssistantSettingsSection(section: AssistantSettingsSection) {
@@ -3148,6 +3213,7 @@ function insertDailyBriefingVariable(value: string) {
 
 function openConfigureJobsModal() {
   assistantHistoryDrawerOpen.value = false;
+  assistantSkillsModalOpen.value = false;
   configureJobsModalOpen.value = true;
 }
 
@@ -3172,6 +3238,10 @@ function closeDetailModal() {
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key !== "Escape") return;
+  if (assistantSkillsModalOpen.value) {
+    closeAssistantSkillsModal();
+    return;
+  }
   if (assistantSettingsModalOpen.value) {
     closeAssistantSettingsModal();
     return;
@@ -3755,6 +3825,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
             size="compact"
             icon-only
             class="assistant-mobile-nav__button"
+            aria-label="Skills"
+            title="Skills"
+            type="button"
+            @click="openAssistantSkillsModal"
+          >
+            <UiIcon name="Sparkles" :size="18" aria-hidden="true" />
+          </Button>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            class="assistant-mobile-nav__button"
             aria-label="New chat"
             title="New chat"
             type="button"
@@ -3777,6 +3860,18 @@ function messageFromUnknown(err: unknown, fallback: string) {
         @click="openConfigureJobsModal"
       >
         <UiIcon name="BriefcaseBusiness" :size="18" aria-hidden="true" />
+      </Button>
+      <Button
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        type="button"
+        aria-label="Skills"
+        title="Skills"
+        @click="openAssistantSkillsModal"
+      >
+        <UiIcon name="Sparkles" :size="18" aria-hidden="true" />
       </Button>
       <Button
         color="ghost"
@@ -4116,6 +4211,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
           >
             <UiIcon name="BriefcaseBusiness" :size="15" aria-hidden="true" />
             <span>Jobs</span>
+          </button>
+          <button
+            type="button"
+            class="assistant-history__footer-button"
+            @click="openAssistantSkillsModal"
+          >
+            <UiIcon name="Sparkles" :size="15" aria-hidden="true" />
+            <span>Skills</span>
           </button>
           <button
             type="button"
@@ -5055,6 +5158,140 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </article>
               </template>
             </section>
+          </div>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="assistantSkillsModalOpen"
+        class="assistant-modal"
+        @click.self="closeAssistantSkillsModal"
+      >
+        <section
+          class="assistant-modal__dialog assistant-modal__dialog--wide assistant-skills-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assistant-skills-title"
+        >
+          <header class="assistant-modal__header">
+            <div class="assistant-modal__header-copy">
+              <h2 id="assistant-skills-title">Skills</h2>
+              <p>
+                Playbooks ME3 can use for specialist work. Skills do not give
+                ME3 account access or permission to take actions.
+              </p>
+            </div>
+            <div class="assistant-modal__header-actions">
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                aria-label="Close"
+                @click="closeAssistantSkillsModal"
+              >
+                <UiIcon name="X" :size="20" />
+              </Button>
+            </div>
+          </header>
+
+          <div class="assistant-skills">
+            <div class="assistant-skills__main">
+              <section class="assistant-skills__panel">
+                <header class="assistant-skills__panel-header">
+                  <div>
+                    <h3>Installed</h3>
+                    <p>Enabled playbooks available to chats and jobs.</p>
+                  </div>
+                  <span class="assistant-skills__count">0</span>
+                </header>
+                <div class="assistant-skills__empty">
+                  <UiIcon name="BookOpen" :size="22" aria-hidden="true" />
+                  <div>
+                    <h4>No skills installed yet.</h4>
+                    <p>
+                      Core and plugin-owned skills will appear here once the
+                      installer is connected.
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <section class="assistant-skills__panel">
+                <header class="assistant-skills__panel-header">
+                  <div>
+                    <h3>Add Skill</h3>
+                    <p>Install from a trusted source or import a local bundle.</p>
+                  </div>
+                </header>
+                <form
+                  class="assistant-skills__install-form"
+                  @submit.prevent
+                >
+                  <label class="sr-only" for="assistant-skill-url">
+                    Skill URL or repository
+                  </label>
+                  <div class="assistant-skills__input-row">
+                    <UiIcon name="Link" :size="16" aria-hidden="true" />
+                    <input
+                      id="assistant-skill-url"
+                      v-model="assistantSkillUrlDraft"
+                      type="url"
+                      placeholder="https://github.com/org/skill or skill URL"
+                    />
+                    <Button
+                      color="accent"
+                      shape="soft"
+                      size="compact"
+                      type="submit"
+                      disabled
+                    >
+                      Install
+                    </Button>
+                  </div>
+                </form>
+                <div class="assistant-skills__source-grid">
+                  <article
+                    v-for="source in assistantSkillInstallSources"
+                    :key="source.id"
+                    class="assistant-skills__source"
+                  >
+                    <UiIcon :name="source.icon" :size="17" aria-hidden="true" />
+                    <div>
+                      <h4>{{ source.title }}</h4>
+                      <p>{{ source.description }}</p>
+                    </div>
+                  </article>
+                </div>
+              </section>
+            </div>
+
+            <aside class="assistant-skills__panel assistant-skills__details">
+              <header class="assistant-skills__panel-header">
+                <div>
+                  <h3>Details</h3>
+                  <p>What ME3 will check before a skill affects a run.</p>
+                </div>
+              </header>
+              <article
+                v-for="row in assistantSkillDetailRows"
+                :key="row.id"
+                class="assistant-skills__detail-row"
+              >
+                <UiIcon :name="row.icon" :size="17" aria-hidden="true" />
+                <div>
+                  <h4>{{ row.title }}</h4>
+                  <p>{{ row.description }}</p>
+                </div>
+              </article>
+              <div class="assistant-skills__notice">
+                <strong>Pending backend:</strong>
+                validation, matching, progressive loading, and run manifests.
+              </div>
+            </aside>
           </div>
         </section>
       </div>
@@ -7359,6 +7596,171 @@ function messageFromUnknown(err: unknown, fallback: string) {
   line-height: 1.4;
 }
 
+.assistant-skills-dialog {
+  width: min(920px, calc(100vw - 32px));
+}
+
+.assistant-skills {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
+  gap: 14px;
+  min-width: 0;
+}
+
+.assistant-skills__main,
+.assistant-skills__panel,
+.assistant-skills__install-form,
+.assistant-skills__details {
+  display: grid;
+  min-width: 0;
+}
+
+.assistant-skills__main,
+.assistant-skills__panel,
+.assistant-skills__install-form,
+.assistant-skills__details {
+  gap: 12px;
+}
+
+.assistant-skills__panel {
+  align-content: start;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 14px;
+  background: var(--ui-surface);
+}
+
+.assistant-skills__panel-header,
+.assistant-skills__input-row,
+.assistant-skills__empty,
+.assistant-skills__source,
+.assistant-skills__detail-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.assistant-skills__panel-header {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-skills__panel-header h3,
+.assistant-skills__panel-header p,
+.assistant-skills__empty h4,
+.assistant-skills__empty p,
+.assistant-skills__source h4,
+.assistant-skills__source p,
+.assistant-skills__detail-row h4,
+.assistant-skills__detail-row p {
+  margin: 0;
+}
+
+.assistant-skills__panel-header h3,
+.assistant-skills__empty h4,
+.assistant-skills__source h4,
+.assistant-skills__detail-row h4 {
+  color: var(--ui-text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.assistant-skills__panel-header p,
+.assistant-skills__empty p,
+.assistant-skills__source p,
+.assistant-skills__detail-row p,
+.assistant-skills__notice {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.assistant-skills__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 999px;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.assistant-skills__empty {
+  align-items: center;
+  min-height: 96px;
+  border-radius: var(--ui-radius-sm);
+  padding: 14px;
+  background: var(--ui-surface-muted);
+}
+
+.assistant-skills__empty > svg,
+.assistant-skills__source > svg,
+.assistant-skills__detail-row > svg {
+  flex: 0 0 auto;
+  color: var(--ui-accent);
+}
+
+.assistant-skills__input-row {
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--ui-radius-md);
+  padding: 5px;
+  background: var(--ui-surface-muted);
+}
+
+.assistant-skills__input-row > svg {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  color: var(--ui-text-muted);
+}
+
+.assistant-skills__input-row input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  padding: 0 8px;
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.assistant-skills__input-row input:focus {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 1px;
+}
+
+.assistant-skills__source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.assistant-skills__source,
+.assistant-skills__detail-row {
+  border-top: 1px solid var(--ui-border);
+  padding-top: 12px;
+}
+
+.assistant-skills__notice {
+  border-radius: var(--ui-radius-sm);
+  padding: 10px;
+  background: var(--ui-surface-muted);
+}
+
+.assistant-skills__notice strong {
+  color: var(--ui-text);
+}
+
 .needs-you {
   display: inline-flex;
   align-items: center;
@@ -8295,6 +8697,29 @@ button:disabled {
     max-height: none;
     overflow: visible;
     padding: 14px 14px 14px 14px;
+  }
+
+  .assistant-skills-dialog {
+    width: 100%;
+  }
+
+  .assistant-skills,
+  .assistant-skills__source-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .assistant-skills {
+    overflow: auto;
+  }
+
+  .assistant-skills__input-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .assistant-skills__input-row .me3-btn {
+    width: 100%;
+    grid-column: 1 / -1;
   }
 
   .assistant-settings-row {
