@@ -3761,7 +3761,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             type="button"
             @click="openAssistantSettings('context')"
           >
-            <UiIcon name="Settings" :size="18" aria-hidden="true" />
+            <UiIcon name="Brain" :size="18" aria-hidden="true" />
           </Button>
         </div>
       </div>
@@ -3789,7 +3789,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
         title="Assistant settings"
         @click="openAssistantSettings('context')"
       >
-        <UiIcon name="Settings" :size="18" aria-hidden="true" />
+        <UiIcon name="Brain" :size="18" aria-hidden="true" />
       </Button>
     </div>
     <aside
@@ -4110,7 +4110,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             class="assistant-history__footer-button"
             @click="openAssistantSettings('context')"
           >
-            <UiIcon name="Settings" :size="15" aria-hidden="true" />
+            <UiIcon name="Brain" :size="15" aria-hidden="true" />
             <span>Settings</span>
           </button>
         </div>
@@ -4759,11 +4759,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
           aria-modal="true"
           aria-labelledby="assistant-settings-title"
         >
-          <header class="assistant-modal__header">
-            <div class="assistant-modal__header-copy">
-              <h2 id="assistant-settings-title">Assistant settings</h2>
-              <p>What ME3 can use and what it has done.</p>
-            </div>
+          <header
+            class="assistant-modal__header assistant-modal__header--icon-only"
+          >
+            <h2 id="assistant-settings-title" class="sr-only">
+              Assistant settings
+            </h2>
             <div class="assistant-modal__header-actions">
               <Button
                 color="ghost"
@@ -4793,29 +4794,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
               class="assistant-settings__panel"
               role="tabpanel"
             >
-              <div class="assistant-settings__panel-header">
-                <div>
-                  <h3>What ME3 can use</h3>
-                  <p>
-                    ME3 keeps the top items small, then adds matching details
-                    only when a chat or job needs them.
-                  </p>
-                </div>
-                <Button
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  type="button"
-                  aria-label="Refresh context"
-                  title="Refresh"
-                  :disabled="assistantContextLoading"
-                  @click="loadAssistantContext"
-                >
-                  <UiIcon name="RefreshCw" :size="16" />
-                </Button>
-              </div>
-
               <p
                 v-if="assistantSettingsError"
                 class="assistant-settings__error"
@@ -4828,6 +4806,84 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 Loading context...
               </div>
               <template v-else>
+                <section class="assistant-settings__block">
+                  <header class="assistant-settings__block-header">
+                    <div>
+                      <h4>Sources</h4>
+                      <p>
+                        Ordered by importance. Missing essentials are
+                        highlighted.
+                      </p>
+                    </div>
+                    <span>{{ assistantSourceRows.length }}</span>
+                  </header>
+                  <form
+                    class="assistant-settings-inline-form"
+                    @submit.prevent="addAssistantSource"
+                  >
+                    <input
+                      v-model="assistantSourceDraft"
+                      type="text"
+                      placeholder="Add a site, provider, or source"
+                      aria-label="Add context source"
+                    />
+                    <Button
+                      color="accent"
+                      shape="soft"
+                      size="compact"
+                      icon-only
+                      type="submit"
+                      aria-label="Add source"
+                      :disabled="!assistantSourceDraft.trim()"
+                    >
+                      <UiIcon name="Plus" :size="18" />
+                    </Button>
+                  </form>
+                  <div
+                    v-if="assistantSourceRows.length === 0"
+                    class="empty-row"
+                  >
+                    No context sources yet.
+                  </div>
+                  <article
+                    v-for="source in assistantSourceRows"
+                    :key="source.id"
+                    class="assistant-settings-row"
+                    :class="{
+                      'assistant-settings-row--missing': source.isMissing,
+                    }"
+                  >
+                    <div class="assistant-settings-row__main">
+                      <div class="assistant-settings-row__heading">
+                        <h4>{{ source.label }}</h4>
+                        <span class="assistant-settings-row__priority">
+                          {{ source.priorityLabel }}
+                        </span>
+                        <span
+                          class="status-badge"
+                          :class="`status-badge--${source.status}`"
+                        >
+                          {{ assistantSourceStatusLabel(source.status) }}
+                        </span>
+                      </div>
+                      <p>
+                        {{
+                          source.description ||
+                          source.sourceRef ||
+                          assistantSourceKindLabel(source.sourceKind)
+                        }}
+                      </p>
+                      <div class="assistant-settings-row__meta">
+                        <span>{{
+                          assistantSourceKindLabel(source.sourceKind)
+                        }}</span>
+                        <span>{{ source.accessLabel }}</span>
+                        <span>{{ source.usageLabel }}</span>
+                      </div>
+                    </div>
+                  </article>
+                </section>
+
                 <section class="assistant-settings__block">
                   <header class="assistant-settings__block-header">
                     <div>
@@ -4924,84 +4980,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                         <UiIcon name="Trash2" :size="14" />
                         Forget
                       </Button>
-                    </div>
-                  </article>
-                </section>
-
-                <section class="assistant-settings__block">
-                  <header class="assistant-settings__block-header">
-                    <div>
-                      <h4>Sources</h4>
-                      <p>
-                        Ordered by importance. Missing essentials are
-                        highlighted.
-                      </p>
-                    </div>
-                    <span>{{ assistantSourceRows.length }}</span>
-                  </header>
-                  <form
-                    class="assistant-settings-inline-form"
-                    @submit.prevent="addAssistantSource"
-                  >
-                    <input
-                      v-model="assistantSourceDraft"
-                      type="text"
-                      placeholder="Add a site, provider, or source"
-                      aria-label="Add context source"
-                    />
-                    <Button
-                      color="accent"
-                      shape="soft"
-                      size="compact"
-                      icon-only
-                      type="submit"
-                      aria-label="Add source"
-                      :disabled="!assistantSourceDraft.trim()"
-                    >
-                      <UiIcon name="Plus" :size="18" />
-                    </Button>
-                  </form>
-                  <div
-                    v-if="assistantSourceRows.length === 0"
-                    class="empty-row"
-                  >
-                    No context sources yet.
-                  </div>
-                  <article
-                    v-for="source in assistantSourceRows"
-                    :key="source.id"
-                    class="assistant-settings-row"
-                    :class="{
-                      'assistant-settings-row--missing': source.isMissing,
-                    }"
-                  >
-                    <div class="assistant-settings-row__main">
-                      <div class="assistant-settings-row__heading">
-                        <h4>{{ source.label }}</h4>
-                        <span class="assistant-settings-row__priority">
-                          {{ source.priorityLabel }}
-                        </span>
-                        <span
-                          class="status-badge"
-                          :class="`status-badge--${source.status}`"
-                        >
-                          {{ assistantSourceStatusLabel(source.status) }}
-                        </span>
-                      </div>
-                      <p>
-                        {{
-                          source.description ||
-                          source.sourceRef ||
-                          assistantSourceKindLabel(source.sourceKind)
-                        }}
-                      </p>
-                      <div class="assistant-settings-row__meta">
-                        <span>{{
-                          assistantSourceKindLabel(source.sourceKind)
-                        }}</span>
-                        <span>{{ source.accessLabel }}</span>
-                        <span>{{ source.usageLabel }}</span>
-                      </div>
                     </div>
                   </article>
                 </section>
@@ -7936,6 +7914,10 @@ button:disabled {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.assistant-modal__header--icon-only {
+  justify-content: flex-end;
 }
 
 .assistant-modal__header-copy {
