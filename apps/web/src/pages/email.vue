@@ -3870,7 +3870,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: nowrap;
   align-items: flex-end;
-  gap: 0;
   width: max-content;
   flex-shrink: 0;
 }
@@ -3900,6 +3899,10 @@ onBeforeUnmount(() => {
   transition:
     color 0.12s,
     background 0.12s;
+}
+
+.folder-btn + .folder-btn {
+  margin-inline-start: 4px;
 }
 
 .folder-btn:hover:not(.folder-btn--active) {
