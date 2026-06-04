@@ -486,8 +486,6 @@ type MissionContextSource = {
 type AssistantSourceViewItem = MissionContextSource & {
   priority: number;
   priorityLabel: string;
-  accessLabel: string;
-  usageLabel: string;
   isMissing: boolean;
 };
 type MissionMemoryResponse = { memory: MissionMemory[] };
@@ -614,8 +612,8 @@ const assistantPendingApprovals = ref<MissionApproval[]>([]);
 const assistantRecentRuns = ref<MissionRun[]>([]);
 const assistantRecentActivity = ref<MissionActivity[]>([]);
 const assistantMemoryDraft = ref("");
-const assistantSourceDraft = ref("");
 const assistantMemoryActionId = ref("");
+const assistantSourceActionId = ref("");
 const assistantClearingActivity = ref(false);
 const copiedMessageKey = ref<string | null>(null);
 const assistantComposerRef = ref<HTMLTextAreaElement | null>(null);
@@ -938,8 +936,6 @@ const assistantSourceRows = computed<AssistantSourceViewItem[]>(() =>
         ...source,
         priority,
         priorityLabel: `Priority ${priority}`,
-        accessLabel: source.visibility === "public" ? "Public" : "Private",
-        usageLabel: assistantSourceUsageLabel(source),
         isMissing:
           source.status === "setup_required" || source.status === "failed",
       };
@@ -1498,24 +1494,25 @@ function replaceAssistantMemory(next: MissionMemory) {
   else assistantMemory.value.unshift(next);
 }
 
-async function addAssistantSource() {
-  const label = assistantSourceDraft.value.trim();
-  if (!label) return;
+async function deleteAssistantSource(source: MissionContextSource) {
+  if (assistantSourceActionId.value) return;
+  assistantSourceActionId.value = source.id;
   assistantSettingsError.value = "";
   try {
-    await api.post("/mission-control/context-sources", {
-      label,
-      sourceKind: label.startsWith("http") ? "url" : "provider",
-      sourceRef: label.startsWith("http") ? label : null,
-    });
-    assistantSourceDraft.value = "";
-    await loadAssistantContext();
-    toastSuccess("Source saved");
+    await api.delete<{ ok: true }>(
+      `/mission-control/context-sources/${encodeURIComponent(source.id)}`,
+    );
+    assistantSources.value = assistantSources.value.filter(
+      (entry) => entry.id !== source.id,
+    );
+    toastSuccess("Source deleted");
   } catch (err) {
     assistantSettingsError.value = messageFromUnknown(
       err,
-      "Could not save source.",
+      "Could not delete source.",
     );
+  } finally {
+    assistantSourceActionId.value = "";
   }
 }
 
@@ -3636,17 +3633,6 @@ function assistantSourcePriority(
   return 5;
 }
 
-function assistantSourceUsageLabel(source: MissionContextSource) {
-  if (source.status === "setup_required") return "Missing";
-  if (source.status === "failed") return "Needs attention";
-  if (source.status === "paused") return "Paused";
-  if (source.sourceKind === "mission_statement") return "Always small";
-  if (source.sourceKind === "wheel_of_life") return "Always small";
-  if (source.sourceKind === "public_me_json") return "Small profile";
-  if (source.sourceKind === "private_memory") return "Only if relevant";
-  return "Used when relevant";
-}
-
 function assistantSourceStatusLabel(status: MissionContextSource["status"]) {
   if (status === "setup_required") return "Missing";
   return assistantMemoryKindLabel(status);
@@ -4828,30 +4814,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                         assist you.
                       </p>
                     </div>
-                    <span>{{ assistantSourceRows.length }}</span>
                   </header>
-                  <form
-                    class="assistant-settings-inline-form"
-                    @submit.prevent="addAssistantSource"
-                  >
-                    <input
-                      v-model="assistantSourceDraft"
-                      type="text"
-                      placeholder="Add a site, provider, or source"
-                      aria-label="Add context source"
-                    />
-                    <Button
-                      color="accent"
-                      shape="soft"
-                      size="compact"
-                      icon-only
-                      type="submit"
-                      aria-label="Add source"
-                      :disabled="!assistantSourceDraft.trim()"
-                    >
-                      <UiIcon name="Plus" :size="18" />
-                    </Button>
-                  </form>
                   <div
                     v-if="assistantSourceRows.length === 0"
                     class="empty-row"
@@ -4878,6 +4841,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
                         >
                           {{ assistantSourceStatusLabel(source.status) }}
                         </span>
+                        <Button
+                          class="assistant-settings-row__delete"
+                          color="ghost"
+                          shape="soft"
+                          size="compact"
+                          icon-only
+                          type="button"
+                          aria-label="Delete source"
+                          :disabled="assistantSourceActionId === source.id"
+                          @click="deleteAssistantSource(source)"
+                        >
+                          <UiIcon name="Trash2" :size="14" />
+                        </Button>
                       </div>
                       <p>
                         {{
@@ -4886,13 +4862,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                           assistantSourceKindLabel(source.sourceKind)
                         }}
                       </p>
-                      <div class="assistant-settings-row__meta">
-                        <span>{{
-                          assistantSourceKindLabel(source.sourceKind)
-                        }}</span>
-                        <span>{{ source.accessLabel }}</span>
-                        <span>{{ source.usageLabel }}</span>
-                      </div>
                     </div>
                   </article>
                 </section>
@@ -4933,9 +4902,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       <UiIcon name="Plus" :size="18" />
                     </Button>
                   </form>
-                  <div v-if="assistantMemory.length === 0" class="empty-row">
-                    No private memory yet.
-                  </div>
                   <article
                     v-for="item in assistantMemory"
                     :key="item.id"
@@ -7233,7 +7199,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-settings-row__main {
   display: grid;
+  flex: 1 1 auto;
   gap: 5px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -7241,6 +7209,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-wrap: wrap;
   justify-content: flex-start;
   gap: 6px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -7286,6 +7255,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   justify-content: center;
   gap: 6px;
   width: 100%;
+}
+
+.assistant-settings-row__delete {
+  margin-left: auto;
 }
 
 .assistant-settings-row__kind {
