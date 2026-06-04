@@ -74,17 +74,19 @@ Removed visible UI:
 Normalize old Mission Control journal links safely:
 
 - `/mission-control`
+  - Opens the Mission Control dashboard.
+- `/mission-control/projects`
   - Opens Projects.
 - `/mission-control?section=projects`
-  - Opens Projects.
+  - Legacy query route; do not preserve as a redirect.
 - `/mission-control?section=today`
   - Prefer redirecting to `/journal` if the Journal plugin is enabled.
-  - Otherwise fall back to Projects.
+  - Otherwise fall back to the Mission Control dashboard.
 - `/mission-control?section=journal`
   - Same behavior as `today`.
 - `/mission-control?section=archive` or `journal-archive`
   - Prefer redirecting to `/journal` archive behavior if that exists.
-  - Otherwise fall back to Projects.
+  - Otherwise fall back to the Mission Control dashboard.
 
 Do not leave users on a blank page for removed sections.
 
@@ -184,7 +186,7 @@ The current archive UI is coupled to Journal archive. For this cleanup, it is ac
 
 If archived project tasks still need an owner-facing path before cleanup lands, add a follow-up bead for a Projects-native archive:
 
-- Route/query: `/mission-control?section=projects&view=archive`
+- Route/query: `/mission-control/projects?view=archive`
 - Or a compact "Archived tasks" link in the project switcher.
 - Single-column list is preferred over reusing the old Journal archive layout.
 
@@ -198,8 +200,8 @@ Do not keep Journal archive UI solely to preserve project archive access.
    - Confirm Journal nav is installed/enabled behavior is settled.
 2. Update Mission Control section model:
    - Remove `today` and `journalArchive`.
-   - Default `normalizeSection` to `projects`.
-   - Handle old query values.
+   - Default the projects page section model to `projects`.
+   - Replace old project query links with `/mission-control/projects`.
 3. Remove Today and Journal UI:
    - Delete template blocks.
    - Delete state, computed values, watchers, and methods.
@@ -228,8 +230,9 @@ Because this changes the web app, `pnpm build` is required before landing.
 
 Use the in-app browser or Playwright screenshots to verify:
 
-- `/mission-control` opens to Projects.
-- `/mission-control?section=projects` opens to Projects.
+- `/mission-control` opens to the Mission Control dashboard.
+- `/mission-control/projects` opens to Projects.
+- `/mission-control?section=projects` is not preserved as a compatibility route.
 - Old journal query values do not produce a broken view.
 - Project picker still works.
 - Project task board still loads.

@@ -12,7 +12,7 @@ New route shape:
 - `/mission-control/projects`: projects and tasks workspace.
 - `/mission-control/wheel-of-life`: existing full Wheel of Life workspace, retained.
 - `/accounts`: Accounts plugin ledger workspace.
-- `/mission-control?section=projects`: redirect or normalize to `/mission-control/projects`.
+- `/mission-control?section=projects`: legacy query route; do not preserve as a redirect.
 - Legacy settings query sections can keep working during migration, but should move behind a dashboard settings surface or plugin-owned pages over time.
 
 Default dashboard cards:
@@ -266,7 +266,7 @@ Layout guidance:
 1. Routing shell
    - Change `/mission-control` into a dashboard placeholder.
    - Move the existing projects workspace to `/mission-control/projects`.
-   - Redirect old `section=projects` links.
+   - Replace internal `section=projects` links with `/mission-control/projects`.
    - Keep `/mission-control/wheel-of-life` working.
 
 2. Project extraction
@@ -320,7 +320,7 @@ Browser verification:
 
 - `/mission-control` opens to the dashboard.
 - `/mission-control/projects` opens to the grouped task list.
-- `/mission-control?section=projects` redirects or lands safely.
+- `/mission-control?section=projects` is not preserved as a compatibility route.
 - `/accounts` opens the Accounts plugin ledger when Accounts is active.
 - Project picker and `Add project` still work.
 - Task create, status update, archive, detail modal, and local-run affordances still work.

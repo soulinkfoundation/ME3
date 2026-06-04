@@ -15,7 +15,7 @@ definePage({
 });
 
 const missionStatementPlaceholder =
-  "I am here to help [who/what] become [desired change] by being [way of being] and creating [work/service], guided by [values].";
+  "I AM HERE... to help [who/what] with [desired change] by being [my way of being] and doing [my work/service], guided by [my core values].";
 </script>
 
 <template>
@@ -37,30 +37,38 @@ const missionStatementPlaceholder =
       </Button>
     </header>
 
-    <section class="mission-dashboard__workspace" aria-label="Mission Control dashboard">
+    <section
+      class="mission-dashboard__workspace"
+      aria-label="Mission Control dashboard"
+    >
       <div class="mission-dashboard__quick-actions" aria-label="Quick actions">
-        <Button color="outline" shape="pill" size="large" to="/mission-control/projects">
+        <Button
+          color="outline"
+          shape="pill"
+          size="large"
+          to="/mission-control/projects"
+        >
           <template #icon>
-            <UiIcon name="ListTodo" :size="18" />
+            <span class="me3-btn__emoji" aria-hidden="true">📋</span>
           </template>
           View Projects
         </Button>
         <Button color="outline" shape="pill" size="large" to="/assistant">
           <template #icon>
-            <UiIcon name="MessagesSquare" :size="18" />
+            <span class="me3-btn__emoji" aria-hidden="true">💬</span>
           </template>
           Chat with ME3
         </Button>
       </div>
 
       <div class="mission-dashboard__grid">
-        <article class="dashboard-card dashboard-card--wide">
+        <article class="dashboard-card">
           <header class="dashboard-card__header">
             <h2>Daily Briefing</h2>
           </header>
           <p>
-            Your Daily Briefing card will appear here once the dashboard settings API
-            and card registry land.
+            Your Daily Briefing card will appear here once the dashboard
+            settings API and card registry land.
           </p>
           <Button color="outline" shape="soft" size="compact" to="/assistant">
             Configure Daily Briefing
@@ -134,7 +142,7 @@ const missionStatementPlaceholder =
 
 .mission-dashboard__workspace {
   display: grid;
-  width: min(980px, 100%);
+  width: min(1040px, 100%);
   align-self: center;
   gap: 18px;
 }
@@ -144,11 +152,13 @@ const missionStatementPlaceholder =
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px;
+  width: min(520px, 100%);
+  justify-self: center;
 }
 
 .mission-dashboard__grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -161,10 +171,6 @@ const missionStatementPlaceholder =
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-md);
   background: var(--ui-surface);
-}
-
-.dashboard-card--wide {
-  grid-column: 1 / -1;
 }
 
 .dashboard-card__header {

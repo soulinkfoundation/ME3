@@ -120,12 +120,13 @@ const rootClass = computed(() => [
   justify-content: center;
   box-sizing: border-box;
   font-family: inherit;
-  font-weight: 600;
+  font-weight: 700;
   text-decoration: none;
   cursor: pointer;
   border-style: solid;
   border-width: 1px;
   border-color: transparent;
+  white-space: nowrap;
 }
 
 button.me3-btn {
@@ -156,8 +157,15 @@ button.me3-btn {
     "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
 }
 
-.me3-btn__label {
+:slotted(.me3-btn__emoji) {
+  font-size: 1.125em;
   line-height: 1;
+  font-family:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+.me3-btn__label {
+  line-height: 1.15;
 }
 
 /* --- colors --- */
@@ -255,8 +263,19 @@ button.me3-btn {
   color: var(--ui-text, var(--color-text));
 }
 
+.me3-btn--outline:not(.me3-btn--icon-only) {
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
 .me3-btn--outline:hover:not(:disabled) {
+  border-color: color-mix(
+    in oklab,
+    var(--ui-accent, var(--color-accent)) 40%,
+    var(--ui-border, var(--color-border))
+  );
   background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text, var(--color-text));
 }
 
 .me3-btn--ghost {
@@ -274,7 +293,7 @@ button.me3-btn {
 /* --- shapes --- */
 
 .me3-btn--pill {
-  border-radius: 22px;
+  border-radius: 999px;
 }
 
 .me3-btn--soft {
@@ -285,35 +304,30 @@ button.me3-btn {
 
 .me3-btn--small {
   gap: 6px;
-  min-height: 32px;
-  padding: 6px 10px;
-  font-size: 13px;
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
 }
 
 .me3-btn--compact {
   gap: 7px;
-  min-height: 36px;
-  padding: 0 12px;
+  min-height: 34px;
+  padding: 0 10px;
   font-size: 13px;
-  font-weight: 800;
 }
 
 .me3-btn--medium {
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px 14px;
-  font-size: 14px;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
 }
 
 .me3-btn--large {
-  gap: 10px;
-  min-height: 44px;
-  padding: 10px 18px;
-  font-size: 15px;
-}
-
-.me3-btn--large.me3-btn--pill {
-  border-radius: 10px;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 14px;
 }
 
 /* --- icon only --- */
@@ -321,24 +335,28 @@ button.me3-btn {
 .me3-btn--icon-only.me3-btn--small {
   width: 32px;
   min-width: 32px;
+  min-height: 32px;
   padding: 0;
 }
 
 .me3-btn--icon-only.me3-btn--compact {
   width: 36px;
   min-width: 36px;
+  min-height: 36px;
   padding: 0;
 }
 
 .me3-btn--icon-only.me3-btn--medium {
   width: 40px;
   min-width: 40px;
+  min-height: 40px;
   padding: 0;
 }
 
 .me3-btn--icon-only.me3-btn--large {
   width: 44px;
   min-width: 44px;
+  min-height: 44px;
   padding: 0;
 }
 

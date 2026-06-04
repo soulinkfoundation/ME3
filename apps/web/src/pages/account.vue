@@ -2801,7 +2801,7 @@ onMounted(async () => {
               </span>
               <router-link
                 class="local-executor-project-link"
-                to="/mission-control?section=projects"
+                to="/mission-control/projects"
                 @click="closeLocalExecutorSetup"
               >
                 Open Mission Control Projects
