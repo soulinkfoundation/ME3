@@ -22,6 +22,7 @@ const sitesPath = computed(() =>
 const navDrawerOpen = ref(false);
 const navDrawerId = "app-side-nav-drawer";
 const missionControlInstalled = ref(false);
+const accountsInstalled = ref(false);
 const journalInstalled = ref(false);
 const calendarInstalled = ref(false);
 const socialPublishingInstalled = ref(false);
@@ -60,6 +61,7 @@ const isCalendar = computed(() => route.path.startsWith("/calendar"));
 const isMissionControl = computed(() =>
   route.path.startsWith("/mission-control"),
 );
+const isAccounts = computed(() => route.path.startsWith("/accounts"));
 const isJournal = computed(() => route.path.startsWith("/journal"));
 const isEmail = computed(() => route.path.startsWith("/email"));
 const isSites = computed(
@@ -79,6 +81,7 @@ const navMenuLabel = computed(() =>
 function rowActive(
   kind:
     | "mission-control"
+    | "accounts"
     | "journal"
     | "calendar"
     | "email"
@@ -90,6 +93,8 @@ function rowActive(
   switch (kind) {
     case "mission-control":
       return isMissionControl.value;
+    case "accounts":
+      return isAccounts.value;
     case "journal":
       return isJournal.value;
     case "calendar":
@@ -138,8 +143,15 @@ async function loadInstalledPluginNav() {
         plugin.enabled &&
         plugin.status === "installed",
     );
+    accountsInstalled.value = response.plugins.some(
+      (plugin) =>
+        plugin.id === "me3.accounts" &&
+        plugin.enabled &&
+        plugin.status === "installed",
+    );
   } catch {
     missionControlInstalled.value = false;
+    accountsInstalled.value = false;
     journalInstalled.value = false;
     calendarInstalled.value = false;
     socialPublishingInstalled.value = false;
@@ -295,6 +307,19 @@ watch(navDrawerOpen, (isOpen) => {
         >
           <span class="app-side-nav__emoji" aria-hidden="true">📣</span>
           <span class="sr-only">Social publishing</span>
+        </RouterLink>
+
+        <RouterLink
+          v-if="accountsInstalled"
+          to="/accounts"
+          class="app-side-nav__row app-side-nav-control"
+          :class="{ 'app-side-nav__row--active': rowActive('accounts') }"
+          aria-label="Accounts"
+          title="Accounts"
+          @click="closeNavDrawer"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">💰</span>
+          <span class="sr-only">Accounts</span>
         </RouterLink>
 
         <RouterLink

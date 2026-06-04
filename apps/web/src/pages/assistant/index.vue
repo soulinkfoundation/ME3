@@ -2930,7 +2930,7 @@ function formatDestination(detail: AssistantJobDetail | null) {
   if (landing === "approval") return "Mission Control approvals";
   if (landing === "memory_review") return "Mission Control memory review";
   if (landing === "activity") return "Mission Control activity";
-  if (landing === "accounts") return "Mission Control → Accounts tab";
+  if (landing === "accounts") return "Accounts ledger";
   return "Mission Control results";
 }
 

@@ -718,8 +718,8 @@ const ACCOUNTS_PLUGIN: CorePluginManifestSummary = {
   ],
   uiSlots: [
     {
-      id: "accounts.mission-control.tab",
-      slot: "mission-control.primary-tab",
+      id: "accounts.ledger.page",
+      slot: "app.page",
       label: "Accounts",
     },
     {

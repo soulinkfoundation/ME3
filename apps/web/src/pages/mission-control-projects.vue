@@ -186,12 +186,12 @@ type ActivityViewItem = {
 const route = useRoute();
 const router = useRouter();
 const { toastFromUnknown, toastSuccess } = useAppToast();
+const isAccountsRoute = computed(() => route.path === "/accounts");
 
 const basePrimarySections: PrimaryMissionSection[] = ["projects"];
 const settingsSections: SettingsMissionSection[] = ["activity", "memory", "sources"];
 const sectionIds: MissionSection[] = [
   ...basePrimarySections,
-  "accounts",
   ...settingsSections,
 ];
 const sectionLabels: Record<MissionSection, string> = {
@@ -205,7 +205,7 @@ const ACCOUNTS_PAGE_SIZE = 50;
 const PROJECTS_KANBAN_ENABLED_STORAGE_KEY = "me3:mission-control:kanban-enabled";
 
 const activeSection = ref<MissionSection>(
-  normalizeSection(route.query.section),
+  isAccountsRoute.value ? "accounts" : normalizeSection(route.query.section),
 );
 const accountsEnabled = ref(false);
 const projects = ref<MissionProject[]>([]);
@@ -289,9 +289,7 @@ const accountsImportInput = ref<HTMLInputElement | null>(null);
 const accountsForm = ref<AccountsEntryForm>(emptyAccountsForm("expense"));
 
 const primarySections = computed<PrimaryMissionSection[]>(() =>
-  accountsEnabled.value
-    ? [...basePrimarySections, "accounts"]
-    : basePrimarySections,
+  isAccountsRoute.value ? ["accounts"] : basePrimarySections,
 );
 const activityItems = computed<ActivityViewItem[]>(() => {
   const visibleRunIds = new Set(
@@ -349,7 +347,8 @@ const activityItems = computed<ActivityViewItem[]>(() => {
   ];
 });
 const settingsSectionActive = computed(() =>
-  settingsSections.includes(activeSection.value as SettingsMissionSection),
+  !isAccountsRoute.value &&
+    settingsSections.includes(activeSection.value as SettingsMissionSection),
 );
 const mobilePrimarySectionCycleLabel = computed(() =>
   activeSection.value === "accounts" ? "Switch to projects" : "Switch to accounts",
@@ -640,7 +639,7 @@ async function loadPluginCapabilities() {
           plugin.enabled &&
           plugin.status === "installed",
       ) || false;
-    if (accountsEnabled.value && activeSection.value === "accounts") {
+    if (accountsEnabled.value && (activeSection.value === "accounts" || isAccountsRoute.value)) {
       await loadAccounts();
     }
   } catch {
@@ -930,6 +929,7 @@ function setSection(section: MissionSection) {
 }
 
 function cyclePrimarySection() {
+  if (isAccountsRoute.value) return;
   setSection(activeSection.value === "accounts" ? "projects" : "accounts");
 }
 
@@ -1561,11 +1561,16 @@ function isRemovedJournalSection(value: unknown): boolean {
 }
 
 function normalizeSection(value: unknown): MissionSection {
-  const raw = Array.isArray(value) ? value[0] : value;
+  const raw = normalizeRawSection(value);
   if (raw === "approvals" || raw === "runs") return "activity";
   return sectionIds.includes(raw as MissionSection)
     ? (raw as MissionSection)
     : "projects";
+}
+
+function normalizeRawSection(value: unknown): string | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" ? raw : undefined;
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
@@ -1591,11 +1596,17 @@ function handleWindowClick() {
 watch(
   () => route.query.section,
   (section) => {
+    if (!isAccountsRoute.value && normalizeRawSection(section) === "accounts") {
+      void router.replace("/accounts");
+      return;
+    }
     if (isRemovedJournalSection(section)) {
       void router.replace("/journal");
       return;
     }
-    activeSection.value = normalizeSection(section);
+    activeSection.value = isAccountsRoute.value
+      ? "accounts"
+      : normalizeSection(section);
   },
 );
 
@@ -1615,6 +1626,10 @@ watch(selectedProjectDetailId, (next, previous) => {
 });
 
 onMounted(() => {
+  if (!isAccountsRoute.value && normalizeRawSection(route.query.section) === "accounts") {
+    void router.replace("/accounts");
+    return;
+  }
   if (isRemovedJournalSection(route.query.section)) {
     void router.replace("/journal");
     return;
@@ -1631,6 +1646,7 @@ onMounted(() => {
   if (activeSection.value === "activity") void loadActivityReview();
   if (activeSection.value === "memory" || activeSection.value === "sources")
     void loadMemoryAndSources();
+  if (activeSection.value === "accounts") void loadAccounts();
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener("click", handleWindowClick);
 });
@@ -1670,7 +1686,7 @@ onBeforeUnmount(() => {
           <span>Ask assistant</span>
         </button>
         <Button
-          v-if="primarySections.length > 1"
+          v-if="primarySections.length > 1 && !isAccountsRoute"
           color="ghost"
           shape="soft"
           size="compact"
@@ -1682,6 +1698,7 @@ onBeforeUnmount(() => {
           <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
         </Button>
         <Button
+          v-if="!isAccountsRoute"
           color="ghost"
           shape="soft"
           size="compact"
@@ -1693,7 +1710,7 @@ onBeforeUnmount(() => {
           <UiIcon name="ShipWheel" :size="18" />
         </Button>
 
-        <div class="settings-menu" @click.stop>
+        <div v-if="!isAccountsRoute" class="settings-menu" @click.stop>
           <Button
             color="ghost"
             shape="soft"
