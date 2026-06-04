@@ -250,7 +250,9 @@ const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
     total: 0,
     counts: createCounts(),
   }));
-  const summaryById = new Map(summaries.map((summary) => [summary.id, summary]));
+  const summaryById = new Map(
+    summaries.map((summary) => [summary.id, summary]),
+  );
   const personalSummary: ProjectDashboardSummary = {
     id: "personal",
     label: "Personal",
@@ -751,7 +753,7 @@ onMounted(() => {
               <Button
                 v-else
                 class="dashboard-card__action-button is-saving"
-                color="accent"
+                color="ghost"
                 shape="soft"
                 size="compact"
                 icon-only
@@ -888,9 +890,7 @@ onMounted(() => {
               </div>
             </div>
             <div v-else class="dashboard-empty">
-              <p>
-                No open project tasks yet.
-              </p>
+              <p>No open project tasks yet.</p>
               <Button
                 color="outline"
                 shape="soft"
@@ -1351,8 +1351,8 @@ onMounted(() => {
 
 .dashboard-card__actions {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 5px;
+  right: 5px;
   z-index: 2;
   display: inline-flex;
   gap: 4px;
@@ -1414,10 +1414,16 @@ onMounted(() => {
 }
 
 .mission-statement-display {
-  color: var(--ui-text);
-  font-size: 20px;
-  line-height: 1.4;
-  white-space: pre-wrap;
+  color: var(--ui-text) !important;
+  font-size: 14px;
+  line-height: 1.6 !important;
+  text-align: center !important;
+  font-weight: 500 !important;
+  text-wrap: balance !important;
+  white-space: pre-wrap !important;
+  padding: 10px;
+  background: var(--ui-surface-muted);
+  border-radius: 15px;
 }
 
 .wheel-summary {
