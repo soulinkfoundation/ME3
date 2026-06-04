@@ -131,6 +131,7 @@ const quickActionPickerOpen = ref(false);
 const cards = computed(() =>
   (dashboard.value?.cards || [])
     .filter((card) => card.enabled && card.available !== false && isRenderableDashboardCard(card))
+    .map((card) => ({ ...card, size: "medium" as const }))
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
 const quickLinks = computed(() =>
@@ -221,7 +222,7 @@ function missionStatementDisplayText(): string {
 function syncDashboardDrafts() {
   cardDrafts.value = [...(dashboard.value?.cards || [])]
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((card, index) => ({ ...card, sortOrder: index }));
+    .map((card, index) => ({ ...card, size: "medium", sortOrder: index }));
   quickActionDrafts.value = [...(dashboard.value?.quickLinks || [])]
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((link, index) => ({ ...link, sortOrder: index }));
@@ -248,7 +249,7 @@ function startMissionStatementEdit() {
 
 function updateCardDraft(
   cardId: string,
-  patch: Partial<Pick<DashboardCardInstance, "enabled" | "size">>,
+  patch: Partial<Pick<DashboardCardInstance, "enabled">>,
 ) {
   cardDrafts.value = cardDrafts.value.map((card) =>
     card.cardId === cardId ? { ...card, ...patch } : card,
@@ -276,7 +277,12 @@ function nextEnabledQuickActionSortOrder(): number {
 function addCardDraft(cardId: string) {
   cardDrafts.value = cardDrafts.value.map((card) =>
     card.cardId === cardId
-      ? { ...card, enabled: true, sortOrder: nextEnabledCardSortOrder() }
+      ? {
+          ...card,
+          enabled: true,
+          size: "medium",
+          sortOrder: nextEnabledCardSortOrder(),
+        }
       : card,
   );
   cardPickerOpen.value = false;
@@ -399,6 +405,7 @@ async function saveDashboardLayout() {
       {
         cards: cardDrafts.value.map((card, sortOrder) => ({
           ...card,
+          size: "medium",
           sortOrder,
         })),
         quickLinks: quickActionDrafts.value.map((link, sortOrder) => ({
@@ -496,19 +503,6 @@ onMounted(() => {
             >
               <UiIcon name="GripVertical" :size="15" />
             </Button>
-            <select
-              :value="card.size"
-              aria-label="Card size"
-              @change="
-                updateCardDraft(card.cardId, {
-                  size: ($event.target as HTMLSelectElement).value as DashboardCardSize,
-                })
-              "
-            >
-              <option value="small">Small</option>
-              <option value="medium">Medium</option>
-              <option value="wide">Wide</option>
-            </select>
             <Button
               color="ghost"
               shape="soft"
@@ -548,8 +542,14 @@ onMounted(() => {
                 <UiIcon name="Rocket" :size="16" />
                 <span>Mission Statement</span>
               </h2>
+            </header>
+            <div
+              class="dashboard-card__actions"
+              :class="{ 'is-active': missionStatementEditing }"
+            >
               <Button
                 v-if="!missionStatementEditing"
+                class="dashboard-card__action-button"
                 color="ghost"
                 shape="soft"
                 size="compact"
@@ -562,6 +562,7 @@ onMounted(() => {
               </Button>
               <Button
                 v-else
+                class="dashboard-card__action-button is-saving"
                 color="accent"
                 shape="soft"
                 size="compact"
@@ -573,7 +574,7 @@ onMounted(() => {
               >
                 <UiIcon name="Save" :size="16" />
               </Button>
-            </header>
+            </div>
             <form
               v-if="missionStatementEditing"
               class="mission-statement-form"
@@ -600,19 +601,22 @@ onMounted(() => {
                 <span v-if="wheelSnapshot?.snapshot">
                   Saved {{ formatDashboardDate(wheelSnapshot.snapshot.createdAt) }}
                 </span>
-                <Button
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  to="/mission-control/wheel-of-life"
-                  aria-label="Open Wheel of Life"
-                  title="Open Wheel of Life"
-                >
-                  <UiIcon name="Pencil" :size="16" />
-                </Button>
               </div>
             </header>
+            <div class="dashboard-card__actions">
+              <Button
+                class="dashboard-card__action-button"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                to="/mission-control/wheel-of-life"
+                aria-label="Open Wheel of Life"
+                title="Open Wheel of Life"
+              >
+                <UiIcon name="Pencil" :size="16" />
+              </Button>
+            </div>
             <div v-if="wheelSnapshot?.snapshot" class="wheel-summary">
               <div
                 v-for="segment in wheelSegments"
@@ -798,19 +802,6 @@ onMounted(() => {
               <strong>{{ cardLabel(card) }}</strong>
               <span>{{ card.pluginId }}</span>
             </div>
-            <select
-              :value="card.size"
-              aria-label="Card size"
-              @change="
-                updateCardDraft(card.cardId, {
-                  size: ($event.target as HTMLSelectElement).value as DashboardCardSize,
-                })
-              "
-            >
-              <option value="small">Small</option>
-              <option value="medium">Medium</option>
-              <option value="wide">Wide</option>
-            </select>
             <Button color="accent" shape="soft" size="compact" @click="addCardDraft(card.cardId)">
               Add
             </Button>
@@ -945,17 +936,6 @@ onMounted(() => {
   justify-self: center;
 }
 
-.dashboard-card__edit-controls select {
-  width: 100%;
-  min-height: 32px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-bg);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 12px;
-}
-
 .mission-dashboard__grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -963,6 +943,7 @@ onMounted(() => {
 }
 
 .dashboard-card {
+  position: relative;
   display: grid;
   align-content: start;
   min-width: 0;
@@ -983,10 +964,10 @@ onMounted(() => {
 }
 
 .dashboard-card__edit-controls {
-  display: grid;
-  grid-template-columns: auto minmax(86px, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: space-between;
+  gap: 6px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--ui-border);
 }
@@ -1050,7 +1031,33 @@ onMounted(() => {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+  padding-right: 36px;
   gap: 8px;
+}
+
+.dashboard-card__actions {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.dashboard-card:hover .dashboard-card__actions,
+.dashboard-card:focus-within .dashboard-card__actions,
+.dashboard-card__actions:focus-within,
+.dashboard-card__actions.is-active,
+.dashboard-card__action-button.is-saving {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dashboard-card__action-button {
+  background: color-mix(in oklab, var(--ui-surface), transparent 6%);
 }
 
 .dashboard-card__body {
@@ -1214,7 +1221,7 @@ onMounted(() => {
 
 .dashboard-modal__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 10px 0;
@@ -1244,7 +1251,6 @@ onMounted(() => {
   font-weight: 650;
 }
 
-.dashboard-modal__row select,
 .dashboard-modal__row input {
   width: 100%;
   min-width: 0;
@@ -1280,7 +1286,7 @@ onMounted(() => {
   }
 
   .dashboard-card__edit-controls {
-    grid-template-columns: 1fr;
+    justify-content: space-between;
   }
 
   .dashboard-card--wide {
