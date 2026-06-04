@@ -113,6 +113,13 @@ export type ProjectTaskDetailDraft = {
   status: ProjectBoardStatus;
 };
 
+export type ProjectTaskListGroup = {
+  id: string;
+  label: string;
+  project: MissionProject | null;
+  tasks: MissionTask[];
+};
+
 export const projectBoardStatuses: Array<{
   id: ProjectBoardStatus;
   label: string;
@@ -121,6 +128,12 @@ export const projectBoardStatuses: Array<{
   { id: "in_progress", label: "Doing" },
   { id: "review", label: "Review" },
   { id: "done", label: "Done" },
+];
+
+export const activeProjectTaskStatuses: ProjectBoardStatus[] = [
+  "backlog",
+  "in_progress",
+  "review",
 ];
 
 export const PROJECT_TASK_PAGE_SIZE = 50;
@@ -290,6 +303,7 @@ export function appendUniqueTasks(
 }
 
 export function missionTasksUrl(options: {
+  active?: boolean;
   archived?: boolean;
   projectId?: string;
   cursor?: string | null;
@@ -297,10 +311,73 @@ export function missionTasksUrl(options: {
   const params = new URLSearchParams({
     limit: String(PROJECT_TASK_PAGE_SIZE),
   });
+  if (options.active) params.set("active", "1");
   if (options.archived) params.set("archived", "1");
   if (options.projectId) params.set("projectId", options.projectId);
   if (options.cursor) params.set("cursor", options.cursor);
   return `/mission-control/tasks?${params.toString()}`;
+}
+
+export function projectBoardStatusLabel(status: MissionTask["status"]): string {
+  if (status === "in_progress") return "Doing";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+export function activeProjectTasks(tasks: MissionTask[]): MissionTask[] {
+  return tasks.filter((task) =>
+    activeProjectTaskStatuses.includes(task.status as ProjectBoardStatus),
+  );
+}
+
+export function groupProjectTasks(
+  projects: MissionProject[],
+  tasks: MissionTask[],
+  selectedProject: MissionProject | null,
+): ProjectTaskListGroup[] {
+  const selectedProjectId = selectedProject?.id || "";
+  const scopedTasks = selectedProjectId
+    ? tasks.filter((task) => task.projectId === selectedProjectId)
+    : tasks;
+  const orderedProjects = selectedProject
+    ? [selectedProject]
+    : [...projects].sort((a, b) => {
+        if (a.name === "Personal") return -1;
+        if (b.name === "Personal") return 1;
+        return a.name.localeCompare(b.name);
+      });
+  const groups: ProjectTaskListGroup[] = [];
+
+  for (const project of orderedProjects) {
+    const projectTasks = scopedTasks.filter(
+      (task) => task.projectId === project.id,
+    );
+    if (projectTasks.length || selectedProjectId) {
+      groups.push({
+        id: project.id,
+        label: project.name,
+        project,
+        tasks: projectTasks,
+      });
+    }
+  }
+
+  if (!selectedProjectId) {
+    const ungroupedTasks = scopedTasks.filter(
+      (task) =>
+        !task.projectId ||
+        !projects.some((project) => project.id === task.projectId),
+    );
+    if (ungroupedTasks.length || groups.length === 0) {
+      groups.push({
+        id: "personal",
+        label: "Personal",
+        project: null,
+        tasks: ungroupedTasks,
+      });
+    }
+  }
+
+  return groups;
 }
 
 export function projectName(

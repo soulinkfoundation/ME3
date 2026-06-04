@@ -3070,6 +3070,7 @@ app.get("/api/mission-control/tasks", async (c) => {
       await listMissionTaskPage(c.env, ownerId, {
         status: c.req.query("status"),
         dueDate: c.req.query("date"),
+        activeOnly: c.req.query("active") === "1",
         archived: c.req.query("archived") === "1",
         projectId: c.req.query("projectId"),
         limit: c.req.query("limit"),

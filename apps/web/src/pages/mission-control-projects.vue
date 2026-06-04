@@ -15,9 +15,12 @@ import MissionProjectModal from "../components/mission-control/MissionProjectMod
 import MissionProjectPicker from "../components/mission-control/MissionProjectPicker.vue";
 import MissionProjectTaskBoard from "../components/mission-control/MissionProjectTaskBoard.vue";
 import MissionProjectTaskDetailModal from "../components/mission-control/MissionProjectTaskDetailModal.vue";
+import MissionProjectTaskList from "../components/mission-control/MissionProjectTaskList.vue";
 import {
+  activeProjectTasks,
   appendUniqueTasks,
   formatDateTime,
+  groupProjectTasks,
   formatShortDate,
   isLocalProject,
   missionTasksUrl,
@@ -35,6 +38,7 @@ import type {
   ProjectBoardColumn,
   ProjectBoardStatus,
   ProjectTaskDetailDraft,
+  ProjectTaskListGroup,
   WeeklyReviewTaskCleanupAction,
 } from "../components/mission-control/projectWorkspace";
 import type { UiIconName } from "../utils/icons";
@@ -198,6 +202,7 @@ const sectionLabels: Record<MissionSection, string> = {
   sources: "Sources",
 };
 const ACCOUNTS_PAGE_SIZE = 50;
+const PROJECTS_KANBAN_ENABLED_STORAGE_KEY = "me3:mission-control:kanban-enabled";
 
 const activeSection = ref<MissionSection>(
   normalizeSection(route.query.section),
@@ -234,12 +239,15 @@ const projectTasksLoadingMore = ref(false);
 const projectTasksError = ref("");
 const projectTasksNextCursor = ref<string | null>(null);
 const localExecutorStatus = ref<LocalExecutorStatusResponse | null>(null);
+const kanbanEnabled = ref(false);
+const projectTaskViewMode = ref<"list" | "kanban">("list");
 const projectTaskDraft = ref("");
 const projectTaskProjectId = ref("");
 const projectTaskSaving = ref(false);
 const projectTaskActionId = ref("");
 const projectTaskLocalRunId = ref("");
 const projectTaskComposerStatus = ref<ProjectBoardStatus | "">("");
+const projectTaskComposerProjectId = ref<string | null>(null);
 const draggedProjectTaskId = ref("");
 const projectTaskDropStatus = ref<ProjectBoardStatus | "">("");
 const selectedProjectTaskDetailId = ref("");
@@ -443,6 +451,13 @@ const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
     ),
   })),
 );
+const projectTaskListGroups = computed<ProjectTaskListGroup[]>(() =>
+  groupProjectTasks(
+    projects.value,
+    activeProjectTasks(selectedProjectTasks.value),
+    selectedProjectDetail.value,
+  ),
+);
 const selectedProjectDetailLabel = computed(
   () => selectedProjectDetail.value?.name || "All",
 );
@@ -451,7 +466,7 @@ const projectTaskCreateDisabled = computed(
     projectTaskSaving.value ||
     !projectTaskComposerStatus.value ||
     !projectTaskDraft.value.trim() ||
-    !projectTaskProjectId.value,
+    Boolean(!selectedProjectDetail.value && !projectTaskProjectId.value),
 );
 const projectTaskDetailSaveDisabled = computed(
   () =>
@@ -834,11 +849,12 @@ async function loadProjectTasks(
   projectId = selectedProjectTaskScopeId.value,
 ) {
   const scopeId = projectId || "";
+  const active = projectTaskViewMode.value !== "kanban";
   projectTasksLoading.value = true;
   projectTasksError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ projectId: scopeId }),
+      missionTasksUrl({ active, projectId: scopeId }),
     );
     if (selectedProjectTaskScopeId.value !== scopeId) return;
     projectTasks.value = response.tasks || [];
@@ -866,12 +882,13 @@ async function loadLocalExecutorStatus() {
 async function loadMoreProjectTasks() {
   const projectId = selectedProjectTaskScopeId.value;
   const cursor = projectTasksNextCursor.value;
+  const active = projectTaskViewMode.value !== "kanban";
   if (!cursor || projectTasksLoadingMore.value) return;
   projectTasksLoadingMore.value = true;
   projectTasksError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ projectId, cursor }),
+      missionTasksUrl({ active, projectId, cursor }),
     );
     if (selectedProjectTaskScopeId.value !== projectId) return;
     projectTasks.value = appendUniqueTasks(
@@ -1014,6 +1031,26 @@ function resetProjectTaskComposer() {
   projectTaskComposerStatus.value = "";
   projectTaskDraft.value = "";
   projectTaskProjectId.value = "";
+  projectTaskComposerProjectId.value = null;
+}
+
+function setKanbanEnabled(enabled: boolean) {
+  kanbanEnabled.value = enabled;
+  if (!enabled) projectTaskViewMode.value = "list";
+  window.localStorage.setItem(
+    PROJECTS_KANBAN_ENABLED_STORAGE_KEY,
+    enabled ? "1" : "0",
+  );
+  if (activeSection.value === "projects") void loadProjectTasks();
+}
+
+function setProjectTaskViewMode(mode: "list" | "kanban") {
+  const nextMode = mode === "kanban" && kanbanEnabled.value ? "kanban" : "list";
+  if (projectTaskViewMode.value === nextMode) return;
+  projectTaskViewMode.value = nextMode;
+  resetProjectTaskComposer();
+  closeProjectTaskDetail();
+  void loadProjectTasks();
 }
 
 function resetWeeklyReviewSelection(task: MissionTask | null) {
@@ -1086,6 +1123,7 @@ function closeProjectTaskDetail(options: { force?: boolean } = {}) {
 function openProjectTaskComposer(status: ProjectBoardStatus) {
   if (projectTaskSaving.value) return;
   projectTaskComposerStatus.value = status;
+  projectTaskComposerProjectId.value = null;
   projectTaskDraft.value = "";
   projectTaskProjectId.value = selectedProjectDetail.value?.id || "";
   void nextTick(() => {
@@ -1097,6 +1135,25 @@ function openProjectTaskComposer(status: ProjectBoardStatus) {
     }
     document
       .querySelector<HTMLSelectElement>(".project-task-composer__project")
+      ?.focus();
+  });
+}
+
+function openProjectTaskListComposer(projectId: string) {
+  if (projectTaskSaving.value) return;
+  projectTaskComposerStatus.value = "backlog";
+  projectTaskComposerProjectId.value = projectId;
+  projectTaskDraft.value = "";
+  projectTaskProjectId.value = selectedProjectDetail.value?.id || projectId;
+  void nextTick(() => {
+    if (selectedProjectDetail.value || projectId) {
+      document
+        .querySelector<HTMLInputElement>(".project-task-list-composer__input")
+        ?.focus();
+      return;
+    }
+    document
+      .querySelector<HTMLSelectElement>(".project-task-list-composer__project")
       ?.focus();
   });
 }
@@ -1562,6 +1619,9 @@ onMounted(() => {
     void router.replace("/journal");
     return;
   }
+  kanbanEnabled.value =
+    window.localStorage.getItem(PROJECTS_KANBAN_ENABLED_STORAGE_KEY) === "1";
+  projectTaskViewMode.value = "list";
   void loadMissionControlWorkspace();
   void loadPluginCapabilities();
   if (activeSection.value === "projects") {
@@ -1666,6 +1726,20 @@ onBeforeUnmount(() => {
             >
               <span>{{ sectionLabels[section] }}</span>
             </button>
+            <button
+              type="button"
+              class="settings-menu__item settings-menu__item--toggle"
+              role="menuitemcheckbox"
+              :aria-checked="kanbanEnabled"
+              @click="setKanbanEnabled(!kanbanEnabled)"
+            >
+              <span>Kanban board</span>
+              <UiIcon
+                :name="kanbanEnabled ? 'Check' : 'Plus'"
+                :size="15"
+                aria-hidden="true"
+              />
+            </button>
           </div>
         </div>
       </div>
@@ -1674,39 +1748,98 @@ onBeforeUnmount(() => {
     <p v-if="error" class="mission-control__message is-error">{{ error }}</p>
 
     <section v-show="activeSection === 'projects'" class="mission-page">
-      <MissionProjectTaskBoard
-        v-model:task-draft="projectTaskDraft"
-        v-model:task-project-id="projectTaskProjectId"
-        :projects="projects"
-        :selected-project="selectedProjectDetail"
-        :selected-project-is-local="selectedProjectIsLocal"
-        :local-executor-runner-label="localExecutorRunnerLabel"
-        :local-executor-runner-detail="localExecutorRunnerDetail"
-        :error="projectTasksError"
-        :loading="projectTasksLoading"
-        :columns="projectBoardColumns"
-        :drop-status="projectTaskDropStatus"
-        :dragged-task-id="draggedProjectTaskId"
-        :action-id="projectTaskActionId"
-        :local-run-id="projectTaskLocalRunId"
-        :saving="projectTaskSaving"
-        :composer-status="projectTaskComposerStatus"
-        :create-disabled="projectTaskCreateDisabled"
-        :next-cursor="projectTasksNextCursor"
-        :loading-more="projectTasksLoadingMore"
-        @column-drag-over="handleProjectColumnDragOver"
-        @column-drag-leave="handleProjectColumnDragLeave"
-        @drop-task="dropProjectTask"
-        @open-detail="openProjectTaskDetail"
-        @task-drag-start="startProjectTaskDrag"
-        @task-drag-end="endProjectTaskDrag"
-        @archive-task="archiveProjectTask"
-        @run-task-locally="runProjectTaskLocally"
-        @add-task="addProjectTask"
-        @open-composer="openProjectTaskComposer"
-        @cancel-composer="cancelProjectTaskComposer"
-        @load-more="loadMoreProjectTasks"
-      />
+      <div class="mission-projects-shell">
+        <div
+          v-if="kanbanEnabled"
+          class="mission-projects-view-switcher"
+          role="tablist"
+          aria-label="Project task view"
+        >
+          <button
+            type="button"
+            class="mission-control__section-tab"
+            :class="{ 'is-active': projectTaskViewMode === 'list' }"
+            role="tab"
+            :aria-selected="projectTaskViewMode === 'list'"
+            @click="setProjectTaskViewMode('list')"
+          >
+            List
+          </button>
+          <button
+            type="button"
+            class="mission-control__section-tab"
+            :class="{ 'is-active': projectTaskViewMode === 'kanban' }"
+            role="tab"
+            :aria-selected="projectTaskViewMode === 'kanban'"
+            @click="setProjectTaskViewMode('kanban')"
+          >
+            Kanban
+          </button>
+        </div>
+        <MissionProjectTaskList
+          v-if="projectTaskViewMode === 'list'"
+          v-model:task-draft="projectTaskDraft"
+          v-model:task-project-id="projectTaskProjectId"
+          :projects="projects"
+          :selected-project="selectedProjectDetail"
+          :selected-project-is-local="selectedProjectIsLocal"
+          :local-executor-runner-label="localExecutorRunnerLabel"
+          :local-executor-runner-detail="localExecutorRunnerDetail"
+          :error="projectTasksError"
+          :loading="projectTasksLoading"
+          :groups="projectTaskListGroups"
+          :statuses="projectBoardStatuses"
+          :action-id="projectTaskActionId"
+          :local-run-id="projectTaskLocalRunId"
+          :saving="projectTaskSaving"
+          :composer-project-id="projectTaskComposerProjectId"
+          :create-disabled="projectTaskCreateDisabled"
+          :next-cursor="projectTasksNextCursor"
+          :loading-more="projectTasksLoadingMore"
+          @open-detail="openProjectTaskDetail"
+          @archive-task="archiveProjectTask"
+          @run-task-locally="runProjectTaskLocally"
+          @set-status="setProjectTaskStatus"
+          @add-task="addProjectTask"
+          @open-composer="openProjectTaskListComposer"
+          @cancel-composer="cancelProjectTaskComposer"
+          @load-more="loadMoreProjectTasks"
+        />
+        <MissionProjectTaskBoard
+          v-else
+          v-model:task-draft="projectTaskDraft"
+          v-model:task-project-id="projectTaskProjectId"
+          :projects="projects"
+          :selected-project="selectedProjectDetail"
+          :selected-project-is-local="selectedProjectIsLocal"
+          :local-executor-runner-label="localExecutorRunnerLabel"
+          :local-executor-runner-detail="localExecutorRunnerDetail"
+          :error="projectTasksError"
+          :loading="projectTasksLoading"
+          :columns="projectBoardColumns"
+          :drop-status="projectTaskDropStatus"
+          :dragged-task-id="draggedProjectTaskId"
+          :action-id="projectTaskActionId"
+          :local-run-id="projectTaskLocalRunId"
+          :saving="projectTaskSaving"
+          :composer-status="projectTaskComposerStatus"
+          :create-disabled="projectTaskCreateDisabled"
+          :next-cursor="projectTasksNextCursor"
+          :loading-more="projectTasksLoadingMore"
+          @column-drag-over="handleProjectColumnDragOver"
+          @column-drag-leave="handleProjectColumnDragLeave"
+          @drop-task="dropProjectTask"
+          @open-detail="openProjectTaskDetail"
+          @task-drag-start="startProjectTaskDrag"
+          @task-drag-end="endProjectTaskDrag"
+          @archive-task="archiveProjectTask"
+          @run-task-locally="runProjectTaskLocally"
+          @add-task="addProjectTask"
+          @open-composer="openProjectTaskComposer"
+          @cancel-composer="cancelProjectTaskComposer"
+          @load-more="loadMoreProjectTasks"
+        />
+      </div>
     </section>
 
     <section v-show="activeSection === 'accounts'" class="mission-page">
@@ -2420,6 +2553,19 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted);
 }
 
+.settings-menu__item--toggle {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--ui-border);
+  border-radius: 0 0 var(--ui-radius-sm) var(--ui-radius-sm);
+}
+
+.settings-menu__item--toggle svg {
+  color: var(--ui-text-muted);
+}
+
 .mission-control__message {
   width: min(700px, 100%);
   padding: 8px 12px;
@@ -2437,6 +2583,23 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   width: 100%;
+}
+
+.mission-projects-shell {
+  display: grid;
+  justify-items: center;
+  width: 100%;
+  gap: 12px;
+}
+
+.mission-projects-view-switcher {
+  display: inline-flex;
+  justify-self: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
 }
 
 .simple-sheet {
