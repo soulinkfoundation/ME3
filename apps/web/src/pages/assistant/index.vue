@@ -7060,6 +7060,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
   max-width: 100%;
 }
 
+.assistant-settings__tabs :deep(.workspace-tabs__tab) {
+  background: var(--ui-surface-muted);
+}
+
+.assistant-settings__tabs :deep(.workspace-tabs__tab--active) {
+  border-bottom-color: var(--ui-surface);
+  background: var(--ui-surface);
+}
+
+.assistant-settings__tabs :deep(.workspace-tabs__tab--active .workspace-tabs__count) {
+  background: var(--ui-surface-muted);
+}
+
 .assistant-settings__panel {
   display: grid;
   align-content: start;
@@ -7067,7 +7080,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-width: 0;
   max-height: min(620px, calc(100vh - 190px));
   overflow: auto;
-  padding-right: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 0 var(--ui-radius-sm) var(--ui-radius-sm)
+    var(--ui-radius-sm);
+  padding: 14px 10px 14px 14px;
+  background: var(--ui-surface);
   scrollbar-color: color-mix(in oklab, var(--ui-text-muted) 38%, transparent)
     transparent;
   scrollbar-width: thin;
