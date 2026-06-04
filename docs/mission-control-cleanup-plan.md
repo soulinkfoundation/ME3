@@ -2,6 +2,8 @@
 
 Source of truth: follows `docs/journal-plugin-plan.md` and bead `me3-3ic`.
 
+Status note, 2026-06-04: visible Mission Control direction has moved on to [Mission Control Dashboard Roadmap](/Users/kieranbutler/Coding/me3/docs/mission-control-dashboard-roadmap.md). Keep this cleanup plan as historical context for removing retired Journal/daily-capture surfaces, but follow the dashboard roadmap for current route and UI direction.
+
 ## Timing
 
 Do this after the new Journal plugin has landed on `main`.
@@ -21,8 +23,8 @@ Mission Control should become an operational review workspace, not a human writi
 
 For this cleanup pass:
 
-- Mission Control opens to Projects by default.
-- The current Projects kanban remains as-is.
+- Mission Control opens to the dashboard by default.
+- The current Projects kanban lives at `/mission-control/projects` during migration.
 - Journal UI and journal archive UI leave Mission Control.
 - Task/reminder/event capture UI leaves Mission Control.
 - Backend Mission Control task/project/activity APIs remain in place.
@@ -32,11 +34,12 @@ After this pass, the product boundary should be clear:
 
 - `/journal`: daily writing and human capture.
 - `/assistant`: conversational creation and actions.
-- `/mission-control`: project/task/status review.
+- `/mission-control`: dashboard.
+- `/mission-control/projects`: project/task/status review.
 
 ## Target UI
 
-Route: `/mission-control`
+Route: `/mission-control/projects`
 
 Default visible section: `projects`
 

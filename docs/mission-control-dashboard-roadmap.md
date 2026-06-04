@@ -2,6 +2,22 @@
 
 Planning source: refactor/redesign session on 2026-06-04.
 
+## Current Status
+
+Completed on 2026-06-04:
+
+- Bead epic `me3-j1e` and child implementation tasks are created.
+- `/mission-control` now renders the dashboard shell with placeholder default cards.
+- `/mission-control/projects` now hosts the existing projects workspace.
+- Internal project links now use `/mission-control/projects`; `/mission-control?section=projects` is not preserved as a redirect.
+- Shared [Button.vue](/Users/kieranbutler/Coding/me3/apps/web/src/components/Button.vue) text buttons now match the smaller rounded `/assistant` starter prompt feel more closely.
+- Dashboard quick actions currently render as emoji pill buttons.
+- Dashboard cards render as a three-column desktop grid and one column on mobile.
+
+Recommended next implementation bead:
+
+- `me3-j1e.3`: extract the existing projects workspace components from [mission-control-projects.vue](/Users/kieranbutler/Coding/me3/apps/web/src/pages/mission-control-projects.vue), especially project picker, project modal, task detail modal, task board, and shared task helpers. This should make `me3-j1e.1` much safer.
+
 ## Product Direction
 
 Mission Control should become the owner's calm operational dashboard. It should not be a full plugin dump, a writing workspace, or a kanban-first project manager.
@@ -46,7 +62,8 @@ Keep the project list visually quieter than the current board. The default proje
 
 ## Current Architecture Notes
 
-- [mission-control.vue](/Users/kieranbutler/Coding/me3/apps/web/src/pages/mission-control.vue) is a large page-level implementation containing project kanban, accounts, activity, memory, sources, and modals.
+- [mission-control.vue](/Users/kieranbutler/Coding/me3/apps/web/src/pages/mission-control.vue) is currently a dashboard shell/placeholder.
+- [mission-control-projects.vue](/Users/kieranbutler/Coding/me3/apps/web/src/pages/mission-control-projects.vue) contains the large legacy projects workspace implementation, including project kanban, accounts, activity, memory, sources, and modals.
 - Mission Control already uses owner-scoped project/task APIs: `GET/POST /api/mission-control/projects` and `GET/POST/PATCH/DELETE /api/mission-control/tasks`.
 - The current task board is kanban-first with statuses `backlog`, `in_progress`, `review`, and `done`.
 - Plugin manifests already expose simple `uiSlots`, but those slots are descriptive. They need a richer dashboard contribution contract.
@@ -255,8 +272,9 @@ Layout guidance:
 
 - Dashboard max width around 960-1040px.
 - One column on mobile.
-- Two-column card grid on desktop, with `wide` cards spanning both columns.
-- Daily Briefing should default to `wide`.
+- Three-column card grid on desktop.
+- `wide` cards can span all columns later when the content genuinely needs more room.
+- Daily Briefing should start as a normal card in the default three-column set; it can become `wide` only if the actual briefing content warrants it.
 - Mission Statement and Wheel Snapshot can default to `medium`.
 - Quick actions should be pill buttons in a centered flex wrap, visually close to the `/assistant` starter prompts.
 - No decorative hero, no nested cards, no oversized marketing layout.
@@ -319,7 +337,7 @@ pnpm build
 Browser verification:
 
 - `/mission-control` opens to the dashboard.
-- `/mission-control/projects` opens to the grouped task list.
+- `/mission-control/projects` opens to the current projects workspace during migration, and later to the grouped task list after `me3-j1e.1`.
 - `/mission-control?section=projects` is not preserved as a compatibility route.
 - `/accounts` opens the Accounts plugin ledger when Accounts is active.
 - Project picker and `Add project` still work.
