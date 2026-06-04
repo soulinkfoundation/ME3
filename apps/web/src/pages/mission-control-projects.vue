@@ -225,12 +225,15 @@ const memoryActionId = ref("");
 const sourceDraft = ref("");
 const settingsMenuOpen = ref(false);
 const projectModalOpen = ref(false);
+const projectModalMode = ref<"add" | "edit">("add");
+const editingProjectId = ref("");
 const projectTitle = ref("");
 const projectDescription = ref("");
 const projectType = ref<"standard" | "local">("standard");
 const projectLocalPath = ref("");
 const projectLogoData = ref("");
 const projectLogoName = ref("");
+const projectIconName = ref("");
 const projectSaving = ref(false);
 const projectError = ref("");
 const projectTasks = ref<MissionTask[]>([]);
@@ -511,6 +514,7 @@ async function loadMissionControlWorkspace() {
       "/mission-control/projects",
     );
     projects.value = response.projects || [];
+    syncSelectedProjectFromRoute();
     if (
       selectedProjectDetailId.value &&
       !projects.value.some(
@@ -913,6 +917,10 @@ function selectProjectDetail(projectId: string) {
   projectPickerOpen.value = false;
   resetProjectTaskComposer();
   closeProjectTaskDetail();
+  const { project: _project, ...query } = route.query;
+  void router.replace({
+    query: projectId ? { ...query, project: projectId } : query,
+  });
 }
 
 function setSection(section: MissionSection) {
@@ -935,23 +943,39 @@ function cyclePrimarySection() {
 
 function openProjectModal() {
   projectPickerOpen.value = false;
+  projectModalMode.value = "add";
+  editingProjectId.value = "";
   projectTitle.value = "";
   projectDescription.value = "";
   projectType.value = "standard";
   projectLocalPath.value = "";
   projectLogoData.value = "";
   projectLogoName.value = "";
+  projectIconName.value = "";
   projectError.value = "";
   projectModalOpen.value = true;
 }
 
-function openAssistantForSelectedProject() {
-  const project = selectedProjectDetail.value;
-  if (!project) return;
-  void router.push({
-    path: "/assistant",
-    query: { project: project.id },
-  });
+function projectIconIsLogo(value: string | null | undefined): boolean {
+  return Boolean(value?.startsWith("data:image/"));
+}
+
+function openEditProjectModal(project: MissionProject) {
+  projectPickerOpen.value = false;
+  projectModalMode.value = "edit";
+  editingProjectId.value = project.id;
+  projectTitle.value = project.name;
+  projectDescription.value = project.description || "";
+  projectType.value = isLocalProject(project) ? "local" : "standard";
+  projectLocalPath.value =
+    typeof project.metadata.localPath === "string"
+      ? project.metadata.localPath
+      : "";
+  projectLogoData.value = projectIconIsLogo(project.icon) ? project.icon || "" : "";
+  projectLogoName.value = projectLogoData.value ? "Uploaded logo" : "";
+  projectIconName.value = projectIconIsLogo(project.icon) ? "" : project.icon || "";
+  projectError.value = "";
+  projectModalOpen.value = true;
 }
 
 function closeProjectModal() {
@@ -980,6 +1004,7 @@ function chooseProjectLogo(event: Event) {
     projectLogoData.value =
       typeof reader.result === "string" ? reader.result : "";
     projectLogoName.value = file.name;
+    projectIconName.value = "";
   };
   reader.onerror = () => {
     projectError.value = "Could not read that image";
@@ -990,6 +1015,11 @@ function chooseProjectLogo(event: Event) {
 function removeProjectLogo() {
   projectLogoData.value = "";
   projectLogoName.value = "";
+}
+
+function setProjectIconName(value: string) {
+  projectIconName.value = value;
+  if (value) removeProjectLogo();
 }
 
 async function addProject() {
@@ -1008,7 +1038,7 @@ async function addProject() {
           projectType.value === "local"
             ? projectLocalPath.value.trim()
             : undefined,
-        icon: projectLogoData.value || undefined,
+        icon: projectLogoData.value || projectIconName.value || undefined,
       },
     );
     projects.value = [response.project, ...projects.value].sort((a, b) => {
@@ -1022,6 +1052,40 @@ async function addProject() {
   } catch (e) {
     projectError.value =
       e instanceof ApiError ? e.message : "Could not create project";
+  } finally {
+    projectSaving.value = false;
+  }
+}
+
+async function saveProject() {
+  const projectId = editingProjectId.value;
+  const name = projectTitle.value.trim();
+  if (!projectId || !name || projectSaving.value) return;
+  projectSaving.value = true;
+  projectError.value = "";
+  try {
+    const response = await api.patch<{ project: MissionProject }>(
+      `/mission-control/projects/${encodeURIComponent(projectId)}`,
+      {
+        name,
+        description: projectDescription.value.trim() || null,
+        icon: projectLogoData.value || projectIconName.value || null,
+      },
+    );
+    projects.value = projects.value
+      .map((project) =>
+        project.id === response.project.id ? response.project : project,
+      )
+      .sort((a, b) => {
+        if (a.name === "Personal") return -1;
+        if (b.name === "Personal") return 1;
+        return a.name.localeCompare(b.name);
+      });
+    toastSuccess("Project saved");
+    projectModalOpen.value = false;
+  } catch (e) {
+    projectError.value =
+      e instanceof ApiError ? e.message : "Could not save project";
   } finally {
     projectSaving.value = false;
   }
@@ -1573,6 +1637,20 @@ function normalizeRawSection(value: unknown): string | undefined {
   return typeof raw === "string" ? raw : undefined;
 }
 
+function rawProjectQuery(value: unknown): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" ? raw : "";
+}
+
+function syncSelectedProjectFromRoute() {
+  const projectId = rawProjectQuery(route.query.project);
+  selectedProjectDetailId.value = projects.value.some(
+    (project) => project.id === projectId,
+  )
+    ? projectId
+    : "";
+}
+
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape" && projectPickerOpen.value) {
     projectPickerOpen.value = false;
@@ -1607,6 +1685,13 @@ watch(
     activeSection.value = isAccountsRoute.value
       ? "accounts"
       : normalizeSection(section);
+  },
+);
+
+watch(
+  () => route.query.project,
+  () => {
+    syncSelectedProjectFromRoute();
   },
 );
 
@@ -1676,15 +1761,6 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="mission-control__topbar-trailing">
-        <button
-          v-if="activeSection === 'projects' && selectedProjectDetail"
-          type="button"
-          class="mission-control__assistant-link"
-          @click="openAssistantForSelectedProject"
-        >
-          <UiIcon name="MessagesSquare" :size="15" aria-hidden="true" />
-          <span>Ask assistant</span>
-        </button>
         <Button
           v-if="primarySections.length > 1 && !isAccountsRoute"
           color="ghost"
@@ -1817,6 +1893,7 @@ onBeforeUnmount(() => {
           @archive-task="archiveProjectTask"
           @run-task-locally="runProjectTaskLocally"
           @set-status="setProjectTaskStatus"
+          @edit-project="openEditProjectModal"
           @add-task="addProjectTask"
           @open-composer="openProjectTaskListComposer"
           @cancel-composer="cancelProjectTaskComposer"
@@ -2265,16 +2342,19 @@ onBeforeUnmount(() => {
       v-model:project-description="projectDescription"
       v-model:project-type="projectType"
       v-model:project-local-path="projectLocalPath"
+      :project-icon-name="projectIconName"
       :open="projectModalOpen"
+      :mode="projectModalMode"
       :project-logo-data="projectLogoData"
       :project-logo-name="projectLogoName"
       :saving="projectSaving"
       :error="projectError"
       :create-disabled="projectCreateDisabled"
+      @update:project-icon-name="setProjectIconName"
       @choose-logo="chooseProjectLogo"
       @remove-logo="removeProjectLogo"
       @close="closeProjectModal"
-      @submit="addProject"
+      @submit="projectModalMode === 'edit' ? saveProject() : addProject()"
     />
 
     <MissionProjectTaskDetailModal

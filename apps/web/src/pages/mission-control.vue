@@ -338,6 +338,12 @@ function projectStatusCountLabel(
   return `${label} ${count}`;
 }
 
+function projectSummaryPath(summary: ProjectDashboardSummary): string {
+  return summary.id === "personal"
+    ? "/mission-control/projects"
+    : `/mission-control/projects?project=${encodeURIComponent(summary.id)}`;
+}
+
 function syncDashboardDrafts() {
   cardDrafts.value = [...(dashboard.value?.cards || [])]
     .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -824,6 +830,20 @@ onMounted(() => {
                 <span>{{ totalOpenProjectTasks }} open</span>
               </div>
             </header>
+            <div v-if="!dashboardEditing" class="dashboard-card__actions">
+              <Button
+                class="dashboard-card__action-button"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                to="/mission-control/projects"
+                aria-label="Open Projects"
+                title="Open Projects"
+              >
+                <UiIcon name="Eye" :size="16" />
+              </Button>
+            </div>
             <div v-if="projectsSummaryLoading" class="dashboard-empty">
               <p>Loading project stats...</p>
             </div>
@@ -845,7 +865,9 @@ onMounted(() => {
                 class="project-summary__row"
               >
                 <div class="project-summary__main">
-                  <strong>{{ summary.label }}</strong>
+                  <RouterLink :to="projectSummaryPath(summary)">
+                    {{ summary.label }}
+                  </RouterLink>
                   <span>{{ summary.total }} open tasks</span>
                 </div>
                 <div class="project-summary__stats">
@@ -858,14 +880,6 @@ onMounted(() => {
                   </span>
                 </div>
               </div>
-              <Button
-                color="outline"
-                shape="soft"
-                size="compact"
-                to="/mission-control/projects"
-              >
-                Open Projects
-              </Button>
             </div>
             <div v-else class="dashboard-empty">
               <p>
@@ -1440,13 +1454,19 @@ onMounted(() => {
   gap: 10px;
 }
 
-.project-summary__main strong {
+.project-summary__main a {
   min-width: 0;
   overflow: hidden;
   color: var(--ui-text);
   font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-summary__main a:hover {
+  color: var(--ui-accent);
 }
 
 .project-summary__main span {

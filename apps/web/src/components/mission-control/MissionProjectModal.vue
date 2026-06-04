@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import Button from "../Button.vue";
+import IconPicker from "../IconPicker.vue";
 import UiIcon from "../UiIcon.vue";
 
 defineProps<{
   open: boolean;
+  mode: "add" | "edit";
   projectTitle: string;
   projectDescription: string;
   projectType: "standard" | "local";
   projectLocalPath: string;
   projectLogoData: string;
   projectLogoName: string;
+  projectIconName: string;
   saving: boolean;
   error: string;
   createDisabled: boolean;
@@ -20,6 +23,7 @@ const emit = defineEmits<{
   "update:projectDescription": [value: string];
   "update:projectType": [value: "standard" | "local"];
   "update:projectLocalPath": [value: string];
+  "update:projectIconName": [value: string];
   chooseLogo: [event: Event];
   removeLogo: [];
   close: [];
@@ -53,7 +57,9 @@ function projectTypeValue(event: Event): "standard" | "local" {
         @submit.prevent="emit('submit')"
       >
         <div class="mission-modal__header">
-          <h2 id="project-modal-title">Add project</h2>
+          <h2 id="project-modal-title">
+            {{ mode === "edit" ? "Edit project" : "Add project" }}
+          </h2>
           <Button
             color="ghost"
             shape="soft"
@@ -118,7 +124,16 @@ function projectTypeValue(event: Event): "standard" | "local" {
         </template>
 
         <label class="field">
-          <span>Logo</span>
+          <span>Icon</span>
+          <IconPicker
+            :model-value="projectIconName"
+            aria-label="Project icon"
+            @update:model-value="emit('update:projectIconName', $event)"
+          />
+        </label>
+
+        <label class="field">
+          <span>Logo upload</span>
           <input type="file" accept="image/*" @change="emit('chooseLogo', $event)" />
         </label>
 
@@ -157,7 +172,15 @@ function projectTypeValue(event: Event): "standard" | "local" {
             type="submit"
             :disabled="createDisabled"
           >
-            {{ saving ? "Adding..." : "Add project" }}
+            {{
+              saving
+                ? mode === "edit"
+                  ? "Saving..."
+                  : "Adding..."
+                : mode === "edit"
+                  ? "Save project"
+                  : "Add project"
+            }}
           </Button>
         </div>
       </form>

@@ -5,13 +5,12 @@ import {
   formatShortDate,
   isLocalProject,
   localProjectPath,
-  projectBoardStatusLabel,
   projectForTask,
-  projectName,
   projectTaskComposerProjectLabel,
   weeklyReviewCardLabel,
   weeklyReviewMetadata,
 } from "./projectWorkspace";
+import { resolveUiIconName, type UiIconName } from "../../utils/icons";
 import type {
   MissionProject,
   MissionTask,
@@ -48,6 +47,7 @@ const emit = defineEmits<{
   "archive-task": [task: MissionTask];
   "run-task-locally": [task: MissionTask];
   "set-status": [task: MissionTask, status: MissionTask["status"]];
+  "edit-project": [project: MissionProject];
   "add-task": [status: ProjectBoardStatus];
   "open-composer": [projectId: string];
   "cancel-composer": [];
@@ -57,8 +57,13 @@ function inputValue(event: Event): string {
   return (event.target as HTMLInputElement | HTMLSelectElement).value;
 }
 
-function statusValue(event: Event): MissionTask["status"] {
-  return (event.target as HTMLSelectElement).value as MissionTask["status"];
+function projectIconName(project: MissionProject | null): UiIconName {
+  return (resolveUiIconName(project?.icon || "") ||
+    "BriefcaseBusiness") as UiIconName;
+}
+
+function isProjectLogo(project: MissionProject | null): boolean {
+  return Boolean(project?.icon?.startsWith("data:image/"));
 }
 </script>
 
@@ -88,11 +93,29 @@ function statusValue(event: Event): MissionTask["status"] {
         :aria-label="`${group.label} tasks`"
       >
         <header class="project-task-group__header">
-          <div>
+          <div class="project-task-group__title-wrap">
+            <span class="project-task-group__visual" aria-hidden="true">
+              <img
+                v-if="isProjectLogo(group.project)"
+                :src="group.project?.icon || ''"
+                alt=""
+              />
+              <UiIcon v-else :name="projectIconName(group.project)" :size="15" />
+            </span>
             <h2>{{ group.label }}</h2>
             <span v-if="isLocalProject(group.project)" class="local-project-badge"
               >Local</span
             >
+            <button
+              v-if="group.project"
+              class="project-task-group__edit"
+              type="button"
+              :aria-label="`Edit ${group.label}`"
+              :title="`Edit ${group.label}`"
+              @click="emit('edit-project', group.project)"
+            >
+              <UiIcon name="Pencil" :size="14" />
+            </button>
           </div>
           <div class="project-task-group__actions">
             <span>{{ group.tasks.length }}</span>
@@ -191,14 +214,6 @@ function statusValue(event: Event): MissionTask["status"] {
                 class="weekly-review-badge"
                 >Weekly Review</span
               >
-              <span v-if="!selectedProject" class="project-task-row__project">
-                <img
-                  v-if="projectForTask(projects, task)?.icon"
-                  :src="projectForTask(projects, task)?.icon || ''"
-                  alt=""
-                />
-                <span>{{ projectName(projects, task.projectId) }}</span>
-              </span>
               <span v-if="task.dueAt || task.scheduledFor">
                 {{ formatShortDate(task.dueAt || task.scheduledFor) }}
               </span>
@@ -209,24 +224,18 @@ function statusValue(event: Event): MissionTask["status"] {
           </button>
 
           <div class="project-task-row__controls">
-            <select
-              :value="task.status"
-              class="project-task-row__status"
-              :aria-label="`Status for ${task.title}`"
-              :disabled="actionId === task.id || localRunId === task.id"
-              @change="emit('set-status', task, statusValue($event))"
-            >
-              <option
-                v-for="status in statuses"
-                :key="status.id"
-                :value="status.id"
-              >
-                {{ status.label }}
-              </option>
-            </select>
-            <span class="project-task-row__status-label">
-              {{ projectBoardStatusLabel(task.status) }}
-            </span>
+            <label class="project-task-row__done">
+              <input
+                type="checkbox"
+                :checked="task.status === 'done'"
+                :aria-label="`Mark ${task.title} done`"
+                :disabled="actionId === task.id || localRunId === task.id"
+                @change="emit('set-status', task, 'done')"
+              />
+              <span aria-hidden="true">
+                <UiIcon name="Check" :size="13" />
+              </span>
+            </label>
             <button
               v-if="isLocalProject(projectForTask(projects, task))"
               type="button"
@@ -338,6 +347,7 @@ function statusValue(event: Event): MissionTask["status"] {
   border-bottom: 1px solid var(--ui-border);
 }
 
+.project-task-group__title-wrap,
 .project-task-group__header div {
   display: flex;
   align-items: center;
@@ -353,6 +363,55 @@ function statusValue(event: Event): MissionTask["status"] {
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-task-group__visual {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-text-muted);
+}
+
+.project-task-group__visual img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.project-task-group__edit {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.project-task-group__header:hover .project-task-group__edit,
+.project-task-group__edit:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.project-task-group__edit:hover {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.project-task-group__edit:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 2px;
 }
 
 .project-task-group__actions {
@@ -530,21 +589,6 @@ function statusValue(event: Event): MissionTask["status"] {
   min-width: 0;
 }
 
-.project-task-row__status {
-  min-height: 30px;
-  max-width: 116px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-bg);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 12px;
-}
-
-.project-task-row__status-label {
-  display: none;
-}
-
 .project-task-row__run {
   display: inline-flex;
   align-items: center;
@@ -575,6 +619,45 @@ function statusValue(event: Event): MissionTask["status"] {
 .project-task-row__controls .me3-btn {
   width: 30px;
   height: 30px;
+}
+
+.project-task-row__done {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  cursor: pointer;
+}
+
+.project-task-row__done input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.project-task-row__done span {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: transparent;
+}
+
+.project-task-row__done:hover span,
+.project-task-row__done input:focus-visible + span {
+  border-color: var(--ui-accent);
+}
+
+.project-task-row__done input:checked + span {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
 }
 
 .local-project-badge {
@@ -644,9 +727,7 @@ function statusValue(event: Event): MissionTask["status"] {
   }
 
   .local-project-summary,
-  .project-task-group__header,
-  .project-task-row,
-  .project-task-row__controls {
+  .project-task-row {
     align-items: stretch;
   }
 
@@ -656,7 +737,6 @@ function statusValue(event: Event): MissionTask["status"] {
   }
 
   .local-project-summary,
-  .project-task-group__header,
   .project-task-row {
     display: grid;
   }
@@ -670,16 +750,19 @@ function statusValue(event: Event): MissionTask["status"] {
     grid-template-columns: 1fr;
   }
 
-  .project-task-row__controls {
-    justify-content: start;
+  .project-task-group__header {
+    gap: 8px;
   }
 
-  .project-task-row__status {
-    max-width: none;
+  .project-task-group__actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
   }
 
-  .project-task-row__status-label {
-    display: none;
+  .project-task-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
   }
 }
 </style>
