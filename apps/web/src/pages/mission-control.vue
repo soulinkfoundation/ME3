@@ -544,6 +544,7 @@ onMounted(() => {
               </h2>
             </header>
             <div
+              v-if="!dashboardEditing"
               class="dashboard-card__actions"
               :class="{ 'is-active': missionStatementEditing }"
             >
@@ -603,7 +604,7 @@ onMounted(() => {
                 </span>
               </div>
             </header>
-            <div class="dashboard-card__actions">
+            <div v-if="!dashboardEditing" class="dashboard-card__actions">
               <Button
                 class="dashboard-card__action-button"
                 color="ghost"
@@ -839,7 +840,7 @@ onMounted(() => {
             class="dashboard-modal__row dashboard-modal__row--action"
           >
             <label>
-              <span>Name</span>
+              <span>Button label</span>
               <input
                 :value="link.label"
                 type="text"
@@ -862,9 +863,10 @@ onMounted(() => {
                 "
               />
             </label>
-            <span class="dashboard-modal__destination">
-              {{ quickActionDestinationLabel(link) }}
-            </span>
+            <div class="dashboard-modal__action">
+              <span>Action</span>
+              <strong>{{ quickActionDestinationLabel(link) }}</strong>
+            </div>
             <Button color="accent" shape="soft" size="compact" @click="addQuickActionDraft(link.id)">
               Add
             </Button>
@@ -1057,6 +1059,9 @@ onMounted(() => {
 }
 
 .dashboard-card__action-button {
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
   background: color-mix(in oklab, var(--ui-surface), transparent 6%);
 }
 
@@ -1073,6 +1078,7 @@ onMounted(() => {
 .mission-statement-form {
   display: grid;
   gap: 10px;
+  margin-top: 8px;
 }
 
 .mission-statement-form textarea {
@@ -1153,6 +1159,7 @@ onMounted(() => {
   z-index: 1;
   width: 24px;
   height: 24px;
+  border-style: dashed;
   background: var(--ui-surface);
 }
 
@@ -1239,16 +1246,30 @@ onMounted(() => {
   gap: 4px;
 }
 
-.dashboard-modal__row strong {
+.dashboard-modal__row strong,
+.dashboard-modal__action strong {
   color: var(--ui-text);
   font-size: 13px;
 }
 
 .dashboard-modal__row span,
-.dashboard-modal__destination {
+.dashboard-modal__destination,
+.dashboard-modal__action span {
   color: var(--ui-text-muted);
   font-size: 12px;
   font-weight: 650;
+}
+
+.dashboard-modal__action {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.dashboard-modal__action strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dashboard-modal__row input {
