@@ -487,6 +487,7 @@ type AssistantSourceViewItem = MissionContextSource & {
   priority: number;
   priorityLabel: string;
   isMissing: boolean;
+  isDeletable: boolean;
 };
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
@@ -938,6 +939,7 @@ const assistantSourceRows = computed<AssistantSourceViewItem[]>(() =>
         priorityLabel: `Priority ${priority}`,
         isMissing:
           source.status === "setup_required" || source.status === "failed",
+        isDeletable: !isDefaultAssistantSource(source),
       };
     })
     .sort(
@@ -1495,6 +1497,7 @@ function replaceAssistantMemory(next: MissionMemory) {
 }
 
 async function deleteAssistantSource(source: MissionContextSource) {
+  if (isDefaultAssistantSource(source)) return;
   if (assistantSourceActionId.value) return;
   assistantSourceActionId.value = source.id;
   assistantSettingsError.value = "";
@@ -3633,6 +3636,17 @@ function assistantSourcePriority(
   return 5;
 }
 
+function isDefaultAssistantSource(
+  source: Pick<MissionContextSource, "sourceKind">,
+) {
+  return (
+    source.sourceKind === "mission_statement" ||
+    source.sourceKind === "wheel_of_life" ||
+    source.sourceKind === "public_me_json" ||
+    source.sourceKind === "private_memory"
+  );
+}
+
 function assistantSourceStatusLabel(status: MissionContextSource["status"]) {
   if (status === "setup_required") return "Missing";
   return assistantMemoryKindLabel(status);
@@ -4842,6 +4856,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                           {{ assistantSourceStatusLabel(source.status) }}
                         </span>
                         <Button
+                          v-if="source.isDeletable"
                           class="assistant-settings-row__delete"
                           color="ghost"
                           shape="soft"
@@ -4875,7 +4890,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                         here.
                       </p>
                     </div>
-                    <span>{{ assistantMemory.length }}</span>
                   </header>
                   <form
                     class="assistant-settings-inline-form"
@@ -7027,7 +7041,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-settings {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   min-height: 0;
   overflow: auto;
   scrollbar-color: color-mix(in oklab, var(--ui-text-muted) 38%, transparent)
@@ -7083,7 +7097,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   border: 1px solid var(--ui-border);
   border-radius: 0 var(--ui-radius-sm) var(--ui-radius-sm)
     var(--ui-radius-sm);
-  padding: 14px 10px 14px 14px;
+  padding: 14px 16px 14px 14px;
   background: var(--ui-surface);
   scrollbar-color: color-mix(in oklab, var(--ui-text-muted) 38%, transparent)
     transparent;
@@ -7290,6 +7304,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
   justify-content: flex-start;
   gap: 7px;
   min-width: 0;
+}
+
+.assistant-settings-row__activity-head h4 {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
 }
 
 .assistant-settings-row--activity .assistant-settings-row__main p {
@@ -8267,14 +8287,14 @@ button:disabled {
     position: sticky;
     top: 0;
     z-index: 2;
-    padding-bottom: 2px;
+    padding-bottom: 0;
     background: var(--ui-surface);
   }
 
   .assistant-settings__panel {
     max-height: none;
     overflow: visible;
-    padding-right: 0;
+    padding: 14px 14px 14px 14px;
   }
 
   .assistant-settings-row {
