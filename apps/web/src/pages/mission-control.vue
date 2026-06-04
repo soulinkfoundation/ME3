@@ -29,6 +29,12 @@ type DashboardCardInstance = {
   sortOrder: number;
 };
 
+type DashboardCardContribution = {
+  id: string;
+  label: string;
+  defaultSize: DashboardCardSize;
+};
+
 type DashboardQuickLink = {
   id: string;
   label: string;
@@ -68,6 +74,7 @@ type WheelSnapshotCardData = {
 
 type MissionDashboardResponse = {
   cards: DashboardCardInstance[];
+  availableCards: DashboardCardContribution[];
   quickLinks: DashboardQuickLink[];
   availableQuickActions: Array<{
     id: string;
@@ -90,9 +97,12 @@ const loading = ref(true);
 const error = ref("");
 const missionStatementDraft = ref("");
 const missionStatementSaving = ref(false);
-const quickActionsEditing = ref(false);
+const dashboardEditing = ref(false);
+const cardDrafts = ref<DashboardCardInstance[]>([]);
 const quickActionDrafts = ref<DashboardQuickLink[]>([]);
-const quickActionsSaving = ref(false);
+const dashboardSaving = ref(false);
+const draggedCardId = ref("");
+const draggedQuickActionId = ref("");
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
@@ -101,6 +111,16 @@ const cards = computed(() =>
 );
 const quickLinks = computed(() =>
   (dashboard.value?.quickLinks || [])
+    .filter((link) => link.enabled && dashboard.value?.destinations[link.destinationId])
+    .sort((a, b) => a.sortOrder - b.sortOrder),
+);
+const visibleCards = computed(() =>
+  (dashboardEditing.value ? cardDrafts.value : cards.value)
+    .filter((card) => card.enabled)
+    .sort((a, b) => a.sortOrder - b.sortOrder),
+);
+const visibleQuickLinks = computed(() =>
+  (dashboardEditing.value ? quickActionDrafts.value : quickLinks.value)
     .filter((link) => link.enabled && dashboard.value?.destinations[link.destinationId])
     .sort((a, b) => a.sortOrder - b.sortOrder),
 );
@@ -114,6 +134,13 @@ const wheelSnapshot = computed(
   () => dashboard.value?.data["mission.wheel-latest-snapshot"] || null,
 );
 const wheelSegments = computed(() => wheelSnapshot.value?.snapshot?.segments || []);
+
+function cardLabel(card: DashboardCardInstance): string {
+  const contribution = dashboard.value?.availableCards.find(
+    (item) => item.id === card.cardId,
+  );
+  return contribution?.label || card.cardId;
+}
 
 function quickLinkPath(link: DashboardQuickLink): string {
   return dashboard.value?.destinations[link.destinationId]?.path || "/mission-control";
@@ -130,20 +157,46 @@ function quickActionDestinationLabel(link: DashboardQuickLink): string {
   return contribution?.label || link.destinationId;
 }
 
-function syncQuickActionDrafts() {
+function syncDashboardDrafts() {
+  cardDrafts.value = [...(dashboard.value?.cards || [])]
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((card, index) => ({ ...card, sortOrder: index }));
   quickActionDrafts.value = [...(dashboard.value?.quickLinks || [])]
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((link, index) => ({ ...link, sortOrder: index }));
 }
 
-function openQuickActionEditor() {
-  syncQuickActionDrafts();
-  quickActionsEditing.value = true;
+function openDashboardEditor() {
+  syncDashboardDrafts();
+  dashboardEditing.value = true;
 }
 
-function closeQuickActionEditor() {
-  quickActionsEditing.value = false;
-  syncQuickActionDrafts();
+function closeDashboardEditor() {
+  dashboardEditing.value = false;
+  draggedCardId.value = "";
+  draggedQuickActionId.value = "";
+  syncDashboardDrafts();
+}
+
+function moveCard(index: number, direction: -1 | 1) {
+  const nextIndex = index + direction;
+  if (nextIndex < 0 || nextIndex >= cardDrafts.value.length) return;
+  const next = [...cardDrafts.value];
+  const current = next[index];
+  const target = next[nextIndex];
+  if (!current || !target) return;
+  next[index] = target;
+  next[nextIndex] = current;
+  cardDrafts.value = next.map((card, sortOrder) => ({ ...card, sortOrder }));
+}
+
+function moveCardById(cardId: string, direction: -1 | 1) {
+  const ordered = [...cardDrafts.value].sort((a, b) => a.sortOrder - b.sortOrder);
+  const index = ordered.findIndex((card) => card.cardId === cardId);
+  if (index < 0) return;
+  const nextIndex = index + direction;
+  if (nextIndex < 0 || nextIndex >= ordered.length) return;
+  moveCard(index, direction);
 }
 
 function moveQuickAction(index: number, direction: -1 | 1) {
@@ -161,6 +214,15 @@ function moveQuickAction(index: number, direction: -1 | 1) {
   }));
 }
 
+function updateCardDraft(
+  cardId: string,
+  patch: Partial<Pick<DashboardCardInstance, "enabled" | "size">>,
+) {
+  cardDrafts.value = cardDrafts.value.map((card) =>
+    card.cardId === cardId ? { ...card, ...patch } : card,
+  );
+}
+
 function updateQuickActionDraft(
   index: number,
   patch: Partial<Pick<DashboardQuickLink, "label" | "icon" | "enabled">>,
@@ -168,6 +230,40 @@ function updateQuickActionDraft(
   const current = quickActionDrafts.value[index];
   if (!current) return;
   quickActionDrafts.value[index] = { ...current, ...patch };
+}
+
+function setCardDropTarget(targetCardId: string) {
+  const sourceCardId = draggedCardId.value;
+  if (!sourceCardId || sourceCardId === targetCardId) return;
+  reorderCards(sourceCardId, targetCardId);
+}
+
+function setQuickActionDropTarget(targetLinkId: string) {
+  const sourceLinkId = draggedQuickActionId.value;
+  if (!sourceLinkId || sourceLinkId === targetLinkId) return;
+  reorderQuickActions(sourceLinkId, targetLinkId);
+}
+
+function reorderCards(sourceCardId: string, targetCardId: string) {
+  const next = [...cardDrafts.value].sort((a, b) => a.sortOrder - b.sortOrder);
+  const sourceIndex = next.findIndex((card) => card.cardId === sourceCardId);
+  const targetIndex = next.findIndex((card) => card.cardId === targetCardId);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+  const [source] = next.splice(sourceIndex, 1);
+  if (!source) return;
+  next.splice(targetIndex, 0, source);
+  cardDrafts.value = next.map((card, sortOrder) => ({ ...card, sortOrder }));
+}
+
+function reorderQuickActions(sourceLinkId: string, targetLinkId: string) {
+  const next = [...quickActionDrafts.value].sort((a, b) => a.sortOrder - b.sortOrder);
+  const sourceIndex = next.findIndex((link) => link.id === sourceLinkId);
+  const targetIndex = next.findIndex((link) => link.id === targetLinkId);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+  const [source] = next.splice(sourceIndex, 1);
+  if (!source) return;
+  next.splice(targetIndex, 0, source);
+  quickActionDrafts.value = next.map((link, sortOrder) => ({ ...link, sortOrder }));
 }
 
 function formatDashboardDate(value: string | null | undefined): string {
@@ -190,7 +286,7 @@ async function loadDashboard() {
       "/mission-control/dashboard",
     );
     missionStatementDraft.value = dashboard.value.missionStatement;
-    syncQuickActionDrafts();
+    syncDashboardDrafts();
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Mission Control could not load.";
   } finally {
@@ -217,13 +313,17 @@ async function saveMissionStatement() {
   }
 }
 
-async function saveQuickActions() {
-  if (quickActionsSaving.value) return;
-  quickActionsSaving.value = true;
+async function saveDashboardLayout() {
+  if (dashboardSaving.value) return;
+  dashboardSaving.value = true;
   try {
     dashboard.value = await api.patch<MissionDashboardResponse>(
       "/mission-control/dashboard",
       {
+        cards: cardDrafts.value.map((card, sortOrder) => ({
+          ...card,
+          sortOrder,
+        })),
         quickLinks: quickActionDrafts.value.map((link, sortOrder) => ({
           ...link,
           label: link.label.trim() || quickActionDestinationLabel(link),
@@ -232,13 +332,13 @@ async function saveQuickActions() {
         })),
       },
     );
-    syncQuickActionDrafts();
-    quickActionsEditing.value = false;
-    toastSuccess("Quick actions saved");
+    syncDashboardDrafts();
+    dashboardEditing.value = false;
+    toastSuccess("Dashboard saved");
   } catch (err) {
-    toastFromUnknown(err, "Quick actions could not be saved");
+    toastFromUnknown(err, "Dashboard could not be saved");
   } finally {
-    quickActionsSaving.value = false;
+    dashboardSaving.value = false;
   }
 }
 
@@ -256,11 +356,11 @@ onMounted(() => {
         shape="soft"
         size="compact"
         icon-only
-        aria-label="Customize quick actions"
-        title="Customize quick actions"
-        @click="openQuickActionEditor"
+        :aria-label="dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'"
+        :title="dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'"
+        @click="dashboardEditing ? closeDashboardEditor() : openDashboardEditor()"
       >
-        <UiIcon name="SlidersHorizontal" :size="18" />
+        <UiIcon :name="dashboardEditing ? 'X' : 'SlidersHorizontal'" :size="18" />
       </Button>
       <Button
         color="ghost"
@@ -286,13 +386,96 @@ onMounted(() => {
         Loading Mission Control...
       </div>
 
-      <div v-else class="mission-dashboard__grid">
+      <div v-if="dashboardEditing" class="dashboard-edit-banner">
+        <span>Edit mode</span>
+        <div>
+          <Button color="ghost" shape="soft" size="compact" @click="closeDashboardEditor">
+            Cancel
+          </Button>
+          <Button
+            color="accent"
+            shape="soft"
+            size="compact"
+            :disabled="dashboardSaving"
+            @click="saveDashboardLayout"
+          >
+            {{ dashboardSaving ? "Saving..." : "Save dashboard" }}
+          </Button>
+        </div>
+      </div>
+
+      <div v-if="!loading" class="mission-dashboard__grid">
         <article
-          v-for="card in cards"
+          v-for="(card, index) in visibleCards"
           :key="card.instanceId"
           class="dashboard-card"
-          :class="`dashboard-card--${card.size}`"
+          :class="[
+            `dashboard-card--${card.size}`,
+            {
+              'is-editing': dashboardEditing,
+              'is-dragging': draggedCardId === card.cardId,
+            },
+          ]"
+          :draggable="dashboardEditing"
+          @dragstart="draggedCardId = card.cardId"
+          @dragend="draggedCardId = ''"
+          @dragover.prevent
+          @drop.prevent="setCardDropTarget(card.cardId)"
         >
+          <div v-if="dashboardEditing" class="dashboard-card__edit-controls">
+            <button
+              type="button"
+              class="dashboard-drag-handle"
+              aria-label="Drag card"
+            >
+              <UiIcon name="GripVertical" :size="15" />
+            </button>
+            <select
+              :value="card.size"
+              aria-label="Card size"
+              @change="
+                updateCardDraft(card.cardId, {
+                  size: ($event.target as HTMLSelectElement).value as DashboardCardSize,
+                })
+              "
+            >
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="wide">Wide</option>
+            </select>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              aria-label="Move card left"
+              :disabled="index === 0"
+              @click="moveCardById(card.cardId, -1)"
+            >
+              <UiIcon name="ChevronLeft" :size="15" />
+            </Button>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              aria-label="Move card right"
+              :disabled="index === visibleCards.length - 1"
+              @click="moveCardById(card.cardId, 1)"
+            >
+              <UiIcon name="ChevronRight" :size="15" />
+            </Button>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              aria-label="Remove card"
+              @click="updateCardDraft(card.cardId, { enabled: false })"
+            >
+              <UiIcon name="EyeOff" :size="15" />
+            </Button>
+          </div>
           <template v-if="card.cardId === 'mission.daily-briefing'">
             <header class="dashboard-card__header">
               <h2>Daily Briefing</h2>
@@ -369,17 +552,23 @@ onMounted(() => {
       </div>
 
       <div
-        v-if="!loading && quickLinks.length"
+        v-if="!loading && visibleQuickLinks.length"
         class="mission-dashboard__quick-actions"
         aria-label="Quick actions"
+        @dragover.prevent
       >
         <Button
-          v-for="link in quickLinks"
+          v-for="link in visibleQuickLinks"
           :key="link.id"
           color="outline"
           shape="pill"
           size="large"
-          :to="quickLinkPath(link)"
+          :to="dashboardEditing ? undefined : quickLinkPath(link)"
+          :draggable="dashboardEditing"
+          @dragstart="draggedQuickActionId = link.id"
+          @dragend="draggedQuickActionId = ''"
+          @dragover.prevent
+          @drop.prevent="setQuickActionDropTarget(link.id)"
         >
           <template #icon>
             <UiIcon :name="quickLinkIcon(link)" :size="17" />
@@ -389,22 +578,86 @@ onMounted(() => {
       </div>
 
       <section
-        v-if="quickActionsEditing"
+        v-if="dashboardEditing"
+        class="quick-action-editor"
+        aria-label="Card settings"
+      >
+        <header class="quick-action-editor__header">
+          <h2>Cards</h2>
+        </header>
+        <div class="quick-action-editor__rows">
+          <div
+            v-for="(card, index) in cardDrafts"
+            :key="card.cardId"
+            class="quick-action-editor__row dashboard-card-editor__row"
+            :class="{ 'is-disabled': !card.enabled }"
+            draggable="true"
+            @dragstart="draggedCardId = card.cardId"
+            @dragend="draggedCardId = ''"
+            @dragover.prevent
+            @drop.prevent="setCardDropTarget(card.cardId)"
+          >
+            <label class="quick-action-editor__toggle">
+              <input
+                type="checkbox"
+                :checked="card.enabled"
+                @change="
+                  updateCardDraft(card.cardId, {
+                    enabled: ($event.target as HTMLInputElement).checked,
+                  })
+                "
+              />
+              <span>{{ card.enabled ? "Shown" : "Hidden" }}</span>
+            </label>
+            <span class="dashboard-card-editor__label">{{ cardLabel(card) }}</span>
+            <select
+              :value="card.size"
+              aria-label="Card size"
+              @change="
+                updateCardDraft(card.cardId, {
+                  size: ($event.target as HTMLSelectElement).value as DashboardCardSize,
+                })
+              "
+            >
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="wide">Wide</option>
+            </select>
+            <div class="quick-action-editor__order">
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Move card up"
+                :disabled="index === 0"
+                @click="moveCard(index, -1)"
+              >
+                <UiIcon name="ChevronUp" :size="15" />
+              </Button>
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Move card down"
+                :disabled="index === cardDrafts.length - 1"
+                @click="moveCard(index, 1)"
+              >
+                <UiIcon name="ChevronDown" :size="15" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        v-if="dashboardEditing"
         class="quick-action-editor"
         aria-label="Quick action settings"
       >
         <header class="quick-action-editor__header">
           <h2>Quick actions</h2>
-          <Button
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            aria-label="Close quick action settings"
-            @click="closeQuickActionEditor"
-          >
-            <UiIcon name="X" :size="16" />
-          </Button>
         </header>
         <div class="quick-action-editor__rows">
           <div
@@ -412,6 +665,11 @@ onMounted(() => {
             :key="link.id"
             class="quick-action-editor__row"
             :class="{ 'is-disabled': !link.enabled }"
+            draggable="true"
+            @dragstart="draggedQuickActionId = link.id"
+            @dragend="draggedQuickActionId = ''"
+            @dragover.prevent
+            @drop.prevent="setQuickActionDropTarget(link.id)"
           >
             <label class="quick-action-editor__toggle">
               <input
@@ -481,17 +739,17 @@ onMounted(() => {
           </div>
         </div>
         <div class="quick-action-editor__footer">
-          <Button color="ghost" shape="soft" size="compact" @click="closeQuickActionEditor">
+          <Button color="ghost" shape="soft" size="compact" @click="closeDashboardEditor">
             Cancel
           </Button>
           <Button
             color="accent"
             shape="soft"
             size="compact"
-            :disabled="quickActionsSaving"
-            @click="saveQuickActions"
+            :disabled="dashboardSaving"
+            @click="saveDashboardLayout"
           >
-            {{ quickActionsSaving ? "Saving..." : "Save actions" }}
+            {{ dashboardSaving ? "Saving..." : "Save dashboard" }}
           </Button>
         </div>
       </section>
@@ -516,7 +774,7 @@ onMounted(() => {
   top: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-height: var(--workspace-topbar-height);
@@ -558,6 +816,30 @@ onMounted(() => {
   gap: 8px;
   width: min(640px, 100%);
   justify-self: center;
+}
+
+.dashboard-edit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(760px, 100%);
+  justify-self: center;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+}
+
+.dashboard-edit-banner > span {
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.dashboard-edit-banner > div {
+  display: flex;
+  gap: 6px;
 }
 
 .quick-action-editor {
@@ -655,6 +937,32 @@ onMounted(() => {
   font-weight: 650;
 }
 
+.dashboard-card-editor__row {
+  grid-template-columns: auto minmax(0, 1fr) 130px auto;
+}
+
+.dashboard-card-editor__label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-card-editor__row select,
+.dashboard-card__edit-controls select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 12px;
+}
+
 .quick-action-editor__order {
   display: flex;
   gap: 4px;
@@ -675,6 +983,41 @@ onMounted(() => {
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-md);
   background: var(--ui-surface);
+}
+
+.dashboard-card.is-editing {
+  outline: 1px dashed color-mix(in oklab, var(--ui-accent), var(--ui-border) 45%);
+  outline-offset: -5px;
+}
+
+.dashboard-card.is-dragging {
+  opacity: 0.58;
+}
+
+.dashboard-card__edit-controls {
+  display: grid;
+  grid-template-columns: auto minmax(86px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 5px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.dashboard-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-bg);
+  color: var(--ui-text-muted);
+  cursor: grab;
+}
+
+.dashboard-drag-handle:active {
+  cursor: grabbing;
 }
 
 .dashboard-card--wide {
@@ -786,8 +1129,22 @@ onMounted(() => {
   }
 
   .quick-action-editor__row,
+  .dashboard-card-editor__row,
   .quick-action-editor__fields {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard-edit-banner,
+  .dashboard-card__edit-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-edit-banner {
+    display: grid;
+  }
+
+  .dashboard-edit-banner > div {
+    justify-content: start;
   }
 
   .quick-action-editor__order {
