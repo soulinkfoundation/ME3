@@ -6,6 +6,13 @@ With ME3, you can now own your email/calendar/website/AI assistant and more, all
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
 
+## Support ME3
+
+ME3 is open source. Donations to Soulink Foundation CLG help support ongoing
+development, maintenance, and open technology infrastructure.
+
+[Support Soulink Foundation](https://soulinkfoundation.org/support)
+
 ## Why ME3 Exists
 Someone once said: We need to reclaim the internet.
 A second booming voice said: Me too!
