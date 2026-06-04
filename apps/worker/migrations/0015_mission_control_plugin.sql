@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS mission_context_sources (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT 'owner',
   source_kind TEXT NOT NULL
-    CHECK (source_kind IN ('public_me_json', 'private_memory', 'core_table', 'plugin_table', 'daemon_directory', 'daemon_repo', 'provider', 'upload', 'url')),
+    CHECK (source_kind IN ('public_me_json', 'mission_statement', 'wheel_of_life', 'private_memory', 'core_table', 'plugin_table', 'daemon_directory', 'daemon_repo', 'provider', 'upload', 'url')),
   label TEXT NOT NULL,
   description TEXT,
   visibility TEXT NOT NULL DEFAULT 'private'

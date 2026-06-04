@@ -248,6 +248,8 @@ type MissionContextSourceRow = {
   user_id: string;
   source_kind:
     | "public_me_json"
+    | "mission_statement"
+    | "wheel_of_life"
     | "private_memory"
     | "core_table"
     | "plugin_table"
@@ -1593,7 +1595,13 @@ export async function listMissionContextSources(env: Env, userId: string, limitI
             source_ref, last_indexed_at, grants_json, metadata_json, created_at, updated_at
      FROM mission_context_sources
      WHERE user_id = ? AND status != 'archived'
-     ORDER BY CASE source_kind WHEN 'public_me_json' THEN 0 WHEN 'private_memory' THEN 1 ELSE 2 END,
+     ORDER BY CASE source_kind
+                WHEN 'mission_statement' THEN 0
+                WHEN 'wheel_of_life' THEN 1
+                WHEN 'public_me_json' THEN 2
+                WHEN 'private_memory' THEN 3
+                ELSE 4
+              END,
               label ASC
      LIMIT ?`,
   )
@@ -2051,31 +2059,69 @@ async function ensureProjectExists(env: Env, userId: string, projectId: string) 
 }
 
 async function ensureBaselineContextSources(env: Env, userId: string) {
+  const [dashboardRow, latestWheelSnapshot] = await Promise.all([
+    getOrCreateMissionDashboardSettingsRow(env, userId).catch(() => null),
+    getLatestMissionWheelSnapshot(env, userId).catch(() => null),
+  ]);
+  const missionStatement = normalizeContextMissionStatement(
+    dashboardRow?.mission_statement || null,
+  );
   const baselines = [
+    {
+      id: `mission-source-mission-statement-${userId}`,
+      kind: "mission_statement",
+      label: "Mission statement",
+      description: missionStatement
+        ? "The owner's main intent and direction for assistant help."
+        : "Missing: write a mission statement so ME3 understands the owner's main intent.",
+      visibility: "private",
+      status: missionStatement ? "active" : "setup_required",
+      sourceRef: "/mission-control",
+    },
+    {
+      id: `mission-source-wheel-of-life-${userId}`,
+      kind: "wheel_of_life",
+      label: "Wheel of Life",
+      description: latestWheelSnapshot
+        ? "Latest Wheel of Life snapshot, used as a current lightweight life check-in."
+        : "Missing: save a Wheel of Life snapshot so ME3 can see the owner's current balance.",
+      visibility: "private",
+      status: latestWheelSnapshot ? "active" : "setup_required",
+      sourceRef: "/mission-control/wheel-of-life",
+    },
     {
       id: `mission-source-public-profile-${userId}`,
       kind: "public_me_json",
       label: "Public me.json",
-      description: "Core-owned public profile fields available to the workspace.",
+      description: "Public profile facts ME3 can use for identity and public-facing help.",
       visibility: "public",
       status: "active",
+      sourceRef: "/.well-known/me.json",
     },
     {
       id: `mission-source-private-memory-${userId}`,
       kind: "private_memory",
       label: "Private memory",
-      description: "Owner-approved private Mission Control memories.",
+      description: "Approved private notes ME3 can match to the current chat or job.",
       visibility: "private",
       status: "active",
+      sourceRef: "/mission-control?settings=context",
     },
   ] as const;
 
   for (const source of baselines) {
     await env.DB.prepare(
       `INSERT INTO mission_context_sources
-         (id, user_id, source_kind, label, description, visibility, status, grants_json, metadata_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '{}')
-       ON CONFLICT(id) DO NOTHING`,
+         (id, user_id, source_kind, label, description, visibility, status, source_ref, grants_json, metadata_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', '{}')
+       ON CONFLICT(id) DO UPDATE SET
+         source_kind = excluded.source_kind,
+         label = excluded.label,
+         description = excluded.description,
+         visibility = excluded.visibility,
+         status = excluded.status,
+         source_ref = excluded.source_ref,
+         updated_at = datetime('now')`,
     )
       .bind(
         source.id,
@@ -2085,6 +2131,7 @@ async function ensureBaselineContextSources(env: Env, userId: string) {
         source.description,
         source.visibility,
         source.status,
+        source.sourceRef,
       )
       .run();
   }
@@ -2805,6 +2852,13 @@ function normalizeMissionStatement(value: unknown): string {
   return trimmed ? trimmed.slice(0, 2000) : DEFAULT_MISSION_STATEMENT;
 }
 
+function normalizeContextMissionStatement(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === DEFAULT_MISSION_STATEMENT) return null;
+  return trimmed.slice(0, 2000);
+}
+
 function sanitizeMissionWheelSegment(
   value: unknown,
   index: number,
@@ -2991,6 +3045,8 @@ function normalizeMemorySourceKind(value: unknown): MissionMemoryRow["source_kin
 function normalizeSourceKind(value: unknown): MissionContextSourceRow["source_kind"] | null {
   if (
     value === "public_me_json" ||
+    value === "mission_statement" ||
+    value === "wheel_of_life" ||
     value === "private_memory" ||
     value === "core_table" ||
     value === "plugin_table" ||

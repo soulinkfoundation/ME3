@@ -3,6 +3,7 @@ import {
   createMissionWheelSnapshot,
   getMissionDashboard,
   getMissionWheel,
+  listMissionContextSources,
   updateMissionDashboard,
   updateMissionWheelSettings,
 } from "./mission-control";
@@ -43,6 +44,22 @@ type WheelSnapshotRow = {
   segments_json: string;
   notes_json: string;
   created_at: string;
+};
+
+type ContextSourceRow = {
+  id: string;
+  user_id: string;
+  source_kind: string;
+  label: string;
+  description: string | null;
+  visibility: "public" | "private";
+  status: "active" | "setup_required" | "paused" | "failed" | "archived";
+  source_ref: string | null;
+  last_indexed_at: string | null;
+  grants_json: string;
+  metadata_json: string;
+  created_at: string;
+  updated_at: string;
 };
 
 describe("Mission Control dashboard settings", () => {
@@ -239,6 +256,53 @@ describe("Mission Control dashboard settings", () => {
     expect(dashboard.quickLinks.find((link) => link.id === "journal.today"))
       .toMatchObject({ enabled: true, available: false });
   });
+
+  it("lists priority context sources with missing essentials highlighted", async () => {
+    const env = createDashboardEnv();
+
+    let sources = await listMissionContextSources(env, "owner");
+
+    expect(sources.map((source) => source.sourceKind)).toEqual([
+      "mission_statement",
+      "wheel_of_life",
+      "public_me_json",
+      "private_memory",
+    ]);
+    expect(sources[0]).toMatchObject({
+      label: "Mission statement",
+      status: "setup_required",
+      sourceRef: "/mission-control",
+    });
+    expect(sources[1]).toMatchObject({
+      label: "Wheel of Life",
+      status: "setup_required",
+      sourceRef: "/mission-control/wheel-of-life",
+    });
+
+    await updateMissionDashboard(env, "owner", {
+      missionStatement: "Help builders steer their work with calm, useful systems.",
+    });
+    await createMissionWheelSnapshot(env, "owner", {
+      id: "snapshot-1",
+      createdAt: "2026-06-04T09:00:00.000Z",
+      segments: [
+        { id: "health", label: "Health", value: 6 },
+        { id: "spirituality", label: "Spirituality", value: 7 },
+        { id: "work", label: "Work", value: 8 },
+        { id: "finances", label: "Finances", value: 5 },
+        { id: "relationships", label: "Relationships", value: 7 },
+        { id: "home", label: "Home", value: 6 },
+      ],
+      notes: {},
+    });
+
+    sources = await listMissionContextSources(env, "owner");
+
+    expect(sources.find((source) => source.sourceKind === "mission_statement"))
+      .toMatchObject({ status: "active" });
+    expect(sources.find((source) => source.sourceKind === "wheel_of_life"))
+      .toMatchObject({ status: "active" });
+  });
 });
 
 function createDashboardEnv(options: {
@@ -249,6 +313,7 @@ function createDashboardEnv(options: {
   const settings = new Map<string, DashboardSettingsRow>();
   const wheelSettings = new Map<string, WheelSettingsRow>();
   const wheelSnapshots = new Map<string, WheelSnapshotRow>();
+  const contextSources = new Map<string, ContextSourceRow>();
   const enabledPlugins = new Set(options.enabledPlugins || []);
   const activity = options.activity || [];
   const pluginInstallations = new Map<string, PluginInstallationRow>(
@@ -336,6 +401,32 @@ function createDashboardEnv(options: {
                     ) as T[],
                 };
               }
+              if (sql.includes("mission_context_sources")) {
+                const userId = String(values[0]);
+                const limit = Number(values[1] || 50);
+                const rank = (sourceKind: string) =>
+                  sourceKind === "mission_statement"
+                    ? 0
+                    : sourceKind === "wheel_of_life"
+                      ? 1
+                      : sourceKind === "public_me_json"
+                        ? 2
+                        : sourceKind === "private_memory"
+                          ? 3
+                          : 4;
+                return {
+                  results: Array.from(contextSources.values())
+                    .filter(
+                      (row) => row.user_id === userId && row.status !== "archived",
+                    )
+                    .sort(
+                      (a, b) =>
+                        rank(a.source_kind) - rank(b.source_kind) ||
+                        a.label.localeCompare(b.label),
+                    )
+                    .slice(0, limit) as T[],
+                };
+              }
               return { results: [] as T[] };
             },
             async run() {
@@ -372,6 +463,40 @@ function createDashboardEnv(options: {
                   segments_json: String(values[2]),
                   notes_json: String(values[3]),
                   created_at: String(values[4]),
+                });
+              }
+              if (sql.includes("mission_context_sources")) {
+                const [
+                  id,
+                  userId,
+                  sourceKind,
+                  label,
+                  description,
+                  visibility,
+                  status,
+                  sourceRef,
+                ] = values;
+                const existing = contextSources.get(String(id));
+                contextSources.set(String(id), {
+                  id: String(id),
+                  user_id: String(userId),
+                  source_kind: String(sourceKind),
+                  label: String(label),
+                  description:
+                    description === null || description === undefined
+                      ? null
+                      : String(description),
+                  visibility: visibility === "public" ? "public" : "private",
+                  status: status as ContextSourceRow["status"],
+                  source_ref:
+                    sourceRef === null || sourceRef === undefined
+                      ? null
+                      : String(sourceRef),
+                  last_indexed_at: existing?.last_indexed_at || null,
+                  grants_json: existing?.grants_json || "[]",
+                  metadata_json: existing?.metadata_json || "{}",
+                  created_at: existing?.created_at || "2026-06-04 08:00:00",
+                  updated_at: "2026-06-04 08:00:00",
                 });
               }
               return { success: true, meta: { changes: 1 } };

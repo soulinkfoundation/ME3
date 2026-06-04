@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api, type ApiStreamEvent } from "../../api";
@@ -295,7 +302,11 @@ type AssistantJobBuilderSentenceSegment = {
   strong?: boolean;
 };
 
-type InboxWatchTiming = "immediate" | "daily_digest" | "weekly_digest" | "manual";
+type InboxWatchTiming =
+  | "immediate"
+  | "daily_digest"
+  | "weekly_digest"
+  | "manual";
 type InboxWatchInferredLabel =
   | "needs_reply"
   | "important"
@@ -472,6 +483,13 @@ type MissionContextSource = {
   status: "active" | "setup_required" | "paused" | "failed" | "archived";
   sourceRef: string | null;
 };
+type AssistantSourceViewItem = MissionContextSource & {
+  priority: number;
+  priorityLabel: string;
+  accessLabel: string;
+  usageLabel: string;
+  isMissing: boolean;
+};
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
 type AssistantSettingsSection = "context" | "activity";
@@ -613,7 +631,9 @@ const selectedModelTouched = ref(Boolean(storedAssistantModelId));
 const aiSettingsLoading = ref(false);
 const aiSettingsError = ref("");
 const aiProviders = ref<AiProviderRecord[]>([]);
-const voiceDictationState = ref<"idle" | "listening" | "processing" | "unsupported">("idle");
+const voiceDictationState = ref<
+  "idle" | "listening" | "processing" | "unsupported"
+>("idle");
 const voiceDictationError = ref<string | null>(null);
 const voiceMediaRecorder = ref<MediaRecorder | null>(null);
 const voiceMediaStream = ref<MediaStream | null>(null);
@@ -782,7 +802,9 @@ const inboxWatchRulesChanged = computed(() => {
     JSON.stringify(buildInboxWatchRulePayload(inboxWatchRulesDraft.value)) !==
     JSON.stringify(
       buildInboxWatchRulePayload(
-        inboxWatchRuleFormsFromRules(selectedDetail.value?.version?.rules || []),
+        inboxWatchRuleFormsFromRules(
+          selectedDetail.value?.version?.rules || [],
+        ),
       ),
     )
   );
@@ -790,8 +812,9 @@ const inboxWatchRulesChanged = computed(() => {
 
 const selectedModel = computed(
   () =>
-    AI_AGENT_MODEL_OPTIONS.find((model) => model.id === selectedModelId.value) ||
-    AI_AGENT_MODEL_OPTIONS[0],
+    AI_AGENT_MODEL_OPTIONS.find(
+      (model) => model.id === selectedModelId.value,
+    ) || AI_AGENT_MODEL_OPTIONS[0],
 );
 
 const aiProviderById = computed(() => {
@@ -823,7 +846,9 @@ const assistantModelOptions = computed(() =>
   }),
 );
 
-const selectedModelSetup = computed(() => setupStateForModel(selectedModel.value));
+const selectedModelSetup = computed(() =>
+  setupStateForModel(selectedModel.value),
+);
 
 const selectedModelTitle = computed(() => {
   const model = selectedModel.value;
@@ -844,7 +869,9 @@ const assistantConsoleMessages = computed(() =>
   chatMessages.value.filter((message) => message.id !== "assistant-ready"),
 );
 const assistantAttachmentsReady = computed(() =>
-  assistantAttachments.value.every((attachment) => attachment.status !== "uploading"),
+  assistantAttachments.value.every(
+    (attachment) => attachment.status !== "uploading",
+  ),
 );
 const assistantTextAttachments = computed(() =>
   assistantAttachments.value.filter(
@@ -852,10 +879,14 @@ const assistantTextAttachments = computed(() =>
   ),
 );
 const assistantReadyAttachments = computed(() =>
-  assistantAttachments.value.filter((attachment) => attachment.status === "ready"),
+  assistantAttachments.value.filter(
+    (attachment) => attachment.status === "ready",
+  ),
 );
 const assistantAttachmentIssue = computed(() => {
-  const errored = assistantAttachments.value.find((attachment) => attachment.status === "error");
+  const errored = assistantAttachments.value.find(
+    (attachment) => attachment.status === "error",
+  );
   if (errored?.error) return errored.error;
   if (!assistantAttachmentsReady.value) return "Uploading attachments...";
 
@@ -866,32 +897,59 @@ const assistantAttachmentIssue = computed(() => {
     return `${unsupported.name} is not a supported assistant attachment yet. Use text, markdown, JSON, CSV, or images.`;
   }
 
-  const hasImage = assistantAttachments.value.some((attachment) => attachment.kind === "image");
+  const hasImage = assistantAttachments.value.some(
+    (attachment) => attachment.kind === "image",
+  );
   if (hasImage && !selectedModel.value.capabilities.includes("vision")) {
     return "Switch to a vision-capable model before sending images.";
   }
 
   return "";
 });
-const assistantComposerDragActive = computed(() => assistantComposerDragDepth.value > 0);
+const assistantComposerDragActive = computed(
+  () => assistantComposerDragDepth.value > 0,
+);
 const assistantProjectThreadGroups = computed(() =>
   assistantProjects.value.map((project) => ({
     project,
-    threads: assistantThreads.value.filter((thread) => thread.projectId === project.id),
+    threads: assistantThreads.value.filter(
+      (thread) => thread.projectId === project.id,
+    ),
   })),
 );
 const assistantUngroupedThreads = computed(() =>
   assistantThreads.value.filter((thread) => !thread.projectId),
 );
-const assistantThreadSearchActive = computed(() => assistantThreadSearch.value.trim().length > 0);
+const assistantThreadSearchActive = computed(
+  () => assistantThreadSearch.value.trim().length > 0,
+);
 const assistantThreadListEmpty = computed(
   () =>
     !assistantThreadsLoading.value &&
     assistantThreads.value.length === 0 &&
     !assistantThreadsError.value,
 );
+const assistantSourceRows = computed<AssistantSourceViewItem[]>(() =>
+  assistantSources.value
+    .map((source) => {
+      const priority = assistantSourcePriority(source);
+      return {
+        ...source,
+        priority,
+        priorityLabel: `Priority ${priority}`,
+        accessLabel: source.visibility === "public" ? "Public" : "Private",
+        usageLabel: assistantSourceUsageLabel(source),
+        isMissing:
+          source.status === "setup_required" || source.status === "failed",
+      };
+    })
+    .sort(
+      (left, right) =>
+        left.priority - right.priority || left.label.localeCompare(right.label),
+    ),
+);
 const assistantContextItemCount = computed(
-  () => assistantMemory.value.length + assistantSources.value.length,
+  () => assistantMemory.value.length + assistantSourceRows.value.length,
 );
 const assistantActivityItems = computed<AssistantActivityViewItem[]>(() => {
   const visibleRunIds = new Set(
@@ -958,7 +1016,8 @@ const assistantSettingsTabs = computed<
 
 const canSendAssistantMessage = computed(
   () =>
-    (assistantDraft.value.trim().length > 0 || assistantReadyAttachments.value.length > 0) &&
+    (assistantDraft.value.trim().length > 0 ||
+      assistantReadyAttachments.value.length > 0) &&
     !assistantSending.value &&
     !assistantThreadLoading.value &&
     !assistantAttachmentIssue.value,
@@ -1036,7 +1095,10 @@ async function loadAssistantThreads() {
     );
     assistantThreads.value = response.threads || [];
   } catch (err) {
-    assistantThreadsError.value = messageFromUnknown(err, "Chats could not load.");
+    assistantThreadsError.value = messageFromUnknown(
+      err,
+      "Chats could not load.",
+    );
   } finally {
     assistantThreadsLoading.value = false;
   }
@@ -1046,10 +1108,15 @@ async function loadAssistantProjects() {
   assistantProjectsLoading.value = true;
   assistantProjectsError.value = "";
   try {
-    const response = await api.get<MissionProjectsResponse>("/mission-control/projects");
+    const response = await api.get<MissionProjectsResponse>(
+      "/mission-control/projects",
+    );
     assistantProjects.value = response.projects || [];
   } catch (err) {
-    assistantProjectsError.value = messageFromUnknown(err, "Projects could not load.");
+    assistantProjectsError.value = messageFromUnknown(
+      err,
+      "Projects could not load.",
+    );
   } finally {
     assistantProjectsLoading.value = false;
   }
@@ -1131,7 +1198,9 @@ async function archiveAssistantThread(thread: AssistantThread) {
       `/assistant/threads/${encodeURIComponent(thread.id)}`,
       { status: nextStatus },
     );
-    assistantThreads.value = assistantThreads.value.filter((item) => item.id !== thread.id);
+    assistantThreads.value = assistantThreads.value.filter(
+      (item) => item.id !== thread.id,
+    );
     if (assistantThreadId.value === thread.id && nextStatus === "archived") {
       await startNewAssistantChat(null, { closeHistory: false });
     }
@@ -1143,11 +1212,16 @@ async function archiveAssistantThread(thread: AssistantThread) {
     } else {
       archivedAssistantThreads.value = [
         response.thread,
-        ...archivedAssistantThreads.value.filter((item) => item.id !== response.thread.id),
+        ...archivedAssistantThreads.value.filter(
+          (item) => item.id !== response.thread.id,
+        ),
       ];
     }
   } catch (err) {
-    assistantThreadsError.value = messageFromUnknown(err, "Chat could not update.");
+    assistantThreadsError.value = messageFromUnknown(
+      err,
+      "Chat could not update.",
+    );
   } finally {
     assistantThreadActionId.value = null;
   }
@@ -1155,18 +1229,25 @@ async function archiveAssistantThread(thread: AssistantThread) {
 
 async function deleteAssistantThread(thread: AssistantThread) {
   if (assistantThreadActionId.value) return false;
-  const confirmed = window.confirm(`Delete "${threadTitle(thread)}"? This removes transcript text.`);
+  const confirmed = window.confirm(
+    `Delete "${threadTitle(thread)}"? This removes transcript text.`,
+  );
   if (!confirmed) return false;
   assistantThreadActionId.value = thread.id;
   try {
     await api.delete(`/assistant/threads/${encodeURIComponent(thread.id)}`);
-    assistantThreads.value = assistantThreads.value.filter((item) => item.id !== thread.id);
+    assistantThreads.value = assistantThreads.value.filter(
+      (item) => item.id !== thread.id,
+    );
     if (assistantThreadId.value === thread.id) {
       await startNewAssistantChat(null, { closeHistory: false });
     }
     return true;
   } catch (err) {
-    assistantThreadsError.value = messageFromUnknown(err, "Chat could not be deleted.");
+    assistantThreadsError.value = messageFromUnknown(
+      err,
+      "Chat could not be deleted.",
+    );
     return false;
   } finally {
     assistantThreadActionId.value = null;
@@ -1204,7 +1285,8 @@ function routeAssistantSettingsSection(): AssistantSettingsSection | null {
   const value = route.query.settings;
   const raw = Array.isArray(value) ? value[0] : value;
   if (raw === "activity") return "activity";
-  if (raw === "context" || raw === "memory" || raw === "sources") return "context";
+  if (raw === "context" || raw === "memory" || raw === "sources")
+    return "context";
   return null;
 }
 
@@ -1227,7 +1309,10 @@ async function openAssistantSettings(
   assistantSettingsModalOpen.value = true;
   assistantHistoryDrawerOpen.value = false;
   assistantSettingsError.value = "";
-  if (options.updateRoute !== false && routeAssistantSettingsSection() !== section) {
+  if (
+    options.updateRoute !== false &&
+    routeAssistantSettingsSection() !== section
+  ) {
     void router.replace({
       query: {
         ...route.query,
@@ -1241,7 +1326,12 @@ async function openAssistantSettings(
 
 function closeAssistantSettingsModal() {
   assistantSettingsModalOpen.value = false;
-  const { settings: _settings, context: _context, section: _section, ...query } = route.query;
+  const {
+    settings: _settings,
+    context: _context,
+    section: _section,
+    ...query
+  } = route.query;
   void router.replace({ query });
 }
 
@@ -1306,9 +1396,7 @@ async function loadAssistantActivity() {
         api.get<{ approvals: MissionApproval[] }>(
           "/mission-control/approvals?status=pending",
         ),
-        api.get<{ runs: MissionRun[] }>(
-          "/mission-control/agent-runs?limit=50",
-        ),
+        api.get<{ runs: MissionRun[] }>("/mission-control/agent-runs?limit=50"),
         api.get<{ activity: MissionActivity[] }>(
           "/mission-control/plugin-activity?limit=50",
         ),
@@ -1420,7 +1508,11 @@ async function addAssistantSource() {
 }
 
 async function clearAssistantActivity() {
-  if (assistantActivityItems.value.length === 0 || assistantClearingActivity.value) return;
+  if (
+    assistantActivityItems.value.length === 0 ||
+    assistantClearingActivity.value
+  )
+    return;
   const confirmed = window.confirm(
     "Clear assistant activity? This removes run and plugin activity history from this view.",
   );
@@ -1469,7 +1561,9 @@ async function exportAssistantThread(thread: AssistantThread) {
       `# ${threadTitle(response.thread)}`,
       "",
       `Exported: ${response.exportedAt}`,
-      response.thread.projectId ? `Project: ${projectName(response.thread.projectId)}` : "Project: None",
+      response.thread.projectId
+        ? `Project: ${projectName(response.thread.projectId)}`
+        : "Project: None",
       "",
       ...response.messages.flatMap((message) => [
         `## ${message.role === "user" ? "You" : "ME3"} - ${message.createdAt}`,
@@ -1478,7 +1572,9 @@ async function exportAssistantThread(thread: AssistantThread) {
         "",
       ]),
     ].join("\n");
-    const blob = new Blob([transcript], { type: "text/markdown;charset=utf-8" });
+    const blob = new Blob([transcript], {
+      type: "text/markdown;charset=utf-8",
+    });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1488,7 +1584,10 @@ async function exportAssistantThread(thread: AssistantThread) {
     link.remove();
     window.URL.revokeObjectURL(url);
   } catch (err) {
-    assistantThreadsError.value = messageFromUnknown(err, "Chat could not export.");
+    assistantThreadsError.value = messageFromUnknown(
+      err,
+      "Chat could not export.",
+    );
   } finally {
     assistantThreadActionId.value = null;
   }
@@ -1503,7 +1602,10 @@ function upsertAssistantThread(thread: AssistantThread) {
 
 function projectName(projectId: string | null) {
   if (!projectId) return "Chats";
-  return assistantProjects.value.find((project) => project.id === projectId)?.name || "Project";
+  return (
+    assistantProjects.value.find((project) => project.id === projectId)?.name ||
+    "Project"
+  );
 }
 
 function slugifyFilename(value: string) {
@@ -1521,7 +1623,9 @@ function formatAssistantThreadTime(value: string | null) {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const thatDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const diffDays = Math.round((today.getTime() - thatDay.getTime()) / 86_400_000);
+  const diffDays = Math.round(
+    (today.getTime() - thatDay.getTime()) / 86_400_000,
+  );
   if (diffDays === 0) {
     return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
@@ -1563,7 +1667,9 @@ async function loadAssistantThreadFromRoute() {
       } else {
         archivedAssistantThreads.value = [
           response.thread,
-          ...archivedAssistantThreads.value.filter((item) => item.id !== response.thread.id),
+          ...archivedAssistantThreads.value.filter(
+            (item) => item.id !== response.thread.id,
+          ),
         ];
       }
     }
@@ -1577,7 +1683,10 @@ async function loadAssistantThreadFromRoute() {
     );
   } catch (err) {
     if (assistantThreadId.value !== threadId) return;
-    assistantError.value = messageFromUnknown(err, "Assistant thread could not load.");
+    assistantError.value = messageFromUnknown(
+      err,
+      "Assistant thread could not load.",
+    );
     agentChat.resetMessages();
   } finally {
     if (assistantThreadId.value === threadId) {
@@ -1652,7 +1761,10 @@ function onAssistantComposerDragOver(event: DragEvent) {
 function onAssistantComposerDragLeave(event: DragEvent) {
   if (!assistantDragHasFiles(event)) return;
   event.preventDefault();
-  assistantComposerDragDepth.value = Math.max(0, assistantComposerDragDepth.value - 1);
+  assistantComposerDragDepth.value = Math.max(
+    0,
+    assistantComposerDragDepth.value - 1,
+  );
 }
 
 async function onAssistantComposerDrop(event: DragEvent) {
@@ -1723,13 +1835,16 @@ async function addAssistantAttachments(files: File[]) {
         formData,
       );
       const uploaded = response.attachments[0];
-      if (!uploaded) throw new Error("Attachment upload did not return a record.");
+      if (!uploaded)
+        throw new Error("Attachment upload did not return a record.");
       draft.id = uploaded.id;
       draft.name = uploaded.name || uploaded.filename || draft.name;
       draft.mimeType = uploaded.mimeType || draft.mimeType;
       draft.size = uploaded.size;
       draft.kind = uploaded.kind;
-      draft.text = uploaded.text ? uploaded.text.slice(0, assistantAttachmentTextBudget) : null;
+      draft.text = uploaded.text
+        ? uploaded.text.slice(0, assistantAttachmentTextBudget)
+        : null;
       draft.storageKey = uploaded.storageKey;
       draft.textTruncated = Boolean(uploaded.textTruncated);
       draft.status = "ready";
@@ -1743,7 +1858,9 @@ async function addAssistantAttachments(files: File[]) {
 function removeAssistantAttachment(id: string) {
   const attachment = assistantAttachments.value.find((item) => item.id === id);
   revokeAssistantAttachmentPreview(attachment);
-  assistantAttachments.value = assistantAttachments.value.filter((item) => item.id !== id);
+  assistantAttachments.value = assistantAttachments.value.filter(
+    (item) => item.id !== id,
+  );
 }
 
 function clearAssistantAttachments() {
@@ -1753,7 +1870,9 @@ function clearAssistantAttachments() {
   assistantAttachments.value = [];
 }
 
-function revokeAssistantAttachmentPreview(attachment: AssistantAttachmentDraft | undefined) {
+function revokeAssistantAttachmentPreview(
+  attachment: AssistantAttachmentDraft | undefined,
+) {
   if (!attachment?.previewUrl) return;
   window.URL.revokeObjectURL(attachment.previewUrl);
 }
@@ -1782,7 +1901,8 @@ function classifyAssistantAttachment(file: File): AssistantAttachmentKind {
 function buildAssistantMessageWithAttachments(text: string) {
   const normalized = text.trim();
   const attachments = assistantTextAttachments.value;
-  if (attachments.length === 0) return normalized || "Review the attached files.";
+  if (attachments.length === 0)
+    return normalized || "Review the attached files.";
 
   const base = normalized || "Review the attached files.";
   const renderedAttachments = attachments
@@ -1940,8 +2060,13 @@ function capabilitySummary(capabilities: AiAgentModelCapability[]) {
   return capabilities.map((capability) => labels[capability]).join(", ");
 }
 
-function assistantMessageKey(message: { id?: string; role: string; text: string }, index?: number) {
-  return message.id || `${message.role}:${index ?? 0}:${message.text.slice(0, 32)}`;
+function assistantMessageKey(
+  message: { id?: string; role: string; text: string },
+  index?: number,
+) {
+  return (
+    message.id || `${message.role}:${index ?? 0}:${message.text.slice(0, 32)}`
+  );
 }
 
 function newAssistantMessageId(role: "user" | "assistant") {
@@ -2008,7 +2133,8 @@ async function submitAssistantText(
         const data = streamEventRecord(event);
 
         if (event.event === "thread") {
-          const threadId = typeof data.threadId === "string" ? data.threadId : "";
+          const threadId =
+            typeof data.threadId === "string" ? data.threadId : "";
           if (threadId) {
             assistantThreadId.value = threadId;
           }
@@ -2017,7 +2143,9 @@ async function submitAssistantText(
 
         if (event.event === "delta") {
           ensureAssistantMessage();
-          const message = chatMessages.value.find((item) => item.id === assistantMessageId);
+          const message = chatMessages.value.find(
+            (item) => item.id === assistantMessageId,
+          );
           if (message && typeof data.text === "string") {
             message.text += data.text;
           }
@@ -2034,7 +2162,9 @@ async function submitAssistantText(
 
         if (event.event === "error") {
           throw new Error(
-            typeof data.error === "string" ? data.error : "Assistant stream failed",
+            typeof data.error === "string"
+              ? data.error
+              : "Assistant stream failed",
           );
         }
       },
@@ -2094,12 +2224,17 @@ async function sendAssistantMessage() {
 }
 
 function streamEventRecord(event: ApiStreamEvent): Record<string, unknown> {
-  return event.data && typeof event.data === "object" && !Array.isArray(event.data)
+  return event.data &&
+    typeof event.data === "object" &&
+    !Array.isArray(event.data)
     ? (event.data as Record<string, unknown>)
     : {};
 }
 
-function applyAssistantResultToMessage(messageId: string, result: AgentSandboxResponse) {
+function applyAssistantResultToMessage(
+  messageId: string,
+  result: AgentSandboxResponse,
+) {
   const message = chatMessages.value.find((item) => item.id === messageId);
   if (!message) return;
   if (!message.text.trim()) {
@@ -2114,7 +2249,8 @@ function applyAssistantResultToMessage(messageId: string, result: AgentSandboxRe
   message.reminderLink =
     result.reminderAction?.kind === "created" ||
     result.reminderAction?.kind === "updated";
-  message.actionHref = result.contentAction?.kind === "saved" ? "/assistant" : null;
+  message.actionHref =
+    result.contentAction?.kind === "saved" ? "/assistant" : null;
   message.actionLabel =
     result.contentAction?.kind === "saved" ? "Open content bank" : null;
   message.jobBuilderAction = result.jobBuilderAction || null;
@@ -2132,7 +2268,10 @@ function jobBuilderBusyKey(action: AssistantJobBuilderAction, intent: string) {
     : `job-builder:${intent}:${action.jobId}`;
 }
 
-function jobBuilderActionBusy(action: AssistantJobBuilderAction, intent: string) {
+function jobBuilderActionBusy(
+  action: AssistantJobBuilderAction,
+  intent: string,
+) {
   return busyKeys.value.has(jobBuilderBusyKey(action, intent));
 }
 
@@ -2147,15 +2286,22 @@ async function saveAssistantJobBuilderDraft(
   if (busyKeys.value.has(key)) return;
   busyKeys.value.add(key);
   try {
-    const response = await api.post<AssistantJobSaveResponse>("/assistant/jobs", {
-      draft: action.draft,
-      status: activate ? "active" : "draft",
-    });
+    const response = await api.post<AssistantJobSaveResponse>(
+      "/assistant/jobs",
+      {
+        draft: action.draft,
+        status: activate ? "active" : "draft",
+      },
+    );
     await loadJobs();
     const savedAction = assistantJobSavedAction(response.job);
     message.jobBuilderAction = savedAction;
     message.text = savedAction.summary;
-    toastSuccess(activate && response.job.status === "active" ? "Job saved and activated." : "Job saved.");
+    toastSuccess(
+      activate && response.job.status === "active"
+        ? "Job saved and activated."
+        : "Job saved.",
+    );
   } catch (err) {
     assistantError.value = messageFromUnknown(err, "Job could not be saved.");
     toastFromUnknown(err, "Job could not be saved.");
@@ -2198,8 +2344,12 @@ async function activateAssistantJobBuilderSaved(
   }
 }
 
-function assistantJobSavedAction(job: AssistantJob): AssistantJobSavedBuilderAction {
-  const availableActions: Array<"activate" | "run_now" | "open_job"> = ["open_job"];
+function assistantJobSavedAction(
+  job: AssistantJob,
+): AssistantJobSavedBuilderAction {
+  const availableActions: Array<"activate" | "run_now" | "open_job"> = [
+    "open_job",
+  ];
   if (job.status === "draft" || job.status === "paused") {
     availableActions.unshift("activate");
   }
@@ -2218,7 +2368,10 @@ function assistantJobSavedAction(job: AssistantJob): AssistantJobSavedBuilderAct
 function assistantJobStatusLabel(
   status: AssistantJobStatus | AssistantJobDraftValidation["status"],
 ) {
-  const labels: Record<AssistantJobStatus | AssistantJobDraftValidation["status"], string> = {
+  const labels: Record<
+    AssistantJobStatus | AssistantJobDraftValidation["status"],
+    string
+  > = {
     draft: "Draft",
     active: "Active",
     paused: "Paused",
@@ -2252,8 +2405,14 @@ function assistantJobBuilderWhenPhrase(draft: AssistantJobDraft) {
     return trigger.localTime ? `daily at ${trigger.localTime}` : "daily";
   }
   if (trigger.cadence === "weekly") {
-    const day = weekdayOptions.find((option) => option.value === trigger.dayOfWeek)?.label;
-    const parts = ["weekly", day ? `on ${day}` : "", trigger.localTime ? `at ${trigger.localTime}` : ""]
+    const day = weekdayOptions.find(
+      (option) => option.value === trigger.dayOfWeek,
+    )?.label;
+    const parts = [
+      "weekly",
+      day ? `on ${day}` : "",
+      trigger.localTime ? `at ${trigger.localTime}` : "",
+    ]
       .filter(Boolean)
       .join(" ");
     return parts || "weekly";
@@ -2283,11 +2442,7 @@ function assistantJobBuilderToolNames(draft: AssistantJobDraft) {
       "Mission Control Reviews",
       "Mission Control Tasks",
     ],
-    "invoice-receipt-triage": [
-      "Email",
-      "Accounts",
-      "Mission Control Reviews",
-    ],
+    "invoice-receipt-triage": ["Email", "Accounts", "Mission Control Reviews"],
   };
   const fromRecipe = draft.recipeId ? recipeTools[draft.recipeId] : null;
   if (fromRecipe) return fromRecipe;
@@ -2337,7 +2492,9 @@ function assistantRecipeIngredientName(capabilityId: string) {
   return capabilityId
     .split(".")
     .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).replace(/_/g, " "))
+    .map(
+      (part) => part.charAt(0).toUpperCase() + part.slice(1).replace(/_/g, " "),
+    )
     .join(" ");
 }
 
@@ -2358,7 +2515,10 @@ function assistantJobBuilderSentenceSegments(
   const byRecipe: Record<string, AssistantJobBuilderSentenceSegment[]> = {
     "weekly-review": [
       { text: "This job will review " },
-      { text: "your projects, tasks, and pending approvals for the week", strong: true },
+      {
+        text: "your projects, tasks, and pending approvals for the week",
+        strong: true,
+      },
       { text: " " },
       { text: when, strong: true },
       { text: " and create " },
@@ -2376,7 +2536,10 @@ function assistantJobBuilderSentenceSegments(
     ],
     "email-triage": [
       { text: "This job will check " },
-      { text: "your connected email for messages that match your rules", strong: true },
+      {
+        text: "your connected email for messages that match your rules",
+        strong: true,
+      },
       { text: " " },
       { text: when, strong: true },
       { text: " and create " },
@@ -2409,14 +2572,19 @@ function assistantJobBuilderSentenceSegments(
 }
 
 function formatHumanList(values: string[]) {
-  const unique = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  const unique = Array.from(
+    new Set(values.map((value) => value.trim()).filter(Boolean)),
+  );
   if (unique.length === 0) return "";
   if (unique.length === 1) return unique[0] || "";
   if (unique.length === 2) return `${unique[0]} and ${unique[1]}`;
   return `${unique.slice(0, -1).join(", ")}, and ${unique[unique.length - 1]}`;
 }
 
-function setAssistantStoppedMessage(messageId: string, messageStarted: boolean) {
+function setAssistantStoppedMessage(
+  messageId: string,
+  messageStarted: boolean,
+) {
   const stoppedDetail = "ME3 stopped before the assistant finished replying.";
   if (!messageStarted) {
     agentChat.appendMessage({
@@ -2446,9 +2614,8 @@ function stopAssistantTurn() {
 
 function isAbortError(err: unknown) {
   return (
-    err instanceof DOMException && err.name === "AbortError"
-  ) || (
-    err instanceof Error && err.name === "AbortError"
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError")
   );
 }
 
@@ -2481,7 +2648,9 @@ async function copyAssistantMessage(
   }, 1500);
 }
 
-async function retryAssistantTurn(message: (typeof chatMessages.value)[number]) {
+async function retryAssistantTurn(
+  message: (typeof chatMessages.value)[number],
+) {
   if (assistantSending.value) return;
 
   const startIndex =
@@ -2497,7 +2666,9 @@ async function retryAssistantTurn(message: (typeof chatMessages.value)[number]) 
   await submitAssistantText(text);
 }
 
-function editAndResendAssistantTurn(message: (typeof chatMessages.value)[number]) {
+function editAndResendAssistantTurn(
+  message: (typeof chatMessages.value)[number],
+) {
   if (assistantSending.value || message.role !== "user") return;
 
   const index = assistantMessageIndex(message);
@@ -2512,7 +2683,9 @@ function editAndResendAssistantTurn(message: (typeof chatMessages.value)[number]
   });
 }
 
-function findPreviousUserMessageIndex(message: (typeof chatMessages.value)[number]) {
+function findPreviousUserMessageIndex(
+  message: (typeof chatMessages.value)[number],
+) {
   const index = assistantMessageIndex(message);
   if (index < 0) return -1;
 
@@ -2537,7 +2710,8 @@ async function toggleVoiceDictation() {
 async function startVoiceDictation() {
   if (!supportsMediaRecording()) {
     voiceDictationState.value = "unsupported";
-    voiceDictationError.value = "Voice dictation is not available in this browser.";
+    voiceDictationError.value =
+      "Voice dictation is not available in this browser.";
     return;
   }
 
@@ -2549,7 +2723,10 @@ async function startVoiceDictation() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mimeType = getPreferredVoiceMimeType();
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const recorder = new MediaRecorder(
+      stream,
+      mimeType ? { mimeType } : undefined,
+    );
     voiceMediaStream.value = stream;
     voiceMediaRecorder.value = recorder;
 
@@ -2557,7 +2734,9 @@ async function startVoiceDictation() {
       if (event.data.size > 0) voiceAudioChunks.push(event.data);
     });
     recorder.addEventListener("stop", () => {
-      void transcribeRecordedVoice(recorder.mimeType || mimeType || "audio/webm");
+      void transcribeRecordedVoice(
+        recorder.mimeType || mimeType || "audio/webm",
+      );
     });
 
     recorder.start();
@@ -2615,7 +2794,11 @@ async function transcribeRecordedVoice(mimeType: string) {
   try {
     const formData = new FormData();
     const audio = new Blob(chunks, { type: mimeType });
-    formData.append("audio", audio, `assistant-dictation.${extensionForMimeType(mimeType)}`);
+    formData.append(
+      "audio",
+      audio,
+      `assistant-dictation.${extensionForMimeType(mimeType)}`,
+    );
     const result = await api.upload<VoiceTranscriptionResponse>(
       "/assistant/voice/transcribe",
       formData,
@@ -2624,7 +2807,10 @@ async function transcribeRecordedVoice(mimeType: string) {
     voiceDictationState.value = "idle";
   } catch (err) {
     voiceDictationState.value = "idle";
-    voiceDictationError.value = messageFromUnknown(err, "Voice transcription failed.");
+    voiceDictationError.value = messageFromUnknown(
+      err,
+      "Voice transcription failed.",
+    );
   }
 }
 
@@ -2671,7 +2857,10 @@ function getPreferredVoiceMimeType() {
     "audio/mp4",
     "audio/ogg;codecs=opus",
   ];
-  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || "";
+  return (
+    candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ||
+    ""
+  );
 }
 
 function extensionForMimeType(mimeType: string) {
@@ -3153,7 +3342,9 @@ function inboxWatchRuleFormsFromRules(
   const forms = rules
     .map((rule) => inboxWatchRuleFormFromRule(rule))
     .filter((rule): rule is InboxWatchRuleForm => Boolean(rule));
-  return forms.length ? forms : [defaultInboxWatchRuleForm("any-inbox-message")];
+  return forms.length
+    ? forms
+    : [defaultInboxWatchRuleForm("any-inbox-message")];
 }
 
 function inboxWatchRuleFormFromRule(
@@ -3167,14 +3358,18 @@ function inboxWatchRuleFormFromRule(
     label: rule.label || "Inbox Watch rule",
     enabled: value.enabled !== false,
     timing: normalizeInboxWatchTiming(value.timing),
-    from: listToLines(match.from) || listToLines([
-      ...listFromUnknown(match.fromAddresses),
-      ...listFromUnknown(match.fromDomains),
-    ]),
-    contains: listToLines(match.textContains) || listToLines([
-      ...listFromUnknown(match.subjectContains),
-      ...listFromUnknown(match.bodyContains),
-    ]),
+    from:
+      listToLines(match.from) ||
+      listToLines([
+        ...listFromUnknown(match.fromAddresses),
+        ...listFromUnknown(match.fromDomains),
+      ]),
+    contains:
+      listToLines(match.textContains) ||
+      listToLines([
+        ...listFromUnknown(match.subjectContains),
+        ...listFromUnknown(match.bodyContains),
+      ]),
     inferredLabels: normalizeInboxWatchLabels(match.inferredLabels),
     notifyOwner: actions.notifyOwner === true,
     summarizeAndLabel: actions.summarizeAndLabel !== false,
@@ -3183,7 +3378,9 @@ function inboxWatchRuleFormFromRule(
   };
 }
 
-function defaultInboxWatchRuleForm(id: string = crypto.randomUUID()): InboxWatchRuleForm {
+function defaultInboxWatchRuleForm(
+  id: string = crypto.randomUUID(),
+): InboxWatchRuleForm {
   return {
     id,
     label: "Any inbox email",
@@ -3402,6 +3599,8 @@ function assistantMemoryScopeLabel(item: MissionMemory) {
 
 function assistantSourceKindLabel(kind: string) {
   const labels: Record<string, string> = {
+    mission_statement: "Mission statement",
+    wheel_of_life: "Wheel of Life",
     public_me_json: "Public profile",
     private_memory: "Private memory",
     core_table: "ME3 data",
@@ -3415,8 +3614,29 @@ function assistantSourceKindLabel(kind: string) {
   return labels[kind] || assistantMemoryKindLabel(kind);
 }
 
+function assistantSourcePriority(
+  source: Pick<MissionContextSource, "sourceKind">,
+) {
+  if (source.sourceKind === "mission_statement") return 1;
+  if (source.sourceKind === "wheel_of_life") return 2;
+  if (source.sourceKind === "public_me_json") return 3;
+  if (source.sourceKind === "private_memory") return 4;
+  return 5;
+}
+
+function assistantSourceUsageLabel(source: MissionContextSource) {
+  if (source.status === "setup_required") return "Missing";
+  if (source.status === "failed") return "Needs attention";
+  if (source.status === "paused") return "Paused";
+  if (source.sourceKind === "mission_statement") return "Always small";
+  if (source.sourceKind === "wheel_of_life") return "Always small";
+  if (source.sourceKind === "public_me_json") return "Small profile";
+  if (source.sourceKind === "private_memory") return "Only if relevant";
+  return "Used when relevant";
+}
+
 function assistantSourceStatusLabel(status: MissionContextSource["status"]) {
-  if (status === "setup_required") return "Setup needed";
+  if (status === "setup_required") return "Missing";
   return assistantMemoryKindLabel(status);
 }
 
@@ -3485,7 +3705,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
       aria-label="Close chat history"
       @click="assistantHistoryDrawerOpen = false"
     />
-    <Teleport v-if="!assistantHistoryDrawerOpen" to="#app-side-nav-mobile-page-controls">
+    <Teleport
+      v-if="!assistantHistoryDrawerOpen"
+      to="#app-side-nav-mobile-page-controls"
+    >
       <div class="assistant-mobile-nav">
         <Button
           color="ghost"
@@ -3633,7 +3856,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
       <div v-if="!assistantHistoryCollapsed" class="assistant-history__body">
         <nav class="assistant-history__topnav" aria-label="Assistant tools">
-          <form class="assistant-history__search" @submit.prevent="applyAssistantThreadSearch">
+          <form
+            class="assistant-history__search"
+            @submit.prevent="applyAssistantThreadSearch"
+          >
             <UiIcon name="Search" :size="16" aria-hidden="true" />
             <input
               v-model="assistantThreadSearchDraft"
@@ -3655,7 +3881,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
         <p v-if="assistantThreadsError" class="assistant-history__message">
           {{ assistantThreadsError }}
         </p>
-        <p v-else-if="assistantProjectsError" class="assistant-history__message">
+        <p
+          v-else-if="assistantProjectsError"
+          class="assistant-history__message"
+        >
           {{ assistantProjectsError }}
         </p>
         <p
@@ -3681,13 +3910,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <button
               type="button"
               class="assistant-history__project-row"
-              :class="{ 'is-active': routeProjectId() === group.project.id && !assistantThreadId }"
+              :class="{
+                'is-active':
+                  routeProjectId() === group.project.id && !assistantThreadId,
+              }"
               :aria-label="`Start a new chat in ${group.project.name}`"
               @click="startNewAssistantChat(group.project.id)"
             >
               <UiIcon name="Folder" :size="15" aria-hidden="true" />
               <span>{{ group.project.name }}</span>
-              <span v-if="group.threads.length" class="assistant-history__count">
+              <span
+                v-if="group.threads.length"
+                class="assistant-history__count"
+              >
                 {{ group.threads.length }}
               </span>
               <span class="assistant-history__project-add" aria-hidden="true">
@@ -3708,16 +3943,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <button
                   type="button"
                   class="assistant-history__thread"
-                  :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
+                  :aria-current="
+                    assistantThreadId === thread.id ? 'page' : undefined
+                  "
                   @click="selectAssistantThread(thread.id)"
                 >
-                  <UiIcon name="MessageSquare" :size="15" aria-hidden="true" />
                   <span class="assistant-history__thread-main">
                     <span class="assistant-history__thread-title">
                       {{ threadTitle(thread) }}
                     </span>
                     <span class="assistant-history__thread-meta">
-                      {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
+                      {{
+                        formatAssistantThreadTime(
+                          thread.lastMessageAt || thread.updatedAt,
+                        )
+                      }}
                     </span>
                   </span>
                 </button>
@@ -3774,16 +4014,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <button
                 type="button"
                 class="assistant-history__thread"
-                :aria-current="assistantThreadId === thread.id ? 'page' : undefined"
+                :aria-current="
+                  assistantThreadId === thread.id ? 'page' : undefined
+                "
                 @click="selectAssistantThread(thread.id)"
               >
-                <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
                 <span class="assistant-history__thread-main">
                   <span class="assistant-history__thread-title">
                     {{ threadTitle(thread) }}
                   </span>
                   <span class="assistant-history__thread-meta">
-                    {{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}
+                    {{
+                      formatAssistantThreadTime(
+                        thread.lastMessageAt || thread.updatedAt,
+                      )
+                    }}
                   </span>
                 </span>
               </button>
@@ -3825,10 +4070,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
               v-if="assistantThreadListEmpty"
               class="assistant-history__message"
             >
-              {{ assistantThreadSearchActive ? "No matching chats." : "No saved chats yet." }}
+              {{
+                assistantThreadSearchActive
+                  ? "No matching chats."
+                  : "No saved chats yet."
+              }}
             </p>
             <p
-              v-else-if="!assistantThreadsLoading && assistantUngroupedThreads.length === 0"
+              v-else-if="
+                !assistantThreadsLoading &&
+                assistantUngroupedThreads.length === 0
+              "
               class="assistant-history__message"
             >
               No chats outside projects.
@@ -3865,10 +4117,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
       </div>
     </aside>
 
-    <main
-      class="assistant-main"
-      aria-label="Assistant console"
-    >
+    <main class="assistant-main" aria-label="Assistant console">
       <section v-if="pageError" class="notice notice--error" role="alert">
         {{ pageError }}
       </section>
@@ -3929,12 +4178,20 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     class="job-builder-card__status"
                     :class="`job-builder-card__status--${message.jobBuilderAction.validation.status}`"
                   >
-                    {{ assistantJobStatusLabel(message.jobBuilderAction.validation.status) }}
+                    {{
+                      assistantJobStatusLabel(
+                        message.jobBuilderAction.validation.status,
+                      )
+                    }}
                   </span>
                 </div>
                 <p class="job-builder-card__sentence">
                   <template
-                    v-for="(segment, segmentIndex) in assistantJobBuilderSentenceSegments(message.jobBuilderAction)"
+                    v-for="(
+                      segment, segmentIndex
+                    ) in assistantJobBuilderSentenceSegments(
+                      message.jobBuilderAction,
+                    )"
                     :key="`${segment.text}-${segmentIndex}`"
                   >
                     <strong v-if="segment.strong">{{ segment.text }}</strong>
@@ -3942,14 +4199,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   </template>
                 </p>
                 <p class="job-builder-card__tools">
-                  Uses {{ assistantJobBuilderToolPhrase(message.jobBuilderAction.draft) }}.
+                  Uses
+                  {{
+                    assistantJobBuilderToolPhrase(
+                      message.jobBuilderAction.draft,
+                    )
+                  }}.
                 </p>
                 <ul
-                  v-if="message.jobBuilderAction.explanation.setupWarnings.length"
+                  v-if="
+                    message.jobBuilderAction.explanation.setupWarnings.length
+                  "
                   class="job-builder-card__warnings"
                 >
                   <li
-                    v-for="warning in message.jobBuilderAction.explanation.setupWarnings"
+                    v-for="warning in message.jobBuilderAction.explanation
+                      .setupWarnings"
                     :key="warning"
                   >
                     {{ warning }}
@@ -3957,21 +4222,46 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </ul>
                 <div class="job-builder-card__actions">
                   <button
-                    v-if="message.jobBuilderAction.availableActions.includes('save')"
+                    v-if="
+                      message.jobBuilderAction.availableActions.includes('save')
+                    "
                     type="button"
                     class="job-builder-card__button"
-                    :disabled="jobBuilderActionBusy(message.jobBuilderAction, 'save')"
-                    @click="saveAssistantJobBuilderDraft(message, message.jobBuilderAction, false)"
+                    :disabled="
+                      jobBuilderActionBusy(message.jobBuilderAction, 'save')
+                    "
+                    @click="
+                      saveAssistantJobBuilderDraft(
+                        message,
+                        message.jobBuilderAction,
+                        false,
+                      )
+                    "
                   >
                     <UiIcon name="Save" :size="15" aria-hidden="true" />
                     <span>Save job</span>
                   </button>
                   <button
-                    v-if="message.jobBuilderAction.availableActions.includes('save_and_activate')"
+                    v-if="
+                      message.jobBuilderAction.availableActions.includes(
+                        'save_and_activate',
+                      )
+                    "
                     type="button"
                     class="job-builder-card__button job-builder-card__button--primary"
-                    :disabled="jobBuilderActionBusy(message.jobBuilderAction, 'save_and_activate')"
-                    @click="saveAssistantJobBuilderDraft(message, message.jobBuilderAction, true)"
+                    :disabled="
+                      jobBuilderActionBusy(
+                        message.jobBuilderAction,
+                        'save_and_activate',
+                      )
+                    "
+                    @click="
+                      saveAssistantJobBuilderDraft(
+                        message,
+                        message.jobBuilderAction,
+                        true,
+                      )
+                    "
                   >
                     <UiIcon name="Play" :size="15" aria-hidden="true" />
                     <span>Save and activate</span>
@@ -3985,37 +4275,62 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <div class="job-builder-card__header">
                   <div>
                     <h3>{{ message.text }}</h3>
-                    <p>Review settings, run a test, or activate it from here.</p>
+                    <p>
+                      Review settings, run a test, or activate it from here.
+                    </p>
                   </div>
                   <span
                     class="job-builder-card__status"
                     :class="`job-builder-card__status--${message.jobBuilderAction.status}`"
                   >
-                    {{ assistantJobStatusLabel(message.jobBuilderAction.status) }}
+                    {{
+                      assistantJobStatusLabel(message.jobBuilderAction.status)
+                    }}
                   </span>
                 </div>
                 <div class="job-builder-card__actions">
                   <button
-                    v-if="message.jobBuilderAction.availableActions.includes('activate')"
+                    v-if="
+                      message.jobBuilderAction.availableActions.includes(
+                        'activate',
+                      )
+                    "
                     type="button"
                     class="job-builder-card__button job-builder-card__button--primary"
-                    :disabled="jobBuilderActionBusy(message.jobBuilderAction, 'activate')"
-                    @click="activateAssistantJobBuilderSaved(message, message.jobBuilderAction)"
+                    :disabled="
+                      jobBuilderActionBusy(message.jobBuilderAction, 'activate')
+                    "
+                    @click="
+                      activateAssistantJobBuilderSaved(
+                        message,
+                        message.jobBuilderAction,
+                      )
+                    "
                   >
                     <UiIcon name="Play" :size="15" aria-hidden="true" />
                     <span>Activate job</span>
                   </button>
                   <button
-                    v-if="message.jobBuilderAction.availableActions.includes('run_now')"
+                    v-if="
+                      message.jobBuilderAction.availableActions.includes(
+                        'run_now',
+                      )
+                    "
                     type="button"
                     class="job-builder-card__button"
-                    @click="runAssistantJobBuilderSaved(message.jobBuilderAction)"
+                    @click="
+                      runAssistantJobBuilderSaved(message.jobBuilderAction)
+                    "
                   >
                     <UiIcon name="RefreshCw" :size="15" aria-hidden="true" />
                     <span>Run now</span>
                   </button>
                   <button
-                    v-if="message.jobBuilderAction.availableActions.includes('open_job')"
+                    v-if="
+                      message.jobBuilderAction.availableActions.includes(
+                        'open_job',
+                      )
+                    "
                     type="button"
                     class="job-builder-card__button"
                     @click="openJob(message.jobBuilderAction.jobId)"
@@ -4106,7 +4421,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
             v-if="assistantSending && assistantAwaitingResponse"
             class="assistant-message assistant-message--assistant"
           >
-            <div class="assistant-message__bubble assistant-message__bubble--pending">
+            <div
+              class="assistant-message__bubble assistant-message__bubble--pending"
+            >
               <span>ME3 is thinking</span>
               <span class="assistant-typing" aria-hidden="true">
                 <span />
@@ -4119,7 +4436,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
         <footer
           class="assistant-composer"
-          :class="{ 'assistant-composer--drag-active': assistantComposerDragActive }"
+          :class="{
+            'assistant-composer--drag-active': assistantComposerDragActive,
+          }"
           aria-label="Message composer"
           @dragenter="onAssistantComposerDragEnter"
           @dragover="onAssistantComposerDragOver"
@@ -4158,14 +4477,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 :size="14"
                 aria-hidden="true"
               />
-              <span class="assistant-attachment__name">{{ attachment.name }}</span>
+              <span class="assistant-attachment__name">{{
+                attachment.name
+              }}</span>
               <span
                 v-if="attachment.status !== 'uploading'"
                 class="assistant-attachment__meta"
               >
                 {{
-                  attachment.status === 'error'
-                    ? 'Failed'
+                  attachment.status === "error"
+                    ? "Failed"
                     : formatFileSize(attachment.size)
                 }}
               </span>
@@ -4200,7 +4521,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,text/*,application/json,application/xml,image/*"
                 @change="onAssistantAttachmentChange"
               />
-              <Button color="ghost" shape="pill" size="small" icon-only class="composer-icon-button" type="button"
+              <Button
+                color="ghost"
+                shape="pill"
+                size="small"
+                icon-only
+                class="composer-icon-button"
+                type="button"
                 title="Add attachment"
                 aria-label="Add attachment"
                 :disabled="assistantSending"
@@ -4252,7 +4579,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </span>
               </div>
               <Button
-                :color="voiceDictationState === 'listening' ? 'accent' : 'ghost'"
+                :color="
+                  voiceDictationState === 'listening' ? 'accent' : 'ghost'
+                "
                 shape="pill"
                 size="small"
                 icon-only
@@ -4268,7 +4597,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     : 'Start voice dictation'
                 "
                 :aria-pressed="voiceDictationState === 'listening'"
-                :disabled="!canUseVoiceDictation || voiceDictationState === 'unsupported'"
+                :disabled="
+                  !canUseVoiceDictation || voiceDictationState === 'unsupported'
+                "
                 type="button"
                 @click="toggleVoiceDictation"
               >
@@ -4285,18 +4616,24 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 class="assistant-send"
                 :class="{ 'assistant-send--stop': assistantSending }"
                 :disabled="assistantSending ? false : !canSendAssistantMessage"
-                :aria-label="assistantSending ? 'Stop response' : 'Send message'"
+                :aria-label="
+                  assistantSending ? 'Stop response' : 'Send message'
+                "
                 type="button"
-                @click="assistantSending ? stopAssistantTurn() : sendAssistantMessage()"
+                @click="
+                  assistantSending
+                    ? stopAssistantTurn()
+                    : sendAssistantMessage()
+                "
               >
-                <UiIcon :name="assistantSending ? 'Square' : 'ArrowUp'" :size="18" />
+                <UiIcon
+                  :name="assistantSending ? 'Square' : 'ArrowUp'"
+                  :size="18"
+                />
               </Button>
             </div>
           </div>
-          <div
-            v-if="voiceDictationStatusText"
-            class="assistant-composer__meta"
-          >
+          <div v-if="voiceDictationStatusText" class="assistant-composer__meta">
             <span
               v-if="voiceDictationStatusText"
               class="assistant-composer__voice-status"
@@ -4328,7 +4665,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <h2 id="archived-chats-title">Archived Chats</h2>
               <p>Restore a chat to bring it back into the side nav.</p>
             </div>
-            <Button color="ghost" shape="soft" size="compact" icon-only type="button"
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
               aria-label="Close"
               @click="closeArchivedThreadsModal"
             >
@@ -4336,7 +4678,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </Button>
           </header>
 
-          <p v-if="archivedAssistantThreadsError" class="assistant-history__message">
+          <p
+            v-if="archivedAssistantThreadsError"
+            class="assistant-history__message"
+          >
             {{ archivedAssistantThreadsError }}
           </p>
           <p
@@ -4355,12 +4700,19 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <button
                 type="button"
                 class="assistant-archived-thread__main"
-                @click="selectAssistantThread(thread.id); closeArchivedThreadsModal()"
+                @click="
+                  selectAssistantThread(thread.id);
+                  closeArchivedThreadsModal();
+                "
               >
                 <UiIcon name="MessageSquare" :size="16" aria-hidden="true" />
                 <span>
                   <strong>{{ threadTitle(thread) }}</strong>
-                  <small>{{ formatAssistantThreadTime(thread.lastMessageAt || thread.updatedAt) }}</small>
+                  <small>{{
+                    formatAssistantThreadTime(
+                      thread.lastMessageAt || thread.updatedAt,
+                    )
+                  }}</small>
                 </span>
               </button>
               <div class="assistant-archived-thread__actions">
@@ -4410,7 +4762,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
           <header class="assistant-modal__header">
             <div class="assistant-modal__header-copy">
               <h2 id="assistant-settings-title">Assistant settings</h2>
-              <p>Context and activity for ME3.</p>
+              <p>What ME3 can use and what it has done.</p>
             </div>
             <div class="assistant-modal__header-actions">
               <Button
@@ -4443,8 +4795,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
             >
               <div class="assistant-settings__panel-header">
                 <div>
-                  <h3>Context</h3>
-                  <p>Memory and sources ME3 can use.</p>
+                  <h3>What ME3 can use</h3>
+                  <p>
+                    ME3 keeps the top items small, then adds matching details
+                    only when a chat or job needs them.
+                  </p>
                 </div>
                 <Button
                   color="ghost"
@@ -4476,8 +4831,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <section class="assistant-settings__block">
                   <header class="assistant-settings__block-header">
                     <div>
-                      <h4>Memory</h4>
-                      <p>Durable notes waiting for review or already active.</p>
+                      <h4>Saved memory</h4>
+                      <p>
+                        Approved private notes. ME3 only uses the ones that
+                        match the current chat or job.
+                      </p>
                     </div>
                     <span>{{ assistantMemory.length }}</span>
                   </header>
@@ -4498,7 +4856,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       icon-only
                       type="submit"
                       aria-label="Add memory"
-                      :disabled="!assistantMemoryDraft.trim() || Boolean(assistantMemoryActionId)"
+                      :disabled="
+                        !assistantMemoryDraft.trim() ||
+                        Boolean(assistantMemoryActionId)
+                      "
                     >
                       <UiIcon name="Plus" :size="18" />
                     </Button>
@@ -4517,7 +4878,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   >
                     <div class="assistant-settings-row__main">
                       <div class="assistant-settings-row__heading">
-                        <h4>{{ item.title || assistantMemoryKindLabel(item.memoryKind) }}</h4>
+                        <h4>
+                          {{
+                            item.title ||
+                            assistantMemoryKindLabel(item.memoryKind)
+                          }}
+                        </h4>
                         <span
                           class="status-badge"
                           :class="`status-badge--${item.reviewStatus}`"
@@ -4529,7 +4895,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       <div class="assistant-settings-row__meta">
                         <span>{{ assistantMemorySourceLabel(item) }}</span>
                         <span>{{ assistantMemoryScopeLabel(item) }}</span>
-                        <span>{{ formatAssistantSettingsDate(item.updatedAt) }}</span>
+                        <span>{{
+                          formatAssistantSettingsDate(item.updatedAt)
+                        }}</span>
                       </div>
                     </div>
                     <div class="assistant-settings-row__actions">
@@ -4564,9 +4932,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   <header class="assistant-settings__block-header">
                     <div>
                       <h4>Sources</h4>
-                      <p>Inventoried places context can come from.</p>
+                      <p>
+                        Ordered by importance. Missing essentials are
+                        highlighted.
+                      </p>
                     </div>
-                    <span>{{ assistantSources.length }}</span>
+                    <span>{{ assistantSourceRows.length }}</span>
                   </header>
                   <form
                     class="assistant-settings-inline-form"
@@ -4575,7 +4946,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     <input
                       v-model="assistantSourceDraft"
                       type="text"
-                      placeholder="Source name or URL"
+                      placeholder="Add a site, provider, or source"
                       aria-label="Add context source"
                     />
                     <Button
@@ -4590,27 +4961,46 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       <UiIcon name="Plus" :size="18" />
                     </Button>
                   </form>
-                  <div v-if="assistantSources.length === 0" class="empty-row">
+                  <div
+                    v-if="assistantSourceRows.length === 0"
+                    class="empty-row"
+                  >
                     No context sources yet.
                   </div>
                   <article
-                    v-for="source in assistantSources"
+                    v-for="source in assistantSourceRows"
                     :key="source.id"
                     class="assistant-settings-row"
+                    :class="{
+                      'assistant-settings-row--missing': source.isMissing,
+                    }"
                   >
                     <div class="assistant-settings-row__main">
                       <div class="assistant-settings-row__heading">
                         <h4>{{ source.label }}</h4>
-                        <span class="status-badge">
+                        <span class="assistant-settings-row__priority">
+                          {{ source.priorityLabel }}
+                        </span>
+                        <span
+                          class="status-badge"
+                          :class="`status-badge--${source.status}`"
+                        >
                           {{ assistantSourceStatusLabel(source.status) }}
                         </span>
                       </div>
                       <p>
-                        {{ source.description || source.sourceRef || assistantSourceKindLabel(source.sourceKind) }}
+                        {{
+                          source.description ||
+                          source.sourceRef ||
+                          assistantSourceKindLabel(source.sourceKind)
+                        }}
                       </p>
                       <div class="assistant-settings-row__meta">
-                        <span>{{ assistantSourceKindLabel(source.sourceKind) }}</span>
-                        <span>{{ source.visibility }}</span>
+                        <span>{{
+                          assistantSourceKindLabel(source.sourceKind)
+                        }}</span>
+                        <span>{{ source.accessLabel }}</span>
+                        <span>{{ source.usageLabel }}</span>
                       </div>
                     </div>
                   </article>
@@ -4618,11 +5008,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </template>
             </section>
 
-            <section
-              v-else
-              class="assistant-settings__panel"
-              role="tabpanel"
-            >
+            <section v-else class="assistant-settings__panel" role="tabpanel">
               <div class="assistant-settings__panel-header">
                 <div>
                   <h3>Activity</h3>
@@ -4647,7 +5033,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     shape="soft"
                     size="compact"
                     type="button"
-                    :disabled="assistantActivityItems.length === 0 || assistantClearingActivity"
+                    :disabled="
+                      assistantActivityItems.length === 0 ||
+                      assistantClearingActivity
+                    "
                     @click="clearAssistantActivity"
                   >
                     {{ assistantClearingActivity ? "Clearing" : "Clear" }}
@@ -4665,7 +5054,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <div v-if="assistantActivityLoading" class="empty-row">
                 Loading activity...
               </div>
-              <div v-else-if="assistantActivityItems.length === 0" class="empty-row">
+              <div
+                v-else-if="assistantActivityItems.length === 0"
+                class="empty-row"
+              >
                 No activity yet.
               </div>
               <template v-else>
@@ -4675,7 +5067,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   class="assistant-settings-row assistant-settings-row--activity"
                 >
                   <div class="assistant-settings-row__main">
-                    <span class="assistant-settings-row__kind">{{ item.kind }}</span>
+                    <span class="assistant-settings-row__kind">{{
+                      item.kind
+                    }}</span>
                     <h4>{{ item.title }}</h4>
                     <p>{{ item.summary || "No summary yet" }}</p>
                   </div>
@@ -4683,7 +5077,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     <span v-if="item.status" class="status-badge">
                       {{ item.status }}
                     </span>
-                    <span>{{ formatAssistantSettingsDate(item.createdAt) }}</span>
+                    <span>{{
+                      formatAssistantSettingsDate(item.createdAt)
+                    }}</span>
                   </div>
                 </article>
               </template>
@@ -4725,7 +5121,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <UiIcon name="Plus" :size="15" aria-hidden="true" />
                 <span>Set up a job</span>
               </button>
-              <Button color="ghost" shape="soft" size="compact" icon-only type="button"
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
                 aria-label="Close"
                 @click="closeConfigureJobsModal"
               >
@@ -4738,7 +5139,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
             Loading jobs...
           </div>
           <div v-else class="job-list" role="list">
-            <template v-for="row in configureJobRows" :key="row.kind === 'job' ? row.job.id : row.recipe.id">
+            <template
+              v-for="row in configureJobRows"
+              :key="row.kind === 'job' ? row.job.id : row.recipe.id"
+            >
               <article
                 v-if="row.kind === 'job'"
                 role="listitem"
@@ -4787,7 +5191,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       type="checkbox"
                       class="job-toggle__input"
                       :checked="isJobEnabled(row.job)"
-                      :disabled="!canToggle(row.job) || isJobToggleBusy(row.job)"
+                      :disabled="
+                        !canToggle(row.job) || isJobToggleBusy(row.job)
+                      "
                       :aria-label="
                         isJobEnabled(row.job)
                           ? `Pause ${row.job.name}`
@@ -4802,7 +5208,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     />
                     <span class="job-toggle__track" aria-hidden="true" />
                   </label>
-                  <Button color="ghost" shape="soft" size="small" icon-only type="button"
+                  <Button
+                    color="ghost"
+                    shape="soft"
+                    size="small"
+                    icon-only
+                    type="button"
                     title="Job detail"
                     aria-label="Open job detail"
                     @click.stop="openJob(row.job.id)"
@@ -4812,11 +5223,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </div>
               </article>
 
-              <article
-                v-else
-                role="listitem"
-                class="job-row job-row--inactive"
-              >
+              <article v-else role="listitem" class="job-row job-row--inactive">
                 <span class="job-row__emoji" aria-hidden="true">
                   {{ recipeNavEmoji(row.recipe.id) }}
                 </span>
@@ -4895,7 +5302,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <h2 id="recipe-ingredients-title">Recipe ingredients</h2>
               <p>ME3 features currently available to starter recipes.</p>
             </div>
-            <Button color="ghost" shape="soft" size="compact" icon-only type="button"
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
               aria-label="Close"
               @click="closeRecipeIngredientsModal"
             >
@@ -4903,9 +5315,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </Button>
           </header>
 
-          <div v-if="loadingRecipes" class="empty-row">
-            Loading recipes...
-          </div>
+          <div v-if="loadingRecipes" class="empty-row">Loading recipes...</div>
           <div v-else class="recipe-ingredient-list" role="list">
             <article
               v-for="recipe in recipes"
@@ -4925,7 +5335,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   class="status-badge"
                   :class="`status-badge--${recipe.state}`"
                 >
-                  {{ recipe.state === 'needs_setup' ? 'Needs setup' : recipe.state === 'coming_later' ? 'Later' : 'Ready' }}
+                  {{
+                    recipe.state === "needs_setup"
+                      ? "Needs setup"
+                      : recipe.state === "coming_later"
+                        ? "Later"
+                        : "Ready"
+                  }}
                 </span>
               </div>
               <div class="recipe-ingredient-row__groups">
@@ -4933,7 +5349,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   <strong>Required</strong>
                   <div class="recipe-ingredient-row__chips">
                     <span
-                      v-for="ingredient in recipeIngredientNames(recipe).required"
+                      v-for="ingredient in recipeIngredientNames(recipe)
+                        .required"
                       :key="`${recipe.id}:required:${ingredient}`"
                       class="recipe-ingredient-chip"
                     >
@@ -4945,7 +5362,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   <strong>Optional</strong>
                   <div class="recipe-ingredient-row__chips">
                     <span
-                      v-for="ingredient in recipeIngredientNames(recipe).optional"
+                      v-for="ingredient in recipeIngredientNames(recipe)
+                        .optional"
                       :key="`${recipe.id}:optional:${ingredient}`"
                       class="recipe-ingredient-chip recipe-ingredient-chip--optional"
                     >
@@ -4993,7 +5411,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </div>
                 <p>{{ jobDetailPurpose(selectedJob) }}</p>
               </div>
-              <Button color="ghost" shape="soft" size="compact" icon-only type="button"
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
                 aria-label="Close"
                 @click="closeDetailModal"
               >
@@ -5083,7 +5506,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       >
                         Save
                       </Button>
-                      <Button color="ghost" shape="soft" size="small" icon-only type="button"
+                      <Button
+                        color="ghost"
+                        shape="soft"
+                        size="small"
+                        icon-only
+                        type="button"
                         aria-label="Cancel schedule edit"
                         @click="cancelScheduleInlineEdit"
                       >
@@ -5096,10 +5524,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   v-else-if="selectedScheduleTrigger"
                   class="detail-facts__schedule"
                 >
-                  <span>{{
-                    formatTrigger(selectedJob.triggerSummary)
-                  }}</span>
-                  <Button color="ghost" shape="soft" size="small" icon-only type="button"
+                  <span>{{ formatTrigger(selectedJob.triggerSummary) }}</span>
+                  <Button
+                    color="ghost"
+                    shape="soft"
+                    size="small"
+                    icon-only
+                    type="button"
                     title="Edit schedule"
                     aria-label="Edit schedule"
                     @click="openScheduleInlineEdit"
@@ -5190,7 +5621,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       />
                       <span class="job-toggle__track" aria-hidden="true" />
                     </label>
-                    <Button color="ghost" shape="soft" size="small" icon-only type="button"
+                    <Button
+                      color="ghost"
+                      shape="soft"
+                      size="small"
+                      icon-only
+                      type="button"
                       title="Remove rule"
                       aria-label="Remove rule"
                       :disabled="inboxWatchRulesDraft.length <= 1"
@@ -5221,48 +5657,48 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
                   <div class="inbox-watch-labels">
                     <span class="inbox-watch-labels__title">Looks like</span>
-                  <div class="inbox-watch-checks">
-                    <label class="checkbox-pill">
-                      <input
-                        v-model="rule.inferredLabels"
-                        type="checkbox"
-                        value="needs_reply"
-                      />
-                      <span>Needs reply</span>
-                    </label>
-                    <label class="checkbox-pill">
-                      <input
-                        v-model="rule.inferredLabels"
-                        type="checkbox"
-                        value="important"
-                      />
-                      <span>Important</span>
-                    </label>
-                    <label class="checkbox-pill">
-                      <input
-                        v-model="rule.inferredLabels"
-                        type="checkbox"
-                        value="finance"
-                      />
-                      <span>Finance</span>
-                    </label>
-                    <label class="checkbox-pill">
-                      <input
-                        v-model="rule.inferredLabels"
-                        type="checkbox"
-                        value="scheduling"
-                      />
-                      <span>Scheduling</span>
-                    </label>
-                    <label class="checkbox-pill">
-                      <input
-                        v-model="rule.inferredLabels"
-                        type="checkbox"
-                        value="review"
-                      />
-                      <span>Review</span>
-                    </label>
-                  </div>
+                    <div class="inbox-watch-checks">
+                      <label class="checkbox-pill">
+                        <input
+                          v-model="rule.inferredLabels"
+                          type="checkbox"
+                          value="needs_reply"
+                        />
+                        <span>Needs reply</span>
+                      </label>
+                      <label class="checkbox-pill">
+                        <input
+                          v-model="rule.inferredLabels"
+                          type="checkbox"
+                          value="important"
+                        />
+                        <span>Important</span>
+                      </label>
+                      <label class="checkbox-pill">
+                        <input
+                          v-model="rule.inferredLabels"
+                          type="checkbox"
+                          value="finance"
+                        />
+                        <span>Finance</span>
+                      </label>
+                      <label class="checkbox-pill">
+                        <input
+                          v-model="rule.inferredLabels"
+                          type="checkbox"
+                          value="scheduling"
+                        />
+                        <span>Scheduling</span>
+                      </label>
+                      <label class="checkbox-pill">
+                        <input
+                          v-model="rule.inferredLabels"
+                          type="checkbox"
+                          value="review"
+                        />
+                        <span>Review</span>
+                      </label>
+                    </div>
                   </div>
 
                   <div class="inbox-watch-actions">
@@ -5313,7 +5749,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
             >
               <div class="briefing-settings__header">
                 <h3 id="briefing-customise-title">Customise message</h3>
-                <Button color="ghost" shape="soft" size="small" icon-only type="button"
+                <Button
+                  color="ghost"
+                  shape="soft"
+                  size="small"
+                  icon-only
+                  type="button"
                   title="Restore default"
                   aria-label="Restore default message"
                   @click="resetDailyBriefingTemplate"
@@ -5483,7 +5924,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: flex;
   flex-direction: column;
   width: min(300px, calc(100vw - var(--app-shell-mobile-nav-leading-padding)));
-  max-width: min(300px, calc(100vw - var(--app-shell-mobile-nav-leading-padding)));
+  max-width: min(
+    300px,
+    calc(100vw - var(--app-shell-mobile-nav-leading-padding))
+  );
   min-width: 0;
   height: 100dvh;
   max-height: 100dvh;
@@ -5587,8 +6031,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: transparent;
   color: var(--ui-text);
   font: inherit;
-  font-size: 13px;
-  font-weight: 520;
+  font-size: 12px;
+  font-weight: 400;
   text-align: left;
   cursor: pointer;
 }
@@ -5654,9 +6098,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history__list--nested {
-  margin-left: 14px;
-  padding-left: 6px;
-  border-left: 1px solid var(--ui-border);
+  margin-left: 12px;
 }
 
 .assistant-history__project-group {
@@ -5734,15 +6176,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-history__thread-title {
   color: inherit;
-  font-size: 12px;
-  font-weight: 540;
+  font-size: 11px;
+  font-weight: 450;
   line-height: 1.25;
 }
 
 .assistant-history__thread-meta,
 .assistant-history__message {
   color: var(--ui-text-muted);
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.35;
 }
 
@@ -5968,7 +6410,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  padding: var(--assistant-header-clearance) 0 var(--assistant-composer-clearance);
+  padding: var(--assistant-header-clearance) 0
+    var(--assistant-composer-clearance);
 }
 
 .assistant-empty-state {
@@ -6221,7 +6664,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
-  transition: border-color 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+  transition:
+    border-color 0.14s ease,
+    background-color 0.14s ease,
+    color 0.14s ease;
 }
 
 .job-builder-card__button:hover:not(:disabled) {
@@ -6272,7 +6718,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+  transition:
+    opacity 0.14s ease,
+    background-color 0.14s ease,
+    color 0.14s ease;
 }
 
 .assistant-message:hover .assistant-message-tool,
@@ -6412,7 +6861,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-attachment--error {
-  border-color: color-mix(in oklab, var(--ui-warning, #b26a00) 45%, var(--ui-border));
+  border-color: color-mix(
+    in oklab,
+    var(--ui-warning, #b26a00) 45%,
+    var(--ui-border)
+  );
   color: var(--ui-warning, #b26a00);
 }
 
@@ -6742,6 +7195,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
   border-color: color-mix(in oklab, #b45309, var(--ui-border) 72%);
 }
 
+.assistant-settings-row--missing {
+  border-color: color-mix(in oklab, #dc2626 55%, var(--ui-border));
+  background: color-mix(in oklab, #dc2626 5%, transparent);
+  border-radius: var(--ui-radius-sm);
+  padding-inline: 10px;
+}
+
 .assistant-settings-row__main {
   display: grid;
   gap: 5px;
@@ -6768,6 +7228,21 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-settings-row__meta span {
   overflow-wrap: anywhere;
+}
+
+.assistant-settings-row__priority {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border: 1px solid color-mix(in oklab, var(--ui-accent) 35%, var(--ui-border));
+  border-radius: var(--ui-radius-sm);
+  padding: 3px 7px;
+  background: color-mix(in oklab, var(--ui-accent-soft) 70%, var(--ui-surface));
+  color: var(--ui-text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .assistant-settings-row__actions {
@@ -7052,10 +7527,17 @@ button:disabled {
 }
 
 .status-badge--needs_setup,
+.status-badge--setup_required,
 .status-badge--needs_review,
 .status-badge--failing {
   border: 1px solid color-mix(in oklab, #d97706 45%, var(--ui-border));
   background: color-mix(in oklab, #d97706 12%, var(--ui-surface));
+  color: var(--ui-text);
+}
+
+.status-badge--failed {
+  border: 1px solid color-mix(in oklab, #dc2626 55%, var(--ui-border));
+  background: color-mix(in oklab, #dc2626 12%, var(--ui-surface));
   color: var(--ui-text);
 }
 
@@ -7614,7 +8096,9 @@ button:disabled {
 @media (max-width: 760px) {
   .assistant-page {
     --assistant-composer-clearance: clamp(250px, 32vh, 360px);
-    --assistant-header-clearance: calc(var(--app-shell-mobile-nav-height) + 14px);
+    --assistant-header-clearance: calc(
+      var(--app-shell-mobile-nav-height) + 14px
+    );
   }
 
   .assistant-page-tools {

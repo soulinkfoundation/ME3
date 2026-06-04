@@ -13,6 +13,8 @@ export type Me3AgentContextVisibility = "public" | "private" | "internal";
 
 export type Me3AgentContextSourceKind =
   | "owner_profile"
+  | "mission_statement"
+  | "wheel_of_life"
   | "public_me_json"
   | "private_memory"
   | "contact"
@@ -65,6 +67,25 @@ export type Me3AgentContextPublicIdentity = {
   meJsonUrl?: string | null;
   offers?: readonly string[];
   actions?: readonly string[];
+  source: Me3AgentContextSource;
+};
+
+export type Me3AgentContextMissionStatement = {
+  statement: string;
+  source: Me3AgentContextSource;
+};
+
+export type Me3AgentContextLifeSnapshotArea = {
+  label: string;
+  score?: number | null;
+  note?: string | null;
+};
+
+export type Me3AgentContextLifeSnapshot = {
+  id: string;
+  createdAt?: string | null;
+  summary?: string | null;
+  areas: readonly Me3AgentContextLifeSnapshotArea[];
   source: Me3AgentContextSource;
 };
 
@@ -182,6 +203,8 @@ export type Me3AgentContextPacketInput = {
   surface?: Me3AgentContextSurface;
   requestSummary?: string | null;
   ownerProfile?: Me3AgentContextOwnerProfile | null;
+  missionStatement?: Me3AgentContextMissionStatement | null;
+  lifeSnapshot?: Me3AgentContextLifeSnapshot | null;
   publicIdentity?: Me3AgentContextPublicIdentity | null;
   privateMemory?: readonly Me3AgentContextPrivateMemory[];
   contacts?: readonly Me3AgentContextContact[];
@@ -204,6 +227,8 @@ export type Me3AgentContextPacket = {
   surface: Me3AgentContextSurface;
   requestSummary: string | null;
   ownerProfile: Me3AgentContextOwnerProfile | null;
+  missionStatement: Me3AgentContextMissionStatement | null;
+  lifeSnapshot: Me3AgentContextLifeSnapshot | null;
   publicIdentity: Me3AgentContextPublicIdentity | null;
   privateMemory: readonly Me3AgentContextPrivateMemory[];
   contacts: readonly Me3AgentContextContact[];
@@ -388,6 +413,12 @@ export function createMe3AgentContextPacket(
     ownerProfile: input.ownerProfile
       ? normalizeOwnerProfile(input.ownerProfile)
       : null,
+    missionStatement: input.missionStatement
+      ? normalizeMissionStatement(input.missionStatement)
+      : null,
+    lifeSnapshot: input.lifeSnapshot
+      ? normalizeLifeSnapshot(input.lifeSnapshot)
+      : null,
     publicIdentity: input.publicIdentity
       ? normalizePublicIdentity(input.publicIdentity)
       : null,
@@ -422,6 +453,8 @@ export function buildMe3AgentContextPrompt(
     packet.requestSummary ? `Request: ${packet.requestSummary}` : null,
     "",
     formatOwnerProfile(packet.ownerProfile),
+    formatMissionStatement(packet.missionStatement),
+    formatLifeSnapshot(packet.lifeSnapshot),
     formatPublicIdentity(packet.publicIdentity),
     formatList(
       "Private memory",
@@ -650,6 +683,26 @@ function normalizePublicIdentity(
       ...normalizeSource(identity.source),
       visibility: "public",
     },
+  };
+}
+
+function normalizeMissionStatement(
+  missionStatement: Me3AgentContextMissionStatement,
+): Me3AgentContextMissionStatement {
+  return {
+    ...missionStatement,
+    statement: missionStatement.statement.trim(),
+    source: normalizeSource(missionStatement.source),
+  };
+}
+
+function normalizeLifeSnapshot(
+  snapshot: Me3AgentContextLifeSnapshot,
+): Me3AgentContextLifeSnapshot {
+  return {
+    ...snapshot,
+    areas: snapshot.areas.map((area) => ({ ...area })),
+    source: normalizeSource(snapshot.source),
   };
 }
 
@@ -1054,6 +1107,8 @@ function collectMe3AgentContextSources(
 ): readonly Me3AgentContextSource[] {
   return [
     packet.ownerProfile?.source,
+    packet.missionStatement?.source,
+    packet.lifeSnapshot?.source,
     packet.publicIdentity?.source,
     ...packet.privateMemory.map((item) => item.source),
     ...packet.contacts.map((item) => item.source),
@@ -1092,6 +1147,8 @@ function groupManifestSources(
 function sourceKindDisplayOrder(kind: Me3AgentContextSourceKind): number {
   const order: Me3AgentContextSourceKind[] = [
     "owner_profile",
+    "mission_statement",
+    "wheel_of_life",
     "public_me_json",
     "private_memory",
     "contact",
@@ -1119,6 +1176,10 @@ function manifestSourceKindLabel(kind: Me3AgentContextSourceKind, count: number)
   switch (kind) {
     case "owner_profile":
       return plural ? "owner profiles" : "owner profile";
+    case "mission_statement":
+      return plural ? "mission statements" : "mission statement";
+    case "wheel_of_life":
+      return plural ? "Wheel of Life snapshots" : "Wheel of Life snapshot";
     case "public_me_json":
       return "public me.json";
     case "private_memory":
@@ -1174,6 +1235,32 @@ function formatPublicIdentity(
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+function formatMissionStatement(
+  missionStatement: Me3AgentContextMissionStatement | null,
+): string | null {
+  if (!missionStatement?.statement) return null;
+  return ["Mission statement:", `- ${missionStatement.statement}`].join("\n");
+}
+
+function formatLifeSnapshot(
+  snapshot: Me3AgentContextLifeSnapshot | null,
+): string | null {
+  if (!snapshot) return null;
+  const lines = [
+    "Wheel of Life snapshot:",
+    snapshot.summary ? `- Summary: ${snapshot.summary}` : null,
+    snapshot.createdAt ? `- Saved: ${snapshot.createdAt}` : null,
+    ...snapshot.areas.map((area) => {
+      const score =
+        typeof area.score === "number" && Number.isFinite(area.score)
+          ? `${area.score}/10`
+          : "not scored";
+      return `- ${area.label}: ${score}${area.note ? `. ${area.note}` : ""}`;
+    }),
+  ].filter((line): line is string => Boolean(line));
+  return lines.length > 1 ? lines.join("\n") : null;
 }
 
 function formatList<T>(

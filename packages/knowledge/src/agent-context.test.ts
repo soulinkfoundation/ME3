@@ -30,6 +30,22 @@ const meJsonSource: Me3AgentContextSource = {
   reason: "Public identity context for agents.",
 };
 
+const missionStatementSource: Me3AgentContextSource = {
+  id: "mission-statement",
+  kind: "mission_statement",
+  label: "Mission statement",
+  visibility: "private",
+  reason: "Primary owner intent for agent replies.",
+};
+
+const lifeSnapshotSource: Me3AgentContextSource = {
+  id: "wheel-snapshot-1",
+  kind: "wheel_of_life",
+  label: "Wheel of Life snapshot",
+  visibility: "private",
+  reason: "Current life snapshot for balancing advice.",
+};
+
 describe("ME3 agent context contract", () => {
   it("serializes a stable source-labeled context packet", () => {
     const packet = createMe3AgentContextPacket({
@@ -51,6 +67,20 @@ describe("ME3 agent context contract", () => {
         offers: ["Product strategy"],
         actions: ["book"],
         source: meJsonSource,
+      },
+      missionStatement: {
+        statement: "Help thoughtful builders make useful agentic products.",
+        source: missionStatementSource,
+      },
+      lifeSnapshot: {
+        id: "wheel-snapshot-1",
+        createdAt: "2026-05-16T09:00:00.000Z",
+        summary: "Work is strong; health needs attention.",
+        areas: [
+          { label: "Work", score: 8, note: "Shipping consistently." },
+          { label: "Health", score: 5, note: "Needs more recovery." },
+        ],
+        source: lifeSnapshotSource,
       },
       privateMemory: [
         {
@@ -175,6 +205,13 @@ describe("ME3 agent context contract", () => {
       - Username: kieran
       - Bio: Builds ME3.
       - Timezone: Europe/Dublin
+      Mission statement:
+      - Help thoughtful builders make useful agentic products.
+      Wheel of Life snapshot:
+      - Summary: Work is strong; health needs attention.
+      - Saved: 2026-05-16T09:00:00.000Z
+      - Work: 8/10. Shipping consistently.
+      - Health: 5/10. Needs more recovery.
       Public identity:
       - Summary: Kieran helps people build useful agentic products.
       - me.json: https://example.com/.well-known/me.json
@@ -199,11 +236,13 @@ describe("ME3 agent context contract", () => {
       - calendar_event:event-1 [private, included] Ada check-in - Upcoming related meeting.
       - contact:contact-ada [private, included] Ada Lovelace - Mentioned by name.
       - email_thread:thread-1 [private, included] Workflow notes - Active reply context.
+      - mission_statement:mission-statement [private, included] Mission statement - Primary owner intent for agent replies.
       - owner_profile:owner [public, included] Owner profile - Always include a small owner profile.
       - private_memory:memory-1 [private, included] Email tone - Relevant to drafting a reply.
       - project:project-1 [private, included] Analytics Workflow - Linked to Ada.
       - public_me_json:owner-me-json [public, included] Public me.json - Public identity context for agents.
-      - task:task-1 [private, included] Send Friday update - Open task for this contact."
+      - task:task-1 [private, included] Send Friday update - Open task for this contact.
+      - wheel_of_life:wheel-snapshot-1 [private, included] Wheel of Life snapshot - Current life snapshot for balancing advice."
     `);
   });
 

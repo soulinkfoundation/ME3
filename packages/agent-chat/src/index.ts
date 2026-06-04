@@ -11,6 +11,8 @@ import {
   type Me3AgentContextCalendarEvent,
   type Me3AgentContextContact,
   type Me3AgentContextEmailThread,
+  type Me3AgentContextLifeSnapshot,
+  type Me3AgentContextMissionStatement,
   type Me3AgentContextManifest,
   type Me3AgentContextPrivateMemory,
   type Me3AgentContextProject,
@@ -529,6 +531,18 @@ type DbCalendarContextEventRow = {
   updated_at?: string | null;
 };
 
+type DbMissionDashboardSettingsRow = {
+  mission_statement: string | null;
+  updated_at: string;
+};
+
+type DbMissionWheelSnapshotRow = {
+  id: string;
+  segments_json: string;
+  notes_json: string;
+  created_at: string;
+};
+
 type CoreChatAgentContextResult = {
   prompt: string;
   manifest: Me3AgentContextManifest;
@@ -582,6 +596,8 @@ const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest";
 const INSTALL_ENCRYPTION_KEY_NAME = "TOKEN_ENCRYPTION_KEY";
 const CHAT_CONTEXT_PROMPT_BUDGET_CHARS = 3500;
+const DEFAULT_MISSION_STATEMENT_TEMPLATE_MARKER = "[who/what]";
+const MAX_WHEEL_SNAPSHOT_AREAS = 8;
 const CONTACT_SOURCES = new Set<AgentContactSource>([
   "booking",
   "manual",
@@ -2703,6 +2719,18 @@ function parseJsonRecord(value: string | null): Record<string, unknown> {
   }
 }
 
+function parseJsonRecordArray(value: string | null): Record<string, unknown>[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is Record<string, unknown> => isPlainObject(item))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function parseJsonArray(value: string | null): string[] {
   if (!value) return [];
   try {
@@ -2738,6 +2766,20 @@ function contextSource(input: {
 function summarizeRequest(value: string): string {
   const normalized = value.trim().replace(/\s+/g, " ");
   return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+}
+
+function summarizeContextText(value: string, maxLength: number): string {
+  const normalized = normalizeWhitespace(value);
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, Math.max(0, maxLength - 3))}...`
+    : normalized;
+}
+
+function normalizeMissionStatementForContext(value: string | null): string | null {
+  const normalized = normalizeNullableText(value);
+  if (!normalized) return null;
+  if (normalized.includes(DEFAULT_MISSION_STATEMENT_TEMPLATE_MARKER)) return null;
+  return summarizeContextText(normalized, 800);
 }
 
 function coreMeJsonUrl(env: CoreAgentChatEnv): string | null {
@@ -3340,13 +3382,23 @@ async function loadCoreChatAgentContext(
   try {
     const activeDate = localDateForTimezone(input.owner?.timezone || null);
     const contacts = await loadCoreContextContacts(env, input.ownerId);
-    const [emailThreads, projects, tasks, calendarEvents, privateMemory] =
+    const [
+      emailThreads,
+      projects,
+      tasks,
+      calendarEvents,
+      privateMemory,
+      missionStatement,
+      lifeSnapshot,
+    ] =
       await Promise.all([
         loadCoreContextEmailThreads(env, input.ownerId, contacts),
         loadCoreContextProjects(env, input.ownerId),
         loadCoreContextTasks(env, input.ownerId),
         loadCoreContextCalendarEvents(env, input.ownerId),
         loadCoreContextPrivateMemory(env, input.ownerId),
+        loadCoreContextMissionStatement(env, input.ownerId),
+        loadCoreContextLifeSnapshot(env, input.ownerId),
       ]);
 
     const packet = resolveMe3AgentContextPacket({
@@ -3356,6 +3408,8 @@ async function loadCoreChatAgentContext(
       requestSummary: summarizeRequest(input.messageText),
       requestText: input.messageText,
       ownerProfile: input.owner ? mapOwnerProfileToContext(input.owner) : null,
+      missionStatement,
+      lifeSnapshot,
       publicIdentity: input.owner
         ? {
             summary: input.owner.bio,
@@ -3624,6 +3678,123 @@ async function loadCoreContextPrivateMemory(
       updatedAt: row.updated_at,
     }),
   }));
+}
+
+async function loadCoreContextMissionStatement(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<Me3AgentContextMissionStatement | null> {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT mission_statement, updated_at
+       FROM mission_dashboard_settings
+       WHERE user_id = ?`,
+    )
+      .bind(ownerId)
+      .first<DbMissionDashboardSettingsRow>();
+    const statement = normalizeMissionStatementForContext(row?.mission_statement || null);
+    if (!statement) return null;
+    return {
+      statement,
+      source: contextSource({
+        id: "mission-statement",
+        kind: "mission_statement",
+        label: "Mission statement",
+        visibility: "private",
+        reason: "Primary owner intent for agent replies.",
+        sourceRef: "/mission-control",
+        updatedAt: row?.updated_at || null,
+      }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function loadCoreContextLifeSnapshot(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<Me3AgentContextLifeSnapshot | null> {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id, segments_json, notes_json, created_at
+       FROM mission_wheel_snapshots
+       WHERE user_id = ?
+       ORDER BY created_at DESC, id ASC
+       LIMIT 1`,
+    )
+      .bind(ownerId)
+      .first<DbMissionWheelSnapshotRow>();
+    if (!row) return null;
+
+    const notes = parseJsonRecord(row.notes_json);
+    const areas = parseJsonRecordArray(row.segments_json)
+      .map((segment) => {
+        const id = stringValue(segment.id);
+        const label = stringValue(segment.label);
+        if (!id || !label) return null;
+        const rawScore =
+          typeof segment.value === "number" ? segment.value : Number(segment.value);
+        const score =
+          segment.value === null || segment.value === undefined || !Number.isFinite(rawScore)
+            ? null
+            : Math.max(0, Math.min(10, rawScore));
+        const note = stringValue(notes[id]);
+        return {
+          label,
+          score,
+          note: note ? summarizeContextText(note, 160) : null,
+        };
+      })
+      .filter(
+        (
+          area,
+        ): area is {
+          label: string;
+          score: number | null;
+          note: string | null;
+        } => Boolean(area),
+      )
+      .slice(0, MAX_WHEEL_SNAPSHOT_AREAS);
+    if (!areas.length) return null;
+
+    const scoredAreas = areas.filter((area) => typeof area.score === "number");
+    const lowest = [...scoredAreas]
+      .sort((left, right) => (left.score ?? 0) - (right.score ?? 0))
+      .slice(0, 2)
+      .map((area) => area.label);
+    const highest = [...scoredAreas]
+      .sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
+      .slice(0, 2)
+      .map((area) => area.label);
+    const summary =
+      highest.length || lowest.length
+        ? [
+            highest.length ? `Strongest: ${highest.join(", ")}` : null,
+            lowest.length ? `Needs attention: ${lowest.join(", ")}` : null,
+          ]
+            .filter(Boolean)
+            .join(". ")
+        : null;
+
+    return {
+      id: row.id,
+      createdAt: row.created_at,
+      summary,
+      areas,
+      source: contextSource({
+        id: row.id,
+        kind: "wheel_of_life",
+        label: "Wheel of Life snapshot",
+        visibility: "private",
+        reason: "Current life snapshot for balancing advice.",
+        sourceRef: "/mission-control/wheel-of-life",
+        updatedAt: row.created_at,
+      }),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function mapOwnerProfileToContext(owner: OwnerProfileRow) {

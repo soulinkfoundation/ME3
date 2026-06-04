@@ -13,6 +13,7 @@ ME3 should make the assistant feel like it remembers useful things without addin
 The practical path is to wire together the data ME3 already owns:
 
 - Public `me.json` and profile data.
+- Mission Control mission statement and latest Wheel of Life snapshot.
 - Contacts, relationship notes, and follow-up state.
 - Email and mailbox threads.
 - Calendar, tasks, projects, and captures.
@@ -38,6 +39,8 @@ Suggested home: extend `@me3/knowledge` or add a sibling package if the existing
 The packet should include:
 
 - Owner/profile summary.
+- Mission Control mission statement.
+- Latest Wheel of Life snapshot.
 - Public identity context from `me.json`-owned data.
 - Relevant private memories.
 - Relevant contacts.
@@ -195,6 +198,8 @@ When cloning into `me3-app`, keep the shared packet contract unchanged and repla
 | Context source | Core scaffold source today | me3-app adapter target |
 | --- | --- | --- |
 | Owner profile | `owner_profile` rows | me3-app owner/user profile model |
+| Mission statement | `mission_dashboard_settings.mission_statement` | Mission Control mission statement in me3-app |
+| Wheel of Life | latest `mission_wheel_snapshots` row | Mission Control Wheel of Life snapshot in me3-app |
 | Public identity | `/.well-known/me.json` / public profile fields | published me.json/profile source in me3-app |
 | Contacts | `contacts` table | me3-app contacts/CRM source |
 | Email threads | `mailbox_aliases` + `mailbox_messages` | me3-app email provider/thread abstraction |
