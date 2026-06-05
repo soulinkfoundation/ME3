@@ -440,3 +440,69 @@ export interface DbAgentChannelEvent {
   created_at: string;
   updated_at: string;
 }
+
+export interface DbSchedulingRequest {
+  id: string;
+  user_id: string;
+  contact_id: string | null;
+  time_type_id: string;
+  status:
+    | "draft"
+    | "candidates_shared"
+    | "review_required"
+    | "not_allowed"
+    | "voting"
+    | "pending_approval"
+    | "approved"
+    | "checkout_required"
+    | "finalized"
+    | "cancelled";
+  requester_name: string | null;
+  target_name: string | null;
+  reason: string | null;
+  date_range_start: string;
+  date_range_end: string;
+  candidate_slots_json: string;
+  selected_slot_json: string | null;
+  policy_json: string | null;
+  stream_payload_json: string | null;
+  checkout_url: string | null;
+  requester_approved_at: string | null;
+  target_approved_at: string | null;
+  finalized_calendar_event_id: string | null;
+  finalized_booking_id: string | null;
+  finalized_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbSchedulingRequestVote {
+  id: string;
+  request_id: string;
+  participant_role: "requester" | "target";
+  voter_label: string | null;
+  slot_starts_at: string;
+  slot_ends_at: string;
+  preference: "yes" | "maybe" | "no";
+  raw_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbSchedulingRequestAudit {
+  id: string;
+  request_id: string;
+  user_id: string;
+  event_type:
+    | "request_created"
+    | "candidates_shared"
+    | "vote_recorded"
+    | "approval_recorded"
+    | "finalization_blocked"
+    | "checkout_handoff"
+    | "finalized";
+  actor_role: "system" | "assistant" | "requester" | "target" | "owner" | null;
+  summary: string | null;
+  metadata_json: string | null;
+  created_at: string;
+}

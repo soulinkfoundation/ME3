@@ -15,6 +15,9 @@ import type {
   DbMailboxAlias,
   DbMailboxMessage,
   DbBooking,
+  DbSchedulingRequest,
+  DbSchedulingRequestAudit,
+  DbSchedulingRequestVote,
   DbSite,
   DbUserCalendarEvent,
   DbUserReminder,
@@ -318,6 +321,9 @@ function createEnv(): Env & {
   bookings: DbBooking[];
   bookingHolds: StoredBookingHold[];
   schedulingTimeTypes: StoredSchedulingTimeType[];
+  schedulingRequests: DbSchedulingRequest[];
+  schedulingRequestVotes: DbSchedulingRequestVote[];
+  schedulingRequestAudit: DbSchedulingRequestAudit[];
 } {
   const state = {
     owner: null as StoredOwner | null,
@@ -359,6 +365,9 @@ function createEnv(): Env & {
     bookings: [] as DbBooking[],
     bookingHolds: [] as StoredBookingHold[],
     schedulingTimeTypes: [] as StoredSchedulingTimeType[],
+    schedulingRequests: [] as DbSchedulingRequest[],
+    schedulingRequestVotes: [] as DbSchedulingRequestVote[],
+    schedulingRequestAudit: [] as DbSchedulingRequestAudit[],
   };
 
   const toStoredSiteFileContent = (value: unknown): Uint8Array => {
@@ -1297,6 +1306,150 @@ function createEnv(): Env & {
                 );
               }
 
+              if (sql.includes("INSERT INTO scheduling_requests")) {
+                state.schedulingRequests.push({
+                  id: values[0] as string,
+                  user_id: values[1] as string,
+                  contact_id: values[2] as string | null,
+                  time_type_id: values[3] as string,
+                  status: values[4] as DbSchedulingRequest["status"],
+                  requester_name: values[5] as string | null,
+                  target_name: values[6] as string | null,
+                  reason: values[7] as string | null,
+                  date_range_start: values[8] as string,
+                  date_range_end: values[9] as string,
+                  candidate_slots_json: values[10] as string,
+                  selected_slot_json: null,
+                  policy_json: values[11] as string | null,
+                  stream_payload_json: values[12] as string | null,
+                  checkout_url: null,
+                  requester_approved_at: null,
+                  target_approved_at: null,
+                  finalized_calendar_event_id: null,
+                  finalized_booking_id: null,
+                  finalized_at: null,
+                  created_at: "2026-06-05T12:20:00Z",
+                  updated_at: "2026-06-05T12:20:00Z",
+                });
+              }
+
+              if (sql.includes("INSERT INTO scheduling_request_votes")) {
+                const existingIndex = state.schedulingRequestVotes.findIndex(
+                  (vote) =>
+                    vote.request_id === values[1] &&
+                    vote.participant_role === values[2] &&
+                    vote.slot_starts_at === values[4] &&
+                    vote.slot_ends_at === values[5],
+                );
+                const vote: DbSchedulingRequestVote = {
+                  id: existingIndex >= 0
+                    ? state.schedulingRequestVotes[existingIndex].id
+                    : (values[0] as string),
+                  request_id: values[1] as string,
+                  participant_role: values[2] as DbSchedulingRequestVote["participant_role"],
+                  voter_label: values[3] as string | null,
+                  slot_starts_at: values[4] as string,
+                  slot_ends_at: values[5] as string,
+                  preference: values[6] as DbSchedulingRequestVote["preference"],
+                  raw_json: values[7] as string | null,
+                  created_at: existingIndex >= 0
+                    ? state.schedulingRequestVotes[existingIndex].created_at
+                    : "2026-06-05T12:21:00Z",
+                  updated_at: "2026-06-05T12:21:00Z",
+                };
+                if (existingIndex >= 0) state.schedulingRequestVotes[existingIndex] = vote;
+                else state.schedulingRequestVotes.push(vote);
+              }
+
+              if (sql.includes("INSERT INTO scheduling_request_audit")) {
+                state.schedulingRequestAudit.push({
+                  id: values[0] as string,
+                  request_id: values[1] as string,
+                  user_id: values[2] as string,
+                  event_type: values[3] as DbSchedulingRequestAudit["event_type"],
+                  actor_role: values[4] as DbSchedulingRequestAudit["actor_role"],
+                  summary: values[5] as string | null,
+                  metadata_json: values[6] as string | null,
+                  created_at: "2026-06-05T12:22:00Z",
+                });
+              }
+
+              if (sql.includes("UPDATE scheduling_requests")) {
+                if (sql.includes("status = 'checkout_required'")) {
+                  state.schedulingRequests = state.schedulingRequests.map((request) =>
+                    request.id === values[1] && request.user_id === values[2]
+                      ? {
+                          ...request,
+                          status: "checkout_required",
+                          checkout_url: values[0] as string | null,
+                          updated_at: "2026-06-05T12:25:00Z",
+                        }
+                      : request,
+                  );
+                } else if (sql.includes("status = 'finalized'")) {
+                  state.schedulingRequests = state.schedulingRequests.map((request) =>
+                    request.id === values[2] && request.user_id === values[3]
+                      ? {
+                          ...request,
+                          status: "finalized",
+                          finalized_booking_id: values[0] as string | null,
+                          finalized_calendar_event_id: values[1] as string | null,
+                          finalized_at: "2026-06-05T12:25:00Z",
+                          updated_at: "2026-06-05T12:25:00Z",
+                        }
+                      : request,
+                  );
+                } else if (sql.includes("selected_slot_json")) {
+                  state.schedulingRequests = state.schedulingRequests.map((request) => {
+                    if (request.id !== values[5] || request.user_id !== values[6]) return request;
+                    const approvingRole = values[1] as string;
+                    const requesterApproved =
+                      approvingRole === "requester"
+                        ? "2026-06-05T12:23:00Z"
+                        : request.requester_approved_at;
+                    const targetApproved =
+                      approvingRole === "target"
+                        ? "2026-06-05T12:23:00Z"
+                        : request.target_approved_at;
+                    return {
+                      ...request,
+                      selected_slot_json: request.selected_slot_json || (values[0] as string),
+                      requester_approved_at: requesterApproved,
+                      target_approved_at: targetApproved,
+                      status: requesterApproved && targetApproved ? "approved" : "pending_approval",
+                      updated_at: "2026-06-05T12:23:00Z",
+                    };
+                  });
+                } else if (sql.includes("status = CASE")) {
+                  state.schedulingRequests = state.schedulingRequests.map((request) =>
+                    request.id === values[0] && request.user_id === values[1]
+                      ? {
+                          ...request,
+                          status: request.status === "candidates_shared" ? "voting" : request.status,
+                          updated_at: "2026-06-05T12:21:00Z",
+                        }
+                      : request,
+                  );
+                }
+              }
+
+              if (sql.includes("INSERT INTO user_calendar_events")) {
+                state.userCalendarEvents.push({
+                  id: values[0] as string,
+                  user_id: values[1] as string,
+                  title: values[2] as string,
+                  notes: values[3] as string | null,
+                  location: sql.includes("NULL") ? null : (values[4] as string | null),
+                  starts_at: sql.includes("NULL") ? (values[4] as string) : (values[5] as string),
+                  ends_at: sql.includes("NULL") ? (values[5] as string) : (values[6] as string),
+                  timezone: sql.includes("NULL") ? (values[6] as string | null) : (values[7] as string | null),
+                  all_day: 0,
+                  kind: "event",
+                  recurrence_rule: null,
+                  created_at: "2026-06-05T12:25:00Z",
+                });
+              }
+
               if (sql.includes("UPDATE mailbox_aliases") && state.mailbox) {
                 if (sql.includes("alias_local_part = ?")) {
                   state.mailbox.alias_local_part = values[0] as string;
@@ -1608,6 +1761,19 @@ function createEnv(): Env & {
                 }
               }
 
+              if (sql.includes("UPDATE agent_channel_events")) {
+                state.agentEvents = state.agentEvents.map((event) =>
+                  event.id === values[4]
+                    ? {
+                        ...event,
+                        status: values[0] as StoredAgentChannelEvent["status"],
+                        provider_message_id: values[1] as string | null,
+                        raw_json: values[2] as string | null,
+                      }
+                    : event,
+                );
+              }
+
               return { success: true };
             },
             async first<T>() {
@@ -1910,6 +2076,20 @@ function createEnv(): Env & {
                   ) || null
                 ) as T | null;
               }
+              if (sql.includes("FROM scheduling_requests")) {
+                return (
+                  state.schedulingRequests.find(
+                    (request) => request.user_id === values[0] && request.id === values[1],
+                  ) || null
+                ) as T | null;
+              }
+              if (sql.includes("FROM user_calendar_events")) {
+                return (
+                  state.userCalendarEvents.find(
+                    (event) => event.id === values[0] && event.user_id === values[1],
+                  ) || null
+                ) as T | null;
+              }
               if (sql.includes("FROM social_provider_settings")) {
                 return (
                   state.socialProviderSettings.find(
@@ -2068,6 +2248,20 @@ function createEnv(): Env & {
                     (timeType) =>
                       timeType.user_id === values[0] &&
                       (!sql.includes("status = 'active'") || timeType.status === "active"),
+                  ) as T[],
+                };
+              }
+              if (sql.includes("FROM scheduling_request_votes")) {
+                return {
+                  results: state.schedulingRequestVotes.filter(
+                    (vote) => vote.request_id === values[0],
+                  ) as T[],
+                };
+              }
+              if (sql.includes("FROM scheduling_request_audit")) {
+                return {
+                  results: state.schedulingRequestAudit.filter(
+                    (entry) => entry.request_id === values[0],
                   ) as T[],
                 };
               }
@@ -2337,6 +2531,15 @@ function createEnv(): Env & {
     },
     get schedulingTimeTypes() {
       return state.schedulingTimeTypes;
+    },
+    get schedulingRequests() {
+      return state.schedulingRequests;
+    },
+    get schedulingRequestVotes() {
+      return state.schedulingRequestVotes;
+    },
+    get schedulingRequestAudit() {
+      return state.schedulingRequestAudit;
     },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
@@ -5881,6 +6084,316 @@ describe("ME3 Core Worker auth", () => {
       "09:15",
       "09:30",
     ]);
+  });
+
+  it("creates a Soulink scheduling poll request and finalizes only after both approvals", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.soulinkConnection = {
+      id: "soulink-scheduling",
+      user_id: "owner",
+      channel: "soulink",
+      status: "active",
+      setup_token: "setup-token",
+      provider_connection_id: "messaging",
+      provider_user_id: "node-owner",
+      provider_thread_id: "assistant-channel",
+      provider_username: "assistant-owner",
+      provider_metadata_json: JSON.stringify({ ownerNodeId: "node-owner" }),
+      telegram_user_id: null,
+      telegram_chat_id: null,
+      telegram_username: null,
+      telegram_first_name: null,
+      telegram_last_name: null,
+      connected_at: "2026-05-11T10:01:00Z",
+      disconnected_at: null,
+      last_inbound_at: null,
+      last_outbound_at: null,
+      created_at: "2026-05-11T10:00:00Z",
+      updated_at: "2026-05-11T10:00:00Z",
+    };
+    env.schedulingTimeTypes.push({
+      id: "soulink-coffee",
+      user_id: "owner",
+      title: "Coffee chat",
+      description: null,
+      duration_minutes: 30,
+      buffer_minutes: 0,
+      timezone: "UTC",
+      windows_json: JSON.stringify({ thursday: ["09:00-11:00"] }),
+      allowed_tiers_json: JSON.stringify(["close_contact"]),
+      payment_mode: "free",
+      public_booking_offer_id: null,
+      owner_pre_review: "unless_close_contact",
+      allow_close_contact_candidate_sharing: 1,
+      final_approval: "both_owners",
+      status: "active",
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+    env.contacts.push({
+      id: "close-soulink-contact",
+      user_id: "owner",
+      name: "Close Soulink Contact",
+      email: "close@example.com",
+      phone: null,
+      source: "soulink",
+      source_ref: "node-close",
+      relationship: "contact",
+      status: "active",
+      notes: null,
+      tags: null,
+      last_interaction_at: null,
+      next_followup_at: null,
+      outreach_status: null,
+      social_handles: null,
+      metadata: JSON.stringify({ closeness: "close", soulinkNodeId: "node-close" }),
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+
+    const fetchMock = vi.fn(async () => Response.json({ ok: true, messageId: "stream-poll-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const createResponse = await app.fetch(
+        new Request("http://localhost/api/scheduling/requests", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({
+            timeTypeId: "soulink-coffee",
+            contactId: "close-soulink-contact",
+            requesterName: "Owner",
+            targetName: "Close Contact",
+            reason: "Catch up properly",
+            dateRange: { start: "2026-06-11", end: "2026-06-11" },
+            limit: 5,
+          }),
+        }),
+        env,
+      );
+      const created = (await createResponse.json()) as {
+        request: {
+          id: string;
+          status: string;
+          candidateSlots: Array<{ startsAt: string; endsAt: string; localStartTime: string }>;
+        };
+        streamPayload: {
+          kind: string;
+          poll: { options: unknown[] };
+          actionCard: { actions: unknown[] };
+        };
+        audit: Array<{ eventType: string }>;
+        soulinkDelivery: { attempted: boolean; status: string };
+      };
+
+      expect(createResponse.status).toBe(201);
+      expect(created.request.status).toBe("candidates_shared");
+      expect(created.request.candidateSlots.map((slot) => slot.localStartTime)).toEqual([
+        "09:00",
+        "09:15",
+        "09:30",
+        "09:45",
+        "10:00",
+      ]);
+      expect(created.streamPayload).toMatchObject({
+        kind: "scheduling_poll",
+        poll: { options: expect.any(Array) },
+        actionCard: { actions: expect.any(Array) },
+      });
+      expect(created.streamPayload.poll.options).toHaveLength(5);
+      expect(created.audit.map((entry) => entry.eventType)).toEqual([
+        "request_created",
+        "candidates_shared",
+      ]);
+      expect(created.soulinkDelivery).toEqual({ attempted: true, status: "sent" });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(env.agentEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            channel: "soulink",
+            direction: "outbound",
+            provider_event_id: `scheduling:${created.request.id}:candidates`,
+            status: "sent",
+          }),
+        ]),
+      );
+      expect(env.userCalendarEvents).toHaveLength(0);
+      expect(env.bookings).toHaveLength(0);
+
+      const blockedFinalizeResponse = await app.fetch(
+        new Request(`http://localhost/api/scheduling/requests/${created.request.id}/finalize`, {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      expect(blockedFinalizeResponse.status).toBe(409);
+      expect(env.userCalendarEvents).toHaveLength(0);
+
+      for (const participantRole of ["requester", "target"]) {
+        const voteResponse = await app.fetch(
+          new Request(`http://localhost/api/scheduling/requests/${created.request.id}/votes`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Cookie: session },
+            body: JSON.stringify({
+              participantRole,
+              slotId: "1",
+              preference: "yes",
+              voterLabel: participantRole,
+            }),
+          }),
+          env,
+        );
+        expect(voteResponse.status).toBe(200);
+
+        const approvalResponse = await app.fetch(
+          new Request(`http://localhost/api/scheduling/requests/${created.request.id}/approvals`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Cookie: session },
+            body: JSON.stringify({ participantRole, slotId: "1" }),
+          }),
+          env,
+        );
+        expect(approvalResponse.status).toBe(200);
+      }
+
+      expect(env.schedulingRequestVotes).toHaveLength(2);
+      const finalizeResponse = await app.fetch(
+        new Request(`http://localhost/api/scheduling/requests/${created.request.id}/finalize`, {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const finalized = (await finalizeResponse.json()) as {
+        request: { status: string; finalizedCalendarEventId: string | null };
+        calendarEvent: { title: string; startsAt: string; endsAt: string };
+      };
+
+      expect(finalizeResponse.status).toBe(200);
+      expect(finalized.request.status).toBe("finalized");
+      expect(finalized.request.finalizedCalendarEventId).toBeTruthy();
+      expect(finalized.calendarEvent).toMatchObject({
+        title: "Coffee chat with Close Contact",
+        startsAt: "2026-06-11T09:00:00.000Z",
+        endsAt: "2026-06-11T09:30:00.000Z",
+      });
+      expect(env.userCalendarEvents).toHaveLength(1);
+      expect(env.schedulingRequestAudit.map((entry) => entry.event_type)).toEqual(
+        expect.arrayContaining([
+          "request_created",
+          "candidates_shared",
+          "vote_recorded",
+          "approval_recorded",
+          "finalization_blocked",
+          "finalized",
+        ]),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("hands paid scheduling requests to checkout after approvals without creating bookings", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addBookableSite(env, {
+      enabled: true,
+      offers: [
+        {
+          id: "paid-session",
+          title: "Paid Session",
+          duration: 60,
+          pricing: { enabled: true, suggestedAmount: 75, currency: "EUR" },
+        },
+      ],
+      bufferTime: 0,
+      availability: {
+        timezone: "UTC",
+        windows: { monday: ["09:00-11:00"] },
+      },
+    });
+    env.contacts.push({
+      id: "close-paid-contact",
+      user_id: "owner",
+      name: "Close Paid Contact",
+      email: "paid@example.com",
+      phone: null,
+      source: "manual",
+      source_ref: null,
+      relationship: "contact",
+      status: "active",
+      notes: null,
+      tags: null,
+      last_interaction_at: null,
+      next_followup_at: null,
+      outreach_status: null,
+      social_handles: null,
+      metadata: JSON.stringify({ closeness: "close" }),
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+
+    const createResponse = await app.fetch(
+      new Request("http://localhost/api/scheduling/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: "public:owner:paid-session",
+          contactId: "close-paid-contact",
+          requesterName: "Client",
+          targetName: "Owner",
+          dateRange: { start: "2026-06-08", end: "2026-06-08" },
+          limit: 3,
+        }),
+      }),
+      env,
+    );
+    const created = (await createResponse.json()) as {
+      request: { id: string; candidateSlots: Array<{ localStartTime: string }> };
+    };
+    expect(createResponse.status).toBe(201);
+    expect(created.request.candidateSlots.map((slot) => slot.localStartTime)).toEqual([
+      "09:00",
+      "09:15",
+      "09:30",
+    ]);
+
+    for (const participantRole of ["requester", "target"]) {
+      const approvalResponse = await app.fetch(
+        new Request(`http://localhost/api/scheduling/requests/${created.request.id}/approvals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({ participantRole, slotId: "1" }),
+        }),
+        env,
+      );
+      expect(approvalResponse.status).toBe(200);
+    }
+
+    const finalizeResponse = await app.fetch(
+      new Request(`http://localhost/api/scheduling/requests/${created.request.id}/finalize`, {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const finalized = (await finalizeResponse.json()) as {
+      request: { status: string; checkoutUrl: string; finalizedBookingId: string | null };
+      checkoutUrl: string;
+    };
+
+    expect(finalizeResponse.status).toBe(200);
+    expect(finalized.request.status).toBe("checkout_required");
+    expect(finalized.request.finalizedBookingId).toBeNull();
+    expect(finalized.checkoutUrl).toContain("/book/owner");
+    expect(finalized.checkoutUrl).toContain("offerId=paid-session");
+    expect(env.bookings).toHaveLength(0);
+    expect(env.userCalendarEvents).toHaveLength(0);
+    expect(env.schedulingRequestAudit.map((entry) => entry.event_type)).toContain(
+      "checkout_handoff",
+    );
   });
 
   it("lists curated Core plugins for the signed-in owner", async () => {

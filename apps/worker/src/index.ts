@@ -255,6 +255,9 @@ import type {
   DbCalendarSourceEvent,
   DbContact,
   DbMailboxAlias,
+  DbSchedulingRequest,
+  DbSchedulingRequestAudit,
+  DbSchedulingRequestVote,
   DbSchedulingTimeType,
   DbSite,
   DbSubscriber,
@@ -506,6 +509,9 @@ type SchedulingPrivilegeTier = "public" | "contact" | "close_contact" | "client"
 type SchedulingPaymentMode = "free" | "paid_checkout" | "owner_review";
 type SchedulingOwnerPreReview = "always" | "unless_close_contact";
 type SchedulingFinalApproval = "both_owners";
+type SchedulingRequestStatus = DbSchedulingRequest["status"];
+type SchedulingParticipantRole = "requester" | "target";
+type SchedulingVotePreference = DbSchedulingRequestVote["preference"];
 type SchedulingTimeType = {
   id: string;
   title: string;
@@ -524,6 +530,27 @@ type SchedulingTimeType = {
   status: "active" | "archived";
   createdAt?: string;
   updatedAt?: string;
+};
+type SchedulingRequestSlot = Pick<
+  SchedulingCandidateSlot,
+  "startsAt" | "endsAt" | "timezone" | "localDate" | "localStartTime" | "localEndDate" | "localEndTime"
+>;
+type SchedulingRequestStreamPayload = {
+  kind: "scheduling_poll";
+  requestId: string;
+  title: string;
+  summary: string;
+  poll: {
+    question: string;
+    maxSelections: number;
+    options: Array<{ id: string; label: string; startsAt: string; endsAt: string }>;
+  };
+  actionCard: {
+    title: string;
+    description: string;
+    actions: Array<{ id: string; label: string; type: "vote" | "approve" | "checkout" }>;
+  };
+  requiresApproval: "both_owners";
 };
 type CoreBookIntent = NonNullable<Me3SiteProfile["intents"]>["book"] & {
   bufferTime?: number;
@@ -7605,6 +7632,75 @@ app.post("/api/scheduling/candidates", async (c) => {
   });
 });
 
+app.post("/api/scheduling/requests", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const result = await createSchedulingRequest(
+    c.env,
+    ownerId,
+    c.req.url,
+    await c.req.json().catch(() => null),
+  );
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json({ ok: true, ...result }, 201);
+});
+
+app.get("/api/scheduling/requests/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const request = await getSchedulingRequest(c.env, ownerId, c.req.param("id"));
+  if (!request) return c.json({ error: "Scheduling request not found" }, 404);
+  const [votes, audit] = await Promise.all([
+    listSchedulingRequestVotes(c.env, request.id),
+    listSchedulingRequestAudit(c.env, request.id),
+  ]);
+  return c.json({
+    ok: true,
+    request: serializeSchedulingRequest(request),
+    votes: votes.map(serializeSchedulingVote),
+    audit: audit.map(serializeSchedulingAudit),
+  });
+});
+
+app.post("/api/scheduling/requests/:id/votes", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const result = await recordSchedulingRequestVote(
+    c.env,
+    ownerId,
+    c.req.param("id"),
+    await c.req.json().catch(() => null),
+  );
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json({ ok: true, ...result });
+});
+
+app.post("/api/scheduling/requests/:id/approvals", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const result = await approveSchedulingRequest(
+    c.env,
+    ownerId,
+    c.req.param("id"),
+    await c.req.json().catch(() => null),
+  );
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json({ ok: true, ...result });
+});
+
+app.post("/api/scheduling/requests/:id/finalize", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const result = await finalizeSchedulingRequest(c.env, ownerId, c.req.param("id"));
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json({ ok: true, ...result });
+});
+
 app.get("/api/contacts", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -10415,6 +10511,946 @@ function sanitizeSchedulingTimeTypeForCandidates(timeType: SchedulingTimeType) {
     paymentMode: timeType.paymentMode,
     source: timeType.source,
     publicBookingOfferId: timeType.publicBookingOfferId,
+  };
+}
+
+async function createSchedulingRequest(
+  env: Env,
+  ownerId: string,
+  requestUrl: string,
+  value: unknown,
+): Promise<
+  | {
+      request: ReturnType<typeof serializeSchedulingRequest>;
+      votes: ReturnType<typeof serializeSchedulingVote>[];
+      audit: ReturnType<typeof serializeSchedulingAudit>[];
+      streamPayload: SchedulingRequestStreamPayload | null;
+      soulinkDelivery: { attempted: boolean; status: "sent" | "pending" | "failed" | "skipped" };
+    }
+  | { error: string; status: 400 | 404 }
+> {
+  const body = isPlainObject(value) ? value : {};
+  const contactId = normalizeShortText(body.contactId, 120);
+  const timeTypeId = normalizeShortText(body.timeTypeId, 160);
+  const requesterName = normalizeShortText(body.requesterName, 120);
+  const targetName = normalizeShortText(body.targetName, 120);
+  const reason = normalizeLongText(body.reason, 500);
+  const dateRange = parseSchedulingDateRange(body.dateRange);
+  if ("error" in dateRange) return { error: dateRange.error, status: 400 };
+
+  const policy = await resolveSchedulingPolicy(env, ownerId, { contactId, timeTypeId });
+  if ("error" in policy) return policy;
+
+  const limit = normalizeSchedulingRequestCandidateLimit(body.limit);
+  const slots = policy.allowed && !policy.ownerReviewRequired
+    ? await generateSchedulingCandidateSlots(env, ownerId, {
+        timeType: policy.timeType,
+        dateRange,
+        limit,
+      })
+    : [];
+  const requestId = crypto.randomUUID();
+  const status: SchedulingRequestStatus = !policy.allowed
+    ? "not_allowed"
+    : policy.ownerReviewRequired
+    ? "review_required"
+    : "candidates_shared";
+  const streamPayload = slots.length > 0
+    ? buildSchedulingRequestStreamPayload({
+        requestId,
+        timeType: policy.timeType,
+        slots,
+        requesterName,
+        targetName,
+        reason,
+      })
+    : null;
+
+  await env.DB.prepare(
+    `INSERT INTO scheduling_requests
+       (id, user_id, contact_id, time_type_id, status, requester_name, target_name,
+        reason, date_range_start, date_range_end, candidate_slots_json,
+        selected_slot_json, policy_json, stream_payload_json, checkout_url,
+        requester_approved_at, target_approved_at, finalized_calendar_event_id,
+        finalized_booking_id, finalized_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL,
+             NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      requestId,
+      ownerId,
+      policy.contactId,
+      policy.timeType.id,
+      status,
+      requesterName || null,
+      targetName || null,
+      reason || null,
+      dateRange.start,
+      dateRange.end,
+      JSON.stringify(slots),
+      JSON.stringify({
+        tier: policy.tier,
+        allowed: policy.allowed,
+        reason: policy.reason,
+        ownerReviewRequired: policy.ownerReviewRequired,
+        candidateSharingAllowed: policy.candidateSharingAllowed,
+        timeType: sanitizeSchedulingTimeTypeForCandidates(policy.timeType),
+      }),
+      streamPayload ? JSON.stringify(streamPayload) : null,
+    )
+    .run();
+
+  await insertSchedulingRequestAudit(env, {
+    requestId,
+    userId: ownerId,
+    eventType: "request_created",
+    actorRole: "assistant",
+    summary: policy.allowed
+      ? `Created scheduling request for ${policy.timeType.title}`
+      : policy.reason,
+    metadata: { dateRange, contactId: policy.contactId, status },
+  });
+
+  let soulinkDelivery: { attempted: boolean; status: "sent" | "pending" | "failed" | "skipped" } = {
+    attempted: false,
+    status: "skipped",
+  };
+  if (streamPayload) {
+    await insertSchedulingRequestAudit(env, {
+      requestId,
+      userId: ownerId,
+      eventType: "candidates_shared",
+      actorRole: "assistant",
+      summary: `Shared ${slots.length} candidate slots`,
+      metadata: {
+        slots: slots.map((slot) => ({
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          timezone: slot.timezone,
+        })),
+        streamPayloadKind: streamPayload.kind,
+      },
+    });
+    soulinkDelivery = await deliverSchedulingRequestToSoulink(
+      env,
+      ownerId,
+      requestUrl,
+      streamPayload,
+    );
+  }
+
+  const request = await getSchedulingRequest(env, ownerId, requestId);
+  const audit = await listSchedulingRequestAudit(env, requestId);
+  return {
+    request: serializeSchedulingRequest(request!),
+    votes: [],
+    audit: audit.map(serializeSchedulingAudit),
+    streamPayload,
+    soulinkDelivery,
+  };
+}
+
+async function recordSchedulingRequestVote(
+  env: Env,
+  ownerId: string,
+  requestId: string,
+  value: unknown,
+): Promise<
+  | {
+      request: ReturnType<typeof serializeSchedulingRequest>;
+      vote: ReturnType<typeof serializeSchedulingVote>;
+      votes: ReturnType<typeof serializeSchedulingVote>[];
+    }
+  | { error: string; status: 400 | 404 }
+> {
+  const request = await getSchedulingRequest(env, ownerId, requestId);
+  if (!request) return { error: "Scheduling request not found", status: 404 };
+  if (request.status === "finalized" || request.status === "cancelled") {
+    return { error: "Scheduling request is closed", status: 400 };
+  }
+
+  const body = isPlainObject(value) ? value : {};
+  const role = normalizeSchedulingParticipantRole(body.participantRole);
+  if (!role) return { error: "participantRole must be requester or target", status: 400 };
+  const preference = normalizeSchedulingVotePreference(body.preference);
+  const slot = selectSchedulingRequestSlot(request, body.slotId, body.startsAt, body.endsAt);
+  if (!slot) return { error: "Vote must reference one of the shared candidate slots", status: 400 };
+  const voterLabel = normalizeShortText(body.voterLabel, 120);
+  const voteId = crypto.randomUUID();
+
+  await env.DB.prepare(
+    `INSERT INTO scheduling_request_votes
+       (id, request_id, participant_role, voter_label, slot_starts_at, slot_ends_at,
+        preference, raw_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+     ON CONFLICT(request_id, participant_role, slot_starts_at, slot_ends_at)
+     DO UPDATE SET voter_label = excluded.voter_label,
+                   preference = excluded.preference,
+                   raw_json = excluded.raw_json,
+                   updated_at = CURRENT_TIMESTAMP`,
+  )
+    .bind(
+      voteId,
+      request.id,
+      role,
+      voterLabel || null,
+      slot.startsAt,
+      slot.endsAt,
+      preference,
+      JSON.stringify(body),
+    )
+    .run();
+
+  await env.DB.prepare(
+    `UPDATE scheduling_requests
+     SET status = CASE
+           WHEN status = 'candidates_shared' THEN 'voting'
+           ELSE status
+         END,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(request.id, ownerId)
+    .run();
+
+  await insertSchedulingRequestAudit(env, {
+    requestId: request.id,
+    userId: ownerId,
+    eventType: "vote_recorded",
+    actorRole: role,
+    summary: `${role} voted ${preference} on ${slot.startsAt}`,
+    metadata: { slot, preference, voterLabel: voterLabel || null },
+  });
+
+  const updated = (await getSchedulingRequest(env, ownerId, request.id))!;
+  const votes = await listSchedulingRequestVotes(env, request.id);
+  const vote = votes.find(
+    (entry) =>
+      entry.participant_role === role &&
+      entry.slot_starts_at === slot.startsAt &&
+      entry.slot_ends_at === slot.endsAt,
+  ) || votes[0];
+  return {
+    request: serializeSchedulingRequest(updated),
+    vote: serializeSchedulingVote(vote),
+    votes: votes.map(serializeSchedulingVote),
+  };
+}
+
+async function approveSchedulingRequest(
+  env: Env,
+  ownerId: string,
+  requestId: string,
+  value: unknown,
+): Promise<
+  | { request: ReturnType<typeof serializeSchedulingRequest> }
+  | { error: string; status: 400 | 404 }
+> {
+  const request = await getSchedulingRequest(env, ownerId, requestId);
+  if (!request) return { error: "Scheduling request not found", status: 404 };
+  if (request.status === "finalized" || request.status === "cancelled") {
+    return { error: "Scheduling request is closed", status: 400 };
+  }
+
+  const body = isPlainObject(value) ? value : {};
+  const role = normalizeSchedulingParticipantRole(body.participantRole);
+  if (!role) return { error: "participantRole must be requester or target", status: 400 };
+  const slot = selectSchedulingRequestSlot(
+    request,
+    body.slotId,
+    body.startsAt,
+    body.endsAt,
+  ) || firstPositiveSchedulingVoteSlot(await listSchedulingRequestVotes(env, request.id));
+  if (!slot) return { error: "Select a shared candidate slot before approving", status: 400 };
+
+  await env.DB.prepare(
+    `UPDATE scheduling_requests
+     SET selected_slot_json = COALESCE(selected_slot_json, ?),
+         requester_approved_at = CASE
+           WHEN ? = 'requester' THEN CURRENT_TIMESTAMP
+           ELSE requester_approved_at
+         END,
+         target_approved_at = CASE
+           WHEN ? = 'target' THEN CURRENT_TIMESTAMP
+           ELSE target_approved_at
+         END,
+         status = CASE
+           WHEN (? = 'requester' AND target_approved_at IS NOT NULL)
+             OR (? = 'target' AND requester_approved_at IS NOT NULL)
+           THEN 'approved'
+           ELSE 'pending_approval'
+         END,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(JSON.stringify(slot), role, role, role, role, request.id, ownerId)
+    .run();
+
+  await insertSchedulingRequestAudit(env, {
+    requestId: request.id,
+    userId: ownerId,
+    eventType: "approval_recorded",
+    actorRole: role,
+    summary: `${role} approved ${slot.startsAt}`,
+    metadata: { slot },
+  });
+
+  const updated = (await getSchedulingRequest(env, ownerId, request.id))!;
+  return { request: serializeSchedulingRequest(updated) };
+}
+
+async function finalizeSchedulingRequest(
+  env: Env,
+  ownerId: string,
+  requestId: string,
+): Promise<
+  | {
+      request: ReturnType<typeof serializeSchedulingRequest>;
+      calendarEvent?: ReturnType<typeof serializeCalendarEvent>;
+      booking?: ReturnType<typeof serializeBooking>;
+      checkoutUrl?: string;
+    }
+  | { error: string; status: 400 | 404 | 409 }
+> {
+  const request = await getSchedulingRequest(env, ownerId, requestId);
+  if (!request) return { error: "Scheduling request not found", status: 404 };
+  if (request.status === "finalized") {
+    return { request: serializeSchedulingRequest(request) };
+  }
+  if (!request.requester_approved_at || !request.target_approved_at) {
+    await insertSchedulingRequestAudit(env, {
+      requestId: request.id,
+      userId: ownerId,
+      eventType: "finalization_blocked",
+      actorRole: "system",
+      summary: "Both owners must approve before finalization",
+      metadata: {
+        requesterApproved: Boolean(request.requester_approved_at),
+        targetApproved: Boolean(request.target_approved_at),
+      },
+    });
+    return { error: "Both owners must approve before finalization", status: 409 };
+  }
+
+  const slot = parseSchedulingRequestSlot(request.selected_slot_json);
+  if (!slot) return { error: "Scheduling request has no selected slot", status: 400 };
+  const timeType = (await listSchedulingTimeTypes(env, ownerId)).find(
+    (entry) => entry.id === request.time_type_id,
+  );
+  if (!timeType) return { error: "Scheduling time type not found", status: 404 };
+
+  if (timeType.paymentMode === "paid_checkout") {
+    const checkoutUrl = buildSchedulingCheckoutUrl(env, timeType, slot);
+    await env.DB.prepare(
+      `UPDATE scheduling_requests
+       SET status = 'checkout_required',
+           checkout_url = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(checkoutUrl, request.id, ownerId)
+      .run();
+    await insertSchedulingRequestAudit(env, {
+      requestId: request.id,
+      userId: ownerId,
+      eventType: "checkout_handoff",
+      actorRole: "assistant",
+      summary: "Shared checkout link for paid scheduling",
+      metadata: { checkoutUrl, slot },
+    });
+    const updated = (await getSchedulingRequest(env, ownerId, request.id))!;
+    return { request: serializeSchedulingRequest(updated), checkoutUrl };
+  }
+
+  if (timeType.source === "public_booking_offer" && timeType.publicBookingOfferId) {
+    const booking = await finalizeSchedulingRequestAsBooking(env, ownerId, request, timeType, slot);
+    if ("error" in booking) return booking;
+    await markSchedulingRequestFinalized(env, ownerId, request.id, {
+      bookingId: booking.booking.id,
+      calendarEventId: null,
+    });
+    await insertSchedulingRequestAudit(env, {
+      requestId: request.id,
+      userId: ownerId,
+      eventType: "finalized",
+      actorRole: "assistant",
+      summary: "Created booking after both owners approved",
+      metadata: { bookingId: booking.booking.id, slot },
+    });
+    const updated = (await getSchedulingRequest(env, ownerId, request.id))!;
+    return {
+      request: serializeSchedulingRequest(updated),
+      booking: serializeBooking(booking.booking),
+    };
+  }
+
+  const calendarEvent = await finalizeSchedulingRequestAsCalendarEvent(
+    env,
+    ownerId,
+    request,
+    timeType,
+    slot,
+  );
+  await markSchedulingRequestFinalized(env, ownerId, request.id, {
+    bookingId: null,
+    calendarEventId: calendarEvent.id,
+  });
+  await insertSchedulingRequestAudit(env, {
+    requestId: request.id,
+    userId: ownerId,
+    eventType: "finalized",
+    actorRole: "assistant",
+    summary: "Created calendar event after both owners approved",
+    metadata: { calendarEventId: calendarEvent.id, slot },
+  });
+  const updated = (await getSchedulingRequest(env, ownerId, request.id))!;
+  return {
+    request: serializeSchedulingRequest(updated),
+    calendarEvent: serializeCalendarEvent(calendarEvent),
+  };
+}
+
+async function deliverSchedulingRequestToSoulink(
+  env: Env,
+  ownerId: string,
+  requestUrl: string,
+  payload: SchedulingRequestStreamPayload,
+): Promise<{ attempted: boolean; status: "sent" | "pending" | "failed" | "skipped" }> {
+  const connection = await getSoulinkConnection(env, ownerId);
+  if (!connection || connection.status !== "active" || !connection.provider_thread_id) {
+    return { attempted: false, status: "skipped" };
+  }
+
+  const providerEventId = `scheduling:${payload.requestId}:candidates`;
+  const messageText = payload.summary;
+  const eventId = await insertProviderChannelEventOnce(env, {
+    channel: "soulink",
+    connectionId: connection.id,
+    direction: "outbound",
+    eventType: "send",
+    status: "pending",
+    providerEventId,
+    providerMessageId: null,
+    replyToMessageId: null,
+    textBody: messageText,
+    rawJson: {
+      schedulingPayload: payload,
+      fallbackActionCard: payload.actionCard,
+    },
+    errorMessage: null,
+  });
+
+  try {
+    const response = await fetch(`${getSchedulingSoulinkApiOrigin(env)}/api/me3/assistant-channel/notify`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${connection.setup_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        streamChannelType: connection.provider_connection_id || "messaging",
+        streamChannelId: connection.provider_thread_id,
+        messageId: providerEventId,
+        messageText,
+        createdAt: new Date().toISOString(),
+        schedulingPayload: payload,
+        fallbackActionCard: payload.actionCard,
+        sourceUrl: requestUrl,
+      }),
+    });
+    const result = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!response.ok || result?.ok !== true) {
+      await updateSchedulingSoulinkEvent(env, eventId, {
+        status: "failed",
+        providerMessageId: stringValue(result?.messageId),
+        rawJson: result,
+        errorMessage: stringValue(result?.error) || `Soulink notification failed with ${response.status}`,
+      });
+      return { attempted: true, status: "failed" };
+    }
+    await updateSchedulingSoulinkEvent(env, eventId, {
+      status: "sent",
+      providerMessageId: stringValue(result.messageId) || stringValue(result.eventId),
+      rawJson: result,
+      errorMessage: null,
+    });
+    await env.DB.prepare(
+      `UPDATE agent_channel_connections
+       SET last_outbound_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+      .bind(connection.id)
+      .run();
+    return { attempted: true, status: "sent" };
+  } catch (error) {
+    await updateSchedulingSoulinkEvent(env, eventId, {
+      status: "failed",
+      providerMessageId: null,
+      rawJson: { errorMessage: getSchedulingErrorMessage(error) },
+      errorMessage: getSchedulingErrorMessage(error),
+    });
+    return { attempted: true, status: "failed" };
+  }
+}
+
+async function updateSchedulingSoulinkEvent(
+  env: Env,
+  eventId: string,
+  input: {
+    status: "sent" | "failed";
+    providerMessageId: string | null;
+    rawJson: unknown;
+    errorMessage: string | null;
+  },
+) {
+  await env.DB.prepare(
+    `UPDATE agent_channel_events
+     SET status = ?,
+         provider_message_id = ?,
+         raw_json = ?,
+         error_message = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  )
+    .bind(
+      input.status,
+      input.providerMessageId,
+      JSON.stringify(input.rawJson),
+      input.errorMessage,
+      eventId,
+    )
+    .run();
+}
+
+function buildSchedulingRequestStreamPayload(input: {
+  requestId: string;
+  timeType: SchedulingTimeType;
+  slots: SchedulingCandidateSlot[];
+  requesterName: string;
+  targetName: string;
+  reason: string;
+}): SchedulingRequestStreamPayload {
+  const names = [input.requesterName, input.targetName].filter(Boolean).join(" and ");
+  const title = `${input.timeType.title} scheduling`;
+  const options = input.slots.slice(0, 5).map((slot, index) => ({
+    id: `${index + 1}`,
+    label: formatSchedulingSlotLabel(slot),
+    startsAt: slot.startsAt,
+    endsAt: slot.endsAt,
+  }));
+  return {
+    kind: "scheduling_poll",
+    requestId: input.requestId,
+    title,
+    summary: `${title}: ${options.length} candidate time${options.length === 1 ? "" : "s"} ready${names ? ` for ${names}` : ""}.`,
+    poll: {
+      question: input.reason || `Which ${input.timeType.title} time works?`,
+      maxSelections: options.length,
+      options,
+    },
+    actionCard: {
+      title,
+      description: input.reason || "Choose the times that work, then both owners approve finalization.",
+      actions: [
+        ...options.map((option) => ({
+          id: `vote:${option.id}`,
+          label: option.label,
+          type: "vote" as const,
+        })),
+        { id: "approve", label: "Approve selected time", type: "approve" as const },
+      ],
+    },
+    requiresApproval: "both_owners",
+  };
+}
+
+function formatSchedulingSlotLabel(slot: SchedulingRequestSlot): string {
+  const end =
+    slot.localEndDate && slot.localEndDate !== slot.localDate
+      ? `${slot.localEndDate} ${slot.localEndTime}`
+      : slot.localEndTime;
+  return `${slot.localDate} ${slot.localStartTime}-${end} ${slot.timezone}`;
+}
+
+function normalizeSchedulingRequestCandidateLimit(value: unknown): number {
+  const normalized = normalizeCandidateLimit(value);
+  return Math.max(3, Math.min(5, normalized));
+}
+
+function normalizeSchedulingParticipantRole(value: unknown): SchedulingParticipantRole | null {
+  return value === "requester" || value === "target" ? value : null;
+}
+
+function normalizeSchedulingVotePreference(value: unknown): SchedulingVotePreference {
+  return value === "maybe" || value === "no" ? value : "yes";
+}
+
+function parseSchedulingRequestSlots(value: string | null): SchedulingRequestSlot[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(parseSchedulingRequestSlotFromUnknown)
+      .filter((slot): slot is SchedulingRequestSlot => Boolean(slot));
+  } catch {
+    return [];
+  }
+}
+
+function parseSchedulingRequestSlot(value: string | null): SchedulingRequestSlot | null {
+  if (!value) return null;
+  try {
+    return parseSchedulingRequestSlotFromUnknown(JSON.parse(value) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function parseSchedulingRequestSlotFromUnknown(value: unknown): SchedulingRequestSlot | null {
+  if (!isPlainObject(value)) return null;
+  const startsAt = normalizeShortText(value.startsAt, 40);
+  const endsAt = normalizeShortText(value.endsAt, 40);
+  const timezone = resolveTimeZone(normalizeShortText(value.timezone, 80));
+  if (!startsAt || !endsAt || !Number.isFinite(Date.parse(startsAt)) || !Number.isFinite(Date.parse(endsAt))) {
+    return null;
+  }
+  const localStart = formatUtcInstantInTimeZone(Date.parse(startsAt), timezone);
+  const localEnd = formatUtcInstantInTimeZone(Date.parse(endsAt), timezone);
+  return {
+    startsAt,
+    endsAt,
+    timezone,
+    localDate: normalizeShortText(value.localDate, 20) || localStart?.localDate || startsAt.slice(0, 10),
+    localStartTime: normalizeShortText(value.localStartTime, 10) || localStart?.localTime || startsAt.slice(11, 16),
+    localEndDate: normalizeShortText(value.localEndDate, 20) || localEnd?.localDate || endsAt.slice(0, 10),
+    localEndTime: normalizeShortText(value.localEndTime, 10) || localEnd?.localTime || endsAt.slice(11, 16),
+  };
+}
+
+function selectSchedulingRequestSlot(
+  request: DbSchedulingRequest,
+  slotIdValue: unknown,
+  startsAtValue: unknown,
+  endsAtValue: unknown,
+): SchedulingRequestSlot | null {
+  const slots = parseSchedulingRequestSlots(request.candidate_slots_json);
+  const slotId = normalizeShortText(slotIdValue, 20);
+  if (slotId && /^\d+$/.test(slotId)) {
+    const index = Number(slotId) - 1;
+    if (index >= 0 && index < slots.length) return slots[index];
+  }
+  const startsAt = normalizeShortText(startsAtValue, 40);
+  const endsAt = normalizeShortText(endsAtValue, 40);
+  if (!startsAt || !endsAt) return null;
+  return slots.find((slot) => slot.startsAt === startsAt && slot.endsAt === endsAt) || null;
+}
+
+function firstPositiveSchedulingVoteSlot(votes: DbSchedulingRequestVote[]): SchedulingRequestSlot | null {
+  const vote = votes.find((entry) => entry.preference === "yes") ||
+    votes.find((entry) => entry.preference === "maybe");
+  if (!vote) return null;
+  const timezone = resolveTimeZone(null);
+  const localStart = formatUtcInstantInTimeZone(Date.parse(vote.slot_starts_at), timezone);
+  const localEnd = formatUtcInstantInTimeZone(Date.parse(vote.slot_ends_at), timezone);
+  return {
+    startsAt: vote.slot_starts_at,
+    endsAt: vote.slot_ends_at,
+    timezone,
+    localDate: localStart?.localDate || vote.slot_starts_at.slice(0, 10),
+    localStartTime: localStart?.localTime || vote.slot_starts_at.slice(11, 16),
+    localEndDate: localEnd?.localDate || vote.slot_ends_at.slice(0, 10),
+    localEndTime: localEnd?.localTime || vote.slot_ends_at.slice(11, 16),
+  };
+}
+
+async function getSchedulingRequest(
+  env: Env,
+  ownerId: string,
+  requestId: string,
+): Promise<DbSchedulingRequest | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, contact_id, time_type_id, status, requester_name,
+              target_name, reason, date_range_start, date_range_end,
+              candidate_slots_json, selected_slot_json, policy_json,
+              stream_payload_json, checkout_url, requester_approved_at,
+              target_approved_at, finalized_calendar_event_id,
+              finalized_booking_id, finalized_at, created_at, updated_at
+       FROM scheduling_requests
+       WHERE user_id = ? AND id = ?`,
+    )
+      .bind(ownerId, requestId)
+      .first<DbSchedulingRequest>()) || null
+  );
+}
+
+async function listSchedulingRequestVotes(
+  env: Env,
+  requestId: string,
+): Promise<DbSchedulingRequestVote[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, request_id, participant_role, voter_label, slot_starts_at,
+            slot_ends_at, preference, raw_json, created_at, updated_at
+     FROM scheduling_request_votes
+     WHERE request_id = ?
+     ORDER BY created_at ASC`,
+  )
+    .bind(requestId)
+    .all<DbSchedulingRequestVote>();
+  return rows.results || [];
+}
+
+async function listSchedulingRequestAudit(
+  env: Env,
+  requestId: string,
+): Promise<DbSchedulingRequestAudit[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, request_id, user_id, event_type, actor_role, summary,
+            metadata_json, created_at
+     FROM scheduling_request_audit
+     WHERE request_id = ?
+     ORDER BY created_at ASC`,
+  )
+    .bind(requestId)
+    .all<DbSchedulingRequestAudit>();
+  return rows.results || [];
+}
+
+async function insertSchedulingRequestAudit(
+  env: Env,
+  input: {
+    requestId: string;
+    userId: string;
+    eventType: DbSchedulingRequestAudit["event_type"];
+    actorRole: NonNullable<DbSchedulingRequestAudit["actor_role"]>;
+    summary: string;
+    metadata: unknown;
+  },
+) {
+  await env.DB.prepare(
+    `INSERT INTO scheduling_request_audit
+       (id, request_id, user_id, event_type, actor_role, summary, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      input.requestId,
+      input.userId,
+      input.eventType,
+      input.actorRole,
+      input.summary,
+      JSON.stringify(input.metadata),
+    )
+    .run();
+}
+
+async function finalizeSchedulingRequestAsCalendarEvent(
+  env: Env,
+  ownerId: string,
+  request: DbSchedulingRequest,
+  timeType: SchedulingTimeType,
+  slot: SchedulingRequestSlot,
+): Promise<DbUserCalendarEvent> {
+  const eventId = crypto.randomUUID();
+  const title = [timeType.title, request.target_name].filter(Boolean).join(" with ");
+  const notes = [
+    request.reason,
+    "Created by ME3 agent-assisted scheduling after both owners approved.",
+  ].filter(Boolean).join("\n\n");
+  await env.DB.prepare(
+    `INSERT INTO user_calendar_events
+       (id, user_id, title, notes, location, starts_at, ends_at, timezone, all_day, kind, recurrence_rule)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0, 'event', NULL)`,
+  )
+    .bind(eventId, ownerId, title, notes, slot.startsAt, slot.endsAt, slot.timezone)
+    .run();
+
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, title, notes, location, starts_at, ends_at, timezone,
+              all_day, kind, recurrence_rule, created_at
+       FROM user_calendar_events
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(eventId, ownerId)
+      .first<DbUserCalendarEvent>()) || {
+      id: eventId,
+      user_id: ownerId,
+      title,
+      notes,
+      location: null,
+      starts_at: slot.startsAt,
+      ends_at: slot.endsAt,
+      timezone: slot.timezone,
+      all_day: 0,
+      kind: "event",
+      recurrence_rule: null,
+      created_at: new Date().toISOString(),
+    }
+  );
+}
+
+async function finalizeSchedulingRequestAsBooking(
+  env: Env,
+  ownerId: string,
+  request: DbSchedulingRequest,
+  timeType: SchedulingTimeType,
+  slot: SchedulingRequestSlot,
+): Promise<{ booking: DbBooking } | { error: string; status: 400 | 404 | 409 }> {
+  const publicRef = parsePublicSchedulingTimeTypeId(timeType.id);
+  if (!publicRef) return { error: "Public booking time type is invalid", status: 400 };
+  const site = await getSiteForOwner(env, ownerId, publicRef.username);
+  if (!site) return { error: "Booking site not found", status: 404 };
+  const profile = await loadSiteProfileForCommerce(env, site);
+  const bookIntent = profile?.intents?.book as CoreBookIntent | undefined;
+  if (!bookIntent?.enabled) return { error: "Booking offer not found", status: 404 };
+  const offerResult = resolvePublicOneToOneBookingOffer(bookIntent, publicRef.offerId);
+  if ("error" in offerResult) return offerResult;
+  const slotResult = resolvePublicBookingSlot({
+    slotStart: slot.startsAt,
+    slotEnd: slot.endsAt,
+    durationMinutes: offerResult.offer.duration,
+    timezone: resolveTimeZone(offerResult.offer.availability.timezone),
+  });
+  if ("error" in slotResult) return { error: slotResult.error, status: 400 };
+  const availabilityError = validateBookingAvailability(
+    offerResult.offer.availability,
+    slotResult.localDate,
+    slotResult.localTime,
+    offerResult.offer.duration,
+  );
+  if (availabilityError) return { error: availabilityError, status: 400 };
+  const overlap = await findConfirmedBookingOverlap(env, {
+    siteId: site.id,
+    offerId: offerResult.offer.id,
+    startsAt: slot.startsAt,
+    endsAt: slot.endsAt,
+  });
+  if (overlap) return { error: "That time has already been booked", status: 409 };
+
+  const owner = await getOwnerProfile(env, ownerId);
+  const booking = await createConfirmedFreeOneToOneBooking(env, {
+    site,
+    bookIntent,
+    offer: offerResult.offer,
+    guestName: request.requester_name || "Scheduling contact",
+    guestEmail: owner?.email || "unknown@example.com",
+    notes: request.reason || "Created by ME3 agent-assisted scheduling.",
+    slot,
+  });
+  if (!booking) return { error: "Failed to create booking", status: 400 };
+  return { booking };
+}
+
+async function markSchedulingRequestFinalized(
+  env: Env,
+  ownerId: string,
+  requestId: string,
+  input: { bookingId: string | null; calendarEventId: string | null },
+) {
+  await env.DB.prepare(
+    `UPDATE scheduling_requests
+     SET status = 'finalized',
+         finalized_booking_id = ?,
+         finalized_calendar_event_id = ?,
+         finalized_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(input.bookingId, input.calendarEventId, requestId, ownerId)
+    .run();
+}
+
+function parsePublicSchedulingTimeTypeId(id: string): { username: string; offerId: string } | null {
+  if (!id.startsWith("public:")) return null;
+  const [, username, ...offerParts] = id.split(":");
+  const offerId = offerParts.join(":");
+  return username && offerId ? { username, offerId } : null;
+}
+
+function buildSchedulingCheckoutUrl(
+  env: Env,
+  timeType: SchedulingTimeType,
+  slot: SchedulingRequestSlot,
+): string {
+  const publicRef = parsePublicSchedulingTimeTypeId(timeType.id);
+  const origin = env.CORE_WEB_ORIGIN || env.CORE_API_ORIGIN || "";
+  if (!publicRef || !origin) return "";
+  const url = new URL(`/book/${publicRef.username}`, origin);
+  url.searchParams.set("offerId", publicRef.offerId);
+  url.searchParams.set("slotStart", slot.startsAt);
+  url.searchParams.set("slotEnd", slot.endsAt);
+  return url.toString();
+}
+
+function getSchedulingSoulinkApiOrigin(env: Env): string {
+  const configured = normalizeShortText(env.SOULINK_API_ORIGIN, 300);
+  if (!configured) return DEFAULT_SOULINK_API_ORIGIN;
+  try {
+    return new URL(configured).origin;
+  } catch {
+    return DEFAULT_SOULINK_API_ORIGIN;
+  }
+}
+
+function getSchedulingErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || "Unknown error");
+}
+
+function serializeSchedulingRequest(row: DbSchedulingRequest) {
+  return {
+    id: row.id,
+    contactId: row.contact_id,
+    timeTypeId: row.time_type_id,
+    status: row.status,
+    requesterName: row.requester_name,
+    targetName: row.target_name,
+    reason: row.reason,
+    dateRange: { start: row.date_range_start, end: row.date_range_end },
+    candidateSlots: parseSchedulingRequestSlots(row.candidate_slots_json),
+    selectedSlot: parseSchedulingRequestSlot(row.selected_slot_json),
+    policy: parseJsonRecord(row.policy_json),
+    streamPayload: parseJsonRecord(row.stream_payload_json),
+    checkoutUrl: row.checkout_url,
+    approvals: {
+      requesterApprovedAt: row.requester_approved_at,
+      targetApprovedAt: row.target_approved_at,
+    },
+    finalizedCalendarEventId: row.finalized_calendar_event_id,
+    finalizedBookingId: row.finalized_booking_id,
+    finalizedAt: row.finalized_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function serializeSchedulingVote(row: DbSchedulingRequestVote) {
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    participantRole: row.participant_role,
+    voterLabel: row.voter_label,
+    slot: {
+      startsAt: row.slot_starts_at,
+      endsAt: row.slot_ends_at,
+    },
+    preference: row.preference,
+    raw: parseJsonRecord(row.raw_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function serializeSchedulingAudit(row: DbSchedulingRequestAudit) {
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    eventType: row.event_type,
+    actorRole: row.actor_role,
+    summary: row.summary,
+    metadata: parseJsonRecord(row.metadata_json),
+    createdAt: row.created_at,
   };
 }
 
