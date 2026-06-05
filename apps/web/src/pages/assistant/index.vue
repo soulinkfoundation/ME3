@@ -4156,30 +4156,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <div class="assistant-history__thread-actions" aria-label="Chat controls">
                   <button
                     type="button"
-                    title="Export transcript"
-                    aria-label="Export transcript"
-                    :disabled="assistantThreadActionId === thread.id"
-                    @click="exportAssistantThread(thread)"
-                  >
-                    <UiIcon name="Download" :size="14" aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
                     title="Archive chat"
                     aria-label="Archive chat"
                     :disabled="assistantThreadActionId === thread.id"
                     @click="archiveAssistantThread(thread)"
                   >
                     <UiIcon name="Archive" :size="14" aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Delete chat"
-                    aria-label="Delete chat"
-                    :disabled="assistantThreadActionId === thread.id"
-                    @click="deleteAssistantThread(thread)"
-                  >
-                    <UiIcon name="Trash2" :size="14" aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -4238,30 +4220,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <div class="assistant-history__thread-actions" aria-label="Chat controls">
                 <button
                   type="button"
-                  title="Export transcript"
-                  aria-label="Export transcript"
-                  :disabled="assistantThreadActionId === thread.id"
-                  @click="exportAssistantThread(thread)"
-                >
-                  <UiIcon name="Download" :size="14" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
                   title="Archive chat"
                   aria-label="Archive chat"
                   :disabled="assistantThreadActionId === thread.id"
                   @click="archiveAssistantThread(thread)"
                 >
                   <UiIcon name="Archive" :size="14" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  title="Delete chat"
-                  aria-label="Delete chat"
-                  :disabled="assistantThreadActionId === thread.id"
-                  @click="deleteAssistantThread(thread)"
-                >
-                  <UiIcon name="Trash2" :size="14" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -4892,7 +4856,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
           <header class="assistant-modal__header">
             <div class="assistant-modal__header-copy">
               <h2 id="archived-chats-title">Archived Chats</h2>
-              <p>Restore a chat to bring it back into the side nav.</p>
+              <p>Download, restore, or delete archived chats.</p>
             </div>
             <Button
               color="ghost"
@@ -4945,6 +4909,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </span>
               </button>
               <div class="assistant-archived-thread__actions">
+                <button
+                  type="button"
+                  title="Export transcript"
+                  aria-label="Export transcript"
+                  :disabled="assistantThreadActionId === thread.id"
+                  @click="exportAssistantThread(thread)"
+                >
+                  <UiIcon name="Download" :size="15" aria-hidden="true" />
+                </button>
                 <button
                   type="button"
                   title="Restore chat"
