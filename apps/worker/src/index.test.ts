@@ -1869,6 +1869,13 @@ function createEnv(): Env & {
                     ? (state.sandboxConnection as T)
                     : null;
                 }
+                if (sql.includes("setup_token = ?") && sql.includes("channel = 'soulink'")) {
+                  return state.soulinkConnection &&
+                    values[0] === state.soulinkConnection.setup_token &&
+                    state.soulinkConnection.status === "active"
+                    ? (state.soulinkConnection as T)
+                    : null;
+                }
                 if (sql.includes("provider_thread_id = ?")) {
                   return state.soulinkConnection &&
                     values[0] === state.soulinkConnection.provider_thread_id &&
@@ -4100,6 +4107,19 @@ describe("ME3 Core Worker auth", () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
     addAssistantEditableSite(env, { blogEnabled: true });
+    const aiRun = vi.fn(async () => ({
+      response: JSON.stringify({
+        aboutParagraph:
+          "Model-written about paragraph for a public site that feels specific, useful, and alive.",
+        blogPost: {
+          title: "Personal AI Assistants in Practice",
+          bodyMarkdown:
+            "# Personal AI Assistants in Practice\n\nModel-written blog copy about practical personal AI assistants, context, and momentum.",
+          excerpt: "Model-written blog copy about practical personal AI assistants.",
+        },
+      }),
+    }));
+    env.AI = { run: aiRun } as unknown as Ai;
 
     const draftResponse = await app.fetch(
       new Request("http://localhost/api/assistant/chat/turn", {
@@ -4127,10 +4147,13 @@ describe("ME3 Core Worker auth", () => {
     expect(draftResponse.status).toBe(200);
     expect(draftPayload).toMatchObject({
       ok: true,
-      source: "tool",
+      source: "workers-ai",
       specialist: "core.sites.update_draft",
+      model: "@cf/qwen/qwen3-30b-a3b-fp8",
     });
+    expect(aiRun).toHaveBeenCalledOnce();
     expect(String(draftPayload.replyText)).toContain("Reply `publish`");
+    expect(String(draftPayload.replyText)).toContain("Generated with @cf/qwen/qwen3-30b-a3b-fp8");
     expect(draftFile).toBeTruthy();
     expect(siteFileText(env, "site-assistant", "src/about.md")).toBe("# About\n\nOriginal about.");
     expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeNull();
@@ -4160,24 +4183,24 @@ describe("ME3 Core Worker auth", () => {
     expect(String(publishPayload.replyText)).toContain("Published");
     expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeTruthy();
     expect(siteFileText(env, "site-assistant", "src/about.md")).toContain(
-      "living notebook",
+      "Model-written about paragraph",
     );
     expect(
       siteFileText(
         env,
         "site-assistant",
-        "src/blog/the-rise-of-personal-ai-assistants.md",
+        "src/blog/personal-ai-assistants-in-practice.md",
       ),
-    ).toContain("# The Rise of Personal AI Assistants");
+    ).toContain("Model-written blog copy");
     expect(
       siteFileText(
         env,
         "site-assistant",
-        "public/blog/the-rise-of-personal-ai-assistants.html",
+        "public/blog/personal-ai-assistants-in-practice.html",
       ),
-    ).toContain("Personal AI assistants");
+    ).toContain("Model-written blog copy");
     expect(siteFileText(env, "site-assistant", "public/me.json")).toContain(
-      "the-rise-of-personal-ai-assistants",
+      "personal-ai-assistants-in-practice",
     );
     expect(
       env.siteFiles.find(
@@ -4294,6 +4317,66 @@ describe("ME3 Core Worker auth", () => {
     });
     expect(String(savePayload.replyText)).toContain("already saved as a pending draft");
     expect(String(savePayload.replyText)).not.toContain("email");
+  });
+
+  it("lists profile site blog posts from assistant chat", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env, { blogEnabled: true });
+    const meJson = JSON.parse(siteFileText(env, "site-assistant", "src/me.json") || "{}");
+    meJson.posts = [
+      {
+        slug: "published-note",
+        title: "Published Note",
+        file: "blog/published-note.md",
+        publishedAt: "2026-06-01",
+        draft: false,
+      },
+      {
+        slug: "draft-note",
+        title: "Draft Note",
+        file: "blog/draft-note.md",
+        draft: true,
+      },
+    ];
+    addSiteFileText(
+      env,
+      "site-assistant",
+      "src/me.json",
+      JSON.stringify(meJson, null, 2),
+      "application/json",
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: "list all blog posts",
+        }),
+      }),
+      env,
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "tool",
+      specialist: "core.sites.approval_status",
+      siteAction: {
+        kind: "listed_blog_posts",
+        siteId: "site-assistant",
+        username: "owner",
+      },
+    });
+    expect(String(payload.replyText)).toContain("Published Note");
+    expect(String(payload.replyText)).toContain("published, 2026-06-01");
+    expect(String(payload.replyText)).toContain("Draft Note");
+    expect(String(payload.replyText)).toContain("draft");
   });
 
   it("publishes a prior plain-text assistant site draft when the user approves it", async () => {
@@ -9471,6 +9554,215 @@ describe("ME3 Core Worker auth", () => {
         }),
       ]),
     );
+  });
+
+  it("exposes privacy-safe Soulink Links to connected Core installs", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+    env.soulinkConnection = {
+      id: "soulink-links-connection",
+      user_id: "owner",
+      channel: "soulink",
+      status: "active",
+      setup_token: "dispatch-token",
+      provider_connection_id: "messaging",
+      provider_user_id: "node-owner",
+      provider_thread_id: "assistant-channel",
+      provider_username: "assistant-owner",
+      provider_metadata_json: JSON.stringify({
+        ownerNodeId: "node-owner",
+        assistantNodeId: "assistant-owner",
+      }),
+      telegram_user_id: null,
+      telegram_chat_id: null,
+      telegram_username: null,
+      telegram_first_name: null,
+      telegram_last_name: null,
+      connected_at: "2026-05-11T10:01:00Z",
+      disconnected_at: null,
+      last_inbound_at: null,
+      last_outbound_at: null,
+      created_at: "2026-05-11T10:00:00Z",
+      updated_at: "2026-05-11T10:00:00Z",
+    };
+    env.contacts.push({
+      id: "soulink-contact-1",
+      user_id: "owner",
+      name: "Ada Lovelace",
+      email: "ada@example.com",
+      phone: "+353 1 555 0000",
+      source: "soulink",
+      source_ref: "link-ada",
+      relationship: "contact",
+      status: "active",
+      notes: "private note should not leak",
+      tags: "private,tags",
+      last_interaction_at: "2026-06-04T12:00:00Z",
+      next_followup_at: "2026-06-10T12:00:00Z",
+      outreach_status: null,
+      social_handles: JSON.stringify({
+        soulink: "ada",
+        me3: "https://ada.example/me.json",
+      }),
+      metadata: JSON.stringify({
+        avatarUrl: "https://cdn.test/ada.png",
+        me3Url: "https://ada.example",
+        soulinkLinkId: "link-ada",
+        soulinkNodeId: "node-ada",
+        soulinkChatUrl: "https://soulink.test/?chat=messaging%3Achat-ada",
+        soulinkSourceChatId: "chat-ada",
+        soulinkContextLabel: "Friends",
+        soulinkSourceChatTitle: "Ada chat",
+        soulinkSourceChatKind: "direct",
+        soulinkStatus: "active",
+        soulinkLastActiveAt: "2026-06-05T09:00:00Z",
+      }),
+      created_at: "2026-06-01T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+    env.contacts.push({
+      id: "manual-contact",
+      user_id: "owner",
+      name: "Manual Contact",
+      email: "manual@example.com",
+      phone: null,
+      source: "manual",
+      source_ref: null,
+      relationship: "contact",
+      status: "active",
+      notes: "not linked",
+      tags: null,
+      last_interaction_at: null,
+      next_followup_at: null,
+      outreach_status: null,
+      social_handles: null,
+      metadata: null,
+      created_at: "2026-06-01T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/me3/links?ownerNodeId=node-owner", {
+        headers: { Authorization: "Bearer dispatch-token" },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      ok: boolean;
+      ownerNodeId: string;
+      links: Array<{
+        id: string;
+        fromNodeId: string;
+        toNodeId: string;
+        sourceChatId: string;
+        status: string;
+        otherNode: {
+          id: string;
+          displayName: string;
+          handle: string;
+          me3Url: string;
+          avatarUrl: string;
+          email: string;
+          contactEmail: string;
+        };
+        context: {
+          sourceChatId: string;
+          sourceChatTitle: string;
+          sourceChatKind: string;
+          streamChannelId: string;
+          soulinkChatUrl: string;
+          label: string;
+        };
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      ownerNodeId: "node-owner",
+      links: [
+        {
+          id: "link-ada",
+          fromNodeId: "node-owner",
+          toNodeId: "node-ada",
+          sourceChatId: "chat-ada",
+          status: "active",
+          otherNode: {
+            id: "node-ada",
+            displayName: "Ada Lovelace",
+            handle: "ada",
+            me3Url: "https://ada.example",
+            avatarUrl: "https://cdn.test/ada.png",
+            email: "ada@example.com",
+            contactEmail: "ada@example.com",
+          },
+          context: {
+            sourceChatId: "chat-ada",
+            sourceChatTitle: "Ada chat",
+            sourceChatKind: "direct",
+            streamChannelId: "chat-ada",
+            soulinkChatUrl: "https://soulink.test/?chat=messaging%3Achat-ada",
+            label: "Friends",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(body)).not.toContain("private note should not leak");
+    expect(JSON.stringify(body)).not.toContain("private,tags");
+    expect(JSON.stringify(body)).not.toContain("+353");
+    expect(JSON.stringify(body)).not.toContain("Manual Contact");
+  });
+
+  it("rejects Soulink Links requests for invalid tokens and mismatched owners", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+    env.soulinkConnection = {
+      id: "soulink-links-connection",
+      user_id: "owner",
+      channel: "soulink",
+      status: "active",
+      setup_token: "dispatch-token",
+      provider_connection_id: "messaging",
+      provider_user_id: "node-owner",
+      provider_thread_id: "assistant-channel",
+      provider_username: "assistant-owner",
+      provider_metadata_json: JSON.stringify({ ownerNodeId: "node-owner" }),
+      telegram_user_id: null,
+      telegram_chat_id: null,
+      telegram_username: null,
+      telegram_first_name: null,
+      telegram_last_name: null,
+      connected_at: "2026-05-11T10:01:00Z",
+      disconnected_at: null,
+      last_inbound_at: null,
+      last_outbound_at: null,
+      created_at: "2026-05-11T10:00:00Z",
+      updated_at: "2026-05-11T10:00:00Z",
+    };
+
+    const invalidResponse = await app.fetch(
+      new Request("http://localhost/api/me3/links", {
+        headers: { Authorization: "Bearer wrong-token" },
+      }),
+      env,
+    );
+    const mismatchResponse = await app.fetch(
+      new Request("http://localhost/api/me3/links?ownerNodeId=other-owner", {
+        headers: { Authorization: "Bearer dispatch-token" },
+      }),
+      env,
+    );
+
+    expect(invalidResponse.status).toBe(401);
+    expect(await invalidResponse.json()).toMatchObject({
+      ok: false,
+      error: "Invalid Soulink dispatch token",
+    });
+    expect(mismatchResponse.status).toBe(403);
+    expect(await mismatchResponse.json()).toMatchObject({
+      ok: false,
+      error: "Dispatch token is not valid for that owner node",
+    });
   });
 
   it("disconnects an active Telegram account-level connection", async () => {

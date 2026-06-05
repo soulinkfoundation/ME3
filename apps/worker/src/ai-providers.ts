@@ -55,6 +55,22 @@ export type AiSettingsResponse = {
   defaults: Record<AiRouteId, AiModelRouteRecord>;
 };
 
+export type AiTextMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+export type AiTextGenerationSelection = {
+  providerId?: unknown;
+  model?: unknown;
+};
+
+export type AiTextGenerationResult = {
+  text: string;
+  providerId: Exclude<AiProviderId, "executor">;
+  model: string;
+};
+
 type AiProviderUpdate = {
   id?: unknown;
   apiKey?: unknown;
@@ -274,6 +290,46 @@ export async function hasConfiguredAiProvider(env: Env, ownerId: string): Promis
   } catch {
     return Boolean(env.AI || env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY);
   }
+}
+
+export async function generateAiText(
+  env: Env,
+  ownerId: string,
+  input: {
+    routeId?: AiRouteId;
+    selectedModel?: AiTextGenerationSelection | null;
+    messages: AiTextMessage[];
+    temperature?: number;
+    maxTokens?: number;
+  },
+): Promise<AiTextGenerationResult> {
+  const route = await resolveTextGenerationRoute(
+    env,
+    ownerId,
+    input.routeId || "chat",
+    input.selectedModel || null,
+  );
+  const temperature =
+    typeof input.temperature === "number" && Number.isFinite(input.temperature)
+      ? input.temperature
+      : 0.4;
+  const maxTokens =
+    typeof input.maxTokens === "number" && Number.isFinite(input.maxTokens)
+      ? Math.max(64, Math.min(Math.round(input.maxTokens), 4000))
+      : 1200;
+
+  const text =
+    route.providerId === "workers-ai"
+      ? await runWorkersAiText(route, input.messages, { temperature, maxTokens })
+      : route.providerId === "openai"
+        ? await runOpenAiText(route, input.messages, { temperature, maxTokens })
+        : await runAnthropicText(route, input.messages, { temperature, maxTokens });
+
+  return {
+    text,
+    providerId: route.providerId,
+    model: route.model,
+  };
 }
 
 async function applyProviderUpdate(
@@ -534,6 +590,190 @@ function normalizeModel(value: unknown): string | null {
   return model;
 }
 
+type ResolvedTextGenerationRoute = {
+  providerId: Exclude<AiProviderId, "executor">;
+  model: string;
+  apiKey: string | null;
+  ai: Ai | null;
+};
+
+async function resolveTextGenerationRoute(
+  env: Env,
+  ownerId: string,
+  routeId: AiRouteId,
+  selectedModel: AiTextGenerationSelection | null,
+): Promise<ResolvedTextGenerationRoute> {
+  const settings = await getAiSettings(env, ownerId);
+  const selectedProviderId = normalizeProviderId(selectedModel?.providerId);
+  const selectedModelName = normalizeModel(selectedModel?.model);
+  const defaultRoute = settings.defaults[routeId] || settings.defaults.chat;
+  const providerId = selectedProviderId || defaultRoute.providerId;
+  if (providerId === "executor") {
+    throw new Error("External executor models cannot generate text in Core yet.");
+  }
+
+  const model = selectedModelName || defaultRoute.model;
+  if (!model) throw new Error("AI model is not configured.");
+
+  const apiKey =
+    providerId === "openai"
+      ? env.OPENAI_API_KEY || (await getStoredProviderApiKey(env, ownerId, providerId))
+      : providerId === "anthropic"
+        ? env.ANTHROPIC_API_KEY || (await getStoredProviderApiKey(env, ownerId, providerId))
+        : null;
+
+  if (providerId === "workers-ai" && !env.AI) {
+    throw new Error("Workers AI binding is not configured.");
+  }
+  if ((providerId === "openai" || providerId === "anthropic") && !apiKey) {
+    throw new Error(`${providerId} API key is not configured.`);
+  }
+
+  return { providerId, model, apiKey, ai: env.AI || null };
+}
+
+async function getStoredProviderApiKey(
+  env: Env,
+  ownerId: string,
+  providerId: Exclude<AiProviderId, "executor" | "workers-ai">,
+): Promise<string | null> {
+  const credentials = await listAiCredentials(env, ownerId);
+  const encrypted = credentials.get(providerId)?.encrypted_api_key || null;
+  if (!encrypted) return null;
+  const installKey = await getInstallEncryptionKey(env);
+  return installKey ? decryptProviderSecret(encrypted, installKey) : null;
+}
+
+async function getInstallEncryptionKey(env: Env): Promise<string | null> {
+  if (env.TOKEN_ENCRYPTION_KEY) return env.TOKEN_ENCRYPTION_KEY;
+  try {
+    const row = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
+      .bind("token_encryption_key")
+      .first<{ value: string }>();
+    return row?.value || null;
+  } catch {
+    return null;
+  }
+}
+
+async function decryptProviderSecret(
+  encrypted: string,
+  installKey: string,
+): Promise<string | null> {
+  const parts = encrypted.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") return null;
+  const iv = decodeBase64UrlBytes(parts[1]);
+  const ciphertext = decodeBase64UrlBytes(parts[2]);
+  const key = await importSecretCryptoKey(installKey, ["decrypt"]);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: toArrayBuffer(iv) },
+    key,
+    toArrayBuffer(ciphertext),
+  );
+  return new TextDecoder().decode(plaintext);
+}
+
+async function runWorkersAiText(
+  route: ResolvedTextGenerationRoute,
+  messages: AiTextMessage[],
+  options: { temperature: number; maxTokens: number },
+): Promise<string> {
+  if (!route.ai) throw new Error("Workers AI binding is not configured.");
+  const result = await route.ai.run(route.model, {
+    messages,
+    temperature: options.temperature,
+    max_tokens: options.maxTokens,
+  });
+  const text = extractAiText(result);
+  if (!text) throw new Error(`Workers AI (${route.model}) returned an empty reply.`);
+  return text;
+}
+
+async function runOpenAiText(
+  route: ResolvedTextGenerationRoute,
+  messages: AiTextMessage[],
+  options: { temperature: number; maxTokens: number },
+): Promise<string> {
+  if (!route.apiKey) throw new Error("OpenAI API key is not configured.");
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${route.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: route.model,
+      messages,
+      temperature: options.temperature,
+      max_tokens: options.maxTokens,
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { choices?: Array<{ message?: { content?: unknown; refusal?: unknown } }>; error?: { message?: string } }
+    | null;
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || `OpenAI request failed (${response.status})`);
+  }
+  const text =
+    extractAiText(payload?.choices?.[0]?.message?.content) ||
+    extractAiText(payload?.choices?.[0]?.message?.refusal);
+  if (!text) throw new Error(`OpenAI (${route.model}) returned an empty reply.`);
+  return text;
+}
+
+async function runAnthropicText(
+  route: ResolvedTextGenerationRoute,
+  messages: AiTextMessage[],
+  options: { temperature: number; maxTokens: number },
+): Promise<string> {
+  if (!route.apiKey) throw new Error("Anthropic API key is not configured.");
+  const system = messages.find((message) => message.role === "system")?.content || "";
+  const turns = messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({ role: message.role, content: message.content }));
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": route.apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: route.model,
+      max_tokens: options.maxTokens,
+      temperature: options.temperature,
+      system,
+      messages: turns,
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { content?: Array<{ type?: string; text?: string }>; error?: { message?: string } }
+    | null;
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || `Anthropic request failed (${response.status})`);
+  }
+  const text = extractAiText(payload?.content);
+  if (!text) throw new Error(`Anthropic (${route.model}) returned an empty reply.`);
+  return text;
+}
+
+function extractAiText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) return value.map((part) => extractAiText(part)).join("").trim();
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  return (
+    extractAiText(record.text) ||
+    extractAiText(record.output_text) ||
+    extractAiText(record.response) ||
+    extractAiText(record.content) ||
+    extractAiText(record.message) ||
+    extractAiText(record.choices) ||
+    extractAiText(record.result) ||
+    extractAiText(record.output)
+  );
+}
+
 function getSecretHint(secret: string): string {
   return `***${secret.slice(-4)}`;
 }
@@ -568,6 +808,26 @@ function encodeBase64Url(value: ArrayBuffer | Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeBase64UrlBytes(value: string): Uint8Array {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(
+    Math.ceil(value.length / 4) * 4,
+    "=",
+  );
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

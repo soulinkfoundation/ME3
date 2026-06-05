@@ -21,9 +21,12 @@ import {
 } from "./accounts";
 import {
   AiSettingsInputError,
+  generateAiText,
   getAiRoutingSummary,
   getAiSettings,
   hasConfiguredAiProvider,
+  type AiTextGenerationResult,
+  type AiTextMessage,
   updateAiSettings,
 } from "./ai-providers";
 import {
@@ -370,6 +373,8 @@ type SoulinkProvisionResponse = {
   error?: string;
 };
 type SoulinkLinksResponse = {
+  ok?: boolean;
+  ownerNodeId?: string | null;
   links?: SoulinkLinkRecord[];
   error?: string;
 };
@@ -2113,9 +2118,29 @@ type AssistantSiteThreadMessage = {
 
 type ParsedAssistantSiteDraftContent = {
   aboutParagraph?: string;
+  pages?: AssistantSiteGeneratedPage[];
   postTitle?: string;
   postBody?: string;
   postTopic?: string;
+  postDraft?: boolean;
+};
+
+type AssistantSiteGeneratedPage = {
+  slug: string;
+  title: string;
+  bodyMarkdown: string;
+};
+
+type AssistantSiteGeneratedContent = {
+  aboutParagraph?: string;
+  pages?: AssistantSiteGeneratedPage[];
+  postTitle?: string;
+  postBody?: string;
+  postTopic?: string;
+  postExcerpt?: string;
+  postDraft?: boolean;
+  modelResult?: AiTextGenerationResult | null;
+  fallbackReason?: string | null;
 };
 
 type AssistantSiteUpdateDraft = {
@@ -2131,11 +2156,18 @@ type AssistantSiteUpdateDraft = {
   changes: {
     aboutFile?: string;
     aboutParagraph?: string;
+    pageFiles?: string[];
     postTitle?: string;
     postSlug?: string;
     postFile?: string;
     postMarkdown?: string;
+    postDraft?: boolean;
     refinementText?: string | null;
+    generatedBy?: {
+      providerId: string;
+      model: string;
+      fallbackReason?: string | null;
+    } | null;
   };
 };
 
@@ -2153,7 +2185,8 @@ type AssistantSiteToolAction = {
       | "published"
       | "approval_status"
       | "missing_site"
-      | "unsupported_feature";
+      | "unsupported_feature"
+      | "listed_blog_posts";
     siteId: string | null;
     username: string | null;
     pending: boolean;
@@ -2163,6 +2196,8 @@ type AssistantSiteToolAction = {
     url?: string | null;
     message?: string | null;
   };
+  model?: string | null;
+  source?: "tool" | "openai" | "anthropic" | "workers-ai" | "fallback" | null;
 };
 
 async function maybeHandleAssistantSiteToolAction(
@@ -2171,8 +2206,10 @@ async function maybeHandleAssistantSiteToolAction(
   threadId: string,
   messageText: string,
   requestUrl: string,
+  selectedModel: AssistantChatTurnModelSelection | null,
 ): Promise<AssistantSiteToolAction | null> {
   const approvalIntent = isAssistantSiteApprovalIntent(messageText);
+  const blogListIntent = isAssistantSiteBlogListIntent(messageText);
   const statusIntent = isAssistantSiteStatusIntent(messageText);
   const updateIntent = isAssistantSiteUpdateIntent(messageText);
   const refinementIntent = isAssistantSiteRefinementIntent(messageText);
@@ -2183,6 +2220,17 @@ async function maybeHandleAssistantSiteToolAction(
       env,
       ownerId,
       threadId,
+      messageText,
+      requestUrl,
+      selectedModel,
+    );
+    if (action) return action;
+  }
+
+  if (blogListIntent) {
+    const action = await maybeListAssistantSiteBlogPosts(
+      env,
+      ownerId,
       messageText,
       requestUrl,
     );
@@ -2228,6 +2276,7 @@ async function maybeHandleAssistantSiteToolAction(
         site,
         threadId,
         messageText,
+        selectedModel,
       );
       if (draft) {
         const unavailable = await getUnavailableAssistantSiteFeatureForDraft(
@@ -2253,6 +2302,8 @@ async function maybeHandleAssistantSiteToolAction(
             postTitle: draft.changes.postTitle || null,
             url: getAssistantSiteAdminUrl(env, site, requestUrl),
           },
+          model: draft.changes.generatedBy?.model || null,
+          source: assistantSiteToolSourceFromDraft(draft),
         };
       }
     }
@@ -2263,10 +2314,12 @@ async function maybeHandleAssistantSiteToolAction(
     if (pending) {
       return refineAssistantSiteDraft(
         env,
+        ownerId,
         pending.site,
         pending.draft,
         messageText,
         requestUrl,
+        selectedModel,
       );
     }
   }
@@ -2291,7 +2344,15 @@ async function maybeHandleAssistantSiteToolAction(
     };
   }
 
-  const draft = await createAssistantSiteUpdateDraft(env, ownerId, site, threadId, messageText);
+  const draft = await createAssistantSiteUpdateDraft(
+    env,
+    ownerId,
+    site,
+    threadId,
+    messageText,
+    null,
+    selectedModel,
+  );
   const unavailable = await getUnavailableAssistantSiteFeatureForDraft(
     env,
     ownerId,
@@ -2313,6 +2374,8 @@ async function maybeHandleAssistantSiteToolAction(
       postTitle: draft.changes.postTitle || null,
       url: getAssistantSiteAdminUrl(env, site, requestUrl),
     },
+    model: draft.changes.generatedBy?.model || null,
+    source: assistantSiteToolSourceFromDraft(draft),
   };
 }
 
@@ -2324,8 +2387,8 @@ function buildAssistantSiteToolPayload(threadId: string, action: AssistantSiteTo
     threadId,
     specialist: action.specialist,
     replyText: action.replyText,
-    model: null,
-    source: "tool",
+    source: action.source || "tool",
+    model: action.model || null,
     siteAction: action.siteAction,
     jobBuilderAction: null,
     emailAction: null,
@@ -2333,6 +2396,15 @@ function buildAssistantSiteToolPayload(threadId: string, action: AssistantSiteTo
     contentAction: null,
     contactsChanged: false,
   };
+}
+
+function assistantSiteToolSourceFromDraft(draft: AssistantSiteUpdateDraft): AssistantSiteToolAction["source"] {
+  if (!draft.changes.generatedBy) return "tool";
+  if (draft.changes.generatedBy.fallbackReason) return "fallback";
+  const providerId = draft.changes.generatedBy.providerId;
+  return providerId === "openai" || providerId === "anthropic" || providerId === "workers-ai"
+    ? providerId
+    : "tool";
 }
 
 function isAssistantSiteUpdateIntent(messageText: string): boolean {
@@ -2365,6 +2437,16 @@ function isAssistantSiteStatusIntent(messageText: string): boolean {
   );
 }
 
+function isAssistantSiteBlogListIntent(messageText: string): boolean {
+  const text = normalizeAssistantIntentText(messageText);
+  if (!text) return false;
+  if (isAssistantSiteUpdateIntent(text) || isAssistantSiteApprovalIntent(text)) return false;
+  return (
+    /\b(list|show|see|view|open|what|which)\b.*\b(blog posts?|posts?|articles?)\b/.test(text) ||
+    /\b(blog posts?|posts?|articles?)\b.*\b(list|show|see|view|published|existing)\b/.test(text)
+  );
+}
+
 function isAssistantSiteDraftSaveIntent(messageText: string): boolean {
   const text = normalizeAssistantIntentText(messageText);
   if (!text) return false;
@@ -2389,6 +2471,7 @@ async function maybePublishAssistantSiteDraft(
   threadId: string,
   messageText: string,
   requestUrl: string,
+  selectedModel: AssistantChatTurnModelSelection | null,
 ): Promise<AssistantSiteToolAction | null> {
   const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
   let site = pending?.site || (await chooseAssistantSiteForMessage(env, ownerId, messageText));
@@ -2402,6 +2485,7 @@ async function maybePublishAssistantSiteDraft(
       site,
       threadId,
       messageText,
+      selectedModel,
     );
   }
   if (!draft) return null;
@@ -2505,14 +2589,61 @@ async function maybeReportAssistantSiteApprovalStatus(
   };
 }
 
+async function maybeListAssistantSiteBlogPosts(
+  env: Env,
+  ownerId: string,
+  messageText: string,
+  requestUrl: string,
+): Promise<AssistantSiteToolAction | null> {
+  const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+  if (!site) return null;
+  const sourceFiles = await loadSiteSourceFiles(env, site.id);
+  const profile = await loadAssistantSiteProfile(env, ownerId, site, sourceFiles);
+  const posts = Array.isArray(profile.posts) ? profile.posts : [];
+  const lines = posts
+    .map((post, index) => {
+      const title = post.title || titleFromSlug(post.slug || `post-${index + 1}`);
+      const status = post.draft === true ? "draft" : "published";
+      const date = post.publishedAt ? `, ${post.publishedAt}` : "";
+      const slug = post.slug ? ` (${post.slug})` : "";
+      return `${index + 1}. ${title}${slug} - ${status}${date}`;
+    });
+  return {
+    specialist: "core.sites.approval_status",
+    replyText: lines.length
+      ? `Blog posts for @${site.username}:\n\n${lines.join("\n")}`
+      : `@${site.username} does not have any blog posts yet.`,
+    siteAction: {
+      kind: "listed_blog_posts",
+      siteId: site.id,
+      username: site.username,
+      pending: false,
+      published: Boolean(site.published_at),
+      files: [],
+      url: getAssistantSiteAdminUrl(env, site, requestUrl),
+    },
+    source: "tool",
+    model: null,
+  };
+}
+
 async function refineAssistantSiteDraft(
   env: Env,
+  ownerId: string,
   site: DbSite,
   draft: AssistantSiteUpdateDraft,
   refinementText: string,
   requestUrl: string,
+  selectedModel: AssistantChatTurnModelSelection | null,
 ): Promise<AssistantSiteToolAction> {
-  const nextDraft = applyAssistantSiteDraftRefinement(draft, refinementText);
+  const nextDraft = await applyAssistantSiteDraftRefinement(
+    env,
+    ownerId,
+    site,
+    draft,
+    refinementText,
+    selectedModel,
+  );
   await saveAssistantSiteUpdateDraft(env, nextDraft);
   return {
     specialist: "core.sites.refine_draft",
@@ -2527,6 +2658,8 @@ async function refineAssistantSiteDraft(
       postTitle: nextDraft.changes.postTitle || null,
       url: getAssistantSiteAdminUrl(env, site, requestUrl),
     },
+    model: nextDraft.changes.generatedBy?.model || null,
+    source: assistantSiteToolSourceFromDraft(nextDraft),
   };
 }
 
@@ -2653,6 +2786,7 @@ async function createAssistantSiteDraftFromRecentThread(
   site: DbSite,
   threadId: string,
   fallbackRequestText: string,
+  selectedModel: AssistantChatTurnModelSelection | null,
 ): Promise<AssistantSiteUpdateDraft | null> {
   const messages = await loadAssistantThreadRecentMessages(env, ownerId, threadId);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -2668,12 +2802,21 @@ async function createAssistantSiteDraftFromRecentThread(
       threadId,
       priorUserMessage || fallbackRequestText,
       parsed,
+      selectedModel,
     );
   }
 
   const priorUserMessage = findPriorSiteUpdateUserMessage(messages, messages.length);
   if (!priorUserMessage) return null;
-  return createAssistantSiteUpdateDraft(env, ownerId, site, threadId, priorUserMessage);
+  return createAssistantSiteUpdateDraft(
+    env,
+    ownerId,
+    site,
+    threadId,
+    priorUserMessage,
+    null,
+    selectedModel,
+  );
 }
 
 async function hasRecentAssistantSiteDraftContext(
@@ -2726,16 +2869,40 @@ async function createAssistantSiteUpdateDraft(
   threadId: string,
   requestText: string,
   parsedContent: ParsedAssistantSiteDraftContent | null = null,
+  selectedModel: AssistantChatTurnModelSelection | null = null,
 ): Promise<AssistantSiteUpdateDraft> {
   const sourceFiles = await loadSiteSourceFiles(env, site.id);
   const profile = await loadAssistantSiteProfile(env, ownerId, site, sourceFiles);
-  const changes: AssistantSiteUpdateDraft["changes"] = { refinementText: null };
+  const generatedContent =
+    parsedContent
+      ? assistantGeneratedContentFromParsed(parsedContent)
+      : await generateAssistantSiteUpdateContent(
+          env,
+          ownerId,
+          site,
+          profile,
+          sourceFiles,
+          requestText,
+          selectedModel,
+        );
+  const changes: AssistantSiteUpdateDraft["changes"] = {
+    refinementText: null,
+    generatedBy: generatedContent.modelResult
+      ? {
+          providerId: generatedContent.modelResult.providerId,
+          model: generatedContent.modelResult.model,
+          fallbackReason: generatedContent.fallbackReason || null,
+        }
+      : generatedContent.fallbackReason
+        ? {
+            providerId: "fallback",
+            model: "local-site-fallback",
+            fallbackReason: generatedContent.fallbackReason,
+          }
+        : null,
+  };
 
-  const aboutParagraph =
-    parsedContent?.aboutParagraph ||
-    (assistantRequestMentionsAbout(requestText)
-      ? generateAssistantAboutParagraph(requestText)
-      : "");
+  const aboutParagraph = generatedContent.aboutParagraph || "";
   if (aboutParagraph) {
     const aboutPage = upsertAssistantAboutPage(profile);
     const aboutFile = normalizeSiteFileName(aboutPage.file || "about.md") || "about.md";
@@ -2745,32 +2912,48 @@ async function createAssistantSiteUpdateDraft(
     changes.aboutParagraph = aboutParagraph;
   }
 
-  const shouldCreatePost = Boolean(parsedContent?.postBody || assistantRequestMentionsBlogPost(requestText));
+  for (const page of generatedContent.pages || []) {
+    const slug = slugifyAssistantSitePath(page.slug || page.title || "page");
+    if (!slug || slug === "blog" || slug === "shop") continue;
+    const title = page.title.trim() || titleFromSlug(slug);
+    const pageFile = `${slug}.md`;
+    upsertAssistantSitePage(profile, { slug, title, file: pageFile });
+    sourceFiles.set(pageFile, normalizeAssistantPostMarkdown(title, page.bodyMarkdown));
+    changes.pageFiles = [...(changes.pageFiles || []), pageFile];
+  }
+
+  const shouldCreatePost = Boolean(
+    generatedContent.postBody || assistantRequestMentionsBlogPost(requestText),
+  );
   if (shouldCreatePost) {
-    const topic = parsedContent?.postTopic || extractAssistantBlogTopic(requestText);
-    const postTitle = parsedContent?.postTitle || assistantBlogTitleFromTopic(topic);
+    const topic = generatedContent.postTopic || extractAssistantBlogTopic(requestText);
+    const postTitle = generatedContent.postTitle || assistantBlogTitleFromTopic(topic);
     const postSlug = slugifyAssistantSitePath(postTitle || topic || "personal-ai-assistants");
     const postFile = `blog/${postSlug}.md`;
-    const postMarkdown = parsedContent?.postBody
-      ? normalizeAssistantPostMarkdown(postTitle, parsedContent.postBody)
+    const postMarkdown = generatedContent.postBody
+      ? normalizeAssistantPostMarkdown(postTitle, generatedContent.postBody)
       : generateAssistantBlogPostMarkdown(topic, postTitle, requestText);
     upsertAssistantBlogPost(profile, {
       slug: postSlug,
       title: postTitle,
       file: postFile,
-      excerpt: markdownExcerpt(postMarkdown),
+      excerpt: generatedContent.postExcerpt || markdownExcerpt(postMarkdown),
+      draft: generatedContent.postDraft === true || assistantRequestAsksForDraftPost(requestText),
     });
     sourceFiles.set(postFile, postMarkdown);
     changes.postTitle = postTitle;
     changes.postSlug = postSlug;
     changes.postFile = postFile;
     changes.postMarkdown = postMarkdown;
+    changes.postDraft =
+      generatedContent.postDraft === true || assistantRequestAsksForDraftPost(requestText);
   }
 
-  if (!changes.aboutParagraph && !changes.postMarkdown) {
+  if (!changes.aboutParagraph && !changes.pageFiles?.length && !changes.postMarkdown) {
     const aboutPage = upsertAssistantAboutPage(profile);
     const aboutFile = normalizeSiteFileName(aboutPage.file || "about.md") || "about.md";
-    const fallbackParagraph = generateAssistantAboutParagraph(requestText);
+    const fallbackParagraph =
+      generatedContent.aboutParagraph || generateAssistantAboutParagraph(requestText);
     const existingAbout = sourceFiles.get(aboutFile) || `# ${aboutPage.title || "About"}\n`;
     sourceFiles.set(aboutFile, appendAssistantParagraph(existingAbout, fallbackParagraph));
     changes.aboutFile = aboutFile;
@@ -2792,6 +2975,193 @@ async function createAssistantSiteUpdateDraft(
     sourceFiles: Object.fromEntries(sourceFiles.entries()),
     changes,
   };
+}
+
+function assistantGeneratedContentFromParsed(
+  parsed: ParsedAssistantSiteDraftContent,
+): AssistantSiteGeneratedContent {
+  return {
+    aboutParagraph: parsed.aboutParagraph,
+    pages: parsed.pages,
+    postTitle: parsed.postTitle,
+    postBody: parsed.postBody,
+    postTopic: parsed.postTopic,
+    postDraft: parsed.postDraft,
+    modelResult: null,
+    fallbackReason: null,
+  };
+}
+
+async function generateAssistantSiteUpdateContent(
+  env: Env,
+  ownerId: string,
+  site: DbSite,
+  profile: Me3SiteProfile,
+  sourceFiles: Map<string, string>,
+  requestText: string,
+  selectedModel: AssistantChatTurnModelSelection | null,
+): Promise<AssistantSiteGeneratedContent> {
+  try {
+    const messages = buildAssistantSiteGenerationMessages(site, profile, sourceFiles, requestText);
+    const modelResult = await generateAiText(env, ownerId, {
+      routeId: "chat",
+      selectedModel,
+      messages,
+      temperature: 0.55,
+      maxTokens: 1800,
+    });
+    const parsed = parseAssistantSiteGeneratedJson(modelResult.text);
+    if (!parsed) {
+      throw new Error("The model did not return valid site-update JSON.");
+    }
+    return { ...parsed, modelResult, fallbackReason: null };
+  } catch (error) {
+    return {
+      ...generateFallbackAssistantSiteContent(requestText),
+      modelResult: null,
+      fallbackReason:
+        error instanceof Error ? error.message : "The configured model could not generate the site update.",
+    };
+  }
+}
+
+function buildAssistantSiteGenerationMessages(
+  site: DbSite,
+  profile: Me3SiteProfile,
+  sourceFiles: Map<string, string>,
+  requestText: string,
+): AiTextMessage[] {
+  const pages = (profile.pages || []).map((page) => {
+    const file = normalizeSiteFileName(page.file || (page.slug ? `${page.slug}.md` : ""));
+    return {
+      slug: page.slug || "",
+      title: page.title || titleFromSlug(page.slug || file || "page"),
+      file,
+      excerpt: truncateAssistantPromptText(sourceFiles.get(file) || "", 700),
+    };
+  });
+  const posts = (profile.posts || []).map((post) => ({
+    slug: post.slug || "",
+    title: post.title || titleFromSlug(post.slug || "post"),
+    file: normalizeSiteFileName(post.file || (post.slug ? `blog/${post.slug}.md` : "")),
+    draft: post.draft === true,
+    publishedAt: post.publishedAt || null,
+    excerpt: post.excerpt || "",
+  }));
+  const system = [
+    "You write public ME3 profile-site content for the owner.",
+    "Return only strict JSON. No markdown fence, no prose outside JSON.",
+    "Schema: {\"aboutParagraph\": string optional, \"pages\": [{\"slug\": string, \"title\": string, \"bodyMarkdown\": string}] optional, \"blogPost\": {\"title\": string, \"bodyMarkdown\": string, \"excerpt\": string optional, \"draft\": boolean optional} optional}.",
+    "Use bodyMarkdown without frontmatter. For pages and posts, include a single H1 followed by useful body copy.",
+    "Only include fields that the owner asked to create or update. Keep content specific to the owner's request and current site.",
+    "Do not claim the site is published.",
+  ].join("\n");
+  const user = JSON.stringify(
+    {
+      request: requestText,
+      site: {
+        username: site.username,
+        name: profile.name || site.username,
+        bio: profile.bio || "",
+        blogEnabled: assistantSiteBlogFeatureEnabled(profile),
+      },
+      existingPages: pages,
+      existingBlogPosts: posts,
+    },
+    null,
+    2,
+  );
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+}
+
+function parseAssistantSiteGeneratedJson(text: string): AssistantSiteGeneratedContent | null {
+  const parsed = parseJsonObjectFromModelText(text);
+  if (!parsed) return null;
+  const aboutParagraph = normalizeGeneratedString(parsed.aboutParagraph);
+  const pages = Array.isArray(parsed.pages)
+    ? parsed.pages
+        .map((page) => normalizeGeneratedPage(page))
+        .filter((page): page is AssistantSiteGeneratedPage => Boolean(page))
+    : [];
+  const blogPost = isRecordValue(parsed.blogPost) ? parsed.blogPost : null;
+  const postTitle = normalizeGeneratedString(blogPost?.title);
+  const postBody = normalizeGeneratedString(blogPost?.bodyMarkdown);
+  const postExcerpt = normalizeGeneratedString(blogPost?.excerpt);
+  const postDraft = typeof blogPost?.draft === "boolean" ? blogPost.draft : undefined;
+
+  if (!aboutParagraph && pages.length === 0 && !postBody) return null;
+  return {
+    aboutParagraph: aboutParagraph || undefined,
+    pages: pages.length ? pages : undefined,
+    postTitle: postTitle || undefined,
+    postBody: postBody || undefined,
+    postExcerpt: postExcerpt || undefined,
+    postDraft,
+    modelResult: null,
+    fallbackReason: null,
+  };
+}
+
+function parseJsonObjectFromModelText(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+  const candidates = [trimmed];
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (isRecordValue(parsed)) return parsed;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+function normalizeGeneratedPage(value: unknown): AssistantSiteGeneratedPage | null {
+  if (!isRecordValue(value)) return null;
+  const title = normalizeGeneratedString(value.title);
+  const bodyMarkdown = normalizeGeneratedString(value.bodyMarkdown);
+  const slug = slugifyAssistantSitePath(normalizeGeneratedString(value.slug) || title);
+  if (!slug || !title || !bodyMarkdown) return null;
+  return { slug, title, bodyMarkdown };
+}
+
+function normalizeGeneratedString(value: unknown): string {
+  return typeof value === "string" ? cleanAssistantGeneratedSnippet(value) : "";
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function truncateAssistantPromptText(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function generateFallbackAssistantSiteContent(requestText: string): AssistantSiteGeneratedContent {
+  const content: AssistantSiteGeneratedContent = {};
+  if (assistantRequestMentionsAbout(requestText)) {
+    content.aboutParagraph = generateAssistantAboutParagraph(requestText);
+  }
+  if (assistantRequestMentionsBlogPost(requestText)) {
+    const topic = extractAssistantBlogTopic(requestText);
+    content.postTopic = topic;
+    content.postTitle = assistantBlogTitleFromTopic(topic);
+    content.postBody = generateAssistantBlogPostMarkdown(topic, content.postTitle, requestText);
+    content.postDraft = assistantRequestAsksForDraftPost(requestText);
+  }
+  if (!content.aboutParagraph && !content.postBody) {
+    content.aboutParagraph = generateAssistantAboutParagraph(requestText);
+  }
+  return content;
 }
 
 async function loadAssistantSiteProfile(
@@ -2846,9 +3216,35 @@ function upsertAssistantAboutPage(profile: Me3SiteProfile) {
   return page;
 }
 
+function upsertAssistantSitePage(
+  profile: Me3SiteProfile,
+  input: { slug: string; title: string; file: string },
+) {
+  const pages = Array.isArray(profile.pages) ? [...profile.pages] : [];
+  const existingIndex = pages.findIndex((page) => {
+    const slug = normalizeSiteFileName(page.slug || "").toLowerCase();
+    const file = normalizeSiteFileName(page.file || "").toLowerCase();
+    return slug === input.slug || file === input.file.toLowerCase();
+  });
+  const page = {
+    ...(existingIndex >= 0 ? pages[existingIndex] : {}),
+    slug: input.slug,
+    title: input.title,
+    file: input.file,
+    visible: existingIndex >= 0 && pages[existingIndex]?.visible === false ? false : true,
+  };
+  if (existingIndex >= 0) {
+    pages[existingIndex] = page;
+  } else {
+    pages.push(page);
+  }
+  profile.pages = pages;
+  return page;
+}
+
 function upsertAssistantBlogPost(
   profile: Me3SiteProfile,
-  input: { slug: string; title: string; file: string; excerpt: string },
+  input: { slug: string; title: string; file: string; excerpt: string; draft?: boolean },
 ) {
   const posts = Array.isArray(profile.posts) ? [...profile.posts] : [];
   const existingIndex = posts.findIndex(
@@ -2861,7 +3257,7 @@ function upsertAssistantBlogPost(
     file: input.file,
     publishedAt: new Date().toISOString().slice(0, 10),
     excerpt: input.excerpt,
-    draft: false,
+    draft: input.draft === true,
     type: "article",
   };
   if (existingIndex >= 0) {
@@ -2889,16 +3285,49 @@ function removeAssistantBlogPost(
   );
 }
 
-function applyAssistantSiteDraftRefinement(
+async function applyAssistantSiteDraftRefinement(
+  env: Env,
+  ownerId: string,
+  site: DbSite,
   draft: AssistantSiteUpdateDraft,
   refinementText: string,
-): AssistantSiteUpdateDraft {
+  selectedModel: AssistantChatTurnModelSelection | null,
+): Promise<AssistantSiteUpdateDraft> {
   const sourceFiles = new Map(Object.entries(draft.sourceFiles));
   const changes = { ...draft.changes, refinementText };
   const combinedRequest = `${draft.requestText}\n\nRefinement: ${refinementText}`;
+  let generatedContent: AssistantSiteGeneratedContent | null = null;
+  try {
+    const profile = parseSiteProfile(sourceFiles.get("me.json") || "{}", site.username);
+    generatedContent = await generateAssistantSiteUpdateContent(
+      env,
+      ownerId,
+      site,
+      profile,
+      sourceFiles,
+      combinedRequest,
+      selectedModel,
+    );
+    changes.generatedBy = generatedContent.modelResult
+      ? {
+          providerId: generatedContent.modelResult.providerId,
+          model: generatedContent.modelResult.model,
+          fallbackReason: generatedContent.fallbackReason || null,
+        }
+      : generatedContent.fallbackReason
+        ? {
+            providerId: "fallback",
+            model: "local-site-fallback",
+            fallbackReason: generatedContent.fallbackReason,
+          }
+        : changes.generatedBy || null;
+  } catch {
+    generatedContent = null;
+  }
 
   if (changes.aboutFile && changes.aboutParagraph && assistantRefinementTargetsAbout(refinementText)) {
-    const nextParagraph = generateAssistantAboutParagraph(combinedRequest);
+    const nextParagraph =
+      generatedContent?.aboutParagraph || generateAssistantAboutParagraph(combinedRequest);
     const currentAbout = sourceFiles.get(changes.aboutFile) || "";
     sourceFiles.set(
       changes.aboutFile,
@@ -2908,9 +3337,14 @@ function applyAssistantSiteDraftRefinement(
   }
 
   if (changes.postFile && changes.postTitle && assistantRefinementTargetsPost(refinementText)) {
-    const nextTitle = extractAssistantRequestedTitle(refinementText) || changes.postTitle;
+    const nextTitle =
+      generatedContent?.postTitle ||
+      extractAssistantRequestedTitle(refinementText) ||
+      changes.postTitle;
     const topic = extractAssistantBlogTopic(draft.requestText);
-    const nextMarkdown = generateAssistantBlogPostMarkdown(topic, nextTitle, combinedRequest);
+    const nextMarkdown = generatedContent?.postBody
+      ? normalizeAssistantPostMarkdown(nextTitle, generatedContent.postBody)
+      : generateAssistantBlogPostMarkdown(topic, nextTitle, combinedRequest);
     sourceFiles.delete(changes.postFile);
     const nextSlug = slugifyAssistantSitePath(nextTitle);
     const nextFile = `blog/${nextSlug}.md`;
@@ -2929,6 +3363,7 @@ function applyAssistantSiteDraftRefinement(
         title: nextTitle,
         file: nextFile,
         excerpt: markdownExcerpt(nextMarkdown),
+        draft: changes.postDraft === true,
       });
       sourceFiles.set("me.json", JSON.stringify(profile, null, 2));
     }
@@ -3059,6 +3494,7 @@ function assistantSiteDraftPath(threadId: string): string {
 function assistantSiteDraftChangedFiles(draft: AssistantSiteUpdateDraft): string[] {
   const files = new Set<string>();
   if (draft.changes.aboutFile) files.add(draft.changes.aboutFile);
+  for (const pageFile of draft.changes.pageFiles || []) files.add(pageFile);
   if (draft.changes.postFile) files.add(draft.changes.postFile);
   files.add("me.json");
   return Array.from(files);
@@ -3070,7 +3506,17 @@ function formatAssistantSiteDraftReply(draft: AssistantSiteUpdateDraft): string 
     parts.push(`About page: added a new paragraph to ${draft.changes.aboutFile}.`);
   }
   if (draft.changes.postTitle && draft.changes.postFile) {
-    parts.push(`Blog: added "${draft.changes.postTitle}" at ${draft.changes.postFile}.`);
+    parts.push(
+      `Blog: added ${draft.changes.postDraft ? "draft " : ""}"${draft.changes.postTitle}" at ${draft.changes.postFile}.`,
+    );
+  }
+  if (draft.changes.pageFiles?.length) {
+    parts.push(`Pages: updated ${draft.changes.pageFiles.join(", ")}.`);
+  }
+  if (draft.changes.generatedBy?.fallbackReason) {
+    parts.push(`Generation note: I could not reach the configured model, so I used a local fallback (${draft.changes.generatedBy.fallbackReason}).`);
+  } else if (draft.changes.generatedBy?.model) {
+    parts.push(`Generated with ${draft.changes.generatedBy.model}.`);
   }
   parts.push("Reply `publish` to publish it now, or tell me what to change.");
   return parts.join("\n\n");
@@ -3081,6 +3527,11 @@ function formatAssistantSiteRefinedReply(draft: AssistantSiteUpdateDraft): strin
   if (draft.changes.aboutFile) parts.push(`About page: revised ${draft.changes.aboutFile}.`);
   if (draft.changes.postTitle && draft.changes.postFile) {
     parts.push(`Blog: revised "${draft.changes.postTitle}" at ${draft.changes.postFile}.`);
+  }
+  if (draft.changes.generatedBy?.fallbackReason) {
+    parts.push(`Generation note: I used a local fallback (${draft.changes.generatedBy.fallbackReason}).`);
+  } else if (draft.changes.generatedBy?.model) {
+    parts.push(`Generated with ${draft.changes.generatedBy.model}.`);
   }
   parts.push("Reply `publish` when it looks right, or send another change.");
   return parts.join("\n\n");
@@ -3159,6 +3610,11 @@ function assistantRequestMentionsAbout(requestText: string): boolean {
 
 function assistantRequestMentionsBlogPost(requestText: string): boolean {
   return /\b(blog post|post about|article about|blog|article)\b/i.test(requestText);
+}
+
+function assistantRequestAsksForDraftPost(requestText: string): boolean {
+  const text = normalizeAssistantIntentText(requestText);
+  return /\b(draft|save as draft|do not publish|don't publish|unpublished)\b/.test(text);
 }
 
 function extractAssistantBlogTopic(requestText: string): string {
@@ -3516,6 +3972,7 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
     thread.id,
     messageText,
     c.req.url,
+    selectedModel,
   );
   if (siteAction) {
     await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, siteAction.replyText);
@@ -3692,6 +4149,7 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
           thread.id,
           messageText,
           c.req.url,
+          selectedModel,
         );
         if (siteAction) {
           await persistAssistantTurnMessages(
@@ -7523,6 +7981,16 @@ app.post("/api/soulink/contacts/sync", async (c) => {
   return c.json(result);
 });
 
+app.get("/api/me3/links", async (c) => {
+  const result = await listSoulinkLinksForConnectedCore(
+    c.env,
+    c.req.header("authorization"),
+    c.req.query("ownerNodeId"),
+  );
+  if (!result.ok) return c.json({ ok: false, error: result.error }, result.status as any);
+  return c.json(result);
+});
+
 app.get("/api/scheduling/time-types", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -9999,6 +10467,110 @@ async function syncSoulinkContacts(env: Env, ownerId: string) {
   };
 }
 
+async function listSoulinkLinksForConnectedCore(
+  env: Env,
+  authorization: string | undefined,
+  requestedOwnerNodeId: string | undefined,
+): Promise<
+  | { ok: true; ownerNodeId: string | null; links: ReturnType<typeof serializeSoulinkContactLink>[] }
+  | { ok: false; status: 401 | 403; error: string }
+> {
+  const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || "";
+  if (!token) return { ok: false, status: 401, error: "Missing Soulink dispatch token" };
+
+  const connection = await getActiveSoulinkConnectionByDispatchToken(env, token);
+  if (!connection || !constantTimeEqual(connection.setup_token, token)) {
+    return { ok: false, status: 401, error: "Invalid Soulink dispatch token" };
+  }
+
+  const metadata = parseJsonRecord(connection.provider_metadata_json);
+  const ownerNodeId =
+    stringValue(metadata.ownerNodeId) ||
+    stringValue(connection.provider_user_id);
+  const normalizedRequestedOwnerNodeId = normalizeShortText(requestedOwnerNodeId, 160);
+  if (
+    normalizedRequestedOwnerNodeId &&
+    ownerNodeId &&
+    normalizedRequestedOwnerNodeId !== ownerNodeId
+  ) {
+    return { ok: false, status: 403, error: "Dispatch token is not valid for that owner node" };
+  }
+
+  const contacts = await env.DB.prepare(
+    `SELECT id, user_id, name, email, phone, source, source_ref,
+            relationship, status, notes, tags, last_interaction_at,
+            next_followup_at, outreach_status, social_handles, metadata,
+            created_at, updated_at
+     FROM contacts
+     WHERE user_id = ? AND status = 'active'`,
+  )
+    .bind(connection.user_id)
+    .all<DbContact>();
+
+  return {
+    ok: true,
+    ownerNodeId,
+    links: (contacts.results || [])
+      .map((contact) => serializeSoulinkContactLink(contact, ownerNodeId))
+      .filter((link): link is ReturnType<typeof serializeSoulinkContactLink> => Boolean(link)),
+  };
+}
+
+function serializeSoulinkContactLink(contact: DbContact, ownerNodeId: string | null) {
+  const metadata = parseJsonRecord(contact.metadata);
+  const socialHandles = parseJsonRecord(contact.social_handles);
+  const linkId = stringValue(metadata.soulinkLinkId) || (
+    contact.source === "soulink" && contact.source_ref ? contact.source_ref : null
+  );
+  const otherNodeId = stringValue(metadata.soulinkNodeId) || (
+    contact.source === "soulink" && contact.source_ref ? contact.source_ref : null
+  );
+  const me3Url = stringValue(metadata.me3Url) || stringValue(socialHandles.me3);
+  const handle = stringValue(socialHandles.soulink) || stringValue(metadata.soulinkHandle);
+  const sourceChatId = stringValue(metadata.soulinkSourceChatId);
+  const streamChannelId = stringValue(metadata.soulinkStreamChannelId) || sourceChatId;
+  const soulinkChatUrl = stringValue(metadata.soulinkChatUrl);
+
+  if (!linkId && !otherNodeId && !soulinkChatUrl && contact.source !== "soulink") return null;
+
+  return {
+    id: linkId || `contact:${contact.id}`,
+    fromNodeId: ownerNodeId,
+    toNodeId: otherNodeId,
+    sourceChatId,
+    status: stringValue(metadata.soulinkStatus) || "active",
+    createdAt: contact.created_at,
+    updatedAt:
+      stringValue(metadata.soulinkLastActiveAt) ||
+      stringValue(contact.last_interaction_at) ||
+      contact.updated_at,
+    otherNode: {
+      id: otherNodeId,
+      displayName: contact.name,
+      handle,
+      me3Url,
+      kind: "person",
+      avatarUrl: stringValue(metadata.avatarUrl),
+      email: contact.email,
+      contactEmail: contact.email,
+    },
+    context: {
+      sourceChatId,
+      sourceChatTitle: stringValue(metadata.soulinkSourceChatTitle),
+      sourceChatKind: stringValue(metadata.soulinkSourceChatKind),
+      streamChannelId,
+      soulinkChatUrl,
+      chatUrl: soulinkChatUrl,
+      lastActiveAt:
+        stringValue(metadata.soulinkLastActiveAt) ||
+        stringValue(contact.last_interaction_at),
+      label:
+        stringValue(metadata.soulinkContextLabel) ||
+        stringValue(metadata.soulinkSourceChatTitle),
+    },
+  };
+}
+
 async function listSchedulingTimeTypes(
   env: Env,
   ownerId: string,
@@ -11887,6 +12459,22 @@ async function getActiveSoulinkConnectionForThread(env: Env, streamChannelId: st
      WHERE provider_thread_id = ? AND channel = 'soulink' AND status = 'active'`,
   )
     .bind(streamChannelId)
+    .first<DbAgentChannelConnection>();
+}
+
+async function getActiveSoulinkConnectionByDispatchToken(env: Env, setupToken: string) {
+  return env.DB.prepare(
+    `SELECT id, user_id, channel, status, setup_token,
+            provider_connection_id, provider_user_id, provider_thread_id,
+            provider_username, provider_metadata_json,
+            telegram_user_id, telegram_chat_id, telegram_username,
+            telegram_first_name, telegram_last_name, connected_at,
+            disconnected_at, last_inbound_at, last_outbound_at, created_at,
+            updated_at
+     FROM agent_channel_connections
+     WHERE setup_token = ? AND channel = 'soulink' AND status = 'active'`,
+  )
+    .bind(setupToken)
     .first<DbAgentChannelConnection>();
 }
 
