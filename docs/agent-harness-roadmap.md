@@ -1,6 +1,6 @@
 # ME3 Agent Harness Roadmap
 
-Last updated: 2026-06-03
+Last updated: 2026-06-05
 
 This document is the source of truth for the medium-term ME3 Core agent harness work.
 Update it whenever chat actions, Assistant Jobs, context/memory, Mission Control outputs,
@@ -206,6 +206,8 @@ Detailed reference docs:
 - `docs/local-executor-assistant-job.md`: optional local executor plugin and daemon reference.
 - `docs/mission-control-plugin-mvp.md`: Mission Control workspace/plugin reference.
 - `docs/soulink-agent-chat-spike.md`: Soulink assistant chat channel reference.
+- `docs/agent-assisted-scheduling-plan.md`: agent-to-agent scheduling, public booking
+  compatibility, Soulink polls, and private availability policy reference.
 
 Retired stale docs:
 
