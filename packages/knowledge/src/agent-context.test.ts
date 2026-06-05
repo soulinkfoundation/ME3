@@ -539,6 +539,32 @@ describe("ME3 agent context resolvers", () => {
     ]);
   });
 
+  it("includes contacts when the owner asks for their contact directory", () => {
+    const packet = resolveMe3AgentContextPacket({
+      id: "resolved-contact-directory",
+      generatedAt: "2026-05-16T10:00:00.000Z",
+      ownerId: "owner",
+      purpose: "chat_reply",
+      requestText: "Can you list the contacts I have?",
+      candidateContacts: [
+        contact("contact-ada", "Ada Lovelace", "client"),
+        contact("contact-grace", "Grace Hopper", "contact"),
+        contact("contact-mina", "Mina Murray", "prospect"),
+      ],
+    });
+
+    expect(packet.contacts.map((item) => item.id)).toEqual([
+      "contact-ada",
+      "contact-grace",
+      "contact-mina",
+    ]);
+    expect(packet.sources.filter((item) => item.kind === "contact")).toHaveLength(3);
+    expect(packet.sources.find((item) => item.id === "contact-ada")).toMatchObject({
+      reason: "Contact directory requested by the owner.",
+    });
+    expect(packet.warnings).toEqual([]);
+  });
+
   it("uses active scopes even when the request text is sparse", () => {
     const packet = resolveMe3AgentContextPacket({
       id: "resolved-active",

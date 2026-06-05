@@ -264,6 +264,55 @@ describe("Core chat native context", () => {
     expect(modelInput.messages[0]?.content).not.toContain("ME3 agent context packet:");
   });
 
+  it("adds contact directory context when the owner asks to list contacts", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "You have Ada, Grace, and Mina in contacts.",
+    }));
+    const env = createEnv({
+      contacts: [
+        contactRow("contact-ada", "Ada Lovelace", "ada@example.com", "client"),
+        contactRow("contact-grace", "Grace Hopper", "grace@example.com", "contact"),
+        contactRow("contact-mina", "Mina Murray", "mina@example.com", "prospect"),
+      ],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput("Can you list the contacts I have?"),
+    );
+
+    expect(response.replyText).toBe("You have Ada, Grace, and Mina in contacts.");
+    expect(response.contextSummary).toContain("3 contacts");
+    expect(response.contextManifest?.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "contact-ada",
+          kind: "contact",
+          reason: "Contact directory requested by the owner.",
+        }),
+        expect.objectContaining({
+          id: "contact-grace",
+          kind: "contact",
+          reason: "Contact directory requested by the owner.",
+        }),
+        expect.objectContaining({
+          id: "contact-mina",
+          kind: "contact",
+          reason: "Contact directory requested by the owner.",
+        }),
+      ]),
+    );
+    const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const system = modelInput.messages[0]?.content || "";
+
+    expect(system).toContain("Contacts\n- Ada Lovelace (client)");
+    expect(system).toContain("- Grace Hopper (contact)");
+    expect(system).toContain("- Mina Murray (prospect)");
+  });
+
   it("extracts Workers AI chat-completion shaped replies", async () => {
     const aiRun = vi.fn(async () => ({
       choices: [{ message: { content: "Choice-shaped reply." } }],

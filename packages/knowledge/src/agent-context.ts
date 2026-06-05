@@ -827,10 +827,18 @@ function resolveContacts(input: {
 }): readonly Me3AgentContextContact[] {
   if (!input.contacts.length) return [];
   const requestText = normalizeText(input.requestText);
+  const isContactDirectoryRequest = hasContactDirectoryIntent(input.requestTokens);
   const scored = input.contacts
     .map((contact): ScoredContextItem<Me3AgentContextContact> | null => {
       if (input.activeContactId && contact.id === input.activeContactId) {
         return { item: contact, score: 100, reason: "Active contact scope." };
+      }
+      if (isContactDirectoryRequest) {
+        return {
+          item: contact,
+          score: 70,
+          reason: "Contact directory requested by the owner.",
+        };
       }
       const labels = contactLabels(contact);
       if (labels.some((label) => phraseMatches(requestText, label, 2))) {
@@ -848,7 +856,12 @@ function resolveContacts(input: {
 
   const topScore = Math.max(0, ...scored.map((item) => item.score));
   const topMatches = scored.filter((item) => item.score === topScore);
-  if (!input.activeContactId && topScore < 80 && topMatches.length > 1) {
+  if (
+    !input.activeContactId &&
+    !isContactDirectoryRequest &&
+    topScore < 80 &&
+    topMatches.length > 1
+  ) {
     input.warnings.push(
       `Ambiguous contact match for "${input.requestText.trim()}"; no contact context was selected.`,
     );
@@ -1059,6 +1072,24 @@ function contactLabels(contact: Me3AgentContextContact): readonly string[] {
 
 function projectLabels(project: Me3AgentContextProject): readonly string[] {
   return [project.name, ...(project.aliases || [])].filter(Boolean);
+}
+
+function hasContactDirectoryIntent(requestTokens: ReadonlySet<string>): boolean {
+  if (!requestTokens.has("contacts")) return false;
+  return [
+    "access",
+    "all",
+    "available",
+    "directory",
+    "have",
+    "know",
+    "list",
+    "manage",
+    "mine",
+    "my",
+    "show",
+    "view",
+  ].some((token) => requestTokens.has(token));
 }
 
 function phraseMatches(

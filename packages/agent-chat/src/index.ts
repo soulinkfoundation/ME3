@@ -3627,6 +3627,7 @@ async function loadCoreChatAgentContext(
       candidateCalendarEvents: calendarEvents,
       candidatePrivateMemory: privateMemory,
       candidateRecentMessages: mapRecentMessagesToContext(input.recent),
+      resolverOptions: { maxContacts: 12 },
       skills,
       activeScope: { date: activeDate },
       budget: { maxPromptChars: CHAT_CONTEXT_PROMPT_BUDGET_CHARS },
