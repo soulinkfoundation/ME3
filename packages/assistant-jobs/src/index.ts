@@ -1539,8 +1539,8 @@ export function validateAssistantJobDraft(
     if (availableSkillIds && !availableSkillIds.has(skillId)) {
       errors.push({
         code: "skill_missing",
-        message: `Required skill is not available: ${skillId}.`,
-        blocking: true,
+        message: `Recommended skill is not available: ${skillId}.`,
+        blocking: false,
       });
     }
   }
@@ -1793,7 +1793,7 @@ function validationStatusFromErrors(
   );
   if (hasInvalidError) return "invalid";
   const hasSetupError = errors.some(
-    (error) => error.code === "setup_missing" || error.code === "skill_missing",
+    (error) => error.code === "setup_missing",
   );
   return hasSetupError ? "needs_setup" : "valid";
 }

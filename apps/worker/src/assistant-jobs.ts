@@ -542,7 +542,7 @@ function createAssistantJobBuilderSetupWarnings(
   for (const error of validation.errors) {
     if (error.code === "setup_missing") continue;
     if (error.code === "skill_missing") {
-      warnings.add("A required skill is not available yet.");
+      warnings.add("A recommended skill is not available yet.");
       continue;
     }
     if (error.blocking) warnings.add("This draft needs adjustment before it can run.");

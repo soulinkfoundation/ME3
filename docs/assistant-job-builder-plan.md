@@ -1,6 +1,6 @@
 # Assistant Job Builder Plan
 
-Last updated: 2026-06-03
+Last updated: 2026-06-05
 
 Planning source of truth: [`docs/agent-harness-roadmap.md`](agent-harness-roadmap.md).
 Detailed capability reference: [`docs/assistant-job-creation-capability.md`](assistant-job-creation-capability.md).
@@ -137,9 +137,9 @@ MVP behavior:
 - Add a small registry of available Core skills by ID and metadata.
 - Include relevant skill instructions in the job-builder prompt when a recipe or request calls
   for them.
-- Let `AssistantJobDraft` keep using `recommendedSkillIds` and `requiredSkillIds`.
-- Validate required skills before active save or run.
-- Render required/missing skills as setup-style warnings only when owner action is needed.
+- Let `AssistantJobDraft` keep using `recommendedSkillIds` and legacy `requiredSkillIds`.
+- Treat missing skills as non-blocking suggestions or warnings, never as activation/run blockers.
+- Render missing skills only when they make the draft easier to understand or improve.
 
 Non-goals for MVP:
 
@@ -238,7 +238,7 @@ Out of scope:
 5. **Skill-Aware Prompting**
    - Add a minimal skill registry.
    - Include relevant skill instructions in builder prompts.
-   - Validate required skills before active save/run.
+   - Show missing skills as helpful suggestions, not blockers.
 
 6. **QA Pass**
    - Verify each visible starter can be described, drafted, saved, opened, activated when ready,

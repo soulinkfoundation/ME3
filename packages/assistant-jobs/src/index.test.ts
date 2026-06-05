@@ -139,6 +139,27 @@ describe("assistant jobs package", () => {
     expect(validation.errors.map((error) => error.code)).toContain("unknown_capability");
   });
 
+  it("does not block a job when a referenced skill is missing", () => {
+    const weeklyReview = getAssistantJobStarterRecipe("weekly-review");
+    if (!weeklyReview) throw new Error("Missing weekly-review recipe");
+    const draft: AssistantJobDraft = {
+      ...createAssistantJobDraftFromRecipe(weeklyReview),
+      requiredSkillIds: ["weekly-review-memory-coach"],
+    };
+
+    const validation = validateAssistantJobDraft(draft, {
+      availableSkillIds: [],
+    });
+
+    expect(validation.status).toBe("valid");
+    expect(validation.errors).toContainEqual(
+      expect.objectContaining({
+        code: "skill_missing",
+        blocking: false,
+      }),
+    );
+  });
+
   it("rejects actions with weaker approval than their capability policy", () => {
     const weeklyReview = getAssistantJobStarterRecipe("weekly-review");
     if (!weeklyReview) throw new Error("Missing weekly-review recipe");
