@@ -2,10 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
+import { useRouter } from "vue-router";
 import Button from "../components/Button.vue";
 import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
-import { API_BASE, ApiError, api } from "../api";
+import { API_BASE, api } from "../api";
 import { useAppToast } from "../composables/useAppToast";
 import { useInboxDraftCount } from "../composables/useInboxDraftCount";
 import { useAuthStore } from "../stores/auth";
@@ -151,15 +152,6 @@ type TelegramStatusResponse = {
   recentEvents: unknown[];
 };
 
-type SoulinkStatusResponse = {
-  available: boolean;
-  configured: boolean;
-  connection: {
-    status: "pending" | "active" | "disconnected";
-  } | null;
-  recentEvents: unknown[];
-};
-
 type AgentTurn = {
   id: string;
   channel: "telegram" | "sandbox" | "soulink";
@@ -185,7 +177,7 @@ type ClearTelegramHistoryResponse = {
 };
 
 type EmailTab = "inbox" | "drafts" | "sent" | "archive" | "trash";
-type Tab = EmailTab | "telegram" | "contacts";
+type Tab = EmailTab | "telegram";
 
 type TelegramChatBubble = {
   id: string;
@@ -211,7 +203,6 @@ const mailboxAddress = ref<string | null>(null);
 const expandedId = ref<string | null>(null);
 const mobileThreadOpen = ref(false);
 const searchQuery = ref("");
-const contactSearchQuery = ref("");
 const actionPending = ref<string | null>(null);
 const deletePending = ref<string | null>(null);
 const unsubscribePending = ref<string | null>(null);
@@ -239,19 +230,6 @@ const composeForm = ref({
   subject: "",
   textBody: "",
 });
-const contactsLoaded = ref(false);
-const contactModalOpen = ref(false);
-const contactSaving = ref(false);
-const contactError = ref("");
-const contactForm = ref({
-  name: "",
-  email: "",
-});
-const soulinkSyncing = ref(false);
-const soulinkSyncError = ref("");
-const soulinkSyncNotice = ref("");
-const soulinkSyncAttempted = ref(false);
-const soulinkContactsConnected = ref(false);
 const offset = ref(0);
 const limit = 50;
 const TELEGRAM_PAGE_LIMIT = 50;
@@ -263,6 +241,7 @@ const {
   useInboxDraftCount();
 const { toastFromUnknown, toastSuccess } = useAppToast();
 const auth = useAuthStore();
+const router = useRouter();
 const contactsStore = useContactsStore();
 const { contacts } = storeToRefs(contactsStore);
 
@@ -350,80 +329,6 @@ const contactRecipientOptions = computed(() =>
     })),
 );
 
-const contactSearchTerm = computed(() =>
-  contactSearchQuery.value.trim().toLowerCase(),
-);
-
-const searchableContactText = (contact: Contact): string =>
-  [
-    contact.name,
-    contact.email,
-    contact.phone,
-    contact.relationship,
-    contact.source,
-    contact.notes,
-    contact.metadata?.soulinkContextLabel,
-    contact.metadata?.soulinkSourceChatTitle,
-    contact.metadata?.soulinkOrigin,
-    contact.tags.join(" "),
-    Object.values(contact.socialHandles).join(" "),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-const activeContacts = computed(() =>
-  [...contacts.value]
-    .filter((contact) => contact.status !== "archived")
-    .sort((a, b) => {
-      const aTime =
-        a.metadata?.soulinkLastActiveAt ||
-        a.lastInteractionAt ||
-        a.updatedAt ||
-        a.createdAt;
-      const bTime =
-        b.metadata?.soulinkLastActiveAt ||
-        b.lastInteractionAt ||
-        b.updatedAt ||
-        b.createdAt;
-      return bTime.localeCompare(aTime);
-    }),
-);
-
-const visibleContacts = computed(() => {
-  const term = contactSearchTerm.value;
-  if (!term) return activeContacts.value;
-  return activeContacts.value.filter((contact) =>
-    searchableContactText(contact).includes(term),
-  );
-});
-
-const mobileSearchQuery = computed({
-  get: () =>
-    activeTab.value === "contacts"
-      ? contactSearchQuery.value
-      : searchQuery.value,
-  set: (value: string) => {
-    if (activeTab.value === "contacts") {
-      contactSearchQuery.value = value;
-      return;
-    }
-    searchQuery.value = value;
-  },
-});
-
-const mobileSearchLabel = computed(() =>
-  activeTab.value === "contacts" ? "Search contacts" : "Search mail",
-);
-
-const mobileSearchDisabled = computed(() =>
-  activeTab.value === "contacts" ? contactsStore.loading : loading.value,
-);
-
-const canSyncSoulinkContacts = computed(
-  () => activeTab.value === "contacts" && soulinkContactsConnected.value,
-);
-
 const composeRecipientSuggestions = computed(() => {
   if (!composeToFocused.value || !composeToHasTyped.value) return [];
   const query = composeForm.value.to.trim().toLowerCase();
@@ -491,7 +396,7 @@ const emailTabIcons: Record<EmailTab, UiIconName> = {
 };
 const mailFolderTabs = computed(() => {
   const tabs: Array<{
-    id: Tab;
+    id: Tab | "contacts";
     label: string;
     icon: UiIconName;
     count?: number | null;
@@ -513,7 +418,7 @@ const mailFolderTabs = computed(() => {
   return tabs;
 });
 
-function isEmailTab(tab: Tab): tab is EmailTab {
+function isEmailTab(tab: Tab | "contacts"): tab is EmailTab {
   return tab !== "telegram" && tab !== "contacts";
 }
 
@@ -932,7 +837,6 @@ async function applySearch() {
 }
 
 async function applyMobileSearch() {
-  if (activeTab.value === "contacts") return;
   await applySearch();
 }
 
@@ -1098,150 +1002,6 @@ async function clearTelegramHistory() {
   }
 }
 
-async function loadContactsPage(options: { syncSoulink?: boolean } = {}) {
-  contactError.value = "";
-  soulinkSyncError.value = "";
-  soulinkSyncNotice.value = "";
-  await Promise.all([contactsStore.fetchContacts(), loadSoulinkContactsStatus()]);
-  contactsLoaded.value = true;
-  if (options.syncSoulink && soulinkContactsConnected.value) {
-    await syncSoulinkContacts();
-  }
-}
-
-async function loadSoulinkContactsStatus() {
-  try {
-    const response = await api.get<SoulinkStatusResponse>("/soulink/status");
-    soulinkContactsConnected.value = response.connection?.status === "active";
-  } catch {
-    soulinkContactsConnected.value = false;
-  }
-}
-
-async function syncSoulinkContacts() {
-  if (soulinkSyncing.value) return;
-  if (!soulinkContactsConnected.value) {
-    await loadSoulinkContactsStatus();
-  }
-  if (!soulinkContactsConnected.value) {
-    soulinkSyncError.value = "";
-    soulinkSyncNotice.value = "";
-    soulinkSyncAttempted.value = true;
-    return;
-  }
-  soulinkSyncing.value = true;
-  soulinkSyncAttempted.value = true;
-  soulinkSyncError.value = "";
-  soulinkSyncNotice.value = "";
-  try {
-    const response = await api.post<{
-      ok: boolean;
-      synced: number;
-      created: number;
-      updated: number;
-      skipped: number;
-    }>("/soulink/contacts/sync");
-    await contactsStore.fetchContacts();
-    soulinkSyncNotice.value =
-      response.synced > 0
-        ? `Synced ${response.synced} Soulink contact${
-            response.synced === 1 ? "" : "s"
-          }.`
-        : "Soulink contacts are up to date.";
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 409) {
-      soulinkContactsConnected.value = false;
-      soulinkSyncError.value = "";
-      soulinkSyncNotice.value = "";
-      return;
-    }
-    soulinkSyncError.value =
-      err instanceof Error ? err.message : "Failed to sync Soulink contacts";
-  } finally {
-    soulinkSyncing.value = false;
-  }
-}
-
-function openContactModal() {
-  contactForm.value = { name: "", email: "" };
-  contactError.value = "";
-  contactModalOpen.value = true;
-  void nextTick(() => {
-    document.getElementById("contact-name")?.focus();
-  });
-}
-
-function closeContactModal() {
-  if (contactSaving.value) return;
-  contactModalOpen.value = false;
-}
-
-async function saveManualContact() {
-  if (contactSaving.value) return;
-  contactSaving.value = true;
-  contactError.value = "";
-  try {
-    const contact = await contactsStore.createContact({
-      name: contactForm.value.name,
-      email: contactForm.value.email,
-      source: "manual",
-      relationship: "contact",
-      status: "active",
-    });
-    if (!contact) {
-      contactError.value = contactsStore.error || "Failed to add contact";
-      return;
-    }
-    contactModalOpen.value = false;
-    toastSuccess("Contact added.");
-  } finally {
-    contactSaving.value = false;
-  }
-}
-
-function contactInitial(contact: Contact): string {
-  const source = contact.name || contact.email || "?";
-  return source.trim().slice(0, 1).toUpperCase() || "?";
-}
-
-function contactAvatarUrl(contact: Contact): string | null {
-  const avatar = contact.metadata?.avatarUrl;
-  return typeof avatar === "string" && avatar.trim() ? avatar.trim() : null;
-}
-
-function contactHasSoulink(contact: Contact): boolean {
-  return (
-    contact.source === "soulink" ||
-    Boolean(contact.metadata?.soulinkNodeId || contact.metadata?.soulinkLinkId)
-  );
-}
-
-function contactSoulinkUrl(contact: Contact): string | null {
-  const url = contact.metadata?.soulinkChatUrl || contact.metadata?.soulinkOrigin;
-  return typeof url === "string" && url.trim() ? url.trim() : null;
-}
-
-function contactMetaLine(contact: Contact): string {
-  if (contact.email) return contact.email;
-  if (contact.metadata?.soulinkContextLabel) {
-    return String(contact.metadata.soulinkContextLabel);
-  }
-  if (contactHasSoulink(contact)) return "Soulink contact";
-  return "No email yet";
-}
-
-function composeContact(contact: Contact) {
-  if (!contact.email) return;
-  openComposeModal();
-  composeForm.value = {
-    ...composeForm.value,
-    to: contact.email,
-  };
-  void nextTick(() => {
-    document.getElementById("compose-subject")?.focus();
-  });
-}
-
 function switchTab(tab: Tab) {
   if (activeTab.value === tab) return;
   activeTab.value = tab;
@@ -1255,15 +1015,17 @@ function switchTab(tab: Tab) {
   telegramNotice.value = "";
   if (tab === "telegram") {
     void loadTelegramHistory();
-  } else if (tab === "contacts") {
-    void loadContactsPage({ syncSoulink: !soulinkSyncAttempted.value });
   } else {
     void loadMessages();
   }
 }
 
 function switchMailFolderTab(tabId: string) {
-  if (tabId === "contacts" || emailTabOrder.includes(tabId as EmailTab)) {
+  if (tabId === "contacts") {
+    void router.push("/contacts");
+    return;
+  }
+  if (emailTabOrder.includes(tabId as EmailTab)) {
     switchTab(tabId as Tab);
   }
 }
@@ -1271,17 +1033,13 @@ function switchMailFolderTab(tabId: string) {
 async function refreshMessagesPage() {
   if (activeTab.value === "telegram") {
     await loadTelegramHistory();
-  } else if (activeTab.value === "contacts") {
-    await loadContactsPage({ syncSoulink: true });
   } else {
     await loadChannelHealth();
     await loadMessages();
   }
   await refreshInboxDraftCount();
   await loadFolderCounts();
-  if (activeTab.value !== "contacts") {
-    await contactsStore.fetchContacts();
-  }
+  await contactsStore.fetchContacts();
 }
 
 function selectMessage(id: string) {
@@ -1343,7 +1101,6 @@ async function moveMessage(
   const previousTotal = total.value;
   const targetIsCurrentTab =
     activeTab.value !== "telegram" &&
-    activeTab.value !== "contacts" &&
     emailTabConfig[activeTab.value].folderParam === folder;
   const readAt =
     folder === "archive" || folder === "trash"
@@ -1389,7 +1146,6 @@ async function moveSelectedMessages(folder: "inbox" | "archive" | "trash") {
   const ids = new Set(selectedMessages.value.map((message) => message.id));
   const targetIsCurrentTab =
     activeTab.value !== "telegram" &&
-    activeTab.value !== "contacts" &&
     emailTabConfig[activeTab.value].folderParam === folder;
   const readAt = new Date().toISOString();
 
@@ -2113,7 +1869,7 @@ onBeforeUnmount(() => {
   <div class="agent-page">
     <Teleport to="#app-side-nav-mobile-page-controls">
       <form
-        v-if="isEmailTab(activeTab) || activeTab === 'contacts'"
+        v-if="isEmailTab(activeTab)"
         class="mail-search mail-search--mobile-nav"
         role="search"
         @submit.prevent="applyMobileSearch"
@@ -2122,24 +1878,23 @@ onBeforeUnmount(() => {
           class="mail-search__label"
           for="mail-search-input-mobile-nav"
         >
-          {{ mobileSearchLabel }}
+          Search mail
         </label>
         <input
           id="mail-search-input-mobile-nav"
-          v-model="mobileSearchQuery"
+          v-model="searchQuery"
           class="mail-search__input"
           type="search"
-          :placeholder="mobileSearchLabel"
+          placeholder="Search mail"
         />
         <Button color="ghost" shape="soft" size="compact" icon-only class="mail-mobile-icon-btn" type="submit"
-          :disabled="mobileSearchDisabled"
-          :aria-label="mobileSearchLabel"
+          :disabled="loading"
+          aria-label="Search mail"
           title="Search"
         >
           <UiIcon name="Search" :size="18" aria-hidden="true" />
         </Button>
         <Button
-          v-if="activeTab !== 'contacts'"
           color="outline"
           shape="soft"
           size="compact"
@@ -2153,35 +1908,11 @@ onBeforeUnmount(() => {
           </template>
           Compose
         </Button>
-        <Button
-          v-else
-          color="outline"
-          shape="soft"
-          size="compact"
-          class="mail-mobile-compose-btn"
-          type="button"
-          aria-label="Add contact"
-          @click="openContactModal"
-        >
-          <template #icon>
-            <UiIcon name="Plus" :size="16" aria-hidden="true" />
-          </template>
-          Add
-        </Button>
         <Button color="ghost" shape="soft" size="compact" icon-only class="mail-mobile-icon-btn" type="button"
-          v-if="activeTab !== 'contacts' || canSyncSoulinkContacts"
-          :disabled="activeTab === 'contacts' ? soulinkSyncing : loading"
-          :aria-label="
-            activeTab === 'contacts'
-              ? 'Sync Soulink contacts'
-              : 'Refresh conversations'
-          "
-          :title="activeTab === 'contacts' ? 'Sync Soulink contacts' : 'Refresh'"
-          @click="
-            activeTab === 'contacts'
-              ? syncSoulinkContacts()
-              : refreshMessagesPage()
-          "
+          :disabled="loading"
+          aria-label="Refresh conversations"
+          title="Refresh"
+          @click="refreshMessagesPage"
         >
           <UiIcon name="RefreshCw" :size="18" aria-hidden="true" />
         </Button>
@@ -2320,125 +2051,10 @@ onBeforeUnmount(() => {
                   :model-value="activeTab"
                   aria-label="Mailbox folders"
                   @update:model-value="switchMailFolderTab"
+                  @change="switchMailFolderTab"
                 />
               </aside>
 
-              <section
-                v-if="activeTab === 'contacts'"
-                class="contacts-panel"
-                aria-label="Contacts"
-              >
-                <div
-                  v-if="!soulinkContactsConnected"
-                  class="contacts-sync-note"
-                >
-                  You can sync your Soulink contacts here by connecting to
-                  Soulink in
-                  <router-link
-                    to="/account?section=advanced"
-                    class="empty-hint-link"
-                  >
-                    Settings -> Advanced
-                  </router-link>
-                </div>
-                <div
-                  v-else-if="soulinkSyncError"
-                  class="contacts-sync-note contacts-sync-note--error"
-                >
-                  {{ soulinkSyncError }}
-                </div>
-                <div
-                  v-else-if="soulinkSyncNotice"
-                  class="contacts-sync-note"
-                >
-                  {{ soulinkSyncNotice }}
-                </div>
-
-                <div
-                  v-if="contactsStore.loading && !contactsLoaded"
-                  class="conversation-loading"
-                  aria-live="polite"
-                >
-                  Loading contacts…
-                </div>
-                <div v-else-if="visibleContacts.length" class="contacts-list">
-                  <article
-                    v-for="contact in visibleContacts"
-                    :key="contact.id"
-                    class="contact-row"
-                  >
-                    <div class="contact-avatar">
-                      <img
-                        v-if="contactAvatarUrl(contact)"
-                        :src="contactAvatarUrl(contact) || ''"
-                        alt=""
-                      />
-                      <span v-else>{{ contactInitial(contact) }}</span>
-                    </div>
-                    <div class="contact-row__body">
-                      <div class="contact-row__title">
-                        <strong>{{ contact.name }}</strong>
-                        <span
-                          v-if="contactHasSoulink(contact)"
-                          class="contact-source-pill"
-                        >
-                          Soulink
-                        </span>
-                      </div>
-                      <p>{{ contactMetaLine(contact) }}</p>
-                    </div>
-                    <div class="contact-row__actions">
-                      <Button color="ghost" shape="soft" size="compact" icon-only type="button"
-                        :disabled="!contact.email"
-                        :title="
-                          contact.email ? `Email ${contact.name}` : 'No email yet'
-                        "
-                        :aria-label="
-                          contact.email ? `Email ${contact.name}` : 'No email yet'
-                        "
-                        @click="composeContact(contact)"
-                      >
-                        <UiIcon name="Mail" :size="16" aria-hidden="true" />
-                      </Button>
-                      <a
-                        v-if="contactSoulinkUrl(contact)"
-                        class="contacts-icon-btn contacts-icon-link"
-                        :href="contactSoulinkUrl(contact) || undefined"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        :title="`Message ${contact.name} in Soulink`"
-                        :aria-label="`Message ${contact.name} in Soulink`"
-                      >
-                        <UiIcon
-                          name="MessageCircle"
-                          :size="16"
-                          aria-hidden="true"
-                        />
-                      </a>
-                    </div>
-                  </article>
-                </div>
-                <div v-else class="empty-state empty-state--inline">
-                  <div class="empty-state__stack">
-                    <p>
-                      {{
-                        contactSearchTerm
-                          ? "No contacts match that search."
-                          : "No contacts yet."
-                      }}
-                    </p>
-                    <p class="empty-state__sub">
-                      {{
-                        contactSearchTerm
-                          ? "Try a name, email, tag, or Soulink detail."
-                          : "Add one manually or sync Links from Soulink."
-                      }}
-                    </p>
-                  </div>
-                </div>
-              </section>
-
-              <template v-else>
               <section
                 class="conversation-list"
                 :class="{
@@ -2907,71 +2523,11 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </section>
-              </template>
             </div>
           </template>
         </div>
       </template>
     </main>
-
-    <div
-      v-if="contactModalOpen"
-      class="compose-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="contact-modal-title"
-      @keydown.esc="closeContactModal"
-    >
-      <form class="contact-modal__card" @submit.prevent="saveManualContact">
-        <header class="compose-modal__head">
-          <h2 id="contact-modal-title">Add contact</h2>
-          <Button color="ghost" shape="soft" size="compact" icon-only type="button"
-            aria-label="Close add contact"
-            :disabled="contactSaving"
-            @click="closeContactModal"
-          >
-            <UiIcon name="X" :size="16" aria-hidden="true" />
-          </Button>
-        </header>
-        <label class="compose-field">
-          <span>Name</span>
-          <input
-            id="contact-name"
-            v-model="contactForm.name"
-            type="text"
-            autocomplete="name"
-            required
-          />
-        </label>
-        <label class="compose-field">
-          <span>Email</span>
-          <input
-            v-model="contactForm.email"
-            type="email"
-            autocomplete="email"
-            required
-          />
-        </label>
-        <p v-if="contactError" class="compose-error">{{ contactError }}</p>
-        <footer class="compose-modal__actions">
-          <Button color="outline" shape="soft" size="compact" type="button"
-            :disabled="contactSaving"
-            @click="closeContactModal"
-          >
-            Cancel
-          </Button>
-          <Button color="primary" shape="soft" size="compact" type="submit"
-            :disabled="
-              contactSaving ||
-              !contactForm.name.trim() ||
-              !contactForm.email.trim()
-            "
-          >
-            {{ contactSaving ? "Adding…" : "Add contact" }}
-          </Button>
-        </footer>
-      </form>
-    </div>
 
     <div
       v-if="composeOpen"
@@ -3852,139 +3408,6 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--color-border);
 }
 
-.contacts-panel {
-  order: 2;
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  border-top: 1px solid var(--ui-border, var(--color-border));
-  background: var(--ui-bg, var(--color-bg));
-}
-
-.contact-row__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.contacts-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 6px);
-  background: var(--ui-surface, var(--color-bg));
-  color: var(--ui-text, var(--color-text));
-  cursor: pointer;
-}
-
-.contacts-icon-btn {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-}
-
-.contacts-icon-link {
-  text-decoration: none;
-}
-
-.contacts-icon-btn:hover:not(:disabled) {
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-  border-color: var(--ui-border-strong, var(--color-text));
-}
-
-.contacts-icon-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.contacts-sync-note {
-  padding: 9px 16px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-}
-
-.contacts-sync-note--error {
-  color: #b33b2e;
-}
-
-.contacts-list {
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.contact-row {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
-}
-
-.contact-avatar {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  overflow: hidden;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: 999px;
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-  color: var(--ui-text, var(--color-text));
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.contact-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.contact-row__body {
-  min-width: 0;
-}
-
-.contact-row__title {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.contact-row__title strong,
-.contact-row__body p {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.contact-row__title strong {
-  font-size: 14px;
-}
-
-.contact-row__body p {
-  margin: 3px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-}
-
-.contact-source-pill {
-  flex: 0 0 auto;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--ui-accent-soft, color-mix(in srgb, var(--color-accent) 14%, transparent));
-  color: var(--ui-accent-strong, var(--color-accent));
-  font-size: 11px;
-  font-weight: 800;
-}
-
 .conversation-list__head {
   display: none;
   align-items: center;
@@ -4324,11 +3747,6 @@ onBeforeUnmount(() => {
 
   .conversation-list {
     grid-column: 1;
-    grid-row: 2;
-  }
-
-  .contacts-panel {
-    grid-column: 1 / -1;
     grid-row: 2;
   }
 
@@ -5006,19 +4424,6 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 14px;
   width: min(100%, 620px);
-  max-height: calc(100dvh - 40px);
-  overflow: auto;
-  padding: 18px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg);
-  box-shadow: 0 20px 60px rgba(17, 17, 17, 0.18);
-}
-
-.contact-modal__card {
-  display: grid;
-  gap: 14px;
-  width: min(100%, 420px);
   max-height: calc(100dvh - 40px);
   overflow: auto;
   padding: 18px;
