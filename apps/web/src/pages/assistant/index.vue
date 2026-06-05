@@ -659,8 +659,10 @@ const voiceDictationState = ref<
 const voiceDictationError = ref<string | null>(null);
 const voiceMediaRecorder = ref<MediaRecorder | null>(null);
 const voiceMediaStream = ref<MediaStream | null>(null);
+const voiceRecordingElapsedSeconds = ref(0);
 const voiceAudioChunks: Blob[] = [];
 let voiceStopTimeout: number | null = null;
+let voiceRecordingTimer: number | null = null;
 let voiceDiscardRecording = false;
 let assistantAbortController: AbortController | null = null;
 
@@ -1055,11 +1057,13 @@ const canUseVoiceDictation = computed(
   () => !assistantSending.value && voiceDictationState.value !== "processing",
 );
 const voiceDictationStatusText = computed(() => {
-  if (voiceDictationState.value === "listening") return "Listening";
   if (voiceDictationState.value === "processing") return "Transcribing";
   if (voiceDictationError.value) return voiceDictationError.value;
   return "";
 });
+const voiceRecordingElapsedLabel = computed(() =>
+  formatRecordingElapsed(voiceRecordingElapsedSeconds.value),
+);
 
 onMounted(() => {
   if (!supportsMediaRecording()) {
@@ -2872,6 +2876,7 @@ async function startVoiceDictation() {
 
     recorder.start();
     voiceDictationState.value = "listening";
+    startVoiceRecordingTimer();
     voiceStopTimeout = window.setTimeout(() => {
       stopVoiceDictation();
     }, 120_000);
@@ -2968,9 +2973,32 @@ function insertVoiceTranscript(text: string) {
 }
 
 function cleanupVoiceRecorder() {
+  stopVoiceRecordingTimer();
   voiceMediaRecorder.value = null;
   voiceMediaStream.value?.getTracks().forEach((track) => track.stop());
   voiceMediaStream.value = null;
+}
+
+function startVoiceRecordingTimer() {
+  stopVoiceRecordingTimer();
+  voiceRecordingElapsedSeconds.value = 0;
+  voiceRecordingTimer = window.setInterval(() => {
+    voiceRecordingElapsedSeconds.value += 1;
+  }, 1000);
+}
+
+function stopVoiceRecordingTimer() {
+  if (voiceRecordingTimer !== null) {
+    window.clearInterval(voiceRecordingTimer);
+    voiceRecordingTimer = null;
+  }
+}
+
+function formatRecordingElapsed(seconds: number) {
+  const safeSeconds = Math.max(0, seconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
 function supportsMediaRecording() {
@@ -4776,7 +4804,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 @click="toggleVoiceDictation"
               >
                 <UiIcon
-                  :name="voiceDictationState === 'listening' ? 'MicOff' : 'Mic'"
+                  :name="voiceDictationState === 'listening' ? 'Pause' : 'Mic'"
                   :size="17"
                 />
               </Button>
@@ -4805,9 +4833,39 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </Button>
             </div>
           </div>
-          <div v-if="voiceDictationStatusText" class="assistant-composer__meta">
+          <div
+            v-if="voiceDictationState === 'listening' || voiceDictationStatusText"
+            class="assistant-composer__meta"
+          >
+            <div
+              v-if="voiceDictationState === 'listening'"
+              class="assistant-composer__voice-wave"
+              role="status"
+              aria-live="polite"
+              aria-label="Recording voice dictation"
+            >
+              <span class="assistant-composer__voice-guide" aria-hidden="true" />
+              <span class="assistant-composer__voice-bars" aria-hidden="true">
+                <span
+                  v-for="bar in 24"
+                  :key="bar"
+                  :style="{ '--voice-bar-index': bar }"
+                />
+              </span>
+              <span class="assistant-composer__voice-time">
+                {{ voiceRecordingElapsedLabel }}
+              </span>
+              <button
+                class="assistant-composer__voice-stop"
+                type="button"
+                aria-label="Stop voice dictation"
+                @click="stopVoiceDictation()"
+              >
+                <UiIcon name="Square" :size="9" />
+              </button>
+            </div>
             <span
-              v-if="voiceDictationStatusText"
+              v-else-if="voiceDictationStatusText"
               class="assistant-composer__voice-status"
             >
               {{ voiceDictationStatusText }}
@@ -7208,6 +7266,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: flex;
   align-items: center;
   min-height: 16px;
+  width: 100%;
   color: var(--ui-text-muted);
   font-size: 12px;
   line-height: 1.35;
@@ -7216,6 +7275,109 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-composer__voice-status {
   color: var(--ui-accent-strong);
   font-weight: 700;
+}
+
+.assistant-composer__voice-wave {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 22px;
+  color: var(--ui-text-muted);
+}
+
+.assistant-composer__voice-guide {
+  display: block;
+  width: 100%;
+  height: 2px;
+  border-radius: 999px;
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--ui-text-muted) 18%, transparent) 50%,
+    transparent 0
+  );
+  background-size: 4px 2px;
+}
+
+.assistant-composer__voice-bars {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  transform: translate(-50%, -50%);
+  padding: 0 6px;
+  background: var(--ui-surface);
+}
+
+.assistant-composer__voice-bars span {
+  width: 2px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--ui-text);
+  animation: assistantVoiceWave 780ms ease-in-out infinite alternate;
+  animation-delay: calc(var(--voice-bar-index) * -42ms);
+  transform-origin: center;
+}
+
+.assistant-composer__voice-bars span:nth-child(6n + 1) {
+  height: 7px;
+}
+
+.assistant-composer__voice-bars span:nth-child(6n + 2) {
+  height: 18px;
+}
+
+.assistant-composer__voice-bars span:nth-child(6n + 3) {
+  height: 26px;
+}
+
+.assistant-composer__voice-bars span:nth-child(6n + 4) {
+  height: 20px;
+}
+
+.assistant-composer__voice-bars span:nth-child(6n + 5) {
+  height: 10px;
+}
+
+.assistant-composer__voice-time {
+  min-width: 32px;
+  color: var(--ui-text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  text-align: right;
+}
+
+.assistant-composer__voice-stop {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.assistant-composer__voice-stop:hover {
+  background: var(--ui-border);
+  color: var(--ui-text);
+}
+
+@keyframes assistantVoiceWave {
+  from {
+    transform: scaleY(0.45);
+    opacity: 0.64;
+  }
+
+  to {
+    transform: scaleY(1.18);
+    opacity: 1;
+  }
 }
 
 .assistant-composer__attachment-status {
