@@ -196,6 +196,26 @@ export interface DbUserCalendarEvent {
   created_at: string;
 }
 
+export interface DbSchedulingTimeType {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  duration_minutes: number;
+  buffer_minutes: number;
+  timezone: string;
+  windows_json: string;
+  allowed_tiers_json: string;
+  payment_mode: "free" | "paid_checkout" | "owner_review";
+  public_booking_offer_id: string | null;
+  owner_pre_review: "always" | "unless_close_contact";
+  allow_close_contact_candidate_sharing: number;
+  final_approval: "both_owners";
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DbCalendarSource {
   id: string;
   user_id: string;

@@ -218,6 +218,25 @@ type StoredBookingHold = {
   created_at: string;
   updated_at: string;
 };
+type StoredSchedulingTimeType = {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  duration_minutes: number;
+  buffer_minutes: number;
+  timezone: string;
+  windows_json: string;
+  allowed_tiers_json: string;
+  payment_mode: "free" | "paid_checkout" | "owner_review";
+  public_booking_offer_id: string | null;
+  owner_pre_review: "always" | "unless_close_contact";
+  allow_close_contact_candidate_sharing: number;
+  final_approval: "both_owners";
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+};
 type StoredTelegramSettings = {
   user_id: string;
   bot_username: string | null;
@@ -292,6 +311,7 @@ function createEnv(): Env & {
   siteFiles: StoredSiteFile[];
   bookings: DbBooking[];
   bookingHolds: StoredBookingHold[];
+  schedulingTimeTypes: StoredSchedulingTimeType[];
 } {
   const state = {
     owner: null as StoredOwner | null,
@@ -329,6 +349,7 @@ function createEnv(): Env & {
     siteFiles: [] as StoredSiteFile[],
     bookings: [] as DbBooking[],
     bookingHolds: [] as StoredBookingHold[],
+    schedulingTimeTypes: [] as StoredSchedulingTimeType[],
   };
 
   const toStoredSiteFileContent = (value: unknown): Uint8Array => {
@@ -1216,6 +1237,57 @@ function createEnv(): Env & {
                 });
               }
 
+              if (sql.includes("INSERT INTO scheduling_time_types")) {
+                state.schedulingTimeTypes.push({
+                  id: values[0] as string,
+                  user_id: values[1] as string,
+                  title: values[2] as string,
+                  description: values[3] as string | null,
+                  duration_minutes: values[4] as number,
+                  buffer_minutes: values[5] as number,
+                  timezone: values[6] as string,
+                  windows_json: values[7] as string,
+                  allowed_tiers_json: values[8] as string,
+                  payment_mode: sql.includes("'free', NULL")
+                    ? "free"
+                    : (values[9] as StoredSchedulingTimeType["payment_mode"]),
+                  public_booking_offer_id: null,
+                  owner_pre_review: sql.includes("'unless_close_contact'")
+                    ? "unless_close_contact"
+                    : (values[10] as StoredSchedulingTimeType["owner_pre_review"]),
+                  allow_close_contact_candidate_sharing: sql.includes("'free', NULL")
+                    ? 1
+                    : (values[11] as number),
+                  final_approval: "both_owners",
+                  status: "active",
+                  created_at: "2026-06-05T12:00:00Z",
+                  updated_at: "2026-06-05T12:00:00Z",
+                });
+              }
+
+              if (sql.includes("UPDATE scheduling_time_types")) {
+                state.schedulingTimeTypes = state.schedulingTimeTypes.map((timeType) =>
+                  timeType.user_id === values[11] && timeType.id === values[12]
+                    ? {
+                        ...timeType,
+                        title: values[0] as string,
+                        description: values[1] as string | null,
+                        duration_minutes: values[2] as number,
+                        buffer_minutes: values[3] as number,
+                        timezone: values[4] as string,
+                        windows_json: values[5] as string,
+                        allowed_tiers_json: values[6] as string,
+                        payment_mode: values[7] as StoredSchedulingTimeType["payment_mode"],
+                        owner_pre_review:
+                          values[8] as StoredSchedulingTimeType["owner_pre_review"],
+                        allow_close_contact_candidate_sharing: values[9] as number,
+                        status: values[10] as StoredSchedulingTimeType["status"],
+                        updated_at: "2026-06-05T12:10:00Z",
+                      }
+                    : timeType,
+                );
+              }
+
               if (sql.includes("UPDATE mailbox_aliases") && state.mailbox) {
                 if (sql.includes("alias_local_part = ?")) {
                   state.mailbox.alias_local_part = values[0] as string;
@@ -1814,6 +1886,21 @@ function createEnv(): Env & {
                   ) || null
                 ) as T | null;
               }
+              if (sql.includes("FROM scheduling_time_types")) {
+                if (sql.includes("LIMIT 1") && !sql.includes("AND id = ?")) {
+                  return (
+                    state.schedulingTimeTypes.find(
+                      (timeType) => timeType.user_id === values[0],
+                    ) || null
+                  ) as T | null;
+                }
+                return (
+                  state.schedulingTimeTypes.find(
+                    (timeType) =>
+                      timeType.user_id === values[0] && timeType.id === values[1],
+                  ) || null
+                ) as T | null;
+              }
               if (sql.includes("FROM social_provider_settings")) {
                 return (
                   state.socialProviderSettings.find(
@@ -1918,6 +2005,15 @@ function createEnv(): Env & {
                   ) as T[],
                 };
               }
+              if (sql.includes("FROM scheduling_time_types")) {
+                return {
+                  results: state.schedulingTimeTypes.filter(
+                    (timeType) =>
+                      timeType.user_id === values[0] &&
+                      (!sql.includes("status = 'active'") || timeType.status === "active"),
+                  ) as T[],
+                };
+              }
               if (sql.includes("FROM ai_provider_credentials")) {
                 return {
                   results: state.aiCredentials.filter(
@@ -2014,7 +2110,10 @@ function createEnv(): Env & {
                       const typeMatches =
                         !sql.includes("COALESCE(site_type, 'profile') = 'profile'") ||
                         (site.site_type || "profile") === "profile";
-                      return ownerMatches && typeMatches;
+                      const publishedMatches =
+                        !sql.includes("published_at IS NOT NULL") ||
+                        site.published_at !== null;
+                      return ownerMatches && typeMatches && publishedMatches;
                     })
                     .sort((first, second) =>
                       String(second.published_at || second.updated_at || "").localeCompare(
@@ -2169,6 +2268,9 @@ function createEnv(): Env & {
     },
     get bookingHolds() {
       return state.bookingHolds;
+    },
+    get schedulingTimeTypes() {
+      return state.schedulingTimeTypes;
     },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
@@ -5039,6 +5141,287 @@ describe("ME3 Core Worker auth", () => {
       checkoutUrl: "/api/book/owner/checkout-session",
     });
     expect(env.bookings).toHaveLength(0);
+  });
+
+  it("lists default private scheduling time types and maps public booking offers", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addBookableSite(env, {
+      enabled: true,
+      offers: [
+        {
+          id: "paid-session",
+          title: "Paid Session",
+          description: "A paid public session.",
+          duration: 60,
+          pricing: { enabled: true, suggestedAmount: 75, currency: "EUR" },
+        },
+      ],
+      bufferTime: 15,
+      availability: {
+        timezone: "Europe/Dublin",
+        windows: { tuesday: ["15:00-17:00"] },
+      },
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/scheduling/time-types", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      ok: boolean;
+      timeTypes: Array<{
+        id: string;
+        title: string;
+        source: string;
+        paymentMode: string;
+        allowedTiers: string[];
+        publicBookingOfferId?: string;
+        bufferMinutes: number;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.timeTypes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Catch-up",
+          source: "owner",
+          paymentMode: "free",
+          allowedTiers: ["close_contact"],
+        }),
+        expect.objectContaining({
+          id: "public:owner:paid-session",
+          title: "Paid Session",
+          source: "public_booking_offer",
+          paymentMode: "paid_checkout",
+          publicBookingOfferId: "paid-session",
+          bufferMinutes: 15,
+        }),
+      ]),
+    );
+    expect(env.schedulingTimeTypes).toHaveLength(1);
+  });
+
+  it("creates and updates private scheduling time types", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const createResponse = await app.fetch(
+      new Request("http://localhost/api/scheduling/time-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          title: "Work call",
+          description: "Private working time.",
+          durationMinutes: 45,
+          bufferMinutes: 15,
+          timezone: "Europe/Dublin",
+          windows: { monday: ["10:00-12:00"] },
+          allowedTiers: ["contact", "close_contact"],
+          paymentMode: "owner_review",
+          ownerPreReview: "always",
+          allowCloseContactCandidateSharing: false,
+        }),
+      }),
+      env,
+    );
+    const created = (await createResponse.json()) as {
+      timeType: { id: string; title: string; durationMinutes: number };
+    };
+
+    expect(createResponse.status).toBe(201);
+    expect(created.timeType).toMatchObject({
+      title: "Work call",
+      durationMinutes: 45,
+    });
+
+    const updateResponse = await app.fetch(
+      new Request(
+        `http://localhost/api/scheduling/time-types/${created.timeType.id}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({
+            title: "Deep work call",
+            durationMinutes: 60,
+            bufferMinutes: 20,
+            timezone: "Europe/Dublin",
+            windows: { monday: ["10:00-13:00"] },
+            allowedTiers: ["contact", "close_contact"],
+            paymentMode: "free",
+            ownerPreReview: "unless_close_contact",
+            allowCloseContactCandidateSharing: true,
+          }),
+        },
+      ),
+      env,
+    );
+    const updated = (await updateResponse.json()) as {
+      timeType: {
+        title: string;
+        durationMinutes: number;
+        bufferMinutes: number;
+        paymentMode: string;
+      };
+    };
+
+    expect(updateResponse.status).toBe(200);
+    expect(updated.timeType).toMatchObject({
+      title: "Deep work call",
+      durationMinutes: 60,
+      bufferMinutes: 20,
+      paymentMode: "free",
+    });
+  });
+
+  it("resolves scheduling privilege tiers and review policy", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const createResponse = await app.fetch(
+      new Request("http://localhost/api/scheduling/time-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          title: "Coffee chat",
+          durationMinutes: 30,
+          bufferMinutes: 10,
+          timezone: "UTC",
+          windows: { friday: ["09:00-11:00"] },
+          allowedTiers: ["contact", "close_contact"],
+          ownerPreReview: "unless_close_contact",
+          allowCloseContactCandidateSharing: true,
+        }),
+      }),
+      env,
+    );
+    const created = (await createResponse.json()) as {
+      timeType: { id: string };
+    };
+
+    env.contacts.push({
+      id: "ordinary-contact",
+      user_id: "owner",
+      name: "Ordinary Contact",
+      email: "ordinary@example.com",
+      phone: null,
+      source: "manual",
+      source_ref: null,
+      relationship: "contact",
+      status: "active",
+      notes: null,
+      tags: null,
+      last_interaction_at: null,
+      next_followup_at: null,
+      outreach_status: null,
+      social_handles: null,
+      metadata: JSON.stringify({ closeness: "acquaintance" }),
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+    env.contacts.push({
+      id: "close-contact",
+      user_id: "owner",
+      name: "Close Contact",
+      email: "close@example.com",
+      phone: null,
+      source: "manual",
+      source_ref: null,
+      relationship: "contact",
+      status: "active",
+      notes: null,
+      tags: null,
+      last_interaction_at: null,
+      next_followup_at: null,
+      outreach_status: null,
+      social_handles: null,
+      metadata: JSON.stringify({ closeness: "close" }),
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+
+    const publicResponse = await app.fetch(
+      new Request("http://localhost/api/scheduling/policy/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({ timeTypeId: created.timeType.id }),
+      }),
+      env,
+    );
+    const publicBody = (await publicResponse.json()) as {
+      policy: {
+        tier: string;
+        allowed: boolean;
+        candidateSharingAllowed: boolean;
+      };
+    };
+
+    expect(publicResponse.status).toBe(200);
+    expect(publicBody.policy).toMatchObject({
+      tier: "public",
+      allowed: false,
+      candidateSharingAllowed: false,
+    });
+
+    const ordinaryResponse = await app.fetch(
+      new Request("http://localhost/api/scheduling/policy/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: created.timeType.id,
+          contactId: "ordinary-contact",
+        }),
+      }),
+      env,
+    );
+    const ordinaryBody = (await ordinaryResponse.json()) as {
+      policy: {
+        tier: string;
+        allowed: boolean;
+        ownerReviewRequired: boolean;
+        candidateSharingAllowed: boolean;
+      };
+    };
+
+    expect(ordinaryResponse.status).toBe(200);
+    expect(ordinaryBody.policy).toMatchObject({
+      tier: "contact",
+      allowed: true,
+      ownerReviewRequired: true,
+      candidateSharingAllowed: false,
+    });
+
+    const closeResponse = await app.fetch(
+      new Request("http://localhost/api/scheduling/policy/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: created.timeType.id,
+          contactId: "close-contact",
+        }),
+      }),
+      env,
+    );
+    const closeBody = (await closeResponse.json()) as {
+      policy: {
+        tier: string;
+        allowed: boolean;
+        ownerReviewRequired: boolean;
+        candidateSharingAllowed: boolean;
+      };
+    };
+
+    expect(closeResponse.status).toBe(200);
+    expect(closeBody.policy).toMatchObject({
+      tier: "close_contact",
+      allowed: true,
+      ownerReviewRequired: false,
+      candidateSharingAllowed: true,
+    });
   });
 
   it("lists curated Core plugins for the signed-in owner", async () => {

@@ -253,7 +253,9 @@ import type {
   DbBooking,
   DbCalendarSource,
   DbCalendarSourceEvent,
+  DbContact,
   DbMailboxAlias,
+  DbSchedulingTimeType,
   DbSite,
   DbSubscriber,
   DbUserCalendarEvent,
@@ -500,6 +502,29 @@ type CoreBookingAvailability = {
   timezone?: string;
   windows?: Record<string, string[]>;
 };
+type SchedulingPrivilegeTier = "public" | "contact" | "close_contact" | "client";
+type SchedulingPaymentMode = "free" | "paid_checkout" | "owner_review";
+type SchedulingOwnerPreReview = "always" | "unless_close_contact";
+type SchedulingFinalApproval = "both_owners";
+type SchedulingTimeType = {
+  id: string;
+  title: string;
+  description?: string;
+  durationMinutes: number;
+  bufferMinutes: number;
+  timezone: string;
+  windows: Record<string, string[]>;
+  allowedTiers: SchedulingPrivilegeTier[];
+  paymentMode: SchedulingPaymentMode;
+  publicBookingOfferId?: string;
+  ownerPreReview: SchedulingOwnerPreReview;
+  allowCloseContactCandidateSharing: boolean;
+  finalApproval: SchedulingFinalApproval;
+  source: "owner" | "public_booking_offer";
+  status: "active" | "archived";
+  createdAt?: string;
+  updatedAt?: string;
+};
 type CoreBookIntent = NonNullable<Me3SiteProfile["intents"]>["book"] & {
   bufferTime?: number;
   offers?: CoreBookingOffer[];
@@ -518,6 +543,7 @@ type CoreBookIntent = NonNullable<Me3SiteProfile["intents"]>["book"] & {
 type ResolvedOneToOneBookingOffer = {
   id: string;
   title: string;
+  description?: string;
   duration: number;
   pricing?: CoreBookingPricing;
   availability: CoreBookingAvailability;
@@ -7470,6 +7496,58 @@ app.post("/api/soulink/contacts/sync", async (c) => {
   return c.json(result);
 });
 
+app.get("/api/scheduling/time-types", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  return c.json({
+    ok: true,
+    timeTypes: await listSchedulingTimeTypes(c.env, ownerId),
+  });
+});
+
+app.post("/api/scheduling/time-types", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const result = await createSchedulingTimeType(
+    c.env,
+    ownerId,
+    await c.req.json().catch(() => null),
+  );
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json({ ok: true, timeType: result }, 201);
+});
+
+app.put("/api/scheduling/time-types/:id", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const result = await updateSchedulingTimeType(
+    c.env,
+    ownerId,
+    c.req.param("id"),
+    await c.req.json().catch(() => null),
+  );
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json({ ok: true, timeType: result });
+});
+
+app.post("/api/scheduling/policy/resolve", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body = await c.req
+    .json<{ contactId?: unknown; timeTypeId?: unknown }>()
+    .catch((): { contactId?: unknown; timeTypeId?: unknown } => ({}));
+  const result = await resolveSchedulingPolicy(c.env, ownerId, {
+    contactId: normalizeShortText(body.contactId, 120),
+    timeTypeId: normalizeShortText(body.timeTypeId, 160),
+  });
+  if ("error" in result) return c.json({ error: result.error }, result.status as any);
+  return c.json({ ok: true, policy: result });
+});
+
 app.get("/api/contacts", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -8860,6 +8938,7 @@ function listOneToOneBookingOffers(
     return {
       id: offer.id || slugifyBookingOfferId(offer.title || "book-session") || "book-session",
       title: offer.title || book.title || "Book a session",
+      ...(offer.description ? { description: offer.description } : {}),
       duration,
       pricing: offer.pricing,
       availability,
@@ -9765,6 +9844,479 @@ async function syncSoulinkContacts(env: Env, ownerId: string) {
     contacts: contacts.contacts,
     summary: contacts.summary,
   };
+}
+
+async function listSchedulingTimeTypes(
+  env: Env,
+  ownerId: string,
+): Promise<SchedulingTimeType[]> {
+  await ensureDefaultSchedulingTimeType(env, ownerId);
+
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, title, description, duration_minutes, buffer_minutes,
+            timezone, windows_json, allowed_tiers_json, payment_mode,
+            public_booking_offer_id, owner_pre_review,
+            allow_close_contact_candidate_sharing, final_approval, status,
+            created_at, updated_at
+     FROM scheduling_time_types
+     WHERE user_id = ? AND status = 'active'
+     ORDER BY created_at ASC`,
+  )
+    .bind(ownerId)
+    .all<DbSchedulingTimeType>();
+
+  const ownerTypes = (rows.results || []).map(serializeSchedulingTimeType);
+  const publicTypes = await listPublicBookingSchedulingTimeTypes(env, ownerId);
+  return [...ownerTypes, ...publicTypes];
+}
+
+async function ensureDefaultSchedulingTimeType(env: Env, ownerId: string) {
+  const existing = await env.DB.prepare(
+    `SELECT id
+     FROM scheduling_time_types
+     WHERE user_id = ?
+     LIMIT 1`,
+  )
+    .bind(ownerId)
+    .first<{ id: string }>();
+  if (existing) return;
+
+  const owner = await getOwnerProfile(env, ownerId);
+  const timezone = resolveTimeZone(owner?.timezone);
+  await env.DB.prepare(
+    `INSERT INTO scheduling_time_types
+     (id, user_id, title, description, duration_minutes, buffer_minutes,
+      timezone, windows_json, allowed_tiers_json, payment_mode,
+      public_booking_offer_id, owner_pre_review,
+      allow_close_contact_candidate_sharing, final_approval, status,
+      created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'free', NULL, 'unless_close_contact',
+             1, 'both_owners', 'active', datetime('now'), datetime('now'))`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      ownerId,
+      "Catch-up",
+      "Informal 1:1 time for close contacts.",
+      30,
+      10,
+      timezone,
+      JSON.stringify({
+        monday: ["09:00-17:00"],
+        tuesday: ["09:00-17:00"],
+        wednesday: ["09:00-17:00"],
+        thursday: ["09:00-17:00"],
+        friday: ["09:00-17:00"],
+      }),
+      JSON.stringify(["close_contact"]),
+    )
+    .run();
+}
+
+async function listPublicBookingSchedulingTimeTypes(
+  env: Env,
+  ownerId: string,
+): Promise<SchedulingTimeType[]> {
+  const sites = await env.DB.prepare(
+    `SELECT id, user_id, username, site_type, template_id, custom_domain,
+            custom_domain_status, custom_domain_cf_id, created_at, updated_at,
+            published_at
+     FROM sites
+     WHERE user_id = ? AND published_at IS NOT NULL
+     ORDER BY created_at ASC`,
+  )
+    .bind(ownerId)
+    .all<DbSite>();
+
+  const timeTypes: SchedulingTimeType[] = [];
+  for (const site of sites.results || []) {
+    const profile = await loadSiteProfileForCommerce(env, site);
+    const bookIntent = profile?.intents?.book as CoreBookIntent | undefined;
+    if (!bookIntent?.enabled) continue;
+
+    const offers = listOneToOneBookingOffers(bookIntent);
+    for (const offer of offers) {
+      timeTypes.push({
+        id: `public:${site.username}:${offer.id}`,
+        title: offer.title,
+        description: offer.description,
+        durationMinutes: offer.duration,
+        bufferMinutes: normalizeBufferMinutes(bookIntent.bufferTime),
+        timezone: resolveTimeZone(offer.availability.timezone),
+        windows: sanitizeAvailabilityWindows(offer.availability.windows || {}),
+        allowedTiers: ["public", "contact", "close_contact", "client"],
+        paymentMode: offer.pricing?.enabled ? "paid_checkout" : "free",
+        publicBookingOfferId: offer.id,
+        ownerPreReview: "unless_close_contact",
+        allowCloseContactCandidateSharing: true,
+        finalApproval: "both_owners",
+        source: "public_booking_offer",
+        status: "active",
+      });
+    }
+  }
+
+  return timeTypes;
+}
+
+async function createSchedulingTimeType(
+  env: Env,
+  ownerId: string,
+  value: unknown,
+): Promise<SchedulingTimeType | { error: string; status: 400 }> {
+  const parsed = parseSchedulingTimeTypeInput(value, null);
+  if ("error" in parsed) return { error: parsed.error, status: 400 };
+
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO scheduling_time_types
+     (id, user_id, title, description, duration_minutes, buffer_minutes,
+      timezone, windows_json, allowed_tiers_json, payment_mode,
+      public_booking_offer_id, owner_pre_review,
+      allow_close_contact_candidate_sharing, final_approval, status,
+      created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'both_owners', 'active',
+             datetime('now'), datetime('now'))`,
+  )
+    .bind(
+      id,
+      ownerId,
+      parsed.title,
+      parsed.description || null,
+      parsed.durationMinutes,
+      parsed.bufferMinutes,
+      parsed.timezone,
+      JSON.stringify(parsed.windows),
+      JSON.stringify(parsed.allowedTiers),
+      parsed.paymentMode,
+      parsed.ownerPreReview,
+      parsed.allowCloseContactCandidateSharing ? 1 : 0,
+    )
+    .run();
+
+  const row = await getOwnerSchedulingTimeType(env, ownerId, id);
+  return row ? serializeSchedulingTimeType(row) : {
+    id,
+    ...parsed,
+    finalApproval: "both_owners",
+    source: "owner",
+    status: "active",
+  };
+}
+
+async function updateSchedulingTimeType(
+  env: Env,
+  ownerId: string,
+  id: string,
+  value: unknown,
+): Promise<SchedulingTimeType | { error: string; status: 400 | 404 }> {
+  const existing = await getOwnerSchedulingTimeType(env, ownerId, id);
+  if (!existing) return { error: "Scheduling time type not found", status: 404 };
+
+  const parsed = parseSchedulingTimeTypeInput(value, serializeSchedulingTimeType(existing));
+  if ("error" in parsed) return { error: parsed.error, status: 400 };
+
+  await env.DB.prepare(
+    `UPDATE scheduling_time_types
+     SET title = ?, description = ?, duration_minutes = ?, buffer_minutes = ?,
+         timezone = ?, windows_json = ?, allowed_tiers_json = ?,
+         payment_mode = ?, owner_pre_review = ?,
+         allow_close_contact_candidate_sharing = ?, status = ?,
+         updated_at = datetime('now')
+     WHERE user_id = ? AND id = ?`,
+  )
+    .bind(
+      parsed.title,
+      parsed.description || null,
+      parsed.durationMinutes,
+      parsed.bufferMinutes,
+      parsed.timezone,
+      JSON.stringify(parsed.windows),
+      JSON.stringify(parsed.allowedTiers),
+      parsed.paymentMode,
+      parsed.ownerPreReview,
+      parsed.allowCloseContactCandidateSharing ? 1 : 0,
+      parsed.status,
+      ownerId,
+      id,
+    )
+    .run();
+
+  const row = await getOwnerSchedulingTimeType(env, ownerId, id);
+  return row ? serializeSchedulingTimeType(row) : { error: "Scheduling time type not found", status: 404 };
+}
+
+async function resolveSchedulingPolicy(
+  env: Env,
+  ownerId: string,
+  input: { contactId: string; timeTypeId: string },
+): Promise<
+  | {
+      tier: SchedulingPrivilegeTier;
+      allowed: boolean;
+      reason: string;
+      ownerReviewRequired: boolean;
+      candidateSharingAllowed: boolean;
+      timeType: SchedulingTimeType;
+      contactId: string | null;
+    }
+  | { error: string; status: 400 | 404 }
+> {
+  if (!input.timeTypeId) return { error: "timeTypeId is required", status: 400 };
+
+  const timeType = (await listSchedulingTimeTypes(env, ownerId)).find(
+    (type) => type.id === input.timeTypeId,
+  );
+  if (!timeType) return { error: "Scheduling time type not found", status: 404 };
+
+  const contact = input.contactId
+    ? await getSchedulingContact(env, ownerId, input.contactId)
+    : null;
+  if (input.contactId && !contact) return { error: "Contact not found", status: 404 };
+
+  const tier = resolveSchedulingPrivilegeTier(contact);
+  const allowed = timeType.allowedTiers.includes(tier);
+  if (!allowed) {
+    return {
+      tier,
+      allowed: false,
+      reason: `The ${tier} tier is not allowed for this time type`,
+      ownerReviewRequired: false,
+      candidateSharingAllowed: false,
+      timeType,
+      contactId: contact?.id || null,
+    };
+  }
+
+  const ownerReviewRequired =
+    timeType.ownerPreReview === "always" ||
+    (timeType.ownerPreReview === "unless_close_contact" && tier !== "close_contact");
+  const candidateSharingAllowed =
+    tier === "close_contact" &&
+    timeType.allowCloseContactCandidateSharing &&
+    !ownerReviewRequired;
+
+  return {
+    tier,
+    allowed: true,
+    reason: candidateSharingAllowed
+      ? "Close contact candidate sharing is allowed without pre-review"
+      : ownerReviewRequired
+      ? "Owner review is required before sharing candidate slots"
+      : "Scheduling policy allows this request",
+    ownerReviewRequired,
+    candidateSharingAllowed,
+    timeType,
+    contactId: contact?.id || null,
+  };
+}
+
+async function getOwnerSchedulingTimeType(
+  env: Env,
+  ownerId: string,
+  id: string,
+): Promise<DbSchedulingTimeType | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, title, description, duration_minutes, buffer_minutes,
+              timezone, windows_json, allowed_tiers_json, payment_mode,
+              public_booking_offer_id, owner_pre_review,
+              allow_close_contact_candidate_sharing, final_approval, status,
+              created_at, updated_at
+       FROM scheduling_time_types
+       WHERE user_id = ? AND id = ?`,
+    )
+      .bind(ownerId, id)
+      .first<DbSchedulingTimeType>()) || null
+  );
+}
+
+async function getSchedulingContact(
+  env: Env,
+  ownerId: string,
+  contactId: string,
+): Promise<DbContact | null> {
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, name, email, phone, source, source_ref,
+              relationship, status, notes, tags, last_interaction_at,
+              next_followup_at, outreach_status, social_handles, metadata,
+              created_at, updated_at
+       FROM contacts
+       WHERE user_id = ? AND id = ?`,
+    )
+      .bind(ownerId, contactId)
+      .first<DbContact>()) || null
+  );
+}
+
+function serializeSchedulingTimeType(row: DbSchedulingTimeType): SchedulingTimeType {
+  return {
+    id: row.id,
+    title: row.title,
+    ...(row.description ? { description: row.description } : {}),
+    durationMinutes: row.duration_minutes,
+    bufferMinutes: row.buffer_minutes,
+    timezone: resolveTimeZone(row.timezone),
+    windows: sanitizeAvailabilityWindows(parseJsonRecord(row.windows_json)),
+    allowedTiers: normalizeAllowedSchedulingTiers(parseJsonArray(row.allowed_tiers_json)),
+    paymentMode: normalizeSchedulingPaymentMode(row.payment_mode),
+    ...(row.public_booking_offer_id ? { publicBookingOfferId: row.public_booking_offer_id } : {}),
+    ownerPreReview: normalizeSchedulingOwnerPreReview(row.owner_pre_review),
+    allowCloseContactCandidateSharing: row.allow_close_contact_candidate_sharing === 1,
+    finalApproval: "both_owners",
+    source: row.public_booking_offer_id ? "public_booking_offer" : "owner",
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function parseSchedulingTimeTypeInput(
+  value: unknown,
+  existing: SchedulingTimeType | null,
+):
+  | Omit<SchedulingTimeType, "id" | "source" | "createdAt" | "updatedAt">
+  | { error: string } {
+  if (!isPlainObject(value)) return { error: "Invalid request body" };
+
+  const title = normalizeShortText(value.title ?? existing?.title, 120);
+  if (!title) return { error: "Title is required" };
+
+  const durationMinutes = normalizeDurationMinutes(
+    value.durationMinutes,
+    existing?.durationMinutes ?? 30,
+  );
+  if (!durationMinutes) return { error: "durationMinutes must be between 15 and 1440" };
+
+  const timezone = resolveTimeZone(
+    normalizeShortText(value.timezone, 120) || existing?.timezone || "UTC",
+  );
+  const windows = sanitizeAvailabilityWindows(
+    isPlainObject(value.windows) ? value.windows : existing?.windows || {},
+  );
+  if (Object.keys(windows).length === 0) {
+    return { error: "At least one availability window is required" };
+  }
+
+  return {
+    title,
+    description: normalizeLongText(value.description ?? existing?.description, 500),
+    durationMinutes,
+    bufferMinutes: normalizeBufferMinutes(value.bufferMinutes, existing?.bufferMinutes ?? 0),
+    timezone,
+    windows,
+    allowedTiers: normalizeAllowedSchedulingTiers(
+      Array.isArray(value.allowedTiers) ? value.allowedTiers : existing?.allowedTiers,
+    ),
+    paymentMode: normalizeSchedulingPaymentMode(
+      normalizeShortText(value.paymentMode, 40) || existing?.paymentMode,
+    ),
+    ownerPreReview: normalizeSchedulingOwnerPreReview(
+      normalizeShortText(value.ownerPreReview, 40) || existing?.ownerPreReview,
+    ),
+    allowCloseContactCandidateSharing:
+      typeof value.allowCloseContactCandidateSharing === "boolean"
+        ? value.allowCloseContactCandidateSharing
+        : existing?.allowCloseContactCandidateSharing ?? true,
+    finalApproval: "both_owners",
+    status: value.status === "archived" ? "archived" : "active",
+  };
+}
+
+function resolveSchedulingPrivilegeTier(contact: DbContact | null): SchedulingPrivilegeTier {
+  if (!contact || contact.status === "archived") return "public";
+  if (contact.relationship === "client") return "client";
+
+  const metadata = parseJsonRecord(contact.metadata);
+  const closeness =
+    typeof metadata.closeness === "string" ? metadata.closeness : null;
+  if (closeness === "close" || closeness === "very_close") {
+    return "close_contact";
+  }
+
+  return "contact";
+}
+
+function normalizeDurationMinutes(value: unknown, fallback: number): number | null {
+  const number =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : typeof value === "string" && value.trim()
+      ? Number(value)
+      : fallback;
+  if (!Number.isFinite(number)) return null;
+  const rounded = Math.round(number);
+  if (rounded < 15 || rounded > 24 * 60) return null;
+  return rounded;
+}
+
+function normalizeBufferMinutes(value: unknown, fallback = 0): number {
+  const number =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : typeof value === "string" && value.trim()
+      ? Number(value)
+      : fallback;
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.min(240, Math.round(number)));
+}
+
+function sanitizeAvailabilityWindows(value: unknown): Record<string, string[]> {
+  if (!isPlainObject(value)) return {};
+  const result: Record<string, string[]> = {};
+  for (const day of [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+  ]) {
+    const windows = value[day];
+    if (!Array.isArray(windows)) continue;
+    const valid = windows
+      .map((window) => String(window).trim())
+      .filter((window) => {
+        const [start, end] = window.split("-").map((part) => part.trim());
+        const startMinutes = timeToMinutes(start);
+        const endMinutes = timeToMinutes(end);
+        return startMinutes !== null && endMinutes !== null && endMinutes > startMinutes;
+      });
+    if (valid.length > 0) result[day] = valid;
+  }
+  return result;
+}
+
+function normalizeAllowedSchedulingTiers(value: unknown): SchedulingPrivilegeTier[] {
+  const allowed = new Set<SchedulingPrivilegeTier>();
+  if (Array.isArray(value)) {
+    for (const tier of value) {
+      if (
+        tier === "public" ||
+        tier === "contact" ||
+        tier === "close_contact" ||
+        tier === "client"
+      ) {
+        allowed.add(tier);
+      }
+    }
+  }
+  if (allowed.size === 0) allowed.add("close_contact");
+  return Array.from(allowed);
+}
+
+function normalizeSchedulingPaymentMode(value: unknown): SchedulingPaymentMode {
+  return value === "paid_checkout" || value === "owner_review" || value === "free"
+    ? value
+    : "free";
+}
+
+function normalizeSchedulingOwnerPreReview(value: unknown): SchedulingOwnerPreReview {
+  return value === "always" || value === "unless_close_contact"
+    ? value
+    : "unless_close_contact";
 }
 
 async function fetchSoulinkLinks(

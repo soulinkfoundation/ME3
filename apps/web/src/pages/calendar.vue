@@ -8,12 +8,15 @@ import CalendarMonthBoard from "../components/calendar/CalendarMonthBoard.vue";
 import Button from "../components/Button.vue";
 import UiIcon from "../components/UiIcon.vue";
 import type { UiIconName } from "../utils/icons";
+import BookingAvailabilityEditor, {
+  type BookingAvailability,
+} from "../components/booking/BookingAvailabilityEditor.vue";
 import type {
   CalendarAgendaEvent,
   CalendarRangeMode,
 } from "../components/calendar/calendarAgenda";
 import { ApiError, api } from "../api";
-import { useSitesStore } from "../stores/sites";
+import { useSitesStore, type SiteContent } from "../stores/sites";
 
 definePage({
   meta: {
@@ -159,9 +162,19 @@ const monthCursor = ref(new Date());
 const dayCursor = ref(new Date());
 const activeCreateMode = ref<CreateMode>(null);
 const showCreateMenu = ref(false);
+const showSettingsMenu = ref(false);
 const calendarPickerOpen = ref(false);
 const calendarPickerMonth = ref(monthKeyFromDate(new Date()));
 const quickCreateDayKey = ref<string | null>(null);
+const availabilityModalOpen = ref(false);
+const availabilityLoading = ref(false);
+const availabilitySaving = ref(false);
+const availabilityError = ref("");
+const availabilitySiteUsername = ref("");
+const availabilitySourceProfile = ref<Record<string, unknown> | null>(null);
+const availabilityDraft = ref<BookingAvailability>(defaultBookingAvailability());
+const availabilityBufferTime = ref(0);
+const availabilityTimezone = ref("UTC");
 
 function startOfWeekMonday(from: Date): Date {
   const d = new Date(from);
@@ -905,6 +918,7 @@ function toggleCalendarPicker() {
     syncCalendarPickerMonth();
   }
   showCreateMenu.value = false;
+  showSettingsMenu.value = false;
   calendarPickerOpen.value = !calendarPickerOpen.value;
 }
 
@@ -923,13 +937,246 @@ function pickCalendarToday() {
 
 function toggleCreateMenu() {
   calendarPickerOpen.value = false;
+  showSettingsMenu.value = false;
   showCreateMenu.value = !showCreateMenu.value;
+}
+
+function toggleSettingsMenu() {
+  calendarPickerOpen.value = false;
+  showCreateMenu.value = false;
+  showSettingsMenu.value = !showSettingsMenu.value;
+}
+
+function defaultBookingAvailability(): BookingAvailability {
+  return {
+    monday: ["09:00-17:00"],
+    tuesday: ["09:00-17:00"],
+    wednesday: ["09:00-17:00"],
+    thursday: ["09:00-17:00"],
+    friday: ["09:00-17:00"],
+    saturday: [],
+    sunday: [],
+  };
+}
+
+function normalizeBookingAvailability(input: unknown): BookingAvailability {
+  const record =
+    input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const fallback = defaultBookingAvailability();
+  const next: BookingAvailability = {};
+  for (const day of Object.keys(fallback)) {
+    next[day] = Array.isArray(record[day])
+      ? (record[day] as unknown[])
+          .filter((window): window is string => typeof window === "string")
+      : [...fallback[day]];
+  }
+  return next;
+}
+
+function compactAvailabilityWindows(availability: BookingAvailability) {
+  const windows: Record<string, string[]> = {};
+  for (const [day, dayWindows] of Object.entries(availability)) {
+    if (dayWindows.length > 0) {
+      windows[day] = [...dayWindows];
+    }
+  }
+  return windows;
+}
+
+function isRealSiteUsername(value: string): boolean {
+  return sites.sites.some((site) => site.username === value);
+}
+
+function preferredAvailabilitySiteUsername(): string {
+  if (isRealSiteUsername(sidebarSiteFilter.value)) return sidebarSiteFilter.value;
+  if (isRealSiteUsername(newBookingForm.value.username)) {
+    return newBookingForm.value.username;
+  }
+  return sites.sites[0]?.username ?? "";
+}
+
+function applyAvailabilityContent(content: SiteContent | null) {
+  if (!content?.ok || !content.profile) {
+    availabilitySourceProfile.value = null;
+    availabilityDraft.value = defaultBookingAvailability();
+    availabilityBufferTime.value = 0;
+    availabilityTimezone.value = defaultFormTimeZone;
+    availabilityError.value = "No published site profile was found for this site.";
+    return;
+  }
+
+  const profile = JSON.parse(JSON.stringify(content.profile)) as Record<
+    string,
+    unknown
+  >;
+  const intents =
+    profile.intents && typeof profile.intents === "object"
+      ? (profile.intents as Record<string, unknown>)
+      : {};
+  const book =
+    intents.book && typeof intents.book === "object"
+      ? (intents.book as Record<string, any>)
+      : {};
+  const oneToOneType = Array.isArray(book.bookingTypes)
+    ? book.bookingTypes.find(
+        (entry: unknown) =>
+          entry &&
+          typeof entry === "object" &&
+          ((entry as Record<string, unknown>).type === "one_to_one" ||
+            (entry as Record<string, unknown>).id === "one_to_one"),
+      )
+    : null;
+  const oneToOneAvailability =
+    oneToOneType &&
+    typeof oneToOneType === "object" &&
+    (oneToOneType as Record<string, any>).availability
+      ? (oneToOneType as Record<string, any>).availability
+      : null;
+  const availability =
+    oneToOneAvailability && typeof oneToOneAvailability === "object"
+      ? oneToOneAvailability
+      : book.availability && typeof book.availability === "object"
+        ? book.availability
+        : null;
+
+  availabilitySourceProfile.value = profile;
+  availabilityDraft.value = normalizeBookingAvailability(
+    availability && typeof availability === "object"
+      ? (availability as Record<string, unknown>).windows
+      : null,
+  );
+  availabilityBufferTime.value =
+    book.bufferTime === 0 ||
+    book.bufferTime === 5 ||
+    book.bufferTime === 10 ||
+    book.bufferTime === 15 ||
+    book.bufferTime === 30
+      ? book.bufferTime
+      : 0;
+  availabilityTimezone.value =
+    availability &&
+    typeof availability === "object" &&
+    typeof (availability as Record<string, unknown>).timezone === "string"
+      ? ((availability as Record<string, unknown>).timezone as string)
+      : defaultFormTimeZone;
+}
+
+async function loadAvailabilitySettings() {
+  const username = availabilitySiteUsername.value;
+  availabilityError.value = "";
+  availabilitySourceProfile.value = null;
+  if (!username) {
+    availabilityError.value = "Create a site before editing booking availability.";
+    return;
+  }
+
+  availabilityLoading.value = true;
+  try {
+    applyAvailabilityContent(await sites.getSiteContent(username));
+  } catch (err) {
+    availabilityError.value =
+      err instanceof Error ? err.message : "Could not load booking availability.";
+  } finally {
+    availabilityLoading.value = false;
+  }
+}
+
+async function openAvailabilitySettings() {
+  showSettingsMenu.value = false;
+  showCreateMenu.value = false;
+  calendarPickerOpen.value = false;
+  statusMessage.value = "";
+  availabilityModalOpen.value = true;
+  availabilitySiteUsername.value = preferredAvailabilitySiteUsername();
+  await loadAvailabilitySettings();
+}
+
+function closeAvailabilitySettings() {
+  availabilityModalOpen.value = false;
+  availabilityError.value = "";
+  availabilitySourceProfile.value = null;
+}
+
+async function saveAvailabilitySettings() {
+  const username = availabilitySiteUsername.value;
+  if (!username || !availabilitySourceProfile.value || availabilitySaving.value) {
+    return;
+  }
+
+  availabilitySaving.value = true;
+  availabilityError.value = "";
+  try {
+    const nextProfile = JSON.parse(
+      JSON.stringify(availabilitySourceProfile.value),
+    ) as Record<string, any>;
+    const intents =
+      nextProfile.intents && typeof nextProfile.intents === "object"
+        ? { ...nextProfile.intents }
+        : {};
+    const book =
+      intents.book && typeof intents.book === "object"
+        ? { ...intents.book }
+        : {};
+    const availability = {
+      ...(book.availability && typeof book.availability === "object"
+        ? book.availability
+        : {}),
+      timezone: availabilityTimezone.value || defaultFormTimeZone,
+      windows: compactAvailabilityWindows(availabilityDraft.value),
+    };
+
+    book.enabled = book.enabled ?? true;
+    book.bufferTime = availabilityBufferTime.value;
+    book.availability = availability;
+    if (Array.isArray(book.bookingTypes)) {
+      book.bookingTypes = book.bookingTypes.map((entry: unknown) => {
+        if (!entry || typeof entry !== "object") return entry;
+        const bookingType = entry as Record<string, any>;
+        if (bookingType.type !== "one_to_one" && bookingType.id !== "one_to_one") {
+          return bookingType;
+        }
+        return {
+          ...bookingType,
+          availability: {
+            ...(bookingType.availability &&
+            typeof bookingType.availability === "object"
+              ? bookingType.availability
+              : {}),
+            ...availability,
+          },
+        };
+      });
+    }
+
+    intents.book = book;
+    nextProfile.intents = intents;
+
+    const me3File = new File(
+      [JSON.stringify(nextProfile, null, 2)],
+      "me.json",
+      { type: "application/json" },
+    );
+    const saved = await sites.uploadSite(username, [me3File]);
+    if (!saved) {
+      throw new Error(sites.error || "Could not save booking availability.");
+    }
+
+    availabilitySourceProfile.value = nextProfile;
+    statusMessage.value = "Booking availability updated.";
+    closeAvailabilitySettings();
+  } catch (err) {
+    availabilityError.value =
+      err instanceof Error ? err.message : "Could not save booking availability.";
+  } finally {
+    availabilitySaving.value = false;
+  }
 }
 
 function onRangeChange(mode: CalendarRangeMode) {
   const previous = rangeMode.value;
   rangeMode.value = mode;
   calendarPickerOpen.value = false;
+  showSettingsMenu.value = false;
   boardHighlightId.value = "";
   if (mode === "day" && previous !== "day") {
     dayCursor.value = new Date();
@@ -1140,6 +1387,7 @@ function resetImportForm() {
 
 function openCreateMode(mode: Exclude<CreateMode, null>, dayKey?: string) {
   showCreateMenu.value = false;
+  showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
   statusMessage.value = "";
   if (dayKey) {
@@ -1170,6 +1418,7 @@ function openEditReminder(reminderId: string) {
   const reminder = reminders.value.find((item) => item.id === reminderId);
   if (!reminder) return;
   showCreateMenu.value = false;
+  showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
   statusMessage.value = "";
   newReminderError.value = "";
@@ -1190,6 +1439,7 @@ function openEditEvent(eventId: string) {
   const event = events.value.find((item) => item.id === eventId);
   if (!event) return;
   showCreateMenu.value = false;
+  showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
   statusMessage.value = "";
   newEventError.value = "";
@@ -1239,6 +1489,7 @@ function isQuickCreateMode(mode: CreateMode): mode is QuickCreateMode {
 function closeCreateMode() {
   activeCreateMode.value = null;
   showCreateMenu.value = false;
+  showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
   quickCreateDayKey.value = null;
   editingEventId.value = null;
@@ -1493,10 +1744,15 @@ watch(
 function closeCalendarHeaderMenus() {
   calendarPickerOpen.value = false;
   showCreateMenu.value = false;
+  showSettingsMenu.value = false;
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
+    if (availabilityModalOpen.value) {
+      closeAvailabilitySettings();
+      return;
+    }
     closeCalendarHeaderMenus();
   }
 }
@@ -1592,6 +1848,32 @@ onBeforeUnmount(() => {
         >
           <UiIcon :name="mobileRangeIcon" :size="18" aria-hidden="true" />
         </Button>
+        <div class="cal-mobile-settings-wrap">
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            class="cal-mobile-icon-btn"
+            aria-label="Calendar settings"
+            title="Calendar settings"
+            type="button"
+            :aria-expanded="showSettingsMenu"
+            aria-haspopup="menu"
+            @click="toggleSettingsMenu"
+          >
+            <UiIcon name="Settings" :size="18" aria-hidden="true" />
+          </Button>
+          <div
+            v-if="showSettingsMenu"
+            class="cal-create-menu cal-settings-menu cal-settings-menu--mobile-nav"
+            role="menu"
+          >
+            <button type="button" role="menuitem" @click="openAvailabilitySettings">
+              Availability
+            </button>
+          </div>
+        </div>
         <div class="cal-mobile-create-wrap">
           <Button
             color="ghost"
@@ -1602,24 +1884,30 @@ onBeforeUnmount(() => {
             aria-label="Create calendar item"
             title="Create calendar item"
             type="button"
+            :aria-expanded="showCreateMenu"
+            aria-haspopup="menu"
             @click="toggleCreateMenu"
           >
             <UiIcon name="Plus" :size="18" aria-hidden="true" />
           </Button>
-          <div v-if="showCreateMenu" class="cal-create-menu cal-create-menu--mobile-nav">
-            <button type="button" @click="openCreateMode('booking')">
+          <div
+            v-if="showCreateMenu"
+            class="cal-create-menu cal-create-menu--mobile-nav"
+            role="menu"
+          >
+            <button type="button" role="menuitem" @click="openCreateMode('booking')">
               New booking
             </button>
-            <button type="button" @click="openCreateMode('reminder')">
+            <button type="button" role="menuitem" @click="openCreateMode('reminder')">
               New reminder
             </button>
-            <button type="button" @click="openCreateMode('event')">
+            <button type="button" role="menuitem" @click="openCreateMode('event')">
               New event
             </button>
-            <button type="button" @click="openCreateMode('birthday')">
+            <button type="button" role="menuitem" @click="openCreateMode('birthday')">
               New birthday
             </button>
-            <button type="button" @click="openCreateMode('import')">
+            <button type="button" role="menuitem" @click="openCreateMode('import')">
               Import .ics
             </button>
           </div>
@@ -1698,10 +1986,38 @@ onBeforeUnmount(() => {
         <div class="cal-toolbar-actions">
           <div class="cal-create-wrap">
             <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              class="cal-toolbar-icon-btn"
+              aria-label="Calendar settings"
+              title="Calendar settings"
+              type="button"
+              :aria-expanded="showSettingsMenu"
+              aria-haspopup="menu"
+              @click="toggleSettingsMenu"
+            >
+              <UiIcon name="Settings" :size="18" aria-hidden="true" />
+            </Button>
+            <div
+              v-if="showSettingsMenu"
+              class="cal-create-menu cal-settings-menu cal-settings-menu--toolbar"
+              role="menu"
+            >
+              <button type="button" role="menuitem" @click="openAvailabilitySettings">
+                Availability
+              </button>
+            </div>
+          </div>
+          <div class="cal-create-wrap">
+            <Button
               color="primary"
               shape="soft"
               size="compact"
               type="button"
+              :aria-expanded="showCreateMenu"
+              aria-haspopup="menu"
               @click="toggleCreateMenu"
             >
               <template #icon>
@@ -1709,20 +2025,24 @@ onBeforeUnmount(() => {
               </template>
               Create
             </Button>
-            <div v-if="showCreateMenu" class="cal-create-menu cal-create-menu--toolbar">
-              <button type="button" @click="openCreateMode('booking')">
+            <div
+              v-if="showCreateMenu"
+              class="cal-create-menu cal-create-menu--toolbar"
+              role="menu"
+            >
+              <button type="button" role="menuitem" @click="openCreateMode('booking')">
                 New booking
               </button>
-              <button type="button" @click="openCreateMode('reminder')">
+              <button type="button" role="menuitem" @click="openCreateMode('reminder')">
                 New reminder
               </button>
-              <button type="button" @click="openCreateMode('event')">
+              <button type="button" role="menuitem" @click="openCreateMode('event')">
                 New event
               </button>
-              <button type="button" @click="openCreateMode('birthday')">
+              <button type="button" role="menuitem" @click="openCreateMode('birthday')">
                 New birthday
               </button>
-              <button type="button" @click="openCreateMode('import')">
+              <button type="button" role="menuitem" @click="openCreateMode('import')">
                 Import .ics
               </button>
             </div>
@@ -2525,6 +2845,179 @@ onBeforeUnmount(() => {
         </form>
       </div>
     </div>
+
+    <div
+      v-if="availabilityModalOpen"
+      class="modal-overlay"
+      @click.self="closeAvailabilitySettings"
+    >
+      <div
+        class="modal-card availability-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="calendar-availability-title"
+      >
+        <div class="modal-header">
+          <div>
+            <h2 id="calendar-availability-title">Booking availability</h2>
+            <p class="modal-subtitle">
+              Manage the weekly windows used by bookings for this site.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="icon-close"
+            aria-label="Close"
+            @click="closeAvailabilitySettings"
+          >
+            ×
+          </button>
+        </div>
+
+        <form class="availability-form" @submit.prevent="saveAvailabilitySettings">
+          <label v-if="sites.sites.length > 1" class="availability-site-picker">
+            <span>Site</span>
+            <select
+              v-model="availabilitySiteUsername"
+              :disabled="availabilityLoading || availabilitySaving"
+              @change="loadAvailabilitySettings"
+            >
+              <option
+                v-for="site in sites.sites"
+                :key="site.id"
+                :value="site.username"
+              >
+                {{ site.username }}.example.com
+              </option>
+            </select>
+          </label>
+
+          <div v-if="availabilityLoading" class="cal-loading">
+            Loading availability…
+          </div>
+          <BookingAvailabilityEditor
+            v-else
+            v-model:availability="availabilityDraft"
+            v-model:buffer-time="availabilityBufferTime"
+            v-model:timezone="availabilityTimezone"
+            description="These windows apply to private booking offers. Classes and retreats keep their own schedules."
+          />
+
+          <p v-if="availabilityError" class="form-error">
+            {{ availabilityError }}
+          </p>
+
+          <div class="modal-actions">
+            <Button
+              size="small"
+              type="button"
+              color="outline"
+              :disabled="availabilitySaving"
+              @click="closeAvailabilitySettings"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="small"
+              type="submit"
+              color="primary"
+              :disabled="
+                availabilityLoading ||
+                availabilitySaving ||
+                !availabilitySourceProfile
+              "
+            >
+              {{ availabilitySaving ? "Saving…" : "Save availability" }}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div
+      v-if="availabilityModalOpen"
+      class="modal-overlay"
+      @click.self="closeAvailabilitySettings"
+    >
+      <div
+        class="modal-card availability-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="availability-settings-title"
+      >
+        <div class="modal-header">
+          <h2 id="availability-settings-title">Booking availability</h2>
+          <button
+            type="button"
+            class="icon-close"
+            aria-label="Close"
+            @click="closeAvailabilitySettings"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="booking-form availability-settings-form">
+          <label>
+            <span>Site</span>
+            <select
+              v-model="availabilitySiteUsername"
+              :disabled="availabilityLoading || availabilitySaving"
+              @change="loadAvailabilitySettings"
+            >
+              <option value="">Choose a site</option>
+              <option
+                v-for="site in sites.sites"
+                :key="site.id"
+                :value="site.username"
+              >
+                {{ site.username }}
+              </option>
+            </select>
+          </label>
+
+          <p v-if="availabilityLoading" class="form-hint">
+            Loading availability…
+          </p>
+
+          <BookingAvailabilityEditor
+            v-if="!availabilityLoading"
+            v-model:availability="availabilityDraft"
+            v-model:buffer-time="availabilityBufferTime"
+            v-model:timezone="availabilityTimezone"
+            description="Weekly windows for public 1:1 booking on this site."
+          />
+
+          <p v-if="availabilityError" class="form-error">
+            {{ availabilityError }}
+          </p>
+
+          <div class="modal-actions">
+            <Button
+              size="small"
+              type="button"
+              color="outline"
+              @click="closeAvailabilitySettings"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="small"
+              type="button"
+              color="primary"
+              :disabled="
+                availabilityLoading ||
+                availabilitySaving ||
+                !availabilitySourceProfile
+              "
+              @click="saveAvailabilitySettings"
+            >
+              {{ availabilitySaving ? "Saving…" : "Save availability" }}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -2564,7 +3057,7 @@ onBeforeUnmount(() => {
 
 .cal-mobile-nav-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px 36px;
+  grid-template-columns: minmax(0, 1fr) 36px 36px 36px;
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -2588,22 +3081,24 @@ onBeforeUnmount(() => {
 
 .cal-period-switcher--mobile .cal-period-title {
   min-height: 32px;
-  max-width: min(220px, calc(100vw - 180px));
+  max-width: min(220px, calc(100vw - 220px));
   padding-inline: 6px;
   font-size: 14px;
 }
 
-.cal-create-menu--mobile-nav {
-  position: fixed;
-  top: var(--workspace-topbar-height);
-  right: 14px;
+.cal-create-menu--mobile-nav,
+.cal-settings-menu--mobile-nav {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
   left: auto;
-  width: min(220px, calc(100vw - 28px));
+  width: min(220px, calc(100vw - 32px));
 }
 
 :global(#app-side-nav-mobile-page-controls:has(.cal-mobile-nav-controls)) {
   min-height: var(--app-shell-mobile-nav-height);
   height: var(--app-shell-mobile-nav-height);
+  overflow: visible;
   padding: var(--workspace-topbar-padding-block) 8px
     var(--workspace-topbar-padding-block)
     var(--app-shell-mobile-nav-leading-padding);
@@ -2688,6 +3183,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: flex-end;
   justify-self: end;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -2746,6 +3242,18 @@ onBeforeUnmount(() => {
   right: 0;
   left: auto;
   width: 190px;
+}
+
+.cal-create-menu.cal-create-menu--mobile-nav,
+.cal-create-menu.cal-settings-menu--mobile-nav {
+  top: calc(100% + 8px);
+  right: 0;
+  left: auto;
+  width: min(220px, calc(100vw - 32px));
+}
+
+.cal-settings-menu--toolbar {
+  width: 180px;
 }
 
 .cal-create-menu button {
@@ -2856,6 +3364,14 @@ onBeforeUnmount(() => {
   width: min(100%, 520px);
 }
 
+.availability-modal {
+  width: min(100%, 760px);
+}
+
+.availability-settings-form {
+  gap: 16px;
+}
+
 .modal-header {
   display: flex;
   align-items: flex-start;
@@ -2867,6 +3383,13 @@ onBeforeUnmount(() => {
 .modal-header h2 {
   margin: 0;
   font-size: 20px;
+}
+
+.modal-subtitle {
+  margin: 6px 0 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .modal-kicker {
@@ -3002,6 +3525,27 @@ onBeforeUnmount(() => {
   gap: 14px;
 }
 
+.availability-form {
+  display: grid;
+  gap: 16px;
+}
+
+.availability-site-picker {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.availability-site-picker select {
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+  font: inherit;
+}
+
 .form-hint {
   margin: 0;
   font-size: 13px;
@@ -3082,7 +3626,13 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
-.cal-mobile-create-wrap {
+.cal-toolbar-icon-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.cal-mobile-create-wrap,
+.cal-mobile-settings-wrap {
   position: relative;
 }
 
