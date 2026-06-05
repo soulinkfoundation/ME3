@@ -7548,6 +7548,63 @@ app.post("/api/scheduling/policy/resolve", async (c) => {
   return c.json({ ok: true, policy: result });
 });
 
+app.post("/api/scheduling/candidates", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body = await c.req
+    .json<{
+      contactId?: unknown;
+      timeTypeId?: unknown;
+      dateRange?: { start?: unknown; end?: unknown };
+      limit?: unknown;
+    }>()
+    .catch((): {
+      contactId?: unknown;
+      timeTypeId?: unknown;
+      dateRange?: { start?: unknown; end?: unknown };
+      limit?: unknown;
+    } => ({}));
+
+  const policy = await resolveSchedulingPolicy(c.env, ownerId, {
+    contactId: normalizeShortText(body.contactId, 120),
+    timeTypeId: normalizeShortText(body.timeTypeId, 160),
+  });
+  if ("error" in policy) return c.json({ error: policy.error }, policy.status as any);
+
+  const dateRange = parseSchedulingDateRange(body.dateRange);
+  if ("error" in dateRange) return c.json({ error: dateRange.error }, 400);
+
+  const limit = normalizeCandidateLimit(body.limit);
+  const slots = policy.allowed
+    ? await generateSchedulingCandidateSlots(c.env, ownerId, {
+        timeType: policy.timeType,
+        dateRange,
+        limit,
+      })
+    : [];
+
+  return c.json({
+    ok: true,
+    status: !policy.allowed
+      ? "not_allowed"
+      : policy.ownerReviewRequired
+      ? "review_required"
+      : "ok",
+    policy: {
+      tier: policy.tier,
+      allowed: policy.allowed,
+      reason: policy.reason,
+      ownerReviewRequired: policy.ownerReviewRequired,
+      candidateSharingAllowed: policy.candidateSharingAllowed,
+      contactId: policy.contactId,
+    },
+    timeType: sanitizeSchedulingTimeTypeForCandidates(policy.timeType),
+    dateRange,
+    slots,
+  });
+});
+
 app.get("/api/contacts", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -10108,6 +10165,256 @@ async function resolveSchedulingPolicy(
     candidateSharingAllowed,
     timeType,
     contactId: contact?.id || null,
+  };
+}
+
+type SchedulingDateRange = { start: string; end: string };
+type SchedulingBlocker = { startsAt: string; endsAt: string; allDay: boolean };
+type SchedulingCandidateSlot = {
+  startsAt: string;
+  endsAt: string;
+  timezone: string;
+  localDate: string;
+  localStartTime: string;
+  localEndDate: string;
+  localEndTime: string;
+};
+
+function parseSchedulingDateRange(value: unknown):
+  | SchedulingDateRange
+  | { error: string } {
+  const record = isPlainObject(value) ? value : {};
+  const start = normalizeShortText(record.start, 20);
+  const end = normalizeShortText(record.end, 20);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    return { error: "dateRange.start and dateRange.end must be YYYY-MM-DD dates" };
+  }
+
+  const startMs = Date.parse(`${start}T00:00:00Z`);
+  const endMs = Date.parse(`${end}T00:00:00Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return { error: "dateRange.end must be on or after dateRange.start" };
+  }
+  const days = Math.floor((endMs - startMs) / (24 * 60 * 60 * 1000)) + 1;
+  if (days > 62) return { error: "dateRange cannot exceed 62 days" };
+  return { start, end };
+}
+
+function normalizeCandidateLimit(value: unknown): number {
+  const numeric =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : typeof value === "string" && value.trim()
+      ? Number(value)
+      : 10;
+  if (!Number.isFinite(numeric)) return 10;
+  return Math.max(1, Math.min(50, Math.round(numeric)));
+}
+
+async function generateSchedulingCandidateSlots(
+  env: Env,
+  ownerId: string,
+  input: {
+    timeType: SchedulingTimeType;
+    dateRange: SchedulingDateRange;
+    limit: number;
+  },
+): Promise<SchedulingCandidateSlot[]> {
+  const timezone = resolveTimeZone(input.timeType.timezone);
+  const blockers = await loadSchedulingBlockers(env, ownerId, input.dateRange, timezone);
+  const slots: SchedulingCandidateSlot[] = [];
+  let localDate = input.dateRange.start;
+
+  while (localDate <= input.dateRange.end && slots.length < input.limit) {
+    const weekday = weekdayForDate(localDate);
+    const dayWindows = weekday ? input.timeType.windows[weekday] || [] : [];
+
+    for (const window of dayWindows) {
+      const [windowStart, windowEnd] = String(window).split("-").map((part) => part.trim());
+      const windowStartMinutes = timeToMinutes(windowStart);
+      const windowEndMinutes = timeToMinutes(windowEnd);
+      if (windowStartMinutes === null || windowEndMinutes === null) continue;
+
+      for (
+        let startMinutes = windowStartMinutes;
+        startMinutes + input.timeType.durationMinutes <= windowEndMinutes;
+        startMinutes += 15
+      ) {
+        const localStartTime = minutesToTime(startMinutes);
+        const slot = resolveBookingSlot({
+          localDate,
+          localTime: localStartTime,
+          durationMinutes: input.timeType.durationMinutes,
+          timezone,
+        });
+        if (!slot || slot.startsAtMs <= Date.now() + 5 * 60_000) continue;
+        if (
+          schedulingSlotOverlapsBlockers(slot, blockers, input.timeType.bufferMinutes)
+        ) {
+          continue;
+        }
+
+        const localEnd = formatUtcInstantInTimeZone(
+          Date.parse(slot.endsAt),
+          timezone,
+        );
+        slots.push({
+          startsAt: slot.startsAt,
+          endsAt: slot.endsAt,
+          timezone,
+          localDate,
+          localStartTime,
+          localEndDate: localEnd?.localDate || localDate,
+          localEndTime: localEnd?.localTime || minutesToTime(
+            startMinutes + input.timeType.durationMinutes,
+          ),
+        });
+        if (slots.length >= input.limit) break;
+      }
+      if (slots.length >= input.limit) break;
+    }
+
+    localDate = addDaysToDateString(localDate, 1);
+  }
+
+  return slots;
+}
+
+async function loadSchedulingBlockers(
+  env: Env,
+  ownerId: string,
+  dateRange: SchedulingDateRange,
+  timezone: string,
+): Promise<SchedulingBlocker[]> {
+  const window = resolveSchedulingUtcWindow(dateRange, timezone);
+  const [bookings, events, recurringEvents, importedEvents] = await Promise.all([
+    env.DB.prepare(
+      `SELECT b.id, b.site_id, b.offer_id, b.booking_type, b.guest_name, b.guest_email,
+              b.starts_at, b.ends_at, b.duration_minutes, b.calendar_event_id,
+              b.status, b.notes, b.created_at, b.cancelled_at, b.payment_intent_id,
+              b.amount_paid, b.suggested_amount, b.currency, b.payment_status,
+              b.is_free_booking, b.paid_at
+       FROM bookings b
+       JOIN sites s ON s.id = b.site_id
+       WHERE s.user_id = ? AND b.status = 'confirmed'
+         AND b.ends_at > ? AND b.starts_at < ?`,
+    )
+      .bind(ownerId, window.startsAt, window.endsAt)
+      .all<DbBooking>(),
+    env.DB.prepare(
+      `SELECT id, user_id, title, notes, location, starts_at, ends_at, timezone,
+              all_day, kind, recurrence_rule, created_at
+       FROM user_calendar_events
+       WHERE user_id = ? AND recurrence_rule IS NULL
+         AND ends_at > ? AND starts_at < ?`,
+    )
+      .bind(ownerId, window.startsAt, window.endsAt)
+      .all<DbUserCalendarEvent>(),
+    env.DB.prepare(
+      `SELECT id, user_id, title, notes, location, starts_at, ends_at, timezone,
+              all_day, kind, recurrence_rule, created_at
+       FROM user_calendar_events
+       WHERE user_id = ? AND recurrence_rule IS NOT NULL`,
+    )
+      .bind(ownerId)
+      .all<DbUserCalendarEvent>(),
+    env.DB.prepare(
+      `SELECT cse.id, cse.source_id, cse.external_key, cse.external_uid, cse.title,
+              cse.notes, cse.location, cse.starts_at, cse.ends_at, cse.timezone,
+              cse.all_day, cse.created_at
+       FROM calendar_source_events cse
+       JOIN calendar_sources cs ON cs.id = cse.source_id
+       WHERE cs.user_id = ? AND cs.status = 'active'
+         AND cse.ends_at > ? AND cse.starts_at < ?`,
+    )
+      .bind(ownerId, window.startsAt, window.endsAt)
+      .all<DbCalendarSourceEvent>(),
+  ]);
+
+  const expandedRecurringEvents = expandRecurringCalendarEvents(
+    recurringEvents.results || [],
+    window.startsAt,
+    window.endsAt,
+  );
+
+  return [
+    ...(bookings.results || []).map((booking) => ({
+      startsAt: booking.starts_at,
+      endsAt: booking.ends_at,
+      allDay: false,
+    })),
+    ...(events.results || []).map(calendarEventToSchedulingBlocker),
+    ...expandedRecurringEvents.map(calendarEventToSchedulingBlocker),
+    ...(importedEvents.results || []).map((event) => ({
+      startsAt: event.starts_at,
+      endsAt: event.ends_at,
+      allDay: event.all_day === 1,
+    })),
+  ];
+}
+
+function resolveSchedulingUtcWindow(
+  dateRange: SchedulingDateRange,
+  timezone: string,
+): { startsAt: string; endsAt: string } {
+  const [startYear, startMonth, startDay] = dateRange.start.split("-").map(Number);
+  const endExclusive = addDaysToDateString(dateRange.end, 1);
+  const [endYear, endMonth, endDay] = endExclusive.split("-").map(Number);
+  return {
+    startsAt: new Date(
+      getUtcMsForLocalTime(
+        { year: startYear, month: startMonth, day: startDay, hour: 0, minute: 0 },
+        timezone,
+      ),
+    ).toISOString(),
+    endsAt: new Date(
+      getUtcMsForLocalTime(
+        { year: endYear, month: endMonth, day: endDay, hour: 0, minute: 0 },
+        timezone,
+      ),
+    ).toISOString(),
+  };
+}
+
+function calendarEventToSchedulingBlocker(
+  event: DbUserCalendarEvent,
+): SchedulingBlocker {
+  return {
+    startsAt: event.starts_at,
+    endsAt: event.ends_at,
+    allDay: event.all_day === 1,
+  };
+}
+
+function schedulingSlotOverlapsBlockers(
+  slot: { startsAt: string; endsAt: string },
+  blockers: SchedulingBlocker[],
+  bufferMinutes: number,
+): boolean {
+  const bufferMs = bufferMinutes * 60_000;
+  const slotStartMs = Date.parse(slot.startsAt) - bufferMs;
+  const slotEndMs = Date.parse(slot.endsAt) + bufferMs;
+
+  for (const blocker of blockers) {
+    const blockerStartMs = Date.parse(blocker.startsAt);
+    const blockerEndMs = Date.parse(blocker.endsAt);
+    if (!Number.isFinite(blockerStartMs) || !Number.isFinite(blockerEndMs)) continue;
+    if (blockerStartMs < slotEndMs && blockerEndMs > slotStartMs) return true;
+  }
+
+  return false;
+}
+
+function sanitizeSchedulingTimeTypeForCandidates(timeType: SchedulingTimeType) {
+  return {
+    id: timeType.id,
+    title: timeType.title,
+    durationMinutes: timeType.durationMinutes,
+    bufferMinutes: timeType.bufferMinutes,
+    timezone: timeType.timezone,
+    paymentMode: timeType.paymentMode,
+    source: timeType.source,
+    publicBookingOfferId: timeType.publicBookingOfferId,
   };
 }
 

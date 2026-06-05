@@ -8,12 +8,15 @@ import type {
   DbAiModelDefault,
   DbAiProviderCredential,
   DbContact,
+  DbCalendarSource,
+  DbCalendarSourceEvent,
   DbEmailProviderSetting,
   DbEmailSendAudit,
   DbMailboxAlias,
   DbMailboxMessage,
   DbBooking,
   DbSite,
+  DbUserCalendarEvent,
   DbUserReminder,
   Env,
   OwnerProfile,
@@ -292,6 +295,9 @@ function createEnv(): Env & {
   emailSends: Array<Record<string, unknown>>;
   mailboxMessages: StoredMailboxMessage[];
   reminders: DbUserReminder[];
+  userCalendarEvents: DbUserCalendarEvent[];
+  calendarSources: DbCalendarSource[];
+  calendarSourceEvents: DbCalendarSourceEvent[];
   contacts: DbContact[];
   telegramConnection: StoredTelegramConnection | null;
   sandboxConnection: StoredTelegramConnection | null;
@@ -330,6 +336,9 @@ function createEnv(): Env & {
     emailSends: [] as Array<Record<string, unknown>>,
     mailboxMessages: [] as StoredMailboxMessage[],
     reminders: [] as DbUserReminder[],
+    userCalendarEvents: [] as DbUserCalendarEvent[],
+    calendarSources: [] as DbCalendarSource[],
+    calendarSourceEvents: [] as DbCalendarSourceEvent[],
     contacts: [] as DbContact[],
     telegramConnection: null as StoredTelegramConnection | null,
     sandboxConnection: null as StoredTelegramConnection | null,
@@ -2005,6 +2014,54 @@ function createEnv(): Env & {
                   ) as T[],
                 };
               }
+              if (sql.includes("FROM bookings b")) {
+                const [ownerId, windowStart, windowEnd] = values as string[];
+                return {
+                  results: state.bookings.filter((booking) => {
+                    const site = state.sites.find((entry) => entry.id === booking.site_id);
+                    return (
+                      site?.user_id === ownerId &&
+                      booking.status === "confirmed" &&
+                      booking.ends_at > windowStart &&
+                      booking.starts_at < windowEnd
+                    );
+                  }) as T[],
+                };
+              }
+              if (sql.includes("FROM user_calendar_events")) {
+                const ownerId = values[0] as string;
+                const recurring = sql.includes("recurrence_rule IS NOT NULL");
+                const windowStart = values[1] as string | undefined;
+                const windowEnd = values[2] as string | undefined;
+                return {
+                  results: state.userCalendarEvents.filter((event) => {
+                    if (event.user_id !== ownerId) return false;
+                    if (recurring) return event.recurrence_rule !== null;
+                    return (
+                      event.recurrence_rule === null &&
+                      typeof windowStart === "string" &&
+                      typeof windowEnd === "string" &&
+                      event.ends_at > windowStart &&
+                      event.starts_at < windowEnd
+                    );
+                  }) as T[],
+                };
+              }
+              if (sql.includes("FROM calendar_source_events")) {
+                const [ownerId, windowStart, windowEnd] = values as string[];
+                return {
+                  results: state.calendarSourceEvents.filter((event) => {
+                    const source = state.calendarSources.find(
+                      (entry) => entry.id === event.source_id,
+                    );
+                    return (
+                      source?.user_id === ownerId &&
+                      event.ends_at > windowStart &&
+                      event.starts_at < windowEnd
+                    );
+                  }) as T[],
+                };
+              }
               if (sql.includes("FROM scheduling_time_types")) {
                 return {
                   results: state.schedulingTimeTypes.filter(
@@ -2205,6 +2262,15 @@ function createEnv(): Env & {
     },
     get reminders() {
       return state.reminders;
+    },
+    get userCalendarEvents() {
+      return state.userCalendarEvents;
+    },
+    get calendarSources() {
+      return state.calendarSources;
+    },
+    get calendarSourceEvents() {
+      return state.calendarSourceEvents;
     },
     get contacts() {
       return state.contacts;
@@ -5422,6 +5488,399 @@ describe("ME3 Core Worker auth", () => {
       ownerReviewRequired: false,
       candidateSharingAllowed: true,
     });
+  });
+
+  it("generates timezone-aware scheduling candidates and ignores reminders", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.schedulingTimeTypes.push({
+      id: "dublin-catchup",
+      user_id: "owner",
+      title: "Dublin catch-up",
+      description: null,
+      duration_minutes: 30,
+      buffer_minutes: 0,
+      timezone: "Europe/Dublin",
+      windows_json: JSON.stringify({ monday: ["09:00-10:00"] }),
+      allowed_tiers_json: JSON.stringify(["public", "contact", "close_contact"]),
+      payment_mode: "free",
+      public_booking_offer_id: null,
+      owner_pre_review: "unless_close_contact",
+      allow_close_contact_candidate_sharing: 1,
+      final_approval: "both_owners",
+      status: "active",
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+    env.reminders.push({
+      id: "reminder-1",
+      user_id: "owner",
+      title: "Reminder should not block",
+      notes: null,
+      remind_at: "2026-06-08T08:15:00.000Z",
+      timezone: "Europe/Dublin",
+      recurrence_rule: null,
+      context_type: null,
+      context_id: null,
+      context_label: null,
+      status: "pending",
+      delivered_at: null,
+      dismissed_at: null,
+      created_at: "2026-06-05T12:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/scheduling/candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: "dublin-catchup",
+          dateRange: { start: "2026-06-08", end: "2026-06-08" },
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      status: string;
+      slots: Array<{
+        startsAt: string;
+        endsAt: string;
+        timezone: string;
+        localStartTime: string;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.status).toBe("review_required");
+    expect(body.slots).toEqual([
+      expect.objectContaining({
+        startsAt: "2026-06-08T08:00:00.000Z",
+        endsAt: "2026-06-08T08:30:00.000Z",
+        timezone: "Europe/Dublin",
+        localStartTime: "09:00",
+      }),
+      expect.objectContaining({
+        startsAt: "2026-06-08T08:15:00.000Z",
+        localStartTime: "09:15",
+      }),
+      expect.objectContaining({
+        startsAt: "2026-06-08T08:30:00.000Z",
+        localStartTime: "09:30",
+      }),
+    ]);
+  });
+
+  it("excludes slots overlapping bookings and native events with buffer", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addBookableSite(env);
+    env.schedulingTimeTypes.push({
+      id: "buffered-call",
+      user_id: "owner",
+      title: "Buffered call",
+      description: null,
+      duration_minutes: 30,
+      buffer_minutes: 15,
+      timezone: "UTC",
+      windows_json: JSON.stringify({ monday: ["09:00-12:00"] }),
+      allowed_tiers_json: JSON.stringify(["public", "contact", "close_contact"]),
+      payment_mode: "free",
+      public_booking_offer_id: null,
+      owner_pre_review: "unless_close_contact",
+      allow_close_contact_candidate_sharing: 1,
+      final_approval: "both_owners",
+      status: "active",
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+    env.bookings.push({
+      id: "booking-blocker",
+      site_id: "site-booking",
+      offer_id: "free-session",
+      booking_type: "one_to_one",
+      guest_name: "Booked",
+      guest_email: "booked@example.com",
+      starts_at: "2026-06-08T09:30:00.000Z",
+      ends_at: "2026-06-08T10:00:00.000Z",
+      duration_minutes: 30,
+      calendar_event_id: null,
+      status: "confirmed",
+      notes: "private booking notes",
+      created_at: "2026-06-05T12:00:00Z",
+      cancelled_at: null,
+      payment_intent_id: null,
+      amount_paid: null,
+      suggested_amount: null,
+      currency: null,
+      payment_status: "not_required",
+      is_free_booking: 1,
+      paid_at: null,
+    });
+    env.userCalendarEvents.push({
+      id: "event-blocker",
+      user_id: "owner",
+      title: "Private event title",
+      notes: "private event notes",
+      location: null,
+      starts_at: "2026-06-08T10:45:00.000Z",
+      ends_at: "2026-06-08T11:15:00.000Z",
+      timezone: "UTC",
+      all_day: 0,
+      kind: "event",
+      recurrence_rule: null,
+      created_at: "2026-06-05T12:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/scheduling/candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: "buffered-call",
+          dateRange: { start: "2026-06-08", end: "2026-06-08" },
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      slots: Array<{ localStartTime: string; startsAt: string; endsAt: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.slots).toEqual([
+      expect.objectContaining({
+        localStartTime: "11:30",
+        startsAt: "2026-06-08T11:30:00.000Z",
+        endsAt: "2026-06-08T12:00:00.000Z",
+      }),
+    ]);
+    expect(JSON.stringify(body)).not.toContain("Private event title");
+    expect(JSON.stringify(body)).not.toContain("private booking notes");
+  });
+
+  it("blocks all-day calendar events and returns empty availability safely", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.schedulingTimeTypes.push({
+      id: "all-day-test",
+      user_id: "owner",
+      title: "All day test",
+      description: null,
+      duration_minutes: 30,
+      buffer_minutes: 0,
+      timezone: "UTC",
+      windows_json: JSON.stringify({ tuesday: ["09:00-10:00"] }),
+      allowed_tiers_json: JSON.stringify(["public", "contact", "close_contact"]),
+      payment_mode: "free",
+      public_booking_offer_id: null,
+      owner_pre_review: "unless_close_contact",
+      allow_close_contact_candidate_sharing: 1,
+      final_approval: "both_owners",
+      status: "active",
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+    env.userCalendarEvents.push({
+      id: "all-day-blocker",
+      user_id: "owner",
+      title: "All day private event",
+      notes: "not returned",
+      location: null,
+      starts_at: "2026-06-09T00:00:00.000Z",
+      ends_at: "2026-06-10T00:00:00.000Z",
+      timezone: "UTC",
+      all_day: 1,
+      kind: "event",
+      recurrence_rule: null,
+      created_at: "2026-06-05T12:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/scheduling/candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: "all-day-test",
+          dateRange: { start: "2026-06-09", end: "2026-06-09" },
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { slots: unknown[] };
+
+    expect(response.status).toBe(200);
+    expect(body.slots).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("All day private event");
+  });
+
+  it("uses imported calendar events as blockers without exposing details", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.schedulingTimeTypes.push({
+      id: "imported-test",
+      user_id: "owner",
+      title: "Imported test",
+      description: null,
+      duration_minutes: 30,
+      buffer_minutes: 0,
+      timezone: "UTC",
+      windows_json: JSON.stringify({ wednesday: ["09:00-10:00"] }),
+      allowed_tiers_json: JSON.stringify(["public", "contact", "close_contact"]),
+      payment_mode: "free",
+      public_booking_offer_id: null,
+      owner_pre_review: "unless_close_contact",
+      allow_close_contact_candidate_sharing: 1,
+      final_approval: "both_owners",
+      status: "active",
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+    env.calendarSources.push({
+      id: "source-1",
+      user_id: "owner",
+      kind: "ics_upload",
+      name: "Imported calendar",
+      original_filename: "private.ics",
+      imported_event_count: 1,
+      created_at: "2026-06-05T12:00:00Z",
+    });
+    env.calendarSourceEvents.push({
+      id: "imported-blocker",
+      source_id: "source-1",
+      external_key: "secret-key",
+      external_uid: "secret-uid",
+      title: "Secret imported appointment",
+      notes: "secret imported notes",
+      location: "secret room",
+      starts_at: "2026-06-10T09:15:00.000Z",
+      ends_at: "2026-06-10T09:45:00.000Z",
+      timezone: "UTC",
+      all_day: 0,
+      created_at: "2026-06-05T12:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/scheduling/candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: "imported-test",
+          dateRange: { start: "2026-06-10", end: "2026-06-10" },
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { slots: unknown[] };
+
+    expect(response.status).toBe(200);
+    expect(body.slots).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("Secret imported appointment");
+    expect(JSON.stringify(body)).not.toContain("secret imported notes");
+  });
+
+  it("returns policy-safe statuses for denied and close-contact candidate requests", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.schedulingTimeTypes.push({
+      id: "close-only",
+      user_id: "owner",
+      title: "Close only",
+      description: null,
+      duration_minutes: 30,
+      buffer_minutes: 0,
+      timezone: "UTC",
+      windows_json: JSON.stringify({ thursday: ["09:00-10:00"] }),
+      allowed_tiers_json: JSON.stringify(["close_contact"]),
+      payment_mode: "free",
+      public_booking_offer_id: null,
+      owner_pre_review: "unless_close_contact",
+      allow_close_contact_candidate_sharing: 1,
+      final_approval: "both_owners",
+      status: "active",
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+    env.contacts.push({
+      id: "close-contact-for-candidates",
+      user_id: "owner",
+      name: "Close Contact",
+      email: "close-candidate@example.com",
+      phone: null,
+      source: "manual",
+      source_ref: null,
+      relationship: "contact",
+      status: "active",
+      notes: null,
+      tags: null,
+      last_interaction_at: null,
+      next_followup_at: null,
+      outreach_status: null,
+      social_handles: null,
+      metadata: JSON.stringify({ closeness: "very_close" }),
+      created_at: "2026-06-05T12:00:00Z",
+      updated_at: "2026-06-05T12:00:00Z",
+    });
+
+    const deniedResponse = await app.fetch(
+      new Request("http://localhost/api/scheduling/candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: "close-only",
+          dateRange: { start: "2026-06-11", end: "2026-06-11" },
+        }),
+      }),
+      env,
+    );
+    const deniedBody = (await deniedResponse.json()) as {
+      status: string;
+      policy: { tier: string; allowed: boolean };
+      slots: unknown[];
+    };
+
+    expect(deniedResponse.status).toBe(200);
+    expect(deniedBody).toMatchObject({
+      status: "not_allowed",
+      policy: { tier: "public", allowed: false },
+      slots: [],
+    });
+
+    const closeResponse = await app.fetch(
+      new Request("http://localhost/api/scheduling/candidates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          timeTypeId: "close-only",
+          contactId: "close-contact-for-candidates",
+          dateRange: { start: "2026-06-11", end: "2026-06-11" },
+        }),
+      }),
+      env,
+    );
+    const closeBody = (await closeResponse.json()) as {
+      status: string;
+      policy: {
+        tier: string;
+        allowed: boolean;
+        ownerReviewRequired: boolean;
+        candidateSharingAllowed: boolean;
+      };
+      slots: Array<{ localStartTime: string }>;
+    };
+
+    expect(closeResponse.status).toBe(200);
+    expect(closeBody.status).toBe("ok");
+    expect(closeBody.policy).toMatchObject({
+      tier: "close_contact",
+      allowed: true,
+      ownerReviewRequired: false,
+      candidateSharingAllowed: true,
+    });
+    expect(closeBody.slots.map((slot) => slot.localStartTime)).toEqual([
+      "09:00",
+      "09:15",
+      "09:30",
+    ]);
   });
 
   it("lists curated Core plugins for the signed-in owner", async () => {
