@@ -71,6 +71,7 @@ const MAX_SKILL_MD_CHARS = 24_000;
 const MAX_DESCRIPTION_CHARS = 600;
 const MAX_TRIGGER_HINTS = 12;
 const MAX_MATCHED_SKILLS = 4;
+const MAX_REMOTE_SKILLS_PER_INSTALL = 50;
 
 export async function listAssistantSkills(env: Env, userId: string, limitInput = 100) {
   const limit = Math.max(1, Math.min(limitInput, 100));
@@ -92,12 +93,83 @@ export async function listAssistantSkills(env: Env, userId: string, limitInput =
 export async function createAssistantSkill(env: Env, userId: string, input: unknown) {
   const body = isRecord(input) ? input : {};
   const sourceRef = normalizeNullableText(body.sourceRef);
-  const rawSkillMd = normalizeSkillMarkdown(body.skillMd);
+  let rawSkillMd = normalizeSkillMarkdown(body.skillMd);
   if (!sourceRef && !rawSkillMd) {
     throw new AssistantSkillsInputError("Skill URL or SKILL.md is required");
   }
 
   const sourceKind = normalizeSourceKind(body.sourceKind, sourceRef);
+  const remoteSkills =
+    sourceRef && !rawSkillMd
+      ? await fetchRemoteSkillMarkdown(sourceRef)
+      : [];
+  if (remoteSkills.length === 1) {
+    rawSkillMd = remoteSkills[0]?.skillMd || rawSkillMd;
+  }
+
+  if (remoteSkills.length > 1) {
+    const installedSkills: AssistantSkill[] = [];
+    let duplicateCount = 0;
+    for (const remoteSkill of remoteSkills) {
+      try {
+        installedSkills.push(
+          await insertAssistantSkill(env, userId, {
+            body,
+            sourceRef: remoteSkill.sourceRef,
+            sourceKind: "repo",
+            rawSkillMd: remoteSkill.skillMd,
+            metadataFallback: {
+              installMode: "remote_skill_md",
+              remoteSourceRef: sourceRef,
+              remotePath: remoteSkill.path,
+              scriptsInert: true,
+            },
+          }),
+        );
+      } catch (error) {
+        if (isDuplicateSourceError(error)) {
+          duplicateCount += 1;
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (!installedSkills.length) {
+      throw new AssistantSkillsInputError(
+        duplicateCount
+          ? "Those skills are already installed"
+          : "No installable SKILL.md files were found",
+        duplicateCount ? 409 : 400,
+      );
+    }
+    return { skill: installedSkills[0], skills: installedSkills };
+  }
+
+  const skill = await insertAssistantSkill(env, userId, {
+    body,
+    sourceRef,
+    sourceKind,
+    rawSkillMd,
+    metadataFallback: {
+      installMode: rawSkillMd ? "skill_md" : "source_ref",
+      scriptsInert: true,
+    },
+  });
+  return { skill, skills: [skill] };
+}
+
+async function insertAssistantSkill(
+  env: Env,
+  userId: string,
+  input: {
+    body: Record<string, unknown>;
+    sourceRef: string | null;
+    sourceKind: AssistantSkillSourceKind;
+    rawSkillMd: string | null;
+    metadataFallback: Record<string, unknown>;
+  },
+) {
+  const { body, sourceRef, sourceKind, rawSkillMd } = input;
   const validation = validateSkillInput(sourceKind, sourceRef, rawSkillMd);
   if (validation.errors.length) {
     throw new AssistantSkillsInputError(validation.errors[0] || "Skill is invalid");
@@ -113,10 +185,7 @@ export async function createAssistantSkill(env: Env, userId: string, input: unkn
       MAX_DESCRIPTION_CHARS,
     ) || null;
   const triggerHints = normalizeTriggerHints(body.triggerHints, name, description, sourceRef);
-  const metadata = normalizeMetadata(body.metadata, {
-    installMode: rawSkillMd ? "skill_md" : "source_ref",
-    scriptsInert: true,
-  });
+  const metadata = normalizeMetadata(body.metadata, input.metadataFallback);
   const skillMd = rawSkillMd ? truncateText(rawSkillMd, MAX_SKILL_MD_CHARS) : null;
   const id = crypto.randomUUID();
 
@@ -144,14 +213,14 @@ export async function createAssistantSkill(env: Env, userId: string, input: unkn
       )
       .run();
   } catch (error) {
-    if (String((error as Error)?.message || error).includes("UNIQUE")) {
+    if (isDuplicateSourceError(error)) {
       throw new AssistantSkillsInputError("That skill source is already installed", 409);
     }
     throw error;
   }
 
   const skill = await getAssistantSkill(env, userId, id);
-  return { skill: serializeAssistantSkill(skill as AssistantSkillRow) };
+  return serializeAssistantSkill(skill as AssistantSkillRow);
 }
 
 export async function updateAssistantSkill(
@@ -374,15 +443,46 @@ function tokenize(value: string) {
 
 function inferSkillName(skillMd: string | null) {
   const heading = skillMd?.match(/^#\s+(.+)$/m)?.[1];
-  return truncateText(normalizeNullableText(heading), 80);
+  return truncateText(
+    normalizeNullableText(heading) || parseSkillFrontMatter(skillMd).name,
+    80,
+  );
 }
 
 function inferSkillDescription(skillMd: string | null) {
+  const frontMatterDescription = parseSkillFrontMatter(skillMd).description;
+  if (frontMatterDescription) {
+    return truncateText(frontMatterDescription, MAX_DESCRIPTION_CHARS);
+  }
   const lines = skillMd
     ?.split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#") && !line.startsWith("---"));
+    .filter(
+      (line) =>
+        line &&
+        !line.startsWith("#") &&
+        !line.startsWith("---") &&
+        !/^[a-z][\w-]*:\s*/i.test(line),
+    );
   return truncateText(lines?.[0] || null, MAX_DESCRIPTION_CHARS);
+}
+
+function parseSkillFrontMatter(skillMd: string | null) {
+  const metadata: { name: string | null; description: string | null } = {
+    name: null,
+    description: null,
+  };
+  const frontMatter = skillMd?.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontMatter?.[1]) return metadata;
+  for (const line of frontMatter[1].split(/\r?\n/)) {
+    const match = line.match(/^([a-z][\w-]*):\s*(.+)$/i);
+    if (!match) continue;
+    const key = match[1]?.toLowerCase();
+    const value = normalizeNullableText(match[2]);
+    if (key === "name") metadata.name = value;
+    if (key === "description") metadata.description = value;
+  }
+  return metadata;
 }
 
 function inferSkillNameFromSource(sourceRef: string | null) {
@@ -398,6 +498,161 @@ function isSafeSkillSourceRef(value: string) {
 
 function looksLikeRepoRef(value: string | null) {
   return Boolean(value && /^[\w.-]+\/[\w.-]+(?:\/[\w./-]+)?$/.test(value));
+}
+
+type RemoteSkillMarkdown = {
+  sourceRef: string;
+  path: string;
+  skillMd: string;
+};
+
+async function fetchRemoteSkillMarkdown(sourceRef: string): Promise<RemoteSkillMarkdown[]> {
+  const direct = parseDirectSkillMarkdownUrl(sourceRef);
+  if (direct) {
+    return [
+      {
+        sourceRef: direct.sourceRef,
+        path: direct.path,
+        skillMd: await fetchMarkdownText(direct.rawUrl),
+      },
+    ];
+  }
+
+  const repo = parseGithubRepoSource(sourceRef);
+  if (!repo) return [];
+  const treeUrl = `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/trees/${encodeURIComponent(
+    repo.branch || "HEAD",
+  )}?recursive=1`;
+  const treeResponse = await fetchJson(treeUrl);
+  const tree = Array.isArray(treeResponse.tree) ? treeResponse.tree : [];
+  const basePath = repo.path ? `${repo.path.replace(/^\/+|\/+$/g, "")}/` : "";
+  const skillPaths = tree
+    .map((item) => (isRecord(item) ? normalizeNullableText(item.path) : null))
+    .filter((path): path is string => Boolean(path && /(^|\/)SKILL\.md$/i.test(path)))
+    .filter((path) => !basePath || path === basePath.slice(0, -1) || path.startsWith(basePath))
+    .slice(0, MAX_REMOTE_SKILLS_PER_INSTALL);
+
+  if (!skillPaths.length) {
+    throw new AssistantSkillsInputError("No SKILL.md files were found in that repository");
+  }
+
+  const skills: RemoteSkillMarkdown[] = [];
+  for (const path of skillPaths) {
+    const rawUrl = `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${encodeURIComponent(
+      repo.branch || "HEAD",
+    )}/${path
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/")}`;
+    skills.push({
+      sourceRef: `https://github.com/${repo.owner}/${repo.repo}/tree/${repo.branch || "HEAD"}/${path.replace(
+        /\/?SKILL\.md$/i,
+        "",
+      )}`,
+      path,
+      skillMd: await fetchMarkdownText(rawUrl),
+    });
+  }
+  return skills;
+}
+
+function parseDirectSkillMarkdownUrl(sourceRef: string) {
+  const rawMatch = sourceRef.match(
+    /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+\/)?SKILL\.md$/i,
+  );
+  if (rawMatch) {
+    const [, owner, repo, branch, prefix = ""] = rawMatch;
+    const path = `${prefix}SKILL.md`;
+    return {
+      rawUrl: sourceRef,
+      sourceRef: `https://github.com/${owner}/${repo}/tree/${branch}/${prefix.replace(/\/$/g, "")}`,
+      path,
+    };
+  }
+
+  const blobMatch = sourceRef.match(
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+\/)?SKILL\.md$/i,
+  );
+  if (blobMatch) {
+    const [, owner, repo, branch, prefix = ""] = blobMatch;
+    const path = `${prefix}SKILL.md`;
+    return {
+      rawUrl: `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`,
+      sourceRef: `https://github.com/${owner}/${repo}/tree/${branch}/${prefix.replace(/\/$/g, "")}`,
+      path,
+    };
+  }
+
+  if (/^https?:\/\/[^\s]+\/SKILL\.md(?:\?[^#\s]*)?(?:#[^\s]*)?$/i.test(sourceRef)) {
+    const cleanUrl = sourceRef.replace(/[?#].*$/, "");
+    return {
+      rawUrl: sourceRef,
+      sourceRef: cleanUrl,
+      path: cleanUrl.split("/").slice(-2).join("/") || "SKILL.md",
+    };
+  }
+  return null;
+}
+
+function parseGithubRepoSource(sourceRef: string) {
+  const githubUrl = sourceRef.match(
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/tree\/([^/]+)(?:\/(.+))?)?\/?$/i,
+  );
+  if (githubUrl) {
+    return {
+      owner: githubUrl[1],
+      repo: githubUrl[2],
+      branch: githubUrl[3] || null,
+      path: githubUrl[4] || "",
+    };
+  }
+
+  const shorthand = sourceRef.match(/^([\w.-]+)\/([\w.-]+)(?:\/(.+))?$/);
+  if (shorthand) {
+    return {
+      owner: shorthand[1],
+      repo: shorthand[2],
+      branch: null,
+      path: shorthand[3] || "",
+    };
+  }
+  return null;
+}
+
+async function fetchMarkdownText(url: string) {
+  const response = await fetch(url, {
+    headers: { Accept: "text/markdown,text/plain,*/*" },
+  });
+  if (!response.ok) {
+    throw new AssistantSkillsInputError("Skill markdown could not be fetched", 400);
+  }
+  const text = normalizeSkillMarkdown(await response.text());
+  if (!text) throw new AssistantSkillsInputError("Skill markdown was empty", 400);
+  return text;
+}
+
+async function fetchJson(url: string) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "me3-core-assistant-skills",
+    },
+  });
+  if (!response.ok) {
+    throw new AssistantSkillsInputError("Skill repository could not be inspected", 400);
+  }
+  const parsed = await response.json().catch(() => null);
+  if (!isRecord(parsed)) {
+    throw new AssistantSkillsInputError("Skill repository response was invalid", 400);
+  }
+  return parsed;
+}
+
+function isDuplicateSourceError(error: unknown) {
+  return (
+    String((error as Error)?.message || error).includes("UNIQUE") ||
+    (error instanceof AssistantSkillsInputError && error.status === 409)
+  );
 }
 
 function normalizeMetadata(value: unknown, fallback: Record<string, unknown> = {}) {

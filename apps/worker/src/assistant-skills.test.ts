@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAssistantSkill,
   listAssistantSkills,
@@ -101,15 +101,20 @@ function createSkillEnv() {
 }
 
 describe("assistant skills", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("installs and lists a repo-backed skill without enabling scripts", async () => {
     const { env } = createSkillEnv();
 
     const created = await createAssistantSkill(env as never, "owner", {
       sourceRef: "soulinkfoundation/cloudflare-skill",
+      skillMd: "# Cloudflare skill\nDeploy Workers with explicit approval.",
     });
     const listed = await listAssistantSkills(env as never, "owner");
 
-    expect(created.skill.name).toBe("cloudflare skill");
+    expect(created.skill.name).toBe("Cloudflare skill");
     expect(created.skill.sourceKind).toBe("repo");
     expect(created.skill.scriptsAvailable).toBe(false);
     expect(listed).toHaveLength(1);
@@ -119,11 +124,13 @@ describe("assistant skills", () => {
     const { env } = createSkillEnv();
     await createAssistantSkill(env as never, "owner", {
       sourceRef: "https://example.com/SKILL.md",
+      skillMd: "# Example skill\nUse this for duplicate checks.",
     });
 
     await expect(
       createAssistantSkill(env as never, "owner", {
         sourceRef: "https://example.com/SKILL.md",
+        skillMd: "# Example skill\nUse this for duplicate checks.",
       }),
     ).rejects.toMatchObject({
       status: 409,
@@ -159,4 +166,63 @@ describe("assistant skills", () => {
     expect(matches[0]?.name).toBe("Cloudflare deploy");
     expect(matches[0]?.instructions).toContain("Use Wrangler");
   });
+
+  it("fetches and installs multiple SKILL.md files from a GitHub repo", async () => {
+    const { env } = createSkillEnv();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/git/trees/HEAD")) {
+          return jsonResponse({
+            tree: [
+              { path: "skills/engineering/tdd/SKILL.md" },
+              { path: "skills/productivity/handoff/SKILL.md" },
+              { path: "README.md" },
+            ],
+          });
+        }
+        if (url.includes("skills/engineering/tdd/SKILL.md")) {
+          return textResponse(
+            "---\nname: tdd\ndescription: Test-driven development with red-green-refactor loop.\n---\n\n# TDD\nUse tests to shape implementation.",
+          );
+        }
+        if (url.includes("skills/productivity/handoff/SKILL.md")) {
+          return textResponse("# Handoff\nSummarize context for the next run.");
+        }
+        return textResponse("not found", 404);
+      }),
+    );
+
+    const created = await createAssistantSkill(env as never, "owner", {
+      sourceRef: "https://github.com/mattpocock/skills",
+    });
+    const listed = await listAssistantSkills(env as never, "owner");
+
+    expect(created.skills).toHaveLength(2);
+    expect(listed.map((skill) => skill.name)).toEqual(["TDD", "Handoff"]);
+    expect(listed[0]?.description).toBe(
+      "Test-driven development with red-green-refactor loop.",
+    );
+    expect(listed.every((skill) => skill.hasSkillMarkdown)).toBe(true);
+  });
 });
+
+function jsonResponse(body: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async json() {
+      return body;
+    },
+  };
+}
+
+function textResponse(body: string, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() {
+      return body;
+    },
+  };
+}

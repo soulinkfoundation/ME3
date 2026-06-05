@@ -507,6 +507,7 @@ type AssistantSkill = {
   updatedAt: string;
 };
 type AssistantSkillsResponse = { skills: AssistantSkill[] };
+type AssistantSkillCreateResponse = { skill: AssistantSkill; skills?: AssistantSkill[] };
 type AssistantActivityViewItem = {
   id: string;
   kind: string;
@@ -1409,15 +1410,16 @@ async function addAssistantSkill() {
   assistantSkillActionId.value = "create";
   assistantSkillsError.value = "";
   try {
-    const response = await api.post<{ skill: AssistantSkill }>("/assistant/skills", {
+    const response = await api.post<AssistantSkillCreateResponse>("/assistant/skills", {
       sourceRef,
     });
-    assistantSkills.value = [
-      response.skill,
-      ...assistantSkills.value.filter((skill) => skill.id !== response.skill.id),
-    ];
+    const createdSkills = response.skills?.length ? response.skills : [response.skill];
+    const createdIds = new Set(createdSkills.map((skill) => skill.id));
+    assistantSkills.value = createdSkills.concat(
+      assistantSkills.value.filter((skill) => !createdIds.has(skill.id)),
+    );
     assistantSkillUrlDraft.value = "";
-    toastSuccess("Skill installed");
+    toastSuccess(createdSkills.length === 1 ? "Skill installed" : "Skills installed");
   } catch (err) {
     assistantSkillsError.value =
       err instanceof ApiError ? err.message : "Skill could not be installed.";
