@@ -86,6 +86,52 @@ This is separate from private agent-to-agent calendar availability.
   than managing payment entirely inside the agent flow.
 - Later, Soulink Links, circles, active group chats, and active calls can
   automatically qualify someone as a close contact.
+- Informal mutual scheduling should create calendar events, not booking rows.
+  Public/service/paid/profile-widget scheduling should continue to create
+  booking rows.
+- Assistant activity should show one condensed record per scheduling request,
+  updated as it succeeds, fails, or expires.
+
+## Shared Availability Editor
+
+Extract the availability section from `WizardBookings.vue` into a shared
+component before building Calendar scheduling settings.
+
+Suggested component:
+
+```ts
+type BookingAvailabilityEditorProps = {
+  availability: Record<string, string[]>;
+  bufferTime?: number;
+  timezone?: string;
+  showBuffer?: boolean;
+  showTimezone?: boolean;
+  showPresets?: boolean;
+  description?: string;
+};
+```
+
+Suggested events:
+
+- `update:availability`
+- `update:bufferTime`
+- `update:timezone`
+
+`WizardBookings.vue` should remain responsible for wiring the component to the
+wizard store. A later `/calendar` modal can reuse the same component against
+calendar/scheduling settings without importing the wizard store.
+
+Keep the first extraction limited to the current 1:1 weekly window UI:
+
+- Weekday presets.
+- Mornings preset.
+- Clear all.
+- Per-day edit/clear.
+- Buffer time.
+- Timezone.
+
+Classes and retreats should stay outside this shared component for now because
+they have their own schedule shapes.
 
 ## Time Types
 
@@ -116,6 +162,7 @@ type SchedulingTimeType = {
   paymentMode: "free" | "paid_checkout" | "owner_review";
   publicBookingOfferId?: string;
   ownerPreReview: "always" | "unless_close_contact";
+  allowCloseContactCandidateSharing: boolean;
   finalApproval: "both_owners";
 };
 ```
@@ -148,6 +195,20 @@ there is strong relationship evidence:
 
 That automatic upgrade should remain policy-driven and owner-visible.
 
+Close-contact candidate sharing means the owner's assistant can share possible
+times with the other person's assistant without first asking the owner to review
+those candidate slots.
+
+It does not allow:
+
+- Reading raw calendar data across installs.
+- Sharing event titles, event notes, busy reasons, or private calendar records.
+- Booking automatically.
+- Skipping final owner approval.
+
+The receiving assistant should only see safe slot options such as "Tuesday
+10:00-10:30" and enough metadata to continue the scheduling flow.
+
 ## V1 User Flow
 
 1. User A messages their assistant in Soulink: "Find time with B next week."
@@ -166,6 +227,11 @@ That automatic upgrade should remain policy-driven and owner-visible.
 12. Each user selects acceptable times.
 13. When one slot wins, both owners approve finalization.
 14. ME3 creates the local calendar event or booking record for each owner.
+
+For informal time types such as "Catch-up" or "Coffee chat", finalization should
+create `user_calendar_event` rows for both owners. For public/service/paid
+booking offers, finalization should create a `bookings` row and rely on the
+existing booking display in `/calendar`.
 
 ## Availability Computation
 
@@ -252,6 +318,49 @@ Useful eventual API shape:
 These APIs should be owner-authenticated or service-authenticated. They are not
 public `me.json` actions.
 
+## Secure Agent-To-Agent Path
+
+Recommended v1 transport: Soulink-mediated signed scheduling envelopes.
+
+Avoid direct Core-to-Core trust negotiation in v1. It would require every Core
+install to discover, verify, rotate, and revoke trust for every other install.
+Soulink already has the relevant relationship and messaging context, so it is
+the better trust broker for the first robust version.
+
+Flow:
+
+1. A's assistant creates a scheduling request inside A's ME3 install.
+2. A's ME3 sends a server-to-server request to Soulink using its existing
+   connector trust.
+3. Soulink verifies A's ME3 install and requester identity.
+4. Soulink resolves the target ME3/Soulink identity for B.
+5. Soulink sends B's ME3 install a signed scheduling envelope.
+6. B's ME3 verifies the envelope before invoking B's assistant runtime.
+7. B's assistant returns a signed/sanitized candidate response through Soulink.
+8. Soulink relays the response back to A's ME3 and updates the visible chat/poll
+   only when user action is needed.
+
+The signed envelope should include:
+
+- Issuer: Soulink.
+- Audience: B's ME3 install or owner id.
+- Subject: A's verified ME3/Soulink identity.
+- Request id and idempotency key.
+- Expiry timestamp.
+- Requested time type/date range/duration.
+- Relationship evidence Soulink is allowed to assert, such as Link or shared
+  circle status.
+- Signature key id for rotation.
+
+B's ME3 should reject envelopes with the wrong audience, expired timestamps,
+unknown key ids, replayed idempotency keys, or relationship claims that do not
+match local policy.
+
+This keeps private calendar reads local to each owner and avoids exposing a
+general public "ask my calendar" endpoint. A later version can add direct
+ME3-to-ME3 federation if there is a strong reason, but it should still use
+short-lived signed envelopes and explicit owner-scoped policy.
+
 ## Agent-To-Agent Messages
 
 Use structured messages rather than freeform prose between assistants:
@@ -317,6 +426,41 @@ Policy defaults:
 This matches the existing safety direction: booking and external sends are
 explicit-send actions, and payment/account actions require approval.
 
+## Activity And Audit
+
+The owner-facing assistant activity surface should show one condensed activity
+record per scheduling request, not a stream of low-level logs.
+
+Use a single updatable activity item with lifecycle status:
+
+- `pending`
+- `waiting_for_owner_review`
+- `poll_open`
+- `scheduled`
+- `failed`
+- `expired`
+- `cancelled`
+
+The activity row can say things like:
+
+- "Scheduling with Alex: waiting for Alex to choose a time."
+- "Scheduling with Alex: confirmed for Tuesday 10:00."
+- "Scheduling with Alex: expired after no response."
+
+The activity details can include safe metadata:
+
+- Participant display names.
+- Time type.
+- Request date range.
+- Current status.
+- Selected slot when finalized.
+- Whether approval or payment is still needed.
+
+Do not include private calendar event titles, notes, busy reasons, or raw
+agent-to-agent payloads in the visible activity row. Keep lower-level audit
+events available for debugging and policy review, but do not show them as
+separate rows in `/assistant?settings=activity`.
+
 ## Data Model Sketch
 
 Likely new tables or records:
@@ -325,8 +469,11 @@ Likely new tables or records:
 - `scheduling_requests`: one scheduling attempt across two users.
 - `scheduling_candidates`: candidate slots proposed by each assistant.
 - `scheduling_votes`: selected/acceptable slots from each participant.
-- `scheduling_audit_events`: request, candidate sharing, poll, approval, and
-  finalization audit records.
+- `scheduling_activity`: one owner-facing lifecycle summary per request, or a
+  scheduling-specific wrapper around the existing activity surface.
+- `scheduling_audit_events`: low-level request, candidate sharing, poll,
+  approval, finalization, failure, and expiry records for debugging/policy
+  review.
 
 Existing tables stay relevant:
 
@@ -337,7 +484,24 @@ Existing tables stay relevant:
 - `agent_channel_connections` and `agent_channel_events`: Soulink transport
   audit and dispatch state.
 
+Public/service scheduling and informal mutual scheduling should intentionally
+write to different final records:
+
+- Public/service/paid/profile-widget scheduling: `bookings`.
+- Informal private time: `user_calendar_events`.
+
+Both already appear in `/calendar`, so the user experience can stay unified
+without overloading the meaning of `bookings`.
+
 ## Implementation Phases
+
+### Phase 0: Shared Availability Editor
+
+- Extract the 1:1 weekly availability UI from `WizardBookings.vue`.
+- Keep `WizardBookings.vue` as the wizard-store adapter.
+- Make the shared component reusable from a future `/calendar` scheduling modal.
+- Add focused component tests for presets, day editing, buffer, and timezone
+  emits.
 
 ### Phase 1: Public Booking Action Compatibility
 
@@ -354,7 +518,7 @@ Existing tables stay relevant:
 - Add a minimal owner-facing way to create scheduling time types.
 - Seed public booking offers as public time types.
 - Add one optional private time type such as "Catch-up" for close contacts.
-- Add allowed tiers and pre-review policy.
+- Add allowed tiers, close-contact candidate sharing, and pre-review policy.
 
 ### Phase 3: Private Availability Engine
 
@@ -367,8 +531,8 @@ Existing tables stay relevant:
 ### Phase 4: Agent Scheduling Runtime
 
 - Add structured scheduling request/candidate/finalize messages.
-- Wire A's assistant and B's assistant through the Soulink-backed channel layer
-  or a service-authenticated ME3 endpoint.
+- Wire A's assistant and B's assistant through Soulink-mediated signed
+  scheduling envelopes.
 - Keep coordination hidden unless a user action is needed.
 
 ### Phase 5: Soulink Poll And Finalization
@@ -385,22 +549,39 @@ Existing tables stay relevant:
 - Confirm booking only after checkout succeeds through existing Core commerce
   flow.
 
-## Open Questions
+### Phase 7: Condensed Activity
 
-- Should time types live inside the existing Bookings wizard step, a new Calendar
-  scheduling settings panel, or both?
-- Should close-contact candidate sharing be globally enabled, or enabled per time
-  type?
-- Should a final scheduled "catch-up" create a `booking` row, a
-  `user_calendar_event`, or both?
-- What is the exact service-authenticated path for assistant-to-assistant
-  scheduling requests across separate Core installs?
-- How much of the scheduling audit should be visible in Mission Control versus
-  only in developer logs?
+- Upsert one visible activity record per scheduling request.
+- Update that record as the request moves through pending, poll, scheduled,
+  failed, expired, or cancelled states.
+- Keep low-level scheduling audit records out of the default activity list.
+
+## Resolved Questions
+
+- Time type availability editing should start in the existing Bookings wizard and
+  later become visible from `/calendar` through a shared availability component.
+- Close-contact candidate sharing is allowed, ideally as a per-time-type policy.
+- Informal private scheduling creates `user_calendar_event` rows, while
+  public/service/paid scheduling creates `bookings` rows.
+- The most robust v1 service-authenticated path is a Soulink-mediated signed
+  envelope, not direct Core-to-Core trust negotiation.
+- The assistant activity surface should show one condensed lifecycle record per
+  scheduling request.
+
+## Remaining Questions
+
+- Should time types be edited first in Bookings, Calendar, or both in the first
+  UI release?
+- What default time types should a fresh ME3 install include?
+- What expiry windows should apply when users do not vote or approve?
+- Which Soulink relationship signals are strong enough to upgrade someone to
+  `close_contact` automatically?
 
 ## Recommendation
 
-Start with public booking route compatibility, because Core currently publishes
-`me.json` actions for routes it does not implement. Then add time types and the
-private availability engine. Only after those are stable should Soulink polls and
-agent-to-agent negotiation become visible.
+Start with the shared availability editor and public booking route
+compatibility. Core currently publishes `me.json` actions for routes it does not
+implement, and the same availability UI will be needed again from `/calendar`.
+Then add time types, close-contact policy, and the private availability engine.
+Only after those are stable should Soulink-mediated signed scheduling envelopes,
+polls, finalization, and condensed activity become visible.
