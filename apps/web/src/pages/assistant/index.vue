@@ -1057,7 +1057,6 @@ const canUseVoiceDictation = computed(
   () => !assistantSending.value && voiceDictationState.value !== "processing",
 );
 const voiceDictationStatusText = computed(() => {
-  if (voiceDictationState.value === "processing") return "Transcribing";
   if (voiceDictationError.value) return voiceDictationError.value;
   return "";
 });
@@ -4711,8 +4710,33 @@ function messageFromUnknown(err: unknown, fallback: string) {
             @keydown="onAssistantComposerKeydown"
             @input="autosizeAssistantComposer"
           />
-          <div class="assistant-composer__bottom">
-            <div class="assistant-composer__left">
+          <div
+            class="assistant-composer__bottom"
+            :class="{
+              'assistant-composer__bottom--recording':
+                voiceDictationState === 'listening',
+            }"
+          >
+            <div
+              v-if="voiceDictationState === 'listening'"
+              class="assistant-composer__voice-wave"
+              role="status"
+              aria-live="polite"
+              aria-label="Recording voice dictation"
+            >
+              <span class="assistant-composer__voice-guide" aria-hidden="true" />
+              <span class="assistant-composer__voice-bars" aria-hidden="true">
+                <span
+                  v-for="bar in 24"
+                  :key="bar"
+                  :style="{ '--voice-bar-index': bar }"
+                />
+              </span>
+              <span class="assistant-composer__voice-time">
+                {{ voiceRecordingElapsedLabel }}
+              </span>
+            </div>
+            <div v-else class="assistant-composer__left">
               <input
                 ref="assistantAttachmentInputRef"
                 class="sr-only"
@@ -4738,7 +4762,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </div>
 
             <div class="assistant-composer__right">
-              <div class="model-picker">
+              <div v-if="voiceDictationState !== 'listening'" class="model-picker">
                 <span class="sr-only">Model</span>
                 <span class="model-picker__select-wrap">
                   <span class="model-picker__select-sizer" aria-hidden="true">
@@ -4804,7 +4828,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 @click="toggleVoiceDictation"
               >
                 <UiIcon
-                  :name="voiceDictationState === 'listening' ? 'Pause' : 'Mic'"
+                  :name="voiceDictationState === 'listening' ? 'Square' : 'Mic'"
                   :size="17"
                 />
               </Button>
@@ -4834,40 +4858,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </div>
           </div>
           <div
-            v-if="voiceDictationState === 'listening' || voiceDictationStatusText"
+            v-if="voiceDictationStatusText"
             class="assistant-composer__meta"
           >
-            <div
-              v-if="voiceDictationState === 'listening'"
-              class="assistant-composer__voice-wave"
-              role="status"
-              aria-live="polite"
-              aria-label="Recording voice dictation"
-            >
-              <span class="assistant-composer__voice-guide" aria-hidden="true" />
-              <span class="assistant-composer__voice-bars" aria-hidden="true">
-                <span
-                  v-for="bar in 24"
-                  :key="bar"
-                  :style="{ '--voice-bar-index': bar }"
-                />
-              </span>
-              <span class="assistant-composer__voice-time">
-                {{ voiceRecordingElapsedLabel }}
-              </span>
-              <button
-                class="assistant-composer__voice-stop"
-                type="button"
-                aria-label="Stop voice dictation"
-                @click="stopVoiceDictation()"
-              >
-                <UiIcon name="Square" :size="9" />
-              </button>
-            </div>
-            <span
-              v-else-if="voiceDictationStatusText"
-              class="assistant-composer__voice-status"
-            >
+            <span class="assistant-composer__voice-status">
               {{ voiceDictationStatusText }}
             </span>
           </div>
@@ -7129,6 +7123,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-width: 0;
 }
 
+.assistant-composer__bottom--recording {
+  gap: 12px;
+}
+
+.assistant-composer__bottom--recording .assistant-composer__right {
+  flex: 0 0 auto;
+}
+
 .assistant-composer__left,
 .assistant-composer__right {
   flex-shrink: 0;
@@ -7283,7 +7285,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
   grid-template-columns: 1fr auto auto;
   align-items: center;
   gap: 10px;
+  flex: 1 1 auto;
   width: 100%;
+  min-width: 0;
   min-height: 22px;
   color: var(--ui-text-muted);
 }
@@ -7349,23 +7353,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font-variant-numeric: tabular-nums;
   font-weight: 650;
   text-align: right;
-}
-
-.assistant-composer__voice-stop {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--ui-surface-muted);
-  color: var(--ui-text-muted);
-  cursor: pointer;
-}
-
-.assistant-composer__voice-stop:hover {
-  background: var(--ui-border);
-  color: var(--ui-text);
 }
 
 @keyframes assistantVoiceWave {
