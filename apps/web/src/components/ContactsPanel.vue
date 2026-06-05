@@ -41,6 +41,7 @@ const { contacts } = storeToRefs(contactsStore);
 const contactsLoaded = ref(false);
 const contactModalOpen = ref(false);
 const contactSaving = ref(false);
+const editingContact = ref<Contact | null>(null);
 const contactError = ref("");
 const internalContactSearchQuery = ref("");
 const contactForm = ref({
@@ -174,7 +175,21 @@ async function syncSoulinkContacts() {
 }
 
 function openContactModal() {
+  editingContact.value = null;
   contactForm.value = { name: "", email: "" };
+  contactError.value = "";
+  contactModalOpen.value = true;
+  void nextTick(() => {
+    document.getElementById("contact-name")?.focus();
+  });
+}
+
+function openEditContactModal(contact: Contact) {
+  editingContact.value = contact;
+  contactForm.value = {
+    name: contact.name || "",
+    email: contact.email || "",
+  };
   contactError.value = "";
   contactModalOpen.value = true;
   void nextTick(() => {
@@ -192,19 +207,28 @@ async function saveManualContact() {
   contactSaving.value = true;
   contactError.value = "";
   try {
-    const contact = await contactsStore.createContact({
-      name: contactForm.value.name,
-      email: contactForm.value.email,
-      source: "manual",
-      relationship: "contact",
-      status: "active",
-    });
+    const currentContact = editingContact.value;
+    const contact = currentContact
+      ? await contactsStore.updateContact(currentContact.id, {
+          name: contactForm.value.name,
+          email: contactForm.value.email,
+        })
+      : await contactsStore.createContact({
+          name: contactForm.value.name,
+          email: contactForm.value.email,
+          source: "manual",
+          relationship: "contact",
+          status: "active",
+        });
     if (!contact) {
-      contactError.value = contactsStore.error || "Failed to add contact";
+      contactError.value =
+        contactsStore.error ||
+        (currentContact ? "Failed to update contact" : "Failed to add contact");
       return;
     }
     contactModalOpen.value = false;
-    toastSuccess("Contact added.");
+    editingContact.value = null;
+    toastSuccess(currentContact ? "Contact updated." : "Contact added.");
   } finally {
     contactSaving.value = false;
   }
@@ -350,6 +374,15 @@ defineExpose({
           <p>{{ contactMetaLine(contact) }}</p>
         </div>
         <div class="contact-row__actions">
+          <button
+            class="contacts-icon-btn"
+            type="button"
+            :title="`Edit ${contact.name}`"
+            :aria-label="`Edit ${contact.name}`"
+            @click="openEditContactModal(contact)"
+          >
+            <UiIcon name="Pencil" :size="16" aria-hidden="true" />
+          </button>
           <Button
             v-if="props.showEmailAction"
             color="ghost"
@@ -407,7 +440,7 @@ defineExpose({
     >
       <form class="contact-modal__card" @submit.prevent="saveManualContact">
         <div class="compose-modal__head">
-          <h2>Add contact</h2>
+          <h2>{{ editingContact ? "Edit contact" : "Add contact" }}</h2>
           <Button
             color="ghost"
             shape="soft"
@@ -461,7 +494,15 @@ defineExpose({
               !contactForm.email.trim()
             "
           >
-            {{ contactSaving ? "Adding..." : "Add contact" }}
+            {{
+              contactSaving
+                ? editingContact
+                  ? "Saving..."
+                  : "Adding..."
+                : editingContact
+                  ? "Save contact"
+                  : "Add contact"
+            }}
           </Button>
         </div>
       </form>
