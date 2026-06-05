@@ -3276,11 +3276,8 @@ onBeforeUnmount(() => {
 }
 
 .availability-modal {
+  position: relative;
   width: min(100%, 760px);
-}
-
-.availability-settings-form {
-  gap: 16px;
 }
 
 .modal-header {
@@ -3297,7 +3294,12 @@ onBeforeUnmount(() => {
 }
 
 .modal-header--actions-only {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 1;
   justify-content: flex-end;
+  margin: 0;
 }
 
 .modal-kicker {
@@ -3436,6 +3438,11 @@ onBeforeUnmount(() => {
 .availability-form {
   display: grid;
   gap: 16px;
+}
+
+.availability-modal :deep(.booking-availability-editor) {
+  padding: 0;
+  border-top: 0;
 }
 
 .form-hint {
