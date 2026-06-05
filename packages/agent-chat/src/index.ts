@@ -1944,8 +1944,7 @@ function parseDraftText(text: string): { subject: string | null; body: string } 
   const normalized = text.replace(/\r\n/g, "\n").trim();
   const subjectMatch = normalized.match(/^\s*(?:subject|subject line)\s*:\s*(.+)$/im);
   const subject = subjectMatch?.[1]?.trim() || null;
-  let body = normalized
-    .replace(/^\s*(?:here(?:'|’)s|here is)\s+(?:a\s+)?(?:friendly\s+)?draft\s*:?\s*$/im, "")
+  let body = stripAgentDraftWrapperText(normalized)
     .replace(/^\s*[-–—]{3,}\s*$/gm, "")
     .replace(/^\s*(?:subject|subject line)\s*:\s*.+$/im, "")
     .replace(/^\s*(?:to|recipient)\s*:\s*.+$/im, "")
@@ -1955,6 +1954,19 @@ function parseDraftText(text: string): { subject: string | null; body: string } 
   );
   if (savePromptIndex >= 0) body = body.slice(0, savePromptIndex).trim();
   return { subject, body };
+}
+
+function stripAgentDraftWrapperText(text: string): string {
+  let body = text.replace(/\r\n/g, "\n").trim();
+  body = body.replace(
+    /^\s*(?:here(?:'|’)s|here is)\s+(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*$/im,
+    "",
+  );
+  body = body.replace(
+    /\n\s*(?:[-–—]\s*)?(?:please\s+let\s+me\s+know\s+if\s+you(?:'|’)d\s+like\s+(?:me\s+)?to\s+(?:make\s+any\s+changes\s+or\s+if\s+you(?:'|’)d\s+like\s+me\s+to\s+)?save\s+this\s+draft\.?|this is a chat draft only|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
+    "",
+  );
+  return body.trim();
 }
 
 function extractEmailAddress(text: string): string | null {
@@ -2438,6 +2450,7 @@ function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
   const metadata = parseJsonRecord(row.metadata_json);
   const agentLabels = parseJsonArray(row.agent_labels_json);
   const unsubscribeAction = getMailboxUnsubscribeAction(row);
+  const body = getSerializedAgentMailboxMessageBody(row);
   return {
     id: row.id,
     direction: row.direction,
@@ -2450,9 +2463,9 @@ function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
     fromName: null,
     toAddress: row.to_address,
     subject: row.subject || "(no subject)",
-    body: row.text_body || "",
+    body,
     htmlBody: row.html_body || null,
-    preview: (row.text_body || "").slice(0, 280),
+    preview: body.slice(0, 280),
     metadata,
     unsubscribeAction,
     sourceId: row.source_id,
@@ -2470,6 +2483,18 @@ function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
     sentAt: row.sent_at,
     createdAt: row.created_at,
   };
+}
+
+function getSerializedAgentMailboxMessageBody(row: DbMailboxMessageRow): string {
+  const body = row.text_body || "";
+  if (
+    row.message_kind === "draft" &&
+    row.status === "pending_approval" &&
+    row.created_by === "agent"
+  ) {
+    return stripAgentDraftWrapperText(body);
+  }
+  return body;
 }
 
 function getMailboxUnsubscribeAction(
@@ -2551,6 +2576,8 @@ async function normalizeAgentMailboxDraftInput(
   const messageIdHeader =
     existingHeaders.messageIdHeader || createMessageIdHeader(fromAddress);
   const source = normalizeNullableText(body.source);
+  const createdBy = source === "agent" ? "agent" : "owner";
+  const normalizedTextBody = normalizeNullableText(body.textBody) || existing?.text_body || "";
   const allowedAttachmentSources = [replyTo, existing].filter(
     (row): row is DbMailboxMessageRow => Boolean(row),
   );
@@ -2567,7 +2594,10 @@ async function normalizeAgentMailboxDraftInput(
     fromAddress,
     toAddress,
     subject: normalizeNullableText(body.subject) || existing?.subject || "",
-    textBody: normalizeNullableText(body.textBody) || existing?.text_body || "",
+    textBody:
+      createdBy === "agent"
+        ? stripAgentDraftWrapperText(normalizedTextBody)
+        : normalizedTextBody,
     htmlBody:
       body.htmlBody === undefined
         ? existing?.html_body || null
@@ -2577,7 +2607,7 @@ async function normalizeAgentMailboxDraftInput(
     messageIdHeader,
     inReplyTo: replyHeaders.inReplyTo || existingHeaders.inReplyTo,
     referencesHeader: replyHeaders.referencesHeader || existingHeaders.referencesHeader,
-    createdBy: source === "agent" ? "agent" : "owner",
+    createdBy,
     preservedAttachments: mergeAttachmentMetadata([
       ...preservedAttachments,
       ...uploadedAttachments,
