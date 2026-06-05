@@ -493,9 +493,36 @@ write to different final records:
 Both already appear in `/calendar`, so the user experience can stay unified
 without overloading the meaning of `bookings`.
 
+## New Session Kickoff
+
+Start with the smallest useful implementation slice:
+
+1. `me3-9an.5`: extract the shared availability editor.
+2. `me3-9an.3`: restore the public booking action routes.
+
+The shared availability editor is the safest first move because it should be a
+behavior-preserving refactor of existing wizard UI. It creates a reusable surface
+for later `/calendar` scheduling settings without changing scheduling behavior,
+database shape, public APIs, or agent behavior.
+
+Recommended first-session scope:
+
+- Create `apps/web/src/components/booking/BookingAvailabilityEditor.vue`.
+- Move only the existing 1:1 weekly availability UI and edit/preset logic into
+  the component.
+- Keep `WizardBookings.vue` responsible for reading/writing the wizard store.
+- Add focused tests for the new component or update the existing wizard booking
+  tests to prove generated `me.json` is unchanged.
+- Run `pnpm build`.
+
+Avoid starting private agent-to-agent scheduling until public booking route
+compatibility and the shared availability editor are both stable.
+
 ## Implementation Phases
 
 ### Phase 0: Shared Availability Editor
+
+Tracking: `me3-9an.5`.
 
 - Extract the 1:1 weekly availability UI from `WizardBookings.vue`.
 - Keep `WizardBookings.vue` as the wizard-store adapter.
@@ -504,6 +531,8 @@ without overloading the meaning of `bookings`.
   emits.
 
 ### Phase 1: Public Booking Action Compatibility
+
+Tracking: `me3-9an.3`.
 
 - Re-add `GET /api/book/:username/slots`.
 - Re-add `POST /api/book/:username/confirm`.
@@ -515,12 +544,16 @@ without overloading the meaning of `bookings`.
 
 ### Phase 2: Time Types And Policy
 
+Tracking: `me3-9an.1`.
+
 - Add a minimal owner-facing way to create scheduling time types.
 - Seed public booking offers as public time types.
 - Add one optional private time type such as "Catch-up" for close contacts.
 - Add allowed tiers, close-contact candidate sharing, and pre-review policy.
 
 ### Phase 3: Private Availability Engine
+
+Tracking: `me3-9an.4`.
 
 - Build a shared slot generator that can combine time type windows, buffers,
   confirmed bookings, calendar events, and imported events.
@@ -536,6 +569,8 @@ without overloading the meaning of `bookings`.
 - Keep coordination hidden unless a user action is needed.
 
 ### Phase 5: Soulink Poll And Finalization
+
+Tracking: `me3-9an.2`.
 
 - Create a Stream poll or fallback action card for candidate slots.
 - Record votes.
