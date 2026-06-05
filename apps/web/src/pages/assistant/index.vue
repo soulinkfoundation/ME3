@@ -666,6 +666,7 @@ let voiceStopTimeout: number | null = null;
 let voiceRecordingTimer: number | null = null;
 let voiceDiscardRecording = false;
 let assistantAbortController: AbortController | null = null;
+let assistantThreadSearchDebounceId: number | null = null;
 
 const defaultDailyBriefingTemplate =
   "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -1077,6 +1078,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopVoiceDictation({ discard: true });
   clearAssistantAttachments();
+  cancelAssistantThreadSearchDebounce();
   window.removeEventListener("keydown", handleWindowKeydown);
 });
 
@@ -1100,6 +1102,13 @@ watch(
     void syncAssistantSettingsFromRoute();
   },
 );
+watch(assistantThreadSearchDraft, () => {
+  cancelAssistantThreadSearchDebounce();
+  assistantThreadSearchDebounceId = window.setTimeout(() => {
+    assistantThreadSearchDebounceId = null;
+    void applyAssistantThreadSearch();
+  }, 220);
+});
 
 async function loadPage() {
   pageError.value = "";
@@ -1223,14 +1232,25 @@ function toggleAssistantProject(projectId: string) {
 }
 
 async function applyAssistantThreadSearch() {
-  assistantThreadSearch.value = assistantThreadSearchDraft.value.trim();
+  cancelAssistantThreadSearchDebounce();
+  const nextSearch = assistantThreadSearchDraft.value.trim();
+  if (assistantThreadSearch.value === nextSearch) return;
+  assistantThreadSearch.value = nextSearch;
   await loadAssistantThreads();
 }
 
 async function clearAssistantThreadSearch() {
+  cancelAssistantThreadSearchDebounce();
   assistantThreadSearchDraft.value = "";
+  if (!assistantThreadSearch.value) return;
   assistantThreadSearch.value = "";
   await loadAssistantThreads();
+}
+
+function cancelAssistantThreadSearchDebounce() {
+  if (assistantThreadSearchDebounceId === null) return;
+  window.clearTimeout(assistantThreadSearchDebounceId);
+  assistantThreadSearchDebounceId = null;
 }
 
 async function archiveAssistantThread(thread: AssistantThread) {
@@ -4047,7 +4067,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               aria-label="Search chats"
             />
             <button
-              v-if="assistantThreadSearchActive"
+              v-if="assistantThreadSearchDraft.trim().length > 0"
               type="button"
               aria-label="Clear chat search"
               @click="clearAssistantThreadSearch"
@@ -6233,17 +6253,24 @@ function messageFromUnknown(err: unknown, fallback: string) {
   justify-content: center;
   gap: 6px;
   flex: 0 0 auto;
-  height: 36px;
-  padding: 0 8px;
+  height: 32px;
+  padding: 4px 6px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
   background: transparent;
-  color: var(--ui-text-muted);
+  color: var(--ui-text);
   font: inherit;
   font-size: 12px;
   font-weight: 400;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.assistant-history__new-chat :deep(.me3-btn__icon),
+.assistant-history__new-chat :deep(.me3-btn__label) {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
 }
 
 .assistant-history__nav-row:hover,
@@ -6332,6 +6359,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text);
   font: inherit;
   font-size: 13px;
+}
+
+.assistant-history__search input::-webkit-search-cancel-button,
+.assistant-history__search input::-webkit-search-decoration {
+  display: none;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .assistant-history__search button,
@@ -6484,7 +6518,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-history__thread-title {
   flex: 1 1 auto;
-  max-width: 18ch;
   color: inherit;
   font-size: 11px;
   font-weight: 450;
@@ -6827,6 +6860,14 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-message--user .assistant-message__bubble {
   border-color: color-mix(in oklab, var(--ui-accent) 36%, var(--ui-border));
   background: var(--ui-accent-soft);
+  color: #12231d;
+}
+
+.assistant-message--user .assistant-message__content,
+.assistant-message--user .assistant-message__content :where(p, strong, em, code, a),
+.assistant-message--user .assistant-message__meta,
+.assistant-message--user .assistant-message__detail {
+  color: #12231d;
 }
 
 .assistant-message__bubble--pending {
