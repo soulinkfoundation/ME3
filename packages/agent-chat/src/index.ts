@@ -109,7 +109,10 @@ export type AgentSandboxDispatchResponse = {
   contextPacketId?: string | null;
   contextManifest?: Me3AgentContextManifest | null;
   contextSummary?: string | null;
-  emailAction?: null;
+  emailAction?: {
+    kind: "drafted" | "sent";
+    draftId?: string;
+  } | null;
   reminderAction?: {
     kind: "created" | "updated" | "cancelled" | "dismissed" | "listed";
     reminderId?: string;
@@ -1747,6 +1750,35 @@ async function maybeHandleCoreToolTurn(
 ): Promise<AgentSandboxDispatchResponse | null> {
   const messageText = input.messageText.trim();
 
+  if (isMailboxDraftSaveRequest(messageText)) {
+    const recent = await loadRecentMessages(env, input.userId, input.threadId);
+    const draftPlan = await parseMailboxDraftSaveRequest(env, input.userId, messageText, recent);
+    if ("error" in draftPlan) {
+      return toolResponse(input.turnId, "core.mailbox.draft", draftPlan.error, {
+        fallbackReason: "Mailbox draft details required",
+      });
+    }
+
+    const draft = await createAgentMailboxDraft(env, input.userId, draftPlan.input);
+    if ("error" in draft) {
+      return toolResponse(input.turnId, "core.mailbox.draft", draft.error, {
+        fallbackReason: "Mailbox draft could not be saved",
+      });
+    }
+
+    return toolResponse(
+      input.turnId,
+      "core.mailbox.draft",
+      "Done. I saved that email as a mailbox draft in `/email` for your review. It has not been sent.",
+      {
+        emailAction: {
+          kind: "drafted",
+          draftId: draft.draft.id,
+        },
+      },
+    );
+  }
+
   if (isReminderListRequest(messageText)) {
     const reminders = await listPendingAgentReminders(env, input.userId);
     const replyText = reminders.length
@@ -1817,7 +1849,10 @@ function toolResponse(
   specialist: string,
   replyText: string,
   options: Partial<
-    Pick<AgentSandboxDispatchResponse, "fallbackReason" | "debugError" | "reminderAction">
+    Pick<
+      AgentSandboxDispatchResponse,
+      "fallbackReason" | "debugError" | "emailAction" | "reminderAction"
+    >
   > = {},
 ): AgentSandboxDispatchResponse {
   return {
@@ -1830,11 +1865,112 @@ function toolResponse(
     source: "tool",
     fallbackReason: options.fallbackReason ?? null,
     debugError: options.debugError ?? null,
-    emailAction: null,
+    emailAction: options.emailAction ?? null,
     reminderAction: options.reminderAction ?? null,
     contentAction: null,
     contactsChanged: false,
   };
+}
+
+function isMailboxDraftSaveRequest(messageText: string): boolean {
+  return /\b(save|store|keep|create|make)\b/i.test(messageText) &&
+    /\b(it|that|this|draft|email|reply|message)\b/i.test(messageText) &&
+    /\b(draft|mailbox|email|\/email)\b/i.test(messageText);
+}
+
+async function parseMailboxDraftSaveRequest(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageText: string,
+  recent: Array<{ role: "user" | "assistant"; content: string }>,
+): Promise<{ input: AgentMailboxDraftInput } | { error: string }> {
+  const latestAssistantDraft = [...recent]
+    .reverse()
+    .find((message) => message.role === "assistant" && looksLikeEmailDraft(message.content));
+  if (!latestAssistantDraft) {
+    return {
+      error:
+        "I can save a mailbox draft, but I need the draft text first. Paste the email body or ask me to draft it again.",
+    };
+  }
+
+  const parsed = parseDraftText(latestAssistantDraft.content);
+  const toAddress =
+    extractEmailAddress(messageText) ||
+    extractEmailAddress(latestAssistantDraft.content) ||
+    (await resolveDraftRecipientFromContacts(env, userId, messageText, latestAssistantDraft.content));
+  if (!toAddress) {
+    return {
+      error:
+        "I can save that as a mailbox draft, but I need the recipient email address first.",
+    };
+  }
+
+  const textBody = parsed.body.trim();
+  if (!textBody) {
+    return {
+      error:
+        "I found the request to save a draft, but I could not identify the email body to save.",
+    };
+  }
+
+  return {
+    input: {
+      toAddress,
+      subject: parsed.subject || "Draft email",
+      textBody,
+      source: "agent",
+    },
+  };
+}
+
+function looksLikeEmailDraft(text: string): boolean {
+  return /\b(subject|hi|hello|dear)\b/i.test(text) &&
+    /\b(save this|save it|mailbox draft|send|recipient|to:|subject:|regards|thanks)\b/i.test(text);
+}
+
+function parseDraftText(text: string): { subject: string | null; body: string } {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  const subjectMatch = normalized.match(/^\s*(?:subject|subject line)\s*:\s*(.+)$/im);
+  const subject = subjectMatch?.[1]?.trim() || null;
+  let body = normalized
+    .replace(/^\s*(?:subject|subject line)\s*:\s*.+$/im, "")
+    .replace(/^\s*(?:to|recipient)\s*:\s*.+$/im, "")
+    .trim();
+  const savePromptIndex = body.search(/\n\s*(?:if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i);
+  if (savePromptIndex >= 0) body = body.slice(0, savePromptIndex).trim();
+  return { subject, body };
+}
+
+function extractEmailAddress(text: string): string | null {
+  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0]?.trim().toLowerCase() || null;
+}
+
+async function resolveDraftRecipientFromContacts(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageText: string,
+  draftText: string,
+): Promise<string | null> {
+  const name =
+    messageText.match(/\bto\s+([A-Z][\p{L}'-]+(?:\s+[A-Z][\p{L}'-]+){0,2})/u)?.[1] ||
+    draftText.match(/\bto\s+([A-Z][\p{L}'-]+(?:\s+[A-Z][\p{L}'-]+){0,2})/u)?.[1] ||
+    null;
+  if (!name) return null;
+  const row = await env.DB.prepare(
+    `SELECT email
+     FROM contacts
+     WHERE user_id = ?
+       AND status != 'archived'
+       AND email IS NOT NULL
+       AND lower(name) = lower(?)
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+  )
+    .bind(userId, name.trim())
+    .first<{ email: string | null }>();
+  return normalizeEmail(row?.email);
 }
 
 function isReminderListRequest(messageText: string): boolean {

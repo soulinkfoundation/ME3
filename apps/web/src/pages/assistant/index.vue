@@ -2188,6 +2188,26 @@ function assistantMessageIndex(message: (typeof chatMessages.value)[number]) {
   return chatMessages.value.indexOf(message);
 }
 
+function renderAssistantMarkdown(text: string) {
+  const escaped = escapeHtml(text)
+    .replace(/\*\*([^*\n][\s\S]*?[^*\n])\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n][^*\n]*?[^*\n])\*/g, "<em>$1</em>")
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  return escaped
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function submitAssistantText(
   text: string,
   attachments = serializeAssistantAttachmentsForTurn(),
@@ -4308,7 +4328,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
             :class="`assistant-message--${message.role}`"
           >
             <div class="assistant-message__bubble">
-              <p>{{ message.text }}</p>
+              <div
+                class="assistant-message__content"
+                v-html="renderAssistantMarkdown(message.text)"
+              ></div>
               <p v-if="message.meta" class="assistant-message__meta">
                 {{ message.meta }}
               </p>
@@ -6747,6 +6770,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
   overflow-wrap: anywhere;
   font-size: 14px;
   line-height: 1.5;
+}
+
+.assistant-message__content {
+  display: grid;
+  gap: 10px;
+}
+
+.assistant-message__content strong {
+  font-weight: 800;
+}
+
+.assistant-message__content code {
+  border-radius: 4px;
+  padding: 1px 4px;
+  background: var(--ui-surface-muted);
+  font-size: 0.92em;
 }
 
 .assistant-message__meta,
