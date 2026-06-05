@@ -500,9 +500,6 @@ const allMessagesOnPageSelected = computed(
 const someMessagesOnPageSelected = computed(() =>
   messageIdsOnPage.value.some((id) => selectedMessageIds.value.has(id)),
 );
-const hasReadMessagesOnPage = computed(() =>
-  messages.value.some((message) => !message.unread),
-);
 const followUpDraftCount = computed(
   () =>
     messages.value.filter(
@@ -766,14 +763,6 @@ function toggleMessageSelected(id: string, selected: boolean) {
     next.delete(id);
   }
   selectedMessageIds.value = next;
-}
-
-function selectReadMessagesOnPage() {
-  selectedMessageIds.value = new Set(
-    messages.value
-      .filter((message) => !message.unread)
-      .map((message) => message.id),
-  );
 }
 
 async function runDraftAction(id: string, action: "approve" | "reject") {
@@ -2056,6 +2045,7 @@ onBeforeUnmount(() => {
               </aside>
 
               <section
+                v-show="!mobileThreadOpen"
                 class="conversation-list"
                 :class="{
                   'conversation-list--mobile-hidden': mobileThreadOpen,
@@ -2093,56 +2083,50 @@ onBeforeUnmount(() => {
                       />
                       <span>{{ selectedMessageCount || "Select" }}</span>
                     </label>
-                    <div class="bulk-mail-actions">
+                    <div
+                      v-if="selectedMessageCount > 0"
+                      class="bulk-mail-actions"
+                    >
                       <Button color="outline" shape="soft" size="compact" type="button"
-                        v-if="selectedMessageCount === 0"
-                        :disabled="inboxBusy || !hasReadMessagesOnPage"
-                        @click="selectReadMessagesOnPage"
+                        v-if="activeTab === 'archive' || activeTab === 'trash'"
+                        :disabled="inboxBusy"
+                        title="Restore selected"
+                        @click="moveSelectedMessages('inbox')"
                       >
-                        Read
+                        <UiIcon name="Inbox" :size="14" aria-hidden="true" />
+                        Restore
                       </Button>
-                      <template v-else>
-                        <Button color="outline" shape="soft" size="compact" type="button"
-                          v-if="activeTab === 'archive' || activeTab === 'trash'"
-                          :disabled="inboxBusy"
-                          title="Restore selected"
-                          @click="moveSelectedMessages('inbox')"
-                        >
-                          <UiIcon name="Inbox" :size="14" aria-hidden="true" />
-                          Restore
-                        </Button>
-                        <Button color="outline" shape="soft" size="compact" type="button"
-                          v-else
-                          :disabled="inboxBusy"
-                          title="Archive selected"
-                          @click="moveSelectedMessages('archive')"
-                        >
-                          <UiIcon name="Archive" :size="14" aria-hidden="true" />
-                          Archive
-                        </Button>
-                        <Button color="danger" shape="soft" size="compact" type="button"
-                          :disabled="inboxBusy"
-                          :title="
-                            activeTab === 'trash'
-                              ? 'Delete selected forever'
-                              : 'Move selected to trash'
-                          "
-                          @click="
-                            activeTab === 'trash'
-                              ? deleteSelectedMessagesPermanently()
-                              : moveSelectedMessages('trash')
-                          "
-                        >
-                          <UiIcon name="Trash2" :size="14" aria-hidden="true" />
-                          {{ activeTab === "trash" ? "Delete" : "Trash" }}
-                        </Button>
-                        <Button color="outline" shape="soft" size="compact" type="button"
-                          :disabled="inboxBusy"
-                          @click="clearSelectedMessages"
-                        >
-                          Clear
-                        </Button>
-                      </template>
+                      <Button color="outline" shape="soft" size="compact" type="button"
+                        v-else
+                        :disabled="inboxBusy"
+                        title="Archive selected"
+                        @click="moveSelectedMessages('archive')"
+                      >
+                        <UiIcon name="Archive" :size="14" aria-hidden="true" />
+                        Archive
+                      </Button>
+                      <Button color="danger" shape="soft" size="compact" type="button"
+                        :disabled="inboxBusy"
+                        :title="
+                          activeTab === 'trash'
+                            ? 'Delete selected forever'
+                            : 'Move selected to trash'
+                        "
+                        @click="
+                          activeTab === 'trash'
+                            ? deleteSelectedMessagesPermanently()
+                            : moveSelectedMessages('trash')
+                        "
+                      >
+                        <UiIcon name="Trash2" :size="14" aria-hidden="true" />
+                        {{ activeTab === "trash" ? "Delete" : "Trash" }}
+                      </Button>
+                      <Button color="outline" shape="soft" size="compact" type="button"
+                        :disabled="inboxBusy"
+                        @click="clearSelectedMessages"
+                      >
+                        Clear
+                      </Button>
                     </div>
                   </div>
                   <div class="conversation-scroll">
@@ -3490,10 +3474,16 @@ onBeforeUnmount(() => {
 }
 
 .bulk-select {
-  gap: 8px;
+  display: grid;
+  grid-template-columns: 36px auto;
+  column-gap: 10px;
   min-width: 82px;
   font-size: 13px;
   font-weight: 700;
+}
+
+.bulk-select input {
+  justify-self: center;
 }
 
 .bulk-select input,
@@ -4721,11 +4711,11 @@ onBeforeUnmount(() => {
 
   .bulk-mail-toolbar {
     gap: 8px;
-    padding: 6px 10px;
+    padding: 6px 10px 6px 8px;
   }
 
   .bulk-select {
-    min-width: 74px;
+    min-width: 76px;
   }
 
   .bulk-mail-actions {

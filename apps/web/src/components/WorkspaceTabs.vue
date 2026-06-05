@@ -86,10 +86,10 @@ function selectTab(tab: WorkspaceTab) {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 7px;
-  min-height: 42px;
+  gap: 6px;
+  min-height: 36px;
   margin: 0 0 -1px;
-  padding: 7px 14px;
+  padding: 5px 10px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-sm, 6px) var(--ui-radius-sm, 6px) 0 0;
   background: var(--ui-bg, var(--color-bg));
@@ -106,7 +106,7 @@ function selectTab(tab: WorkspaceTab) {
 }
 
 .workspace-tabs__tab + .workspace-tabs__tab {
-  margin-inline-start: 4px;
+  margin-inline-start: 3px;
 }
 
 .workspace-tabs__tab:hover:not(.workspace-tabs__tab--active):not(:disabled) {
@@ -136,7 +136,7 @@ function selectTab(tab: WorkspaceTab) {
 .workspace-tabs__main {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -150,13 +150,13 @@ function selectTab(tab: WorkspaceTab) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   border-radius: 999px;
   background: var(--ui-border, var(--color-border));
   color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 750;
 }
 
