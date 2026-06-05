@@ -4066,13 +4066,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
         >
           {{ assistantProjectsError }}
         </p>
-        <p
-          v-else-if="assistantThreadsLoading && assistantThreads.length === 0"
-          class="assistant-history__message"
-        >
-          Loading chats...
-        </p>
-
         <section class="assistant-history__section">
           <h2>Projects</h2>
           <div
@@ -4190,6 +4183,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
             class="assistant-history__list"
             aria-label="Chats outside projects"
           >
+            <p
+              v-if="assistantThreadsLoading && assistantThreads.length === 0"
+              class="assistant-history__message"
+            >
+              Loading chats...
+            </p>
             <div
               v-for="thread in assistantUngroupedThreads"
               :key="thread.id"
