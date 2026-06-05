@@ -4699,17 +4699,27 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </button>
             </span>
           </div>
-          <textarea
-            id="assistant-console-input"
-            ref="assistantComposerRef"
-            v-model="assistantDraft"
-            class="assistant-input"
-            rows="1"
-            placeholder="Do anything..."
-            :disabled="assistantSending"
-            @keydown="onAssistantComposerKeydown"
-            @input="autosizeAssistantComposer"
-          />
+          <div class="assistant-input-wrap">
+            <textarea
+              id="assistant-console-input"
+              ref="assistantComposerRef"
+              v-model="assistantDraft"
+              class="assistant-input"
+              rows="1"
+              placeholder="Do anything..."
+              :disabled="assistantSending"
+              @keydown="onAssistantComposerKeydown"
+              @input="autosizeAssistantComposer"
+            />
+            <div
+              v-if="voiceDictationState === 'processing'"
+              class="assistant-input__transcribing"
+              role="status"
+              aria-live="polite"
+            >
+              <span>Transcribing...</span>
+            </div>
+          </div>
           <div
             class="assistant-composer__bottom"
             :class="{
@@ -7142,6 +7152,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
   justify-content: flex-end;
 }
 
+.assistant-input-wrap {
+  position: relative;
+  min-width: 0;
+}
+
 .assistant-input {
   display: block;
   width: 100%;
@@ -7160,6 +7175,46 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-input::placeholder {
   color: color-mix(in oklab, var(--ui-text-muted) 70%, transparent);
+}
+
+.assistant-input__transcribing {
+  position: absolute;
+  inset: 6px 2px 2px;
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.assistant-input__transcribing span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assistant-input__transcribing span::after {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ui-accent);
+  content: "";
+  animation: assistantTranscribingPulse 900ms ease-in-out infinite alternate;
+}
+
+@keyframes assistantTranscribingPulse {
+  from {
+    opacity: 0.35;
+    transform: scale(0.82);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .assistant-attachments {
