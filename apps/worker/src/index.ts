@@ -1913,6 +1913,1034 @@ async function touchAssistantThread(env: Env, ownerId: string, threadId: string)
   }
 }
 
+type AssistantSiteThreadMessage = {
+  role: string;
+  content: string;
+  created_at: string;
+};
+
+type ParsedAssistantSiteDraftContent = {
+  aboutParagraph?: string;
+  postTitle?: string;
+  postBody?: string;
+  postTopic?: string;
+};
+
+type AssistantSiteUpdateDraft = {
+  version: 1;
+  kind: "profile_site_update";
+  siteId: string;
+  siteUsername: string;
+  threadId: string;
+  requestText: string;
+  createdAt: string;
+  updatedAt: string;
+  sourceFiles: Record<string, string>;
+  changes: {
+    aboutFile?: string;
+    aboutParagraph?: string;
+    postTitle?: string;
+    postSlug?: string;
+    postFile?: string;
+    postMarkdown?: string;
+    refinementText?: string | null;
+  };
+};
+
+type AssistantSiteToolAction = {
+  specialist:
+    | "core.sites.update_draft"
+    | "core.sites.refine_draft"
+    | "core.sites.publish"
+    | "core.sites.approval_status";
+  replyText: string;
+  siteAction: {
+    kind: "draft_created" | "draft_refined" | "published" | "approval_status" | "missing_site";
+    siteId: string | null;
+    username: string | null;
+    pending: boolean;
+    published: boolean;
+    files: string[];
+    postTitle?: string | null;
+    url?: string | null;
+    message?: string | null;
+  };
+};
+
+async function maybeHandleAssistantSiteToolAction(
+  env: Env,
+  ownerId: string,
+  threadId: string,
+  messageText: string,
+  requestUrl: string,
+): Promise<AssistantSiteToolAction | null> {
+  const approvalIntent = isAssistantSiteApprovalIntent(messageText);
+  const statusIntent = isAssistantSiteStatusIntent(messageText);
+  const updateIntent = isAssistantSiteUpdateIntent(messageText);
+  const refinementIntent = isAssistantSiteRefinementIntent(messageText);
+
+  if (approvalIntent) {
+    const action = await maybePublishAssistantSiteDraft(
+      env,
+      ownerId,
+      threadId,
+      messageText,
+      requestUrl,
+    );
+    if (action) return action;
+  }
+
+  if (statusIntent) {
+    const action = await maybeReportAssistantSiteApprovalStatus(
+      env,
+      ownerId,
+      threadId,
+      messageText,
+      requestUrl,
+    );
+    if (action) return action;
+  }
+
+  if (refinementIntent) {
+    const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
+    if (pending) {
+      return refineAssistantSiteDraft(
+        env,
+        pending.site,
+        pending.draft,
+        messageText,
+        requestUrl,
+      );
+    }
+  }
+
+  if (!updateIntent) return null;
+
+  const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+  if (!site) {
+    return {
+      specialist: "core.sites.update_draft",
+      replyText:
+        "I can draft and publish site updates once there is a profile site to update. Create a site first, then ask me again.",
+      siteAction: {
+        kind: "missing_site",
+        siteId: null,
+        username: null,
+        pending: false,
+        published: false,
+        files: [],
+        message: "No profile site was found for this owner.",
+      },
+    };
+  }
+
+  const draft = await createAssistantSiteUpdateDraft(env, ownerId, site, threadId, messageText);
+  await saveAssistantSiteUpdateDraft(env, draft);
+  return {
+    specialist: "core.sites.update_draft",
+    replyText: formatAssistantSiteDraftReply(draft),
+    siteAction: {
+      kind: "draft_created",
+      siteId: site.id,
+      username: site.username,
+      pending: true,
+      published: false,
+      files: assistantSiteDraftChangedFiles(draft),
+      postTitle: draft.changes.postTitle || null,
+      url: getAssistantSiteAdminUrl(env, site, requestUrl),
+    },
+  };
+}
+
+function buildAssistantSiteToolPayload(threadId: string, action: AssistantSiteToolAction) {
+  return {
+    ok: true,
+    auditId: null,
+    turnId: null,
+    threadId,
+    specialist: action.specialist,
+    replyText: action.replyText,
+    model: null,
+    source: "tool",
+    siteAction: action.siteAction,
+    jobBuilderAction: null,
+    emailAction: null,
+    reminderAction: null,
+    contentAction: null,
+    contactsChanged: false,
+  };
+}
+
+function isAssistantSiteUpdateIntent(messageText: string): boolean {
+  const text = normalizeAssistantIntentText(messageText);
+  if (!text) return false;
+  if (isAssistantSiteApprovalIntent(text) || isAssistantSiteStatusIntent(text)) return false;
+  const siteish = /\b(site|website|homepage|about page|about section|bio|blog|post|article|page)\b/.test(text);
+  const actionish = /\b(update|add|create|write|draft|make|publish|change|edit|put|append)\b/.test(text);
+  const contentTarget =
+    /\b(about page|about section|bio|blog post|post about|article about|blog|page)\b/.test(text);
+  return siteish && actionish && contentTarget;
+}
+
+function isAssistantSiteApprovalIntent(messageText: string): boolean {
+  const text = normalizeAssistantIntentText(messageText);
+  if (!text) return false;
+  if (isAssistantSiteStatusIntent(text)) return false;
+  return (
+    /^(yes|yep|yeah|ok|okay|sure|approved?|publish|ship|send|do it|just do it|go ahead)\b/.test(text) ||
+    /\b(publish (it|them|this|the draft)|approve (it|them|this|the draft)|ship it|make it live|looks good|just do it|go ahead)\b/.test(text)
+  );
+}
+
+function isAssistantSiteStatusIntent(messageText: string): boolean {
+  const text = normalizeAssistantIntentText(messageText);
+  if (!text) return false;
+  return (
+    /\b(has|have|was|is|did|can you check|check)\b.*\b(approved|published|live|done|status)\b/.test(text) ||
+    /\b(approval status|publish status|site status)\b/.test(text)
+  );
+}
+
+function isAssistantSiteRefinementIntent(messageText: string): boolean {
+  const text = normalizeAssistantIntentText(messageText);
+  if (!text) return false;
+  if (isAssistantSiteApprovalIntent(text) || isAssistantSiteStatusIntent(text)) return false;
+  return /\b(change|revise|refine|rewrite|edit|make|more|less|shorter|longer|instead|remove|add|use|tone|title)\b/.test(text);
+}
+
+function normalizeAssistantIntentText(messageText: string): string {
+  return messageText.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+async function maybePublishAssistantSiteDraft(
+  env: Env,
+  ownerId: string,
+  threadId: string,
+  messageText: string,
+  requestUrl: string,
+): Promise<AssistantSiteToolAction | null> {
+  const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
+  let site = pending?.site || (await chooseAssistantSiteForMessage(env, ownerId, messageText));
+  let draft = pending?.draft || null;
+
+  if (!site) return null;
+  if (!draft) {
+    draft = await createAssistantSiteDraftFromRecentThread(
+      env,
+      ownerId,
+      site,
+      threadId,
+      messageText,
+    );
+  }
+  if (!draft) return null;
+
+  const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(env, site.username);
+  if (cloudUsernameError) {
+    return {
+      specialist: "core.sites.publish",
+      replyText: `I have the draft, but I cannot publish it yet: ${cloudUsernameError}`,
+      siteAction: {
+        kind: "approval_status",
+        siteId: site.id,
+        username: site.username,
+        pending: true,
+        published: false,
+        files: assistantSiteDraftChangedFiles(draft),
+        postTitle: draft.changes.postTitle || null,
+        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+        message: cloudUsernameError,
+      },
+    };
+  }
+
+  site = await publishAssistantSiteDraft(env, site, draft);
+  return {
+    specialist: "core.sites.publish",
+    replyText: formatAssistantSitePublishedReply(env, site, draft, requestUrl),
+    siteAction: {
+      kind: "published",
+      siteId: site.id,
+      username: site.username,
+      pending: false,
+      published: true,
+      files: assistantSiteDraftChangedFiles(draft),
+      postTitle: draft.changes.postTitle || null,
+      url: getAssistantSiteAdminUrl(env, site, requestUrl),
+    },
+  };
+}
+
+async function maybeReportAssistantSiteApprovalStatus(
+  env: Env,
+  ownerId: string,
+  threadId: string,
+  messageText: string,
+  requestUrl: string,
+): Promise<AssistantSiteToolAction | null> {
+  const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
+  if (pending) {
+    return {
+      specialist: "core.sites.approval_status",
+      replyText:
+        "Not yet. There is a site draft waiting in this thread. Reply `publish` or `approve` and I will publish it immediately.",
+      siteAction: {
+        kind: "approval_status",
+        siteId: pending.site.id,
+        username: pending.site.username,
+        pending: true,
+        published: false,
+        files: assistantSiteDraftChangedFiles(pending.draft),
+        postTitle: pending.draft.changes.postTitle || null,
+        url: getAssistantSiteAdminUrl(env, pending.site, requestUrl),
+      },
+    };
+  }
+
+  const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+  if (!site) return null;
+  const recentContext = await hasRecentAssistantSiteDraftContext(env, ownerId, threadId);
+  if (recentContext) {
+    return {
+      specialist: "core.sites.approval_status",
+      replyText:
+        "I can see the site-update draft context, but it has not been published yet. Reply `publish` or `approve` and I will publish it immediately.",
+      siteAction: {
+        kind: "approval_status",
+        siteId: site.id,
+        username: site.username,
+        pending: true,
+        published: false,
+        files: [],
+        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+      },
+    };
+  }
+
+  return {
+    specialist: "core.sites.approval_status",
+    replyText: site.published_at
+      ? `Your @${site.username} site is currently published. I do not see a pending draft in this thread.`
+      : `Your @${site.username} site is not published yet, and I do not see a pending draft in this thread.`,
+    siteAction: {
+      kind: "approval_status",
+      siteId: site.id,
+      username: site.username,
+      pending: false,
+      published: Boolean(site.published_at),
+      files: [],
+      url: getAssistantSiteAdminUrl(env, site, requestUrl),
+    },
+  };
+}
+
+async function refineAssistantSiteDraft(
+  env: Env,
+  site: DbSite,
+  draft: AssistantSiteUpdateDraft,
+  refinementText: string,
+  requestUrl: string,
+): Promise<AssistantSiteToolAction> {
+  const nextDraft = applyAssistantSiteDraftRefinement(draft, refinementText);
+  await saveAssistantSiteUpdateDraft(env, nextDraft);
+  return {
+    specialist: "core.sites.refine_draft",
+    replyText: formatAssistantSiteRefinedReply(nextDraft),
+    siteAction: {
+      kind: "draft_refined",
+      siteId: site.id,
+      username: site.username,
+      pending: true,
+      published: false,
+      files: assistantSiteDraftChangedFiles(nextDraft),
+      postTitle: nextDraft.changes.postTitle || null,
+      url: getAssistantSiteAdminUrl(env, site, requestUrl),
+    },
+  };
+}
+
+async function chooseAssistantSiteForMessage(
+  env: Env,
+  ownerId: string,
+  messageText: string,
+): Promise<DbSite | null> {
+  const sites = await listAssistantOwnerProfileSites(env, ownerId);
+  if (!sites.length) return null;
+
+  const explicitUsername = extractAssistantSiteUsername(messageText);
+  if (explicitUsername) {
+    const explicitSite = sites.find((site) => site.username === explicitUsername);
+    if (explicitSite) return explicitSite;
+  }
+
+  const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
+  if (configuredUsername) {
+    const configuredSite = sites.find((site) => site.username === configuredUsername);
+    if (configuredSite) return configuredSite;
+  }
+
+  const ownerProfile = await getOwnerProfile(env, ownerId);
+  const ownerUsername = normalizeUsername(ownerProfile?.username);
+  if (ownerUsername) {
+    const ownerSite = sites.find((site) => site.username === ownerUsername);
+    if (ownerSite) return ownerSite;
+  }
+
+  return sites[0] || null;
+}
+
+async function listAssistantOwnerProfileSites(env: Env, ownerId: string): Promise<DbSite[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, username, site_type, template_id, custom_domain,
+            custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
+     FROM sites
+     WHERE user_id = ? AND COALESCE(site_type, 'profile') = 'profile'
+     ORDER BY published_at IS NULL, published_at DESC, updated_at DESC, created_at ASC`,
+  )
+    .bind(ownerId)
+    .all<DbSite>();
+  return rows.results || [];
+}
+
+function extractAssistantSiteUsername(messageText: string): string {
+  const atMatch = messageText.match(/@([a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])?)/i);
+  return normalizeUsername(atMatch?.[1]);
+}
+
+async function findPendingAssistantSiteDraft(
+  env: Env,
+  ownerId: string,
+  threadId: string,
+  messageText: string,
+): Promise<{ site: DbSite; draft: AssistantSiteUpdateDraft } | null> {
+  const sites = await listAssistantOwnerProfileSites(env, ownerId);
+  const explicitUsername = extractAssistantSiteUsername(messageText);
+  const orderedSites = [...sites].sort((first, second) => {
+    if (explicitUsername) {
+      if (first.username === explicitUsername) return -1;
+      if (second.username === explicitUsername) return 1;
+    }
+    return 0;
+  });
+
+  for (const site of orderedSites) {
+    const draft = await loadAssistantSiteUpdateDraft(env, site.id, threadId);
+    if (draft) return { site, draft };
+  }
+  return null;
+}
+
+async function createAssistantSiteDraftFromRecentThread(
+  env: Env,
+  ownerId: string,
+  site: DbSite,
+  threadId: string,
+  fallbackRequestText: string,
+): Promise<AssistantSiteUpdateDraft | null> {
+  const messages = await loadAssistantThreadRecentMessages(env, ownerId, threadId);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    const parsed = parseAssistantSiteDraftFromAssistantText(message.content);
+    if (!parsed) continue;
+    const priorUserMessage = findPriorSiteUpdateUserMessage(messages, index);
+    return createAssistantSiteUpdateDraft(
+      env,
+      ownerId,
+      site,
+      threadId,
+      priorUserMessage || fallbackRequestText,
+      parsed,
+    );
+  }
+
+  const priorUserMessage = findPriorSiteUpdateUserMessage(messages, messages.length);
+  if (!priorUserMessage) return null;
+  return createAssistantSiteUpdateDraft(env, ownerId, site, threadId, priorUserMessage);
+}
+
+async function hasRecentAssistantSiteDraftContext(
+  env: Env,
+  ownerId: string,
+  threadId: string,
+): Promise<boolean> {
+  const messages = await loadAssistantThreadRecentMessages(env, ownerId, threadId);
+  return messages.some((message) =>
+    message.role === "assistant"
+      ? Boolean(parseAssistantSiteDraftFromAssistantText(message.content))
+      : message.role === "user" && isAssistantSiteUpdateIntent(message.content),
+  );
+}
+
+async function loadAssistantThreadRecentMessages(
+  env: Env,
+  ownerId: string,
+  threadId: string,
+): Promise<AssistantSiteThreadMessage[]> {
+  const rows = await env.DB.prepare(
+    `SELECT role, content, created_at
+     FROM assistant_messages
+     WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
+     ORDER BY created_at ASC
+     LIMIT 24`,
+  )
+    .bind(ownerId, threadId)
+    .all<AssistantSiteThreadMessage>();
+  return rows.results || [];
+}
+
+function findPriorSiteUpdateUserMessage(
+  messages: AssistantSiteThreadMessage[],
+  beforeIndex: number,
+): string | null {
+  for (let index = Math.min(beforeIndex - 1, messages.length - 1); index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user" && isAssistantSiteUpdateIntent(message.content)) {
+      return message.content;
+    }
+  }
+  return null;
+}
+
+async function createAssistantSiteUpdateDraft(
+  env: Env,
+  ownerId: string,
+  site: DbSite,
+  threadId: string,
+  requestText: string,
+  parsedContent: ParsedAssistantSiteDraftContent | null = null,
+): Promise<AssistantSiteUpdateDraft> {
+  const sourceFiles = await loadSiteSourceFiles(env, site.id);
+  const profile = await loadAssistantSiteProfile(env, ownerId, site, sourceFiles);
+  const changes: AssistantSiteUpdateDraft["changes"] = { refinementText: null };
+
+  const aboutParagraph =
+    parsedContent?.aboutParagraph ||
+    (assistantRequestMentionsAbout(requestText)
+      ? generateAssistantAboutParagraph(requestText)
+      : "");
+  if (aboutParagraph) {
+    const aboutPage = upsertAssistantAboutPage(profile);
+    const aboutFile = normalizeSiteFileName(aboutPage.file || "about.md") || "about.md";
+    const existingAbout = sourceFiles.get(aboutFile) || `# ${aboutPage.title || "About"}\n`;
+    sourceFiles.set(aboutFile, appendAssistantParagraph(existingAbout, aboutParagraph));
+    changes.aboutFile = aboutFile;
+    changes.aboutParagraph = aboutParagraph;
+  }
+
+  const shouldCreatePost = Boolean(parsedContent?.postBody || assistantRequestMentionsBlogPost(requestText));
+  if (shouldCreatePost) {
+    const topic = parsedContent?.postTopic || extractAssistantBlogTopic(requestText);
+    const postTitle = parsedContent?.postTitle || assistantBlogTitleFromTopic(topic);
+    const postSlug = slugifyAssistantSitePath(postTitle || topic || "personal-ai-assistants");
+    const postFile = `blog/${postSlug}.md`;
+    const postMarkdown = parsedContent?.postBody
+      ? normalizeAssistantPostMarkdown(postTitle, parsedContent.postBody)
+      : generateAssistantBlogPostMarkdown(topic, postTitle, requestText);
+    upsertAssistantBlogPost(profile, {
+      slug: postSlug,
+      title: postTitle,
+      file: postFile,
+      excerpt: markdownExcerpt(postMarkdown),
+    });
+    sourceFiles.set(postFile, postMarkdown);
+    changes.postTitle = postTitle;
+    changes.postSlug = postSlug;
+    changes.postFile = postFile;
+    changes.postMarkdown = postMarkdown;
+  }
+
+  if (!changes.aboutParagraph && !changes.postMarkdown) {
+    const aboutPage = upsertAssistantAboutPage(profile);
+    const aboutFile = normalizeSiteFileName(aboutPage.file || "about.md") || "about.md";
+    const fallbackParagraph = generateAssistantAboutParagraph(requestText);
+    const existingAbout = sourceFiles.get(aboutFile) || `# ${aboutPage.title || "About"}\n`;
+    sourceFiles.set(aboutFile, appendAssistantParagraph(existingAbout, fallbackParagraph));
+    changes.aboutFile = aboutFile;
+    changes.aboutParagraph = fallbackParagraph;
+  }
+
+  sourceFiles.set("me.json", JSON.stringify(profile, null, 2));
+
+  const now = new Date().toISOString();
+  return {
+    version: 1,
+    kind: "profile_site_update",
+    siteId: site.id,
+    siteUsername: site.username,
+    threadId,
+    requestText,
+    createdAt: now,
+    updatedAt: now,
+    sourceFiles: Object.fromEntries(sourceFiles.entries()),
+    changes,
+  };
+}
+
+async function loadAssistantSiteProfile(
+  env: Env,
+  ownerId: string,
+  site: DbSite,
+  sourceFiles: Map<string, string>,
+): Promise<Me3SiteProfile> {
+  const owner = await getOwnerProfile(env, ownerId);
+  const fallbackProfile: Me3SiteProfile = {
+    version: "0.1",
+    handle: site.username,
+    name: owner?.name || owner?.username || site.username,
+    bio: owner?.bio || "Personal AI assistant powered by ME3 Core.",
+  };
+  if (owner?.avatar_url) fallbackProfile.avatar = owner.avatar_url;
+
+  const profile = parseSiteProfile(
+    sourceFiles.get("me.json") || JSON.stringify(fallbackProfile),
+    site.username,
+  );
+  profile.version ||= "0.1";
+  profile.handle ||= site.username;
+  profile.name ||= owner?.name || owner?.username || site.username;
+  profile.bio ||= owner?.bio || fallbackProfile.bio;
+  if (!profile.avatar && owner?.avatar_url) profile.avatar = owner.avatar_url;
+  return profile;
+}
+
+function upsertAssistantAboutPage(profile: Me3SiteProfile) {
+  const pages = Array.isArray(profile.pages) ? [...profile.pages] : [];
+  const existingIndex = pages.findIndex((page) => {
+    const slug = normalizeSiteFileName(page.slug || "").toLowerCase();
+    const file = normalizeSiteFileName(page.file || "").toLowerCase();
+    const title = (page.title || "").toLowerCase();
+    return slug === "about" || file === "about.md" || title === "about";
+  });
+  const existing = existingIndex >= 0 ? pages[existingIndex] : {};
+  const page = {
+    ...existing,
+    slug: existing.slug || "about",
+    title: existing.title || "About",
+    file: existing.file || "about.md",
+    visible: existing.visible === false ? false : true,
+  };
+  if (existingIndex >= 0) {
+    pages[existingIndex] = page;
+  } else {
+    pages.push(page);
+  }
+  profile.pages = pages;
+  return page;
+}
+
+function upsertAssistantBlogPost(
+  profile: Me3SiteProfile,
+  input: { slug: string; title: string; file: string; excerpt: string },
+) {
+  const posts = Array.isArray(profile.posts) ? [...profile.posts] : [];
+  const existingIndex = posts.findIndex(
+    (post) => post.slug === input.slug || normalizeSiteFileName(post.file || "") === input.file,
+  );
+  const post = {
+    ...(existingIndex >= 0 ? posts[existingIndex] : {}),
+    slug: input.slug,
+    title: input.title,
+    file: input.file,
+    publishedAt: new Date().toISOString().slice(0, 10),
+    excerpt: input.excerpt,
+    draft: false,
+    type: "article",
+  };
+  if (existingIndex >= 0) {
+    posts[existingIndex] = post;
+  } else {
+    posts.unshift(post);
+  }
+  profile.posts = posts;
+  profile.blogTitle ||= "Blog";
+}
+
+function removeAssistantBlogPost(
+  profile: Me3SiteProfile,
+  slug: string | undefined,
+  file: string | undefined,
+) {
+  if (!Array.isArray(profile.posts)) return;
+  const normalizedFile = normalizeSiteFileName(file || "");
+  profile.posts = profile.posts.filter(
+    (post) =>
+      !(
+        (slug && post.slug === slug) ||
+        (normalizedFile && normalizeSiteFileName(post.file || "") === normalizedFile)
+      ),
+  );
+}
+
+function applyAssistantSiteDraftRefinement(
+  draft: AssistantSiteUpdateDraft,
+  refinementText: string,
+): AssistantSiteUpdateDraft {
+  const sourceFiles = new Map(Object.entries(draft.sourceFiles));
+  const changes = { ...draft.changes, refinementText };
+  const combinedRequest = `${draft.requestText}\n\nRefinement: ${refinementText}`;
+
+  if (changes.aboutFile && changes.aboutParagraph && assistantRefinementTargetsAbout(refinementText)) {
+    const nextParagraph = generateAssistantAboutParagraph(combinedRequest);
+    const currentAbout = sourceFiles.get(changes.aboutFile) || "";
+    sourceFiles.set(
+      changes.aboutFile,
+      replaceAssistantParagraph(currentAbout, changes.aboutParagraph, nextParagraph),
+    );
+    changes.aboutParagraph = nextParagraph;
+  }
+
+  if (changes.postFile && changes.postTitle && assistantRefinementTargetsPost(refinementText)) {
+    const nextTitle = extractAssistantRequestedTitle(refinementText) || changes.postTitle;
+    const topic = extractAssistantBlogTopic(draft.requestText);
+    const nextMarkdown = generateAssistantBlogPostMarkdown(topic, nextTitle, combinedRequest);
+    sourceFiles.delete(changes.postFile);
+    const nextSlug = slugifyAssistantSitePath(nextTitle);
+    const nextFile = `blog/${nextSlug}.md`;
+    sourceFiles.set(nextFile, nextMarkdown);
+    changes.postTitle = nextTitle;
+    changes.postSlug = nextSlug;
+    changes.postFile = nextFile;
+    changes.postMarkdown = nextMarkdown;
+
+    const meJson = sourceFiles.get("me.json");
+    if (meJson) {
+      const profile = parseSiteProfile(meJson, draft.siteUsername);
+      removeAssistantBlogPost(profile, changes.postSlug, changes.postFile);
+      upsertAssistantBlogPost(profile, {
+        slug: nextSlug,
+        title: nextTitle,
+        file: nextFile,
+        excerpt: markdownExcerpt(nextMarkdown),
+      });
+      sourceFiles.set("me.json", JSON.stringify(profile, null, 2));
+    }
+  }
+
+  return {
+    ...draft,
+    requestText: combinedRequest,
+    updatedAt: new Date().toISOString(),
+    sourceFiles: Object.fromEntries(sourceFiles.entries()),
+    changes,
+  };
+}
+
+function assistantRefinementTargetsAbout(refinementText: string): boolean {
+  const text = normalizeAssistantIntentText(refinementText);
+  if (/\b(about|bio|paragraph|page)\b/.test(text)) return true;
+  return !/\b(blog|post|article|title)\b/.test(text);
+}
+
+function assistantRefinementTargetsPost(refinementText: string): boolean {
+  const text = normalizeAssistantIntentText(refinementText);
+  if (/\b(blog|post|article|title)\b/.test(text)) return true;
+  return !/\b(about|bio)\b/.test(text);
+}
+
+function extractAssistantRequestedTitle(refinementText: string): string {
+  const match =
+    refinementText.match(/\btitle (?:to|as)\s+["“]([^"”]+)["”]/i) ||
+    refinementText.match(/\bcalled\s+["“]([^"”]+)["”]/i);
+  return match?.[1]?.trim() || "";
+}
+
+async function publishAssistantSiteDraft(
+  env: Env,
+  site: DbSite,
+  draft: AssistantSiteUpdateDraft,
+): Promise<DbSite> {
+  const manifest = (await loadPublishManifest(env, site.id)) || createEmptyPublishManifest();
+  for (const [name, content] of Object.entries(draft.sourceFiles)) {
+    const sourceName = normalizeSiteFileName(name);
+    if (!sourceName || shouldIgnoreSiteSourceFile(sourceName)) continue;
+    await putSiteFile(env, site.id, `src/${sourceName}`, content, getContentType(sourceName));
+    manifest.sourceFiles[sourceName] = await sha256Text(content);
+  }
+
+  const profile = parseSiteProfile(draft.sourceFiles["me.json"] || "{}", site.username);
+  await pruneUnreferencedSiteSourceFiles(env, site.id, profile, manifest);
+  const sourceFiles = await loadSiteSourceFiles(env, site.id);
+  const generatedFiles = await generateSiteHtml(
+    profile,
+    Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
+  );
+  for (const [name, content] of Object.entries(generatedFiles)) {
+    await putSiteFile(
+      env,
+      site.id,
+      `public/${normalizeSiteFileName(name)}`,
+      content,
+      getGeneratedSiteContentType(name),
+    );
+  }
+  await pruneGeneratedPublicFiles(env, site.id, generatedFiles);
+  manifest.updatedAt = new Date().toISOString();
+  await savePublishManifest(env, site.id, manifest);
+  await env.DB.prepare(
+    "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(site.id)
+    .run();
+  await deleteSiteFile(env, site.id, assistantSiteDraftPath(draft.threadId));
+
+  return {
+    ...site,
+    published_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+async function saveAssistantSiteUpdateDraft(
+  env: Env,
+  draft: AssistantSiteUpdateDraft,
+): Promise<void> {
+  await putSiteFile(
+    env,
+    draft.siteId,
+    assistantSiteDraftPath(draft.threadId),
+    JSON.stringify(draft, null, 2),
+    "application/json",
+  );
+}
+
+async function loadAssistantSiteUpdateDraft(
+  env: Env,
+  siteId: string,
+  threadId: string,
+): Promise<AssistantSiteUpdateDraft | null> {
+  const content = await getSiteFileText(env, siteId, assistantSiteDraftPath(threadId));
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return isAssistantSiteUpdateDraft(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isAssistantSiteUpdateDraft(value: unknown): value is AssistantSiteUpdateDraft {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const draft = value as AssistantSiteUpdateDraft;
+  return (
+    draft.version === 1 &&
+    draft.kind === "profile_site_update" &&
+    typeof draft.siteId === "string" &&
+    typeof draft.siteUsername === "string" &&
+    typeof draft.threadId === "string" &&
+    Boolean(draft.sourceFiles) &&
+    typeof draft.sourceFiles === "object" &&
+    !Array.isArray(draft.sourceFiles)
+  );
+}
+
+function assistantSiteDraftPath(threadId: string): string {
+  const safeThreadId = threadId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 180);
+  return `assistant/site-update-drafts/${safeThreadId || "thread"}.json`;
+}
+
+function assistantSiteDraftChangedFiles(draft: AssistantSiteUpdateDraft): string[] {
+  const files = new Set<string>();
+  if (draft.changes.aboutFile) files.add(draft.changes.aboutFile);
+  if (draft.changes.postFile) files.add(draft.changes.postFile);
+  files.add("me.json");
+  return Array.from(files);
+}
+
+function formatAssistantSiteDraftReply(draft: AssistantSiteUpdateDraft): string {
+  const parts = [`I drafted the site update for @${draft.siteUsername}.`];
+  if (draft.changes.aboutFile) {
+    parts.push(`About page: added a new paragraph to ${draft.changes.aboutFile}.`);
+  }
+  if (draft.changes.postTitle && draft.changes.postFile) {
+    parts.push(`Blog: added "${draft.changes.postTitle}" at ${draft.changes.postFile}.`);
+  }
+  parts.push("Reply `publish` to publish it now, or tell me what to change.");
+  return parts.join("\n\n");
+}
+
+function formatAssistantSiteRefinedReply(draft: AssistantSiteUpdateDraft): string {
+  const parts = [`I updated the pending draft for @${draft.siteUsername}.`];
+  if (draft.changes.aboutFile) parts.push(`About page: revised ${draft.changes.aboutFile}.`);
+  if (draft.changes.postTitle && draft.changes.postFile) {
+    parts.push(`Blog: revised "${draft.changes.postTitle}" at ${draft.changes.postFile}.`);
+  }
+  parts.push("Reply `publish` when it looks right, or send another change.");
+  return parts.join("\n\n");
+}
+
+function formatAssistantSitePublishedReply(
+  env: Env,
+  site: DbSite,
+  draft: AssistantSiteUpdateDraft,
+  requestUrl: string,
+): string {
+  const parts = [`Published. I updated @${site.username}.`];
+  if (draft.changes.aboutFile) parts.push(`About page: ${draft.changes.aboutFile}.`);
+  if (draft.changes.postTitle) parts.push(`Blog: "${draft.changes.postTitle}".`);
+  const url = getAssistantSiteAdminUrl(env, site, requestUrl);
+  if (url) parts.push(`View it at ${url}`);
+  return parts.join("\n\n");
+}
+
+function getAssistantSiteAdminUrl(env: Env, site: DbSite, requestUrl: string): string | null {
+  const origin = getCoreWebOrigin(env, requestUrl);
+  if (!origin) return null;
+  return new URL(`/sites/${encodeURIComponent(site.username)}`, origin).toString();
+}
+
+function appendAssistantParagraph(markdown: string, paragraph: string): string {
+  const base = markdown.trimEnd();
+  return `${base}\n\n${paragraph.trim()}\n`;
+}
+
+function replaceAssistantParagraph(markdown: string, previous: string, next: string): string {
+  if (markdown.includes(previous)) return markdown.replace(previous, next);
+  return appendAssistantParagraph(markdown, next);
+}
+
+function parseAssistantSiteDraftFromAssistantText(
+  text: string,
+): ParsedAssistantSiteDraftContent | null {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const parsed: ParsedAssistantSiteDraftContent = {};
+  const aboutMatch = normalized.match(
+    /About Page(?:\s+(?:Paragraph|Update))?:\s*([\s\S]*?)(?=\n{0,2}\s*(?:Blog Post|Post|Article):|$)/i,
+  );
+  if (aboutMatch?.[1]) {
+    parsed.aboutParagraph = cleanAssistantGeneratedSnippet(aboutMatch[1]);
+  }
+
+  const blogMatch = normalized.match(/(?:Blog Post|Post|Article):\s*([\s\S]*)/i);
+  if (blogMatch?.[1]) {
+    const blogSection = cleanAssistantGeneratedSnippet(blogMatch[1]);
+    const titleBodyMatch = blogSection.match(/^["'“”]?([^"'“”:\n]{3,140})["'“”]?\s*:\s*([\s\S]+)$/);
+    if (titleBodyMatch) {
+      parsed.postTitle = cleanAssistantGeneratedSnippet(titleBodyMatch[1]);
+      parsed.postBody = cleanAssistantGeneratedSnippet(titleBodyMatch[2]);
+    } else {
+      parsed.postBody = blogSection;
+    }
+  }
+
+  if (!parsed.aboutParagraph && !parsed.postBody) return null;
+  return parsed;
+}
+
+function cleanAssistantGeneratedSnippet(value: string): string {
+  return value
+    .replace(/^```(?:markdown|md)?/i, "")
+    .replace(/```$/i, "")
+    .trim()
+    .replace(/^["'“”]+|["'“”]+$/g, "")
+    .trim();
+}
+
+function assistantRequestMentionsAbout(requestText: string): boolean {
+  return /\b(about page|about section|about me|bio)\b/i.test(requestText);
+}
+
+function assistantRequestMentionsBlogPost(requestText: string): boolean {
+  return /\b(blog post|post about|article about|blog|article)\b/i.test(requestText);
+}
+
+function extractAssistantBlogTopic(requestText: string): string {
+  const quoted =
+    requestText.match(/\b(?:blog post|post|article)\s+(?:about|on)\s+["'“]([^"'”]+)["'”]/i) ||
+    requestText.match(/\b(?:about|on)\s+["'“]([^"'”]+)["'”]/i);
+  if (quoted?.[1]) return quoted[1].trim();
+
+  const unquoted = requestText.match(/\b(?:blog post|post|article)\s+(?:about|on)\s+([^.!?\n]+)(?:[.!?\n]|$)/i);
+  if (unquoted?.[1]) {
+    return unquoted[1].replace(/\b(and|then|also)\b.*$/i, "").trim();
+  }
+  return "personal AI assistants";
+}
+
+function assistantBlogTitleFromTopic(topic: string): string {
+  const normalizedTopic = topic.trim() || "personal AI assistants";
+  return `The Rise of ${titleCaseAssistantSiteText(normalizedTopic)}`;
+}
+
+function titleCaseAssistantSiteText(value: string): string {
+  return value
+    .replace(/[-_]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (lower === "ai") return "AI";
+      if (lower === "me3") return "ME3";
+      return `${lower.slice(0, 1).toUpperCase()}${lower.slice(1)}`;
+    })
+    .join(" ");
+}
+
+function slugifyAssistantSitePath(value: string): string {
+  const slug = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return slug || "personal-ai-assistants";
+}
+
+function generateAssistantAboutParagraph(requestText: string): string {
+  const text = normalizeAssistantIntentText(requestText);
+  if (/\b(short|shorter|concise|tight)\b/.test(text)) {
+    return "This space collects experiments in creative work, useful systems, and personal AI assistants, turning scattered ideas into practical momentum.";
+  }
+  if (/\b(playful|fun|weird|lighter)\b/.test(text)) {
+    return "This site is my little workshop for curious experiments: part notebook, part launchpad, and part invitation to see what happens when personal AI assistants help ideas find their next shape.";
+  }
+  if (/\b(professional|serious|polished|clear)\b/.test(text)) {
+    return "This site brings together my work on practical systems, creative exploration, and personal AI assistants, with a focus on turning emerging ideas into clear, useful outcomes.";
+  }
+  return "This site is a living notebook for experiments in creative systems, personal AI assistants, and the small practical rituals that turn scattered ideas into momentum.";
+}
+
+function generateAssistantBlogPostMarkdown(
+  topic: string,
+  title: string,
+  requestText: string,
+): string {
+  const text = normalizeAssistantIntentText(requestText);
+  if (/\b(short|shorter|concise|tight)\b/.test(text)) {
+    return normalizeAssistantPostMarkdown(
+      title,
+      `Personal AI assistants are becoming less like flashy software and more like everyday infrastructure. The best ones remember context, reduce coordination drag, and help people move from intention to action without turning the day into another dashboard.\n\nThe interesting shift is not that assistants can answer questions. It is that they can quietly hold the thread: the note you meant to write, the follow-up you almost forgot, the idea that needs one more pass before it becomes useful.`,
+    );
+  }
+  if (/\b(playful|fun|weird|lighter)\b/.test(text)) {
+    return normalizeAssistantPostMarkdown(
+      title,
+      `Personal AI assistants are starting to feel less like tools and more like tiny studios that fit in the corner of your day. They can catch loose thoughts, sort half-formed plans, and nudge ideas from "someday" into "let's try this now."\n\nThe magic is not that they do everything for us. It is that they make it easier to stay in motion. A good assistant keeps the boring bits from swallowing the bright bits, which leaves more room for curiosity, taste, and actual follow-through.`,
+    );
+  }
+  return normalizeAssistantPostMarkdown(
+    title,
+    `Personal AI assistants are moving from novelty to quiet infrastructure. Instead of asking people to manage another tool, the most useful assistants sit close to the work: they remember context, surface next steps, and help turn loose intentions into visible progress.\n\nThe real promise is not automation for its own sake. It is continuity. A personal assistant can hold the thread between a note, a conversation, a calendar commitment, and a half-finished idea, making it easier to return to the work with less friction.\n\nAs these systems mature, the best ones will feel less like command centers and more like trusted companions for attention. They will help people notice what matters, protect time for deeper work, and move steadily from possibility to practice.`,
+  );
+}
+
+function normalizeAssistantPostMarkdown(title: string, body: string): string {
+  const cleanBody = cleanAssistantGeneratedSnippet(body);
+  if (/^#\s+/m.test(cleanBody)) return `${cleanBody.trim()}\n`;
+  return `# ${title.trim()}\n\n${cleanBody.trim()}\n`;
+}
+
+function markdownExcerpt(markdown: string): string {
+  return markdown
+    .replace(/^#.+$/gm, "")
+    .replace(/[#*_>`[\]()]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
+
 app.get("/api/assistant/threads", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -2165,6 +3193,19 @@ async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
     });
   }
 
+  const siteAction = await maybeHandleAssistantSiteToolAction(
+    c.env,
+    ownerId,
+    thread.id,
+    messageText,
+    c.req.url,
+  );
+  if (siteAction) {
+    await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, siteAction.replyText);
+    await touchAssistantThread(c.env, ownerId, thread.id);
+    return c.json(buildAssistantSiteToolPayload(thread.id, siteAction));
+  }
+
   const runtime = c.env.ME3_USER_AGENT;
   if (!runtime) {
     return c.json(
@@ -2325,6 +3366,29 @@ async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
             contentAction: null,
             contactsChanged: false,
           });
+          return;
+        }
+
+        const siteAction = await maybeHandleAssistantSiteToolAction(
+          c.env,
+          ownerId,
+          thread.id,
+          messageText,
+          c.req.url,
+        );
+        if (siteAction) {
+          await persistAssistantTurnMessages(
+            c.env,
+            ownerId,
+            thread.id,
+            messageText,
+            siteAction.replyText,
+          );
+          await touchAssistantThread(c.env, ownerId, thread.id);
+          for (const chunk of splitAssistantStreamText(siteAction.replyText)) {
+            send("delta", { text: chunk });
+          }
+          send("done", buildAssistantSiteToolPayload(thread.id, siteAction));
           return;
         }
 

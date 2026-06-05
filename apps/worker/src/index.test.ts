@@ -315,7 +315,21 @@ function createEnv(): Env & {
     bookings: [] as DbBooking[],
   };
 
+  const toStoredSiteFileContent = (value: unknown): Uint8Array => {
+    if (value instanceof Uint8Array) return value;
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (Array.isArray(value)) return new Uint8Array(value as number[]);
+    return new TextEncoder().encode(String(value ?? ""));
+  };
+
   const db = {
+    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      const results: unknown[] = [];
+      for (const statement of statements) {
+        results.push(await statement.run());
+      }
+      return results;
+    },
     prepare(sql: string) {
       return {
         async all<T>() {
@@ -466,6 +480,53 @@ function createEnv(): Env & {
                   threadId: sql.includes("thread_id") ? (values[4] as string | null) : null,
                   created_at: "2026-05-11T10:07:00Z",
                 });
+              }
+
+              if (sql.includes("INSERT INTO site_files")) {
+                const content = toStoredSiteFileContent(values[2]);
+                const file: StoredSiteFile = {
+                  site_id: values[0] as string,
+                  path: values[1] as string,
+                  content,
+                  content_type: values[3] as string,
+                  size: Number(values[4]) || content.byteLength,
+                  sha256: values[5] as string | null,
+                  updated_at: "2026-06-05T10:00:00Z",
+                };
+                const existingIndex = state.siteFiles.findIndex(
+                  (entry) => entry.site_id === file.site_id && entry.path === file.path,
+                );
+                if (existingIndex >= 0) {
+                  state.siteFiles[existingIndex] = file;
+                } else {
+                  state.siteFiles.push(file);
+                }
+              }
+
+              if (sql.includes("DELETE FROM site_files")) {
+                state.siteFiles = state.siteFiles.filter(
+                  (file) => !(file.site_id === values[0] && file.path === values[1]),
+                );
+              }
+
+              if (sql.includes("UPDATE sites SET published_at = datetime('now')")) {
+                state.sites = state.sites.map((site) =>
+                  site.id === values[0]
+                    ? {
+                        ...site,
+                        published_at: "2026-06-05T10:00:00Z",
+                        updated_at: "2026-06-05T10:00:00Z",
+                      }
+                    : site,
+                );
+              }
+
+              if (sql.includes("UPDATE sites SET published_at = NULL")) {
+                state.sites = state.sites.map((site) =>
+                  site.id === values[0]
+                    ? { ...site, published_at: null, updated_at: "2026-06-05T10:00:00Z" }
+                    : site,
+                );
               }
 
               if (sql.includes("INSERT INTO assistant_attachments")) {
@@ -1887,6 +1948,41 @@ function createEnv(): Env & {
                     })) as T[],
                 };
               }
+              if (sql.includes("FROM sites")) {
+                return {
+                  results: state.sites
+                    .filter((site) => {
+                      const ownerMatches = !values[0] || site.user_id === values[0];
+                      const typeMatches =
+                        !sql.includes("COALESCE(site_type, 'profile') = 'profile'") ||
+                        (site.site_type || "profile") === "profile";
+                      return ownerMatches && typeMatches;
+                    })
+                    .sort((first, second) =>
+                      String(second.published_at || second.updated_at || "").localeCompare(
+                        String(first.published_at || first.updated_at || ""),
+                      ),
+                    ) as T[],
+                };
+              }
+              if (sql.includes("FROM site_files")) {
+                const siteId = values[0] as string;
+                const pathPattern = String(values[1] || "");
+                const prefix = pathPattern.endsWith("%")
+                  ? pathPattern.slice(0, -1)
+                  : pathPattern;
+                return {
+                  results: state.siteFiles
+                    .filter(
+                      (file) =>
+                        file.site_id === siteId &&
+                        (sql.includes("path LIKE ?")
+                          ? file.path.startsWith(prefix)
+                          : file.path === pathPattern),
+                    )
+                    .sort((first, second) => first.path.localeCompare(second.path)) as T[],
+                };
+              }
               return { results: [] as T[] };
             },
           };
@@ -2097,6 +2193,77 @@ function cookieHeader(response: Response): string {
 function responseCookieCleared(response: Response): boolean {
   const setCookie = response.headers.get("set-cookie") || "";
   return setCookie.includes("me3_core_session=") && setCookie.includes("Max-Age=0");
+}
+
+function addSiteFileText(
+  env: ReturnType<typeof createEnv>,
+  siteId: string,
+  path: string,
+  text: string,
+  contentType: string,
+) {
+  const content = new TextEncoder().encode(text);
+  env.siteFiles.push({
+    site_id: siteId,
+    path,
+    content,
+    content_type: contentType,
+    size: content.byteLength,
+    sha256: null,
+    updated_at: "2026-06-05T09:00:00Z",
+  });
+}
+
+function siteFileText(
+  env: ReturnType<typeof createEnv>,
+  siteId: string,
+  path: string,
+): string | null {
+  const file = env.siteFiles.find(
+    (entry) => entry.site_id === siteId && entry.path === path,
+  );
+  return file ? new TextDecoder().decode(file.content) : null;
+}
+
+function addAssistantEditableSite(env: ReturnType<typeof createEnv>) {
+  env.sites.push({
+    id: "site-assistant",
+    user_id: "owner",
+    username: "owner",
+    site_type: "profile",
+    template_id: "me3",
+    custom_domain: null,
+    custom_domain_status: null,
+    custom_domain_cf_id: null,
+    created_at: "2026-06-05T09:00:00Z",
+    updated_at: "2026-06-05T09:00:00Z",
+    published_at: null,
+  });
+  addSiteFileText(
+    env,
+    "site-assistant",
+    "src/me.json",
+    JSON.stringify(
+      {
+        version: "0.1",
+        handle: "owner",
+        name: "Owner",
+        bio: "Original bio.",
+        pages: [{ slug: "about", title: "About", file: "about.md" }],
+        posts: [],
+      },
+      null,
+      2,
+    ),
+    "application/json",
+  );
+  addSiteFileText(
+    env,
+    "site-assistant",
+    "src/about.md",
+    "# About\n\nOriginal about.",
+    "text/markdown",
+  );
 }
 
 function addBookableSite(env: ReturnType<typeof createEnv>) {
@@ -3488,6 +3655,173 @@ describe("ME3 Core Worker auth", () => {
         },
       ],
     });
+  });
+
+  it("drafts and publishes profile site updates from assistant approval", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env);
+
+    const draftResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText:
+            "Update my site, add a made up paragraph to my about page and add a blog post about 'personal ai assistants'. make it all up, do your best :)",
+        }),
+      }),
+      env,
+    );
+    const draftPayload = (await draftResponse.json()) as Record<string, unknown>;
+    const threadId = String(draftPayload.threadId);
+    const draftFile = env.siteFiles.find(
+      (file) =>
+        file.site_id === "site-assistant" &&
+        file.path.startsWith("assistant/site-update-drafts/") &&
+        file.path.endsWith(`${threadId}.json`),
+    );
+
+    expect(draftResponse.status).toBe(200);
+    expect(draftPayload).toMatchObject({
+      ok: true,
+      source: "tool",
+      specialist: "core.sites.update_draft",
+    });
+    expect(String(draftPayload.replyText)).toContain("Reply `publish`");
+    expect(draftFile).toBeTruthy();
+    expect(siteFileText(env, "site-assistant", "src/about.md")).toBe("# About\n\nOriginal about.");
+    expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeNull();
+
+    const publishResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          threadId,
+          messageText: "yes publish them",
+        }),
+      }),
+      env,
+    );
+    const publishPayload = (await publishResponse.json()) as Record<string, unknown>;
+
+    expect(publishResponse.status).toBe(200);
+    expect(publishPayload).toMatchObject({
+      ok: true,
+      source: "tool",
+      specialist: "core.sites.publish",
+    });
+    expect(String(publishPayload.replyText)).toContain("Published");
+    expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeTruthy();
+    expect(siteFileText(env, "site-assistant", "src/about.md")).toContain(
+      "living notebook",
+    );
+    expect(
+      siteFileText(
+        env,
+        "site-assistant",
+        "src/blog/the-rise-of-personal-ai-assistants.md",
+      ),
+    ).toContain("# The Rise of Personal AI Assistants");
+    expect(
+      siteFileText(
+        env,
+        "site-assistant",
+        "public/blog/the-rise-of-personal-ai-assistants.html",
+      ),
+    ).toContain("Personal AI assistants");
+    expect(siteFileText(env, "site-assistant", "public/me.json")).toContain(
+      "the-rise-of-personal-ai-assistants",
+    );
+    expect(
+      env.siteFiles.find(
+        (file) =>
+          file.site_id === "site-assistant" &&
+          file.path.startsWith("assistant/site-update-drafts/") &&
+          file.path.endsWith(`${threadId}.json`),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("publishes a prior plain-text assistant site draft when the user approves it", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env);
+    env.assistantThreads.push({
+      id: "thread-legacy-site-draft",
+      owner_id: "owner",
+      title: "Update my site",
+      origin_surface: "assistant",
+      project_id: null,
+      status: "active",
+      pinned_at: null,
+      archived_at: null,
+      deleted_at: null,
+      last_message_at: "2026-06-05T09:10:00Z",
+      created_at: "2026-06-05T09:10:00Z",
+      updated_at: "2026-06-05T09:10:00Z",
+    });
+    env.messages.push(
+      {
+        id: "message-user-site-request",
+        ownerId: "owner",
+        role: "user",
+        content:
+          "Update my site, add a made up paragraph to my about page and add a blog post about 'personal ai assistants'.",
+        threadId: "thread-legacy-site-draft",
+        created_at: "2026-06-05T09:11:00Z",
+      },
+      {
+        id: "message-assistant-site-draft",
+        ownerId: "owner",
+        role: "assistant",
+        content:
+          "About Page Paragraph: \"Welcome to my world of innovation and transformation! This site is a place for imaginary experiments, generous curiosity, and practical AI companions.\"\n\nBlog Post: 'The Rise of Personal AI Assistants': \"In today's fast-paced world, personal AI assistants are becoming trusted creative partners. They help people capture ideas, make plans, and keep momentum visible.\"",
+        threadId: "thread-legacy-site-draft",
+        created_at: "2026-06-05T09:12:00Z",
+      },
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          threadId: "thread-legacy-site-draft",
+          messageText: "just do it",
+        }),
+      }),
+      env,
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "tool",
+      specialist: "core.sites.publish",
+    });
+    expect(siteFileText(env, "site-assistant", "src/about.md")).toContain(
+      "Welcome to my world of innovation and transformation",
+    );
+    expect(
+      siteFileText(
+        env,
+        "site-assistant",
+        "src/blog/the-rise-of-personal-ai-assistants.md",
+      ),
+    ).toContain("In today's fast-paced world");
+    expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeTruthy();
   });
 
   it("streams owner assistant chat turns through server-sent events", async () => {
