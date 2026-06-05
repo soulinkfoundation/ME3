@@ -20,6 +20,13 @@ The boundary:
 
 Core v1 should keep skills as optional context references. Recipes and jobs may record `recommendedSkillIds` and `requiredSkillIds`, but skills must not grant permissions, bypass capability validation, or run scripts by themselves.
 
+Current Core implementation:
+
+- Assistant skills persist per owner in `assistant_skills`.
+- `/api/assistant/skills` can list, install from a URL/repo reference, update, and archive skills.
+- Chat context can match active skills by request text and add matched skills to the context packet as `agent_skill` sources.
+- Stored `SKILL.md` text can be included as matched instructions, but skill scripts remain inert and unavailable to the runner.
+
 The safe integration path:
 
 1. Add skill reference fields to recipes and job drafts.

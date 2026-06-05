@@ -9,7 +9,7 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { definePage } from "unplugin-vue-router/runtime";
-import { api, type ApiStreamEvent } from "../../api";
+import { ApiError, api, type ApiStreamEvent } from "../../api";
 import Button from "../../components/Button.vue";
 import LandingGrids from "../../components/LandingGrids.vue";
 import UiIcon from "../../components/UiIcon.vue";
@@ -492,6 +492,21 @@ type AssistantSourceViewItem = MissionContextSource & {
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
 type AssistantSettingsSection = "context" | "activity";
+type AssistantSkill = {
+  id: string;
+  name: string;
+  description: string | null;
+  sourceKind: "url" | "repo" | "upload" | "core" | "plugin";
+  sourceRef: string | null;
+  status: "active" | "disabled" | "invalid";
+  trustLevel: "core" | "plugin" | "user";
+  triggerHints: string[];
+  hasSkillMarkdown: boolean;
+  validationErrors: string[];
+  scriptsAvailable: boolean;
+  updatedAt: string;
+};
+type AssistantSkillsResponse = { skills: AssistantSkill[] };
 type AssistantActivityViewItem = {
   id: string;
   kind: string;
@@ -607,6 +622,10 @@ const assistantSettingsSection = ref<AssistantSettingsSection>("context");
 const assistantSettingsError = ref("");
 const assistantSkillsModalOpen = ref(false);
 const assistantSkillUrlDraft = ref("");
+const assistantSkills = ref<AssistantSkill[]>([]);
+const assistantSkillsLoading = ref(false);
+const assistantSkillsError = ref("");
+const assistantSkillActionId = ref("");
 const assistantMemory = ref<MissionMemory[]>([]);
 const assistantSources = ref<MissionContextSource[]>([]);
 const assistantContextLoading = ref(false);
@@ -1015,56 +1034,13 @@ const assistantSettingsTabs = computed<
   },
 ]);
 
-const assistantSkillInstallSources = [
-  {
-    id: "repo",
-    icon: "GitBranch",
-    title: "Repository or URL",
-    description:
-      "Install a skill bundle from a trusted Git repository or direct skill URL.",
-  },
-  {
-    id: "upload",
-    icon: "Upload",
-    title: "Upload",
-    description:
-      "Import a skill folder, ZIP archive, or single SKILL.md file for review.",
-  },
-] satisfies Array<{
-  id: string;
-  icon: UiIconName;
-  title: string;
-  description: string;
-}>;
+const installedAssistantSkills = computed(() =>
+  assistantSkills.value.filter((skill) => skill.status !== "disabled"),
+);
 
-const assistantSkillDetailRows = [
-  {
-    id: "playbooks",
-    icon: "BookOpen",
-    title: "Playbooks, not permissions",
-    description:
-      "Skills teach ME3 how to approach specialist work, but account access still comes from connected tools.",
-  },
-  {
-    id: "loading",
-    icon: "SearchCheck",
-    title: "Loaded only when useful",
-    description:
-      "ME3 can keep skills lightweight by reading full instructions only when a chat or job matches.",
-  },
-  {
-    id: "safety",
-    icon: "ShieldCheck",
-    title: "Actions stay approved",
-    description:
-      "A skill can suggest an action, but ME3 still uses the shared setup, approval, and audit layer.",
-  },
-] satisfies Array<{
-  id: string;
-  icon: UiIconName;
-  title: string;
-  description: string;
-}>;
+const canInstallAssistantSkill = computed(
+  () => assistantSkillUrlDraft.value.trim().length > 0 && !assistantSkillActionId.value,
+);
 
 const canSendAssistantMessage = computed(
   () =>
@@ -1403,11 +1379,67 @@ function openAssistantSkillsModal() {
   assistantSkillsModalOpen.value = true;
   assistantSettingsModalOpen.value = false;
   assistantHistoryDrawerOpen.value = false;
+  assistantSkillsError.value = "";
+  void loadAssistantSkills();
 }
 
 function closeAssistantSkillsModal() {
   assistantSkillsModalOpen.value = false;
   assistantSkillUrlDraft.value = "";
+  assistantSkillsError.value = "";
+}
+
+async function loadAssistantSkills() {
+  assistantSkillsLoading.value = true;
+  assistantSkillsError.value = "";
+  try {
+    const response = await api.get<AssistantSkillsResponse>("/assistant/skills");
+    assistantSkills.value = response.skills || [];
+  } catch (err) {
+    assistantSkillsError.value =
+      err instanceof ApiError ? err.message : "Skills could not load.";
+  } finally {
+    assistantSkillsLoading.value = false;
+  }
+}
+
+async function addAssistantSkill() {
+  const sourceRef = assistantSkillUrlDraft.value.trim();
+  if (!sourceRef || assistantSkillActionId.value) return;
+  assistantSkillActionId.value = "create";
+  assistantSkillsError.value = "";
+  try {
+    const response = await api.post<{ skill: AssistantSkill }>("/assistant/skills", {
+      sourceRef,
+    });
+    assistantSkills.value = [
+      response.skill,
+      ...assistantSkills.value.filter((skill) => skill.id !== response.skill.id),
+    ];
+    assistantSkillUrlDraft.value = "";
+    toastSuccess("Skill installed");
+  } catch (err) {
+    assistantSkillsError.value =
+      err instanceof ApiError ? err.message : "Skill could not be installed.";
+  } finally {
+    assistantSkillActionId.value = "";
+  }
+}
+
+async function removeAssistantSkill(skill: AssistantSkill) {
+  if (assistantSkillActionId.value) return;
+  assistantSkillActionId.value = skill.id;
+  assistantSkillsError.value = "";
+  try {
+    await api.delete<{ ok: boolean }>(`/assistant/skills/${encodeURIComponent(skill.id)}`);
+    assistantSkills.value = assistantSkills.value.filter((item) => item.id !== skill.id);
+    toastSuccess("Skill removed");
+  } catch (err) {
+    assistantSkillsError.value =
+      err instanceof ApiError ? err.message : "Skill could not be removed.";
+  } finally {
+    assistantSkillActionId.value = "";
+  }
 }
 
 async function setAssistantSettingsSection(section: AssistantSettingsSection) {
@@ -5199,99 +5231,73 @@ function messageFromUnknown(err: unknown, fallback: string) {
           </header>
 
           <div class="assistant-skills">
-            <div class="assistant-skills__main">
-              <section class="assistant-skills__panel">
-                <header class="assistant-skills__panel-header">
-                  <div>
-                    <h3>Installed</h3>
-                    <p>Enabled playbooks available to chats and jobs.</p>
-                  </div>
-                  <span class="assistant-skills__count">0</span>
-                </header>
-                <div class="assistant-skills__empty">
-                  <UiIcon name="BookOpen" :size="22" aria-hidden="true" />
-                  <div>
-                    <h4>No skills installed yet.</h4>
-                    <p>
-                      Core and plugin-owned skills will appear here once the
-                      installer is connected.
-                    </p>
-                  </div>
-                </div>
-              </section>
-
-              <section class="assistant-skills__panel">
-                <header class="assistant-skills__panel-header">
-                  <div>
-                    <h3>Add Skill</h3>
-                    <p>Install from a trusted source or import a local bundle.</p>
-                  </div>
-                </header>
-                <form
-                  class="assistant-skills__install-form"
-                  @submit.prevent
+            <form class="assistant-skills__install-form" @submit.prevent="addAssistantSkill">
+              <label class="sr-only" for="assistant-skill-url">
+                Skill URL or repository
+              </label>
+              <div class="assistant-skills__input-row">
+                <UiIcon name="Link" :size="16" aria-hidden="true" />
+                <input
+                  id="assistant-skill-url"
+                  v-model="assistantSkillUrlDraft"
+                  type="text"
+                  placeholder="Paste a skill URL or repo"
+                />
+                <Button
+                  color="accent"
+                  shape="soft"
+                  size="compact"
+                  type="submit"
+                  :disabled="!canInstallAssistantSkill"
                 >
-                  <label class="sr-only" for="assistant-skill-url">
-                    Skill URL or repository
-                  </label>
-                  <div class="assistant-skills__input-row">
-                    <UiIcon name="Link" :size="16" aria-hidden="true" />
-                    <input
-                      id="assistant-skill-url"
-                      v-model="assistantSkillUrlDraft"
-                      type="url"
-                      placeholder="https://github.com/org/skill or skill URL"
-                    />
-                    <Button
-                      color="accent"
-                      shape="soft"
-                      size="compact"
-                      type="submit"
-                      disabled
-                    >
-                      Install
-                    </Button>
-                  </div>
-                </form>
-                <div class="assistant-skills__source-grid">
-                  <article
-                    v-for="source in assistantSkillInstallSources"
-                    :key="source.id"
-                    class="assistant-skills__source"
-                  >
-                    <UiIcon :name="source.icon" :size="17" aria-hidden="true" />
-                    <div>
-                      <h4>{{ source.title }}</h4>
-                      <p>{{ source.description }}</p>
-                    </div>
-                  </article>
-                </div>
-              </section>
-            </div>
-
-            <aside class="assistant-skills__panel assistant-skills__details">
-              <header class="assistant-skills__panel-header">
-                <div>
-                  <h3>Details</h3>
-                  <p>What ME3 will check before a skill affects a run.</p>
-                </div>
-              </header>
-              <article
-                v-for="row in assistantSkillDetailRows"
-                :key="row.id"
-                class="assistant-skills__detail-row"
-              >
-                <UiIcon :name="row.icon" :size="17" aria-hidden="true" />
-                <div>
-                  <h4>{{ row.title }}</h4>
-                  <p>{{ row.description }}</p>
-                </div>
-              </article>
-              <div class="assistant-skills__notice">
-                <strong>Pending backend:</strong>
-                validation, matching, progressive loading, and run manifests.
+                  Install
+                </Button>
               </div>
-            </aside>
+            </form>
+
+            <p
+              v-if="assistantSkillsError"
+              class="assistant-skills__error"
+              role="alert"
+            >
+              {{ assistantSkillsError }}
+            </p>
+
+            <div v-if="assistantSkillsLoading" class="empty-row">
+              Loading skills...
+            </div>
+            <div
+              v-else-if="installedAssistantSkills.length === 0"
+              class="assistant-skills__empty"
+            >
+              <UiIcon name="BookOpen" :size="18" aria-hidden="true" />
+              <span>No skills installed yet.</span>
+            </div>
+            <div v-else class="assistant-skills__installed">
+              <article
+                v-for="skill in installedAssistantSkills"
+                :key="skill.id"
+                class="assistant-skills__card"
+              >
+                <UiIcon name="Sparkles" :size="17" aria-hidden="true" />
+                <div>
+                  <h4>{{ skill.name }}</h4>
+                  <p>{{ skill.description || skill.sourceRef }}</p>
+                </div>
+                <Button
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  type="button"
+                  aria-label="Remove skill"
+                  :disabled="assistantSkillActionId === skill.id"
+                  @click="removeAssistantSkill(skill)"
+                >
+                  <UiIcon name="Trash2" :size="14" />
+                </Button>
+              </article>
+            </div>
           </div>
         </section>
       </div>
@@ -7597,115 +7603,23 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-skills-dialog {
-  width: min(920px, calc(100vw - 32px));
+  width: min(620px, calc(100vw - 32px));
 }
 
 .assistant-skills {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
 }
 
-.assistant-skills__main,
-.assistant-skills__panel,
-.assistant-skills__install-form,
-.assistant-skills__details {
+.assistant-skills__install-form {
   display: grid;
   min-width: 0;
 }
 
-.assistant-skills__main,
-.assistant-skills__panel,
-.assistant-skills__install-form,
-.assistant-skills__details {
-  gap: 12px;
-}
-
-.assistant-skills__panel {
-  align-content: start;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  padding: 14px;
-  background: var(--ui-surface);
-}
-
-.assistant-skills__panel-header,
-.assistant-skills__input-row,
-.assistant-skills__empty,
-.assistant-skills__source,
-.assistant-skills__detail-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-}
-
-.assistant-skills__panel-header {
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.assistant-skills__panel-header h3,
-.assistant-skills__panel-header p,
-.assistant-skills__empty h4,
-.assistant-skills__empty p,
-.assistant-skills__source h4,
-.assistant-skills__source p,
-.assistant-skills__detail-row h4,
-.assistant-skills__detail-row p {
-  margin: 0;
-}
-
-.assistant-skills__panel-header h3,
-.assistant-skills__empty h4,
-.assistant-skills__source h4,
-.assistant-skills__detail-row h4 {
-  color: var(--ui-text);
-  font-size: 14px;
-  line-height: 1.25;
-}
-
-.assistant-skills__panel-header p,
-.assistant-skills__empty p,
-.assistant-skills__source p,
-.assistant-skills__detail-row p,
-.assistant-skills__notice {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.assistant-skills__count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  min-height: 24px;
-  border-radius: 999px;
-  background: var(--ui-surface-muted);
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.assistant-skills__empty {
-  align-items: center;
-  min-height: 96px;
-  border-radius: var(--ui-radius-sm);
-  padding: 14px;
-  background: var(--ui-surface-muted);
-}
-
-.assistant-skills__empty > svg,
-.assistant-skills__source > svg,
-.assistant-skills__detail-row > svg {
-  flex: 0 0 auto;
-  color: var(--ui-accent);
-}
-
 .assistant-skills__input-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   border-radius: var(--ui-radius-md);
@@ -7713,8 +7627,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: var(--ui-surface-muted);
 }
 
-.assistant-skills__input-row > svg {
+.assistant-skills__empty > svg,
+.assistant-skills__card > svg {
   flex: 0 0 auto;
+  color: var(--ui-accent);
+}
+
+.assistant-skills__input-row > svg {
   margin-left: 8px;
   color: var(--ui-text-muted);
 }
@@ -7738,27 +7657,63 @@ function messageFromUnknown(err: unknown, fallback: string) {
   outline-offset: 1px;
 }
 
-.assistant-skills__source-grid {
+.assistant-skills__error {
+  margin: 0;
+  border-radius: var(--ui-radius-sm);
+  padding: 8px 10px;
+  background: color-mix(in oklab, #e53935 10%, var(--ui-surface));
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.assistant-skills__empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+}
+
+.assistant-skills__installed {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   min-width: 0;
 }
 
-.assistant-skills__source,
-.assistant-skills__detail-row {
-  border-top: 1px solid var(--ui-border);
-  padding-top: 12px;
-}
-
-.assistant-skills__notice {
+.assistant-skills__card {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
   padding: 10px;
-  background: var(--ui-surface-muted);
+  background: var(--ui-surface);
 }
 
-.assistant-skills__notice strong {
+.assistant-skills__card h4,
+.assistant-skills__card p {
+  margin: 0;
+}
+
+.assistant-skills__card h4 {
   color: var(--ui-text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.assistant-skills__card p {
+  overflow-wrap: anywhere;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.assistant-skills__card .me3-btn {
+  justify-self: end;
 }
 
 .needs-you {
@@ -8701,11 +8656,6 @@ button:disabled {
 
   .assistant-skills-dialog {
     width: 100%;
-  }
-
-  .assistant-skills,
-  .assistant-skills__source-grid {
-    grid-template-columns: 1fr;
   }
 
   .assistant-skills {

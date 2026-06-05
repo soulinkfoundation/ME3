@@ -23,6 +23,7 @@ export type Me3AgentContextSourceKind =
   | "task"
   | "project"
   | "assistant_message"
+  | "agent_skill"
   | "agent_job"
   | "plugin"
   | "manual"
@@ -156,6 +157,15 @@ export type Me3AgentContextRecentMessage = {
   source: Me3AgentContextSource;
 };
 
+export type Me3AgentContextSkill = {
+  id: string;
+  name: string;
+  description?: string | null;
+  instructions?: string | null;
+  reason?: string | null;
+  source: Me3AgentContextSource;
+};
+
 export type Me3AgentContextResolverScope = {
   contactId?: string | null;
   emailThreadId?: string | null;
@@ -213,6 +223,7 @@ export type Me3AgentContextPacketInput = {
   tasks?: readonly Me3AgentContextTask[];
   calendarEvents?: readonly Me3AgentContextCalendarEvent[];
   recentMessages?: readonly Me3AgentContextRecentMessage[];
+  skills?: readonly Me3AgentContextSkill[];
   sources?: readonly Me3AgentContextSource[];
   budget?: Partial<Me3AgentContextBudget>;
   warnings?: readonly string[];
@@ -237,6 +248,7 @@ export type Me3AgentContextPacket = {
   tasks: readonly Me3AgentContextTask[];
   calendarEvents: readonly Me3AgentContextCalendarEvent[];
   recentMessages: readonly Me3AgentContextRecentMessage[];
+  skills: readonly Me3AgentContextSkill[];
   sources: readonly Me3AgentContextSource[];
   budget: Me3AgentContextBudget;
   warnings: readonly string[];
@@ -429,6 +441,7 @@ export function createMe3AgentContextPacket(
     tasks: (input.tasks || []).map(normalizeTask),
     calendarEvents: (input.calendarEvents || []).map(normalizeCalendarEvent),
     recentMessages: (input.recentMessages || []).map(normalizeRecentMessage),
+    skills: (input.skills || []).map(normalizeSkill),
     budget: normalizeBudget(input.budget),
     warnings: [...(input.warnings || [])],
   };
@@ -507,6 +520,14 @@ export function buildMe3AgentContextPrompt(
       "Recent assistant messages",
       packet.recentMessages,
       (message) => `- ${message.role}: ${message.content}`,
+    ),
+    formatList(
+      "Agent skills",
+      packet.skills,
+      (skill) =>
+        `- ${skill.name}: ${skill.description || "No description."}${
+          skill.reason ? ` Match: ${skill.reason}` : ""
+        }${skill.instructions ? `\n  Instructions: ${skill.instructions}` : ""}`,
     ),
     formatList(
       "Context sources",
@@ -761,6 +782,13 @@ function normalizeRecentMessage(
   return {
     ...message,
     source: normalizeSource(message.source),
+  };
+}
+
+function normalizeSkill(skill: Me3AgentContextSkill): Me3AgentContextSkill {
+  return {
+    ...skill,
+    source: normalizeSource(skill.source),
   };
 }
 
@@ -1117,6 +1145,7 @@ function collectMe3AgentContextSources(
     ...packet.tasks.map((item) => item.source),
     ...packet.calendarEvents.map((item) => item.source),
     ...packet.recentMessages.map((item) => item.source),
+    ...packet.skills.map((item) => item.source),
   ].filter((source): source is Me3AgentContextSource => Boolean(source));
 }
 
@@ -1157,6 +1186,7 @@ function sourceKindDisplayOrder(kind: Me3AgentContextSourceKind): number {
     "task",
     "calendar_event",
     "assistant_message",
+    "agent_skill",
     "agent_job",
     "plugin",
     "manual",
@@ -1196,6 +1226,8 @@ function manifestSourceKindLabel(kind: Me3AgentContextSourceKind, count: number)
       return plural ? "projects" : "project";
     case "assistant_message":
       return plural ? "recent messages" : "recent message";
+    case "agent_skill":
+      return plural ? "agent skills" : "agent skill";
     case "agent_job":
       return plural ? "agent jobs" : "agent job";
     case "plugin":

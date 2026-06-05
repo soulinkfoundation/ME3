@@ -18,6 +18,7 @@ import {
   type Me3AgentContextProject,
   type Me3AgentContextRecentMessage,
   type Me3AgentContextSource,
+  type Me3AgentContextSkill,
   type Me3AgentContextTask,
   type Me3KnowledgeRuntimeContext,
 } from "@me3/knowledge";
@@ -517,6 +518,18 @@ type DbMissionTaskRow = {
   due_at: string | null;
   scheduled_for: string | null;
   source_ref: string | null;
+  updated_at: string;
+};
+
+type DbAssistantSkillRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  source_kind: string;
+  source_ref: string | null;
+  trust_level: string;
+  trigger_hints_json: string;
+  skill_md: string | null;
   updated_at: string;
 };
 
@@ -2845,6 +2858,35 @@ function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function tokenizeContextText(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length > 2),
+    ),
+  );
+}
+
+function scoreContextSkillMatch(queryTokens: string[], value: string) {
+  const haystack = new Set(tokenizeContextText(value));
+  return queryTokens.reduce((score, token) => score + (haystack.has(token) ? 1 : 0), 0);
+}
+
+function parseJsonStringArray(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function contactIdForEmail(
   email: string | null,
   contactsByEmail: ReadonlyMap<string, string>,
@@ -3390,6 +3432,7 @@ async function loadCoreChatAgentContext(
       privateMemory,
       missionStatement,
       lifeSnapshot,
+      skills,
     ] =
       await Promise.all([
         loadCoreContextEmailThreads(env, input.ownerId, contacts),
@@ -3399,6 +3442,7 @@ async function loadCoreChatAgentContext(
         loadCoreContextPrivateMemory(env, input.ownerId),
         loadCoreContextMissionStatement(env, input.ownerId),
         loadCoreContextLifeSnapshot(env, input.ownerId),
+        loadCoreContextSkills(env, input.ownerId, input.messageText),
       ]);
 
     const packet = resolveMe3AgentContextPacket({
@@ -3431,6 +3475,7 @@ async function loadCoreChatAgentContext(
       candidateCalendarEvents: calendarEvents,
       candidatePrivateMemory: privateMemory,
       candidateRecentMessages: mapRecentMessagesToContext(input.recent),
+      skills,
       activeScope: { date: activeDate },
       budget: { maxPromptChars: CHAT_CONTEXT_PROMPT_BUDGET_CHARS },
     });
@@ -3678,6 +3723,68 @@ async function loadCoreContextPrivateMemory(
       updatedAt: row.updated_at,
     }),
   }));
+}
+
+async function loadCoreContextSkills(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+  requestText: string,
+): Promise<Me3AgentContextSkill[]> {
+  const requestTokens = tokenizeContextText(requestText);
+  if (requestTokens.length === 0) return [];
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT id, name, description, source_kind, source_ref, trust_level,
+              trigger_hints_json, skill_md, updated_at
+       FROM assistant_skills
+       WHERE user_id = ? AND status = 'active'
+       ORDER BY updated_at DESC, name ASC
+       LIMIT 100`,
+    )
+      .bind(ownerId)
+      .all<DbAssistantSkillRow>();
+
+    return (rows.results || [])
+      .map((row) => ({
+        row,
+        score: scoreContextSkillMatch(
+          requestTokens,
+          [
+            row.name,
+            row.description || "",
+            row.source_ref || "",
+            ...parseJsonStringArray(row.trigger_hints_json),
+          ].join(" "),
+        ),
+      }))
+      .filter((item) => item.score > 0)
+      .sort((left, right) => right.score - left.score || left.row.name.localeCompare(right.row.name))
+      .slice(0, 4)
+      .map(({ row, score }) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        instructions: row.skill_md ? summarizeContextText(row.skill_md, 3200) : null,
+        reason:
+          score >= 3
+            ? "Skill triggers matched this request."
+            : "Skill metadata matched this request.",
+        source: contextSource({
+          id: row.id,
+          kind: "agent_skill",
+          label: row.name,
+          visibility: "private",
+          reason:
+            row.skill_md
+              ? "Matched skill instructions loaded for this turn."
+              : "Matched installed skill; full instructions are not available yet.",
+          sourceRef: row.source_ref,
+          updatedAt: row.updated_at,
+        }),
+      }));
+  } catch {
+    return [];
+  }
 }
 
 async function loadCoreContextMissionStatement(
