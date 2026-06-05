@@ -1869,7 +1869,13 @@ onBeforeUnmount(() => {
             class="cal-create-menu cal-settings-menu cal-settings-menu--mobile-nav"
             role="menu"
           >
-            <button type="button" role="menuitem" @click="openAvailabilitySettings">
+            <button
+              type="button"
+              class="cal-settings-menu-item"
+              role="menuitem"
+              @click="openAvailabilitySettings"
+            >
+              <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
               Availability
             </button>
           </div>
@@ -2005,7 +2011,13 @@ onBeforeUnmount(() => {
               class="cal-create-menu cal-settings-menu cal-settings-menu--toolbar"
               role="menu"
             >
-              <button type="button" role="menuitem" @click="openAvailabilitySettings">
+              <button
+                type="button"
+                class="cal-settings-menu-item"
+                role="menuitem"
+                @click="openAvailabilitySettings"
+              >
+                <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
                 Availability
               </button>
             </div>
@@ -2855,15 +2867,9 @@ onBeforeUnmount(() => {
         class="modal-card availability-modal"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="calendar-availability-title"
+        aria-label="Booking availability"
       >
-        <div class="modal-header">
-          <div>
-            <h2 id="calendar-availability-title">Booking availability</h2>
-            <p class="modal-subtitle">
-              Manage the weekly windows used by bookings for this site.
-            </p>
-          </div>
+        <div class="modal-header modal-header--actions-only">
           <button
             type="button"
             class="icon-close"
@@ -2875,23 +2881,6 @@ onBeforeUnmount(() => {
         </div>
 
         <form class="availability-form" @submit.prevent="saveAvailabilitySettings">
-          <label v-if="sites.sites.length > 1" class="availability-site-picker">
-            <span>Site</span>
-            <select
-              v-model="availabilitySiteUsername"
-              :disabled="availabilityLoading || availabilitySaving"
-              @change="loadAvailabilitySettings"
-            >
-              <option
-                v-for="site in sites.sites"
-                :key="site.id"
-                :value="site.username"
-              >
-                {{ site.username }}.example.com
-              </option>
-            </select>
-          </label>
-
           <div v-if="availabilityLoading" class="cal-loading">
             Loading availability…
           </div>
@@ -2900,7 +2889,7 @@ onBeforeUnmount(() => {
             v-model:availability="availabilityDraft"
             v-model:buffer-time="availabilityBufferTime"
             v-model:timezone="availabilityTimezone"
-            description="These windows apply to private booking offers. Classes and retreats keep their own schedules."
+            description="Set or update your availability here."
           />
 
           <p v-if="availabilityError" class="form-error">
@@ -3189,6 +3178,12 @@ onBeforeUnmount(() => {
   background: var(--ui-surface-muted);
 }
 
+.cal-settings-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .cal-filters-title {
   margin: 0 0 8px;
   font-size: 11px;
@@ -3301,11 +3296,8 @@ onBeforeUnmount(() => {
   font-size: 20px;
 }
 
-.modal-subtitle {
-  margin: 6px 0 0;
-  color: var(--ui-text-muted);
-  font-size: 13px;
-  line-height: 1.45;
+.modal-header--actions-only {
+  justify-content: flex-end;
 }
 
 .modal-kicker {
@@ -3444,22 +3436,6 @@ onBeforeUnmount(() => {
 .availability-form {
   display: grid;
   gap: 16px;
-}
-
-.availability-site-picker {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.availability-site-picker select {
-  padding: 10px 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text);
-  font: inherit;
 }
 
 .form-hint {
