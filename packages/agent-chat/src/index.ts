@@ -1749,9 +1749,9 @@ async function maybeHandleCoreToolTurn(
   owner: OwnerProfileRow | null,
 ): Promise<AgentSandboxDispatchResponse | null> {
   const messageText = input.messageText.trim();
+  const recent = await loadRecentMessages(env, input.userId, input.threadId);
 
-  if (isMailboxDraftSaveRequest(messageText)) {
-    const recent = await loadRecentMessages(env, input.userId, input.threadId);
+  if (isMailboxDraftSaveRequest(messageText, recent)) {
     const draftPlan = await parseMailboxDraftSaveRequest(env, input.userId, messageText, recent);
     if ("error" in draftPlan) {
       return toolResponse(input.turnId, "core.mailbox.draft", draftPlan.error, {
@@ -1769,7 +1769,7 @@ async function maybeHandleCoreToolTurn(
     return toolResponse(
       input.turnId,
       "core.mailbox.draft",
-      "Done. I saved that email as a mailbox draft in `/email` for your review. It has not been sent.",
+      "Done. I saved that email as a draft in `/email` for your review. It has not been sent.",
       {
         emailAction: {
           kind: "drafted",
@@ -1872,10 +1872,15 @@ function toolResponse(
   };
 }
 
-function isMailboxDraftSaveRequest(messageText: string): boolean {
-  return /\b(save|store|keep|create|make)\b/i.test(messageText) &&
-    /\b(it|that|this|draft|email|reply|message)\b/i.test(messageText) &&
-    /\b(draft|mailbox|email|\/email)\b/i.test(messageText);
+function isMailboxDraftSaveRequest(
+  messageText: string,
+  recent: Array<{ role: "user" | "assistant"; content: string }>,
+): boolean {
+  const asksToSave = /\b(save|store|keep|create|make)\b/i.test(messageText) &&
+    /\b(it|that|this|draft|email|reply|message)\b/i.test(messageText);
+  if (!asksToSave) return false;
+  if (/\b(draft|mailbox|email|\/email)\b/i.test(messageText)) return true;
+  return Boolean(latestAssistantEmailDraft(recent));
 }
 
 async function parseMailboxDraftSaveRequest(
@@ -1884,13 +1889,11 @@ async function parseMailboxDraftSaveRequest(
   messageText: string,
   recent: Array<{ role: "user" | "assistant"; content: string }>,
 ): Promise<{ input: AgentMailboxDraftInput } | { error: string }> {
-  const latestAssistantDraft = [...recent]
-    .reverse()
-    .find((message) => message.role === "assistant" && looksLikeEmailDraft(message.content));
+  const latestAssistantDraft = latestAssistantEmailDraft(recent);
   if (!latestAssistantDraft) {
     return {
       error:
-        "I can save a mailbox draft, but I need the draft text first. Paste the email body or ask me to draft it again.",
+        "I can save a draft, but I need the draft text first. Paste the email body or ask me to draft it again.",
     };
   }
 
@@ -1902,7 +1905,7 @@ async function parseMailboxDraftSaveRequest(
   if (!toAddress) {
     return {
       error:
-        "I can save that as a mailbox draft, but I need the recipient email address first.",
+        "I can save that as a draft, but I need the recipient email address first.",
     };
   }
 
@@ -1924,9 +1927,17 @@ async function parseMailboxDraftSaveRequest(
   };
 }
 
+function latestAssistantEmailDraft(
+  recent: Array<{ role: "user" | "assistant"; content: string }>,
+) {
+  return [...recent]
+    .reverse()
+    .find((message) => message.role === "assistant" && looksLikeEmailDraft(message.content));
+}
+
 function looksLikeEmailDraft(text: string): boolean {
-  return /\b(subject|hi|hello|dear)\b/i.test(text) &&
-    /\b(save this|save it|mailbox draft|send|recipient|to:|subject:|regards|thanks)\b/i.test(text);
+  return /\b(subject|subject line|to:|hi|hello|dear)\b/i.test(text) &&
+    /\b(save this|save it|draft|send|recipient|to:|subject:|regards|thanks|best)\b/i.test(text);
 }
 
 function parseDraftText(text: string): { subject: string | null; body: string } {
@@ -1934,10 +1945,14 @@ function parseDraftText(text: string): { subject: string | null; body: string } 
   const subjectMatch = normalized.match(/^\s*(?:subject|subject line)\s*:\s*(.+)$/im);
   const subject = subjectMatch?.[1]?.trim() || null;
   let body = normalized
+    .replace(/^\s*(?:here(?:'|’)s|here is)\s+(?:a\s+)?(?:friendly\s+)?draft\s*:?\s*$/im, "")
+    .replace(/^\s*[-–—]{3,}\s*$/gm, "")
     .replace(/^\s*(?:subject|subject line)\s*:\s*.+$/im, "")
     .replace(/^\s*(?:to|recipient)\s*:\s*.+$/im, "")
     .trim();
-  const savePromptIndex = body.search(/\n\s*(?:if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i);
+  const savePromptIndex = body.search(
+    /\n\s*(?:[-–—]\s*)?(?:this is a chat draft only|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
+  );
   if (savePromptIndex >= 0) body = body.slice(0, savePromptIndex).trim();
   return { subject, body };
 }
@@ -3524,6 +3539,7 @@ function buildChatMessages(
     knowledgeContext,
     agentContextPrompt,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
+    "For email drafting, say 'save a draft' instead of 'stage a draft' or 'stage it in the ME3 mailbox'. If the owner asks to save the draft, the tool layer will handle saving it to /email.",
     "Core can converse with the owner and can use bundled first-party API surfaces for reminders, contacts, mailbox, content, calendar, and site workflows as they are routed by the host.",
   ]
     .filter(Boolean)
