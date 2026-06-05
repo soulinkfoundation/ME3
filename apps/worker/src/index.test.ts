@@ -204,6 +204,20 @@ type StoredSiteFile = {
   sha256: string | null;
   updated_at: string;
 };
+type StoredBookingHold = {
+  id: string;
+  site_id: string;
+  booking_id: string | null;
+  offer_id: string | null;
+  booking_type: "one_to_one" | "class" | "retreat";
+  hold_token: string;
+  slot_start: string;
+  slot_end: string;
+  status: "active" | "confirmed" | "released" | "expired";
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+};
 type StoredTelegramSettings = {
   user_id: string;
   bot_username: string | null;
@@ -277,6 +291,7 @@ function createEnv(): Env & {
   sites: DbSite[];
   siteFiles: StoredSiteFile[];
   bookings: DbBooking[];
+  bookingHolds: StoredBookingHold[];
 } {
   const state = {
     owner: null as StoredOwner | null,
@@ -313,6 +328,7 @@ function createEnv(): Env & {
     sites: [] as DbSite[],
     siteFiles: [] as StoredSiteFile[],
     bookings: [] as DbBooking[],
+    bookingHolds: [] as StoredBookingHold[],
   };
 
   const toStoredSiteFileContent = (value: unknown): Uint8Array => {
@@ -1183,6 +1199,23 @@ function createEnv(): Env & {
                 });
               }
 
+              if (sql.includes("INSERT INTO booking_holds")) {
+                state.bookingHolds.push({
+                  id: values[0] as string,
+                  site_id: values[1] as string,
+                  booking_id: null,
+                  offer_id: values[2] as string | null,
+                  booking_type: "one_to_one",
+                  hold_token: values[3] as string,
+                  slot_start: values[4] as string,
+                  slot_end: values[5] as string,
+                  status: "active",
+                  expires_at: values[6] as string,
+                  created_at: "2026-05-31T22:30:00Z",
+                  updated_at: "2026-05-31T22:30:00Z",
+                });
+              }
+
               if (sql.includes("UPDATE mailbox_aliases") && state.mailbox) {
                 if (sql.includes("alias_local_part = ?")) {
                   state.mailbox.alias_local_part = values[0] as string;
@@ -1756,6 +1789,31 @@ function createEnv(): Env & {
                 }
                 return null;
               }
+              if (sql.includes("FROM booking_holds")) {
+                if (sql.includes("WHERE hold_token = ?")) {
+                  return (
+                    state.bookingHolds.find(
+                      (hold) =>
+                        hold.hold_token === values[0] &&
+                        hold.status === "active" &&
+                        new Date(hold.expires_at).getTime() > Date.now(),
+                    ) || null
+                  ) as T | null;
+                }
+
+                const [siteId, offerId, , endsAt, startsAt] = values as string[];
+                return (
+                  state.bookingHolds.find(
+                    (hold) =>
+                      hold.site_id === siteId &&
+                      hold.status === "active" &&
+                      new Date(hold.expires_at).getTime() > Date.now() &&
+                      (!offerId || hold.offer_id === offerId) &&
+                      hold.slot_start < endsAt &&
+                      hold.slot_end > startsAt,
+                  ) || null
+                ) as T | null;
+              }
               if (sql.includes("FROM social_provider_settings")) {
                 return (
                   state.socialProviderSettings.find(
@@ -2109,6 +2167,9 @@ function createEnv(): Env & {
     get bookings() {
       return state.bookings;
     },
+    get bookingHolds() {
+      return state.bookingHolds;
+    },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
     CORE_WEB_ORIGIN: "http://localhost:4000",
@@ -2266,7 +2327,24 @@ function addAssistantEditableSite(env: ReturnType<typeof createEnv>) {
   );
 }
 
-function addBookableSite(env: ReturnType<typeof createEnv>) {
+function addBookableSite(
+  env: ReturnType<typeof createEnv>,
+  bookIntent: Record<string, unknown> = {
+    enabled: true,
+    offers: [
+      {
+        id: "free-session",
+        title: "Free session",
+        duration: 60,
+        pricing: { enabled: false },
+      },
+    ],
+    availability: {
+      timezone: "Europe/Dublin",
+      windows: { tuesday: ["15:00-16:30"] },
+    },
+  },
+) {
   env.sites.push({
     id: "site-booking",
     user_id: "owner",
@@ -2285,21 +2363,7 @@ function addBookableSite(env: ReturnType<typeof createEnv>) {
     name: "Booking Owner",
     handle: "owner",
     intents: {
-      book: {
-        enabled: true,
-        offers: [
-          {
-            id: "free-session",
-            title: "Free session",
-            duration: 60,
-            pricing: { enabled: false },
-          },
-        ],
-        availability: {
-          timezone: "Europe/Dublin",
-          windows: { tuesday: ["15:00-16:30"] },
-        },
-      },
+      book: bookIntent,
     },
   };
   const content = new TextEncoder().encode(JSON.stringify(meJson));
@@ -4607,6 +4671,263 @@ describe("ME3 Core Worker auth", () => {
     expect(overlapResponse.status).toBe(409);
     expect(overlapBody.error).toBe("That time has already been booked");
     expect(env.bookings).toHaveLength(1);
+  });
+
+  it("returns public slots for a single offer and excludes active holds", async () => {
+    const env = createEnv();
+    addBookableSite(env, {
+      enabled: true,
+      offers: [
+        {
+          id: "free-session",
+          title: "Free session",
+          duration: 60,
+          pricing: { enabled: false },
+        },
+      ],
+      availability: {
+        timezone: "Europe/Dublin",
+        windows: { tuesday: ["15:00-17:30"] },
+      },
+    });
+    env.bookingHolds.push({
+      id: "hold-1",
+      site_id: "site-booking",
+      booking_id: null,
+      offer_id: "free-session",
+      booking_type: "one_to_one",
+      hold_token: "hold-token",
+      slot_start: "2026-06-09T14:00:00.000Z",
+      slot_end: "2026-06-09T15:00:00.000Z",
+      status: "active",
+      expires_at: "2099-01-01T00:00:00.000Z",
+      created_at: "2026-06-05T12:00:00.000Z",
+      updated_at: "2026-06-05T12:00:00.000Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/book/owner/slots?date=2026-06-09"),
+      env,
+    );
+    const body = (await response.json()) as {
+      ok: boolean;
+      timezone: string;
+      offer: { id: string; duration: number };
+      slots: Array<{ localTime: string; slotStart: string; slotEnd: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.timezone).toBe("Europe/Dublin");
+    expect(body.offer).toMatchObject({ id: "free-session", duration: 60 });
+    expect(body.slots.map((slot) => slot.localTime)).toEqual([
+      "16:00",
+      "16:15",
+      "16:30",
+    ]);
+    expect(body.slots[0]).toMatchObject({
+      slotStart: "2026-06-09T15:00:00.000Z",
+      slotEnd: "2026-06-09T16:00:00.000Z",
+    });
+  });
+
+  it("requires offerId for multi-offer public slot lookup", async () => {
+    const env = createEnv();
+    addBookableSite(env, {
+      enabled: true,
+      offers: [
+        { id: "intro", title: "Intro", duration: 30, pricing: { enabled: false } },
+        { id: "deep-dive", title: "Deep Dive", duration: 60, pricing: { enabled: false } },
+      ],
+      availability: {
+        timezone: "UTC",
+        windows: { tuesday: ["09:00-10:00"] },
+      },
+    });
+
+    const missingOfferResponse = await app.fetch(
+      new Request("http://localhost/api/book/owner/slots?date=2026-06-09"),
+      env,
+    );
+    const missingOfferBody = (await missingOfferResponse.json()) as { error: string };
+
+    expect(missingOfferResponse.status).toBe(400);
+    expect(missingOfferBody.error).toBe(
+      "offerId is required when multiple booking offers exist",
+    );
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/api/book/owner/slots?date=2026-06-09&offerId=intro",
+      ),
+      env,
+    );
+    const body = (await response.json()) as {
+      offer: { id: string; duration: number };
+      slots: Array<{ localTime: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.offer).toMatchObject({ id: "intro", duration: 30 });
+    expect(body.slots.map((slot) => slot.localTime)).toEqual([
+      "09:00",
+      "09:15",
+      "09:30",
+    ]);
+  });
+
+  it("confirms free bookings through the public action contract", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/book/owner/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          slotStart: "2026-06-09T14:15:00.000Z",
+          slotEnd: "2026-06-09T15:15:00.000Z",
+          guestName: "Contract Guest",
+          guestEmail: "contract@example.com",
+          notes: "Booked through me.json action.",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      ok: boolean;
+      booking: { guestEmail: string; startsAt: string; endsAt: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.booking).toMatchObject({
+      guestEmail: "contract@example.com",
+      startsAt: "2026-06-09T14:15:00.000Z",
+      endsAt: "2026-06-09T15:15:00.000Z",
+    });
+    expect(env.bookings).toHaveLength(1);
+    expect(env.bookings[0]).toMatchObject({
+      offer_id: "free-session",
+      guest_email: "contract@example.com",
+      payment_status: "not_required",
+    });
+  });
+
+  it("rejects overlaps and missing availability through the public contract", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+
+    const firstResponse = await app.fetch(
+      new Request("http://localhost/api/book/owner/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          slotStart: "2026-06-09T14:15:00.000Z",
+          slotEnd: "2026-06-09T15:15:00.000Z",
+          guestName: "First Guest",
+          guestEmail: "first@example.com",
+        }),
+      }),
+      env,
+    );
+    expect(firstResponse.status).toBe(200);
+
+    const overlapResponse = await app.fetch(
+      new Request("http://localhost/api/book/owner/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          slotStart: "2026-06-09T14:30:00.000Z",
+          slotEnd: "2026-06-09T15:30:00.000Z",
+          guestName: "Second Guest",
+          guestEmail: "second@example.com",
+        }),
+      }),
+      env,
+    );
+    const overlapBody = (await overlapResponse.json()) as { error: string };
+
+    expect(overlapResponse.status).toBe(409);
+    expect(overlapBody.error).toBe("That time has already been booked");
+
+    const missingAvailabilityResponse = await app.fetch(
+      new Request("http://localhost/api/book/owner/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          slotStart: "2026-06-10T14:15:00.000Z",
+          slotEnd: "2026-06-10T15:15:00.000Z",
+          guestName: "Wednesday Guest",
+          guestEmail: "wednesday@example.com",
+        }),
+      }),
+      env,
+    );
+    const missingAvailabilityBody = (await missingAvailabilityResponse.json()) as {
+      error: string;
+    };
+
+    expect(missingAvailabilityResponse.status).toBe(400);
+    expect(missingAvailabilityBody.error).toBe(
+      "This date is not available for bookings",
+    );
+  });
+
+  it("routes paid public confirmations to checkout", async () => {
+    const env = createEnv();
+    addBookableSite(env, {
+      enabled: true,
+      offers: [
+        {
+          id: "paid-session",
+          title: "Paid Session",
+          duration: 60,
+          pricing: {
+            enabled: true,
+            suggestedAmount: 75,
+            currency: "EUR",
+            minimumAmount: 5,
+          },
+        },
+      ],
+      availability: {
+        timezone: "Europe/Dublin",
+        windows: { tuesday: ["15:00-16:30"] },
+      },
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/book/owner/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "paid-session",
+          slotStart: "2026-06-09T14:15:00.000Z",
+          slotEnd: "2026-06-09T15:15:00.000Z",
+          guestName: "Paid Guest",
+          guestEmail: "paid@example.com",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      error: string;
+      action: string;
+      checkoutUrl: string;
+    };
+
+    expect(response.status).toBe(402);
+    expect(body).toMatchObject({
+      error: "Use checkout for paid booking offers",
+      action: "createBookingCheckout",
+      checkoutUrl: "/api/book/owner/checkout-session",
+    });
+    expect(env.bookings).toHaveLength(0);
   });
 
   it("lists curated Core plugins for the signed-in owner", async () => {

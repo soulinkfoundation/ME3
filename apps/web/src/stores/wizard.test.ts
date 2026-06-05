@@ -1393,7 +1393,12 @@ describe("wizard store", () => {
           status: "active",
         },
       ]);
-      expect((me3 as any).actions?.createBookingCheckout).toBeUndefined();
+      expect((me3 as any).actions?.createBookingCheckout).toEqual({
+        method: "POST",
+        url: "http://localhost:3000/api/book/testuser/checkout-session",
+        requires: ["localDate", "localTime", "guestName", "guestEmail"],
+        description: "Create a checkout session for a paid booking offer.",
+      });
     });
 
     it("should load booking config from site content", () => {

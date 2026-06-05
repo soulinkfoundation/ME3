@@ -13,6 +13,9 @@ import {
 } from "../../stores/wizard";
 import BookingOfferDescriptionEditor from "./BookingOfferDescriptionEditor.vue";
 import StripePaymentSetupCallout from "./StripePaymentSetupCallout.vue";
+import BookingAvailabilityEditor, {
+  type BookingAvailability,
+} from "../booking/BookingAvailabilityEditor.vue";
 import UiIcon from "../UiIcon.vue";
 
 const wizard = useWizardStore();
@@ -145,6 +148,17 @@ const bookingBufferTime = computed({
 const bookingTimezone = computed({
   get: () => profile.value.booking.timezone,
   set: (val: string) => wizard.setBooking({ timezone: val }),
+});
+
+const bookingAvailability = computed({
+  get: () => profile.value.booking.availability as BookingAvailability,
+  set: (availability: BookingAvailability) =>
+    wizard.setBooking({
+      availability: {
+        ...profile.value.booking.availability,
+        ...availability,
+      },
+    }),
 });
 
 const activeOffer = computed(() => {
@@ -483,16 +497,6 @@ const availableBookingTypeOptions = computed(() =>
   bookingTypeOptions.value.filter((option) => !option.enabled),
 );
 
-const days = [
-  { key: "monday", label: "Mon" },
-  { key: "tuesday", label: "Tue" },
-  { key: "wednesday", label: "Wed" },
-  { key: "thursday", label: "Thu" },
-  { key: "friday", label: "Fri" },
-  { key: "saturday", label: "Sat" },
-  { key: "sunday", label: "Sun" },
-] as const;
-
 const weekdayOptions = [
   { value: "monday", label: "Monday" },
   { value: "tuesday", label: "Tuesday" },
@@ -543,9 +547,6 @@ const timezoneOptions = computed(() => {
 
   return options;
 });
-
-const editingDay = ref<string | null>(null);
-const editingWindows = ref<string>("");
 
 function selectBookingType(type: WizardBookingType) {
   activeBookingType.value = type;
@@ -600,69 +601,6 @@ function compactTabLabel(
   return value.length > TAB_LABEL_MAX
     ? `${value.slice(0, TAB_LABEL_MAX - 1)}…`
     : value;
-}
-
-function openDayEditor(day: string) {
-  const availability = profile.value.booking.availability;
-  const windows = availability[day as keyof typeof availability] || [];
-  editingWindows.value = windows.join(", ");
-  editingDay.value = day;
-}
-
-function saveDayWindows() {
-  if (!editingDay.value) return;
-
-  const windows = editingWindows.value
-    .split(",")
-    .map((w) => w.trim())
-    .filter((w) => /^\d{2}:\d{2}-\d{2}:\d{2}$/.test(w));
-
-  wizard.setBookingAvailability(
-    editingDay.value as keyof WizardBookingConfig["availability"],
-    windows,
-  );
-  editingDay.value = null;
-  editingWindows.value = "";
-}
-
-function cancelDayEdit() {
-  editingDay.value = null;
-  editingWindows.value = "";
-}
-
-function clearDayWindows(day: string) {
-  wizard.setBookingAvailability(
-    day as keyof WizardBookingConfig["availability"],
-    [],
-  );
-}
-
-function applyWeekdayPreset() {
-  const window = ["09:00-17:00"];
-  wizard.setBookingAvailability("monday", window);
-  wizard.setBookingAvailability("tuesday", window);
-  wizard.setBookingAvailability("wednesday", window);
-  wizard.setBookingAvailability("thursday", window);
-  wizard.setBookingAvailability("friday", window);
-  wizard.setBookingAvailability("saturday", []);
-  wizard.setBookingAvailability("sunday", []);
-}
-
-function applyMorningsPreset() {
-  const window = ["09:00-12:00"];
-  wizard.setBookingAvailability("monday", window);
-  wizard.setBookingAvailability("tuesday", window);
-  wizard.setBookingAvailability("wednesday", window);
-  wizard.setBookingAvailability("thursday", window);
-  wizard.setBookingAvailability("friday", window);
-  wizard.setBookingAvailability("saturday", []);
-  wizard.setBookingAvailability("sunday", []);
-}
-
-function clearAllAvailability() {
-  for (const day of days) {
-    wizard.setBookingAvailability(day.key, []);
-  }
 }
 
 onMounted(() => {
@@ -924,104 +862,13 @@ onMounted(() => {
           </div>
 
           <!-- Weekly windows apply to 1:1 only; classes use each class’s day & start time. -->
-          <div class="availability-section">
-            <div class="section-heading">
-              <label class="section-label">Availability</label>
-            </div>
-
-            <p class="field-hint">
-              When you’re open for private sessions. This does not apply to
-              classes or retreats — each has its own schedule in its tab.
-            </p>
-
-            <div class="availability-presets">
-              <button
-                type="button"
-                class="preset-btn"
-                @click="applyWeekdayPreset"
-              >
-                Weekdays 9-5
-              </button>
-              <button
-                type="button"
-                class="preset-btn"
-                @click="applyMorningsPreset"
-              >
-                Mornings only
-              </button>
-              <button
-                type="button"
-                class="preset-btn danger"
-                @click="clearAllAvailability"
-              >
-                Clear all
-              </button>
-            </div>
-
-            <div class="availability-grid">
-              <div v-for="day in days" :key="day.key" class="day-row">
-                <span class="day-label">{{ day.label }}</span>
-                <div class="day-windows">
-                  <template
-                    v-if="profile.booking.availability[day.key]?.length > 0"
-                  >
-                    <span
-                      v-for="(window, idx) in profile.booking.availability[
-                        day.key
-                      ]"
-                      :key="idx"
-                      class="time-window"
-                    >
-                      {{ window }}
-                    </span>
-                  </template>
-                  <span v-else class="no-availability">Not available</span>
-                </div>
-                <div class="day-actions">
-                  <button
-                    type="button"
-                    class="day-action-btn"
-                    @click="openDayEditor(day.key)"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    v-if="profile.booking.availability[day.key]?.length > 0"
-                    type="button"
-                    class="day-action-btn danger"
-                    @click="clearDayWindows(day.key)"
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label>Buffer time</label>
-                <select v-model="bookingBufferTime">
-                  <option :value="0">No buffer</option>
-                  <option :value="5">5 minutes</option>
-                  <option :value="10">10 minutes</option>
-                  <option :value="15">15 minutes</option>
-                  <option :value="30">30 minutes</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Timezone</label>
-                <select v-model="bookingTimezone">
-                  <option
-                    v-for="tz in timezoneOptions"
-                    :key="tz.value"
-                    :value="tz.value"
-                  >
-                    {{ tz.label }}
-                  </option>
-                </select>
-              </div>
-            </div>
-          </div>
+          <BookingAvailabilityEditor
+            v-model:availability="bookingAvailability"
+            v-model:buffer-time="bookingBufferTime"
+            v-model:timezone="bookingTimezone"
+            :timezone-options="timezoneOptions"
+            description="When you’re open for private sessions. This does not apply to classes or retreats — each has its own schedule in its tab."
+          />
         </div>
 
         <div
@@ -1515,39 +1362,6 @@ onMounted(() => {
       </template>
     </div>
 
-    <div v-if="editingDay" class="modal-overlay" @click.self="cancelDayEdit">
-      <div class="modal">
-        <div class="modal-header">
-          <h3>
-            Edit {{ editingDay.charAt(0).toUpperCase() + editingDay.slice(1) }}
-          </h3>
-          <button class="modal-close" type="button" @click="cancelDayEdit">
-            <UiIcon name="X" :size="18" aria-hidden="true" />
-          </button>
-        </div>
-        <div class="modal-content">
-          <div class="form-group">
-            <label>Time windows</label>
-            <input
-              v-model="editingWindows"
-              type="text"
-              placeholder="09:00-12:00, 14:00-17:00"
-            />
-            <p class="field-hint">
-              Enter time windows separated by commas. Format: HH:MM-HH:MM
-            </p>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn secondary" type="button" @click="cancelDayEdit">
-            Cancel
-          </button>
-          <button class="btn primary" type="button" @click="saveDayWindows">
-            Save
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -1633,7 +1447,6 @@ onMounted(() => {
 }
 
 .empty-bookings-state,
-.availability-section,
 .monetize-section {
   padding: 20px;
   border-top: 1px solid var(--color-border);
@@ -1856,76 +1669,6 @@ onMounted(() => {
   color: #fff;
 }
 
-.availability-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 14px 0;
-}
-
-.preset-btn,
-.day-action-btn {
-  padding: 8px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg);
-  color: var(--color-text);
-  cursor: pointer;
-}
-
-.preset-btn.danger,
-.day-action-btn.danger {
-  color: #a33;
-}
-
-.availability-grid {
-  display: grid;
-  gap: 10px;
-}
-
-.availability-section > .form-row {
-  margin-top: 24px;
-}
-
-.day-row {
-  display: grid;
-  grid-template-columns: 56px minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-  padding: 10px 12px;
-  border: none;
-  border-radius: 8px;
-  background: var(--color-bg-subtle);
-}
-
-.day-label {
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.day-windows {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.time-window {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-text);
-}
-
-.no-availability {
-  font-size: 12px;
-  font-style: italic;
-  color: var(--color-text-muted);
-}
-
-.day-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .checkbox-row,
 .checkbox-inline {
   display: inline-flex !important;
@@ -1942,70 +1685,13 @@ onMounted(() => {
   margin: 12px 0 6px;
 }
 
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.42);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  z-index: 20;
-}
-
-.modal {
-  width: min(100%, 480px);
-  background: var(--color-bg);
-  border-radius: 14px;
-  border: 1px solid var(--color-border);
-}
-
-.modal-header,
-.modal-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 18px;
-}
-
-.modal-content {
-  padding: 0 18px 18px;
-}
-
-.modal-close {
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--color-text);
-}
-
-.btn {
-  padding: 10px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
-  cursor: pointer;
-}
-
-.btn.primary {
-  background: var(--color-text);
-  color: var(--color-bg);
-  border-color: var(--color-text);
-}
-
 @media (max-width: 720px) {
-  .form-row:not(.retreat-schedule-row),
-  .day-row {
+  .form-row:not(.retreat-schedule-row) {
     grid-template-columns: 1fr;
   }
 
   .form-row.retreat-schedule-row {
     grid-template-columns: 1fr;
-  }
-
-  .day-actions {
-    justify-content: flex-start;
   }
 }
 </style>

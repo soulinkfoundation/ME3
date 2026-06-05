@@ -451,6 +451,15 @@ type PaidBookingCheckoutBody = {
   returnUrl?: unknown;
 };
 type FreeBookingBody = Omit<PaidBookingCheckoutBody, "amount" | "returnUrl">;
+type PublicBookingConfirmBody = {
+  offerId?: unknown;
+  slotStart?: unknown;
+  slotEnd?: unknown;
+  guestName?: unknown;
+  guestEmail?: unknown;
+  notes?: unknown;
+  paymentIntentId?: unknown;
+};
 type PaidBookingCompletionBody = {
   sessionId?: unknown;
 };
@@ -683,6 +692,136 @@ app.put("/api/commerce/settings", async (c) => {
   } catch (error) {
     return commerceSettingsErrorResponse(c, error);
   }
+});
+
+app.get("/api/book/:username/slots", async (c) => {
+  const site = await getSiteByUsername(c.env, c.req.param("username"));
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const localDate = normalizeShortText(c.req.query("date"), 20);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) {
+    return c.json({ error: "date is required in YYYY-MM-DD format" }, 400);
+  }
+
+  const profile = await loadSiteProfileForCommerce(c.env, site);
+  const bookIntent = profile?.intents?.book as CoreBookIntent | undefined;
+  if (!bookIntent?.enabled) return c.json({ error: "Booking is not enabled for this site" }, 404);
+
+  const resolved = resolvePublicOneToOneBookingOffer(
+    bookIntent,
+    normalizeShortText(c.req.query("offerId"), 100),
+  );
+  if ("error" in resolved) return c.json({ error: resolved.error }, resolved.status);
+
+  const timezone = resolveTimeZone(resolved.offer.availability.timezone);
+  const slots = await generateAvailableBookingSlots(c.env, {
+    siteId: site.id,
+    offer: resolved.offer,
+    localDate,
+    timezone,
+  });
+
+  return c.json({
+    ok: true,
+    date: localDate,
+    timezone,
+    offer: serializePublicBookingOffer(resolved.offer),
+    slots,
+  });
+});
+
+app.post("/api/book/:username/confirm", async (c) => {
+  const username = c.req.param("username");
+  const site = await getSiteByUsername(c.env, username);
+  if (!site) return c.json({ error: "Site not found" }, 404);
+
+  const body = await c.req.json<PublicBookingConfirmBody>().catch(() => null);
+  if (!body) return c.json({ error: "Invalid request body" }, 400);
+
+  const guestName = normalizeShortText(body.guestName, 120);
+  const guestEmail = normalizeEmail(body.guestEmail);
+  const notes = normalizeLongText(body.notes, 2000);
+  const slotStart = normalizeShortText(body.slotStart, 80);
+  const slotEnd = normalizeShortText(body.slotEnd, 80);
+
+  if (!slotStart || !slotEnd || !guestName) {
+    return c.json({ error: "slotStart, slotEnd, and guestName are required" }, 400);
+  }
+  if (!guestEmail) {
+    return c.json({ error: "Enter a valid email address" }, 400);
+  }
+
+  const profile = await loadSiteProfileForCommerce(c.env, site);
+  const bookIntent = profile?.intents?.book as CoreBookIntent | undefined;
+  if (!bookIntent?.enabled) return c.json({ error: "Booking is not enabled for this site" }, 404);
+
+  const resolved = resolvePublicOneToOneBookingOffer(
+    bookIntent,
+    normalizeShortText(body.offerId, 100),
+  );
+  if ("error" in resolved) return c.json({ error: resolved.error }, resolved.status);
+
+  const offer = resolved.offer;
+  if (offer.pricing?.enabled) {
+    return c.json(
+      {
+        error: "Use checkout for paid booking offers",
+        action: "createBookingCheckout",
+        checkoutUrl: `/api/book/${encodeURIComponent(username)}/checkout-session`,
+      },
+      402,
+    );
+  }
+
+  const timezone = resolveTimeZone(offer.availability.timezone);
+  const slot = resolvePublicBookingSlot({
+    slotStart,
+    slotEnd,
+    durationMinutes: offer.duration,
+    timezone,
+  });
+  if ("error" in slot) return c.json({ error: slot.error }, 400);
+  if (slot.startsAtMs <= Date.now() + 5 * 60_000) {
+    return c.json({ error: "Choose a future booking time" }, 400);
+  }
+
+  const availabilityError = validateBookingAvailability(
+    offer.availability,
+    slot.localDate,
+    slot.localTime,
+    offer.duration,
+  );
+  if (availabilityError) return c.json({ error: availabilityError }, 400);
+
+  const overlap = await findConfirmedBookingOverlap(c.env, {
+    siteId: site.id,
+    offerId: offer.id,
+    startsAt: slot.startsAt,
+    endsAt: slot.endsAt,
+  });
+  if (overlap) return c.json({ error: "That time has already been booked" }, 409);
+
+  const activeHold = await findActiveBookingHoldOverlap(c.env, {
+    siteId: site.id,
+    offerId: offer.id,
+    startsAt: slot.startsAt,
+    endsAt: slot.endsAt,
+  });
+  if (activeHold) {
+    return c.json({ error: "That time is being held for another checkout. Try another slot or check back shortly." }, 409);
+  }
+
+  const booking = await createConfirmedFreeOneToOneBooking(c.env, {
+    site,
+    bookIntent,
+    offer,
+    guestName,
+    guestEmail,
+    notes,
+    slot,
+  });
+
+  return c.json({ ok: true, booking: booking ? serializeBooking(booking) : null });
 });
 
 app.post("/api/book/:username/free", async (c) => {
@@ -8557,11 +8696,21 @@ function resolveOneToOneBookingOffer(
   book: CoreBookIntent,
   offerId: string,
 ): ResolvedOneToOneBookingOffer | null {
+  const offers = listOneToOneBookingOffers(book);
+  const selected = offerId
+    ? offers.find((offer) => offer.id === offerId)
+    : offers[0];
+  return selected || null;
+}
+
+function listOneToOneBookingOffers(
+  book: CoreBookIntent,
+): ResolvedOneToOneBookingOffer[] {
   const oneToOneType = Array.isArray(book.bookingTypes)
     ? book.bookingTypes.find((type) => type?.type === "one_to_one")
     : null;
   const availability = oneToOneType?.availability || book.availability || {};
-  const offers =
+  const rawOffers =
     Array.isArray(oneToOneType?.offers) && oneToOneType.offers.length > 0
       ? oneToOneType.offers
       : Array.isArray(book.offers) && book.offers.length > 0
@@ -8574,26 +8723,42 @@ function resolveOneToOneBookingOffer(
               pricing: book.pricing as CoreBookingPricing | undefined,
             },
           ];
-  const selected =
-    offers.find((offer) => (offer.id || slugifyBookingOfferId(offer.title || "book-session")) === offerId) ||
-    offers[0];
-  if (!selected) return null;
-  const pricing = selected.pricing;
 
-  const duration =
-    typeof selected.duration === "number" && Number.isFinite(selected.duration)
-      ? Math.max(15, Math.min(24 * 60, Math.round(selected.duration)))
-      : typeof book.duration === "number" && Number.isFinite(book.duration)
-      ? Math.max(15, Math.min(24 * 60, Math.round(book.duration)))
-      : 30;
+  return rawOffers.map((offer) => {
+    const duration =
+      typeof offer.duration === "number" && Number.isFinite(offer.duration)
+        ? Math.max(15, Math.min(24 * 60, Math.round(offer.duration)))
+        : typeof book.duration === "number" && Number.isFinite(book.duration)
+        ? Math.max(15, Math.min(24 * 60, Math.round(book.duration)))
+        : 30;
 
-  return {
-    id: selected.id || slugifyBookingOfferId(selected.title || "book-session") || "book-session",
-    title: selected.title || book.title || "Book a session",
-    duration,
-    pricing,
-    availability,
-  };
+    return {
+      id: offer.id || slugifyBookingOfferId(offer.title || "book-session") || "book-session",
+      title: offer.title || book.title || "Book a session",
+      duration,
+      pricing: offer.pricing,
+      availability,
+    };
+  });
+}
+
+function resolvePublicOneToOneBookingOffer(
+  book: CoreBookIntent,
+  offerId: string,
+):
+  | { offer: ResolvedOneToOneBookingOffer }
+  | { error: string; status: 400 | 404 } {
+  const offers = listOneToOneBookingOffers(book);
+  if (offers.length === 0) return { error: "Booking offer not found", status: 404 };
+  if (offers.length > 1 && !offerId) {
+    return { error: "offerId is required when multiple booking offers exist", status: 400 };
+  }
+
+  const selected = offerId
+    ? offers.find((offer) => offer.id === offerId)
+    : offers[0];
+  if (!selected) return { error: "Booking offer not found", status: 404 };
+  return { offer: selected };
 }
 
 function resolvePaidOneToOneOffer(
@@ -8685,6 +8850,239 @@ function resolveBookingSlot(input: {
     endsAt: new Date(endsAtMs).toISOString(),
     startsAtMs,
   };
+}
+
+function resolvePublicBookingSlot(input: {
+  slotStart: string;
+  slotEnd: string;
+  durationMinutes: number;
+  timezone: string;
+}):
+  | {
+      startsAt: string;
+      endsAt: string;
+      startsAtMs: number;
+      localDate: string;
+      localTime: string;
+    }
+  | { error: string } {
+  const startsAtMs = Date.parse(input.slotStart);
+  const endsAtMs = Date.parse(input.slotEnd);
+  if (!Number.isFinite(startsAtMs) || !Number.isFinite(endsAtMs)) {
+    return { error: "Invalid booking slot" };
+  }
+  if (endsAtMs <= startsAtMs) return { error: "slotEnd must be after slotStart" };
+  if (endsAtMs - startsAtMs !== input.durationMinutes * 60_000) {
+    return { error: "Booking slot duration does not match the selected offer" };
+  }
+
+  const local = formatUtcInstantInTimeZone(startsAtMs, input.timezone);
+  if (!local) return { error: "Invalid booking slot timezone" };
+  const resolved = resolveBookingSlot({
+    localDate: local.localDate,
+    localTime: local.localTime,
+    durationMinutes: input.durationMinutes,
+    timezone: input.timezone,
+  });
+  if (!resolved || resolved.startsAt !== new Date(startsAtMs).toISOString()) {
+    return { error: "Booking slot does not match the selected timezone" };
+  }
+
+  return {
+    startsAt: resolved.startsAt,
+    endsAt: resolved.endsAt,
+    startsAtMs: resolved.startsAtMs,
+    localDate: local.localDate,
+    localTime: local.localTime,
+  };
+}
+
+function formatUtcInstantInTimeZone(
+  utcMs: number,
+  timezone: string,
+): { localDate: string; localTime: string } | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(utcMs));
+    const part = (type: string) => parts.find((entry) => entry.type === type)?.value || "";
+    const year = part("year");
+    const month = part("month");
+    const day = part("day");
+    const hour = part("hour");
+    const minute = part("minute");
+    if (!year || !month || !day || !hour || !minute) return null;
+    return { localDate: `${year}-${month}-${day}`, localTime: `${hour}:${minute}` };
+  } catch {
+    return null;
+  }
+}
+
+async function generateAvailableBookingSlots(
+  env: Env,
+  input: {
+    siteId: string;
+    offer: ResolvedOneToOneBookingOffer;
+    localDate: string;
+    timezone: string;
+  },
+): Promise<
+  Array<{
+    slotStart: string;
+    slotEnd: string;
+    startsAt: string;
+    endsAt: string;
+    localDate: string;
+    localTime: string;
+  }>
+> {
+  const windows = input.offer.availability.windows || {};
+  const weekday = weekdayForDate(input.localDate);
+  if (!weekday) return [];
+  const dayWindows = Array.isArray(windows[weekday]) ? windows[weekday] : [];
+  const slots: Array<{
+    slotStart: string;
+    slotEnd: string;
+    startsAt: string;
+    endsAt: string;
+    localDate: string;
+    localTime: string;
+  }> = [];
+
+  for (const window of dayWindows) {
+    const [windowStart, windowEnd] = String(window).split("-").map((part) => part.trim());
+    const windowStartMinutes = timeToMinutes(windowStart);
+    const windowEndMinutes = timeToMinutes(windowEnd);
+    if (windowStartMinutes === null || windowEndMinutes === null) continue;
+
+    for (
+      let startMinutes = windowStartMinutes;
+      startMinutes + input.offer.duration <= windowEndMinutes;
+      startMinutes += 15
+    ) {
+      const localTime = minutesToTime(startMinutes);
+      const slot = resolveBookingSlot({
+        localDate: input.localDate,
+        localTime,
+        durationMinutes: input.offer.duration,
+        timezone: input.timezone,
+      });
+      if (!slot || slot.startsAtMs <= Date.now() + 5 * 60_000) continue;
+
+      const overlap = await findConfirmedBookingOverlap(env, {
+        siteId: input.siteId,
+        offerId: input.offer.id,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+      });
+      if (overlap) continue;
+
+      const activeHold = await findActiveBookingHoldOverlap(env, {
+        siteId: input.siteId,
+        offerId: input.offer.id,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+      });
+      if (activeHold) continue;
+
+      slots.push({
+        slotStart: slot.startsAt,
+        slotEnd: slot.endsAt,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+        localDate: input.localDate,
+        localTime,
+      });
+    }
+  }
+
+  return slots;
+}
+
+function minutesToTime(minutes: number): string {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function serializePublicBookingOffer(offer: ResolvedOneToOneBookingOffer) {
+  return {
+    id: offer.id,
+    title: offer.title,
+    duration: offer.duration,
+    pricing: offer.pricing?.enabled
+      ? {
+          enabled: true,
+          suggestedAmount: offer.pricing.suggestedAmount,
+          currency: offer.pricing.currency,
+        }
+      : { enabled: false },
+  };
+}
+
+async function createConfirmedFreeOneToOneBooking(
+  env: Env,
+  input: {
+    site: DbSite;
+    bookIntent: CoreBookIntent;
+    offer: ResolvedOneToOneBookingOffer;
+    guestName: string;
+    guestEmail: string;
+    notes: string;
+    slot: { startsAt: string; endsAt: string };
+  },
+): Promise<DbBooking | null> {
+  const bookingId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO bookings
+     (id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
+      duration_minutes, status, notes, created_at, payment_intent_id, amount_paid,
+      suggested_amount, currency, payment_status, is_free_booking, paid_at)
+     VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
+             NULL, NULL, NULL, NULL, 'not_required', 1, NULL)`,
+  )
+    .bind(
+      bookingId,
+      input.site.id,
+      input.offer.id,
+      input.guestName,
+      input.guestEmail,
+      input.slot.startsAt,
+      input.slot.endsAt,
+      input.offer.duration,
+      input.notes || null,
+    )
+    .run();
+
+  const booking = await env.DB.prepare(
+    `SELECT id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
+            duration_minutes, calendar_event_id, status, notes, created_at, cancelled_at,
+            payment_intent_id, amount_paid, suggested_amount, currency, payment_status,
+            is_free_booking, paid_at
+     FROM bookings
+     WHERE id = ?`,
+  )
+    .bind(bookingId)
+    .first<DbBooking>();
+
+  if (booking) {
+    scheduleBookingRemindersForBooking(env, {
+      booking,
+      bookingTitle: input.offer.title,
+      timezone: resolveTimeZone(input.offer.availability.timezone),
+      reminders: input.bookIntent.reminders,
+    }).catch((error) => {
+      console.error("Failed to schedule booking reminders:", error);
+    });
+  }
+
+  return booking || null;
 }
 
 function validateBookingAvailability(

@@ -3438,7 +3438,25 @@ export const useWizardStore = defineStore("wizard", () => {
         description: "Create a confirmed booking for a selected slot.",
       };
 
-      void hasPaidBookingOffer;
+      if (hasPaidBookingOffer) {
+        const checkoutRequires = [
+          "localDate",
+          "localTime",
+          "guestName",
+          "guestEmail",
+        ];
+
+        if (requiresOfferId) {
+          checkoutRequires.unshift("offerId");
+        }
+
+        actions.createBookingCheckout = {
+          method: "POST",
+          url: `${publicApiBase}/book/${handle}/checkout-session`,
+          requires: checkoutRequires,
+          description: "Create a checkout session for a paid booking offer.",
+        };
+      }
     }
 
     if (services.length > 0) {
