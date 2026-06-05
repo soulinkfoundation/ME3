@@ -3521,6 +3521,12 @@ onBeforeUnmount(() => {
   }
 }
 
+@media (min-width: 960px) and (max-width: 1100px) {
+  .cal-sidebar {
+    display: none;
+  }
+}
+
 .cal-mobile-icon-btn {
   flex: 0 0 auto;
 }
