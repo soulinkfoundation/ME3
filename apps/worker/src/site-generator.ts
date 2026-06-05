@@ -105,6 +105,7 @@ export type Me3SiteProfile = {
   buttons?: Me3Button[];
   pages?: Me3Page[];
   posts?: Me3Post[];
+  blogEnabled?: boolean;
   products?: Me3Product[];
   testimonials?: Me3Testimonial[];
   blogTitle?: string;

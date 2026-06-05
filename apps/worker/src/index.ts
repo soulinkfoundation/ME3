@@ -2094,7 +2094,13 @@ type AssistantSiteToolAction = {
     | "core.sites.approval_status";
   replyText: string;
   siteAction: {
-    kind: "draft_created" | "draft_refined" | "published" | "approval_status" | "missing_site";
+    kind:
+      | "draft_created"
+      | "draft_refined"
+      | "published"
+      | "approval_status"
+      | "missing_site"
+      | "unsupported_feature";
     siteId: string | null;
     username: string | null;
     pending: boolean;
@@ -2117,6 +2123,7 @@ async function maybeHandleAssistantSiteToolAction(
   const statusIntent = isAssistantSiteStatusIntent(messageText);
   const updateIntent = isAssistantSiteUpdateIntent(messageText);
   const refinementIntent = isAssistantSiteRefinementIntent(messageText);
+  const draftSaveIntent = isAssistantSiteDraftSaveIntent(messageText);
 
   if (approvalIntent) {
     const action = await maybePublishAssistantSiteDraft(
@@ -2138,6 +2145,64 @@ async function maybeHandleAssistantSiteToolAction(
       requestUrl,
     );
     if (action) return action;
+  }
+
+  if (draftSaveIntent) {
+    const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
+    if (pending) {
+      return {
+        specialist: "core.sites.approval_status",
+        replyText:
+          "The site update is already saved as a pending draft in this thread. Reply `publish` to publish it now, or tell me what to change.",
+        siteAction: {
+          kind: "approval_status",
+          siteId: pending.site.id,
+          username: pending.site.username,
+          pending: true,
+          published: false,
+          files: assistantSiteDraftChangedFiles(pending.draft),
+          postTitle: pending.draft.changes.postTitle || null,
+          url: getAssistantSiteAdminUrl(env, pending.site, requestUrl),
+        },
+      };
+    }
+
+    const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+    if (site) {
+      const draft = await createAssistantSiteDraftFromRecentThread(
+        env,
+        ownerId,
+        site,
+        threadId,
+        messageText,
+      );
+      if (draft) {
+        const unavailable = await getUnavailableAssistantSiteFeatureForDraft(
+          env,
+          ownerId,
+          site,
+          draft,
+        );
+        if (unavailable) {
+          return unavailableAssistantSiteFeatureAction(env, site, unavailable, requestUrl);
+        }
+        await saveAssistantSiteUpdateDraft(env, draft);
+        return {
+          specialist: "core.sites.update_draft",
+          replyText: formatAssistantSiteDraftReply(draft),
+          siteAction: {
+            kind: "draft_created",
+            siteId: site.id,
+            username: site.username,
+            pending: true,
+            published: false,
+            files: assistantSiteDraftChangedFiles(draft),
+            postTitle: draft.changes.postTitle || null,
+            url: getAssistantSiteAdminUrl(env, site, requestUrl),
+          },
+        };
+      }
+    }
   }
 
   if (refinementIntent) {
@@ -2174,6 +2239,13 @@ async function maybeHandleAssistantSiteToolAction(
   }
 
   const draft = await createAssistantSiteUpdateDraft(env, ownerId, site, threadId, messageText);
+  const unavailable = await getUnavailableAssistantSiteFeatureForDraft(
+    env,
+    ownerId,
+    site,
+    draft,
+  );
+  if (unavailable) return unavailableAssistantSiteFeatureAction(env, site, unavailable, requestUrl);
   await saveAssistantSiteUpdateDraft(env, draft);
   return {
     specialist: "core.sites.update_draft",
@@ -2238,6 +2310,13 @@ function isAssistantSiteStatusIntent(messageText: string): boolean {
     /\b(has|have|was|is|did|can you check|check)\b.*\b(approved|published|live|done|status)\b/.test(text) ||
     /\b(approval status|publish status|site status)\b/.test(text)
   );
+}
+
+function isAssistantSiteDraftSaveIntent(messageText: string): boolean {
+  const text = normalizeAssistantIntentText(messageText);
+  if (!text) return false;
+  return /\b(save|keep|store)\b.*\b(draft|site update|blog post|post|article)\b/.test(text) ||
+    /\b(save it as a draft|save this as a draft|save that as a draft)\b/.test(text);
 }
 
 function isAssistantSiteRefinementIntent(messageText: string): boolean {
@@ -2467,6 +2546,52 @@ async function findPendingAssistantSiteDraft(
     if (draft) return { site, draft };
   }
   return null;
+}
+
+async function getUnavailableAssistantSiteFeatureForDraft(
+  env: Env,
+  ownerId: string,
+  site: DbSite,
+  draft: AssistantSiteUpdateDraft,
+): Promise<"blog" | null> {
+  if (!draft.changes.postMarkdown) return null;
+  const sourceFiles = await loadSiteSourceFiles(env, site.id);
+  const profile = await loadAssistantSiteProfile(env, ownerId, site, sourceFiles);
+  return assistantSiteBlogFeatureEnabled(profile) ? null : "blog";
+}
+
+function assistantSiteBlogFeatureEnabled(profile: Me3SiteProfile): boolean {
+  if (profile.blogEnabled === true) return true;
+  if (Array.isArray(profile.posts) && profile.posts.length > 0) return true;
+  return typeof profile.blogTitle === "string" && profile.blogTitle.trim().length > 0;
+}
+
+function unavailableAssistantSiteFeatureAction(
+  env: Env,
+  site: DbSite,
+  feature: "blog",
+  requestUrl: string,
+): AssistantSiteToolAction {
+  return {
+    specialist: "core.sites.update_draft",
+    replyText:
+      feature === "blog"
+        ? `I cannot draft a blog post for @${site.username} yet because Blog is not enabled on that site. Enable Blog in the site builder's Additional features step, then ask me again.`
+        : `I cannot draft that site update for @${site.username} yet because the required site feature is not enabled.`,
+    siteAction: {
+      kind: "unsupported_feature",
+      siteId: site.id,
+      username: site.username,
+      pending: false,
+      published: false,
+      files: [],
+      url: getAssistantSiteAdminUrl(env, site, requestUrl),
+      message:
+        feature === "blog"
+          ? "Blog is not enabled for this profile site."
+          : "The required site feature is not enabled for this profile site.",
+    },
+  };
 }
 
 async function createAssistantSiteDraftFromRecentThread(

@@ -349,6 +349,7 @@ export interface WizardTestimonial {
 
 type ExtendedMe3Profile = Omit<Me3Profile, "testimonialDisplay"> & {
   locationData?: WizardLocationData;
+  blogEnabled?: boolean;
   blogTitle?: string;
   shopTitle?: string;
   testimonialDisplay?: TestimonialPlacement;
@@ -2854,6 +2855,14 @@ export const useWizardStore = defineStore("wizard", () => {
       }));
     }
 
+    if (blogEnabled.value) {
+      me3.blogEnabled = true;
+      const cleanedBlogTitle = blogTitle.value.trim();
+      if (cleanedBlogTitle && cleanedBlogTitle !== DEFAULT_BLOG_TITLE) {
+        me3.blogTitle = cleanedBlogTitle;
+      }
+    }
+
     if (blogEnabled.value && posts.value.length > 0) {
       me3.posts = posts.value.map((p) => {
         const post: {
@@ -2879,10 +2888,6 @@ export const useWizardStore = defineStore("wizard", () => {
         if (p.draft) post.draft = p.draft;
         return post;
       });
-      const cleanedBlogTitle = blogTitle.value.trim();
-      if (cleanedBlogTitle && cleanedBlogTitle !== DEFAULT_BLOG_TITLE) {
-        me3.blogTitle = cleanedBlogTitle;
-      }
     }
 
     if (shopEnabled.value && products.value.length > 0) {
@@ -3844,6 +3849,7 @@ export const useWizardStore = defineStore("wizard", () => {
         };
       };
       testimonials?: WizardTestimonial[];
+      blogEnabled?: boolean;
       blogTitle?: string;
       shopTitle?: string;
       testimonialDisplay?: TestimonialPlacement;
@@ -4305,7 +4311,7 @@ export const useWizardStore = defineStore("wizard", () => {
 
     // Restore enabled states from site content
     newsletterEnabled.value = Boolean(siteProfile.intents?.subscribe?.enabled);
-    blogEnabled.value = siteBlogPosts.length > 0;
+    blogEnabled.value = Boolean(siteProfile.blogEnabled) || siteBlogPosts.length > 0;
     bookingsEnabled.value = Boolean(siteProfile.intents?.book?.enabled);
     shopEnabled.value = true;
     testimonialsEnabled.value = (siteProfile.testimonials || []).length > 0;

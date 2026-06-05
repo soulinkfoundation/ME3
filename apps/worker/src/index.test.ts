@@ -2286,7 +2286,10 @@ function siteFileText(
   return file ? new TextDecoder().decode(file.content) : null;
 }
 
-function addAssistantEditableSite(env: ReturnType<typeof createEnv>) {
+function addAssistantEditableSite(
+  env: ReturnType<typeof createEnv>,
+  options: { blogEnabled?: boolean } = {},
+) {
   env.sites.push({
     id: "site-assistant",
     user_id: "owner",
@@ -2311,6 +2314,7 @@ function addAssistantEditableSite(env: ReturnType<typeof createEnv>) {
         name: "Owner",
         bio: "Original bio.",
         pages: [{ slug: "about", title: "About", file: "about.md" }],
+        blogEnabled: options.blogEnabled === true,
         posts: [],
       },
       null,
@@ -3724,7 +3728,7 @@ describe("ME3 Core Worker auth", () => {
   it("drafts and publishes profile site updates from assistant approval", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
-    addAssistantEditableSite(env);
+    addAssistantEditableSite(env, { blogEnabled: true });
 
     const draftResponse = await app.fetch(
       new Request("http://localhost/api/assistant/chat/turn", {
@@ -3814,10 +3818,117 @@ describe("ME3 Core Worker auth", () => {
     ).toBeUndefined();
   });
 
-  it("publishes a prior plain-text assistant site draft when the user approves it", async () => {
+  it("rejects assistant blog post drafts when the site blog feature is disabled", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
     addAssistantEditableSite(env);
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: "Update my site, draft a blog post about personal ai assistants.",
+        }),
+      }),
+      env,
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      source: "tool",
+      specialist: "core.sites.update_draft",
+      siteAction: {
+        kind: "unsupported_feature",
+        siteId: "site-assistant",
+        username: "owner",
+        pending: false,
+        published: false,
+        files: [],
+      },
+    });
+    expect(String(payload.replyText)).toContain("Blog is not enabled");
+    expect(String(payload.replyText)).toContain("Additional features");
+    expect(
+      env.siteFiles.some(
+        (file) =>
+          file.site_id === "site-assistant" &&
+          file.path.startsWith("assistant/site-update-drafts/"),
+      ),
+    ).toBe(false);
+    expect(
+      env.siteFiles.some(
+        (file) =>
+          file.site_id === "site-assistant" &&
+          file.path.startsWith("src/blog/"),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps save-draft follow-ups in the assistant site update flow", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env, { blogEnabled: true });
+
+    const draftResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: "Update my site, draft a blog post about personal ai assistants.",
+        }),
+      }),
+      env,
+    );
+    const draftPayload = (await draftResponse.json()) as Record<string, unknown>;
+    const threadId = String(draftPayload.threadId);
+
+    const saveResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          threadId,
+          messageText: "can you save it as a draft?",
+        }),
+      }),
+      env,
+    );
+    const savePayload = (await saveResponse.json()) as Record<string, unknown>;
+
+    expect(draftResponse.status).toBe(200);
+    expect(saveResponse.status).toBe(200);
+    expect(savePayload).toMatchObject({
+      ok: true,
+      source: "tool",
+      specialist: "core.sites.approval_status",
+      siteAction: {
+        kind: "approval_status",
+        siteId: "site-assistant",
+        username: "owner",
+        pending: true,
+        published: false,
+      },
+    });
+    expect(String(savePayload.replyText)).toContain("already saved as a pending draft");
+    expect(String(savePayload.replyText)).not.toContain("email");
+  });
+
+  it("publishes a prior plain-text assistant site draft when the user approves it", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env, { blogEnabled: true });
     env.assistantThreads.push({
       id: "thread-legacy-site-draft",
       owner_id: "owner",

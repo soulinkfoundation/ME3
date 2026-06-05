@@ -646,6 +646,19 @@ describe("wizard store", () => {
       expect(me3.shopTitle).toBe("Services");
     });
 
+    it("should include blogEnabled when blog is enabled without posts", () => {
+      const store = useWizardStore();
+      store.profile.name = "Test User";
+      store.blogEnabled = true;
+      store.blogTitle = "Articles";
+
+      const me3 = store.generateMe3Json() as any;
+
+      expect(me3.blogEnabled).toBe(true);
+      expect(me3.blogTitle).toBe("Articles");
+      expect(me3.posts).toBeUndefined();
+    });
+
     it("should derive blog and shop paths from the main menu titles", () => {
       const store = useWizardStore();
       store.addPage("Work With Me");
@@ -896,6 +909,19 @@ describe("wizard store", () => {
 
       expect(store.posts).toHaveLength(0);
       expect(store.blogEnabled).toBe(false);
+    });
+
+    it("should restore blogEnabled from site content without posts", () => {
+      const store = useWizardStore();
+      const siteProfile = {
+        name: "Existing User",
+        blogEnabled: true,
+      };
+
+      store.loadFromSiteContent(siteProfile, [], [], [], "existing");
+
+      expect(store.posts).toHaveLength(0);
+      expect(store.blogEnabled).toBe(true);
     });
 
     it("should restore custom blog and shop titles from site content", () => {
