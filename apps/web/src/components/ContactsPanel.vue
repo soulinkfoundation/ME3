@@ -20,15 +20,18 @@ const props = withDefaults(
   defineProps<{
     showHeader?: boolean;
     showEmailAction?: boolean;
+    searchQuery?: string;
   }>(),
   {
     showHeader: true,
     showEmailAction: false,
+    searchQuery: undefined,
   },
 );
 
 const emit = defineEmits<{
   emailContact: [contact: Contact];
+  "update:searchQuery": [value: string];
 }>();
 
 const { toastSuccess } = useAppToast();
@@ -39,7 +42,7 @@ const contactsLoaded = ref(false);
 const contactModalOpen = ref(false);
 const contactSaving = ref(false);
 const contactError = ref("");
-const contactSearchQuery = ref("");
+const internalContactSearchQuery = ref("");
 const contactForm = ref({
   name: "",
   email: "",
@@ -49,9 +52,17 @@ const soulinkSyncError = ref("");
 const soulinkSyncNotice = ref("");
 const soulinkContactsConnected = ref(false);
 
-const contactSearchTerm = computed(() =>
-  contactSearchQuery.value.trim().toLowerCase(),
-);
+const contactSearchQuery = computed({
+  get: () => props.searchQuery ?? internalContactSearchQuery.value,
+  set: (value: string) => {
+    if (props.searchQuery === undefined) {
+      internalContactSearchQuery.value = value;
+    }
+    emit("update:searchQuery", value);
+  },
+});
+
+const contactSearchTerm = computed(() => contactSearchQuery.value.trim().toLowerCase());
 
 const activeContacts = computed(() =>
   [...contacts.value]
@@ -237,6 +248,10 @@ function emailContact(contact: Contact) {
 
 onMounted(() => {
   void loadContactsPage({ syncSoulink: true });
+});
+
+defineExpose({
+  openContactModal,
 });
 </script>
 
