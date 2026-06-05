@@ -617,6 +617,7 @@ const assistantThreadSearch = ref("");
 const assistantThreadActionId = ref<string | null>(null);
 const assistantHistoryCollapsed = ref(false);
 const assistantHistoryDrawerOpen = ref(false);
+const assistantChatsCollapsed = ref(false);
 const collapsedAssistantProjectIds = ref(new Set<string>());
 const assistantSettingsModalOpen = ref(false);
 const assistantSettingsSection = ref<AssistantSettingsSection>("context");
@@ -3906,19 +3907,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
             size="compact"
             icon-only
             class="assistant-mobile-nav__button"
-            aria-label="Skills"
-            title="Skills"
-            type="button"
-            @click="openAssistantSkillsModal"
-          >
-            <UiIcon name="Sparkles" :size="18" aria-hidden="true" />
-          </Button>
-          <Button
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            class="assistant-mobile-nav__button"
             aria-label="New chat"
             title="New chat"
             type="button"
@@ -4031,6 +4019,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
       <div v-if="!assistantHistoryCollapsed" class="assistant-history__body">
         <nav class="assistant-history__topnav" aria-label="Assistant tools">
+          <button
+            type="button"
+            class="assistant-history__nav-row"
+            @click="openConfigureJobsModal"
+          >
+            <UiIcon name="BriefcaseBusiness" :size="15" aria-hidden="true" />
+            <span>Jobs</span>
+          </button>
+          <button
+            type="button"
+            class="assistant-history__nav-row"
+            @click="openAssistantSkillsModal"
+          >
+            <UiIcon name="Sparkles" :size="15" aria-hidden="true" />
+            <span>Skills</span>
+          </button>
           <form
             class="assistant-history__search"
             @submit.prevent="applyAssistantThreadSearch"
@@ -4149,11 +4153,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     </span>
                   </span>
                 </button>
-                <div
-                  v-if="assistantThreadId === thread.id"
-                  class="assistant-history__thread-actions"
-                  aria-label="Selected chat controls"
-                >
+                <div class="assistant-history__thread-actions" aria-label="Chat controls">
                   <button
                     type="button"
                     title="Export transcript"
@@ -4188,8 +4188,23 @@ function messageFromUnknown(err: unknown, fallback: string) {
         </section>
 
         <section class="assistant-history__section">
-          <h2>Chats</h2>
+          <button
+            type="button"
+            class="assistant-history__section-toggle"
+            :aria-expanded="!assistantChatsCollapsed"
+            aria-controls="assistant-ungrouped-chats"
+            @click="assistantChatsCollapsed = !assistantChatsCollapsed"
+          >
+            <UiIcon
+              :name="assistantChatsCollapsed ? 'ChevronRight' : 'ChevronDown'"
+              :size="14"
+              aria-hidden="true"
+            />
+            <span>Chats</span>
+          </button>
           <nav
+            v-if="!assistantChatsCollapsed"
+            id="assistant-ungrouped-chats"
             class="assistant-history__list"
             aria-label="Chats outside projects"
           >
@@ -4220,11 +4235,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   </span>
                 </span>
               </button>
-              <div
-                v-if="assistantThreadId === thread.id"
-                class="assistant-history__thread-actions"
-                aria-label="Selected chat controls"
-              >
+              <div class="assistant-history__thread-actions" aria-label="Chat controls">
                 <button
                   type="button"
                   title="Export transcript"
@@ -4284,22 +4295,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
           >
             <UiIcon name="Archive" :size="15" aria-hidden="true" />
             <span>Archived</span>
-          </button>
-          <button
-            type="button"
-            class="assistant-history__footer-button"
-            @click="openConfigureJobsModal"
-          >
-            <UiIcon name="BriefcaseBusiness" :size="15" aria-hidden="true" />
-            <span>Jobs</span>
-          </button>
-          <button
-            type="button"
-            class="assistant-history__footer-button"
-            @click="openAssistantSkillsModal"
-          >
-            <UiIcon name="Sparkles" :size="15" aria-hidden="true" />
-            <span>Skills</span>
           </button>
           <button
             type="button"
@@ -6304,8 +6299,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-history__body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   min-height: 0;
+  height: 100%;
   padding-top: 10px;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -6387,6 +6383,29 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font-weight: 500;
 }
 
+.assistant-history__section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: 2px 0;
+  background: transparent;
+  color: color-mix(in oklab, var(--ui-text-muted) 76%, transparent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assistant-history__section-toggle:hover,
+.assistant-history__section-toggle:focus-visible {
+  color: var(--ui-text);
+}
+
 .assistant-history__thread-actions button:hover:not(:disabled),
 .assistant-history__search button:hover {
   background: var(--ui-surface);
@@ -6445,13 +6464,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history__thread-main {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
+  width: 100%;
 }
 
 .assistant-history__thread-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 2px;
   min-width: 0;
@@ -6468,6 +6490,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
   gap: 2px;
   flex: 0 0 auto;
   padding-right: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.assistant-history__thread-row:hover .assistant-history__thread-actions,
+.assistant-history__thread-row:focus-within .assistant-history__thread-actions,
+.assistant-history__thread-row.is-active .assistant-history__thread-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .assistant-history__thread-title,
@@ -6479,10 +6511,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-history__thread-title {
+  flex: 1 1 auto;
+  max-width: 18ch;
   color: inherit;
   font-size: 11px;
   font-weight: 450;
   line-height: 1.25;
+}
+
+.assistant-history__thread-meta {
+  flex: 0 0 auto;
 }
 
 .assistant-history__thread-meta,
@@ -6504,7 +6542,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   align-items: center;
   gap: 4px;
   margin-top: auto;
-  padding-top: 8px;
+  padding: 8px 0 0;
   border-top: 1px solid var(--ui-border);
   background: var(--ui-page);
 }

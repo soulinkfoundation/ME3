@@ -345,7 +345,7 @@ watch(navDrawerOpen, (isOpen) => {
 }
 
 .app-side-nav-mobile-bar {
-  position: absolute;
+  position: fixed;
   top: var(--workspace-topbar-padding-block);
   left: var(--app-shell-mobile-nav-inset-inline-start);
   z-index: 70;
