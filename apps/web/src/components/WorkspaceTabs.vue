@@ -49,7 +49,12 @@ function selectTab(tab: WorkspaceTab) {
       @click="selectTab(tab)"
     >
       <span class="workspace-tabs__main">
-        <UiIcon v-if="tab.icon" :name="tab.icon" :size="16" aria-hidden="true" />
+        <UiIcon
+          v-if="tab.icon"
+          :name="tab.icon"
+          :size="16"
+          aria-hidden="true"
+        />
         <span class="workspace-tabs__label">{{ tab.label }}</span>
       </span>
       <span
@@ -87,7 +92,7 @@ function selectTab(tab: WorkspaceTab) {
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
-  min-height: 36px;
+  min-height: 33px;
   margin: 0 0 -1px;
   padding: 5px 10px;
   border: 1px solid var(--ui-border, var(--color-border));
@@ -116,7 +121,8 @@ function selectTab(tab: WorkspaceTab) {
 
 .workspace-tabs__tab:focus-visible {
   z-index: 3;
-  outline: 2px solid color-mix(in oklab, var(--ui-accent, currentColor), transparent 60%);
+  outline: 2px solid
+    color-mix(in oklab, var(--ui-accent, currentColor), transparent 60%);
   outline-offset: 2px;
 }
 

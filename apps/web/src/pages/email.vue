@@ -2045,7 +2045,6 @@ onBeforeUnmount(() => {
               </aside>
 
               <section
-                v-show="!mobileThreadOpen"
                 class="conversation-list"
                 :class="{
                   'conversation-list--mobile-hidden': mobileThreadOpen,
@@ -2269,11 +2268,18 @@ onBeforeUnmount(() => {
                 :class="{ 'thread-pane--mobile-open': mobileThreadOpen }"
               >
                 <header class="thread-toolbar">
-                  <Button color="ghost" shape="soft" size="compact" type="button"
+                  <Button
+                    class="thread-back-btn"
+                    color="ghost"
+                    shape="soft"
+                    size="compact"
+                    icon-only
+                    type="button"
+                    title="Back"
+                    aria-label="Back to message list"
                     @click="mobileThreadOpen = false"
                   >
                     <UiIcon name="ArrowLeft" :size="17" aria-hidden="true" />
-                    Back
                   </Button>
                   <div class="thread-actions">
                     <Button color="ghost" shape="soft" size="compact" icon-only type="button"
@@ -3303,7 +3309,7 @@ onBeforeUnmount(() => {
   display: none;
 }
 
-.conversation-list--mobile-hidden {
+.conversation-list.conversation-list--mobile-hidden {
   display: none;
 }
 
@@ -3683,24 +3689,12 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   min-height: 52px;
-  padding: 8px 18px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--color-border);
 }
 
 .thread-back-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
-  color: var(--color-text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
+  align-self: flex-start;
 }
 
 .thread-actions {
@@ -3745,12 +3739,13 @@ onBeforeUnmount(() => {
   }
 
   .mail-workspace--has-thread .thread-pane {
+    display: flex;
     grid-column: 2;
     grid-row: 2;
     border-top: 1px solid var(--color-border);
   }
 
-  .conversation-list--mobile-hidden {
+  .mail-workspace--has-thread .conversation-list.conversation-list--mobile-hidden {
     display: flex;
   }
 
