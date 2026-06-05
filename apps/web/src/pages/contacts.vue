@@ -63,6 +63,18 @@ function openContactModal() {
           </template>
           Add contact
         </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          class="contacts-mobile-nav__icon-btn"
+          to="/email"
+          aria-label="Return to email"
+          title="Return to email"
+        >
+          <UiIcon name="X" :size="18" aria-hidden="true" />
+        </Button>
       </form>
     </Teleport>
 
@@ -82,7 +94,7 @@ function openContactModal() {
 
 .contacts-mobile-nav {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px auto;
+  grid-template-columns: minmax(0, 1fr) 36px auto 36px;
   gap: 10px;
   width: 100%;
   align-items: center;
