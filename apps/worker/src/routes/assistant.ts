@@ -1,0 +1,3031 @@
+import { type Context } from "hono";
+import {
+  createAssistantJobBuilderAction,
+  type AssistantJobBuilderAction,
+} from "../assistant-jobs";
+import { registerAssistantJobsRoutes } from "./assistant-jobs";
+import { registerAssistantSkillsRoutes } from "./assistant-skills";
+import {
+  generateAiText,
+  type AiTextGenerationResult,
+  type AiTextMessage,
+} from "../ai-providers";
+import { createAgentSandboxTurnRecord } from "../agent-chat";
+import {
+  dispatchAgentChannelTurn,
+  getActiveSoulinkConnectionForThread,
+  getAgentChannelEventByProviderEventId,
+  insertProviderChannelEvent,
+  verifySoulinkDispatchAuth,
+} from "../agent-channels";
+import { isCorePluginEnabled } from "../plugins";
+import { generateSiteHtml, type Me3SiteProfile } from "../site-generator";
+import {
+  createEmptyPublishManifest,
+  deleteSiteFile,
+  getContentType,
+  getCoreWebOrigin,
+  getGeneratedSiteContentType,
+  getMe3CloudUsernamePublishBlockReason,
+  getOwnerProfile,
+  getSiteFileText,
+  loadPublishManifest,
+  loadSiteSourceFiles,
+  normalizeNullableText,
+  normalizeSiteFileName,
+  normalizeUsername,
+  parseSiteProfile,
+  pruneGeneratedPublicFiles,
+  pruneUnreferencedSiteSourceFiles,
+  putSiteFile,
+  savePublishManifest,
+  sha256Text,
+  shouldIgnoreSiteSourceFile,
+  titleFromSlug,
+} from "../sites";
+import {
+  VoiceDictationInputError,
+  transcribeVoiceDictation,
+} from "../voice-dictation";
+import type { AppContext, AppHono } from "../http/types";
+import type { DbSite, Env } from "../types";
+
+const MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES = 1 * 1024 * 1024;
+const MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT = 4;
+const MAX_ASSISTANT_EXTRACTED_TEXT_CHARS = 48_000;
+
+type AssistantRouteDeps = {
+  requireOwner(c: AppContext): Promise<string | null>;
+  unauthorized(c: AppContext): Response;
+  getSessionOwnerId(c: AppContext): Promise<string | null>;
+  getSetupRequired(env: Env, ownerId?: string): Promise<string[]>;
+};
+
+type ChatBody = { message?: string };
+type AssistantChatTurnBody = {
+  messageText?: unknown;
+  threadId?: unknown;
+  projectId?: unknown;
+  replyToMessageId?: unknown;
+  model?: unknown;
+  attachments?: unknown;
+};
+type AssistantChatTurnModelSelection = {
+  providerId: "workers-ai" | "openai" | "anthropic";
+  model: string;
+  optionId: string | null;
+};
+type AssistantChatTurnStreamEvent =
+  | "status"
+  | "thread"
+  | "delta"
+  | "done"
+  | "error";
+type AssistantThreadRow = {
+  id: string;
+  owner_id: string;
+  title: string;
+  origin_surface: "assistant" | "launcher" | "soulink" | "job" | "system";
+  project_id: string | null;
+  status: "active" | "archived" | "deleted";
+  pinned_at: string | null;
+  archived_at: string | null;
+  deleted_at: string | null;
+  last_message_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+type AssistantMessageRow = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
+};
+type SoulinkDispatchBody = {
+  ownerSubject?: unknown;
+  ownerNodeId?: unknown;
+  assistantNodeId?: unknown;
+  connectionId?: unknown;
+  sourceEventId?: unknown;
+  streamChannelType?: unknown;
+  streamChannelId?: unknown;
+  messageText?: unknown;
+  replyToMessageId?: unknown;
+  createdAt?: unknown;
+};
+
+function sanitizeAttachmentFilename(value: string, fallback: string): string {
+  const sanitized = value
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+  return sanitized || fallback;
+}
+
+export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) {
+  const { requireOwner, unauthorized, getSessionOwnerId, getSetupRequired } = deps;
+
+  app.post("/api/assistant/chat", async (c) => {
+    const ownerId = await getSessionOwnerId(c);
+    if (!ownerId) {
+      return c.json({ ok: false, error: "Authentication required" }, 401);
+    }
+
+    const body = await c.req.json<ChatBody>().catch((): ChatBody => ({}));
+    const message = body.message?.trim();
+
+    if (!message) {
+      return c.json({ ok: false, error: "Message is required" }, 400);
+    }
+
+    const id = crypto.randomUUID();
+    await c.env.DB.prepare(
+      "INSERT INTO assistant_messages (id, owner_id, role, content) VALUES (?, ?, ?, ?)",
+    )
+      .bind(id, ownerId, "user", message)
+      .run();
+
+    return c.json({
+      ok: true,
+      reply: "ME3 Core assistant shell is booted. Model execution will be wired in the first bootable slice.",
+      setupRequired: await getSetupRequired(c.env, ownerId),
+    });
+  });
+
+  app.post("/api/assistant/voice/transcribe", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const formData = await c.req.formData().catch((): FormData | null => null);
+    const audio = formData?.get("audio");
+    const language = formData?.get("language");
+
+    if (!(audio instanceof Blob)) {
+      return c.json({ ok: false, error: "Audio file is required" }, 400);
+    }
+
+    try {
+      const result = await transcribeVoiceDictation(c.env, audio, {
+        language: typeof language === "string" && language.trim() ? language.trim() : null,
+      });
+      return c.json({ ok: true, ...result });
+    } catch (error) {
+      if (error instanceof VoiceDictationInputError) {
+        return c.json({ ok: false, error: error.message }, error.status as any);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/assistant/attachments", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const form = await c.req.formData().catch((): FormData | null => null);
+    if (!form) return c.json({ ok: false, error: "Attachment upload is invalid" }, 400);
+
+    const files = form
+      .getAll("attachments")
+      .filter((entry): entry is File => entry instanceof File);
+    if (files.length === 0) return c.json({ ok: false, error: "Choose at least one attachment" }, 400);
+    if (files.length > MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT) {
+      return c.json(
+        {
+          ok: false,
+          error: `Upload up to ${MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT} attachments at a time`,
+        },
+        400,
+      );
+    }
+
+    const threadIdInput = form.get("threadId");
+    const threadId =
+      typeof threadIdInput === "string" && threadIdInput.trim()
+        ? threadIdInput.trim()
+        : null;
+    if (threadId) {
+      const thread = await getAssistantThread(c.env, ownerId, threadId);
+      if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+    }
+
+    const uploaded = [];
+    for (const [index, file] of files.entries()) {
+      const filename = sanitizeAttachmentFilename(file.name, `attachment-${index + 1}`);
+      const mimeType = normalizeAssistantAttachmentMimeType(file, filename);
+      const kind = classifyAssistantUploadKind(filename, mimeType);
+      if (!kind) {
+        return c.json(
+          {
+            ok: false,
+            error: `${filename} is not supported yet. Use text, markdown, JSON, CSV, XML, or images.`,
+          },
+          400,
+        );
+      }
+      if (file.size > MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES) {
+        return c.json(
+          {
+            ok: false,
+            error: `${filename} is larger than ${formatByteLimit(MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES)}`,
+          },
+          400,
+        );
+      }
+      if (kind === "text" && file.size > MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES) {
+        return c.json(
+          {
+            ok: false,
+            error: `${filename} is too large to read as text. Use files under ${formatByteLimit(MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES)} for now.`,
+          },
+          400,
+        );
+      }
+      if (kind === "image" && !c.env.SITE_ASSETS) {
+        return c.json(
+          { ok: false, error: "Assistant image attachment storage is not configured" },
+          503,
+        );
+      }
+
+      const id = crypto.randomUUID();
+      let storageKey: string | null = null;
+      let extractedText: string | null = null;
+      let textTruncated = 0;
+
+      if (kind === "text") {
+        const text = await file.text();
+        extractedText = text.slice(0, MAX_ASSISTANT_EXTRACTED_TEXT_CHARS);
+        textTruncated = text.length > MAX_ASSISTANT_EXTRACTED_TEXT_CHARS ? 1 : 0;
+      } else if (c.env.SITE_ASSETS) {
+        storageKey = [
+          "assistant",
+          ownerId,
+          "attachments",
+          new Date().toISOString().slice(0, 10),
+          `${id}-${filename}`,
+        ].join("/");
+        await c.env.SITE_ASSETS.put(storageKey, await file.arrayBuffer(), {
+          httpMetadata: { contentType: mimeType },
+          customMetadata: {
+            ownerId,
+            threadId: threadId || "",
+            filename,
+            kind,
+          },
+        });
+      }
+
+      try {
+        await c.env.DB.prepare(
+          `INSERT INTO assistant_attachments
+             (id, owner_id, thread_id, filename, mime_type, size, kind, status,
+              storage_key, extracted_text, text_truncated, metadata_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)`,
+        )
+          .bind(
+            id,
+            ownerId,
+            threadId,
+            filename,
+            mimeType,
+            file.size,
+            kind,
+            storageKey,
+            extractedText,
+            textTruncated,
+            JSON.stringify({ source: "assistant-composer" }),
+          )
+          .run();
+      } catch (error) {
+        if (isMissingAssistantAttachmentsTableError(error)) {
+          return c.json(
+            {
+              ok: false,
+              error:
+                "Assistant attachment storage is not migrated yet. Restart the local Worker or run pnpm --filter @me3-core/worker db:migrate:local.",
+            },
+            503,
+          );
+        }
+        throw error;
+      }
+
+      uploaded.push({
+        id,
+        name: filename,
+        filename,
+        mimeType,
+        size: file.size,
+        kind,
+        status: "ready",
+        storageKey,
+        hasText: Boolean(extractedText),
+        text: extractedText,
+        textTruncated: Boolean(textTruncated),
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    return c.json({ ok: true, attachments: uploaded }, 201);
+  });
+
+  registerAssistantSkillsRoutes(app, { requireOwner, unauthorized });
+  registerAssistantJobsRoutes(app, { requireOwner, unauthorized });
+
+  function parseAssistantChatTurnModelSelection(
+    value: unknown,
+  ): AssistantChatTurnModelSelection | null | { error: string } {
+    if (value === undefined || value === null) return null;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { error: "model must be an object" };
+    }
+
+    const input = value as Record<string, unknown>;
+    const providerId = input.providerId;
+    const model = typeof input.model === "string" ? input.model.trim() : "";
+    const optionId =
+      typeof input.optionId === "string" && input.optionId.trim()
+        ? input.optionId.trim()
+        : null;
+
+    if (
+      providerId !== "workers-ai" &&
+      providerId !== "openai" &&
+      providerId !== "anthropic"
+    ) {
+      return { error: "model.providerId is not supported" };
+    }
+
+    if (!model || model.length > 160) {
+      return { error: "model.model is required" };
+    }
+
+    return { providerId, model, optionId };
+  }
+
+  function serializeAssistantThread(row: AssistantThreadRow) {
+    return {
+      id: row.id,
+      title: row.title,
+      originSurface: row.origin_surface,
+      projectId: row.project_id,
+      status: row.status,
+      pinnedAt: row.pinned_at,
+      archivedAt: row.archived_at,
+      deletedAt: row.deleted_at,
+      lastMessageAt: row.last_message_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  function serializeAssistantMessage(row: AssistantMessageRow) {
+    return {
+      id: row.id,
+      role: row.role,
+      text: row.content,
+      createdAt: row.created_at,
+    };
+  }
+
+  function assistantJobBuilderReplyText(action: AssistantJobBuilderAction) {
+    if (action.kind === "job_saved") {
+      return action.summary;
+    }
+
+    const setupText = action.explanation.setupWarnings.length
+      ? " It needs setup before it can activate."
+      : action.validation.status === "valid"
+        ? " You can save and activate it when ready."
+        : "";
+    return `Here is a draft job.${setupText}`;
+  }
+
+  async function persistAssistantTurnMessages(
+    env: Env,
+    ownerId: string,
+    threadId: string,
+    userText: string,
+    assistantText: string,
+  ) {
+    try {
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
+        )
+          .bind(crypto.randomUUID(), ownerId, "user", userText, threadId),
+        env.DB.prepare(
+          "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
+        )
+          .bind(crypto.randomUUID(), ownerId, "assistant", assistantText, threadId),
+      ]);
+    } catch {
+      // Conversation persistence is useful context, but chat turns should not fail on audit writes.
+    }
+  }
+
+  function normalizeAssistantThreadId(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.length > 160) return null;
+    return trimmed;
+  }
+
+  function assistantThreadTitleFromMessage(messageText: string) {
+    const title = messageText.replace(/\s+/g, " ").trim();
+    if (!title) return "New chat";
+    return title.length > 80 ? `${title.slice(0, 77).trimEnd()}...` : title;
+  }
+
+  async function getAssistantThread(
+    env: Env,
+    ownerId: string,
+    threadId: string,
+  ): Promise<AssistantThreadRow | null> {
+    return env.DB.prepare(
+      `SELECT id, owner_id, title, origin_surface, project_id, status, pinned_at,
+              archived_at, deleted_at, last_message_at, created_at, updated_at
+       FROM assistant_threads
+       WHERE id = ? AND owner_id = ? AND status != 'deleted'
+       LIMIT 1`,
+    )
+      .bind(threadId, ownerId)
+      .first<AssistantThreadRow>();
+  }
+
+  async function createAssistantThread(
+    env: Env,
+    ownerId: string,
+    messageText: string,
+    projectId: string | null,
+  ): Promise<AssistantThreadRow> {
+    const id = crypto.randomUUID();
+    const title = assistantThreadTitleFromMessage(messageText);
+    await env.DB.prepare(
+      `INSERT INTO assistant_threads
+         (id, owner_id, title, origin_surface, project_id, status, last_message_at)
+       VALUES (?, ?, ?, 'assistant', ?, 'active', CURRENT_TIMESTAMP)`,
+    )
+      .bind(id, ownerId, title, projectId)
+      .run();
+
+    const thread = await getAssistantThread(env, ownerId, id);
+    return (
+      thread || {
+        id,
+        owner_id: ownerId,
+        title,
+        origin_surface: "assistant",
+        project_id: projectId,
+        status: "active",
+        pinned_at: null,
+        archived_at: null,
+        deleted_at: null,
+        last_message_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+    );
+  }
+
+  async function resolveAssistantThreadForTurn(
+    env: Env,
+    ownerId: string,
+    threadId: string | null,
+    messageText: string,
+    projectId: string | null,
+  ): Promise<AssistantThreadRow | null | { error: string; status: 400 | 404 }> {
+    if (!threadId) {
+      if (projectId && !(await assistantProjectExists(env, ownerId, projectId))) {
+        return { error: "Mission Control project not found", status: 404 };
+      }
+      return createAssistantThread(env, ownerId, messageText, projectId);
+    }
+    const thread = await getAssistantThread(env, ownerId, threadId);
+    if (!thread) return { error: "Assistant thread not found", status: 404 };
+    if (thread.status !== "active") {
+      return { error: "Assistant thread is not active", status: 400 };
+    }
+    return thread;
+  }
+
+  async function assistantProjectExists(env: Env, ownerId: string, projectId: string) {
+    const row = await env.DB.prepare(
+      `SELECT id
+       FROM mission_projects
+       WHERE id = ? AND user_id = ? AND status != 'archived'
+       LIMIT 1`,
+    )
+      .bind(projectId, ownerId)
+      .first<{ id: string }>();
+    return Boolean(row);
+  }
+
+  async function touchAssistantThread(env: Env, ownerId: string, threadId: string) {
+    try {
+      await env.DB.prepare(
+        `UPDATE assistant_threads
+         SET last_message_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND owner_id = ?`,
+      )
+        .bind(threadId, ownerId)
+        .run();
+    } catch {
+      // Thread timestamps should not break the chat turn if persistence is degraded.
+    }
+  }
+
+  type AssistantSiteThreadMessage = {
+    role: string;
+    content: string;
+    created_at: string;
+  };
+
+  type ParsedAssistantSiteDraftContent = {
+    aboutParagraph?: string;
+    pages?: AssistantSiteGeneratedPage[];
+    postTitle?: string;
+    postBody?: string;
+    postTopic?: string;
+    postDraft?: boolean;
+  };
+
+  type AssistantSiteGeneratedPage = {
+    slug: string;
+    title: string;
+    bodyMarkdown: string;
+  };
+
+  type AssistantSiteGeneratedContent = {
+    aboutParagraph?: string;
+    pages?: AssistantSiteGeneratedPage[];
+    postTitle?: string;
+    postBody?: string;
+    postTopic?: string;
+    postExcerpt?: string;
+    postDraft?: boolean;
+    modelResult?: AiTextGenerationResult | null;
+    fallbackReason?: string | null;
+  };
+
+  type AssistantSiteUpdateDraft = {
+    version: 1;
+    kind: "profile_site_update";
+    siteId: string;
+    siteUsername: string;
+    threadId: string;
+    requestText: string;
+    createdAt: string;
+    updatedAt: string;
+    sourceFiles: Record<string, string>;
+    changes: {
+      aboutFile?: string;
+      aboutParagraph?: string;
+      pageFiles?: string[];
+      postTitle?: string;
+      postSlug?: string;
+      postFile?: string;
+      postMarkdown?: string;
+      postDraft?: boolean;
+      refinementText?: string | null;
+      generatedBy?: {
+        providerId: string;
+        model: string;
+        fallbackReason?: string | null;
+      } | null;
+    };
+  };
+
+  type AssistantSiteToolAction = {
+    specialist:
+      | "core.sites.update_draft"
+      | "core.sites.refine_draft"
+      | "core.sites.publish"
+      | "core.sites.approval_status";
+    replyText: string;
+    siteAction: {
+      kind:
+        | "draft_created"
+        | "draft_refined"
+        | "published"
+        | "approval_status"
+        | "missing_site"
+        | "unsupported_feature"
+        | "listed_blog_posts";
+      siteId: string | null;
+      username: string | null;
+      pending: boolean;
+      published: boolean;
+      files: string[];
+      postTitle?: string | null;
+      url?: string | null;
+      message?: string | null;
+    };
+    model?: string | null;
+    source?: "tool" | "openai" | "anthropic" | "workers-ai" | "fallback" | null;
+  };
+
+  async function maybeHandleAssistantSiteToolAction(
+    env: Env,
+    ownerId: string,
+    threadId: string,
+    messageText: string,
+    requestUrl: string,
+    selectedModel: AssistantChatTurnModelSelection | null,
+  ): Promise<AssistantSiteToolAction | null> {
+    const approvalIntent = isAssistantSiteApprovalIntent(messageText);
+    const blogListIntent = isAssistantSiteBlogListIntent(messageText);
+    const statusIntent = isAssistantSiteStatusIntent(messageText);
+    const updateIntent = isAssistantSiteUpdateIntent(messageText);
+    const refinementIntent = isAssistantSiteRefinementIntent(messageText);
+    const draftSaveIntent = isAssistantSiteDraftSaveIntent(messageText);
+
+    if (approvalIntent) {
+      const action = await maybePublishAssistantSiteDraft(
+        env,
+        ownerId,
+        threadId,
+        messageText,
+        requestUrl,
+        selectedModel,
+      );
+      if (action) return action;
+    }
+
+    if (blogListIntent) {
+      const action = await maybeListAssistantSiteBlogPosts(
+        env,
+        ownerId,
+        messageText,
+        requestUrl,
+      );
+      if (action) return action;
+    }
+
+    if (statusIntent) {
+      const action = await maybeReportAssistantSiteApprovalStatus(
+        env,
+        ownerId,
+        threadId,
+        messageText,
+        requestUrl,
+      );
+      if (action) return action;
+    }
+
+    if (draftSaveIntent) {
+      const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
+      if (pending) {
+        return {
+          specialist: "core.sites.approval_status",
+          replyText:
+            "The site update is already saved as a pending draft in this thread. Reply `publish` to publish it now, or tell me what to change.",
+          siteAction: {
+            kind: "approval_status",
+            siteId: pending.site.id,
+            username: pending.site.username,
+            pending: true,
+            published: false,
+            files: assistantSiteDraftChangedFiles(pending.draft),
+            postTitle: pending.draft.changes.postTitle || null,
+            url: getAssistantSiteAdminUrl(env, pending.site, requestUrl),
+          },
+        };
+      }
+
+      const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+      if (site) {
+        const draft = await createAssistantSiteDraftFromRecentThread(
+          env,
+          ownerId,
+          site,
+          threadId,
+          messageText,
+          selectedModel,
+        );
+        if (draft) {
+          const unavailable = await getUnavailableAssistantSiteFeatureForDraft(
+            env,
+            ownerId,
+            site,
+            draft,
+          );
+          if (unavailable) {
+            return unavailableAssistantSiteFeatureAction(env, site, unavailable, requestUrl);
+          }
+          await saveAssistantSiteUpdateDraft(env, draft);
+          return {
+            specialist: "core.sites.update_draft",
+            replyText: formatAssistantSiteDraftReply(draft),
+            siteAction: {
+              kind: "draft_created",
+              siteId: site.id,
+              username: site.username,
+              pending: true,
+              published: false,
+              files: assistantSiteDraftChangedFiles(draft),
+              postTitle: draft.changes.postTitle || null,
+              url: getAssistantSiteAdminUrl(env, site, requestUrl),
+            },
+            model: draft.changes.generatedBy?.model || null,
+            source: assistantSiteToolSourceFromDraft(draft),
+          };
+        }
+      }
+    }
+
+    if (refinementIntent) {
+      const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
+      if (pending) {
+        return refineAssistantSiteDraft(
+          env,
+          ownerId,
+          pending.site,
+          pending.draft,
+          messageText,
+          requestUrl,
+          selectedModel,
+        );
+      }
+    }
+
+    if (!updateIntent) return null;
+
+    const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+    if (!site) {
+      return {
+        specialist: "core.sites.update_draft",
+        replyText:
+          "I can draft and publish site updates once there is a profile site to update. Create a site first, then ask me again.",
+        siteAction: {
+          kind: "missing_site",
+          siteId: null,
+          username: null,
+          pending: false,
+          published: false,
+          files: [],
+          message: "No profile site was found for this owner.",
+        },
+      };
+    }
+
+    const draft = await createAssistantSiteUpdateDraft(
+      env,
+      ownerId,
+      site,
+      threadId,
+      messageText,
+      null,
+      selectedModel,
+    );
+    const unavailable = await getUnavailableAssistantSiteFeatureForDraft(
+      env,
+      ownerId,
+      site,
+      draft,
+    );
+    if (unavailable) return unavailableAssistantSiteFeatureAction(env, site, unavailable, requestUrl);
+    await saveAssistantSiteUpdateDraft(env, draft);
+    return {
+      specialist: "core.sites.update_draft",
+      replyText: formatAssistantSiteDraftReply(draft),
+      siteAction: {
+        kind: "draft_created",
+        siteId: site.id,
+        username: site.username,
+        pending: true,
+        published: false,
+        files: assistantSiteDraftChangedFiles(draft),
+        postTitle: draft.changes.postTitle || null,
+        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+      },
+      model: draft.changes.generatedBy?.model || null,
+      source: assistantSiteToolSourceFromDraft(draft),
+    };
+  }
+
+  function buildAssistantSiteToolPayload(threadId: string, action: AssistantSiteToolAction) {
+    return {
+      ok: true,
+      auditId: null,
+      turnId: null,
+      threadId,
+      specialist: action.specialist,
+      replyText: action.replyText,
+      source: action.source || "tool",
+      model: action.model || null,
+      siteAction: action.siteAction,
+      jobBuilderAction: null,
+      emailAction: null,
+      reminderAction: null,
+      contentAction: null,
+      contactsChanged: false,
+    };
+  }
+
+  function assistantSiteToolSourceFromDraft(draft: AssistantSiteUpdateDraft): AssistantSiteToolAction["source"] {
+    if (!draft.changes.generatedBy) return "tool";
+    if (draft.changes.generatedBy.fallbackReason) return "fallback";
+    const providerId = draft.changes.generatedBy.providerId;
+    return providerId === "openai" || providerId === "anthropic" || providerId === "workers-ai"
+      ? providerId
+      : "tool";
+  }
+
+  function isAssistantSiteUpdateIntent(messageText: string): boolean {
+    const text = normalizeAssistantIntentText(messageText);
+    if (!text) return false;
+    if (isAssistantSiteApprovalIntent(text) || isAssistantSiteStatusIntent(text)) return false;
+    const siteish = /\b(site|website|homepage|about page|about section|bio|blog|post|article|page)\b/.test(text);
+    const actionish = /\b(update|add|create|write|draft|make|publish|change|edit|put|append)\b/.test(text);
+    const contentTarget =
+      /\b(about page|about section|bio|blog post|post about|article about|blog|page)\b/.test(text);
+    return siteish && actionish && contentTarget;
+  }
+
+  function isAssistantSiteApprovalIntent(messageText: string): boolean {
+    const text = normalizeAssistantIntentText(messageText);
+    if (!text) return false;
+    if (isAssistantSiteStatusIntent(text)) return false;
+    return (
+      /^(yes|yep|yeah|ok|okay|sure|approved?|publish|ship|send|do it|just do it|go ahead)\b/.test(text) ||
+      /\b(publish (it|them|this|the draft)|approve (it|them|this|the draft)|ship it|make it live|looks good|just do it|go ahead)\b/.test(text)
+    );
+  }
+
+  function isAssistantSiteStatusIntent(messageText: string): boolean {
+    const text = normalizeAssistantIntentText(messageText);
+    if (!text) return false;
+    return (
+      /\b(has|have|was|is|did|can you check|check)\b.*\b(approved|published|live|done|status)\b/.test(text) ||
+      /\b(approval status|publish status|site status)\b/.test(text)
+    );
+  }
+
+  function isAssistantSiteBlogListIntent(messageText: string): boolean {
+    const text = normalizeAssistantIntentText(messageText);
+    if (!text) return false;
+    if (isAssistantSiteUpdateIntent(text) || isAssistantSiteApprovalIntent(text)) return false;
+    return (
+      /\b(list|show|see|view|open|what|which)\b.*\b(blog posts?|posts?|articles?)\b/.test(text) ||
+      /\b(blog posts?|posts?|articles?)\b.*\b(list|show|see|view|published|existing)\b/.test(text)
+    );
+  }
+
+  function isAssistantSiteDraftSaveIntent(messageText: string): boolean {
+    const text = normalizeAssistantIntentText(messageText);
+    if (!text) return false;
+    return /\b(save|keep|store)\b.*\b(draft|site update|blog post|post|article)\b/.test(text) ||
+      /\b(save it as a draft|save this as a draft|save that as a draft)\b/.test(text);
+  }
+
+  function isAssistantSiteRefinementIntent(messageText: string): boolean {
+    const text = normalizeAssistantIntentText(messageText);
+    if (!text) return false;
+    if (isAssistantSiteApprovalIntent(text) || isAssistantSiteStatusIntent(text)) return false;
+    return /\b(change|revise|refine|rewrite|edit|make|more|less|shorter|longer|instead|remove|add|use|tone|title)\b/.test(text);
+  }
+
+  function normalizeAssistantIntentText(messageText: string): string {
+    return messageText.toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  async function maybePublishAssistantSiteDraft(
+    env: Env,
+    ownerId: string,
+    threadId: string,
+    messageText: string,
+    requestUrl: string,
+    selectedModel: AssistantChatTurnModelSelection | null,
+  ): Promise<AssistantSiteToolAction | null> {
+    const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
+    let site = pending?.site || (await chooseAssistantSiteForMessage(env, ownerId, messageText));
+    let draft = pending?.draft || null;
+
+    if (!site) return null;
+    if (!draft) {
+      draft = await createAssistantSiteDraftFromRecentThread(
+        env,
+        ownerId,
+        site,
+        threadId,
+        messageText,
+        selectedModel,
+      );
+    }
+    if (!draft) return null;
+
+    const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(env, site.username);
+    if (cloudUsernameError) {
+      return {
+        specialist: "core.sites.publish",
+        replyText: `I have the draft, but I cannot publish it yet: ${cloudUsernameError}`,
+        siteAction: {
+          kind: "approval_status",
+          siteId: site.id,
+          username: site.username,
+          pending: true,
+          published: false,
+          files: assistantSiteDraftChangedFiles(draft),
+          postTitle: draft.changes.postTitle || null,
+          url: getAssistantSiteAdminUrl(env, site, requestUrl),
+          message: cloudUsernameError,
+        },
+      };
+    }
+
+    site = await publishAssistantSiteDraft(env, site, draft);
+    return {
+      specialist: "core.sites.publish",
+      replyText: formatAssistantSitePublishedReply(env, site, draft, requestUrl),
+      siteAction: {
+        kind: "published",
+        siteId: site.id,
+        username: site.username,
+        pending: false,
+        published: true,
+        files: assistantSiteDraftChangedFiles(draft),
+        postTitle: draft.changes.postTitle || null,
+        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+      },
+    };
+  }
+
+  async function maybeReportAssistantSiteApprovalStatus(
+    env: Env,
+    ownerId: string,
+    threadId: string,
+    messageText: string,
+    requestUrl: string,
+  ): Promise<AssistantSiteToolAction | null> {
+    const pending = await findPendingAssistantSiteDraft(env, ownerId, threadId, messageText);
+    if (pending) {
+      return {
+        specialist: "core.sites.approval_status",
+        replyText:
+          "Not yet. There is a site draft waiting in this thread. Reply `publish` or `approve` and I will publish it immediately.",
+        siteAction: {
+          kind: "approval_status",
+          siteId: pending.site.id,
+          username: pending.site.username,
+          pending: true,
+          published: false,
+          files: assistantSiteDraftChangedFiles(pending.draft),
+          postTitle: pending.draft.changes.postTitle || null,
+          url: getAssistantSiteAdminUrl(env, pending.site, requestUrl),
+        },
+      };
+    }
+
+    const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+    if (!site) return null;
+    const recentContext = await hasRecentAssistantSiteDraftContext(env, ownerId, threadId);
+    if (recentContext) {
+      return {
+        specialist: "core.sites.approval_status",
+        replyText:
+          "I can see the site-update draft context, but it has not been published yet. Reply `publish` or `approve` and I will publish it immediately.",
+        siteAction: {
+          kind: "approval_status",
+          siteId: site.id,
+          username: site.username,
+          pending: true,
+          published: false,
+          files: [],
+          url: getAssistantSiteAdminUrl(env, site, requestUrl),
+        },
+      };
+    }
+
+    return {
+      specialist: "core.sites.approval_status",
+      replyText: site.published_at
+        ? `Your @${site.username} site is currently published. I do not see a pending draft in this thread.`
+        : `Your @${site.username} site is not published yet, and I do not see a pending draft in this thread.`,
+      siteAction: {
+        kind: "approval_status",
+        siteId: site.id,
+        username: site.username,
+        pending: false,
+        published: Boolean(site.published_at),
+        files: [],
+        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+      },
+    };
+  }
+
+  async function maybeListAssistantSiteBlogPosts(
+    env: Env,
+    ownerId: string,
+    messageText: string,
+    requestUrl: string,
+  ): Promise<AssistantSiteToolAction | null> {
+    const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+    if (!site) return null;
+    const sourceFiles = await loadSiteSourceFiles(env, site.id);
+    const profile = await loadAssistantSiteProfile(env, ownerId, site, sourceFiles);
+    const posts = Array.isArray(profile.posts) ? profile.posts : [];
+    const lines = posts
+      .map((post, index) => {
+        const title = post.title || titleFromSlug(post.slug || `post-${index + 1}`);
+        const status = post.draft === true ? "draft" : "published";
+        const date = post.publishedAt ? `, ${post.publishedAt}` : "";
+        const slug = post.slug ? ` (${post.slug})` : "";
+        return `${index + 1}. ${title}${slug} - ${status}${date}`;
+      });
+    return {
+      specialist: "core.sites.approval_status",
+      replyText: lines.length
+        ? `Blog posts for @${site.username}:\n\n${lines.join("\n")}`
+        : `@${site.username} does not have any blog posts yet.`,
+      siteAction: {
+        kind: "listed_blog_posts",
+        siteId: site.id,
+        username: site.username,
+        pending: false,
+        published: Boolean(site.published_at),
+        files: [],
+        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+      },
+      source: "tool",
+      model: null,
+    };
+  }
+
+  async function refineAssistantSiteDraft(
+    env: Env,
+    ownerId: string,
+    site: DbSite,
+    draft: AssistantSiteUpdateDraft,
+    refinementText: string,
+    requestUrl: string,
+    selectedModel: AssistantChatTurnModelSelection | null,
+  ): Promise<AssistantSiteToolAction> {
+    const nextDraft = await applyAssistantSiteDraftRefinement(
+      env,
+      ownerId,
+      site,
+      draft,
+      refinementText,
+      selectedModel,
+    );
+    await saveAssistantSiteUpdateDraft(env, nextDraft);
+    return {
+      specialist: "core.sites.refine_draft",
+      replyText: formatAssistantSiteRefinedReply(nextDraft),
+      siteAction: {
+        kind: "draft_refined",
+        siteId: site.id,
+        username: site.username,
+        pending: true,
+        published: false,
+        files: assistantSiteDraftChangedFiles(nextDraft),
+        postTitle: nextDraft.changes.postTitle || null,
+        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+      },
+      model: nextDraft.changes.generatedBy?.model || null,
+      source: assistantSiteToolSourceFromDraft(nextDraft),
+    };
+  }
+
+  async function chooseAssistantSiteForMessage(
+    env: Env,
+    ownerId: string,
+    messageText: string,
+  ): Promise<DbSite | null> {
+    const sites = await listAssistantOwnerProfileSites(env, ownerId);
+    if (!sites.length) return null;
+
+    const explicitUsername = extractAssistantSiteUsername(messageText);
+    if (explicitUsername) {
+      const explicitSite = sites.find((site) => site.username === explicitUsername);
+      if (explicitSite) return explicitSite;
+    }
+
+    const configuredUsername = normalizeUsername(env.ME3_SITE_USERNAME);
+    if (configuredUsername) {
+      const configuredSite = sites.find((site) => site.username === configuredUsername);
+      if (configuredSite) return configuredSite;
+    }
+
+    const ownerProfile = await getOwnerProfile(env, ownerId);
+    const ownerUsername = normalizeUsername(ownerProfile?.username);
+    if (ownerUsername) {
+      const ownerSite = sites.find((site) => site.username === ownerUsername);
+      if (ownerSite) return ownerSite;
+    }
+
+    return sites[0] || null;
+  }
+
+  async function listAssistantOwnerProfileSites(env: Env, ownerId: string): Promise<DbSite[]> {
+    const rows = await env.DB.prepare(
+      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+              custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
+       FROM sites
+       WHERE user_id = ? AND COALESCE(site_type, 'profile') = 'profile'
+       ORDER BY published_at IS NULL, published_at DESC, updated_at DESC, created_at ASC`,
+    )
+      .bind(ownerId)
+      .all<DbSite>();
+    return rows.results || [];
+  }
+
+  function extractAssistantSiteUsername(messageText: string): string {
+    const atMatch = messageText.match(/@([a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])?)/i);
+    return normalizeUsername(atMatch?.[1]);
+  }
+
+  async function findPendingAssistantSiteDraft(
+    env: Env,
+    ownerId: string,
+    threadId: string,
+    messageText: string,
+  ): Promise<{ site: DbSite; draft: AssistantSiteUpdateDraft } | null> {
+    const sites = await listAssistantOwnerProfileSites(env, ownerId);
+    const explicitUsername = extractAssistantSiteUsername(messageText);
+    const orderedSites = [...sites].sort((first, second) => {
+      if (explicitUsername) {
+        if (first.username === explicitUsername) return -1;
+        if (second.username === explicitUsername) return 1;
+      }
+      return 0;
+    });
+
+    for (const site of orderedSites) {
+      const draft = await loadAssistantSiteUpdateDraft(env, site.id, threadId);
+      if (draft) return { site, draft };
+    }
+    return null;
+  }
+
+  async function getUnavailableAssistantSiteFeatureForDraft(
+    env: Env,
+    ownerId: string,
+    site: DbSite,
+    draft: AssistantSiteUpdateDraft,
+  ): Promise<"blog" | null> {
+    if (!draft.changes.postMarkdown) return null;
+    const sourceFiles = await loadSiteSourceFiles(env, site.id);
+    const profile = await loadAssistantSiteProfile(env, ownerId, site, sourceFiles);
+    return assistantSiteBlogFeatureEnabled(profile) ? null : "blog";
+  }
+
+  function assistantSiteBlogFeatureEnabled(profile: Me3SiteProfile): boolean {
+    if (profile.blogEnabled === true) return true;
+    if (Array.isArray(profile.posts) && profile.posts.length > 0) return true;
+    return typeof profile.blogTitle === "string" && profile.blogTitle.trim().length > 0;
+  }
+
+  function unavailableAssistantSiteFeatureAction(
+    env: Env,
+    site: DbSite,
+    feature: "blog",
+    requestUrl: string,
+  ): AssistantSiteToolAction {
+    return {
+      specialist: "core.sites.update_draft",
+      replyText:
+        feature === "blog"
+          ? `I cannot draft a blog post for @${site.username} yet because Blog is not enabled on that site. Enable Blog in the site builder's Additional features step, then ask me again.`
+          : `I cannot draft that site update for @${site.username} yet because the required site feature is not enabled.`,
+      siteAction: {
+        kind: "unsupported_feature",
+        siteId: site.id,
+        username: site.username,
+        pending: false,
+        published: false,
+        files: [],
+        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+        message:
+          feature === "blog"
+            ? "Blog is not enabled for this profile site."
+            : "The required site feature is not enabled for this profile site.",
+      },
+    };
+  }
+
+  async function createAssistantSiteDraftFromRecentThread(
+    env: Env,
+    ownerId: string,
+    site: DbSite,
+    threadId: string,
+    fallbackRequestText: string,
+    selectedModel: AssistantChatTurnModelSelection | null,
+  ): Promise<AssistantSiteUpdateDraft | null> {
+    const messages = await loadAssistantThreadRecentMessages(env, ownerId, threadId);
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role !== "assistant") continue;
+      const parsed = parseAssistantSiteDraftFromAssistantText(message.content);
+      if (!parsed) continue;
+      const priorUserMessage = findPriorSiteUpdateUserMessage(messages, index);
+      return createAssistantSiteUpdateDraft(
+        env,
+        ownerId,
+        site,
+        threadId,
+        priorUserMessage || fallbackRequestText,
+        parsed,
+        selectedModel,
+      );
+    }
+
+    const priorUserMessage = findPriorSiteUpdateUserMessage(messages, messages.length);
+    if (!priorUserMessage) return null;
+    return createAssistantSiteUpdateDraft(
+      env,
+      ownerId,
+      site,
+      threadId,
+      priorUserMessage,
+      null,
+      selectedModel,
+    );
+  }
+
+  async function hasRecentAssistantSiteDraftContext(
+    env: Env,
+    ownerId: string,
+    threadId: string,
+  ): Promise<boolean> {
+    const messages = await loadAssistantThreadRecentMessages(env, ownerId, threadId);
+    return messages.some((message) =>
+      message.role === "assistant"
+        ? Boolean(parseAssistantSiteDraftFromAssistantText(message.content))
+        : message.role === "user" && isAssistantSiteUpdateIntent(message.content),
+    );
+  }
+
+  async function loadAssistantThreadRecentMessages(
+    env: Env,
+    ownerId: string,
+    threadId: string,
+  ): Promise<AssistantSiteThreadMessage[]> {
+    const rows = await env.DB.prepare(
+      `SELECT role, content, created_at
+       FROM assistant_messages
+       WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
+       ORDER BY created_at ASC
+       LIMIT 24`,
+    )
+      .bind(ownerId, threadId)
+      .all<AssistantSiteThreadMessage>();
+    return rows.results || [];
+  }
+
+  function findPriorSiteUpdateUserMessage(
+    messages: AssistantSiteThreadMessage[],
+    beforeIndex: number,
+  ): string | null {
+    for (let index = Math.min(beforeIndex - 1, messages.length - 1); index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "user" && isAssistantSiteUpdateIntent(message.content)) {
+        return message.content;
+      }
+    }
+    return null;
+  }
+
+  async function createAssistantSiteUpdateDraft(
+    env: Env,
+    ownerId: string,
+    site: DbSite,
+    threadId: string,
+    requestText: string,
+    parsedContent: ParsedAssistantSiteDraftContent | null = null,
+    selectedModel: AssistantChatTurnModelSelection | null = null,
+  ): Promise<AssistantSiteUpdateDraft> {
+    const sourceFiles = await loadSiteSourceFiles(env, site.id);
+    const profile = await loadAssistantSiteProfile(env, ownerId, site, sourceFiles);
+    const generatedContent =
+      parsedContent
+        ? assistantGeneratedContentFromParsed(parsedContent)
+        : await generateAssistantSiteUpdateContent(
+            env,
+            ownerId,
+            site,
+            profile,
+            sourceFiles,
+            requestText,
+            selectedModel,
+          );
+    const changes: AssistantSiteUpdateDraft["changes"] = {
+      refinementText: null,
+      generatedBy: generatedContent.modelResult
+        ? {
+            providerId: generatedContent.modelResult.providerId,
+            model: generatedContent.modelResult.model,
+            fallbackReason: generatedContent.fallbackReason || null,
+          }
+        : generatedContent.fallbackReason
+          ? {
+              providerId: "fallback",
+              model: "local-site-fallback",
+              fallbackReason: generatedContent.fallbackReason,
+            }
+          : null,
+    };
+
+    const aboutParagraph = generatedContent.aboutParagraph || "";
+    if (aboutParagraph) {
+      const aboutPage = upsertAssistantAboutPage(profile);
+      const aboutFile = normalizeSiteFileName(aboutPage.file || "about.md") || "about.md";
+      const existingAbout = sourceFiles.get(aboutFile) || `# ${aboutPage.title || "About"}\n`;
+      sourceFiles.set(aboutFile, appendAssistantParagraph(existingAbout, aboutParagraph));
+      changes.aboutFile = aboutFile;
+      changes.aboutParagraph = aboutParagraph;
+    }
+
+    for (const page of generatedContent.pages || []) {
+      const slug = slugifyAssistantSitePath(page.slug || page.title || "page");
+      if (!slug || slug === "blog" || slug === "shop") continue;
+      const title = page.title.trim() || titleFromSlug(slug);
+      const pageFile = `${slug}.md`;
+      upsertAssistantSitePage(profile, { slug, title, file: pageFile });
+      sourceFiles.set(pageFile, normalizeAssistantPostMarkdown(title, page.bodyMarkdown));
+      changes.pageFiles = [...(changes.pageFiles || []), pageFile];
+    }
+
+    const shouldCreatePost = Boolean(
+      generatedContent.postBody || assistantRequestMentionsBlogPost(requestText),
+    );
+    if (shouldCreatePost) {
+      const topic = generatedContent.postTopic || extractAssistantBlogTopic(requestText);
+      const postTitle = generatedContent.postTitle || assistantBlogTitleFromTopic(topic);
+      const postSlug = slugifyAssistantSitePath(postTitle || topic || "personal-ai-assistants");
+      const postFile = `blog/${postSlug}.md`;
+      const postMarkdown = generatedContent.postBody
+        ? normalizeAssistantPostMarkdown(postTitle, generatedContent.postBody)
+        : generateAssistantBlogPostMarkdown(topic, postTitle, requestText);
+      upsertAssistantBlogPost(profile, {
+        slug: postSlug,
+        title: postTitle,
+        file: postFile,
+        excerpt: generatedContent.postExcerpt || markdownExcerpt(postMarkdown),
+        draft: generatedContent.postDraft === true || assistantRequestAsksForDraftPost(requestText),
+      });
+      sourceFiles.set(postFile, postMarkdown);
+      changes.postTitle = postTitle;
+      changes.postSlug = postSlug;
+      changes.postFile = postFile;
+      changes.postMarkdown = postMarkdown;
+      changes.postDraft =
+        generatedContent.postDraft === true || assistantRequestAsksForDraftPost(requestText);
+    }
+
+    if (!changes.aboutParagraph && !changes.pageFiles?.length && !changes.postMarkdown) {
+      const aboutPage = upsertAssistantAboutPage(profile);
+      const aboutFile = normalizeSiteFileName(aboutPage.file || "about.md") || "about.md";
+      const fallbackParagraph =
+        generatedContent.aboutParagraph || generateAssistantAboutParagraph(requestText);
+      const existingAbout = sourceFiles.get(aboutFile) || `# ${aboutPage.title || "About"}\n`;
+      sourceFiles.set(aboutFile, appendAssistantParagraph(existingAbout, fallbackParagraph));
+      changes.aboutFile = aboutFile;
+      changes.aboutParagraph = fallbackParagraph;
+    }
+
+    sourceFiles.set("me.json", JSON.stringify(profile, null, 2));
+
+    const now = new Date().toISOString();
+    return {
+      version: 1,
+      kind: "profile_site_update",
+      siteId: site.id,
+      siteUsername: site.username,
+      threadId,
+      requestText,
+      createdAt: now,
+      updatedAt: now,
+      sourceFiles: Object.fromEntries(sourceFiles.entries()),
+      changes,
+    };
+  }
+
+  function assistantGeneratedContentFromParsed(
+    parsed: ParsedAssistantSiteDraftContent,
+  ): AssistantSiteGeneratedContent {
+    return {
+      aboutParagraph: parsed.aboutParagraph,
+      pages: parsed.pages,
+      postTitle: parsed.postTitle,
+      postBody: parsed.postBody,
+      postTopic: parsed.postTopic,
+      postDraft: parsed.postDraft,
+      modelResult: null,
+      fallbackReason: null,
+    };
+  }
+
+  async function generateAssistantSiteUpdateContent(
+    env: Env,
+    ownerId: string,
+    site: DbSite,
+    profile: Me3SiteProfile,
+    sourceFiles: Map<string, string>,
+    requestText: string,
+    selectedModel: AssistantChatTurnModelSelection | null,
+  ): Promise<AssistantSiteGeneratedContent> {
+    try {
+      const messages = buildAssistantSiteGenerationMessages(site, profile, sourceFiles, requestText);
+      const modelResult = await generateAiText(env, ownerId, {
+        routeId: "chat",
+        selectedModel,
+        messages,
+        temperature: 0.55,
+        maxTokens: 1800,
+      });
+      const parsed = parseAssistantSiteGeneratedJson(modelResult.text);
+      if (!parsed) {
+        throw new Error("The model did not return valid site-update JSON.");
+      }
+      return { ...parsed, modelResult, fallbackReason: null };
+    } catch (error) {
+      return {
+        ...generateFallbackAssistantSiteContent(requestText),
+        modelResult: null,
+        fallbackReason:
+          error instanceof Error ? error.message : "The configured model could not generate the site update.",
+      };
+    }
+  }
+
+  function buildAssistantSiteGenerationMessages(
+    site: DbSite,
+    profile: Me3SiteProfile,
+    sourceFiles: Map<string, string>,
+    requestText: string,
+  ): AiTextMessage[] {
+    const pages = (profile.pages || []).map((page) => {
+      const file = normalizeSiteFileName(page.file || (page.slug ? `${page.slug}.md` : ""));
+      return {
+        slug: page.slug || "",
+        title: page.title || titleFromSlug(page.slug || file || "page"),
+        file,
+        excerpt: truncateAssistantPromptText(sourceFiles.get(file) || "", 700),
+      };
+    });
+    const posts = (profile.posts || []).map((post) => ({
+      slug: post.slug || "",
+      title: post.title || titleFromSlug(post.slug || "post"),
+      file: normalizeSiteFileName(post.file || (post.slug ? `blog/${post.slug}.md` : "")),
+      draft: post.draft === true,
+      publishedAt: post.publishedAt || null,
+      excerpt: post.excerpt || "",
+    }));
+    const system = [
+      "You write public ME3 profile-site content for the owner.",
+      "Return only strict JSON. No markdown fence, no prose outside JSON.",
+      "Schema: {\"aboutParagraph\": string optional, \"pages\": [{\"slug\": string, \"title\": string, \"bodyMarkdown\": string}] optional, \"blogPost\": {\"title\": string, \"bodyMarkdown\": string, \"excerpt\": string optional, \"draft\": boolean optional} optional}.",
+      "Use bodyMarkdown without frontmatter. For pages and posts, include a single H1 followed by useful body copy.",
+      "Only include fields that the owner asked to create or update. Keep content specific to the owner's request and current site.",
+      "Do not claim the site is published.",
+    ].join("\n");
+    const user = JSON.stringify(
+      {
+        request: requestText,
+        site: {
+          username: site.username,
+          name: profile.name || site.username,
+          bio: profile.bio || "",
+          blogEnabled: assistantSiteBlogFeatureEnabled(profile),
+        },
+        existingPages: pages,
+        existingBlogPosts: posts,
+      },
+      null,
+      2,
+    );
+    return [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ];
+  }
+
+  function parseAssistantSiteGeneratedJson(text: string): AssistantSiteGeneratedContent | null {
+    const parsed = parseJsonObjectFromModelText(text);
+    if (!parsed) return null;
+    const aboutParagraph = normalizeGeneratedString(parsed.aboutParagraph);
+    const pages = Array.isArray(parsed.pages)
+      ? parsed.pages
+          .map((page) => normalizeGeneratedPage(page))
+          .filter((page): page is AssistantSiteGeneratedPage => Boolean(page))
+      : [];
+    const blogPost = isRecordValue(parsed.blogPost) ? parsed.blogPost : null;
+    const postTitle = normalizeGeneratedString(blogPost?.title);
+    const postBody = normalizeGeneratedString(blogPost?.bodyMarkdown);
+    const postExcerpt = normalizeGeneratedString(blogPost?.excerpt);
+    const postDraft = typeof blogPost?.draft === "boolean" ? blogPost.draft : undefined;
+
+    if (!aboutParagraph && pages.length === 0 && !postBody) return null;
+    return {
+      aboutParagraph: aboutParagraph || undefined,
+      pages: pages.length ? pages : undefined,
+      postTitle: postTitle || undefined,
+      postBody: postBody || undefined,
+      postExcerpt: postExcerpt || undefined,
+      postDraft,
+      modelResult: null,
+      fallbackReason: null,
+    };
+  }
+
+  function parseJsonObjectFromModelText(text: string): Record<string, unknown> | null {
+    const trimmed = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+    const candidates = [trimmed];
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+    }
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate) as unknown;
+        if (isRecordValue(parsed)) return parsed;
+      } catch {
+        // Try the next candidate.
+      }
+    }
+    return null;
+  }
+
+  function normalizeGeneratedPage(value: unknown): AssistantSiteGeneratedPage | null {
+    if (!isRecordValue(value)) return null;
+    const title = normalizeGeneratedString(value.title);
+    const bodyMarkdown = normalizeGeneratedString(value.bodyMarkdown);
+    const slug = slugifyAssistantSitePath(normalizeGeneratedString(value.slug) || title);
+    if (!slug || !title || !bodyMarkdown) return null;
+    return { slug, title, bodyMarkdown };
+  }
+
+  function normalizeGeneratedString(value: unknown): string {
+    return typeof value === "string" ? cleanAssistantGeneratedSnippet(value) : "";
+  }
+
+  function isRecordValue(value: unknown): value is Record<string, unknown> {
+    return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  }
+
+  function truncateAssistantPromptText(value: string, limit: number): string {
+    const normalized = value.replace(/\s+/g, " ").trim();
+    return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+  }
+
+  function generateFallbackAssistantSiteContent(requestText: string): AssistantSiteGeneratedContent {
+    const content: AssistantSiteGeneratedContent = {};
+    if (assistantRequestMentionsAbout(requestText)) {
+      content.aboutParagraph = generateAssistantAboutParagraph(requestText);
+    }
+    if (assistantRequestMentionsBlogPost(requestText)) {
+      const topic = extractAssistantBlogTopic(requestText);
+      content.postTopic = topic;
+      content.postTitle = assistantBlogTitleFromTopic(topic);
+      content.postBody = generateAssistantBlogPostMarkdown(topic, content.postTitle, requestText);
+      content.postDraft = assistantRequestAsksForDraftPost(requestText);
+    }
+    if (!content.aboutParagraph && !content.postBody) {
+      content.aboutParagraph = generateAssistantAboutParagraph(requestText);
+    }
+    return content;
+  }
+
+  async function loadAssistantSiteProfile(
+    env: Env,
+    ownerId: string,
+    site: DbSite,
+    sourceFiles: Map<string, string>,
+  ): Promise<Me3SiteProfile> {
+    const owner = await getOwnerProfile(env, ownerId);
+    const fallbackProfile: Me3SiteProfile = {
+      version: "0.1",
+      handle: site.username,
+      name: owner?.name || owner?.username || site.username,
+      bio: owner?.bio || "Personal AI assistant powered by ME3 Core.",
+    };
+    if (owner?.avatar_url) fallbackProfile.avatar = owner.avatar_url;
+
+    const profile = parseSiteProfile(
+      sourceFiles.get("me.json") || JSON.stringify(fallbackProfile),
+      site.username,
+    );
+    profile.version ||= "0.1";
+    profile.handle ||= site.username;
+    profile.name ||= owner?.name || owner?.username || site.username;
+    profile.bio ||= owner?.bio || fallbackProfile.bio;
+    if (!profile.avatar && owner?.avatar_url) profile.avatar = owner.avatar_url;
+    return profile;
+  }
+
+  function upsertAssistantAboutPage(profile: Me3SiteProfile) {
+    const pages = Array.isArray(profile.pages) ? [...profile.pages] : [];
+    const existingIndex = pages.findIndex((page) => {
+      const slug = normalizeSiteFileName(page.slug || "").toLowerCase();
+      const file = normalizeSiteFileName(page.file || "").toLowerCase();
+      const title = (page.title || "").toLowerCase();
+      return slug === "about" || file === "about.md" || title === "about";
+    });
+    const existing = existingIndex >= 0 ? pages[existingIndex] : {};
+    const page = {
+      ...existing,
+      slug: existing.slug || "about",
+      title: existing.title || "About",
+      file: existing.file || "about.md",
+      visible: existing.visible === false ? false : true,
+    };
+    if (existingIndex >= 0) {
+      pages[existingIndex] = page;
+    } else {
+      pages.push(page);
+    }
+    profile.pages = pages;
+    return page;
+  }
+
+  function upsertAssistantSitePage(
+    profile: Me3SiteProfile,
+    input: { slug: string; title: string; file: string },
+  ) {
+    const pages = Array.isArray(profile.pages) ? [...profile.pages] : [];
+    const existingIndex = pages.findIndex((page) => {
+      const slug = normalizeSiteFileName(page.slug || "").toLowerCase();
+      const file = normalizeSiteFileName(page.file || "").toLowerCase();
+      return slug === input.slug || file === input.file.toLowerCase();
+    });
+    const page = {
+      ...(existingIndex >= 0 ? pages[existingIndex] : {}),
+      slug: input.slug,
+      title: input.title,
+      file: input.file,
+      visible: existingIndex >= 0 && pages[existingIndex]?.visible === false ? false : true,
+    };
+    if (existingIndex >= 0) {
+      pages[existingIndex] = page;
+    } else {
+      pages.push(page);
+    }
+    profile.pages = pages;
+    return page;
+  }
+
+  function upsertAssistantBlogPost(
+    profile: Me3SiteProfile,
+    input: { slug: string; title: string; file: string; excerpt: string; draft?: boolean },
+  ) {
+    const posts = Array.isArray(profile.posts) ? [...profile.posts] : [];
+    const existingIndex = posts.findIndex(
+      (post) => post.slug === input.slug || normalizeSiteFileName(post.file || "") === input.file,
+    );
+    const post = {
+      ...(existingIndex >= 0 ? posts[existingIndex] : {}),
+      slug: input.slug,
+      title: input.title,
+      file: input.file,
+      publishedAt: new Date().toISOString().slice(0, 10),
+      excerpt: input.excerpt,
+      draft: input.draft === true,
+      type: "article",
+    };
+    if (existingIndex >= 0) {
+      posts[existingIndex] = post;
+    } else {
+      posts.unshift(post);
+    }
+    profile.posts = posts;
+    profile.blogTitle ||= "Blog";
+  }
+
+  function removeAssistantBlogPost(
+    profile: Me3SiteProfile,
+    slug: string | undefined,
+    file: string | undefined,
+  ) {
+    if (!Array.isArray(profile.posts)) return;
+    const normalizedFile = normalizeSiteFileName(file || "");
+    profile.posts = profile.posts.filter(
+      (post) =>
+        !(
+          (slug && post.slug === slug) ||
+          (normalizedFile && normalizeSiteFileName(post.file || "") === normalizedFile)
+        ),
+    );
+  }
+
+  async function applyAssistantSiteDraftRefinement(
+    env: Env,
+    ownerId: string,
+    site: DbSite,
+    draft: AssistantSiteUpdateDraft,
+    refinementText: string,
+    selectedModel: AssistantChatTurnModelSelection | null,
+  ): Promise<AssistantSiteUpdateDraft> {
+    const sourceFiles = new Map(Object.entries(draft.sourceFiles));
+    const changes = { ...draft.changes, refinementText };
+    const combinedRequest = `${draft.requestText}\n\nRefinement: ${refinementText}`;
+    let generatedContent: AssistantSiteGeneratedContent | null = null;
+    try {
+      const profile = parseSiteProfile(sourceFiles.get("me.json") || "{}", site.username);
+      generatedContent = await generateAssistantSiteUpdateContent(
+        env,
+        ownerId,
+        site,
+        profile,
+        sourceFiles,
+        combinedRequest,
+        selectedModel,
+      );
+      changes.generatedBy = generatedContent.modelResult
+        ? {
+            providerId: generatedContent.modelResult.providerId,
+            model: generatedContent.modelResult.model,
+            fallbackReason: generatedContent.fallbackReason || null,
+          }
+        : generatedContent.fallbackReason
+          ? {
+              providerId: "fallback",
+              model: "local-site-fallback",
+              fallbackReason: generatedContent.fallbackReason,
+            }
+          : changes.generatedBy || null;
+    } catch {
+      generatedContent = null;
+    }
+
+    if (changes.aboutFile && changes.aboutParagraph && assistantRefinementTargetsAbout(refinementText)) {
+      const nextParagraph =
+        generatedContent?.aboutParagraph || generateAssistantAboutParagraph(combinedRequest);
+      const currentAbout = sourceFiles.get(changes.aboutFile) || "";
+      sourceFiles.set(
+        changes.aboutFile,
+        replaceAssistantParagraph(currentAbout, changes.aboutParagraph, nextParagraph),
+      );
+      changes.aboutParagraph = nextParagraph;
+    }
+
+    if (changes.postFile && changes.postTitle && assistantRefinementTargetsPost(refinementText)) {
+      const nextTitle =
+        generatedContent?.postTitle ||
+        extractAssistantRequestedTitle(refinementText) ||
+        changes.postTitle;
+      const topic = extractAssistantBlogTopic(draft.requestText);
+      const nextMarkdown = generatedContent?.postBody
+        ? normalizeAssistantPostMarkdown(nextTitle, generatedContent.postBody)
+        : generateAssistantBlogPostMarkdown(topic, nextTitle, combinedRequest);
+      sourceFiles.delete(changes.postFile);
+      const nextSlug = slugifyAssistantSitePath(nextTitle);
+      const nextFile = `blog/${nextSlug}.md`;
+      sourceFiles.set(nextFile, nextMarkdown);
+      changes.postTitle = nextTitle;
+      changes.postSlug = nextSlug;
+      changes.postFile = nextFile;
+      changes.postMarkdown = nextMarkdown;
+
+      const meJson = sourceFiles.get("me.json");
+      if (meJson) {
+        const profile = parseSiteProfile(meJson, draft.siteUsername);
+        removeAssistantBlogPost(profile, changes.postSlug, changes.postFile);
+        upsertAssistantBlogPost(profile, {
+          slug: nextSlug,
+          title: nextTitle,
+          file: nextFile,
+          excerpt: markdownExcerpt(nextMarkdown),
+          draft: changes.postDraft === true,
+        });
+        sourceFiles.set("me.json", JSON.stringify(profile, null, 2));
+      }
+    }
+
+    return {
+      ...draft,
+      requestText: combinedRequest,
+      updatedAt: new Date().toISOString(),
+      sourceFiles: Object.fromEntries(sourceFiles.entries()),
+      changes,
+    };
+  }
+
+  function assistantRefinementTargetsAbout(refinementText: string): boolean {
+    const text = normalizeAssistantIntentText(refinementText);
+    if (/\b(about|bio|paragraph|page)\b/.test(text)) return true;
+    return !/\b(blog|post|article|title)\b/.test(text);
+  }
+
+  function assistantRefinementTargetsPost(refinementText: string): boolean {
+    const text = normalizeAssistantIntentText(refinementText);
+    if (/\b(blog|post|article|title)\b/.test(text)) return true;
+    return !/\b(about|bio)\b/.test(text);
+  }
+
+  function extractAssistantRequestedTitle(refinementText: string): string {
+    const match =
+      refinementText.match(/\btitle (?:to|as)\s+["“]([^"”]+)["”]/i) ||
+      refinementText.match(/\bcalled\s+["“]([^"”]+)["”]/i);
+    return match?.[1]?.trim() || "";
+  }
+
+  async function publishAssistantSiteDraft(
+    env: Env,
+    site: DbSite,
+    draft: AssistantSiteUpdateDraft,
+  ): Promise<DbSite> {
+    const manifest = (await loadPublishManifest(env, site.id)) || createEmptyPublishManifest();
+    for (const [name, content] of Object.entries(draft.sourceFiles)) {
+      const sourceName = normalizeSiteFileName(name);
+      if (!sourceName || shouldIgnoreSiteSourceFile(sourceName)) continue;
+      await putSiteFile(env, site.id, `src/${sourceName}`, content, getContentType(sourceName));
+      manifest.sourceFiles[sourceName] = await sha256Text(content);
+    }
+
+    const profile = parseSiteProfile(draft.sourceFiles["me.json"] || "{}", site.username);
+    await pruneUnreferencedSiteSourceFiles(env, site.id, profile, manifest);
+    const sourceFiles = await loadSiteSourceFiles(env, site.id);
+    const generatedFiles = await generateSiteHtml(
+      profile,
+      Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
+    );
+    for (const [name, content] of Object.entries(generatedFiles)) {
+      await putSiteFile(
+        env,
+        site.id,
+        `public/${normalizeSiteFileName(name)}`,
+        content,
+        getGeneratedSiteContentType(name),
+      );
+    }
+    await pruneGeneratedPublicFiles(env, site.id, generatedFiles);
+    manifest.updatedAt = new Date().toISOString();
+    await savePublishManifest(env, site.id, manifest);
+    await env.DB.prepare(
+      "UPDATE sites SET published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+    )
+      .bind(site.id)
+      .run();
+    await deleteSiteFile(env, site.id, assistantSiteDraftPath(draft.threadId));
+
+    return {
+      ...site,
+      published_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  async function saveAssistantSiteUpdateDraft(
+    env: Env,
+    draft: AssistantSiteUpdateDraft,
+  ): Promise<void> {
+    await putSiteFile(
+      env,
+      draft.siteId,
+      assistantSiteDraftPath(draft.threadId),
+      JSON.stringify(draft, null, 2),
+      "application/json",
+    );
+  }
+
+  async function loadAssistantSiteUpdateDraft(
+    env: Env,
+    siteId: string,
+    threadId: string,
+  ): Promise<AssistantSiteUpdateDraft | null> {
+    const content = await getSiteFileText(env, siteId, assistantSiteDraftPath(threadId));
+    if (!content) return null;
+    try {
+      const parsed = JSON.parse(content) as unknown;
+      return isAssistantSiteUpdateDraft(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function isAssistantSiteUpdateDraft(value: unknown): value is AssistantSiteUpdateDraft {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const draft = value as AssistantSiteUpdateDraft;
+    return (
+      draft.version === 1 &&
+      draft.kind === "profile_site_update" &&
+      typeof draft.siteId === "string" &&
+      typeof draft.siteUsername === "string" &&
+      typeof draft.threadId === "string" &&
+      Boolean(draft.sourceFiles) &&
+      typeof draft.sourceFiles === "object" &&
+      !Array.isArray(draft.sourceFiles)
+    );
+  }
+
+  function assistantSiteDraftPath(threadId: string): string {
+    const safeThreadId = threadId.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 180);
+    return `assistant/site-update-drafts/${safeThreadId || "thread"}.json`;
+  }
+
+  function assistantSiteDraftChangedFiles(draft: AssistantSiteUpdateDraft): string[] {
+    const files = new Set<string>();
+    if (draft.changes.aboutFile) files.add(draft.changes.aboutFile);
+    for (const pageFile of draft.changes.pageFiles || []) files.add(pageFile);
+    if (draft.changes.postFile) files.add(draft.changes.postFile);
+    files.add("me.json");
+    return Array.from(files);
+  }
+
+  function formatAssistantSiteDraftReply(draft: AssistantSiteUpdateDraft): string {
+    const parts = [`I drafted the site update for @${draft.siteUsername}.`];
+    if (draft.changes.aboutFile) {
+      parts.push(`About page: added a new paragraph to ${draft.changes.aboutFile}.`);
+    }
+    if (draft.changes.postTitle && draft.changes.postFile) {
+      parts.push(
+        `Blog: added ${draft.changes.postDraft ? "draft " : ""}"${draft.changes.postTitle}" at ${draft.changes.postFile}.`,
+      );
+    }
+    if (draft.changes.pageFiles?.length) {
+      parts.push(`Pages: updated ${draft.changes.pageFiles.join(", ")}.`);
+    }
+    if (draft.changes.generatedBy?.fallbackReason) {
+      parts.push(`Generation note: I could not reach the configured model, so I used a local fallback (${draft.changes.generatedBy.fallbackReason}).`);
+    } else if (draft.changes.generatedBy?.model) {
+      parts.push(`Generated with ${draft.changes.generatedBy.model}.`);
+    }
+    parts.push("Reply `publish` to publish it now, or tell me what to change.");
+    return parts.join("\n\n");
+  }
+
+  function formatAssistantSiteRefinedReply(draft: AssistantSiteUpdateDraft): string {
+    const parts = [`I updated the pending draft for @${draft.siteUsername}.`];
+    if (draft.changes.aboutFile) parts.push(`About page: revised ${draft.changes.aboutFile}.`);
+    if (draft.changes.postTitle && draft.changes.postFile) {
+      parts.push(`Blog: revised "${draft.changes.postTitle}" at ${draft.changes.postFile}.`);
+    }
+    if (draft.changes.generatedBy?.fallbackReason) {
+      parts.push(`Generation note: I used a local fallback (${draft.changes.generatedBy.fallbackReason}).`);
+    } else if (draft.changes.generatedBy?.model) {
+      parts.push(`Generated with ${draft.changes.generatedBy.model}.`);
+    }
+    parts.push("Reply `publish` when it looks right, or send another change.");
+    return parts.join("\n\n");
+  }
+
+  function formatAssistantSitePublishedReply(
+    env: Env,
+    site: DbSite,
+    draft: AssistantSiteUpdateDraft,
+    requestUrl: string,
+  ): string {
+    const parts = [`Published. I updated @${site.username}.`];
+    if (draft.changes.aboutFile) parts.push(`About page: ${draft.changes.aboutFile}.`);
+    if (draft.changes.postTitle) parts.push(`Blog: "${draft.changes.postTitle}".`);
+    const url = getAssistantSiteAdminUrl(env, site, requestUrl);
+    if (url) parts.push(`View it at ${url}`);
+    return parts.join("\n\n");
+  }
+
+  function getAssistantSiteAdminUrl(env: Env, site: DbSite, requestUrl: string): string | null {
+    const origin = getCoreWebOrigin(env, requestUrl);
+    if (!origin) return null;
+    return new URL(`/sites/${encodeURIComponent(site.username)}`, origin).toString();
+  }
+
+  function appendAssistantParagraph(markdown: string, paragraph: string): string {
+    const base = markdown.trimEnd();
+    return `${base}\n\n${paragraph.trim()}\n`;
+  }
+
+  function replaceAssistantParagraph(markdown: string, previous: string, next: string): string {
+    if (markdown.includes(previous)) return markdown.replace(previous, next);
+    return appendAssistantParagraph(markdown, next);
+  }
+
+  function parseAssistantSiteDraftFromAssistantText(
+    text: string,
+  ): ParsedAssistantSiteDraftContent | null {
+    const normalized = text.replace(/\r\n/g, "\n");
+    const parsed: ParsedAssistantSiteDraftContent = {};
+    const aboutMatch = normalized.match(
+      /About Page(?:\s+(?:Paragraph|Update))?:\s*([\s\S]*?)(?=\n{0,2}\s*(?:Blog Post|Post|Article):|$)/i,
+    );
+    if (aboutMatch?.[1]) {
+      parsed.aboutParagraph = cleanAssistantGeneratedSnippet(aboutMatch[1]);
+    }
+
+    const blogMatch = normalized.match(/(?:Blog Post|Post|Article):\s*([\s\S]*)/i);
+    if (blogMatch?.[1]) {
+      const blogSection = cleanAssistantGeneratedSnippet(blogMatch[1]);
+      const titleBodyMatch = blogSection.match(/^["'“”]?([^"'“”:\n]{3,140})["'“”]?\s*:\s*([\s\S]+)$/);
+      if (titleBodyMatch) {
+        parsed.postTitle = cleanAssistantGeneratedSnippet(titleBodyMatch[1]);
+        parsed.postBody = cleanAssistantGeneratedSnippet(titleBodyMatch[2]);
+      } else {
+        parsed.postBody = blogSection;
+      }
+    }
+
+    if (!parsed.aboutParagraph && !parsed.postBody) return null;
+    return parsed;
+  }
+
+  function cleanAssistantGeneratedSnippet(value: string): string {
+    return value
+      .replace(/^```(?:markdown|md)?/i, "")
+      .replace(/```$/i, "")
+      .trim()
+      .replace(/^["'“”]+|["'“”]+$/g, "")
+      .trim();
+  }
+
+  function assistantRequestMentionsAbout(requestText: string): boolean {
+    return /\b(about page|about section|about me|bio)\b/i.test(requestText);
+  }
+
+  function assistantRequestMentionsBlogPost(requestText: string): boolean {
+    return /\b(blog post|post about|article about|blog|article)\b/i.test(requestText);
+  }
+
+  function assistantRequestAsksForDraftPost(requestText: string): boolean {
+    const text = normalizeAssistantIntentText(requestText);
+    return /\b(draft|save as draft|do not publish|don't publish|unpublished)\b/.test(text);
+  }
+
+  function extractAssistantBlogTopic(requestText: string): string {
+    const quoted =
+      requestText.match(/\b(?:blog post|post|article)\s+(?:about|on)\s+["'“]([^"'”]+)["'”]/i) ||
+      requestText.match(/\b(?:about|on)\s+["'“]([^"'”]+)["'”]/i);
+    if (quoted?.[1]) return quoted[1].trim();
+
+    const unquoted = requestText.match(/\b(?:blog post|post|article)\s+(?:about|on)\s+([^.!?\n]+)(?:[.!?\n]|$)/i);
+    if (unquoted?.[1]) {
+      return unquoted[1].replace(/\b(and|then|also)\b.*$/i, "").trim();
+    }
+    return "personal AI assistants";
+  }
+
+  function assistantBlogTitleFromTopic(topic: string): string {
+    const normalizedTopic = topic.trim() || "personal AI assistants";
+    return `The Rise of ${titleCaseAssistantSiteText(normalizedTopic)}`;
+  }
+
+  function titleCaseAssistantSiteText(value: string): string {
+    return value
+      .replace(/[-_]+/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((word) => {
+        const lower = word.toLowerCase();
+        if (lower === "ai") return "AI";
+        if (lower === "me3") return "ME3";
+        return `${lower.slice(0, 1).toUpperCase()}${lower.slice(1)}`;
+      })
+      .join(" ");
+  }
+
+  function slugifyAssistantSitePath(value: string): string {
+    const slug = value
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/&/g, " and ")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80);
+    return slug || "personal-ai-assistants";
+  }
+
+  function generateAssistantAboutParagraph(requestText: string): string {
+    const text = normalizeAssistantIntentText(requestText);
+    if (/\b(short|shorter|concise|tight)\b/.test(text)) {
+      return "This space collects experiments in creative work, useful systems, and personal AI assistants, turning scattered ideas into practical momentum.";
+    }
+    if (/\b(playful|fun|weird|lighter)\b/.test(text)) {
+      return "This site is my little workshop for curious experiments: part notebook, part launchpad, and part invitation to see what happens when personal AI assistants help ideas find their next shape.";
+    }
+    if (/\b(professional|serious|polished|clear)\b/.test(text)) {
+      return "This site brings together my work on practical systems, creative exploration, and personal AI assistants, with a focus on turning emerging ideas into clear, useful outcomes.";
+    }
+    return "This site is a living notebook for experiments in creative systems, personal AI assistants, and the small practical rituals that turn scattered ideas into momentum.";
+  }
+
+  function generateAssistantBlogPostMarkdown(
+    topic: string,
+    title: string,
+    requestText: string,
+  ): string {
+    const text = normalizeAssistantIntentText(requestText);
+    if (/\b(short|shorter|concise|tight)\b/.test(text)) {
+      return normalizeAssistantPostMarkdown(
+        title,
+        `Personal AI assistants are becoming less like flashy software and more like everyday infrastructure. The best ones remember context, reduce coordination drag, and help people move from intention to action without turning the day into another dashboard.\n\nThe interesting shift is not that assistants can answer questions. It is that they can quietly hold the thread: the note you meant to write, the follow-up you almost forgot, the idea that needs one more pass before it becomes useful.`,
+      );
+    }
+    if (/\b(playful|fun|weird|lighter)\b/.test(text)) {
+      return normalizeAssistantPostMarkdown(
+        title,
+        `Personal AI assistants are starting to feel less like tools and more like tiny studios that fit in the corner of your day. They can catch loose thoughts, sort half-formed plans, and nudge ideas from "someday" into "let's try this now."\n\nThe magic is not that they do everything for us. It is that they make it easier to stay in motion. A good assistant keeps the boring bits from swallowing the bright bits, which leaves more room for curiosity, taste, and actual follow-through.`,
+      );
+    }
+    return normalizeAssistantPostMarkdown(
+      title,
+      `Personal AI assistants are moving from novelty to quiet infrastructure. Instead of asking people to manage another tool, the most useful assistants sit close to the work: they remember context, surface next steps, and help turn loose intentions into visible progress.\n\nThe real promise is not automation for its own sake. It is continuity. A personal assistant can hold the thread between a note, a conversation, a calendar commitment, and a half-finished idea, making it easier to return to the work with less friction.\n\nAs these systems mature, the best ones will feel less like command centers and more like trusted companions for attention. They will help people notice what matters, protect time for deeper work, and move steadily from possibility to practice.`,
+    );
+  }
+
+  function normalizeAssistantPostMarkdown(title: string, body: string): string {
+    const cleanBody = cleanAssistantGeneratedSnippet(body);
+    if (/^#\s+/m.test(cleanBody)) return `${cleanBody.trim()}\n`;
+    return `# ${title.trim()}\n\n${cleanBody.trim()}\n`;
+  }
+
+  function markdownExcerpt(markdown: string): string {
+    return markdown
+      .replace(/^#.+$/gm, "")
+      .replace(/[#*_>`[\]()]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 180);
+  }
+
+  app.get("/api/assistant/threads", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const statusParam = c.req.query("status");
+    const status =
+      statusParam === "archived" || statusParam === "deleted" ? statusParam : "active";
+    const projectIdParam = c.req.query("projectId");
+    const normalizedProjectId = normalizeNullableText(projectIdParam);
+    const projectFilter =
+      projectIdParam === "none" || projectIdParam === "ungrouped"
+        ? "none"
+        : normalizedProjectId;
+    const search = normalizeNullableText(c.req.query("q"));
+    const limit = Math.min(
+      Math.max(Number.parseInt(c.req.query("limit") || "40", 10) || 40, 1),
+      100,
+    );
+    const where = ["owner_id = ?", "status = ?"];
+    const bindings: unknown[] = [ownerId, status];
+    if (projectFilter === "none") {
+      where.push("project_id IS NULL");
+    } else if (projectFilter) {
+      where.push("project_id = ?");
+      bindings.push(projectFilter);
+    }
+    if (search) {
+      const pattern = `%${search.replace(/[%_]/g, "\\$&")}%`;
+      where.push(
+        `(title LIKE ? ESCAPE '\\' OR EXISTS (
+          SELECT 1
+          FROM assistant_messages
+          WHERE assistant_messages.thread_id = assistant_threads.id
+            AND assistant_messages.owner_id = assistant_threads.owner_id
+            AND assistant_messages.role IN ('user', 'assistant')
+            AND assistant_messages.content LIKE ? ESCAPE '\\'
+        ))`,
+      );
+      bindings.push(pattern, pattern);
+    }
+    bindings.push(limit);
+
+    const rows = await c.env.DB.prepare(
+      `SELECT id, owner_id, title, origin_surface, project_id, status, pinned_at,
+              archived_at, deleted_at, last_message_at, created_at, updated_at
+       FROM assistant_threads
+       WHERE ${where.join(" AND ")}
+       ORDER BY pinned_at IS NULL, pinned_at DESC,
+                last_message_at IS NULL, last_message_at DESC,
+                updated_at DESC
+       LIMIT ?`,
+    )
+      .bind(...bindings)
+      .all<AssistantThreadRow>();
+
+    return c.json({ threads: (rows.results || []).map(serializeAssistantThread) });
+  });
+
+  app.patch("/api/assistant/threads/:threadId", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const threadId = normalizeAssistantThreadId(c.req.param("threadId"));
+    if (!threadId) return c.json({ ok: false, error: "Thread id is required" }, 400);
+
+    const thread = await getAssistantThread(c.env, ownerId, threadId);
+    if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const projectId =
+      Object.prototype.hasOwnProperty.call(body, "projectId")
+        ? normalizeNullableText(body.projectId)
+        : thread.project_id;
+    if (projectId && !(await assistantProjectExists(c.env, ownerId, projectId))) {
+      return c.json({ ok: false, error: "Mission Control project not found" }, 404);
+    }
+
+    let nextStatus = thread.status;
+    if (body.status === "active" || body.status === "archived") {
+      nextStatus = body.status;
+    }
+    const pinned =
+      Object.prototype.hasOwnProperty.call(body, "pinned") && typeof body.pinned === "boolean"
+        ? body.pinned
+        : Boolean(thread.pinned_at);
+    const title = normalizeNullableText(body.title) || thread.title;
+
+    await c.env.DB.prepare(
+      `UPDATE assistant_threads
+       SET title = ?, project_id = ?, status = ?,
+           pinned_at = CASE WHEN ? THEN COALESCE(pinned_at, CURRENT_TIMESTAMP) ELSE NULL END,
+           archived_at = CASE WHEN ? = 'archived' THEN COALESCE(archived_at, CURRENT_TIMESTAMP) ELSE NULL END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND owner_id = ?`,
+    )
+      .bind(title, projectId, nextStatus, pinned ? 1 : 0, nextStatus, threadId, ownerId)
+      .run();
+
+    const updated = await getAssistantThread(c.env, ownerId, threadId);
+    return c.json({ thread: updated ? serializeAssistantThread(updated) : serializeAssistantThread(thread) });
+  });
+
+  app.delete("/api/assistant/threads/:threadId", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const threadId = normalizeAssistantThreadId(c.req.param("threadId"));
+    if (!threadId) return c.json({ ok: false, error: "Thread id is required" }, 400);
+
+    const thread = await getAssistantThread(c.env, ownerId, threadId);
+    if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+
+    await c.env.DB.prepare(
+      `UPDATE assistant_threads
+       SET status = 'deleted', deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP),
+           archived_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND owner_id = ?`,
+    )
+      .bind(threadId, ownerId)
+      .run();
+    await c.env.DB.prepare(
+      `UPDATE assistant_messages
+       SET content = ''
+       WHERE owner_id = ? AND thread_id = ?`,
+    )
+      .bind(ownerId, threadId)
+      .run();
+
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/assistant/threads/:threadId/export", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const threadId = normalizeAssistantThreadId(c.req.param("threadId"));
+    if (!threadId) return c.json({ ok: false, error: "Thread id is required" }, 400);
+
+    const thread = await getAssistantThread(c.env, ownerId, threadId);
+    if (!thread || thread.status === "deleted") {
+      return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+    }
+
+    const rows = await c.env.DB.prepare(
+      `SELECT id, role, content, created_at
+       FROM assistant_messages
+       WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
+       ORDER BY created_at ASC`,
+    )
+      .bind(ownerId, threadId)
+      .all<AssistantMessageRow>();
+
+    return c.json({
+      thread: serializeAssistantThread(thread),
+      messages: (rows.results || []).map(serializeAssistantMessage),
+      exportedAt: new Date().toISOString(),
+    });
+  });
+
+  app.get("/api/assistant/threads/:threadId/messages", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const threadId = normalizeAssistantThreadId(c.req.param("threadId"));
+    if (!threadId) return c.json({ ok: false, error: "Thread id is required" }, 400);
+
+    const thread = await getAssistantThread(c.env, ownerId, threadId);
+    if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
+
+    const rows = await c.env.DB.prepare(
+      `SELECT id, role, content, created_at
+       FROM assistant_messages
+       WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
+       ORDER BY created_at ASC`,
+    )
+      .bind(ownerId, threadId)
+      .all<AssistantMessageRow>();
+
+    return c.json({
+      thread: serializeAssistantThread(thread),
+      messages: (rows.results || []).map(serializeAssistantMessage),
+    });
+  });
+
+  async function handleAssistantChatTurn(c: Context<{ Bindings: Env }>) {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    if (!(await isCorePluginEnabled(c.env, "me3.agent-chat"))) {
+      return c.json(
+        { ok: false, error: "Agent Chat plugin is disabled" },
+        403,
+      );
+    }
+
+    const body = await c.req
+      .json<AssistantChatTurnBody>()
+      .catch((): AssistantChatTurnBody => ({}));
+    const messageText =
+      typeof body.messageText === "string" ? body.messageText.trim() : "";
+    if (!messageText) {
+      return c.json({ ok: false, error: "Message text is required" }, 400);
+    }
+    const selectedModel = parseAssistantChatTurnModelSelection(body.model);
+    if (selectedModel && "error" in selectedModel) {
+      return c.json({ ok: false, error: selectedModel.error }, 400);
+    }
+    const requestedThreadId = normalizeAssistantThreadId(body.threadId);
+    const requestedProjectId = normalizeNullableText(body.projectId);
+    const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
+
+    const replyToMessageId =
+      typeof body.replyToMessageId === "string" ||
+      typeof body.replyToMessageId === "number"
+        ? body.replyToMessageId
+        : null;
+    const thread = await resolveAssistantThreadForTurn(
+      c.env,
+      ownerId,
+      requestedThreadId,
+      messageText,
+      requestedProjectId,
+    );
+    if (!thread) {
+      return c.json({ ok: false, error: "Assistant thread is required" }, 500);
+    }
+    if ("error" in thread) {
+      return c.json({ ok: false, error: thread.error }, thread.status);
+    }
+
+    const builderAction = await createAssistantJobBuilderAction(c.env, ownerId, messageText);
+    if (builderAction) {
+      const replyText = assistantJobBuilderReplyText(builderAction);
+      await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, replyText);
+      await touchAssistantThread(c.env, ownerId, thread.id);
+      return c.json({
+        ok: true,
+        auditId: null,
+        turnId: null,
+        threadId: thread.id,
+        specialist: "core.job-builder",
+        replyText,
+        model: null,
+        source: "tool",
+        jobBuilderAction: builderAction,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      });
+    }
+
+    const siteAction = await maybeHandleAssistantSiteToolAction(
+      c.env,
+      ownerId,
+      thread.id,
+      messageText,
+      c.req.url,
+      selectedModel,
+    );
+    if (siteAction) {
+      await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, siteAction.replyText);
+      await touchAssistantThread(c.env, ownerId, thread.id);
+      return c.json(buildAssistantSiteToolPayload(thread.id, siteAction));
+    }
+
+    const runtime = c.env.ME3_USER_AGENT;
+    if (!runtime) {
+      return c.json(
+        { ok: false, error: "Agent chat runtime is not configured" },
+        503,
+      );
+    }
+
+    const turn = await createAgentSandboxTurnRecord(c.env, {
+      userId: ownerId,
+      messageText,
+      replyToMessageId,
+      metadata: {
+        surface: "assistant",
+        route: c.req.path,
+        threadId: thread.id,
+        requestedThreadId,
+        requestedProjectId,
+        selectedModel: selectedModel || null,
+        attachmentCount: Array.isArray(body.attachments) ? body.attachments.length : 0,
+        attachmentManifest,
+      },
+    });
+
+    const id = runtime.idFromName(ownerId);
+    const stub = runtime.get(id);
+    const response = await stub.fetch(
+      "https://me3-core-user-agent.internal/dispatch/sandbox",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: ownerId,
+          connectionId: turn.connection.id,
+          sourceEventId: turn.sourceEvent.id,
+          turnId: turn.turnId,
+          threadId: thread.id,
+          messageText: turn.messageText,
+          replyToMessageId: turn.replyToMessageId,
+          selectedModel,
+          attachments: attachmentManifest,
+        }),
+      },
+    );
+
+    const payload = (await response.json().catch(() => null)) as
+      | Record<string, unknown>
+      | null;
+
+    if (!response.ok || payload?.ok !== true) {
+      return c.json(
+        {
+          ok: false,
+          error:
+            typeof payload?.error === "string"
+              ? payload.error
+              : `Agent chat runtime request failed (${response.status})`,
+        },
+        503,
+      );
+    }
+
+    await touchAssistantThread(c.env, ownerId, thread.id);
+    return c.json({ ...payload, threadId: thread.id });
+  }
+
+  async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    if (!(await isCorePluginEnabled(c.env, "me3.agent-chat"))) {
+      return c.json(
+        { ok: false, error: "Agent Chat plugin is disabled" },
+        403,
+      );
+    }
+
+    const body = await c.req
+      .json<AssistantChatTurnBody>()
+      .catch((): AssistantChatTurnBody => ({}));
+    const messageText =
+      typeof body.messageText === "string" ? body.messageText.trim() : "";
+    if (!messageText) {
+      return c.json({ ok: false, error: "Message text is required" }, 400);
+    }
+    const selectedModel = parseAssistantChatTurnModelSelection(body.model);
+    if (selectedModel && "error" in selectedModel) {
+      return c.json({ ok: false, error: selectedModel.error }, 400);
+    }
+
+    const requestedThreadId = normalizeAssistantThreadId(body.threadId);
+    const requestedProjectId = normalizeNullableText(body.projectId);
+    const replyToMessageId =
+      typeof body.replyToMessageId === "string" ||
+      typeof body.replyToMessageId === "number"
+        ? body.replyToMessageId
+        : null;
+    const attachmentCount = Array.isArray(body.attachments) ? body.attachments.length : 0;
+    const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
+    const encoder = new TextEncoder();
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (event: AssistantChatTurnStreamEvent, data: Record<string, unknown>) => {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+          );
+        };
+        let auditContext:
+          | {
+              connectionId: string;
+              sourceEventId: string;
+              turnId: string;
+              threadId: string;
+            }
+          | null = null;
+
+        try {
+          send("status", { state: "started" });
+          const thread = await resolveAssistantThreadForTurn(
+            c.env,
+            ownerId,
+            requestedThreadId,
+            messageText,
+            requestedProjectId,
+          );
+          if (!thread) {
+            send("error", { ok: false, error: "Assistant thread is required" });
+            return;
+          }
+          if ("error" in thread) {
+            send("error", { ok: false, error: thread.error, status: thread.status });
+            return;
+          }
+
+          send("thread", { threadId: thread.id });
+
+          const builderAction = await createAssistantJobBuilderAction(c.env, ownerId, messageText);
+          if (builderAction) {
+            const replyText = assistantJobBuilderReplyText(builderAction);
+            await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, replyText);
+            await touchAssistantThread(c.env, ownerId, thread.id);
+            for (const chunk of splitAssistantStreamText(replyText)) {
+              send("delta", { text: chunk });
+            }
+            send("done", {
+              ok: true,
+              auditId: null,
+              turnId: null,
+              threadId: thread.id,
+              specialist: "core.job-builder",
+              replyText,
+              model: null,
+              source: "tool",
+              jobBuilderAction: builderAction,
+              emailAction: null,
+              reminderAction: null,
+              contentAction: null,
+              contactsChanged: false,
+            });
+            return;
+          }
+
+          const siteAction = await maybeHandleAssistantSiteToolAction(
+            c.env,
+            ownerId,
+            thread.id,
+            messageText,
+            c.req.url,
+            selectedModel,
+          );
+          if (siteAction) {
+            await persistAssistantTurnMessages(
+              c.env,
+              ownerId,
+              thread.id,
+              messageText,
+              siteAction.replyText,
+            );
+            await touchAssistantThread(c.env, ownerId, thread.id);
+            for (const chunk of splitAssistantStreamText(siteAction.replyText)) {
+              send("delta", { text: chunk });
+            }
+            send("done", buildAssistantSiteToolPayload(thread.id, siteAction));
+            return;
+          }
+
+          const runtime = c.env.ME3_USER_AGENT;
+          if (!runtime) {
+            send("error", { ok: false, error: "Agent chat runtime is not configured" });
+            return;
+          }
+
+          const turn = await createAgentSandboxTurnRecord(c.env, {
+            userId: ownerId,
+            messageText,
+            replyToMessageId,
+            metadata: {
+              surface: "assistant",
+              route: c.req.path,
+              stream: true,
+              threadId: thread.id,
+              requestedThreadId,
+              requestedProjectId,
+              selectedModel: selectedModel || null,
+              attachmentCount,
+              attachmentManifest,
+            },
+          });
+          auditContext = {
+            connectionId: turn.connection.id,
+            sourceEventId: turn.sourceEvent.id,
+            turnId: turn.turnId,
+            threadId: thread.id,
+          };
+
+          const id = runtime.idFromName(ownerId);
+          const stub = runtime.get(id);
+          const response = await stub.fetch(
+            "https://me3-core-user-agent.internal/dispatch/sandbox",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              signal: c.req.raw.signal,
+              body: JSON.stringify({
+                userId: ownerId,
+                connectionId: turn.connection.id,
+                sourceEventId: turn.sourceEvent.id,
+                turnId: turn.turnId,
+                threadId: thread.id,
+                messageText: turn.messageText,
+                replyToMessageId: turn.replyToMessageId,
+                selectedModel,
+                attachments: attachmentManifest,
+              }),
+            },
+          );
+
+          const payload = (await response.json().catch(() => null)) as
+            | Record<string, unknown>
+            | null;
+
+          if (!response.ok || payload?.ok !== true) {
+            await insertAssistantChatStreamAuditEvent(c.env, {
+              ownerId,
+              connectionId: turn.connection.id,
+              sourceEventId: turn.sourceEvent.id,
+              turnId: turn.turnId,
+              threadId: thread.id,
+              route: c.req.path,
+              outcome: "failed",
+              selectedModel: selectedModel || null,
+              attachmentCount,
+              attachmentManifest,
+              error:
+                typeof payload?.error === "string"
+                  ? payload.error
+                  : `Agent chat runtime request failed (${response.status})`,
+            });
+            send("error", {
+              ok: false,
+              error:
+                typeof payload?.error === "string"
+                  ? payload.error
+                  : `Agent chat runtime request failed (${response.status})`,
+            });
+            return;
+          }
+
+          await touchAssistantThread(c.env, ownerId, thread.id);
+          const replyText = typeof payload.replyText === "string" ? payload.replyText : "";
+          for (const chunk of splitAssistantStreamText(replyText)) {
+            send("delta", { text: chunk });
+          }
+          await insertAssistantChatStreamAuditEvent(c.env, {
+            ownerId,
+            connectionId: turn.connection.id,
+            sourceEventId: turn.sourceEvent.id,
+            turnId: turn.turnId,
+            threadId: thread.id,
+            route: c.req.path,
+            outcome: "completed",
+            selectedModel: selectedModel || null,
+            attachmentCount,
+            attachmentManifest,
+            error: null,
+          });
+          send("done", { ...payload, threadId: thread.id });
+        } catch (error) {
+          if (c.req.raw.signal.aborted) {
+            if (auditContext) {
+              await insertAssistantChatStreamAuditEvent(c.env, {
+                ownerId,
+                connectionId: auditContext.connectionId,
+                sourceEventId: auditContext.sourceEventId,
+                turnId: auditContext.turnId,
+                threadId: auditContext.threadId,
+                route: c.req.path,
+                outcome: "stopped",
+                selectedModel: selectedModel || null,
+                attachmentCount,
+                attachmentManifest,
+                error: null,
+              });
+            }
+            return;
+          }
+          if (auditContext) {
+            await insertAssistantChatStreamAuditEvent(c.env, {
+              ownerId,
+              connectionId: auditContext.connectionId,
+              sourceEventId: auditContext.sourceEventId,
+              turnId: auditContext.turnId,
+              threadId: auditContext.threadId,
+              route: c.req.path,
+              outcome: "failed",
+              selectedModel: selectedModel || null,
+              attachmentCount,
+              attachmentManifest,
+              error: error instanceof Error ? error.message : "Assistant stream failed",
+            });
+          }
+          send("error", {
+            ok: false,
+            error: error instanceof Error ? error.message : "Assistant stream failed",
+          });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      },
+    });
+  }
+
+  type AssistantAttachmentAuditManifestItem = {
+    id: string | null;
+    name: string | null;
+    mimeType: string | null;
+    size: number | null;
+    kind: string | null;
+    status: string | null;
+    storageKey: string | null;
+    hasText: boolean;
+    textTruncated: boolean;
+  };
+
+  function createAssistantAttachmentAuditManifest(
+    attachments: unknown,
+  ): AssistantAttachmentAuditManifestItem[] {
+    if (!Array.isArray(attachments)) return [];
+    return attachments
+      .filter((attachment): attachment is Record<string, unknown> =>
+        Boolean(attachment && typeof attachment === "object" && !Array.isArray(attachment)),
+      )
+      .map((attachment) => ({
+        id: normalizeAssistantAuditText(attachment.id),
+        name: normalizeAssistantAuditText(attachment.name),
+        mimeType: normalizeAssistantAuditText(attachment.mimeType),
+        size:
+          typeof attachment.size === "number" && Number.isFinite(attachment.size)
+            ? Math.max(0, Math.round(attachment.size))
+            : null,
+        kind: normalizeAssistantAuditText(attachment.kind),
+        status: normalizeAssistantAuditText(attachment.status),
+        storageKey: normalizeAssistantAuditText(attachment.storageKey),
+        hasText: Boolean(attachment.hasText),
+        textTruncated: Boolean(attachment.textTruncated),
+      }));
+  }
+
+  function classifyAssistantUploadKind(
+    filename: string,
+    mimeType: string,
+  ): "text" | "image" | null {
+    const normalizedMime = mimeType.toLowerCase();
+    const normalizedName = filename.toLowerCase();
+    if (normalizedMime.startsWith("image/")) return "image";
+    if (
+      normalizedMime.startsWith("text/") ||
+      normalizedMime === "application/json" ||
+      normalizedMime === "application/xml" ||
+      normalizedMime === "application/csv" ||
+      normalizedName.endsWith(".md") ||
+      normalizedName.endsWith(".markdown") ||
+      normalizedName.endsWith(".csv") ||
+      normalizedName.endsWith(".tsv") ||
+      normalizedName.endsWith(".json") ||
+      normalizedName.endsWith(".txt") ||
+      normalizedName.endsWith(".xml")
+    ) {
+      return "text";
+    }
+    return null;
+  }
+
+  function normalizeAssistantAttachmentMimeType(file: File, filename: string) {
+    const explicit = file.type.trim();
+    if (explicit) return explicit;
+    const lower = filename.toLowerCase();
+    if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
+    if (lower.endsWith(".csv")) return "text/csv";
+    if (lower.endsWith(".tsv")) return "text/tab-separated-values";
+    if (lower.endsWith(".json")) return "application/json";
+    if (lower.endsWith(".xml")) return "application/xml";
+    if (lower.endsWith(".txt")) return "text/plain";
+    return "application/octet-stream";
+  }
+
+  function formatByteLimit(bytes: number) {
+    if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} KB`;
+    return `${Math.round(bytes / 100_000) / 10} MB`;
+  }
+
+  function isMissingAssistantAttachmentsTableError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    return (
+      /assistant_attachments/i.test(message) &&
+      /no such table|not found|no such object/i.test(message)
+    );
+  }
+
+  function normalizeAssistantAuditText(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const normalized = value.trim();
+    return normalized || null;
+  }
+
+  async function insertAssistantChatStreamAuditEvent(
+    env: Env,
+    input: {
+      ownerId: string;
+      connectionId: string;
+      sourceEventId: string;
+      turnId: string;
+      threadId: string;
+      route: string;
+      outcome: "completed" | "failed" | "stopped";
+      selectedModel: ReturnType<typeof parseAssistantChatTurnModelSelection> | null;
+      attachmentCount: number;
+      attachmentManifest: AssistantAttachmentAuditManifestItem[];
+      error: string | null;
+    },
+  ) {
+    try {
+      await insertProviderChannelEvent(env, {
+        channel: "sandbox",
+        connectionId: input.connectionId,
+        direction: "system",
+        eventType: "message",
+        status:
+          input.outcome === "completed"
+            ? "sent"
+            : input.outcome === "stopped"
+              ? "skipped"
+              : "failed",
+        providerEventId: `${input.sourceEventId}:stream:${input.outcome}`,
+        providerMessageId: null,
+        replyToMessageId: null,
+        textBody: null,
+        rawJson: {
+          runtime: "sandbox",
+          surface: "assistant",
+          route: input.route,
+          stream: true,
+          streamOutcome: input.outcome,
+          turnId: input.turnId,
+          threadId: input.threadId,
+          ownerId: input.ownerId,
+          sourceEventId: input.sourceEventId,
+          selectedModel: input.selectedModel,
+          attachmentCount: input.attachmentCount,
+          attachmentManifest: input.attachmentManifest,
+        },
+        errorMessage: input.error,
+      });
+    } catch {
+      // Stream outcome audit should not break the user-visible chat response.
+    }
+  }
+
+  function splitAssistantStreamText(text: string) {
+    const normalized = text || "";
+    if (!normalized) return [""];
+    const chunks: string[] = [];
+    for (let cursor = 0; cursor < normalized.length; cursor += 80) {
+      chunks.push(normalized.slice(cursor, cursor + 80));
+    }
+    return chunks;
+  }
+
+  app.post("/api/assistant/chat/turn", handleAssistantChatTurn);
+  app.post("/api/assistant/chat/turn/stream", handleAssistantChatTurnStream);
+  app.post("/api/agent/sandbox", handleAssistantChatTurn);
+
+  app.post("/api/agent/channels/soulink/dispatch", async (c) => {
+    if (!(await isCorePluginEnabled(c.env, "me3.agent-chat"))) {
+      return c.json({ ok: false, error: "Agent Chat plugin is disabled" }, 403);
+    }
+
+    const body = await c.req.json<SoulinkDispatchBody>().catch((): SoulinkDispatchBody => ({}));
+    const messageText = typeof body.messageText === "string" ? body.messageText.trim() : "";
+    const sourceEventId = typeof body.sourceEventId === "string" ? body.sourceEventId.trim() : "";
+    const streamChannelId = typeof body.streamChannelId === "string" ? body.streamChannelId.trim() : "";
+    const replyToMessageId =
+      typeof body.replyToMessageId === "string" || typeof body.replyToMessageId === "number"
+        ? body.replyToMessageId
+        : null;
+
+    if (!messageText) return c.json({ ok: false, error: "Message text is required" }, 400);
+    if (!sourceEventId) return c.json({ ok: false, error: "sourceEventId is required" }, 400);
+    if (!streamChannelId) return c.json({ ok: false, error: "streamChannelId is required" }, 400);
+
+    const connection = await getActiveSoulinkConnectionForThread(c.env, streamChannelId);
+    if (!connection) {
+      return c.json({ ok: false, error: "Soulink channel is not connected to this ME3 Core install" }, 404);
+    }
+
+    const authResult = verifySoulinkDispatchAuth(connection, c.req.header("authorization"));
+    if (!authResult.ok) {
+      return c.json({ ok: false, error: authResult.error }, authResult.status as any);
+    }
+
+    const duplicate = await getAgentChannelEventByProviderEventId(c.env, connection.id, sourceEventId);
+    if (duplicate) {
+      return c.json({
+        ok: true,
+        deduped: true,
+        auditId: null,
+        turnId: null,
+        specialist: "core.agent-chat",
+        replyText: null,
+        model: null,
+        source: null,
+      });
+    }
+
+    const eventId = await insertProviderChannelEvent(c.env, {
+      channel: "soulink",
+      connectionId: connection.id,
+      direction: "inbound",
+      eventType: "message",
+      status: "received",
+      providerEventId: sourceEventId,
+      providerMessageId: sourceEventId,
+      replyToMessageId,
+      textBody: messageText,
+      rawJson: body,
+      errorMessage: null,
+    });
+
+    await c.env.DB.prepare(
+      `UPDATE agent_channel_connections
+       SET last_inbound_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+      .bind(connection.id)
+      .run();
+
+    const turnId = crypto.randomUUID();
+    const response = await dispatchAgentChannelTurn(c.env, {
+      userId: connection.user_id,
+      connectionId: connection.id,
+      sourceEventId: eventId,
+      turnId,
+      messageText,
+      replyToMessageId,
+    });
+
+    if (!response.ok) {
+      await insertProviderChannelEvent(c.env, {
+        channel: "soulink",
+        connectionId: connection.id,
+        direction: "system",
+        eventType: "error",
+        status: "failed",
+        providerEventId: `${sourceEventId}:dispatch-error`,
+        providerMessageId: null,
+        replyToMessageId,
+        textBody: messageText,
+        rawJson: response,
+        errorMessage: response.error || "Agent dispatch failed",
+      });
+      return c.json(response, 503 as any);
+    }
+
+    if (response.replyText) {
+      await insertProviderChannelEvent(c.env, {
+        channel: "soulink",
+        connectionId: connection.id,
+        direction: "outbound",
+        eventType: "send",
+        status: "pending",
+        providerEventId: `${sourceEventId}:reply`,
+        providerMessageId: null,
+        replyToMessageId,
+        textBody: response.replyText,
+        rawJson: response,
+        errorMessage: null,
+      });
+      await c.env.DB.prepare(
+        `UPDATE agent_channel_connections
+         SET last_outbound_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      )
+        .bind(connection.id)
+        .run();
+    }
+
+    return c.json({
+      ...response,
+      streamChannelType: connection.provider_connection_id || "messaging",
+      streamChannelId,
+    });
+  });
+}
