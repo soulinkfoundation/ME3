@@ -9,6 +9,17 @@ import { MISSION_CONTROL_RUNTIME } from "@me3-core/plugin-mission-control";
 import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
 
 export const CORE_PLUGIN_CATALOG_VERSION = "2026-05-15.v1";
+const PUBLIC_BASELINE_MIGRATION_PATH =
+  "./apps/worker/migrations/0001_initial_public_schema.sql";
+
+function publicBaselineMigration(id: string, description: string) {
+  return {
+    id,
+    path: PUBLIC_BASELINE_MIGRATION_PATH,
+    destructive: false,
+    description,
+  };
+}
 
 export type CorePluginStatus =
   | "available"
@@ -233,16 +244,10 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   ],
   secrets: [],
   migrations: [
-    {
-      id: "social.0011",
-      path: "./apps/worker/migrations/0011_social_publishing_plugin.sql",
-      destructive: false,
-    },
-    {
-      id: "social.0012",
-      path: "./apps/worker/migrations/0012_social_publishing_oauth_setup.sql",
-      destructive: false,
-    },
+    publicBaselineMigration(
+      "social.public-baseline",
+      "Social accounts, OAuth state, content bank, packages, variants, publications, and audit tables are included in the initial public schema.",
+    ),
   ],
   queuesAndCrons: [...SOCIAL_PUBLISHING_RUNTIME.queuesAndCrons],
   notes: [
@@ -521,18 +526,10 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   ],
   secrets: [],
   migrations: [
-    {
-      id: "mission.0015",
-      path: "./apps/worker/migrations/0015_mission_control_plugin.sql",
-      destructive: false,
-    },
-    {
-      id: "mission.0027",
-      path: "./apps/worker/migrations/0027_mission_control_remove_daily_notes.sql",
-      destructive: true,
-      description:
-        "Remove retired Mission Control daily-note and capture storage.",
-    },
+    publicBaselineMigration(
+      "mission.public-baseline",
+      "Mission projects, tasks, approvals, agent runs, plugin activity, private memory, context sources, daemon pairing, and dashboard tables are included in the initial public schema.",
+    ),
   ],
   queuesAndCrons: [],
   notes: [
@@ -640,16 +637,10 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
   ],
   secrets: [],
   migrations: [
-    {
-      id: "calendar.0003",
-      path: "./apps/worker/migrations/0003_workspace_surfaces.sql",
-      destructive: false,
-    },
-    {
-      id: "calendar.0013",
-      path: "./apps/worker/migrations/0013_calendar_plugin_recurrence.sql",
-      destructive: false,
-    },
+    publicBaselineMigration(
+      "calendar.public-baseline",
+      "Calendar events, sources, reminders, bookings, and recurrence-capable event fields are included in the initial public schema.",
+    ),
   ],
   queuesAndCrons: [],
   notes: [
@@ -778,11 +769,10 @@ const ACCOUNTS_PLUGIN: CorePluginManifestSummary = {
   ],
   secrets: [],
   migrations: [
-    {
-      id: "accounts.0024",
-      path: "./apps/worker/migrations/0024_core_accounts.sql",
-      destructive: false,
-    },
+    publicBaselineMigration(
+      "accounts.public-baseline",
+      "Financial categories and ledger entries are included in the initial public schema.",
+    ),
   ],
   queuesAndCrons: [],
   notes: [
@@ -868,16 +858,10 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   migrations: [
-    {
-      id: "agent-chat.0001",
-      path: "./apps/worker/migrations/0001_core_bootstrap.sql",
-      destructive: false,
-    },
-    {
-      id: "agent-chat.0003",
-      path: "./apps/worker/migrations/0003_workspace_surfaces.sql",
-      destructive: false,
-    },
+    publicBaselineMigration(
+      "agent-chat.public-baseline",
+      "Owner profile, assistant messages, threads, attachments, AI provider settings, mailbox, contacts, and agent channel tables are included in the initial public schema.",
+    ),
   ],
   queuesAndCrons: [],
   notes: [
@@ -1083,11 +1067,10 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
   ],
   secrets: [],
   migrations: [
-    {
-      id: "local-executor.0025",
-      path: "./apps/worker/migrations/0025_local_executor_plugin.sql",
-      destructive: false,
-    },
+    publicBaselineMigration(
+      "local-executor.public-baseline",
+      "Local runner pairings, project policies, runs, run events, and audit events are included in the initial public schema.",
+    ),
   ],
   queuesAndCrons: [],
   notes: [
@@ -1167,11 +1150,10 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
   agentTools: [],
   secrets: [],
   migrations: [
-    {
-      id: "journal.0026",
-      path: "./apps/worker/migrations/0026_journal_plugin.sql",
-      destructive: false,
-    },
+    publicBaselineMigration(
+      "journal.public-baseline",
+      "Journal entries are included in the initial public schema.",
+    ),
   ],
   queuesAndCrons: [],
   notes: [

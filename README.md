@@ -117,6 +117,12 @@ pnpm deploy
 
 Before major updates, create or note a Cloudflare D1 Time Travel bookmark. Never overwrite an existing install's `wrangler.toml` resource IDs, Worker secrets, D1 database, R2 bucket, or custom domains unless you intentionally want a fresh install.
 
+The first public Core release uses a single initial D1 schema baseline. After
+that release, migrations are append-only and published migration files are not
+rewritten. See
+[`docs/public-release-hardening.md`](./docs/public-release-hardening.md) for
+the release checklist and migration policy.
+
 ### Recommended Cloudflare Domains
 
 ME3 Core can boot on the generated `workers.dev` URL without a custom domain. Do not add a custom domain during the deploy-button flow unless you already know you need one. Before a custom public-site hostname is configured, the first/profile site is published at `/me` on the Worker URL, for example:

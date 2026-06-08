@@ -79,4 +79,6 @@ ME3_VOICE_TRANSCRIPTION_MODEL = "@cf/openai/whisper-large-v3-turbo"
 # Optional override for the hosted Soulink assistant chat connector.
 # Defaults to https://soulinkfoundation.org.
 # SOULINK_API_ORIGIN = "https://soulinkfoundation.org"
-ME3_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app"
+# Optional social OAuth bridge for managed installs. Leave unset for standalone
+# Core unless you operate a compatible OAuth bridge.
+# ME3_SOCIAL_OAUTH_ORIGIN = "https://social-oauth.example.com"

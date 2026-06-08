@@ -115,7 +115,12 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   ],
   secrets: [],
   migrations: [
-    { id: "mission.0015", path: "./apps/worker/migrations/0015_mission_control_plugin.sql", destructive: false }
+    {
+      id: "mission.public-baseline",
+      path: "./apps/worker/migrations/0001_initial_public_schema.sql",
+      destructive: false,
+      description: "Mission Control tables are included in the initial public schema."
+    }
   ],
   queuesAndCrons: [],
   notes: [
@@ -563,7 +568,7 @@ Hosted Cloud must not own public/private boundary decisions for Core installs, m
 ## Starter Implementation Plan
 
 1. Scaffold `packages/mission-control` with runtime constants, TypeScript types, capture parsing helpers, serializers, and tests.
-2. Add `0015_mission_control_plugin.sql` with the tables above, plus indexes.
+2. Keep Mission Control tables in `0001_initial_public_schema.sql` for the first public baseline; append a new migration for any later schema changes.
 3. Register `me3.mission-control` in `apps/worker/src/plugins.ts` as bundled and default-enabled.
 4. Add Worker routes under `/api/mission-control/*`, keeping Calendar writes behind the existing Calendar plugin contract.
 5. Add `apps/web/src/pages/mission-control.vue` with the Today view first: navbar, centered day switcher, capture row, capture list, journal editor.

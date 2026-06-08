@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
 import { generateAiText } from "./ai-providers";
@@ -5544,6 +5544,17 @@ describe("ME3 Core Worker auth", () => {
     expect(env.bookings).toHaveLength(0);
   });
 
+  describe("scheduling routes", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-05T12:00:00Z"));
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
   it("lists default private scheduling time types and maps public booking offers", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
@@ -6526,6 +6537,7 @@ describe("ME3 Core Worker auth", () => {
     expect(env.schedulingRequestAudit.map((entry) => entry.event_type)).toContain(
       "checkout_handoff",
     );
+  });
   });
 
   it("lists curated Core plugins for the signed-in owner", async () => {
