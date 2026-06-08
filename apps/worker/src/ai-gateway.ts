@@ -137,7 +137,7 @@ export async function getAiGatewaySettings(
     apiTokenHint: row?.api_token_hint || (hasEnvToken ? "environment" : null),
     apiTokenUpdatedAt: normalizeDbDateTime(row?.api_token_updated_at || null),
     routeWorkersAi: row ? row.route_workers_ai !== 0 : Boolean(gatewayId),
-    routeExternalProviders: row ? row.route_external_providers === 1 : false,
+    routeExternalProviders: row ? row.route_external_providers !== 0 : Boolean(gatewayId),
     source,
   };
 }
@@ -186,7 +186,9 @@ export async function updateAiGatewaySettings(
       : input.routeWorkersAi === true;
   const routeExternalProviders =
     input.routeExternalProviders === undefined
-      ? current?.route_external_providers === 1
+      ? current
+        ? current.route_external_providers !== 0
+        : true
       : input.routeExternalProviders === true;
   const now = new Date().toISOString();
 
@@ -241,7 +243,7 @@ export async function getAiGatewayRuntimeConfig(
     gatewayId,
     apiToken: storedToken || env.CLOUDFLARE_API_TOKEN || null,
     routeWorkersAi: row ? row.route_workers_ai !== 0 : Boolean(gatewayId),
-    routeExternalProviders: row ? row.route_external_providers === 1 : false,
+    routeExternalProviders: row ? row.route_external_providers !== 0 : Boolean(gatewayId),
   };
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
+import { generateAiText } from "./ai-providers";
 import { ME3_CORE_VERSION } from "./core-version";
 import { CORE_PLUGIN_CATALOG, type DbPluginInstallation } from "./plugins";
 import { publishQueuedContentPublication } from "./social-publishing";
@@ -32,6 +33,18 @@ type StoredMessage = {
   content: string;
   threadId?: string | null;
   created_at?: string;
+};
+type StoredAiGatewaySettings = {
+  user_id: string;
+  account_id: string | null;
+  gateway_id: string | null;
+  encrypted_api_token: string | null;
+  api_token_hint: string | null;
+  api_token_updated_at: string | null;
+  route_workers_ai: number;
+  route_external_providers: number;
+  created_at: string;
+  updated_at: string;
 };
 type StoredAssistantThread = {
   id: string;
@@ -293,6 +306,7 @@ function createEnv(): Env & {
   installSecrets: Map<string, string>;
   aiCredentials: DbAiProviderCredential[];
   aiDefaults: DbAiModelDefault[];
+  aiGatewaySettings: StoredAiGatewaySettings | null;
   emailProviderSettings: DbEmailProviderSetting[];
   emailSendAudit: DbEmailSendAudit[];
   emailSends: Array<Record<string, unknown>>;
@@ -337,6 +351,7 @@ function createEnv(): Env & {
     installSecrets: new Map<string, string>(),
     aiCredentials: [] as DbAiProviderCredential[],
     aiDefaults: [] as DbAiModelDefault[],
+    aiGatewaySettings: null as StoredAiGatewaySettings | null,
     emailProviderSettings: [] as DbEmailProviderSetting[],
     emailSendAudit: [] as DbEmailSendAudit[],
     emailSends: [] as Array<Record<string, unknown>>,
@@ -959,6 +974,22 @@ function createEnv(): Env & {
                 } else {
                   state.aiDefaults.push(defaultRow);
                 }
+              }
+
+              if (sql.includes("INSERT INTO ai_gateway_settings")) {
+                state.aiGatewaySettings = {
+                  user_id: values[0] as string,
+                  account_id: values[1] as string | null,
+                  gateway_id: values[2] as string | null,
+                  encrypted_api_token: values[3] as string | null,
+                  api_token_hint: values[4] as string | null,
+                  api_token_updated_at: values[5] as string | null,
+                  route_workers_ai: values[6] as number,
+                  route_external_providers: values[7] as number,
+                  created_at:
+                    state.aiGatewaySettings?.created_at || (values[8] as string),
+                  updated_at: values[9] as string,
+                };
               }
 
               if (sql.includes("DELETE FROM ai_model_defaults")) {
@@ -1803,6 +1834,13 @@ function createEnv(): Env & {
               if (sql.includes("FROM owner_profile") && values[0] === state.owner?.id) {
                 return state.owner as T;
               }
+              if (sql.includes("FROM ai_gateway_settings")) {
+                return (
+                  state.aiGatewaySettings?.user_id === values[0]
+                    ? state.aiGatewaySettings
+                    : null
+                ) as T | null;
+              }
               if (sql.includes("FROM assistant_threads")) {
                 return (
                   state.assistantThreads.find(
@@ -2286,6 +2324,14 @@ function createEnv(): Env & {
                   ) as T[],
                 };
               }
+              if (sql.includes("FROM ai_gateway_settings")) {
+                return {
+                  results:
+                    state.aiGatewaySettings?.user_id === values[0]
+                      ? ([state.aiGatewaySettings] as T[])
+                      : ([] as T[]),
+                };
+              }
               if (sql.includes("FROM email_provider_settings")) {
                 return {
                   results: state.emailProviderSettings.filter(
@@ -2448,6 +2494,9 @@ function createEnv(): Env & {
     },
     get aiDefaults() {
       return state.aiDefaults;
+    },
+    get aiGatewaySettings() {
+      return state.aiGatewaySettings;
     },
     get emailProviderSettings() {
       return state.emailProviderSettings;
@@ -7861,6 +7910,180 @@ describe("ME3 Core Worker auth", () => {
         }),
       ]),
     );
+  });
+
+  it("routes OpenAI text generation through AI Gateway when enabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/ai-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          providers: [{ id: "openai", apiKey: "sk-openai-secret" }],
+        }),
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/ai-gateway-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          accountId: "cf-account",
+          gatewayId: "me3",
+          apiToken: "cf-gateway-token",
+          routeExternalProviders: true,
+        }),
+      }),
+      env,
+    );
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ choices: [{ message: { content: "Gateway reply" } }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await generateAiText(env, "owner", {
+        selectedModel: { providerId: "openai", model: "gpt-4.1-mini" },
+        messages: [{ role: "user", content: "Hello" }],
+      });
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+
+      expect(result.text).toBe("Gateway reply");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://gateway.ai.cloudflare.com/v1/cf-account/me3/openai/chat/completions",
+        expect.any(Object),
+      );
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer sk-openai-secret",
+        "cf-aig-authorization": "Bearer cf-gateway-token",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("routes Anthropic text generation through AI Gateway when enabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/ai-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          providers: [{ id: "anthropic", apiKey: "sk-ant-secret" }],
+        }),
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/ai-gateway-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          accountId: "cf-account",
+          gatewayId: "me3",
+          apiToken: "cf-gateway-token",
+          routeExternalProviders: true,
+        }),
+      }),
+      env,
+    );
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ content: [{ type: "text", text: "Claude gateway reply" }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await generateAiText(env, "owner", {
+        selectedModel: { providerId: "anthropic", model: "claude-3-5-haiku-latest" },
+        messages: [{ role: "user", content: "Hello" }],
+      });
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+
+      expect(result.text).toBe("Claude gateway reply");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://gateway.ai.cloudflare.com/v1/cf-account/me3/anthropic/v1/messages",
+        expect.any(Object),
+      );
+      expect(init.headers).toMatchObject({
+        "x-api-key": "sk-ant-secret",
+        "cf-aig-authorization": "Bearer cf-gateway-token",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps direct OpenAI text generation available when Gateway routing is disabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/ai-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          providers: [{ id: "openai", apiKey: "sk-openai-secret" }],
+        }),
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/ai-gateway-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          accountId: "cf-account",
+          gatewayId: "me3",
+          apiToken: "cf-gateway-token",
+          routeExternalProviders: false,
+        }),
+      }),
+      env,
+    );
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ choices: [{ message: { content: "Direct reply" } }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await generateAiText(env, "owner", {
+        selectedModel: { providerId: "openai", model: "gpt-4.1-mini" },
+        messages: [{ role: "user", content: "Hello" }],
+      });
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+
+      expect(result.text).toBe("Direct reply");
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.openai.com/v1/chat/completions",
+        expect.any(Object),
+      );
+      expect(init.headers).not.toHaveProperty("cf-aig-authorization");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("requires owner auth for AI provider settings", async () => {

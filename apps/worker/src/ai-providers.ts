@@ -714,11 +714,15 @@ async function runOpenAiText(
   options: { temperature: number; maxTokens: number },
 ): Promise<string> {
   if (!route.apiKey) throw new Error("OpenAI API key is not configured.");
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const gatewayUrl = externalProviderGatewayUrl(route, "openai", "chat/completions");
+  const response = await fetch(gatewayUrl || "https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${route.apiKey}`,
+      ...(gatewayUrl && route.aiGateway?.apiToken
+        ? { "cf-aig-authorization": `Bearer ${route.aiGateway.apiToken}` }
+        : {}),
     },
     body: JSON.stringify({
       model: route.model,
@@ -750,12 +754,16 @@ async function runAnthropicText(
   const turns = messages
     .filter((message) => message.role !== "system")
     .map((message) => ({ role: message.role, content: message.content }));
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const gatewayUrl = externalProviderGatewayUrl(route, "anthropic", "v1/messages");
+  const response = await fetch(gatewayUrl || "https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": route.apiKey,
       "anthropic-version": "2023-06-01",
+      ...(gatewayUrl && route.aiGateway?.apiToken
+        ? { "cf-aig-authorization": `Bearer ${route.aiGateway.apiToken}` }
+        : {}),
     },
     body: JSON.stringify({
       model: route.model,
@@ -774,6 +782,25 @@ async function runAnthropicText(
   const text = extractAiText(payload?.content);
   if (!text) throw new Error(`Anthropic (${route.model}) returned an empty reply.`);
   return text;
+}
+
+function externalProviderGatewayUrl(
+  route: ResolvedTextGenerationRoute,
+  provider: "openai" | "anthropic",
+  path: string,
+): string | null {
+  const gateway = route.aiGateway;
+  if (
+    !gateway?.routeExternalProviders ||
+    !gateway.accountId ||
+    !gateway.gatewayId ||
+    !gateway.apiToken
+  ) {
+    return null;
+  }
+  return `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(
+    gateway.accountId,
+  )}/${encodeURIComponent(gateway.gatewayId)}/${provider}/${path}`;
 }
 
 function extractAiText(value: unknown): string {

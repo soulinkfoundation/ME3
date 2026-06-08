@@ -331,7 +331,7 @@ const aiGatewayAccountIdInput = ref("");
 const aiGatewayIdInput = ref("");
 const aiGatewayTokenInput = ref("");
 const aiGatewayRouteWorkersAiInput = ref(true);
-const aiGatewayRouteExternalProvidersInput = ref(false);
+const aiGatewayRouteExternalProvidersInput = ref(true);
 const aiGatewayMessage = ref<string | null>(null);
 const aiGatewayError = ref<string | null>(null);
 const emailProviderLoading = ref(false);
@@ -2579,9 +2579,8 @@ onMounted(async () => {
                           <input
                             v-model="aiGatewayRouteExternalProvidersInput"
                             type="checkbox"
-                            disabled
                           />
-                          <span>Route OpenAI and Anthropic through this gateway later</span>
+                          <span>Route OpenAI and Anthropic through this gateway</span>
                         </label>
                         <div class="account-inline-actions">
                           <Button
