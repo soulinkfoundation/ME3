@@ -1014,9 +1014,6 @@ export async function createQueuedContentPublicationAndEnqueue(
 ): Promise<{ item: ContentItem; publicationIds: string[] } | null> {
   const gate = await getSocialPublishingRuntimeStatus(env);
   if (!gate.ready) throw new SocialPublishingGateError(gate);
-  if (!env.SOCIAL_PUBLISH_QUEUE) {
-    throw new SocialPublishingInputError("Social publish queue is not configured", 424);
-  }
 
   const id = normalizeId(idInput);
   if (!id) throw new SocialPublishingInputError("Content item id is required");
@@ -1076,10 +1073,18 @@ export async function createQueuedContentPublicationAndEnqueue(
       eventType: "queued",
       payload: { platform, contentItemId: existing.id },
     });
-    await env.SOCIAL_PUBLISH_QUEUE.send({ publicationId });
+    if (env.SOCIAL_PUBLISH_QUEUE) {
+      await env.SOCIAL_PUBLISH_QUEUE.send({ publicationId });
+    }
   }
 
   await setContentQueueState(env, ownerId, existing.id, "publishing");
+  if (!env.SOCIAL_PUBLISH_QUEUE) {
+    for (const publicationId of publicationIds) {
+      await publishQueuedContentPublication(env, publicationId);
+    }
+  }
+
   const updated = await getOwnedContentItem(env, ownerId, existing.id);
   if (!updated) throw new SocialPublishingInputError("Could not update content item", 500);
   return { item: serializeContentItem(updated), publicationIds };
@@ -1089,7 +1094,7 @@ export async function dispatchDueSocialPublications(
   env: SocialPublishingEnv,
 ): Promise<{ queued: number; skipped: number }> {
   const gate = await getSocialPublishingRuntimeStatus(env);
-  if (!gate.ready || !env.SOCIAL_PUBLISH_QUEUE) return { queued: 0, skipped: 0 };
+  if (!gate.ready) return { queued: 0, skipped: 0 };
 
   const rows = await env.DB.prepare(
     `SELECT c.*, s.username AS site_username

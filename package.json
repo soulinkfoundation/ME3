@@ -20,8 +20,24 @@
     "build": "pnpm generate:llms && pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
-    "deploy": "pnpm storage:r2:provision --yes && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
+    "deploy": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
     "deploy:d1-only": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "ME3's private database. Keep the generated database ID in your copied repository so Core updates reuse the same data."
+      },
+      "SITE_ASSETS": {
+        "description": "Private file storage for site media, mailbox attachments, and generated assets. The default name can stay as-is unless you run multiple ME3 installs in one Cloudflare account."
+      },
+      "ME3_USER_AGENT": {
+        "description": "Durable Object state for ME3's owner agent runtime. Cloudflare provisions this automatically."
+      },
+      "AI": {
+        "description": "Workers AI binding used by ME3's default assistant and voice features. You can add other model providers inside ME3 later."
+      }
+    }
   },
   "devDependencies": {
     "typescript": "^5.3.3",

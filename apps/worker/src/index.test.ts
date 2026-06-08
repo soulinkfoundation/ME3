@@ -7067,6 +7067,120 @@ describe("ME3 Core Worker auth", () => {
     ]);
   });
 
+  it("publishes approved Social Publishing content directly when no queue binding exists", async () => {
+    const env = createEnv();
+    env.SOCIAL_PUBLISH_QUEUE = undefined;
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/social/provider-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          providers: [
+            {
+              id: "linkedin",
+              clientId: "linkedin-client",
+              clientSecret: "linkedin-secret-1234",
+              enabled: true,
+            },
+          ],
+        }),
+      }),
+      env,
+    );
+    const authorizeResponse = await app.fetch(
+      new Request("http://localhost/api/social/linkedin/authorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({ siteId: "site-1", returnPath: "/social" }),
+      }),
+      env,
+    );
+    const authorizeBody = (await authorizeResponse.json()) as { url: string };
+    const state = new URL(authorizeBody.url).searchParams.get("state") || "";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("accessToken")) {
+        return Response.json({
+          access_token: "linkedin-access-token",
+          refresh_token: "linkedin-refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url.includes("userinfo")) {
+        return Response.json({ sub: "linkedin-owner", name: "Owner LinkedIn" });
+      }
+      if (url.includes("/rest/posts")) {
+        return Response.json(
+          { id: "urn:li:share:direct-publish-1" },
+          { headers: { "x-restli-id": "urn:li:share:direct-publish-1" } },
+        );
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await app.fetch(
+        new Request(
+          `http://localhost/api/social/linkedin/callback?code=ok-code&state=${encodeURIComponent(
+            state,
+          )}`,
+        ),
+        env,
+      );
+
+      const createResponse = await app.fetch(
+        new Request("http://localhost/api/content/items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({
+            siteId: "site-1",
+            body: "Publish without queue.",
+            platforms: ["linkedin"],
+          }),
+        }),
+        env,
+      );
+      const createBody = (await createResponse.json()) as { item: { id: string } };
+      const publishResponse = await app.fetch(
+        new Request(`http://localhost/api/content/items/${createBody.item.id}/publish`, {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const publishBody = (await publishResponse.json()) as {
+        item: { status: string };
+        publicationIds: string[];
+      };
+
+      expect(publishResponse.status).toBe(200);
+      expect(publishBody.item.status).toBe("posted");
+      expect(publishBody.publicationIds).toHaveLength(1);
+      expect(env.socialPublishQueueMessages).toHaveLength(0);
+      expect(env.socialPublications[0]).toMatchObject({
+        variant_id: createBody.item.id,
+        platform: "linkedin",
+        status: "published",
+        platform_post_id: "urn:li:share:direct-publish-1",
+      });
+      expect(env.socialPublicationEvents.map((event) => event.event_type)).toEqual([
+        "queued",
+        "publishing",
+        "published",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("refuses Social Publishing provider queueing without a connected account", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

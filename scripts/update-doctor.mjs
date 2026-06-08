@@ -64,11 +64,9 @@ check("R2 SITE_ASSETS binding exists", Boolean(r2Block), 'Expected [[r2_buckets]
 check("R2 bucket name is set", Boolean(getTomlString(r2Block, "bucket_name")), "Expected R2 bucket_name.");
 
 const emailSendBlock = getTomlNamedBlock(config, "send_email", "EMAIL");
-check(
-  "Cloudflare Email Service send binding exists",
-  Boolean(emailSendBlock),
-  'Expected [[send_email]] with name = "EMAIL". Account -> Email stores the sender address.',
-);
+if (emailSendBlock) {
+  check("Optional Cloudflare Email Service send binding is valid", true);
+}
 
 const durableObjectBlock = getTomlArrayBlock(config, "durable_objects.bindings", "ME3_USER_AGENT");
 check(

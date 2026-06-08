@@ -6,6 +6,18 @@ With ME3, you can now own your email/calendar/website/AI assistant and more, all
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
 
+The button is meant to be the lowest-friction path: choose a Git account, keep
+or rename the `my-me3` project/resources, and deploy. Cloudflare provisions the
+D1 database, R2 bucket, Durable Object, Workers AI binding, and assets binding
+from `wrangler.toml`. ME3 setup then continues inside the live app, where owner
+profile, domains, social accounts, email, Telegram, payments, and
+model-provider choices belong.
+
+Cloudflare currently documents the deploy button URL as
+`https://deploy.workers.cloudflare.com/?url=<repo>`. It does not document URL
+parameters for preselecting the Git account or the private-repository checkbox,
+so those remain Cloudflare-controlled choices in the setup screen.
+
 ## Support ME3
 
 ME3 is open source. Donations to Soulink Foundation CLG help support ongoing

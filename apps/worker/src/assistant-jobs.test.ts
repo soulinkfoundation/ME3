@@ -982,15 +982,16 @@ describe("assistant jobs persistence", () => {
       sourceEventId: "evt-ignored",
       eventType: "capture.created",
     });
-    const processed = await processAssistantJobIngressQueueMessage(env, {
+    const repeated = await processAssistantJobIngressQueueMessage(env, {
       eventId: recorded.event.id,
       userId: "owner",
     });
 
-    expect(processed.outcome).toBe("ignored");
-    expect(processed.runCount).toBe(0);
-    expect(processed.event.status).toBe("ignored");
-    expect(processed.event.payload).toMatchObject({ queueOutcome: "no_matching_jobs" });
+    expect(recorded.queued).toBe(false);
+    expect(recorded.event.status).toBe("ignored");
+    expect(recorded.event.payload).toMatchObject({ queueOutcome: "no_matching_jobs" });
+    expect(repeated.outcome).toBe("already_processed");
+    expect(repeated.runCount).toBe(0);
   });
 
   it("marks dead-lettered ingress events as failed", async () => {

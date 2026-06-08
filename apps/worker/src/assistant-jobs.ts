@@ -707,7 +707,7 @@ export async function recordAssistantJobIngressEvent(
     )
     .run();
 
-  const row = await getAssistantJobIngressEventByIdempotencyKey(
+  let row = await getAssistantJobIngressEventByIdempotencyKey(
     env,
     userId,
     event.idempotencyKey,
@@ -717,6 +717,13 @@ export async function recordAssistantJobIngressEvent(
   let queued = false;
   if (!duplicate) {
     queued = await enqueueAssistantJobIngressEvent(env, row);
+    if (!queued) {
+      const processed = await processAssistantJobIngressQueueMessage(env, {
+        eventId: row.id,
+        userId: row.user_id,
+      });
+      row = await requireAssistantJobIngressEvent(env, userId, processed.event.id);
+    }
   }
 
   return {

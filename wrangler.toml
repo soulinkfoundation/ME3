@@ -1,4 +1,4 @@
-name = "me3-core-worker"
+name = "my-me3"
 main = "apps/worker/src/index.ts"
 compatibility_date = "2024-04-01"
 
@@ -15,76 +15,17 @@ binding = "AI"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "me3-core-db"
+database_name = "my-me3-db"
 database_id = "replace-with-generated-d1-id"
 migrations_dir = "apps/worker/migrations"
 
 # Core file storage for site media and future plugin-owned files.
 [[r2_buckets]]
 binding = "SITE_ASSETS"
-bucket_name = "me3-site-assets"
-
-[[queues.producers]]
-binding = "ASSISTANT_JOB_EVENTS"
-queue = "me3-assistant-job-events"
-
-[[queues.producers]]
-binding = "BOOKING_REMINDER_QUEUE"
-queue = "me3-booking-reminders"
-
-[[queues.producers]]
-binding = "SOCIAL_PUBLISH_QUEUE"
-queue = "me3-social-publish"
-
-[[queues.consumers]]
-queue = "me3-assistant-job-events"
-max_batch_size = 10
-max_batch_timeout = 5
-max_retries = 5
-dead_letter_queue = "me3-assistant-job-events-dlq"
-
-[[queues.consumers]]
-queue = "me3-booking-reminders"
-max_batch_size = 10
-max_batch_timeout = 5
-max_retries = 3
-dead_letter_queue = "me3-booking-reminders-dlq"
-
-[[queues.consumers]]
-queue = "me3-assistant-job-events-dlq"
-max_batch_size = 10
-max_batch_timeout = 5
-max_retries = 0
-
-[[queues.consumers]]
-queue = "me3-booking-reminders-dlq"
-max_batch_size = 10
-max_batch_timeout = 5
-max_retries = 0
-
-[[queues.consumers]]
-queue = "me3-social-publish"
-max_batch_size = 10
-max_batch_timeout = 30
-max_retries = 2
-dead_letter_queue = "me3-social-publish-dlq"
-
-[[queues.consumers]]
-queue = "me3-social-publish-dlq"
-max_batch_size = 10
-max_batch_timeout = 30
-max_retries = 0
+bucket_name = "my-me3-site-assets"
 
 [triggers]
 crons = ["* * * * *"]
-
-# Cloudflare Email Service sender binding. Account -> Email stores the sender
-# address; this deploy-time binding lets the Worker call env.EMAIL.send().
-[[send_email]]
-name = "EMAIL"
-
-[vars]
-ME3_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app"
 
 [assets]
 directory = "apps/web/dist"
