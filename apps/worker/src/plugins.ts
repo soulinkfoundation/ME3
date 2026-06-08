@@ -314,6 +314,12 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       auth: "owner",
     },
     {
+      id: "mission.dashboard.ai_usage.api",
+      path: "/api/mission-control/dashboard/cards/mission.ai-usage",
+      methods: ["GET"],
+      auth: "owner",
+    },
+    {
       id: "mission.wheel.api",
       path: "/api/mission-control/wheel",
       methods: ["GET"],
@@ -456,6 +462,14 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       componentKey: "ProjectsSummaryCard",
       defaultEnabled: false,
       defaultSize: "medium",
+    },
+    {
+      id: "mission.ai-usage",
+      label: "AI Usage",
+      componentKey: "AiUsageCard",
+      defaultEnabled: false,
+      defaultSize: "medium",
+      dataEndpoint: "/api/mission-control/dashboard/cards/mission.ai-usage",
     },
   ],
   dashboardQuickActions: [

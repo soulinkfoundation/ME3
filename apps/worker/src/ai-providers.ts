@@ -3,6 +3,10 @@ import {
   getOrCreateInstallEncryptionKey,
   hasInstallEncryptionKey,
 } from "./install-secrets";
+import {
+  getAiGatewayRuntimeConfig,
+  type AiGatewayRuntimeConfig,
+} from "./ai-gateway";
 
 export const AI_ROUTE_IDS = ["default", "chat", "reasoning", "extraction"] as const;
 
@@ -595,6 +599,7 @@ type ResolvedTextGenerationRoute = {
   model: string;
   apiKey: string | null;
   ai: Ai | null;
+  aiGateway: AiGatewayRuntimeConfig | null;
 };
 
 async function resolveTextGenerationRoute(
@@ -629,7 +634,9 @@ async function resolveTextGenerationRoute(
     throw new Error(`${providerId} API key is not configured.`);
   }
 
-  return { providerId, model, apiKey, ai: env.AI || null };
+  const aiGateway = await getAiGatewayRuntimeConfig(env, ownerId).catch(() => null);
+
+  return { providerId, model, apiKey, ai: env.AI || null, aiGateway };
 }
 
 async function getStoredProviderApiKey(
@@ -679,11 +686,23 @@ async function runWorkersAiText(
   options: { temperature: number; maxTokens: number },
 ): Promise<string> {
   if (!route.ai) throw new Error("Workers AI binding is not configured.");
-  const result = await route.ai.run(route.model, {
-    messages,
-    temperature: options.temperature,
-    max_tokens: options.maxTokens,
-  });
+  const requestOptions =
+    route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
+      ? {
+          gateway: {
+            id: route.aiGateway.gatewayId,
+          },
+        }
+      : undefined;
+  const result = await route.ai.run(
+    route.model,
+    {
+      messages,
+      temperature: options.temperature,
+      max_tokens: options.maxTokens,
+    },
+    requestOptions,
+  );
   const text = extractAiText(result);
   if (!text) throw new Error(`Workers AI (${route.model}) returned an empty reply.`);
   return text;

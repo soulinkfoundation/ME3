@@ -13,6 +13,11 @@ import {
   updateAiSettings,
 } from "./ai-providers";
 import {
+  AiGatewayInputError,
+  getAiGatewaySettings,
+  updateAiGatewaySettings,
+} from "./ai-gateway";
+import {
   createAssistantJobBuilderAction,
   dispatchDueScheduledAssistantJobs,
   markAssistantJobQueueMessageFailed,
@@ -1049,6 +1054,28 @@ app.put("/api/ai-settings", async (c) => {
     return c.json(await updateAiSettings(c.env, ownerId, body));
   } catch (error) {
     if (error instanceof AiSettingsInputError) {
+      return c.json({ error: error.message }, error.status as any);
+    }
+    throw error;
+  }
+});
+
+app.get("/api/ai-gateway-settings", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  return c.json(await getAiGatewaySettings(c.env, ownerId));
+});
+
+app.put("/api/ai-gateway-settings", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+
+  const body = await c.req.json<unknown>().catch((): unknown => ({}));
+  try {
+    return c.json(await updateAiGatewaySettings(c.env, ownerId, body));
+  } catch (error) {
+    if (error instanceof AiGatewayInputError) {
       return c.json({ error: error.message }, error.status as any);
     }
     throw error;

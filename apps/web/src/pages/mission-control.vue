@@ -88,6 +88,48 @@ type WheelSnapshotCardData = {
   source: string;
 };
 
+type AiUsageCardData = {
+  configured: boolean;
+  setupRequired: boolean;
+  period: {
+    id: "current_month";
+    startsAt: string;
+    endsAt: string;
+  };
+  currency: "usd";
+  totalCost: number;
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  tokensIn: number;
+  tokensOut: number;
+  totalTokens: number;
+  models: Array<{
+    provider: string;
+    model: string;
+    requests: number;
+    successfulRequests: number;
+    failedRequests: number;
+    tokensIn: number;
+    tokensOut: number;
+    totalTokens: number;
+    cost: number;
+  }>;
+  recent: Array<{
+    id: string;
+    createdAt: string;
+    provider: string;
+    model: string;
+    success: boolean;
+    totalTokens: number;
+    cost: number;
+  }>;
+  fetchedAt: string | null;
+  estimated: boolean;
+  truncated: boolean;
+  error: string | null;
+};
+
 type MissionTasksResponse = {
   tasks: MissionTask[];
   nextCursor: string | null;
@@ -125,6 +167,7 @@ const dashboardCardRegistry = new Set([
   "DailyBriefingCard",
   "MissionStatementCard",
   "WheelSnapshotCard",
+  "AiUsageCard",
   "ProjectsSummaryCard",
   "AccountsSummaryCard",
   "CalendarTodayCard",
@@ -154,6 +197,10 @@ const dashboardProjects = ref<MissionProject[]>([]);
 const dashboardProjectTasks = ref<MissionTask[]>([]);
 const projectsSummaryLoading = ref(false);
 const projectsSummaryError = ref("");
+const aiUsage = ref<AiUsageCardData | null>(null);
+const aiUsageLoading = ref(false);
+const aiUsageError = ref("");
+const aiUsageModalOpen = ref(false);
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
@@ -280,6 +327,7 @@ const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
 const visibleProjectStatuses = computed(() =>
   projectBoardStatuses.filter((status) => status.id !== "done"),
 );
+const aiUsageTopModels = computed(() => (aiUsage.value?.models || []).slice(0, 6));
 
 function cardLabel(card: DashboardCardInstance): string {
   const contribution = dashboard.value?.availableCards.find(
@@ -341,6 +389,10 @@ function projectSummaryPath(summary: ProjectDashboardSummary): string {
   return summary.id === "personal"
     ? "/mission-control/projects"
     : `/mission-control/projects?project=${encodeURIComponent(summary.id)}`;
+}
+
+function visibleCardEnabled(cardId: string): boolean {
+  return visibleCards.value.some((card) => card.cardId === cardId);
 }
 
 function syncDashboardDrafts() {
@@ -482,6 +534,28 @@ function formatDashboardDate(value: string | null | undefined): string {
   }).format(parsed);
 }
 
+function formatCurrency(value: number | null | undefined): string {
+  const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: amount > 0 && amount < 0.01 ? 4 : 2,
+    maximumFractionDigits: amount > 0 && amount < 0.01 ? 4 : 2,
+  }).format(amount);
+}
+
+function formatCompactNumber(value: number | null | undefined): string {
+  const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(amount);
+}
+
+function formatTokenCount(value: number | null | undefined): string {
+  return `${formatCompactNumber(value)} tokens`;
+}
+
 function cleanLegacySectionQuery() {
   const rawSection = Array.isArray(route.query.section)
     ? route.query.section[0]
@@ -500,11 +574,31 @@ async function loadDashboard() {
     );
     missionStatementDraft.value = dashboard.value.missionStatement;
     syncDashboardDrafts();
+    if (visibleCardEnabled("mission.ai-usage")) {
+      void loadAiUsage();
+    }
   } catch (err) {
     error.value =
       err instanceof Error ? err.message : "Mission Control could not load.";
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadAiUsage() {
+  if (aiUsageLoading.value) return;
+  aiUsageLoading.value = true;
+  aiUsageError.value = "";
+  try {
+    aiUsage.value = await api.get<AiUsageCardData>(
+      "/mission-control/dashboard/cards/mission.ai-usage",
+    );
+  } catch (err) {
+    aiUsageError.value =
+      err instanceof Error ? err.message : "AI usage could not load.";
+    aiUsage.value = null;
+  } finally {
+    aiUsageLoading.value = false;
   }
 }
 
@@ -579,6 +673,9 @@ async function saveDashboardLayout() {
     );
     syncDashboardDrafts();
     dashboardEditing.value = false;
+    if (visibleCardEnabled("mission.ai-usage")) {
+      void loadAiUsage();
+    }
     toastSuccess("Dashboard saved");
   } catch (err) {
     toastFromUnknown(err, "Dashboard could not be saved");
@@ -874,6 +971,79 @@ onMounted(() => {
               </Button>
             </div>
           </template>
+          <template v-else-if="cardComponentKey(card) === 'AiUsageCard'">
+            <header class="dashboard-card__header">
+              <h2 class="dashboard-card__title">
+                <UiIcon name="Gauge" :size="16" />
+                <span>AI Usage</span>
+              </h2>
+              <div class="dashboard-card__header-actions">
+                <span v-if="aiUsage?.fetchedAt">
+                  {{ formatDashboardDate(aiUsage.fetchedAt) }}
+                </span>
+              </div>
+            </header>
+            <div v-if="!dashboardEditing" class="dashboard-card__actions">
+              <Button
+                class="dashboard-card__action-button"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                aria-label="Open AI usage details"
+                title="Open AI usage details"
+                @click="aiUsageModalOpen = true"
+              >
+                <UiIcon name="Eye" :size="16" />
+              </Button>
+            </div>
+            <div v-if="aiUsageLoading" class="dashboard-empty">
+              <p>Loading AI usage...</p>
+            </div>
+            <div v-else-if="aiUsageError" class="dashboard-empty">
+              <p>{{ aiUsageError }}</p>
+              <Button color="outline" shape="soft" size="compact" @click="loadAiUsage">
+                Retry
+              </Button>
+            </div>
+            <div v-else-if="aiUsage?.setupRequired" class="dashboard-empty">
+              <p>Connect AI Gateway to show model spend here.</p>
+              <Button color="outline" shape="soft" size="compact" to="/account">
+                Open Settings
+              </Button>
+            </div>
+            <div v-else-if="aiUsage" class="ai-usage-summary">
+              <div class="ai-usage-summary__total">
+                <strong>{{ formatCurrency(aiUsage.totalCost) }}</strong>
+                <span>
+                  {{ formatCompactNumber(aiUsage.totalRequests) }} requests ·
+                  {{ formatTokenCount(aiUsage.totalTokens) }}
+                </span>
+              </div>
+              <div v-if="aiUsageTopModels.length" class="ai-usage-models">
+                <div
+                  v-for="model in aiUsageTopModels"
+                  :key="`${model.provider}:${model.model}`"
+                  class="ai-usage-models__row"
+                >
+                  <div>
+                    <strong>{{ model.model }}</strong>
+                    <span>{{ model.provider }}</span>
+                  </div>
+                  <span>{{ formatCurrency(model.cost) }}</span>
+                </div>
+              </div>
+              <p v-else class="dashboard-card__body">
+                No AI Gateway usage has landed this month.
+              </p>
+            </div>
+            <div v-else class="dashboard-empty">
+              <p>AI usage is ready to load.</p>
+              <Button color="outline" shape="soft" size="compact" @click="loadAiUsage">
+                Load Usage
+              </Button>
+            </div>
+          </template>
           <template
             v-else-if="cardComponentKey(card) === 'ProjectsSummaryCard'"
           >
@@ -1045,6 +1215,85 @@ onMounted(() => {
         </button>
       </div>
     </section>
+
+    <div
+      v-if="aiUsageModalOpen"
+      class="dashboard-modal-backdrop"
+      @click.self="aiUsageModalOpen = false"
+    >
+      <section
+        class="dashboard-modal dashboard-modal--wide"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ai-usage-title"
+      >
+        <header class="dashboard-modal__header">
+          <h2 id="ai-usage-title">AI Usage</h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Close AI usage details"
+            @click="aiUsageModalOpen = false"
+          >
+            <UiIcon name="X" :size="18" />
+          </Button>
+        </header>
+        <div class="dashboard-modal__body">
+          <div v-if="aiUsage" class="ai-usage-detail">
+            <div class="ai-usage-detail__metrics">
+              <div>
+                <span>Spend</span>
+                <strong>{{ formatCurrency(aiUsage.totalCost) }}</strong>
+              </div>
+              <div>
+                <span>Requests</span>
+                <strong>{{ formatCompactNumber(aiUsage.totalRequests) }}</strong>
+              </div>
+              <div>
+                <span>Input</span>
+                <strong>{{ formatTokenCount(aiUsage.tokensIn) }}</strong>
+              </div>
+              <div>
+                <span>Output</span>
+                <strong>{{ formatTokenCount(aiUsage.tokensOut) }}</strong>
+              </div>
+            </div>
+            <p v-if="aiUsage.truncated" class="dashboard-modal__empty">
+              Showing the most recent gateway logs available to this install.
+            </p>
+            <div v-if="aiUsage.models.length" class="ai-usage-detail__table">
+              <div class="ai-usage-detail__table-head">
+                <span>Model</span>
+                <span>Requests</span>
+                <span>Tokens</span>
+                <span>Cost</span>
+              </div>
+              <div
+                v-for="model in aiUsage.models"
+                :key="`${model.provider}:${model.model}`"
+                class="ai-usage-detail__table-row"
+              >
+                <div>
+                  <strong>{{ model.model }}</strong>
+                  <span>{{ model.provider }}</span>
+                </div>
+                <span>{{ formatCompactNumber(model.requests) }}</span>
+                <span>{{ formatCompactNumber(model.totalTokens) }}</span>
+                <span>{{ formatCurrency(model.cost) }}</span>
+              </div>
+            </div>
+            <p v-else class="dashboard-modal__empty">
+              No AI Gateway usage has landed this month.
+            </p>
+          </div>
+          <p v-else class="dashboard-modal__empty">
+            AI usage has not loaded yet.
+          </p>
+        </div>
+      </section>
+    </div>
 
     <div
       v-if="cardPickerOpen"
@@ -1439,6 +1688,70 @@ onMounted(() => {
   width: 100%;
 }
 
+.ai-usage-summary {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-usage-summary__total {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+}
+
+.ai-usage-summary__total strong {
+  color: var(--ui-text);
+  font-size: 24px;
+  line-height: 1.05;
+}
+
+.ai-usage-summary__total span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.ai-usage-models {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-usage-models__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.ai-usage-models__row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.ai-usage-models__row div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.ai-usage-models__row strong {
+  overflow: hidden;
+  color: var(--ui-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-usage-models__row span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .project-summary {
   display: grid;
   gap: 11px;
@@ -1595,6 +1908,10 @@ onMounted(() => {
   box-shadow: var(--ui-shadow-md);
 }
 
+.dashboard-modal--wide {
+  width: min(760px, 100%);
+}
+
 .dashboard-modal__header {
   display: flex;
   align-items: center;
@@ -1691,6 +2008,77 @@ onMounted(() => {
   grid-template-columns: minmax(0, 1fr) auto minmax(110px, 0.5fr) auto;
 }
 
+.ai-usage-detail {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-usage-detail__metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ai-usage-detail__metrics div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-muted);
+}
+
+.ai-usage-detail__metrics span,
+.ai-usage-detail__table-head,
+.ai-usage-detail__table-row > span,
+.ai-usage-detail__table-row div span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.ai-usage-detail__metrics strong {
+  color: var(--ui-text);
+  font-size: 14px;
+}
+
+.ai-usage-detail__table {
+  display: grid;
+  min-width: 0;
+}
+
+.ai-usage-detail__table-head,
+.ai-usage-detail__table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(72px, 0.55fr));
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.ai-usage-detail__table-head {
+  padding-top: 0;
+}
+
+.ai-usage-detail__table-row:last-child {
+  border-bottom: 0;
+}
+
+.ai-usage-detail__table-row div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.ai-usage-detail__table-row div strong {
+  overflow: hidden;
+  color: var(--ui-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 959px) {
   .mission-dashboard {
     padding: 0 14px 32px;
@@ -1751,7 +2139,10 @@ onMounted(() => {
   }
 
   .dashboard-modal__row,
-  .dashboard-modal__row--action {
+  .dashboard-modal__row--action,
+  .ai-usage-detail__metrics,
+  .ai-usage-detail__table-head,
+  .ai-usage-detail__table-row {
     grid-template-columns: 1fr;
   }
 }
