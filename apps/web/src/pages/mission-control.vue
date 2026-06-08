@@ -604,6 +604,16 @@ onMounted(() => {
         aria-label="Quick actions"
         @dragover.prevent
       >
+        <button
+          v-if="dashboardEditing"
+          type="button"
+          class="dashboard-add-action"
+          aria-label="Add quick action"
+          title="Add quick action"
+          @click="quickActionPickerOpen = true"
+        >
+          <UiIcon name="Plus" :size="18" />
+        </button>
         <div
           v-for="link in visibleQuickLinks"
           :key="link.id"
@@ -642,16 +652,6 @@ onMounted(() => {
             <UiIcon name="X" :size="14" />
           </Button>
         </div>
-        <button
-          v-if="dashboardEditing"
-          type="button"
-          class="dashboard-add-action"
-          aria-label="Add quick action"
-          title="Add quick action"
-          @click="quickActionPickerOpen = true"
-        >
-          <UiIcon name="Plus" :size="18" />
-        </button>
       </div>
       <div class="mission-dashboard__topbar-actions">
         <Button
@@ -1561,8 +1561,10 @@ onMounted(() => {
 
 .dashboard-add-action {
   display: inline-grid;
-  width: 42px;
-  min-height: 38px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
   place-items: center;
   border: 1px dashed var(--ui-border-strong);
   border-radius: 999px;
@@ -1772,6 +1774,8 @@ onMounted(() => {
 
   .dashboard-add-action {
     width: 34px;
+    min-width: 34px;
+    height: 34px;
     min-height: 34px;
   }
 }
