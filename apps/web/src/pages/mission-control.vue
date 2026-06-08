@@ -598,18 +598,62 @@ onMounted(() => {
   <main class="mission-dashboard">
     <header class="mission-dashboard__topbar">
       <div class="mission-dashboard__topbar-spacer" aria-hidden="true" />
-      <div class="mission-dashboard__topbar-actions">
-        <Button
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          to="/mission-control/projects"
-          aria-label="Open Projects"
-          title="Open Projects"
+      <div
+        v-if="!loading && (visibleQuickLinks.length || dashboardEditing)"
+        class="mission-dashboard__topbar-quicklinks"
+        aria-label="Quick actions"
+        @dragover.prevent
+      >
+        <div
+          v-for="link in visibleQuickLinks"
+          :key="link.id"
+          class="dashboard-quick-action-wrap"
+          :draggable="dashboardEditing"
+          @dragstart="draggedQuickActionId = link.id"
+          @dragend="draggedQuickActionId = ''"
+          @dragover.prevent
+          @drop.prevent="setQuickActionDropTarget(link.id)"
         >
-          <UiIcon name="FolderDot" :size="18" />
-        </Button>
+          <Button
+            class="dashboard-quick-action"
+            color="outline"
+            shape="pill"
+            size="compact"
+            :aria-label="link.label"
+            :title="link.label"
+            :to="dashboardEditing ? undefined : quickLinkPath(link)"
+          >
+            <template #icon>
+              <UiIcon :name="quickLinkIcon(link)" :size="17" />
+            </template>
+            {{ link.label }}
+          </Button>
+          <Button
+            v-if="dashboardEditing"
+            class="dashboard-quick-action-remove"
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Remove quick action"
+            title="Remove quick action"
+            @click="removeQuickActionDraft(link.id)"
+          >
+            <UiIcon name="X" :size="14" />
+          </Button>
+        </div>
+        <button
+          v-if="dashboardEditing"
+          type="button"
+          class="dashboard-add-action"
+          aria-label="Add quick action"
+          title="Add quick action"
+          @click="quickActionPickerOpen = true"
+        >
+          <UiIcon name="Plus" :size="18" />
+        </button>
+      </div>
+      <div class="mission-dashboard__topbar-actions">
         <Button
           v-if="dashboardEditing"
           color="ghost"
@@ -1000,58 +1044,6 @@ onMounted(() => {
           <UiIcon name="Plus" :size="34" />
         </button>
       </div>
-
-      <div
-        v-if="!loading && (visibleQuickLinks.length || dashboardEditing)"
-        class="mission-dashboard__quick-actions"
-        aria-label="Quick actions"
-        @dragover.prevent
-      >
-        <div
-          v-for="link in visibleQuickLinks"
-          :key="link.id"
-          class="dashboard-quick-action-wrap"
-          :draggable="dashboardEditing"
-          @dragstart="draggedQuickActionId = link.id"
-          @dragend="draggedQuickActionId = ''"
-          @dragover.prevent
-          @drop.prevent="setQuickActionDropTarget(link.id)"
-        >
-          <Button
-            color="outline"
-            shape="pill"
-            size="large"
-            :to="dashboardEditing ? undefined : quickLinkPath(link)"
-          >
-            <template #icon>
-              <UiIcon :name="quickLinkIcon(link)" :size="17" />
-            </template>
-            {{ link.label }}
-          </Button>
-          <Button
-            v-if="dashboardEditing"
-            class="dashboard-quick-action-remove"
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            aria-label="Remove quick action"
-            title="Remove quick action"
-            @click="removeQuickActionDraft(link.id)"
-          >
-            <UiIcon name="X" :size="14" />
-          </Button>
-        </div>
-        <button
-          v-if="dashboardEditing"
-          type="button"
-          class="dashboard-add-action"
-          aria-label="Add quick action"
-          @click="quickActionPickerOpen = true"
-        >
-          <UiIcon name="Plus" :size="18" />
-        </button>
-      </div>
     </section>
 
     <div
@@ -1199,7 +1191,7 @@ onMounted(() => {
   top: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   min-height: var(--workspace-topbar-height);
@@ -1214,8 +1206,20 @@ onMounted(() => {
 
 .mission-dashboard__topbar-actions {
   display: inline-flex;
+  justify-self: end;
   align-items: center;
   gap: 6px;
+}
+
+.mission-dashboard__topbar-quicklinks {
+  display: flex;
+  min-width: 0;
+  max-width: min(640px, 100%);
+  flex-wrap: nowrap;
+  justify-self: center;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .mission-dashboard__workspace {
@@ -1238,15 +1242,6 @@ onMounted(() => {
 
 .mission-dashboard__message.is-error {
   color: #b91c1c;
-}
-
-.mission-dashboard__quick-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  width: min(640px, 100%);
-  justify-self: center;
 }
 
 .mission-dashboard__grid {
@@ -1537,7 +1532,17 @@ onMounted(() => {
 .dashboard-quick-action-wrap {
   position: relative;
   display: inline-flex;
+  min-width: 0;
   align-items: center;
+}
+
+.dashboard-quick-action {
+  min-width: 0;
+}
+
+.dashboard-quick-action :deep(.me3-btn__label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dashboard-quick-action-remove {
@@ -1545,8 +1550,11 @@ onMounted(() => {
   top: -8px;
   right: -8px;
   z-index: 1;
-  width: 24px;
+  width: 24px !important;
+  min-width: 24px !important;
   height: 24px;
+  min-height: 24px !important;
+  padding: 0 !important;
   border-style: dashed;
   background: var(--ui-surface);
 }
@@ -1687,7 +1695,41 @@ onMounted(() => {
   }
 
   .mission-dashboard__topbar {
+    grid-template-columns: minmax(0, 1fr) auto auto;
     padding-left: var(--app-shell-mobile-nav-leading-padding);
+  }
+
+  .mission-dashboard__topbar-quicklinks {
+    max-width: none;
+    justify-self: end;
+    gap: 6px;
+  }
+
+  .dashboard-quick-action {
+    width: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    padding-right: 0;
+    padding-left: 0;
+    border-color: transparent;
+    border-radius: var(--ui-radius-sm);
+    background: transparent;
+  }
+
+  .dashboard-quick-action:hover,
+  .dashboard-quick-action:focus-visible,
+  .dashboard-quick-action.me3-btn--active {
+    border-color: var(--ui-border);
+    background: var(--ui-surface-muted);
+  }
+
+  .dashboard-quick-action :deep(.me3-btn__label) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
 
   .mission-dashboard__grid {
@@ -1709,6 +1751,28 @@ onMounted(() => {
   .dashboard-modal__row,
   .dashboard-modal__row--action {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .mission-dashboard__topbar {
+    gap: 4px;
+  }
+
+  .mission-dashboard__topbar-quicklinks {
+    max-width: calc(100vw - 156px);
+    overflow-x: auto;
+    justify-content: flex-start;
+    scrollbar-width: none;
+  }
+
+  .mission-dashboard__topbar-quicklinks::-webkit-scrollbar {
+    display: none;
+  }
+
+  .dashboard-add-action {
+    width: 34px;
+    min-height: 34px;
   }
 }
 </style>
