@@ -14,23 +14,18 @@
     "update:check": "node scripts/check-updates.mjs",
     "update:core": "node scripts/update-core.mjs",
     "update:doctor": "node scripts/update-doctor.mjs",
+    "deploy:prepare": "node scripts/prepare-cloudflare-deploy.mjs",
     "setup:dev-vars": "node scripts/create-dev-vars.mjs",
     "storage:r2:provision": "node scripts/provision-r2.mjs",
     "verify:local-boot": "node scripts/verify-local-boot.mjs",
     "build": "pnpm generate:llms && pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
-    "deploy": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
-    "deploy:d1-only": "pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
+    "deploy": "pnpm deploy:prepare && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
+    "deploy:d1-only": "pnpm deploy:prepare -- --skip-r2 && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
   },
   "cloudflare": {
     "bindings": {
-      "DB": {
-        "description": "ME3's private database. Keep the generated database ID in your copied repository so Core updates reuse the same data."
-      },
-      "SITE_ASSETS": {
-        "description": "Private file storage for site media, mailbox attachments, and generated assets. The default name can stay as-is unless you run multiple ME3 installs in one Cloudflare account."
-      },
       "ME3_USER_AGENT": {
         "description": "Durable Object state for ME3's owner agent runtime. Cloudflare provisions this automatically."
       },

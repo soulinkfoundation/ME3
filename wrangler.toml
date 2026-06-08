@@ -13,17 +13,6 @@ new_sqlite_classes = ["Me3UserAgent"]
 [ai]
 binding = "AI"
 
-[[d1_databases]]
-binding = "DB"
-database_name = "my-me3-db"
-database_id = "replace-with-generated-d1-id"
-migrations_dir = "apps/worker/migrations"
-
-# Core file storage for site media and future plugin-owned files.
-[[r2_buckets]]
-binding = "SITE_ASSETS"
-bucket_name = "my-me3-site-assets"
-
 [triggers]
 crons = ["* * * * *"]
 

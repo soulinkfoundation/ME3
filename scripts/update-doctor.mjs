@@ -17,6 +17,8 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const coreMetadata = existsSync("me3-core.json")
   ? JSON.parse(readFileSync("me3-core.json", "utf8"))
   : {};
+const deployScript = packageJson.scripts?.deploy || "";
+const deployPreparesResources = /deploy:prepare/.test(deployScript);
 
 check(
   "Core version metadata exists",
@@ -44,24 +46,36 @@ check(
 const d1Block = getTomlArrayBlock(config, "d1_databases", "DB");
 const d1DatabaseName = getTomlString(d1Block, "database_name");
 const d1DatabaseId = getTomlString(d1Block, "database_id");
-check("D1 DB binding exists", Boolean(d1Block), 'Expected [[d1_databases]] with binding = "DB".');
-check("D1 database name is set", Boolean(d1DatabaseName), "Expected D1 database_name.");
 check(
-  "D1 database id is provisioned",
-  Boolean(d1DatabaseId) && (args.allowTemplate || d1DatabaseId !== D1_PLACEHOLDER),
-  args.allowTemplate
-    ? "Template placeholder allowed."
-    : "Expected a real D1 database_id. The Deploy to Cloudflare flow should provision this in the copied repo.",
+  "D1 DB binding exists or deploy script prepares it",
+  Boolean(d1Block) || deployPreparesResources,
+  'Expected [[d1_databases]] with binding = "DB", or pnpm deploy to run deploy:prepare.',
 );
-check(
-  "D1 migrations directory is set",
-  getTomlString(d1Block, "migrations_dir") === "apps/worker/migrations",
-  'Expected migrations_dir = "apps/worker/migrations".',
-);
+if (d1Block) {
+  check("D1 database name is set", Boolean(d1DatabaseName), "Expected D1 database_name.");
+  check(
+    "D1 database id is provisioned",
+    Boolean(d1DatabaseId) && (args.allowTemplate || d1DatabaseId !== D1_PLACEHOLDER),
+    args.allowTemplate
+      ? "Template placeholder allowed."
+      : "Expected a real D1 database_id. The deploy prepare script should provision this before migrations.",
+  );
+  check(
+    "D1 migrations directory is set",
+    getTomlString(d1Block, "migrations_dir") === "apps/worker/migrations",
+    'Expected migrations_dir = "apps/worker/migrations".',
+  );
+}
 
 const r2Block = getTomlArrayBlock(config, "r2_buckets", "SITE_ASSETS");
-check("R2 SITE_ASSETS binding exists", Boolean(r2Block), 'Expected [[r2_buckets]] with binding = "SITE_ASSETS".');
-check("R2 bucket name is set", Boolean(getTomlString(r2Block, "bucket_name")), "Expected R2 bucket_name.");
+check(
+  "R2 SITE_ASSETS binding exists or deploy script prepares it",
+  Boolean(r2Block) || deployPreparesResources,
+  'Expected [[r2_buckets]] with binding = "SITE_ASSETS", or pnpm deploy to run deploy:prepare.',
+);
+if (r2Block) {
+  check("R2 bucket name is set", Boolean(getTomlString(r2Block, "bucket_name")), "Expected R2 bucket_name.");
+}
 
 const emailSendBlock = getTomlNamedBlock(config, "send_email", "EMAIL");
 if (emailSendBlock) {
@@ -86,8 +100,14 @@ check(
 );
 
 check(
+  "Deploy script prepares Cloudflare resources before migrations",
+  /deploy:prepare/.test(deployScript) &&
+    deployScript.indexOf("deploy:prepare") < deployScript.indexOf("db:migrations:apply"),
+  "Expected pnpm deploy to run deploy:prepare before db:migrations:apply.",
+);
+check(
   "Deploy script applies migrations before deploy",
-  /db:migrations:apply/.test(packageJson.scripts?.deploy || ""),
+  /db:migrations:apply/.test(deployScript),
   "Expected pnpm deploy to run db:migrations:apply.",
 );
 check(
