@@ -327,7 +327,9 @@ const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
 const visibleProjectStatuses = computed(() =>
   projectBoardStatuses.filter((status) => status.id !== "done"),
 );
-const aiUsageTopModels = computed(() => (aiUsage.value?.models || []).slice(0, 6));
+const aiUsageTopModels = computed(() =>
+  (aiUsage.value?.models || []).slice(0, 6),
+);
 
 function cardLabel(card: DashboardCardInstance): string {
   const contribution = dashboard.value?.availableCards.find(
@@ -535,7 +537,8 @@ function formatDashboardDate(value: string | null | undefined): string {
 }
 
 function formatCurrency(value: number | null | undefined): string {
-  const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  const amount =
+    typeof value === "number" && Number.isFinite(value) ? value : 0;
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: "USD",
@@ -545,7 +548,8 @@ function formatCurrency(value: number | null | undefined): string {
 }
 
 function formatCompactNumber(value: number | null | undefined): string {
-  const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  const amount =
+    typeof value === "number" && Number.isFinite(value) ? value : 0;
   return new Intl.NumberFormat(undefined, {
     notation: "compact",
     maximumFractionDigits: 1,
@@ -772,7 +776,9 @@ onMounted(() => {
           :aria-label="
             dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'
           "
-          :title="dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'"
+          :title="
+            dashboardEditing ? 'Close dashboard editing' : 'Edit dashboard'
+          "
           @click="
             dashboardEditing ? closeDashboardEditor() : openDashboardEditor()
           "
@@ -1002,7 +1008,12 @@ onMounted(() => {
             </div>
             <div v-else-if="aiUsageError" class="dashboard-empty">
               <p>{{ aiUsageError }}</p>
-              <Button color="outline" shape="soft" size="compact" @click="loadAiUsage">
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                @click="loadAiUsage"
+              >
                 Retry
               </Button>
             </div>
@@ -1039,7 +1050,12 @@ onMounted(() => {
             </div>
             <div v-else class="dashboard-empty">
               <p>AI usage is ready to load.</p>
-              <Button color="outline" shape="soft" size="compact" @click="loadAiUsage">
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                @click="loadAiUsage"
+              >
                 Load Usage
               </Button>
             </div>
@@ -1249,7 +1265,9 @@ onMounted(() => {
               </div>
               <div>
                 <span>Requests</span>
-                <strong>{{ formatCompactNumber(aiUsage.totalRequests) }}</strong>
+                <strong>{{
+                  formatCompactNumber(aiUsage.totalRequests)
+                }}</strong>
               </div>
               <div>
                 <span>Input</span>
@@ -1444,7 +1462,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   min-height: var(--workspace-topbar-height);
-  padding: var(--workspace-topbar-padding-block) 0;
+  padding: var(--workspace-topbar-padding-block) 0 20px;
   background: color-mix(in oklab, var(--ui-bg), transparent 4%);
   backdrop-filter: blur(16px);
 }

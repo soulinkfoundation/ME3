@@ -8,7 +8,7 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:migrate:local": "wrangler d1 migrations apply me3-core-db --local --config wrangler.core.example.toml"
+    "db:migrate:local": "node ../../scripts/repair-local-d1-migrations.mjs --database me3-core-db --config wrangler.core.example.toml && wrangler d1 migrations apply me3-core-db --local --config wrangler.core.example.toml"
   },
   "dependencies": {
     "@me3-core/assistant-jobs": "workspace:*",
