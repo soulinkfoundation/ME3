@@ -206,6 +206,16 @@ type StoredMe3ClaimState = {
   install_id: string | null;
   expires_at: string;
 };
+type StoredAuthRateLimit = {
+  key: string;
+  route: string;
+  subject_hash: string;
+  attempt_count: number;
+  window_started_at: string;
+  locked_until: string | null;
+  created_at: string;
+  updated_at: string;
+};
 type StoredCommerceSettings = {
   user_id: string;
   encrypted_stripe_secret_key: string | null;
@@ -327,6 +337,7 @@ function createEnv(): Env & {
   socialPublicationEvents: StoredSocialPublicationEvent[];
   socialPublishQueueMessages: Array<{ publicationId: string }>;
   me3ClaimStates: StoredMe3ClaimState[];
+  authRateLimits: StoredAuthRateLimit[];
   commerceSettings: StoredCommerceSettings | null;
   telegramSettings: StoredTelegramSettings | null;
   contentItems: StoredContentItem[];
@@ -372,6 +383,7 @@ function createEnv(): Env & {
     socialPublicationEvents: [] as StoredSocialPublicationEvent[],
     socialPublishQueueMessages: [] as Array<{ publicationId: string }>,
     me3ClaimStates: [] as StoredMe3ClaimState[],
+    authRateLimits: [] as StoredAuthRateLimit[],
     commerceSettings: null as StoredCommerceSettings | null,
     telegramSettings: null as StoredTelegramSettings | null,
     contentItems: [] as StoredContentItem[],
@@ -711,6 +723,35 @@ function createEnv(): Env & {
               if (sql.includes("DELETE FROM me3_install_claim_states")) {
                 state.me3ClaimStates = state.me3ClaimStates.filter(
                   (entry) => entry.state !== values[0],
+                );
+              }
+
+              if (sql.includes("INSERT INTO auth_rate_limits")) {
+                const existingIndex = state.authRateLimits.findIndex(
+                  (entry) => entry.key === values[0],
+                );
+                const existing =
+                  existingIndex >= 0 ? state.authRateLimits[existingIndex] : null;
+                const entry: StoredAuthRateLimit = {
+                  key: values[0] as string,
+                  route: values[1] as string,
+                  subject_hash: values[2] as string,
+                  attempt_count: values[3] as number,
+                  window_started_at: values[4] as string,
+                  locked_until: values[5] as string | null,
+                  created_at: existing?.created_at || (values[6] as string),
+                  updated_at: values[7] as string,
+                };
+                if (existingIndex >= 0) {
+                  state.authRateLimits[existingIndex] = entry;
+                } else {
+                  state.authRateLimits.push(entry);
+                }
+              }
+
+              if (sql.includes("DELETE FROM auth_rate_limits")) {
+                state.authRateLimits = state.authRateLimits.filter(
+                  (entry) => entry.key !== values[0],
                 );
               }
 
@@ -2156,6 +2197,11 @@ function createEnv(): Env & {
                   state.me3ClaimStates.find((entry) => entry.state === values[0]) || null
                 ) as T | null;
               }
+              if (sql.includes("FROM auth_rate_limits")) {
+                return (
+                  state.authRateLimits.find((entry) => entry.key === values[0]) || null
+                ) as T | null;
+              }
               if (sql.includes("FROM install_secrets")) {
                 const value = state.installSecrets.get(values[0] as string);
                 return value ? ({ value } as T) : null;
@@ -2563,6 +2609,9 @@ function createEnv(): Env & {
     },
     get me3ClaimStates() {
       return state.me3ClaimStates;
+    },
+    get authRateLimits() {
+      return state.authRateLimits;
     },
     get commerceSettings() {
       return state.commerceSettings;
@@ -3323,6 +3372,50 @@ describe("ME3 Core Worker auth", () => {
     expect(claimUrl.searchParams.get("redirect")).toBe("/account");
   });
 
+  it("rate limits ME3 Cloud install claim starts by client", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
+    try {
+      const env = createEnv();
+      env.ME3_CLOUD_ORIGIN = "https://me3.example";
+      const init = {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.10",
+        },
+        body: JSON.stringify({ redirect: "/account" }),
+      };
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const response = await app.fetch(
+          new Request("https://core.example/api/auth/me3/start", init),
+          env,
+        );
+        expect(response.status).toBe(200);
+      }
+
+      const blockedResponse = await app.fetch(
+        new Request("https://core.example/api/auth/me3/start", init),
+        env,
+      );
+      const blockedBody = (await blockedResponse.json()) as {
+        error: string;
+        retryAfterSeconds: number;
+      };
+
+      expect(blockedResponse.status).toBe(429);
+      expect(blockedResponse.headers.get("Retry-After")).toBe("600");
+      expect(blockedBody.error).toBe("Too many attempts. Try again later.");
+      expect(blockedBody.retryAfterSeconds).toBe(600);
+      expect(env.me3ClaimStates).toHaveLength(20);
+      expect(env.authRateLimits).toHaveLength(1);
+      expect(JSON.stringify(env.authRateLimits)).not.toContain("203.0.113.10");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reuses the same stable install id across claim starts on different URLs", async () => {
     const env = createEnv();
     env.ME3_CLOUD_ORIGIN = "https://me3.example";
@@ -3730,6 +3823,49 @@ describe("ME3 Core Worker auth", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
+  it("rate limits setup bootstrap failures by client", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
+    try {
+      const env = createEnv();
+      const requestInit = (bootstrapCode: string) => ({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.20",
+        },
+        body: JSON.stringify({
+          bootstrapCode,
+          email: "owner@example.com",
+          name: "ME3 Core Owner",
+          username: "owner",
+          password: "correct-horse-battery",
+        }),
+      });
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const response = await app.fetch(
+          new Request("http://localhost/api/admin/bootstrap", requestInit("wrong")),
+          env,
+        );
+        expect(response.status).toBe(401);
+      }
+
+      const blockedResponse = await app.fetch(
+        new Request("http://localhost/api/admin/bootstrap", requestInit("owner-code")),
+        env,
+      );
+      const blockedBody = (await blockedResponse.json()) as { error: string };
+
+      expect(blockedResponse.status).toBe(429);
+      expect(blockedResponse.headers.get("Retry-After")).toBe("1800");
+      expect(blockedBody.error).toBe("Too many attempts. Try again later.");
+      expect(env.owner).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("requires a password during bootstrap", async () => {
     const env = createEnv();
 
@@ -3796,6 +3932,54 @@ describe("ME3 Core Worker auth", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
+  it("rate limits owner login failures by client and email", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
+    try {
+      const env = createEnv();
+      await bootstrap(env);
+      const requestInit = (password: string) => ({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.30",
+        },
+        body: JSON.stringify({
+          email: "owner@example.com",
+          password,
+        }),
+      });
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const response = await app.fetch(
+          new Request("http://localhost/api/auth/login", requestInit("wrong-password")),
+          env,
+        );
+        expect(response.status).toBe(401);
+      }
+
+      const blockedResponse = await app.fetch(
+        new Request("http://localhost/api/auth/login", requestInit("correct-horse-battery")),
+        env,
+      );
+      expect(blockedResponse.status).toBe(429);
+      expect(blockedResponse.headers.get("Retry-After")).toBe("900");
+      expect(blockedResponse.headers.get("set-cookie")).toBeNull();
+
+      vi.setSystemTime(new Date("2026-06-10T12:15:01Z"));
+
+      const recoveredResponse = await app.fetch(
+        new Request("http://localhost/api/auth/login", requestInit("correct-horse-battery")),
+        env,
+      );
+      expect(recoveredResponse.status).toBe(200);
+      expect(recoveredResponse.headers.get("set-cookie")).toContain("HttpOnly");
+      expect(env.authRateLimits).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resets the owner password with the bootstrap code", async () => {
     const env = createEnv();
     await bootstrap(env);
@@ -3851,6 +4035,53 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(401);
     expect(env.owner?.password_hash).toBe(previousHash);
+  });
+
+  it("rate limits bootstrap password reset failures by client", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
+    try {
+      const env = createEnv();
+      await bootstrap(env);
+      const previousHash = env.owner?.password_hash;
+      const requestInit = (bootstrapCode: string) => ({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.40",
+        },
+        body: JSON.stringify({
+          email: "owner@example.com",
+          bootstrapCode,
+          password: "new-correct-horse",
+        }),
+      });
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const response = await app.fetch(
+          new Request(
+            "http://localhost/api/auth/password-reset/bootstrap",
+            requestInit("wrong-code"),
+          ),
+          env,
+        );
+        expect(response.status).toBe(401);
+      }
+
+      const blockedResponse = await app.fetch(
+        new Request(
+          "http://localhost/api/auth/password-reset/bootstrap",
+          requestInit("owner-code"),
+        ),
+        env,
+      );
+
+      expect(blockedResponse.status).toBe(429);
+      expect(blockedResponse.headers.get("Retry-After")).toBe("1800");
+      expect(env.owner?.password_hash).toBe(previousHash);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("hydrates the owner session from the signed cookie", async () => {

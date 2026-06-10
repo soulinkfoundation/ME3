@@ -262,6 +262,22 @@ type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
 type SessionPayload = { sub: string; iat: number; exp: number };
 type OwnerRecord = OwnerProfile & { password_hash: string | null };
 type JwtHeader = { alg?: unknown; kid?: unknown; typ?: unknown };
+type AuthRateLimitPolicy = {
+  route: string;
+  maxAttempts: number;
+  windowSeconds: number;
+  lockoutSeconds: number;
+};
+type AuthRateLimitScope = {
+  key: string;
+  route: string;
+  subjectHash: string;
+};
+type AuthRateLimitRecord = {
+  attempt_count: number | string;
+  window_started_at: string;
+  locked_until: string | null;
+};
 const SESSION_COOKIE_NAME = "me3_core_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
@@ -276,6 +292,32 @@ const MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES = 1 * 1024 * 1024;
 const MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT = 4;
 const MAX_ASSISTANT_EXTRACTED_TEXT_CHARS = 48_000;
+const AUTH_RATE_LIMITS = {
+  claimStart: {
+    route: "auth.me3_claim_start",
+    maxAttempts: 20,
+    windowSeconds: 10 * 60,
+    lockoutSeconds: 10 * 60,
+  },
+  bootstrap: {
+    route: "auth.bootstrap",
+    maxAttempts: 5,
+    windowSeconds: 15 * 60,
+    lockoutSeconds: 30 * 60,
+  },
+  login: {
+    route: "auth.login",
+    maxAttempts: 10,
+    windowSeconds: 15 * 60,
+    lockoutSeconds: 15 * 60,
+  },
+  passwordReset: {
+    route: "auth.password_reset_bootstrap",
+    maxAttempts: 5,
+    windowSeconds: 15 * 60,
+    lockoutSeconds: 30 * 60,
+  },
+} satisfies Record<string, AuthRateLimitPolicy>;
 const OWNER_APP_ROUTE_PREFIXES = [
   "/account",
   "/accounts",
@@ -500,12 +542,16 @@ app.get("/api/auth/me3/callback", async (c) => {
 app.post("/api/admin/bootstrap", async (c) => {
   const body = await c.req.json<BootstrapBody>().catch((): BootstrapBody => ({}));
   const setupPassword = getSetupPassword(c.env);
+  const rateLimitScope = await createAuthRateLimitScope(c, AUTH_RATE_LIMITS.bootstrap);
+  const rateLimitBlock = await checkAuthRateLimit(c, rateLimitScope);
+  if (rateLimitBlock) return rateLimitBlock;
 
   if (!setupPassword) {
     return c.json({ ok: false, error: "Owner auth is not configured" }, 503);
   }
 
   if (body.bootstrapCode !== setupPassword) {
+    await recordAuthRateLimitAttempt(c.env, AUTH_RATE_LIMITS.bootstrap, rateLimitScope);
     return c.json({ ok: false, error: "Invalid setup password" }, 401);
   }
 
@@ -548,6 +594,7 @@ app.post("/api/admin/bootstrap", async (c) => {
     .run();
 
   await getOrCreateInstallEncryptionKey(c.env);
+  await clearAuthRateLimit(c.env, rateLimitScope);
   await setOwnerSession(c, owner.id);
 
   return c.json({ ok: true, owner });
@@ -557,6 +604,13 @@ app.post("/api/auth/login", async (c) => {
   const body = await c.req.json<LoginBody>().catch((): LoginBody => ({}));
   const email = body.email?.trim().toLowerCase();
   const password = body.password?.trim();
+  const rateLimitScope = await createAuthRateLimitScope(
+    c,
+    AUTH_RATE_LIMITS.login,
+    email || "unknown-email",
+  );
+  const rateLimitBlock = await checkAuthRateLimit(c, rateLimitScope);
+  if (rateLimitBlock) return rateLimitBlock;
 
   if (!email || !password) {
     return c.json({ ok: false, error: "Email and password are required" }, 400);
@@ -564,9 +618,11 @@ app.post("/api/auth/login", async (c) => {
 
   const owner = await getOwnerByEmail(c.env, email);
   if (!owner?.password_hash || !(await verifyPassword(password, owner.password_hash))) {
+    await recordAuthRateLimitAttempt(c.env, AUTH_RATE_LIMITS.login, rateLimitScope);
     return c.json({ ok: false, error: "Invalid email or password" }, 401);
   }
 
+  await clearAuthRateLimit(c.env, rateLimitScope);
   await setOwnerSession(c, owner.id);
 
   return c.json({ ok: true, owner: toPublicOwner(owner) });
@@ -579,12 +635,16 @@ app.post("/api/auth/password-reset/bootstrap", async (c) => {
   const email = body.email?.trim().toLowerCase();
   const password = body.password?.trim();
   const setupPassword = getSetupPassword(c.env);
+  const rateLimitScope = await createAuthRateLimitScope(c, AUTH_RATE_LIMITS.passwordReset);
+  const rateLimitBlock = await checkAuthRateLimit(c, rateLimitScope);
+  if (rateLimitBlock) return rateLimitBlock;
 
   if (!setupPassword) {
     return c.json({ ok: false, error: "Owner recovery is not configured" }, 503);
   }
 
   if (body.bootstrapCode !== setupPassword) {
+    await recordAuthRateLimitAttempt(c.env, AUTH_RATE_LIMITS.passwordReset, rateLimitScope);
     return c.json({ ok: false, error: "Invalid setup password" }, 401);
   }
 
@@ -598,6 +658,7 @@ app.post("/api/auth/password-reset/bootstrap", async (c) => {
 
   const owner = await getOwnerByEmail(c.env, email);
   if (!owner) {
+    await recordAuthRateLimitAttempt(c.env, AUTH_RATE_LIMITS.passwordReset, rateLimitScope);
     return c.json({ ok: false, error: "Owner account not found" }, 404);
   }
 
@@ -607,6 +668,7 @@ app.post("/api/auth/password-reset/bootstrap", async (c) => {
     .bind(await hashPassword(password), owner.id)
     .run();
 
+  await clearAuthRateLimit(c.env, rateLimitScope);
   clearOwnerSession(c);
 
   return c.json({ ok: true, owner: toPublicOwner(owner) });
@@ -1487,6 +1549,118 @@ function unauthorized(c: AppContext) {
   return c.json({ ok: false, error: "Authentication required" }, 401);
 }
 
+async function createAuthRateLimitScope(
+  c: AppContext,
+  policy: AuthRateLimitPolicy,
+  discriminator = "",
+): Promise<AuthRateLimitScope> {
+  const clientKey = getRateLimitClientKey(c);
+  const subject = discriminator ? `${clientKey}|${discriminator}` : clientKey;
+  const subjectHash = await sha256Text(subject);
+  return {
+    key: `${policy.route}:${subjectHash}`,
+    route: policy.route,
+    subjectHash,
+  };
+}
+
+async function checkAuthRateLimit(
+  c: AppContext,
+  scope: AuthRateLimitScope,
+): Promise<Response | null> {
+  const row = await getAuthRateLimitRecord(c.env, scope.key);
+  const lockedUntilMs = row?.locked_until ? new Date(row.locked_until).getTime() : 0;
+  if (!Number.isFinite(lockedUntilMs) || lockedUntilMs <= Date.now()) return null;
+
+  const retryAfterSeconds = Math.max(1, Math.ceil((lockedUntilMs - Date.now()) / 1000));
+  c.header("Retry-After", String(retryAfterSeconds));
+  return c.json(
+    {
+      ok: false,
+      error: "Too many attempts. Try again later.",
+      retryAfterSeconds,
+    },
+    429,
+  );
+}
+
+async function recordAuthRateLimitAttempt(
+  env: Env,
+  policy: AuthRateLimitPolicy,
+  scope: AuthRateLimitScope,
+): Promise<void> {
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const existing = await getAuthRateLimitRecord(env, scope.key);
+  const windowStartedMs = existing?.window_started_at
+    ? new Date(existing.window_started_at).getTime()
+    : 0;
+  const windowActive =
+    Number.isFinite(windowStartedMs) &&
+    windowStartedMs > 0 &&
+    windowStartedMs + policy.windowSeconds * 1000 > nowMs;
+  const attemptCount = windowActive ? Number(existing?.attempt_count || 0) + 1 : 1;
+  const windowStartedAt = windowActive ? existing!.window_started_at : nowIso;
+  const lockedUntil =
+    attemptCount >= policy.maxAttempts
+      ? new Date(nowMs + policy.lockoutSeconds * 1000).toISOString()
+      : null;
+
+  await env.DB.prepare(
+    `INSERT INTO auth_rate_limits
+       (key, route, subject_hash, attempt_count, window_started_at, locked_until, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       attempt_count = excluded.attempt_count,
+       window_started_at = excluded.window_started_at,
+       locked_until = excluded.locked_until,
+       updated_at = excluded.updated_at`,
+  )
+    .bind(
+      scope.key,
+      scope.route,
+      scope.subjectHash,
+      attemptCount,
+      windowStartedAt,
+      lockedUntil,
+      nowIso,
+      nowIso,
+    )
+    .run();
+}
+
+async function clearAuthRateLimit(env: Env, scope: AuthRateLimitScope): Promise<void> {
+  await env.DB.prepare("DELETE FROM auth_rate_limits WHERE key = ?")
+    .bind(scope.key)
+    .run();
+}
+
+async function getAuthRateLimitRecord(
+  env: Env,
+  key: string,
+): Promise<AuthRateLimitRecord | null> {
+  const result = await env.DB.prepare(
+    `SELECT attempt_count, window_started_at, locked_until
+     FROM auth_rate_limits
+     WHERE key = ?`,
+  )
+    .bind(key)
+    .first<AuthRateLimitRecord>();
+
+  return result ?? null;
+}
+
+function getRateLimitClientKey(c: AppContext): string {
+  const forwardedFor = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
+  const clientIp =
+    c.req.header("cf-connecting-ip")?.trim() ||
+    forwardedFor ||
+    c.req.header("x-real-ip")?.trim();
+  if (clientIp) return `ip:${clientIp}`;
+
+  return `host:${hostnameFromUrl(c.req.url) || "unknown"}`;
+}
+
 function applyResponseSecurityHeaders(c: AppContext) {
   const pathname = new URL(c.req.url).pathname;
 
@@ -1803,6 +1977,11 @@ async function getOwnerByEmail(env: Env, email: string): Promise<OwnerRecord | n
 }
 
 async function createMe3ClaimStartResponse(c: AppContext, rawRedirect?: unknown): Promise<Response> {
+  const rateLimitScope = await createAuthRateLimitScope(c, AUTH_RATE_LIMITS.claimStart);
+  const rateLimitBlock = await checkAuthRateLimit(c, rateLimitScope);
+  if (rateLimitBlock) return rateLimitBlock;
+  await recordAuthRateLimitAttempt(c.env, AUTH_RATE_LIMITS.claimStart, rateLimitScope);
+
   const webOrigin = getCoreWebOrigin(c.env, c.req.url);
   const apiOrigin = getCoreApiOrigin(c.env, c.req.url);
   const installId = await getOrCreateMe3CoreInstallId(c.env);

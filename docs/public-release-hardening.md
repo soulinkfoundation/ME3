@@ -62,8 +62,9 @@ Before tagging a stable public release, verify:
   root custom domains without the configured admin origin.
 - Webhooks: provider webhooks use configured signing or token checks before
   acting on payloads.
-- Abuse controls: public claim, login, reset, and setup paths have documented
-  rate-limit or backoff coverage before launch.
+- Abuse controls: public claim, login, reset, and setup paths use the
+  D1-backed `auth_rate_limits` table with hashed client/subject keys and Worker
+  regression coverage.
 - Least privilege: D1, R2, Durable Object, Workers AI, queue, email, and secret
   bindings are named explicitly in Wrangler examples; owners provide secrets
   through Worker secret storage, not config files.
