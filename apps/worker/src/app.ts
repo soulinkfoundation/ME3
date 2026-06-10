@@ -177,6 +177,8 @@ import {
   getMe3CloudUsernamePublishBlockReason,
   getSiteFileText,
   getSiteHost,
+  hostnameFromUrl,
+  hostsMatch,
   imageExtension,
   isMissingSiteFilesTableError,
   isPublicSiteHost,
@@ -274,6 +276,23 @@ const MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES = 1 * 1024 * 1024;
 const MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT = 4;
 const MAX_ASSISTANT_EXTRACTED_TEXT_CHARS = 48_000;
+const OWNER_APP_ROUTE_PREFIXES = [
+  "/account",
+  "/accounts",
+  "/assistant",
+  "/calendar",
+  "/contacts",
+  "/create",
+  "/email",
+  "/journal",
+  "/login",
+  "/mission-control",
+  "/mission-control-projects",
+  "/mission-control-wheel-of-life",
+  "/sites",
+  "/social",
+  "/start",
+];
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -308,6 +327,11 @@ app.use(
     credentials: true,
   }),
 );
+
+app.use("*", async (c, next) => {
+  await next();
+  applyResponseSecurityHeaders(c);
+});
 
 app.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname;
@@ -1461,6 +1485,52 @@ async function requireOwner(c: AppContext): Promise<string | null> {
 
 function unauthorized(c: AppContext) {
   return c.json({ ok: false, error: "Authentication required" }, 401);
+}
+
+function applyResponseSecurityHeaders(c: AppContext) {
+  const pathname = new URL(c.req.url).pathname;
+
+  setDefaultHeader(c, "X-Content-Type-Options", "nosniff");
+  setDefaultHeader(c, "Referrer-Policy", "strict-origin-when-cross-origin");
+
+  if (pathname.startsWith("/api/")) {
+    setDefaultHeader(c, "Cache-Control", "no-store");
+  }
+
+  if (isOwnerSurfaceRequest(c, pathname)) {
+    setDefaultHeader(c, "X-Frame-Options", "DENY");
+    setDefaultHeader(c, "Content-Security-Policy", "frame-ancestors 'none'");
+  }
+}
+
+function setDefaultHeader(c: AppContext, name: string, value: string) {
+  if (!c.res.headers.has(name)) c.header(name, value);
+}
+
+function isOwnerSurfaceRequest(c: AppContext, pathname: string): boolean {
+  if (pathname.startsWith("/api/")) return true;
+
+  if (
+    OWNER_APP_ROUTE_PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    )
+  ) {
+    return true;
+  }
+
+  const hasExplicitOwnerHost = Boolean(
+    c.env.ME3_ADMIN_HOST ||
+      c.env.ME3_API_HOST ||
+      c.env.CORE_WEB_ORIGIN ||
+      c.env.CORE_API_ORIGIN,
+  );
+  if (!hasExplicitOwnerHost) return false;
+
+  const requestHost = hostnameFromUrl(c.req.url);
+  return (
+    hostsMatch(requestHost, getAdminHost(c.env, c.req.url)) ||
+    hostsMatch(requestHost, getApiHost(c.env, c.req.url))
+  );
 }
 
 function socialPublishingErrorResponse(c: AppContext, error: unknown) {

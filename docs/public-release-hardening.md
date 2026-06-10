@@ -56,7 +56,8 @@ Before tagging a stable public release, verify:
   subscription billing config.
 - Auth/session: bootstrap, login, session hydration, logout, and protected
   owner routes are covered by Worker tests; cookies are `HttpOnly` and
-  `SameSite=Lax`.
+  `SameSite=Lax`; API/owner surfaces send response security headers and
+  no-store cache headers where routes have not chosen a narrower policy.
 - CORS/origin posture: admin/login/API surfaces are not exposed from public
   root custom domains without the configured admin origin.
 - Webhooks: provider webhooks use configured signing or token checks before
@@ -79,7 +80,9 @@ Before tagging a stable public release, verify:
 - D1 query surfaces used during setup, login, public site serving, and update
   checks have indexes for owner/site/status/date lookups.
 - Static assets are served through the configured Workers assets binding, with
-  the Worker seeing requests first for custom-domain routing.
+  the Worker seeing requests first for custom-domain routing; public site media
+  keeps long-lived immutable cache headers while generated HTML/JSON and API
+  responses avoid accidental shared caching.
 - Deploy-button and copied-repository update smoke tests are recorded in the
   relevant beads before the first public announcement.
 

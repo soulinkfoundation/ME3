@@ -3011,6 +3011,19 @@ describe("ME3 Core Worker auth", () => {
     expect(body.updateManifestUrl).toContain("updates/stable.json");
   });
 
+  it("adds security and no-store headers to API responses", async () => {
+    const env = createEnv();
+
+    const response = await app.fetch(new Request("http://localhost/api/config"), env);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Referrer-Policy")).toBe("strict-origin-when-cross-origin");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+    expect(response.headers.get("Content-Security-Policy")).toBe("frame-ancestors 'none'");
+  });
+
   it("serves the published site profile at the root me.json discovery path", async () => {
     const env = createEnv();
     addBookableSite(env);
@@ -3023,6 +3036,21 @@ describe("ME3 Core Worker auth", () => {
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(body.name).toBe("Booking Owner");
     expect(body.handle).toBe("owner");
+  });
+
+  it("preserves public site image caching while adding safe response headers", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    addSiteFileText(env, "site-booking", "public/files/avatar.png", "PNG", "image/png");
+    env.ME3_SITE_USERNAME = "owner";
+
+    const response = await app.fetch(new Request("https://kieranbutler.com/files/avatar.png"), env);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("X-Frame-Options")).toBeNull();
   });
 
   it("serves the published site profile at the well-known me.json discovery path", async () => {
@@ -5186,6 +5214,17 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  describe("public booking routes", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-05T12:00:00Z"));
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
   it("creates confirmed free bookings from public generated sites", async () => {
     const env = createEnv();
     addBookableSite(env);
@@ -5542,6 +5581,8 @@ describe("ME3 Core Worker auth", () => {
       checkoutUrl: "/api/book/owner/checkout-session",
     });
     expect(env.bookings).toHaveLength(0);
+  });
+
   });
 
   describe("scheduling routes", () => {
