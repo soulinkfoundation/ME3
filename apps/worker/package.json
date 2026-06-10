@@ -21,6 +21,7 @@
     "@me3-core/plugin-social-publishing": "workspace:*",
     "@me3/knowledge": "workspace:*",
     "hono": "^4.3.0",
+    "ical.js": "^2.2.1",
     "stripe": "^17.0.0"
   },
   "devDependencies": {

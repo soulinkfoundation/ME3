@@ -99,9 +99,12 @@ interface CalendarEventRow {
 interface CalendarSourceRow {
   id: string;
   name: string;
-  kind: "ics_upload";
+  kind: "ics_upload" | "ics_url";
   originalFilename: string | null;
+  sourceUrlHint: string | null;
   importedEventCount: number;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
   createdAt: string;
 }
 
@@ -305,8 +308,17 @@ const newBirthdayForm = ref({
 const importSubmitting = ref(false);
 const importError = ref("");
 const importForm = ref({
+  mode: "url" as "url" | "file",
   name: "",
+  url: "",
   file: null as File | null,
+});
+
+const importSubmitLabel = computed(() => {
+  if (importSubmitting.value) {
+    return importForm.value.mode === "url" ? "Syncing..." : "Importing...";
+  }
+  return importForm.value.mode === "url" ? "Sync calendar" : "Import calendar";
 });
 
 const calendarWindow = computed(() => {
@@ -1380,7 +1392,9 @@ function resetBirthdayForm() {
 function resetImportForm() {
   importError.value = "";
   importForm.value = {
+    mode: "url",
     name: "",
+    url: "",
     file: null,
   };
 }
@@ -1700,24 +1714,46 @@ function onImportFileChange(event: Event) {
 
 async function submitImport() {
   importError.value = "";
-  if (!importForm.value.file) {
+  if (importForm.value.mode === "url" && !importForm.value.url.trim()) {
+    importError.value = "Paste an iCalendar subscription URL.";
+    return;
+  }
+  if (importForm.value.mode === "file" && !importForm.value.file) {
     importError.value = "Choose an .ics file to import.";
     return;
   }
 
   importSubmitting.value = true;
   try {
-    const formData = new FormData();
-    formData.set("file", importForm.value.file);
-    if (importForm.value.name.trim()) {
-      formData.set("name", importForm.value.name.trim());
-    }
-    const response = await api.upload<{
+    let response: {
       ok: boolean;
       importedCount: number;
       source: { name: string };
-    }>("/calendar/import/ics", formData);
-    statusMessage.value = `Imported ${response.importedCount} events from ${response.source.name}.`;
+    };
+
+    if (importForm.value.mode === "url") {
+      response = await api.post<{
+        ok: boolean;
+        importedCount: number;
+        source: { name: string };
+      }>("/calendar/sources/ics-url", {
+        name: importForm.value.name.trim(),
+        url: importForm.value.url.trim(),
+      });
+    } else {
+      const formData = new FormData();
+      if (importForm.value.file) formData.set("file", importForm.value.file);
+      if (importForm.value.name.trim()) {
+        formData.set("name", importForm.value.name.trim());
+      }
+      response = await api.upload<{
+        ok: boolean;
+        importedCount: number;
+        source: { name: string };
+      }>("/calendar/import/ics", formData);
+    }
+
+    statusMessage.value = `${importForm.value.mode === "url" ? "Synced" : "Imported"} ${response.importedCount} events from ${response.source.name}.`;
     closeCreateMode();
     await reloadCalendar();
   } catch (err) {
@@ -1914,7 +1950,7 @@ onBeforeUnmount(() => {
               New birthday
             </button>
             <button type="button" role="menuitem" @click="openCreateMode('import')">
-              Import .ics
+              Sync calendar
             </button>
           </div>
         </div>
@@ -2055,7 +2091,7 @@ onBeforeUnmount(() => {
                 New birthday
               </button>
               <button type="button" role="menuitem" @click="openCreateMode('import')">
-                Import .ics
+                Sync calendar
               </button>
             </div>
           </div>
@@ -2176,7 +2212,15 @@ onBeforeUnmount(() => {
                     :style="{ background: siteDotColor(`import:${source.id}`) }"
                     aria-hidden="true"
                   />
-                  <span class="cal-filter-label">{{ source.name }}</span>
+                  <span class="cal-filter-label">
+                    {{ source.name }}
+                    <small v-if="source.lastSyncError" class="cal-filter-meta cal-filter-meta--error">
+                      Sync failed
+                    </small>
+                    <small v-else-if="source.kind === 'ics_url'" class="cal-filter-meta">
+                      {{ source.sourceUrlHint || "Subscribed" }}
+                    </small>
+                  </span>
                 </label>
               </section>
             </aside>
@@ -2799,7 +2843,7 @@ onBeforeUnmount(() => {
         aria-labelledby="import-calendar-title"
       >
         <div class="modal-header">
-          <h2 id="import-calendar-title">Import calendar</h2>
+          <h2 id="import-calendar-title">Sync calendar</h2>
           <button
             type="button"
             class="icon-close"
@@ -2811,9 +2855,36 @@ onBeforeUnmount(() => {
         </div>
 
         <form class="booking-form" @submit.prevent="submitImport">
+          <div class="create-tabs" role="tablist" aria-label="Calendar sync method">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="importForm.mode === 'url'"
+              :class="{ active: importForm.mode === 'url' }"
+              @click="importForm.mode = 'url'"
+            >
+              Subscribe
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="importForm.mode === 'file'"
+              :class="{ active: importForm.mode === 'file' }"
+              @click="importForm.mode = 'file'"
+            >
+              Upload
+            </button>
+          </div>
+
           <p class="form-hint">
-            Upload an `.ics` export to bring an external calendar into ME3 as a
-            read-only source.
+            <template v-if="importForm.mode === 'url'">
+              Paste a Google, Apple, or Outlook `.ics` subscription URL. ME3
+              will keep it as a read-only source and refresh it automatically.
+            </template>
+            <template v-else>
+              Upload an `.ics` export to bring an external calendar into ME3 as
+              a read-only source.
+            </template>
           </p>
 
           <label>
@@ -2825,7 +2896,18 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <label>
+          <label v-if="importForm.mode === 'url'">
+            <span>Subscription URL</span>
+            <input
+              v-model="importForm.url"
+              type="url"
+              inputmode="url"
+              placeholder="https://calendar.google.com/calendar/ical/..."
+              autocomplete="off"
+            />
+          </label>
+
+          <label v-else>
             <span>.ics file</span>
             <input
               accept=".ics,text/calendar"
@@ -2851,7 +2933,7 @@ onBeforeUnmount(() => {
               color="primary"
               :disabled="importSubmitting"
             >
-              {{ importSubmitting ? "Importing…" : "Import calendar" }}
+              {{ importSubmitLabel }}
             </Button>
           </div>
         </form>
@@ -3231,9 +3313,24 @@ onBeforeUnmount(() => {
 }
 
 .cal-filter-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cal-filter-meta {
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.cal-filter-meta--error {
+  color: #b33b2e;
 }
 
 .cal-board-wrap {

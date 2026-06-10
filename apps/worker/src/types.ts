@@ -223,10 +223,14 @@ export interface DbSchedulingTimeType {
 export interface DbCalendarSource {
   id: string;
   user_id: string;
-  kind: "ics_upload";
+  kind: "ics_upload" | "ics_url";
   name: string;
   original_filename: string | null;
+  encrypted_source_url?: string | null;
+  source_url_hint?: string | null;
   imported_event_count: number;
+  last_synced_at?: string | null;
+  last_sync_error?: string | null;
   created_at: string;
 }
 

@@ -1,4 +1,5 @@
 import app from "./app";
+import { dispatchDueCalendarSourceRefreshes } from "./calendar-sources";
 import {
   BOOKING_REMINDER_QUEUE_NAME,
   dispatchDueBookingReminders,
@@ -68,6 +69,7 @@ const worker = {
     await dispatchDueScheduledAssistantJobs(env);
     await dispatchDueBookingReminders(env);
     await dispatchDueSocialPublications(env);
+    await dispatchDueCalendarSourceRefreshes(env);
   },
   queue(
     batch: MessageBatch<

@@ -95,6 +95,7 @@ import {
 import { registerAccountsRoutes } from "./routes/accounts";
 import { registerAssistantRoutes } from "./routes/assistant";
 import { registerBookingRoutes } from "./routes/booking";
+import { registerCalendarSourceRoutes } from "./routes/calendar-sources";
 import { registerChannelRoutes } from "./routes/channels";
 import { registerAssistantJobsRoutes } from "./routes/assistant-jobs";
 import { registerAssistantSkillsRoutes } from "./routes/assistant-skills";
@@ -1322,7 +1323,9 @@ app.get("/api/calendar/feed", async (c) => {
       .bind(ownerId)
       .all<DbUserCalendarEvent>(),
     c.env.DB.prepare(
-      `SELECT id, user_id, kind, name, original_filename, imported_event_count, created_at
+      `SELECT id, user_id, kind, name, original_filename, encrypted_source_url,
+              source_url_hint, imported_event_count, last_synced_at,
+              last_sync_error, created_at
        FROM calendar_sources
        WHERE user_id = ? AND status = 'active'
        ORDER BY name ASC`,
@@ -1518,6 +1521,8 @@ registerMailboxRoutes(app, { requireOwner, unauthorized });
 registerChannelRoutes(app, { requireOwner, unauthorized });
 
 registerSchedulingRoutes(app, { requireOwner, unauthorized });
+
+registerCalendarSourceRoutes(app, { requireOwner, unauthorized });
 
 registerContactsRoutes(app, { requireOwner, unauthorized });
 
@@ -1932,7 +1937,10 @@ function serializeCalendarSource(source: DbCalendarSource) {
     name: source.name,
     kind: source.kind,
     originalFilename: source.original_filename,
+    sourceUrlHint: source.source_url_hint ?? null,
     importedEventCount: source.imported_event_count,
+    lastSyncedAt: source.last_synced_at ?? null,
+    lastSyncError: source.last_sync_error ?? null,
     createdAt: source.created_at,
   };
 }

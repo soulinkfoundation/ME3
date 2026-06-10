@@ -171,6 +171,9 @@ importers:
       hono:
         specifier: ^4.3.0
         version: 4.12.18
+      ical.js:
+        specifier: ^2.2.1
+        version: 2.2.1
       stripe:
         specifier: ^17.0.0
         version: 17.7.0
@@ -1592,6 +1595,9 @@ packages:
 
   hookable@5.5.3:
     resolution: {integrity: sha512-Yc+BQe8SvoXH1643Qez1zqLRmbA5rCL+sSmk6TVos0LWVfNIB7PGncdlId77WzLGSIB5KaWgTaNTs2lNVEI6VQ==}
+
+  ical.js@2.2.1:
+    resolution: {integrity: sha512-yK/UlPbEs316igb/tjRgbFA8ZV75rCsBJp/hWOatpyaPNlgw0dGDmU+FoicOcwX4xXkeXOkYiOmCqNPFpNPkQg==}
 
   idb@7.1.1:
     resolution: {integrity: sha512-gchesWBzyvGHRO9W8tzUWFDycow5gwjvFKfyV9FF32Y7F50yZMp7mP+T2mJIWFx49zicqyC4uefHM17o6xKIVQ==}
@@ -3470,6 +3476,8 @@ snapshots:
   hono@4.12.18: {}
 
   hookable@5.5.3: {}
+
+  ical.js@2.2.1: {}
 
   idb@7.1.1: {}
 
