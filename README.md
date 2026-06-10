@@ -117,6 +117,52 @@ pnpm deploy
 
 Before major updates, create or note a Cloudflare D1 Time Travel bookmark. Never overwrite an existing install's `wrangler.toml` resource IDs, Worker secrets, D1 database, R2 bucket, or custom domains unless you intentionally want a fresh install.
 
+### Deleting ME3 Core
+
+Deleting the Worker, copied Git repository, or Cloudflare Workers Builds project
+is not the same as deleting a whole ME3 Core install. Owner data and runtime
+resources can live in D1, R2, queues, Worker secrets, dashboard settings, and
+custom domains. Cloudflare also requires R2 buckets to be empty before bucket
+deletion succeeds.
+
+From the copied install repository, preview the Cloudflare resources that ME3
+will delete:
+
+```bash
+pnpm uninstall:cloudflare
+```
+
+When the plan looks right, run the destructive uninstall:
+
+```bash
+pnpm uninstall:cloudflare -- --execute
+```
+
+The command reads `wrangler.toml`, removes queue consumers, deletes the Worker,
+then deletes the configured queues, D1 databases, and R2 buckets. It is a dry
+run unless `--execute` is passed, and the executed command still requires a
+typed confirmation unless `--yes` is also passed.
+
+To remove the Worker without explicitly deleting D1, R2, or queues from this
+script, run:
+
+```bash
+pnpm uninstall:cloudflare -- --execute --keep-data
+```
+
+If R2 deletion fails because the bucket is not empty, empty the bucket in the
+Cloudflare dashboard or with S3-compatible tooling such as rclone, then rerun
+the uninstall with keep flags for anything already deleted:
+
+```bash
+pnpm uninstall:cloudflare -- --execute --keep-worker --keep-d1 --keep-queues
+```
+
+Before deleting a real install, export D1 or create a Time Travel bookmark if
+you may want the data later. After Cloudflare resources are removed, delete the
+copied GitHub/GitLab repository and any custom dashboard configuration you no
+longer need.
+
 The first public Core release uses a single initial D1 schema baseline. After
 that release, migrations are append-only and published migration files are not
 rewritten. See
