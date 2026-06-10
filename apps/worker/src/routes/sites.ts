@@ -452,8 +452,20 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (!ownerId) return deps.unauthorized(c);
 
     const body = await c.req
-      .json<{ username?: string; siteType?: string; templateId?: string | null }>()
-      .catch((): { username?: string; siteType?: string; templateId?: string | null } => ({}));
+      .json<{
+        username?: string;
+        siteType?: string;
+        templateId?: string | null;
+        renameFromUsername?: string;
+      }>()
+      .catch(
+        (): {
+          username?: string;
+          siteType?: string;
+          templateId?: string | null;
+          renameFromUsername?: string;
+        } => ({}),
+      );
     const username = normalizeUsername(body.username);
     if (!username || !USERNAME_REGEX.test(username)) {
       return c.json({ error: "Username must be 3-30 characters and use letters, numbers, underscores, or hyphens" }, 400);
@@ -469,6 +481,47 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     ) {
       return c.json({ error: "ME3 Landing Pages is coming soon" }, 403);
     }
+
+    const renameFromUsername = normalizeUsername(body.renameFromUsername);
+    if (siteType === "profile" && renameFromUsername) {
+      const existingProfileSite = await getSiteForOwner(c.env, ownerId, renameFromUsername);
+      if (!existingProfileSite) return c.json({ error: "Profile site to rename was not found" }, 404);
+      if ((existingProfileSite.site_type || "profile") !== "profile") {
+        return c.json({ error: "Only profile sites can be renamed through profile creation" }, 400);
+      }
+
+      if (existingProfileSite.username === username) {
+        return c.json({ site: existingProfileSite });
+      }
+
+      try {
+        await c.env.DB.prepare(
+          `UPDATE sites
+           SET username = ?,
+               site_type = 'profile',
+               template_id = COALESCE(?, template_id),
+               published_at = NULL,
+               updated_at = datetime('now')
+           WHERE id = ? AND user_id = ?`,
+        )
+          .bind(username, body.templateId || null, existingProfileSite.id, ownerId)
+          .run();
+
+        const site = await c.env.DB.prepare(
+          `SELECT id, user_id, username, site_type, template_id, custom_domain,
+                  custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
+           FROM sites WHERE id = ?`,
+        )
+          .bind(existingProfileSite.id)
+          .first<DbSite>();
+
+        return c.json({ site });
+      } catch (error) {
+        console.error("Rename profile site error:", error);
+        return c.json({ error: "Username is already in use" }, 409);
+      }
+    }
+
     const id = crypto.randomUUID();
 
     try {

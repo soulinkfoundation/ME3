@@ -1,946 +1,720 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
-import { computed, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
-import { useWizardStore } from "../stores/wizard";
-import { usePublish } from "../composables/usePublish";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { getUsernameAvailability } from "../api";
+import Button from "../components/Button.vue";
 import ProfilePreview from "../components/ProfilePreview.vue";
-
-// Step components
-import WizardBasics from "../components/wizard/WizardBasics.vue";
+import UiIcon from "../components/UiIcon.vue";
 import WizardAvatar from "../components/wizard/WizardAvatar.vue";
-import WizardBanner from "../components/wizard/WizardBanner.vue";
-import WizardLinks from "../components/wizard/WizardLinks.vue";
-import WizardCallToAction from "../components/wizard/WizardCallToAction.vue";
-import WizardPages from "../components/wizard/WizardPages.vue";
-import WizardAdditionalFeatures from "../components/wizard/WizardAdditionalFeatures.vue";
-import WizardNewsletter from "../components/wizard/WizardNewsletter.vue";
-import WizardBlog from "../components/wizard/WizardBlog.vue";
-import WizardBookings from "../components/wizard/WizardBookings.vue";
-import WizardShop from "../components/wizard/WizardShop.vue";
-import WizardTestimonials from "../components/wizard/WizardTestimonials.vue";
-import WizardPublish from "../components/wizard/WizardPublish.vue";
+import { usePublish } from "../composables/usePublish";
+import { useAuthStore } from "../stores/auth";
+import { useSitesStore } from "../stores/sites";
+import { useWizardStore } from "../stores/wizard";
+import { resolvePublicProfileUrl } from "../utils/publicSiteUrl";
 
 definePage({
   meta: {
     requiresAuth: true,
-    title: "Site Wizard | ME3",
-    description:
-      "Create your me3 site in minutes with the step-by-step wizard.",
+    hideAppShell: true,
+    hideAgentLauncher: true,
+    title: "Create Profile | ME3",
+    description: "Create your ME3 profile.",
     robots: "noindex,follow",
   },
 });
 
-const wizard = useWizardStore();
+const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
+
+const auth = useAuthStore();
+const route = useRoute();
 const router = useRouter();
-const { isPublishing: isQuickPublishing, publish } = usePublish();
-const showIntroScreen = ref(false);
+const sites = useSitesStore();
+const wizard = useWizardStore();
+const { isPublishing, publishProgress, publishError, publish } = usePublish();
 
-// Reference to the current component instance
-const currentComponentRef = ref<
-  | InstanceType<typeof WizardPages>
-  | InstanceType<typeof WizardBlog>
-  | InstanceType<typeof WizardShop>
-  | InstanceType<typeof WizardBookings>
-  | null
->(null);
+const loadingExisting = ref(true);
+const existingProfileUsername = ref<string | null>(null);
+const preserveExistingSiteContent = ref(false);
+const name = ref("");
+const handle = ref("");
+const bio = ref("");
+const profileError = ref("");
+const successMessage = ref("");
+const publishedUrl = ref("");
+const isCheckingUsername = ref(false);
+const isUsernameAvailable = ref<boolean | null>(null);
+const usernameMessage = ref("");
 
-// Step components map
-const stepComponents = computed(() => {
-  const base = [
-    WizardBasics,
-    WizardAvatar,
-    WizardBanner,
-    WizardLinks,
-    WizardCallToAction,
-    WizardPages,
-    WizardAdditionalFeatures,
-  ];
+let usernameCheckTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  // Add conditional steps in order: Newsletter, Bookings, Blog, Offerings, Testimonials
-  if (wizard.newsletterEnabled) {
-    base.push(WizardNewsletter);
-  }
-  if (wizard.bookingsEnabled) {
-    base.push(WizardBookings);
-  }
-  if (wizard.blogEnabled) base.push(WizardBlog);
-  base.push(WizardShop);
-  if (wizard.testimonialsEnabled) base.push(WizardTestimonials);
-
-  base.push(WizardPublish);
-  return base;
-});
-
-const currentComponent = computed(
-  () => stepComponents.value[wizard.currentStep - 1],
+const normalizedHandle = computed(() => normalizeUsername(handle.value));
+const publishedUrlLabel = computed(() =>
+  publishedUrl.value.replace(/^https?:\/\//, "").replace(/\/$/, ""),
+);
+const safeRedirect = computed(() =>
+  resolveSafeRedirect(route.query.redirect || route.query.next),
+);
+const starterPreviewProfile = computed(() => ({
+  ...wizard.profile,
+  newsletter: {
+    ...wizard.profile.newsletter,
+    enabled: false,
+  },
+  booking: {
+    ...wizard.profile.booking,
+    enabled: false,
+  },
+  gift: {
+    ...wizard.profile.gift,
+    enabled: false,
+  },
+}));
+const canSave = computed(
+  () =>
+    !loadingExisting.value &&
+    !isPublishing.value &&
+    !isCheckingUsername.value &&
+    name.value.trim().length >= 2 &&
+    normalizedHandle.value.length >= 3 &&
+    USERNAME_PATTERN.test(normalizedHandle.value) &&
+    isUsernameAvailable.value === true,
 );
 
-const previewActiveView = computed(() => {
-  if (currentComponent.value === WizardBlog) {
-    const blogRef = currentComponentRef.value as InstanceType<
-      typeof WizardBlog
-    > | null;
-    if (blogRef?.activePostSlug) {
-      return `${wizard.blogPath}:${blogRef.activePostSlug}`;
-    }
-    return wizard.blogPath;
-  }
-  if (currentComponent.value === WizardTestimonials) {
-    if (wizard.testimonialsPlacement === "standalone") {
-      return wizard.testimonialsPath;
-    }
-    if (wizard.testimonialsPlacement === "blog") {
-      return wizard.blogPath;
-    }
-    if (wizard.testimonialsPlacement === "shop") {
-      return wizard.shopPath;
-    }
-    if (wizard.testimonialsPlacement.startsWith("page:")) {
-      return wizard.testimonialsPlacement.slice("page:".length) || null;
-    }
-  }
-  return null;
-});
+function normalizeUsername(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/[^a-z0-9]+$/, "")
+    .slice(0, 30);
+}
 
-const importedDraftHost = computed(() => {
-  const sourceUrl = wizard.draftSourceUrl;
-  if (!sourceUrl) return null;
+function clearUsernameCheck() {
+  if (usernameCheckTimeout) {
+    clearTimeout(usernameCheckTimeout);
+    usernameCheckTimeout = null;
+  }
+}
+
+function resolveSafeRedirect(raw: unknown): string {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string") return "";
+  const redirect = value.trim();
+  if (!redirect) return "";
+  if (redirect.startsWith("/") && !redirect.startsWith("//")) return redirect;
 
   try {
-    return new URL(sourceUrl).hostname.replace(/^www\./, "");
+    const parsed = new URL(redirect);
+    if (
+      parsed.hostname === window.location.hostname &&
+      ["http:", "https:"].includes(parsed.protocol)
+    ) {
+      return parsed.toString();
+    }
   } catch {
-    return sourceUrl;
+    return "";
   }
+
+  return "";
+}
+
+function navigateToSafeRedirect(target: string) {
+  if (!target) return;
+  if (target.startsWith("http://") || target.startsWith("https://")) {
+    window.location.href = target;
+    return;
+  }
+  void router.push(target);
+}
+
+function syncWizardProfile() {
+  const nextHandle = normalizedHandle.value;
+  wizard.username = nextHandle;
+  wizard.updateProfile({
+    name: name.value,
+    handle: nextHandle,
+    bio: bio.value,
+  });
+}
+
+function applyStarterProfileScope() {
+  wizard.pages = [];
+  wizard.posts = [];
+  wizard.products = [];
+  wizard.testimonials = [];
+  wizard.newsletterEnabled = false;
+  wizard.blogEnabled = false;
+  wizard.bookingsEnabled = false;
+  wizard.shopEnabled = false;
+  wizard.testimonialsEnabled = false;
+  wizard.updateProfile({
+    newsletter: {
+      ...wizard.profile.newsletter,
+      enabled: false,
+      title: "",
+      description: "",
+    },
+    booking: {
+      ...wizard.profile.booking,
+      enabled: false,
+      oneToOneEnabled: false,
+      classEnabled: false,
+      retreatEnabled: false,
+      offers: [],
+      classOffers: [],
+      retreatOffers: [],
+    },
+    gift: {
+      ...wizard.profile.gift,
+      enabled: false,
+      title: "",
+      description: "",
+    },
+  });
+}
+
+function queueUsernameAvailabilityCheck(value: string) {
+  const cleaned = normalizeUsername(value);
+  usernameMessage.value = "";
+  isUsernameAvailable.value = null;
+  isCheckingUsername.value = false;
+  clearUsernameCheck();
+
+  if (cleaned.length === 0) return;
+  if (cleaned.length < 3 || !USERNAME_PATTERN.test(cleaned)) {
+    usernameMessage.value =
+      cleaned.length < 3
+        ? "Handle must be at least 3 characters."
+        : "Use letters, numbers, underscores, or hyphens.";
+    return;
+  }
+
+  if (cleaned === existingProfileUsername.value) {
+    isUsernameAvailable.value = true;
+    wizard.isUsernameAvailable = true;
+    return;
+  }
+
+  isCheckingUsername.value = true;
+  wizard.isCheckingUsername = true;
+
+  usernameCheckTimeout = setTimeout(async () => {
+    try {
+      const available = await getUsernameAvailability(cleaned);
+      if (normalizedHandle.value === cleaned) {
+        isUsernameAvailable.value = available;
+        wizard.isUsernameAvailable = available;
+      }
+    } catch {
+      if (normalizedHandle.value === cleaned) {
+        isUsernameAvailable.value = true;
+        wizard.isUsernameAvailable = true;
+      }
+    } finally {
+      if (normalizedHandle.value === cleaned) {
+        isCheckingUsername.value = false;
+        wizard.isCheckingUsername = false;
+      }
+    }
+  }, 400);
+}
+
+function hydrateFormFromWizard() {
+  name.value = wizard.profile.name || auth.user?.name || "";
+  handle.value = wizard.profile.handle || wizard.username || "";
+  bio.value = wizard.profile.bio || "";
+  queueUsernameAvailabilityCheck(handle.value);
+}
+
+async function loadExistingProfile() {
+  loadingExisting.value = true;
+  profileError.value = "";
+
+  try {
+    await auth.ensureInitialized();
+    await sites.fetchSites();
+
+    const profileSite = sites.sites.find(
+      (site) => (site.site_type || "profile") === "profile",
+    );
+    existingProfileUsername.value = profileSite?.username || null;
+
+    if (profileSite) {
+      const content = await sites.getSiteContent(profileSite.username);
+      if (content?.ok && content.profile) {
+        preserveExistingSiteContent.value = true;
+        wizard.loadFromSiteContent(
+          content.profile,
+          content.pages,
+          content.posts,
+          content.products || [],
+          profileSite.username,
+          profileSite.published_at || null,
+        );
+      } else {
+        preserveExistingSiteContent.value = false;
+        wizard.reset();
+        wizard.username = profileSite.username;
+        wizard.isUsernameAvailable = true;
+        applyStarterProfileScope();
+        wizard.updateProfile({
+          name: auth.user?.name || "",
+          handle: profileSite.username,
+        });
+      }
+    } else {
+      preserveExistingSiteContent.value = false;
+      const suggestedHandle = normalizeUsername(
+        auth.user?.username ||
+          auth.user?.email?.split("@")[0] ||
+          auth.user?.name ||
+          "",
+      );
+      wizard.reset();
+      wizard.username = suggestedHandle;
+      applyStarterProfileScope();
+      wizard.updateProfile({
+        name: auth.user?.name || "",
+        handle: suggestedHandle,
+      });
+    }
+
+    hydrateFormFromWizard();
+  } catch (error) {
+    profileError.value =
+      error instanceof Error ? error.message : "Could not load your profile.";
+  } finally {
+    loadingExisting.value = false;
+  }
+}
+
+async function saveStarterProfile() {
+  if (!canSave.value) return;
+
+  profileError.value = "";
+  successMessage.value = "";
+  publishedUrl.value = "";
+  syncWizardProfile();
+  if (!preserveExistingSiteContent.value) {
+    applyStarterProfileScope();
+    syncWizardProfile();
+  }
+  wizard.isUsernameAvailable = true;
+
+  const ok = await publish({ celebrate: false, openSite: false });
+  if (!ok) {
+    profileError.value = publishError.value || "Could not save your profile.";
+    return;
+  }
+
+  await sites.fetchSites();
+  existingProfileUsername.value = normalizedHandle.value;
+  publishedUrl.value = await resolvePublicProfileUrl(normalizedHandle.value);
+  successMessage.value = "Profile saved.";
+
+  if (safeRedirect.value) {
+    navigateToSafeRedirect(safeRedirect.value);
+  }
+}
+
+watch(handle, (value) => {
+  const cleaned = normalizeUsername(value);
+  if (cleaned !== value) {
+    handle.value = cleaned;
+    return;
+  }
+  syncWizardProfile();
+  queueUsernameAvailabilityCheck(cleaned);
 });
 
-const showImportedDraftRecovery = computed(
-  () =>
-    !!importedDraftHost.value &&
-    !wizard.lastPublishedAt &&
-    !showIntroScreen.value,
-);
+watch([name, bio], syncWizardProfile);
 
-// Progress percentage
-const progress = computed(
-  () => ((wizard.currentStep - 1) / (wizard.totalSteps - 1)) * 100,
-);
-
-const progressSteps = computed(() =>
-  wizard.stepNames.map((name, index) => {
-    const number = index + 1;
-    const isCurrent = number === wizard.currentStep;
-    const isVisited = number <= wizard.furthestStep;
-
-    return {
-      name,
-      number,
-      isCurrent,
-      isVisited,
-      isJumpable: isVisited && !isCurrent,
-      title: isCurrent
-        ? `${name} (current step)`
-        : isVisited
-          ? `Go to ${name}`
-          : `${name} is locked until you complete the earlier steps`,
-      ariaLabel: isCurrent
-        ? `Current step: ${name}`
-        : isVisited
-          ? `Go to ${name}`
-          : `${name} is locked until you complete the earlier steps`,
-    };
-  }),
-);
-
-// Show preview on larger screens
-const showPreview = computed(
-  () => !showIntroScreen.value && wizard.currentStep < wizard.totalSteps,
-);
-
-// Check if WizardPages/Blog/Offerings/Bookings is in editing mode
-const isEditingPage = computed(() => {
-  if (!currentComponentRef.value) return false;
-
-  if (currentComponent.value === WizardPages) {
-    return (currentComponentRef.value as InstanceType<typeof WizardPages>)
-      .isEditingPage;
-  }
-  if (currentComponent.value === WizardBlog) {
-    return (currentComponentRef.value as InstanceType<typeof WizardBlog>)
-      .isEditingPost;
-  }
-  if (currentComponent.value === WizardShop) {
-    return (currentComponentRef.value as InstanceType<typeof WizardShop>)
-      .isEditingProduct;
-  }
-
-  return false;
-});
-
-function handleBack() {
-  if (wizard.currentStep === 1) {
-    router.push("/");
-  } else {
-    wizard.prevStep();
-  }
-}
-
-function handleNext() {
-  wizard.nextStep();
-}
-
-function handleStepJump(step: number) {
-  wizard.goToStep(step);
-}
-
-function handleProgressStepClick(stepNumber: number, isVisited: boolean) {
-  if (!isVisited) return;
-  handleStepJump(stepNumber);
-}
-
-function exitWizardDestination(): string {
-  const site = (wizard.username || wizard.profile.handle || "")
-    .trim()
-    .toLowerCase();
-  if (site.length >= 3) return `/sites/${site}`;
-  return "/calendar";
-}
-
-function handleExit() {
-  router.push(exitWizardDestination());
-}
-
-function handleIntroGetStarted() {
-  showIntroScreen.value = false;
-}
-
-async function handleQuickPublish() {
-  await publish({ openSite: false });
-}
-
-function clearImportedDraft() {
-  wizard.reset();
-  router.push("/calendar");
-}
-
-onMounted(() => {
-  showIntroScreen.value = !wizard.lastPublishedAt;
-
-  // Check for saved progress
-  if (wizard.profile.name && wizard.currentStep > 1) {
-    // Show continue prompt could go here
-  }
-});
+onMounted(loadExistingProfile);
+onBeforeUnmount(clearUsernameCheck);
 </script>
 
 <template>
-  <div class="wizard-page">
-    <!-- Header -->
-    <header v-if="!showIntroScreen" class="wizard-header">
-      <div class="header-center">
-        <div class="step-indicator">
-          <span class="step-current">{{ wizard.currentStep }}</span>
-          <span class="step-divider">/</span>
-          <span class="step-total">{{ wizard.totalSteps }}</span>
-          <span class="step-name">{{ wizard.currentStepName }}</span>
-        </div>
-      </div>
-
-      <div class="header-right">
-        <button
-          class="exit-btn"
-          @click="handleExit"
-          :title="
-            (wizard.username || wizard.profile.handle || '').trim().length >= 3
-              ? 'Back to site'
-              : 'Back to dashboard'
-          "
-        >
-          Exit
-        </button>
-      </div>
+  <div class="create-profile-page">
+    <header class="create-profile-topbar">
+      <Button to="/account" color="ghost" size="compact" shape="soft">
+        <template #icon>
+          <UiIcon name="ArrowLeft" :size="16" />
+        </template>
+        Account
+      </Button>
     </header>
 
-    <!-- Progress bar -->
-    <div
-      v-if="!showIntroScreen"
-      class="progress-bar"
-      role="navigation"
-      aria-label="Wizard progress"
-    >
-      <div class="progress-track" aria-hidden="true">
-        <div class="progress-fill" :style="{ width: `${progress}%` }" />
-      </div>
-
-      <div
-        class="progress-steps"
-        :style="{
-          gridTemplateColumns: `repeat(${wizard.totalSteps}, minmax(0, 1fr))`,
-        }"
-      >
-        <button
-          v-for="step in progressSteps"
-          :key="step.name"
-          type="button"
-          class="progress-step"
-          :class="{
-            'is-current': step.isCurrent,
-            'is-visited': step.isVisited,
-            'is-jumpable': step.isJumpable,
-          }"
-          :data-step-name="step.name"
-          :aria-label="step.ariaLabel"
-          :aria-current="step.isCurrent ? 'step' : undefined"
-          :aria-disabled="step.isVisited ? undefined : 'true'"
-          :tabindex="step.isVisited ? undefined : -1"
-          @click="handleProgressStepClick(step.number, step.isVisited)"
-        >
-          <span class="progress-step-dot" aria-hidden="true">
-            <span v-if="step.isCurrent" class="progress-step-core" />
-            <span v-else-if="step.isVisited" class="progress-step-check"
-              >✓</span
-            >
-          </span>
-          <span class="progress-step-tooltip" aria-hidden="true">
-            {{ step.name }}
-          </span>
-        </button>
-      </div>
-
-      <div v-if="showImportedDraftRecovery" class="draft-recovery-banner">
-        <div class="draft-recovery-copy">
-          <strong>Imported draft saved locally.</strong>
-          <span>
-            We imported your site from
-            {{ importedDraftHost }}. You can publish, keep editing or start
-            over.
-          </span>
+    <main class="create-profile-main">
+      <section class="profile-editor" aria-labelledby="create-profile-title">
+        <div class="profile-editor__copy">
+          <h1 id="create-profile-title">Create your ME3 profile</h1>
+          <p>Name, avatar, handle, and a short bio for Soulink and ME3.</p>
         </div>
-        <button
-          class="draft-recovery-button"
-          type="button"
-          @click="clearImportedDraft"
-        >
-          Start over
-        </button>
-      </div>
-    </div>
 
-    <main v-if="showIntroScreen" class="wizard-intro">
-      <section class="intro-panel" aria-labelledby="intro-title">
-        <img
-          class="intro-image"
-          src="/me3protocol.jpg"
-          alt="ME3 protocol profile preview"
-        />
-        <div class="intro-copy">
-          <h1 id="intro-title">Create Your ME3 Profile</h1>
-          <p>
-            Your ME3 profile includes everything you might need for an effective
-            website, it's also important context for your ME3 agent.
-            <a href="https://me3.app/protocol" target="_blank" rel="noreferrer">
-              Learn more about that here </a
-            >.
+        <form class="profile-form" autocomplete="off" @submit.prevent="saveStarterProfile">
+          <p v-if="loadingExisting" class="status-row">Loading profile...</p>
+
+          <label class="field" for="profile-name">
+            <span>Name</span>
+            <input
+              id="profile-name"
+              v-model="name"
+              type="text"
+              maxlength="100"
+              placeholder="Alex Smith"
+              :disabled="loadingExisting || isPublishing"
+              required
+            />
+          </label>
+
+          <label class="field" for="profile-handle">
+            <span>Handle</span>
+            <div class="handle-input">
+              <span class="handle-prefix">@</span>
+              <input
+                id="profile-handle"
+                v-model="handle"
+                type="text"
+                maxlength="30"
+                placeholder="alex"
+                inputmode="text"
+                autocomplete="off"
+                autocapitalize="off"
+                autocorrect="off"
+                spellcheck="false"
+                :disabled="loadingExisting || isPublishing"
+                required
+              />
+            </div>
+          </label>
+
+          <p v-if="isCheckingUsername" class="field-hint">
+            Checking availability...
           </p>
-          <button
-            class="intro-button"
-            type="button"
-            @click="handleIntroGetStarted"
+          <p
+            v-else-if="
+              normalizedHandle.length >= 3 && isUsernameAvailable === true
+            "
+            class="success"
           >
-            Get started
-          </button>
-        </div>
-      </section>
-    </main>
+            @{{ normalizedHandle }} is available.
+          </p>
+          <p
+            v-else-if="
+              normalizedHandle.length >= 3 && isUsernameAvailable === false
+            "
+            class="error"
+          >
+            This handle is already taken.
+          </p>
+          <p v-else-if="usernameMessage" class="field-hint">
+            {{ usernameMessage }}
+          </p>
 
-    <!-- Main content -->
-    <main v-else class="wizard-main">
-      <!-- Step content -->
-      <div
-        class="step-content"
-        :class="{ 'publish-step': wizard.currentStep === wizard.totalSteps }"
-      >
-        <component :is="currentComponent" ref="currentComponentRef" />
+          <label class="field" for="profile-bio">
+            <span>Bio</span>
+            <textarea
+              id="profile-bio"
+              v-model="bio"
+              rows="4"
+              maxlength="160"
+              placeholder="A short note about you."
+              :disabled="loadingExisting || isPublishing"
+            />
+          </label>
 
-        <!-- Navigation -->
-        <div v-if="!isEditingPage" class="step-nav">
-          <button class="nav-btn back" @click="handleBack">
-            {{ wizard.currentStep === 1 ? "← Exit" : "← Back" }}
-          </button>
+          <WizardAvatar />
 
-          <div class="nav-actions-right">
-            <!-- Quick Publish button - only for existing sites with unpublished changes -->
-            <button
-              v-if="
-                wizard.lastPublishedAt &&
-                wizard.needsPublish &&
-                wizard.currentStep < wizard.totalSteps
-              "
-              class="nav-btn publish-quick"
-              :disabled="isQuickPublishing"
-              @click="handleQuickPublish"
+          <p v-if="publishProgress" class="field-hint">{{ publishProgress }}</p>
+          <p v-if="profileError || publishError" class="error">
+            {{ profileError || publishError }}
+          </p>
+          <p v-if="successMessage" class="success">{{ successMessage }}</p>
+
+          <div class="form-actions">
+            <Button
+              color="primary"
+              size="medium"
+              shape="soft"
+              type="submit"
+              :disabled="!canSave"
             >
-              {{ isQuickPublishing ? "Publishing..." : "Publish" }}
-            </button>
+              <template #icon>
+                <UiIcon
+                  :name="isPublishing ? 'LoaderCircle' : 'Save'"
+                  :size="17"
+                />
+              </template>
+              {{ isPublishing ? "Saving..." : "Save profile" }}
+            </Button>
 
-            <button
-              v-if="wizard.currentStep < wizard.totalSteps"
-              class="nav-btn next"
-              :disabled="!wizard.canProceed"
-              @click="handleNext"
+            <a
+              v-if="publishedUrl"
+              class="profile-link"
+              :href="publishedUrl"
+              target="_blank"
+              rel="noopener noreferrer"
             >
-              {{
-                wizard.currentStep === wizard.totalSteps - 1
-                  ? "Review →"
-                  : "Next →"
-              }}
-            </button>
+              <UiIcon name="ExternalLink" :size="15" />
+              {{ publishedUrlLabel }}
+            </a>
           </div>
-        </div>
-      </div>
+        </form>
+      </section>
 
-      <!-- Preview panel -->
-      <div v-if="showPreview" class="preview-panel">
+      <aside class="profile-preview-shell" aria-label="Profile preview">
         <ProfilePreview
-          :profile="wizard.profile"
-          :pages="wizard.pages"
-          :posts="wizard.posts"
-          :products="wizard.products"
-          :testimonials="wizard.testimonials"
-          :blogEnabled="wizard.blogEnabled"
+          :profile="starterPreviewProfile"
+          :pages="[]"
+          :posts="[]"
+          :products="[]"
+          :testimonials="[]"
+          :blogEnabled="false"
+          :shopEnabled="false"
+          :testimonialsEnabled="false"
           :blogTitle="wizard.blogTitle"
-          :shopEnabled="wizard.shopEnabled"
           :shopTitle="wizard.shopTitle"
-          :testimonialsEnabled="wizard.testimonialsEnabled"
           :testimonialsPlacement="wizard.testimonialsPlacement"
           :testimonialsTitle="wizard.testimonialsTitle"
           :vibe="wizard.vibe"
-          :activeView="previewActiveView || undefined"
+          :accentOverride="wizard.accentOverride"
           compact
         />
-      </div>
+      </aside>
     </main>
   </div>
 </template>
 
 <style scoped>
-.wizard-page {
+.create-profile-page {
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Header */
-.wizard-header {
-  display: grid;
-  grid-template-columns: 1fr minmax(0, auto) 1fr;
-  align-items: center;
-  padding: 16px 24px;
-}
-
-.header-center {
-  grid-column: 2;
-  justify-self: center;
-  display: flex;
-  justify-content: center;
-}
-
-.header-right {
-  grid-column: 3;
-  justify-self: end;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.logo {
-  display: inline-flex;
-  align-items: center;
-  text-decoration: none;
-  color: var(--color-text);
-}
-
-.logo-img {
-  display: block;
-  height: 28px;
-  width: auto;
-}
-
-.step-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
-}
-
-.step-current {
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-.step-divider,
-.step-total {
-  color: var(--color-text-muted);
-}
-
-.step-name {
-  color: var(--color-text-muted);
-  margin-left: 8px;
-}
-
-.exit-btn {
-  background: var(--color-border);
-  border: none;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text);
-  cursor: pointer;
-  padding: 6px 10px;
-  border-radius: 999px;
-  margin-right: 4px;
-}
-
-.exit-btn:hover {
-  background: var(--color-text-muted);
-  color: var(--color-bg);
-}
-
-/* Progress bar */
-.progress-bar {
-  position: relative;
-  padding: 10px 24px 6px;
-}
-
-.progress-track {
-  position: absolute;
-  left: 40px;
-  right: 40px;
-  top: 31px;
-  height: 3px;
-  background: var(--color-border);
-  border-radius: 999px;
-}
-
-.progress-fill {
-  height: 100%;
-  background: var(--color-text);
-  border-radius: 999px;
-  transition: width 0.3s ease;
-}
-
-.progress-steps {
-  position: relative;
-  display: grid;
-  align-items: center;
-}
-
-.progress-step {
-  position: relative;
-  min-height: 44px;
-  padding: 8px 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background: none;
-  border: none;
-  color: var(--color-text-muted);
-  cursor: default;
-}
-
-.progress-step.is-jumpable {
-  cursor: pointer;
-}
-
-.progress-step[aria-disabled="true"] {
-  cursor: default;
-}
-
-.progress-step-dot {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  border: 2px solid currentColor;
-  background: var(--color-bg);
-  transition:
-    transform 0.2s ease,
-    background-color 0.2s ease,
-    color 0.2s ease,
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-.progress-step.is-visited .progress-step-dot {
-  color: var(--color-text);
-}
-
-.progress-step.is-visited:not(.is-current) .progress-step-dot {
-  background: var(--color-text);
-  color: var(--color-bg);
-  border-color: var(--color-text);
-}
-
-.progress-step.is-current .progress-step-dot {
-  width: 22px;
-  height: 22px;
-  border-color: var(--color-text);
-  color: var(--color-text);
-  box-shadow: 0 0 0 4px var(--color-border);
-}
-
-.progress-step.is-jumpable:hover .progress-step-dot {
-  transform: translateY(-1px);
-}
-
-.progress-step:focus-visible {
-  outline: none;
-}
-
-.progress-step:focus-visible .progress-step-dot {
-  box-shadow: 0 0 0 4px var(--color-border);
-}
-
-.progress-step-tooltip {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 10px);
-  transform: translate(-50%, 8px);
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: var(--color-text);
-  color: var(--color-bg);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity 0.18s ease,
-    transform 0.18s ease;
-  z-index: 2;
-}
-
-.progress-step-tooltip::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: calc(100% - 2px);
-  width: 8px;
-  height: 8px;
-  background: var(--color-text);
-  transform: translateX(-50%) rotate(45deg);
-}
-
-.progress-step:hover .progress-step-tooltip,
-.progress-step:focus-visible .progress-step-tooltip {
-  opacity: 1;
-  transform: translate(-50%, 0);
-}
-
-.progress-step-core {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: currentColor;
-}
-
-.progress-step-check {
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-/* Main */
-.wizard-intro {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  width: 100%;
-  padding: 40px 24px;
-}
-
-.intro-panel {
-  width: min(100%, 550px);
-  display: grid;
-  justify-items: center;
-  gap: 24px;
-  text-align: center;
-}
-
-.intro-image {
-  display: block;
-  width: min(68vw, 270px);
-  height: min(68vw, 270px);
-  object-fit: cover;
-  border-radius: 50%;
-  box-shadow: var(--ui-shadow-md, 0 22px 70px rgba(15, 23, 42, 0.14));
-}
-
-.intro-copy {
-  display: grid;
-  justify-items: center;
-  gap: 18px;
-}
-
-.intro-copy h1 {
-  margin: 0;
+  min-height: 100dvh;
+  background: var(--ui-bg, var(--color-bg));
   color: var(--ui-text, var(--color-text));
-  font-size: clamp(34px, 4.6vw, 48px);
-  line-height: 1;
+}
+
+.create-profile-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 64px;
+  padding: 16px clamp(16px, 4vw, 40px);
+  box-sizing: border-box;
+}
+
+.create-profile-main {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: 24px clamp(16px, 4vw, 40px) 56px;
+  display: grid;
+  grid-template-columns: minmax(0, 520px) minmax(320px, 1fr);
+  gap: clamp(24px, 5vw, 56px);
+  align-items: start;
+  box-sizing: border-box;
+}
+
+.profile-editor {
+  display: grid;
+  gap: 24px;
+}
+
+.profile-editor__copy {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-editor__copy h1 {
+  margin: 0;
+  font-size: clamp(30px, 4vw, 46px);
+  line-height: 1.05;
   letter-spacing: 0;
 }
 
-.intro-copy p {
-  max-width: 550px;
+.profile-editor__copy p {
   margin: 0;
   color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 17px;
-  line-height: 1.55;
+  line-height: 1.5;
+  font-size: 16px;
 }
 
-.intro-copy a {
+.profile-form {
+  display: grid;
+  gap: 18px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field span {
+  font-size: 13px;
+  font-weight: 700;
   color: var(--ui-text, var(--color-text));
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.4;
+  padding: 12px 14px;
+}
+
+.field textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus {
+  outline: 2px solid var(--ui-accent-soft, var(--color-border));
+  outline-offset: 2px;
+  border-color: var(--ui-accent, var(--color-text));
+}
+
+.field input:disabled,
+.field textarea:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.handle-input {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface, var(--color-bg));
+  overflow: hidden;
+}
+
+.handle-prefix {
+  padding: 0 0 0 14px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-weight: 700;
+}
+
+.handle-input input {
+  border: 0;
+  border-radius: 0;
+}
+
+.handle-input:focus-within {
+  outline: 2px solid var(--ui-accent-soft, var(--color-border));
+  outline-offset: 2px;
+  border-color: var(--ui-accent, var(--color-text));
+}
+
+.handle-input:focus-within input {
+  outline: none;
+}
+
+.status-row,
+.field-hint,
+.success,
+.error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.status-row,
+.field-hint {
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.success {
+  color: var(--ui-accent-strong, #047857);
+  font-weight: 650;
+}
+
+.error {
+  color: var(--color-danger, #b91c1c);
+  font-weight: 650;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.profile-link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  color: var(--ui-text, var(--color-text));
+  font-size: 13px;
   font-weight: 700;
   text-decoration-thickness: 1px;
   text-underline-offset: 4px;
 }
 
-.intro-button {
-  min-width: 150px;
-  padding: 14px 24px;
-  border: 0;
-  border-radius: var(--ui-radius-md, 10px);
-  background: var(--ui-text, var(--color-text));
-  color: var(--ui-bg, var(--color-bg));
-  font-size: 15px;
-  font-weight: 700;
-  cursor: pointer;
-  transition:
-    transform 0.2s ease,
-    opacity 0.2s ease;
+.profile-link svg {
+  flex: 0 0 auto;
 }
 
-.intro-button:hover {
-  transform: translateY(-1px);
-  opacity: 0.92;
-}
-
-.wizard-main {
-  flex: 1;
-  display: flex;
-  gap: 20px;
-  padding: 40px;
-  max-width: 1200px;
-  margin: 0 auto;
-  width: 100%;
-}
-
-.step-content {
-  flex: 1;
-  display: flex;
-  max-width: 680px;
-  flex-direction: column;
-}
-
-.step-content.publish-step {
-  max-width: 600px;
-  margin: 0 auto;
-}
-
-.step-nav {
-  display: flex;
-  justify-content: space-between;
-  padding-top: 40px;
-}
-
-.step-content.publish-step .step-nav {
-  max-width: 600px;
-  margin: 0 auto;
-}
-
-.nav-btn {
-  padding: 14px 28px;
-  font-size: 15px;
-  font-weight: 600;
-  border: none;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.nav-btn.back {
-  background: var(--color-border);
-  color: var(--color-text);
-}
-
-.nav-btn.back:hover {
-  background: var(--color-text-muted);
-  color: var(--color-bg);
-}
-
-.nav-btn.next {
-  background: var(--color-text);
-  color: var(--color-bg);
-}
-
-.nav-btn.next:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.nav-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.nav-actions-right {
-  display: flex;
-  gap: 12px;
-}
-
-.nav-btn.publish-quick {
-  background: transparent;
-  border: 2px solid var(--color-text);
-  color: var(--color-text);
-}
-
-.nav-btn.publish-quick:hover:not(:disabled) {
-  background: var(--color-text);
-  color: var(--color-bg);
-}
-
-/* Preview panel */
-.preview-panel {
-  flex-shrink: 0;
+.profile-preview-shell {
   position: sticky;
-  top: 40px;
-  align-self: flex-start;
-  margin: 0 auto;
-  width: 400px;
+  top: 24px;
+  min-width: 0;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-lg, 16px);
+  background: var(--ui-surface, var(--color-bg));
+  overflow: hidden;
 }
 
-/* Draft recovery banner */
-.draft-recovery-banner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+:deep(.step-avatar) {
+  display: grid;
   gap: 16px;
-  margin: 16px 24px 0;
-  padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid rgba(59, 130, 246, 0.22);
-  background: rgba(59, 130, 246, 0.08);
-  color: var(--color-text);
 }
 
-.draft-recovery-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 14px;
-  line-height: 1.45;
+:deep(.step-avatar h2) {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.25;
+  letter-spacing: 0;
 }
 
-.draft-recovery-copy strong {
-  font-size: 14px;
-}
-
-.draft-recovery-button {
-  flex-shrink: 0;
-  padding: 10px 14px;
-  border: 1px solid rgba(59, 130, 246, 0.35);
-  border-radius: 10px;
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.draft-recovery-button:hover {
-  background: rgba(59, 130, 246, 0.06);
-}
-
-/* Responsive */
 @media (max-width: 900px) {
-  .wizard-main {
-    flex-direction: column;
-    padding: 24px;
+  .create-profile-main {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .step-content {
-    max-width: 100%;
-  }
-
-  .preview-panel {
-    display: none;
+  .profile-preview-shell {
+    position: static;
   }
 }
 
-@media (max-width: 640px) {
-  .wizard-header {
-    padding: 14px 16px;
+@media (max-width: 560px) {
+  .create-profile-topbar {
+    min-height: 56px;
   }
 
-  .step-indicator {
-    font-size: 13px;
+  .create-profile-main {
+    padding-top: 12px;
   }
 
-  .step-name {
-    display: none;
+  .form-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
-  .progress-bar {
-    padding: 8px 14px 4px;
-  }
-
-  .progress-track {
-    left: 26px;
-    right: 26px;
-    top: 27px;
-  }
-
-  .progress-step-dot {
-    width: 16px;
-    height: 16px;
-  }
-
-  .progress-step.is-current .progress-step-dot {
-    width: 20px;
-    height: 20px;
-  }
-
-  .progress-step-tooltip {
-    display: none;
-  }
-
-  .wizard-intro {
-    padding: 28px 18px;
-  }
-
-  .intro-panel {
-    gap: 22px;
-  }
-
-  .intro-image {
-    width: min(70vw, 230px);
-    height: min(70vw, 230px);
-  }
-
-  .intro-copy h1 {
-    font-size: 34px;
-  }
-
-  .intro-copy p {
-    font-size: 16px;
+  .profile-link {
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 }
 </style>

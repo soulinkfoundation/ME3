@@ -473,6 +473,26 @@ function createEnv(): Env & {
                 state.installSecrets.delete(values[0] as string);
               }
 
+              if (sql.includes("INSERT INTO sites")) {
+                const username = values[2] as string;
+                if (state.sites.some((site) => site.username === username)) {
+                  throw new Error("UNIQUE constraint failed: sites.username");
+                }
+                state.sites.push({
+                  id: values[0] as string,
+                  user_id: values[1] as string,
+                  username,
+                  site_type: (values[3] as DbSite["site_type"]) || "profile",
+                  template_id: (values[4] as string | null) || null,
+                  custom_domain: null,
+                  custom_domain_status: null,
+                  custom_domain_cf_id: null,
+                  created_at: "2026-06-05T10:00:00Z",
+                  updated_at: "2026-06-05T10:00:00Z",
+                  published_at: null,
+                });
+              }
+
               if (sql.includes("INSERT INTO assistant_threads")) {
                 state.assistantThreads.push({
                   id: values[0] as string,
@@ -576,6 +596,26 @@ function createEnv(): Env & {
               if (sql.includes("DELETE FROM site_files")) {
                 state.siteFiles = state.siteFiles.filter(
                   (file) => !(file.site_id === values[0] && file.path === values[1]),
+                );
+              }
+
+              if (sql.includes("UPDATE sites") && sql.includes("SET username = ?")) {
+                const username = values[0] as string;
+                const siteId = values[2] as string;
+                if (state.sites.some((site) => site.id !== siteId && site.username === username)) {
+                  throw new Error("UNIQUE constraint failed: sites.username");
+                }
+                state.sites = state.sites.map((site) =>
+                  site.id === siteId && site.user_id === values[3]
+                    ? {
+                        ...site,
+                        username,
+                        site_type: "profile",
+                        template_id: (values[1] as string | null) || site.template_id,
+                        published_at: null,
+                        updated_at: "2026-06-05T10:00:00Z",
+                      }
+                    : site,
                 );
               }
 
@@ -2031,6 +2071,11 @@ function createEnv(): Env & {
                 ) as T | null;
               }
               if (sql.includes("FROM sites")) {
+                if (sql.includes("WHERE id = ?") && values.length === 1) {
+                  return (
+                    state.sites.find((site) => site.id === values[0]) || null
+                  ) as T | null;
+                }
                 if (values.length === 1) {
                   return (
                     state.sites.find((site) => site.username === values[0]) ||
@@ -7798,6 +7843,55 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(400);
     expect(body.error).toContain("coming soon");
+  });
+
+  it("renames an existing profile site when creating a replacement profile handle", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.sites.push({
+      id: "site-profile",
+      user_id: "owner",
+      username: "old-handle",
+      site_type: "profile",
+      template_id: "me3",
+      custom_domain: null,
+      custom_domain_status: null,
+      custom_domain_cf_id: null,
+      created_at: "2026-06-05T09:00:00Z",
+      updated_at: "2026-06-05T09:00:00Z",
+      published_at: "2026-06-05T09:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/sites", {
+        method: "POST",
+        headers: {
+          Cookie: session,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: "new-handle",
+          siteType: "profile",
+          renameFromUsername: "old-handle",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { site: DbSite };
+
+    expect(response.status).toBe(200);
+    expect(body.site).toMatchObject({
+      id: "site-profile",
+      username: "new-handle",
+      site_type: "profile",
+      published_at: null,
+    });
+    expect(env.sites).toHaveLength(1);
+    expect(env.sites[0]).toMatchObject({
+      id: "site-profile",
+      username: "new-handle",
+      published_at: null,
+    });
   });
 
   it("rejects landing-page site creation while the plugin is coming soon", async () => {
