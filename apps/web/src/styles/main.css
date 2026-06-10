@@ -4,7 +4,7 @@
   --brand-primary: oklch(59.02% 0.146 172.62);
   --brand-primary-strong: color-mix(in oklab, var(--brand-primary), black 10%);
   --brand-primary-soft: color-mix(in oklab, var(--brand-primary), white 85%);
-  --color-bg: #f8faf7;
+  --color-bg: #ffffff;
   --color-bg-subtle: #f6f7f7;
   --color-bg-muted: #eef1f0;
   --color-text: #232428;
