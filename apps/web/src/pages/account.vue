@@ -290,10 +290,6 @@ const timezoneInput = ref("");
 const savedTimezoneInput = ref("");
 const message = ref<string | null>(null);
 const error = ref<string | null>(null);
-const showDeleteModal = ref(false);
-const deleteConfirmInput = ref("");
-const deleteLoading = ref(false);
-const deleteError = ref<string | null>(null);
 const supportedTimeZones = listSupportedTimeZones();
 const mailboxLoading = ref(false);
 const mailboxSaving = ref(false);
@@ -1711,17 +1707,6 @@ async function logout() {
   router.push("/");
 }
 
-function openDeleteModal() {
-  deleteConfirmInput.value = "";
-  deleteError.value = null;
-  showDeleteModal.value = true;
-}
-
-function closeDeleteModal() {
-  if (deleteLoading.value) return;
-  showDeleteModal.value = false;
-}
-
 async function scrollToRouteHash() {
   if (!route.hash) return;
   await nextTick();
@@ -1730,25 +1715,6 @@ async function scrollToRouteHash() {
       .getElementById(route.hash.slice(1))
       ?.scrollIntoView({ block: "start" });
   });
-}
-
-async function deleteAccount() {
-  if (deleteLoading.value) return;
-  if (deleteConfirmInput.value.trim() !== "DELETE") {
-    deleteError.value = 'Type "DELETE" to confirm.';
-    return;
-  }
-  deleteLoading.value = true;
-  deleteError.value = null;
-  try {
-    await api.post("/account/delete", {});
-    await auth.logout();
-    router.push("/");
-  } catch (e: any) {
-    deleteError.value = e.message || "Failed to delete account.";
-  } finally {
-    deleteLoading.value = false;
-  }
 }
 
 onMounted(async () => {
@@ -2763,22 +2729,6 @@ onMounted(async () => {
             </div>
           </div>
         </section>
-
-        <section class="danger-section advanced-section">
-          <h2>Danger zone</h2>
-          <div class="danger-card">
-            <div>
-              <strong>Delete your account</strong>
-              <p>
-                This will permanently delete your ME3 Core account, all of your
-                sites, and associated data. This action cannot be undone.
-              </p>
-            </div>
-            <Button color="danger" shape="soft" size="compact" type="button" @click="openDeleteModal">
-              Delete
-            </Button>
-          </div>
-        </section>
       </template>
     </main>
 
@@ -3027,79 +2977,6 @@ onMounted(async () => {
       </div>
     </Teleport>
 
-    <div
-      v-if="showDeleteModal"
-      class="modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Delete account"
-      @click.self="closeDeleteModal"
-    >
-      <div class="modal">
-        <div class="modal-header">
-          <h2>Delete account</h2>
-          <Button
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            class="modal-close"
-            type="button"
-            aria-label="Close"
-            title="Close"
-            :disabled="deleteLoading"
-            @click="closeDeleteModal"
-          >
-            <UiIcon name="X" :size="18" aria-hidden="true" />
-          </Button>
-        </div>
-
-        <p class="hint">
-          This will permanently delete your ME3 Core account, all of your sites,
-          and associated data. This cannot be undone.
-        </p>
-
-        <div class="delete-confirm">
-          <p class="confirm-text">
-            To confirm, type
-            <code>DELETE</code>
-            below.
-          </p>
-          <input
-            v-model="deleteConfirmInput"
-            class="input"
-            type="text"
-            placeholder="DELETE"
-            :disabled="deleteLoading"
-          />
-        </div>
-
-        <div class="modal-actions">
-          <Button
-            color="secondary"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="deleteLoading"
-            @click="closeDeleteModal"
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="deleteLoading || deleteConfirmInput.trim() !== 'DELETE'"
-            @click="deleteAccount"
-          >
-            {{ deleteLoading ? "Deleting..." : "Delete account" }}
-          </Button>
-        </div>
-
-        <p v-if="deleteError" class="error">{{ deleteError }}</p>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -3259,10 +3136,6 @@ h1 {
 
 .advanced-section {
   order: 4;
-}
-
-.danger-section.advanced-section {
-  order: 5;
 }
 
 .card {
@@ -3982,39 +3855,6 @@ h1 {
   font-weight: 600;
 }
 
-.danger-section {
-  margin-top: 32px;
-}
-
-.danger-section h2 {
-  margin: 0 0 12px;
-  color: #e53935;
-  font-size: 18px;
-}
-
-.danger-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px;
-  border: 1px solid color-mix(in oklab, #e53935 34%, var(--color-border));
-  border-radius: 12px;
-  background: color-mix(in oklab, #e53935 12%, var(--color-bg-subtle));
-}
-
-.danger-card strong {
-  color: var(--color-text);
-  font-size: 14px;
-}
-
-.danger-card p {
-  margin: 2px 0 0;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -4053,23 +3893,6 @@ h1 {
   font-size: 24px;
   line-height: 1;
   cursor: pointer;
-}
-
-.delete-confirm {
-  display: grid;
-  gap: 8px;
-  margin: 16px 0;
-}
-
-.confirm-text {
-  margin: 0;
-  font-size: 14px;
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .local-executor-modal {
@@ -4179,7 +4002,6 @@ h1 {
     padding: 16px;
   }
 
-  .danger-card,
   .email-row,
   .connection-line {
     align-items: flex-start;
@@ -4236,8 +4058,7 @@ h1 {
     width: 100%;
   }
 
-  .email-row .button,
-  .danger-card .button {
+  .email-row .button {
     width: 100%;
   }
 }
