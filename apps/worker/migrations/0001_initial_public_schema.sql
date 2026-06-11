@@ -278,6 +278,16 @@ CREATE TABLE assistant_threads (
   FOREIGN KEY (owner_id) REFERENCES owner_profile(id),
   FOREIGN KEY (project_id) REFERENCES mission_projects(id) ON DELETE SET NULL
 );
+CREATE TABLE auth_rate_limits (
+  key TEXT PRIMARY KEY,
+  route TEXT NOT NULL,
+  subject_hash TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  window_started_at TEXT NOT NULL,
+  locked_until TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE booking_holds (
   id TEXT PRIMARY KEY,
   site_id TEXT NOT NULL,
@@ -1296,6 +1306,10 @@ CREATE INDEX idx_assistant_threads_owner_last_message
   ON assistant_threads(owner_id, last_message_at DESC);
 CREATE INDEX idx_assistant_threads_owner_status_updated
   ON assistant_threads(owner_id, status, updated_at DESC);
+CREATE INDEX idx_auth_rate_limits_locked_until
+  ON auth_rate_limits(locked_until);
+CREATE INDEX idx_auth_rate_limits_route_subject
+  ON auth_rate_limits(route, subject_hash);
 CREATE INDEX idx_booking_holds_expires_at
   ON booking_holds(expires_at);
 CREATE INDEX idx_booking_holds_site_id
