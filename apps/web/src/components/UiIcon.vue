@@ -1,10 +1,21 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, shallowRef, watch } from "vue";
+import type { IconNode } from "lucide";
 import {
   UI_ICONS,
+  isCoreUiIconName,
   resolveUiIconName,
   type UiIconName,
 } from "../utils/icons";
+
+let iconCatalogPromise: Promise<typeof import("../utils/iconCatalog")> | null = null;
+
+function loadIconCatalog() {
+  if (!iconCatalogPromise) {
+    iconCatalogPromise = import("../utils/iconCatalog");
+  }
+  return iconCatalogPromise;
+}
 
 const props = withDefaults(
   defineProps<{
@@ -16,9 +27,30 @@ const props = withDefaults(
 );
 
 const resolvedName = computed(() => resolveUiIconName(props.name));
-const iconNodes = computed(() =>
-  resolvedName.value ? UI_ICONS[resolvedName.value] : null,
+const catalogIconNodes = shallowRef<IconNode | null>(null);
+let catalogRequestId = 0;
+
+watch(
+  resolvedName,
+  async (name) => {
+    const requestId = ++catalogRequestId;
+    catalogIconNodes.value = null;
+
+    if (!name || isCoreUiIconName(name)) return;
+
+    const { getCatalogIconNode } = await loadIconCatalog();
+    if (requestId === catalogRequestId) {
+      catalogIconNodes.value = getCatalogIconNode(name);
+    }
+  },
+  { immediate: true },
 );
+
+const iconNodes = computed(() => {
+  const name = resolvedName.value;
+  if (!name) return null;
+  return isCoreUiIconName(name) ? UI_ICONS[name] : catalogIconNodes.value;
+});
 </script>
 
 <template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, shallowRef } from "vue";
 import EmojiPicker from "vue3-emoji-picker";
 import "vue3-emoji-picker/css";
 import UiIcon from "./UiIcon.vue";
@@ -10,6 +10,8 @@ import {
   resolveUiIconName,
   type UiIconName,
 } from "../utils/icons";
+
+type IconMeta = { label: string; keywords: string[] };
 
 const props = defineProps<{
   modelValue: string;
@@ -23,11 +25,37 @@ const emit = defineEmits<{
 const activeTab = ref<"icons" | "emoji">("icons");
 const showPicker = ref(false);
 const iconSearch = ref("");
+const iconNames = shallowRef<UiIconName[]>([...UI_ICON_NAMES]);
+const iconMeta = shallowRef<Record<string, IconMeta>>({ ...UI_ICON_META });
+let iconCatalogPromise: Promise<void> | null = null;
 
 // Check if current value is an icon or emoji
 const currentIsIcon = computed(() => isUiIconName(props.modelValue));
 const selectedIconName = computed(() => resolveUiIconName(props.modelValue));
 const hasValue = computed(() => props.modelValue && props.modelValue.trim());
+
+function fallbackIconMeta(name: string): IconMeta {
+  return { label: name, keywords: [] };
+}
+
+function getIconMeta(name: string): IconMeta {
+  return iconMeta.value[name] || fallbackIconMeta(name);
+}
+
+function loadIconCatalog() {
+  if (!iconCatalogPromise) {
+    iconCatalogPromise = import("../utils/iconCatalog").then((catalog) => {
+      iconNames.value = [...catalog.CATALOG_ICON_NAMES];
+      iconMeta.value = catalog.CATALOG_ICON_META;
+    });
+  }
+  return iconCatalogPromise;
+}
+
+function showIconTab() {
+  activeTab.value = "icons";
+  void loadIconCatalog();
+}
 
 function selectIcon(name: UiIconName) {
   emit("update:modelValue", name);
@@ -46,6 +74,9 @@ function clearIcon() {
 
 function togglePicker() {
   showPicker.value = !showPicker.value;
+  if (showPicker.value && activeTab.value === "icons") {
+    void loadIconCatalog();
+  }
   if (!showPicker.value) {
     iconSearch.value = "";
   }
@@ -58,11 +89,11 @@ function closePicker() {
 
 const filteredIconNames = computed(() => {
   const query = iconSearch.value.trim().toLowerCase();
-  if (!query) return UI_ICON_NAMES;
+  if (!query) return iconNames.value;
 
   const terms = query.split(/\s+/).filter(Boolean);
-  return UI_ICON_NAMES.filter((name) => {
-    const meta = UI_ICON_META[name];
+  return iconNames.value.filter((name) => {
+    const meta = getIconMeta(name);
     const haystack = [
       name,
       meta.label,
@@ -141,7 +172,7 @@ const filteredIconNames = computed(() => {
             type="button"
             class="tab-btn"
             :class="{ active: activeTab === 'icons' }"
-            @click="activeTab = 'icons'"
+            @click="showIconTab"
           >
             Icons
           </button>
@@ -192,7 +223,7 @@ const filteredIconNames = computed(() => {
               type="button"
               class="icon-btn"
               :class="{ selected: selectedIconName === name }"
-              :title="UI_ICON_META[name].label"
+              :title="getIconMeta(name).label"
               @click="selectIcon(name)"
             >
               <UiIcon :name="name" :size="20" />
