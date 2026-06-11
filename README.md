@@ -1,4 +1,6 @@
-# 🤖 ME3 is a free, open-source personal OS and AI assistant
+# 🤖 ME3
+
+**A free, open-source personal OS and AI assistant**
 
 Ready to take ownership of your digital life? ME too!
 
