@@ -46,10 +46,20 @@ console.log(
   `Configured DB -> ${dbName}${databaseId === D1_PLACEHOLDER ? "" : ` (${databaseId})`}`,
 );
 
-if (!args.skipR2) {
-  if (!args.skipCreate) ensureR2Bucket(bucketName);
-  config = upsertR2Binding(config, bucketName);
-  console.log(`Configured SITE_ASSETS -> ${bucketName}`);
+if (args.skipR2) {
+  config = removeR2Binding(config);
+  console.log("Skipped SITE_ASSETS; site media will use D1 storage until R2 is configured.");
+} else {
+  const r2Ready = args.skipCreate || ensureR2Bucket(bucketName);
+  if (!r2Ready) {
+    config = removeR2Binding(config);
+    console.warn(
+      "Continuing without SITE_ASSETS; site media will use D1 storage until R2 is configured.",
+    );
+  } else {
+    config = upsertR2Binding(config, bucketName);
+    console.log(`Configured SITE_ASSETS -> ${bucketName}`);
+  }
 }
 
 if (config !== originalConfig) {
@@ -107,13 +117,14 @@ function printHelp() {
 
 Creates or reuses the Cloudflare resources ME3 needs for deploy, then writes
 their bindings into wrangler.toml. Resource names are derived from the Worker
-project name so Deploy to Cloudflare can keep the setup form small.
+project name so Deploy to Cloudflare can keep the setup form small. If R2
+is not available yet, deploy continues with D1 media storage.
 
 Options:
   --config <path>   Wrangler config path (default: wrangler.toml)
   --db-name <name>  D1 database name
   --bucket <name>   R2 bucket name
-  --skip-r2         Do not create or configure SITE_ASSETS
+  --skip-r2         Remove SITE_ASSETS and use D1 media storage
   --skip-create     Update config only; do not call Cloudflare APIs
   --help, -h        Show this help
 `);
@@ -162,14 +173,28 @@ function findD1DatabaseId(databaseName) {
 }
 
 function ensureR2Bucket(bucketName) {
-  runWrangler(["r2", "bucket", "create", bucketName], {
+  const result = spawnWrangler(["r2", "bucket", "create", bucketName], {
     allowAlreadyExists: true,
     quiet: true,
-    failureMessage: `Could not create or reuse R2 bucket "${bucketName}".`,
   });
+
+  if (result.ok) return true;
+
+  console.warn(`Could not create or reuse R2 bucket "${bucketName}".`);
+  console.warn(
+    "Enable R2 in Cloudflare later, then run `pnpm storage:r2:provision` and redeploy to upgrade media storage.",
+  );
+  return false;
 }
 
 function runWrangler(commandArgs, options = {}) {
+  const result = spawnWrangler(commandArgs, options);
+  if (result.ok) return result.text;
+
+  fail(options.failureMessage || `Wrangler command failed: wrangler ${commandArgs.join(" ")}`);
+}
+
+function spawnWrangler(commandArgs, options = {}) {
   const result = spawnSync("pnpm", ["exec", "wrangler", ...commandArgs, "--config", configPath], {
     encoding: "utf8",
   });
@@ -178,11 +203,10 @@ function runWrangler(commandArgs, options = {}) {
   if (!options.quiet && result.stdout) process.stdout.write(result.stdout);
   if (!options.quiet && result.stderr) process.stderr.write(result.stderr);
 
-  if (result.status === 0 || (options.allowAlreadyExists && /already exists/i.test(text))) {
-    return text;
-  }
-
-  fail(options.failureMessage || `Wrangler command failed: wrangler ${commandArgs.join(" ")}`);
+  return {
+    ok: result.status === 0 || (options.allowAlreadyExists && /already exists/i.test(text)),
+    text,
+  };
 }
 
 function upsertD1Binding(value, databaseName, databaseId) {
@@ -229,6 +253,28 @@ function upsertR2Binding(value, bucketName) {
     ].join("\n"),
     ["[triggers]", "[assets]"],
   );
+}
+
+function removeR2Binding(value) {
+  const block = getTomlArrayBlock(value, "r2_buckets", "SITE_ASSETS");
+  if (!block) return removeOrphanedR2Comment(value);
+
+  const coreComment = "\n# Core file storage for site media and future plugin-owned files.";
+  const blockStart = value.indexOf(block);
+  const commentStart =
+    blockStart >= coreComment.length &&
+    value.slice(blockStart - coreComment.length, blockStart) === coreComment
+      ? blockStart - coreComment.length
+      : blockStart;
+
+  return removeOrphanedR2Comment(
+    `${value.slice(0, commentStart)}${value.slice(blockStart + block.length)}`,
+  );
+}
+
+function removeOrphanedR2Comment(value) {
+  if (getTomlArrayBlock(value, "r2_buckets", "SITE_ASSETS")) return value;
+  return value.replace(/\n# Core file storage for site media and future plugin-owned files\.\n/g, "\n");
 }
 
 function insertTomlBlock(value, block, beforeHeaders) {
