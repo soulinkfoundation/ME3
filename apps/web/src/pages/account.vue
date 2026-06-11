@@ -8,6 +8,7 @@ import Button from "../components/Button.vue";
 import PluginList from "../components/PluginList.vue";
 import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
+import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
 import { useTheme, type ThemePreference } from "../composables/useTheme";
 import { useAuthStore } from "../stores/auth";
@@ -356,6 +357,9 @@ const commerceError = ref<string | null>(null);
 const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
   null,
 );
+const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
+  null,
+);
 
 const openSection = ref({
   advanced: false,
@@ -547,6 +551,25 @@ const soulinkStatusLabel = computed(() => {
 
 const soulinkStatusClass = computed(() => {
   const panel = soulinkPanelRef.value;
+  if (!panel) return "pending_setup";
+  if (!panel.available || !panel.connection) return "pending_setup";
+  if (panel.connection.status === "disconnected") return "paused";
+  return panel.connection.status;
+});
+
+const telegramStatusLabel = computed(() => {
+  const panel = telegramPanelRef.value;
+  if (!panel) return "";
+  if (!panel.available) return "Not available";
+  if (!panel.configured) return "Needs setup";
+  if (!panel.connection) return "Not connected";
+  if (panel.connection.status === "active") return "Connected";
+  if (panel.connection.status === "disconnected") return "Disconnected";
+  return "Pending setup";
+});
+
+const telegramStatusClass = computed(() => {
+  const panel = telegramPanelRef.value;
   if (!panel) return "pending_setup";
   if (!panel.available || !panel.connection) return "pending_setup";
   if (panel.connection.status === "disconnected") return "paused";
@@ -2318,7 +2341,35 @@ onMounted(async () => {
                         ref="soulinkPanelRef"
                         variant="inline"
                         :auto-prepare-when-not-connected="
-                          route.query.section === 'soulink' ||
+                          route.query.section === 'soulink'
+                        "
+                      />
+                    </div>
+                  </div>
+
+                  <div
+                    class="connection-line"
+                    :class="{
+                      'connection-line--connected':
+                        telegramPanelRef?.connection?.status === 'active',
+                    }"
+                  >
+                    <div class="connection-line__copy">
+                      <span class="connection-line__title">Telegram</span>
+                      <p class="connection-line__description">
+                        Connect your own bot for assistant messages.
+                      </p>
+                    </div>
+                    <div class="connection-line__end">
+                      <StatusBadge
+                        v-if="telegramPanelRef?.available"
+                        :tone="telegramStatusClass"
+                      >
+                        {{ telegramStatusLabel }}
+                      </StatusBadge>
+                      <TelegramConnectPanel
+                        ref="telegramPanelRef"
+                        :auto-prepare-when-not-connected="
                           route.query.section === 'telegram'
                         "
                       />
@@ -2342,6 +2393,9 @@ onMounted(async () => {
                 </template>
                 <p v-if="soulinkPanelRef?.error" class="error">
                   {{ soulinkPanelRef.error }}
+                </p>
+                <p v-if="telegramPanelRef?.error" class="error">
+                  {{ telegramPanelRef.error }}
                 </p>
               </section>
 

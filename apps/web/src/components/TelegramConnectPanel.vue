@@ -407,6 +407,7 @@ defineExpose({
   available,
   configured,
   connection,
+  error,
   loadTelegram,
   setupTelegram,
 });

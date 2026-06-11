@@ -72,6 +72,7 @@ const pluginDisplayOrder = [
   "me3.calendar",
   "me3.accounts",
   "me3.local-executor",
+  "me3.telegram",
   "me3.landing-pages",
   "me3.social-publishing",
 ];
@@ -88,6 +89,7 @@ const pluginNavEmojis: Record<string, string> = {
   "me3.social-publishing": "📣",
   "me3.accounts": "💰",
   "me3.landing-pages": "🌐",
+  "me3.telegram": "💬",
 };
 
 export function pluginInfoText(plugin: PluginRecord) {

@@ -19,6 +19,7 @@
     "@me3-core/plugin-local-executor": "workspace:*",
     "@me3-core/plugin-mission-control": "workspace:*",
     "@me3-core/plugin-social-publishing": "workspace:*",
+    "@me3-core/plugin-telegram": "workspace:*",
     "@me3/knowledge": "workspace:*",
     "hono": "^4.3.0",
     "ical.js": "^2.2.1",

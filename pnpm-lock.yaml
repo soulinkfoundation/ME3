@@ -165,6 +165,9 @@ importers:
       '@me3-core/plugin-social-publishing':
         specifier: workspace:*
         version: link:../../packages/social-publishing
+      '@me3-core/plugin-telegram':
+        specifier: workspace:*
+        version: link:../../packages/telegram
       '@me3/knowledge':
         specifier: workspace:*
         version: link:../../packages/knowledge
@@ -266,6 +269,12 @@ importers:
         version: 5.9.3
 
   packages/social-publishing:
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+
+  packages/telegram:
     devDependencies:
       typescript:
         specifier: ^5.3.3
