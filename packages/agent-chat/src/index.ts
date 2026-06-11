@@ -349,6 +349,7 @@ type OwnerProfileRow = {
   bio: string | null;
   timezone: string | null;
   locale?: string | null;
+  assistant_name?: string | null;
 };
 
 type AiCredentialRow = {
@@ -3511,7 +3512,7 @@ async function getOwnerProfile(
 ): Promise<OwnerProfileRow | null> {
   try {
     return env.DB.prepare(
-      `SELECT id, email, name, username, bio, timezone
+      `SELECT id, email, name, username, bio, timezone, assistant_name
        FROM owner_profile
        WHERE id = ?
        LIMIT 1`,
@@ -3561,8 +3562,11 @@ function buildChatMessages(
   agentContextPrompt: string | null,
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
   const ownerName = owner?.name?.trim() || owner?.username?.trim() || "the owner";
+  const assistantName = normalizeAssistantDisplayName(owner?.assistant_name);
   const system = [
-    "You are ME3 Core, a concise personal/business assistant running inside the owner's private ME3 Core install.",
+    "You are a concise personal/business assistant running inside the owner's private ME3 Core install.",
+    `Your assistant display name is ${JSON.stringify(assistantName)}.`,
+    "If asked who you are or what your name is, use the assistant display name.",
     `The owner is ${ownerName}.`,
     owner?.bio ? `Owner profile context: ${owner.bio}` : null,
     owner?.timezone ? `Owner timezone: ${owner.timezone}` : null,
@@ -3580,6 +3584,17 @@ function buildChatMessages(
     ...recent,
     { role: "user", content: messageText },
   ];
+}
+
+function normalizeAssistantDisplayName(value: unknown): string {
+  const normalized = normalizeNullableText(value);
+  if (!normalized) return "ME3";
+  const safe = normalized
+    .replace(/[\u0000-\u001f\u007f{}\[\]<>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 48);
+  return safe || "ME3";
 }
 
 function attachAgentContextToResponse(

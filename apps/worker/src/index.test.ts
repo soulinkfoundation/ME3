@@ -445,6 +445,7 @@ function createEnv(): Env & {
                     avatar_url: existingOwner.avatar_url,
                     timezone: existingOwner.timezone,
                     locale: existingOwner.locale,
+                    assistant_name: existingOwner.assistant_name,
                     password_hash: existingOwner.password_hash,
                   };
                 } else {
@@ -457,6 +458,7 @@ function createEnv(): Env & {
                     avatar_url: values[5] as string | null,
                     timezone: values[6] as string | null,
                     locale: null,
+                    assistant_name: null,
                     password_hash: values[7] as string | null,
                   };
                 }
@@ -470,6 +472,10 @@ function createEnv(): Env & {
                 let valueIndex = 0;
                 if (sql.includes("timezone = ?")) {
                   state.owner.timezone = values[valueIndex] as string | null;
+                  valueIndex += 1;
+                }
+                if (sql.includes("assistant_name = ?")) {
+                  state.owner.assistant_name = values[valueIndex] as string | null;
                   valueIndex += 1;
                 }
                 if (sql.includes("locale = ?")) {
@@ -4409,6 +4415,74 @@ describe("ME3 Core Worker auth", () => {
         },
       ],
     });
+  });
+
+  it("saves and clears the assistant display name", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const initialResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/settings", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const initialPayload = (await initialResponse.json()) as {
+      assistantName: string | null;
+      displayName: string;
+    };
+
+    expect(initialResponse.status).toBe(200);
+    expect(initialPayload).toEqual({
+      assistantName: null,
+      displayName: "ME3",
+    });
+
+    const saveResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ assistantName: "  Atlas   Prime  " }),
+      }),
+      env,
+    );
+    const savePayload = (await saveResponse.json()) as {
+      assistantName: string | null;
+      displayName: string;
+    };
+
+    expect(saveResponse.status).toBe(200);
+    expect(savePayload).toEqual({
+      assistantName: "Atlas Prime",
+      displayName: "Atlas Prime",
+    });
+    expect(env.owner?.assistant_name).toBe("Atlas Prime");
+
+    const clearResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ assistantName: "" }),
+      }),
+      env,
+    );
+    const clearPayload = (await clearResponse.json()) as {
+      assistantName: string | null;
+      displayName: string;
+    };
+
+    expect(clearResponse.status).toBe(200);
+    expect(clearPayload).toEqual({
+      assistantName: null,
+      displayName: "ME3",
+    });
+    expect(env.owner?.assistant_name).toBeNull();
   });
 
   it("drafts and publishes profile site updates from assistant approval", async () => {

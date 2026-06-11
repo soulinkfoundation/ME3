@@ -491,6 +491,10 @@ type AssistantSourceViewItem = MissionContextSource & {
 };
 type MissionMemoryResponse = { memory: MissionMemory[] };
 type MissionSourcesResponse = { sources: MissionContextSource[] };
+type AssistantSettingsResponse = {
+  assistantName: string | null;
+  displayName: string;
+};
 type AssistantSettingsSection = "context" | "activity";
 type AssistantSkill = {
   id: string;
@@ -622,6 +626,13 @@ const collapsedAssistantProjectIds = ref(new Set<string>());
 const assistantSettingsModalOpen = ref(false);
 const assistantSettingsSection = ref<AssistantSettingsSection>("context");
 const assistantSettingsError = ref("");
+const assistantSettings = ref<AssistantSettingsResponse>({
+  assistantName: null,
+  displayName: "ME3",
+});
+const assistantNameDraft = ref("");
+const assistantNameSaving = ref(false);
+const assistantNameNotice = ref("");
 const assistantSkillsModalOpen = ref(false);
 const assistantSkillUrlDraft = ref("");
 const assistantSkills = ref<AssistantSkill[]>([]);
@@ -723,6 +734,7 @@ const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
 const assistantTextAttachmentMaxBytes = 1_000_000;
 const assistantAttachmentTextBudget = 48_000;
+const assistantNameMaxLength = 48;
 
 const sortedJobs = computed(() =>
   [...jobs.value].sort((a, b) => {
@@ -975,6 +987,24 @@ const assistantSourceRows = computed<AssistantSourceViewItem[]>(() =>
 );
 const assistantContextItemCount = computed(
   () => assistantMemory.value.length + assistantSourceRows.value.length,
+);
+const normalizedAssistantNameDraft = computed(() =>
+  assistantNameDraft.value.replace(/\s+/g, " ").trim(),
+);
+const savedAssistantName = computed(
+  () => assistantSettings.value.assistantName || "",
+);
+const assistantNameChanged = computed(
+  () => normalizedAssistantNameDraft.value !== savedAssistantName.value,
+);
+const assistantNameInvalid = computed(
+  () => normalizedAssistantNameDraft.value.length > assistantNameMaxLength,
+);
+const canSaveAssistantName = computed(
+  () =>
+    assistantNameChanged.value &&
+    !assistantNameInvalid.value &&
+    !assistantNameSaving.value,
 );
 const assistantActivityItems = computed<AssistantActivityViewItem[]>(() => {
   const visibleRunIds = new Set(
@@ -1504,10 +1534,13 @@ async function loadAssistantContext() {
   assistantContextLoading.value = true;
   assistantSettingsError.value = "";
   try {
-    const [memoryResponse, sourceResponse] = await Promise.all([
+    const [settingsResponse, memoryResponse, sourceResponse] = await Promise.all([
+      api.get<AssistantSettingsResponse>("/assistant/settings"),
       api.get<MissionMemoryResponse>("/mission-control/memory"),
       api.get<MissionSourcesResponse>("/mission-control/context-sources"),
     ]);
+    assistantSettings.value = settingsResponse;
+    assistantNameDraft.value = settingsResponse.assistantName || "";
     assistantMemory.value = memoryResponse.memory || [];
     assistantSources.value = sourceResponse.sources || [];
   } catch (err) {
@@ -1517,6 +1550,29 @@ async function loadAssistantContext() {
     );
   } finally {
     assistantContextLoading.value = false;
+  }
+}
+
+async function saveAssistantName() {
+  if (!canSaveAssistantName.value) return;
+  assistantNameSaving.value = true;
+  assistantSettingsError.value = "";
+  assistantNameNotice.value = "";
+  try {
+    const response = await api.put<AssistantSettingsResponse>("/assistant/settings", {
+      assistantName: normalizedAssistantNameDraft.value || null,
+    });
+    assistantSettings.value = response;
+    assistantNameDraft.value = response.assistantName || "";
+    assistantNameNotice.value = "Name saved.";
+    toastSuccess("Assistant name saved");
+  } catch (err) {
+    assistantSettingsError.value = messageFromUnknown(
+      err,
+      "Could not save assistant name.",
+    );
+  } finally {
+    assistantNameSaving.value = false;
   }
 }
 
@@ -5030,6 +5086,55 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <section class="assistant-settings__block">
                   <header class="assistant-settings__block-header">
                     <div>
+                      <h4>Identity</h4>
+                      <p>
+                        {{ assistantSettings.displayName }} is your assistant's
+                        chat name.
+                      </p>
+                    </div>
+                  </header>
+                  <form
+                    class="assistant-settings-inline-form assistant-settings-name-form"
+                    @submit.prevent="saveAssistantName"
+                  >
+                    <input
+                      v-model="assistantNameDraft"
+                      type="text"
+                      :maxlength="assistantNameMaxLength"
+                      placeholder="ME3"
+                      aria-label="Assistant name"
+                      autocomplete="off"
+                    />
+                    <Button
+                      color="accent"
+                      shape="soft"
+                      size="compact"
+                      type="submit"
+                      :disabled="!canSaveAssistantName"
+                    >
+                      <UiIcon name="Save" :size="14" />
+                      Save
+                    </Button>
+                  </form>
+                  <p
+                    v-if="assistantNameNotice || assistantNameInvalid"
+                    class="assistant-settings-field-note"
+                    :class="{
+                      'assistant-settings-field-note--error':
+                        assistantNameInvalid,
+                    }"
+                  >
+                    {{
+                      assistantNameInvalid
+                        ? `Name must be ${assistantNameMaxLength} characters or fewer.`
+                        : assistantNameNotice
+                    }}
+                  </p>
+                </section>
+
+                <section class="assistant-settings__block">
+                  <header class="assistant-settings__block-header">
+                    <div>
                       <h4>Sources</h4>
                       <p>
                         This is the important data your assistant keeps in
@@ -7748,6 +7853,25 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-settings-inline-form input:focus {
   outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
   outline-offset: 1px;
+}
+
+.assistant-settings-name-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.assistant-settings-name-form .me3-btn {
+  min-height: 38px;
+}
+
+.assistant-settings-field-note {
+  margin: 3px 0 6px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assistant-settings-field-note--error {
+  color: var(--ui-danger, #dc2626);
 }
 
 .assistant-settings-row {

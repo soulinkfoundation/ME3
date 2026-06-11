@@ -55,7 +55,7 @@ export function normalizeNullableText(value: unknown): string | null {
 
 export async function getOwnerProfile(env: Env, ownerId: string): Promise<OwnerRecord | null> {
   const result = await env.DB.prepare(
-    "SELECT id, email, name, username, bio, avatar_url, timezone, locale, password_hash FROM owner_profile WHERE id = ?",
+    "SELECT id, email, name, username, bio, avatar_url, timezone, locale, assistant_name, password_hash FROM owner_profile WHERE id = ?",
   )
     .bind(ownerId)
     .first<OwnerRecord>();

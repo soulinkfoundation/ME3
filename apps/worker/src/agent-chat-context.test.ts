@@ -260,8 +260,44 @@ describe("Core chat native context", () => {
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
     };
-    expect(modelInput.messages[0]?.content).toContain("You are ME3 Core");
+    expect(modelInput.messages[0]?.content).toContain(
+      'Your assistant display name is "ME3".',
+    );
     expect(modelInput.messages[0]?.content).not.toContain("ME3 agent context packet:");
+  });
+
+  it("uses the owner's custom assistant name in model instructions", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Named reply.",
+    }));
+    const env = createEnv({
+      owner: {
+        id: "owner",
+        email: "owner@example.com",
+        name: "Kieran",
+        username: "kieran",
+        bio: "Builds useful agentic products.",
+        timezone: "Europe/Dublin",
+        assistant_name: "Atlas",
+      },
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput("What's your name?"),
+    );
+
+    expect(response.replyText).toBe("Named reply.");
+    const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(modelInput.messages[0]?.content).toContain(
+      'Your assistant display name is "Atlas".',
+    );
+    expect(modelInput.messages[0]?.content).toContain(
+      "If asked who you are or what your name is, use the assistant display name.",
+    );
   });
 
   it("adds contact directory context when the owner asks to list contacts", async () => {

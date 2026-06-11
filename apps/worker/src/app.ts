@@ -1966,7 +1966,7 @@ function serializeImportedCalendarEvent(event: DbCalendarSourceEvent & { source_
 
 async function getOwnerProfile(env: Env, ownerId: string): Promise<OwnerRecord | null> {
   const result = await env.DB.prepare(
-    "SELECT id, email, name, username, bio, avatar_url, timezone, locale, password_hash FROM owner_profile WHERE id = ?",
+    "SELECT id, email, name, username, bio, avatar_url, timezone, locale, assistant_name, password_hash FROM owner_profile WHERE id = ?",
   )
     .bind(ownerId)
     .first<OwnerRecord>();
@@ -1976,7 +1976,7 @@ async function getOwnerProfile(env: Env, ownerId: string): Promise<OwnerRecord |
 
 async function getOwnerByEmail(env: Env, email: string): Promise<OwnerRecord | null> {
   const result = await env.DB.prepare(
-    "SELECT id, email, name, username, bio, avatar_url, timezone, locale, password_hash FROM owner_profile WHERE lower(email) = ?",
+    "SELECT id, email, name, username, bio, avatar_url, timezone, locale, assistant_name, password_hash FROM owner_profile WHERE lower(email) = ?",
   )
     .bind(email)
     .first<OwnerRecord>();
@@ -2045,6 +2045,7 @@ function toPublicOwner(owner: OwnerRecord): OwnerProfile {
     bio: owner.bio,
     avatar_url: owner.avatar_url,
     timezone: owner.timezone,
+    assistant_name: owner.assistant_name ?? null,
   };
 }
 

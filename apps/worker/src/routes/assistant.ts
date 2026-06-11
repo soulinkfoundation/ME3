@@ -54,6 +54,8 @@ const MAX_ASSISTANT_ATTACHMENT_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_ASSISTANT_TEXT_ATTACHMENT_BYTES = 1 * 1024 * 1024;
 const MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT = 4;
 const MAX_ASSISTANT_EXTRACTED_TEXT_CHARS = 48_000;
+const DEFAULT_ASSISTANT_NAME = "ME3";
+const MAX_ASSISTANT_NAME_LENGTH = 48;
 
 type AssistantRouteDeps = {
   requireOwner(c: AppContext): Promise<string | null>;
@@ -114,6 +116,45 @@ type SoulinkDispatchBody = {
   replyToMessageId?: unknown;
   createdAt?: unknown;
 };
+type AssistantSettingsRow = {
+  assistant_name: string | null;
+};
+
+function normalizeAssistantNameInput(
+  value: unknown,
+): string | null | { error: string } {
+  if (value === null) return null;
+  if (typeof value !== "string") return { error: "Assistant name must be text" };
+
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  if (normalized.length > MAX_ASSISTANT_NAME_LENGTH) {
+    return {
+      error: `Assistant name must be ${MAX_ASSISTANT_NAME_LENGTH} characters or fewer`,
+    };
+  }
+  if (/[\u0000-\u001f\u007f{}\[\]<>]/.test(normalized)) {
+    return { error: "Assistant name can only contain plain display-name text" };
+  }
+  return normalized;
+}
+
+function serializeAssistantSettings(row: AssistantSettingsRow | null) {
+  const assistantName = normalizeNullableText(row?.assistant_name) || null;
+  return {
+    assistantName,
+    displayName: assistantName || DEFAULT_ASSISTANT_NAME,
+  };
+}
+
+async function getAssistantSettings(env: Env, ownerId: string) {
+  const row = await env.DB.prepare(
+    "SELECT assistant_name FROM owner_profile WHERE id = ?",
+  )
+    .bind(ownerId)
+    .first<AssistantSettingsRow>();
+  return serializeAssistantSettings(row ?? null);
+}
 
 function sanitizeAttachmentFilename(value: string, fallback: string): string {
   const sanitized = value
@@ -329,6 +370,38 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
 
     return c.json({ ok: true, attachments: uploaded }, 201);
+  });
+
+  app.get("/api/assistant/settings", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    return c.json(await getAssistantSettings(c.env, ownerId));
+  });
+
+  app.put("/api/assistant/settings", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(body, "assistantName")) {
+      return c.json({ ok: false, error: "Assistant name is required" }, 400);
+    }
+
+    const assistantName = normalizeAssistantNameInput(body.assistantName);
+    if (assistantName && typeof assistantName === "object") {
+      return c.json({ ok: false, error: assistantName.error }, 400);
+    }
+
+    await c.env.DB.prepare(
+      `UPDATE owner_profile
+       SET assistant_name = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    )
+      .bind(assistantName, ownerId)
+      .run();
+
+    return c.json(await getAssistantSettings(c.env, ownerId));
   });
 
   registerAssistantSkillsRoutes(app, { requireOwner, unauthorized });

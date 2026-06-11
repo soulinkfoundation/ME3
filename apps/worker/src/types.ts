@@ -94,6 +94,7 @@ export interface OwnerProfile {
   avatar_url: string | null;
   timezone: string | null;
   locale?: string | null;
+  assistant_name?: string | null;
 }
 
 export interface DbSite {
