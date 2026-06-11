@@ -2,7 +2,7 @@
 
 Ready to take ownership of your digital life? ME too!
 
-With ME3 (+ $5/month for clouflare hosting) you can.
+With ME3 (+ $5/month for Cloudflare hosting), you can.
 
 [ screenshot ]
 
@@ -10,17 +10,17 @@ With ME3 (+ $5/month for clouflare hosting) you can.
 
 ## Why ME3 exists
 
-They (who ever 'they' are) want you locked in.
+They (whoever they are) want you locked in.
 
-Mesmerized by the chase. Tranquilized by the Spectacle.
+Mesmerised by the chase. Tranquillised by the Spectacle.
 
 Pampered by convenience, endless subscriptions, chi-sucking feeds and doom-scrolling.
 
 No! No more. Not me. Not you. Not I.
 
-We're on a mission and any mission-bearing soul needs an assistant; one that takes care of as much matrix donkey work as possible so you have more time to unleash the innate genius you were born with.
+We're on a mission, and any mission-bearing soul needs an assistant; one that takes care of as much matrix donkey work as possible so you have more time to unleash the innate genius you were born with.
 
-It's time grasshopper... time to take ownership of your digital life.
+It's time, grasshopper... time to take ownership of your digital life.
 
 ## Install
 
@@ -31,11 +31,11 @@ It's time grasshopper... time to take ownership of your digital life.
 ## What's in ME3
 
 - **🚀 Mission Control** for you, the HUMAN.
-- **🤖 An AI Assistant** you control. Pick it's brains 🧠. Give it jobs 💼.
-- **📧 Email** for you, your assistant or whoever will free you from 3000 unread inbox messages. An end to email slavery. That's the goal Obe Wan.
-- **📆 A Calendar** your assistant helps you manage so you can spend more time sith other humans.
+- **🤖 An AI Assistant** you control. Pick its brains 🧠. Give it jobs 💼.
+- **📧 Email** for you, your assistant or whoever will free you from 3000 unread inbox messages. An end to email slavery. That's the goal, Obe Wan.
+- **📆 A Calendar** your assistant helps you manage so you can spend more time with other humans.
 - **🧩 Plugins**: you can build, extend and modify to make ME3 yours.
-- **🌐 A ME3 profile**: that doubles as a personal website if you need it. (do we even need those anymore? yes, yes we do, trust me, you'll see). Think of it like a digital business card. It uses the [ME3 Protocol](https://me3.app/protocol) so AI agents can do stuff and not forget who you are.
+- **🌐 A ME3 profile**: that doubles as a personal website if you need it. (Do we even need those anymore? Yes, yes, we do, trust me, you'll see). Think of it like a digital business card. It uses the [ME3 Protocol](https://me3.app/protocol) so AI agents know who you are.
 
 ## After setup
 
