@@ -26,7 +26,7 @@ Consume. Consume. Consume.
 
 No! No more. Not ME3.
 
-We're on a mission, you see, and any **mission-bearing soul needs an assistant** to take care of as much matrix donkey work as possible so you've more time to remember and unleash the innate genius you were born with.
+We're on a mission, you see, and any **mission-bearing soul needs an assistant** to take care of as much matrix donkey work as possible, so you have more time to 🧘‍♀️ remember and 💥 unleash the innate genius ❤️ you were born with.
 
 It's time, grasshopper... time to take ownership of your digital life.
 
@@ -41,16 +41,13 @@ It's time, grasshopper... time to take ownership of your digital life.
 
 ## 🕰️ After setup
 
-Be honest, you were never going to read the docs.
+Be honest, you were never going to read the docs, so ME3 ate them all.
 
-So I ate them all.
-
-Ask ME3 for anything you need to know, like how to:
+Once you're set up, you can ask him/her/it anything you need to know, like how to:
 
 - configure a custom domain
-- run the repo locally
+- run the app locally
 - create your own plugin
-- Chat to ME3 on Soulink or Telegram
 
 ## 😘 Support
 
