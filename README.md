@@ -1,34 +1,34 @@
-# ME3
+# 🤖 ME3 is a free, open-source personal OS and AI assistant
 
 Ready to take ownership of your digital life? ME too!
 
-With ME3 (+ $5/month for Cloudflare hosting), you can.
+With ME3 (+ $5/month for hosting), you can.
 
 [ screenshot ]
 
-**ME3 is a free, open-source personal OS and AI assistant.**
+## ☁️ Install
 
-## Why ME3 exists
+1. [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
+2. Follow the yellow brick road (steps).
+3. Name ME3 and train ME3.
+
+## 🤔 Why ME3?
+
+Why You!? Let ME3 tell you...
 
 They (whoever they are) want you locked in.
 
-Mesmerised by the chase. Tranquillised by the Spectacle.
-
 Pampered by convenience, endless subscriptions, chi-sucking feeds and doom-scrolling.
 
-No! No more. Not me. Not you. Not I.
+Consume. Consume. Consume.
 
-We're on a mission, and any mission-bearing soul needs an assistant; one that takes care of as much matrix donkey work as possible so you have more time to unleash the innate genius you were born with.
+No! No more. Not ME3.
+
+We're on a mission, you see, and any **mission-bearing soul needs an assistant** to take care of as much matrix donkey work as possible so you've more time to remember and unleash the innate genius you were born with.
 
 It's time, grasshopper... time to take ownership of your digital life.
 
-## Install
-
-1. Click [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
-2. Follow the yellow brick road steps.
-3. Be free
-
-## What's in ME3
+## 🖥️ What's in ME3
 
 - **🚀 Mission Control** for you, the HUMAN.
 - **🤖 An AI Assistant** you control. Pick its brains 🧠. Give it jobs 💼.
@@ -37,7 +37,7 @@ It's time, grasshopper... time to take ownership of your digital life.
 - **🧩 Plugins**: you can build, extend and modify to make ME3 yours.
 - **🌐 A ME3 profile**: that doubles as a personal website if you need it. (Do we even need those anymore? Yes, yes, we do, trust me, you'll see). Think of it like a digital business card. It uses the [ME3 Protocol](https://me3.app/protocol) so AI agents know who you are.
 
-## After setup
+## 🕰️ After setup
 
 Be honest, you were never going to read the docs.
 
@@ -50,9 +50,9 @@ Ask ME3 for anything you need to know, like how to:
 - create your own plugin
 - Chat to ME3 on Soulink or Telegram
 
-## Support
+## 😘 Support
 
-ME3 is open source. Donations to Soulink Foundation CLG help support ongoing
+ME3 is open source. Donations to Soulink Foundation CLG (non-profit) help support ongoing
 development, maintenance, and open technology infrastructure.
 
 [Support Soulink Foundation](https://soulinkfoundation.org/support)
