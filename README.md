@@ -1,228 +1,62 @@
-# ME3: a free, open-source personal OS and AI assistant.
+# ME3
 
-It's for those who want to take ownership of their digital life.
+Ready to take ownership of your digital life? ME too!
 
-With ME3, you can now own your email/calendar/website/AI assistant and more, all in one place for about $5/month.
+With ME3 (+ $5/month for clouflare hosting) you can.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
+[ screenshot ]
 
-The button is meant to be the lowest-friction path: choose a Git account, name
-the project, and deploy. ME3 derives D1/R2 resource names from that project name
-during the deploy command, then setup continues inside the live app where owner
-profile, domains, social accounts, email, Telegram, payments, and
-model-provider choices belong.
-The only ME3-owned naming input in the Cloudflare setup screen should be the
-project name; any build/deploy or Git repository controls are Cloudflare-owned.
+**ME3 is a free, open-source personal OS and AI assistant.**
 
-Cloudflare currently documents the deploy button URL as
-`https://deploy.workers.cloudflare.com/?url=<repo>`. It does not document URL
-parameters for preselecting the Git account or the private-repository checkbox,
-so those remain Cloudflare-controlled choices in the setup screen.
+## Why ME3 exists
 
-## Support ME3
+They (who ever 'they' are) want you locked in.
+
+Mesmerized by the chase. Tranquilized by the Spectacle.
+
+Pampered by convenience, endless subscriptions, chi-sucking feeds and doom-scrolling.
+
+No! No more. Not me. Not you. Not I.
+
+We're on a mission and any mission-bearing soul needs an assistant; one that takes care of as much matrix donkey work as possible so you have more time to unleash the innate genius you were born with.
+
+It's time grasshopper... time to take ownership of your digital life.
+
+## Install
+
+1. Click [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
+2. Follow the yellow brick road steps.
+3. Be free
+
+## What's in ME3
+
+- **🚀 Mission Control** for you, the HUMAN.
+- **🤖 An AI Assistant** you control. Pick it's brains 🧠. Give it jobs 💼.
+- **📧 Email** for you, your assistant or whoever will free you from 3000 unread inbox messages. An end to email slavery. That's the goal Obe Wan.
+- **📆 A Calendar** your assistant helps you manage so you can spend more time sith other humans.
+- **🧩 Plugins**: you can build, extend and modify to make ME3 yours.
+- **🌐 A ME3 profile**: that doubles as a personal website if you need it. (do we even need those anymore? yes, yes we do, trust me, you'll see). Think of it like a digital business card. It uses the [ME3 Protocol](https://me3.app/protocol) so AI agents can do stuff and not forget who you are.
+
+## After setup
+
+Be honest, you were never going to read the docs.
+
+So I ate them all.
+
+Ask ME3 for anything you need to know, like how to:
+
+- configure a custom domain
+- run the repo locally
+- create your own plugin
+- Chat to ME3 on Soulink or Telegram
+
+## Support
 
 ME3 is open source. Donations to Soulink Foundation CLG help support ongoing
 development, maintenance, and open technology infrastructure.
 
 [Support Soulink Foundation](https://soulinkfoundation.org/support)
 
-## Why ME3 Exists
-Someone once said: We need to reclaim the internet.
-A second booming voice said: Me too!
-That's when ME3 appeared from the fog.
+## License
 
-Everyone should have access to a capable personal AI they own.
-
-## Why Cloudflare
-
-## Setup
-
-## Core principles:
-
-## Customise With Plugins
-Plugins are how ME3 gains new abilities.
-
-### Manual CLI Deploy
-
-### Updating ME3 Core
-
-The Deploy to Cloudflare button is for first-time installs. Do not click it again to update an existing ME3 Core install; that can create a new repository, Worker, D1 database, or R2 bucket instead of updating the install you already own.
-
-ME3 Core updates are release-based. Public installs should update from tagged stable releases such as `v0.2.0`, not from whatever is currently on `main`. The goal is WordPress-style ownership: Core code is replaceable, while owner data and customizations live outside Core in D1, R2, Worker secrets, Cloudflare dashboard settings, and eventually plugins/themes.
-
-For a Deploy to Cloudflare install, the copied GitHub/GitLab repository is the install. Cloudflare provisions D1/R2/Durable Object resources and records those bindings in that copied repository's `wrangler.toml`. Updating ME3 Core means merging a tagged upstream release into that copied repository, then letting Cloudflare Workers Builds redeploy the same Worker against the same resources.
-
-ME3 Core's installed version is stored in `me3-core.json`. The root `package.json` name belongs to the copied install and may be changed by Cloudflare to match the user's project, so future Core releases should not use `package.json` as the release version source.
-
-Check for a newer stable release from the copied repository:
-
-```bash
-pnpm update:check
-```
-
-Update from a deploy-button-created repository with the reusable updater:
-
-```bash
-pnpm update:core
-git push origin main
-```
-
-The updater adds the `upstream` remote if it is missing, fetches release tags, connects copied Deploy-button history to the installed upstream tag when needed, merges the latest stable release, creates any Cloudflare queues declared in `wrangler.toml`, then runs `pnpm install`, `pnpm update:doctor`, and `pnpm build`. If you need to manage Cloudflare resources manually, pass `--skip-cloudflare-provision`.
-
-New GitHub-based installs also include an **Update ME3 Core** GitHub Action. In the copied repository, open **Actions -> Update ME3 Core -> Run workflow**. The workflow runs the same updater, commits the result to `main`, and Cloudflare Workers Builds redeploys from that commit.
-
-The workflow also supports a future ME3 dashboard button through GitHub `repository_dispatch` using the `me3-core-update` event type. The dashboard should trigger the same workflow rather than trying to rewrite or redeploy Core from inside the running Worker.
-
-If your install predates `pnpm update:core`, update manually once to the release that adds it, or bootstrap the latest updater from Core:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/soulinkfoundation/ME3/main/scripts/update-core.mjs -o /tmp/me3-update-core.mjs
-node /tmp/me3-update-core.mjs
-git push origin main
-```
-
-Manual update path:
-
-```bash
-git status
-git remote add upstream https://github.com/soulinkfoundation/ME3.git # only needed once
-git fetch upstream --tags
-git merge vX.Y.Z
-pnpm install
-pnpm update:doctor
-pnpm build
-git push origin main
-```
-
-Cloudflare Workers Builds should then run the configured deploy command for your repository. That deploy applies any new D1 migrations and publishes the updated Worker against the same D1/R2/Durable Object resources.
-
-If Git reports conflicts in `wrangler.toml`, preserve the values from your copied repository for provisioned resources such as `database_id`, `bucket_name`, Worker name, custom domain vars, and secrets configured in Cloudflare. Then bring in any new Core bindings or migrations from the release and rerun:
-
-```bash
-pnpm update:doctor
-```
-
-If an early `v0.1.1` test update reports a conflict at the top of `package.json`, keep the copied install's `name` and the release's version value, then continue the merge. Later releases read Core version metadata from `me3-core.json`, which avoids that recurring conflict.
-
-Update from a manual CLI install:
-
-```bash
-git status
-git fetch upstream --tags
-git merge vX.Y.Z
-pnpm install
-pnpm build
-pnpm deploy
-```
-
-Before major updates, create or note a Cloudflare D1 Time Travel bookmark. Never overwrite an existing install's `wrangler.toml` resource IDs, Worker secrets, D1 database, R2 bucket, or custom domains unless you intentionally want a fresh install.
-
-### Deleting ME3 Core
-
-Deleting the Worker, copied Git repository, or Cloudflare Workers Builds project
-is not the same as deleting a whole ME3 Core install. Owner data and runtime
-resources can live in D1, R2, queues, Worker secrets, dashboard settings, and
-custom domains. Cloudflare also requires R2 buckets to be empty before bucket
-deletion succeeds.
-
-From the copied install repository, preview the Cloudflare resources that ME3
-will delete:
-
-```bash
-pnpm uninstall:cloudflare
-```
-
-When the plan looks right, run the destructive uninstall:
-
-```bash
-pnpm uninstall:cloudflare -- --execute
-```
-
-The command reads `wrangler.toml`, removes queue consumers, deletes the Worker,
-then deletes the configured queues, D1 databases, and R2 buckets. It is a dry
-run unless `--execute` is passed, and the executed command still requires a
-typed confirmation unless `--yes` is also passed.
-
-To remove the Worker without explicitly deleting D1, R2, or queues from this
-script, run:
-
-```bash
-pnpm uninstall:cloudflare -- --execute --keep-data
-```
-
-If R2 deletion fails because the bucket is not empty, empty the bucket in the
-Cloudflare dashboard or with S3-compatible tooling such as rclone, then rerun
-the uninstall with keep flags for anything already deleted:
-
-```bash
-pnpm uninstall:cloudflare -- --execute --keep-worker --keep-d1 --keep-queues
-```
-
-Before deleting a real install, export D1 or create a Time Travel bookmark if
-you may want the data later. After Cloudflare resources are removed, delete the
-copied GitHub/GitLab repository and any custom dashboard configuration you no
-longer need.
-
-The first public Core release uses a single initial D1 schema baseline. After
-that release, migrations are append-only and published migration files are not
-rewritten. See
-[`docs/public-release-hardening.md`](./docs/public-release-hardening.md) for
-the release checklist and migration policy.
-
-### Recommended Cloudflare Domains
-
-ME3 Core can boot on the generated `workers.dev` URL without a custom domain. Do not add a custom domain during the deploy-button flow unless you already know you need one. Before a custom public-site hostname is configured, the first/profile site is published at `/me` on the Worker URL, for example:
-
-```text
-https://your-me3.your-account.workers.dev/me
-```
-
-When an owner is ready to use their own domain, open Account -> Custom domain
-inside ME3 Core and enter the public site domain. Core uses that saved domain
-for public-site routing and infers the private ME3 host from it:
-
-- `me3.customdomain.com` serves the private admin app, login, API URLs, and `me.json` action links.
-- `customdomain.com` serves the public ME3 site.
-
-Attach both hostnames to the same Worker as Cloudflare Worker custom domains:
-
-```text
-me3.customdomain.com  -> me3 Worker
-customdomain.com      -> me3 Worker
-```
-
-The site settings page records a site's desired custom domain. In Core, this
-does not call the Cloudflare account API or mutate Worker custom domains
-automatically; attach the listed hostnames in Cloudflare, then check status in
-ME3.
-
-### Telegram Agent Channel
-
-Standalone Core installs need their own Telegram bot. See
-[`docs/standalone-telegram-setup.md`](./docs/standalone-telegram-setup.md) for
-the BotFather, Worker secret, webhook, and account-linking steps.
-
-### Paid Bookings
-
-ME3 Core supports direct Stripe Checkout for paid 1:1 bookings. Payments use the Stripe account configured on your own Core Worker; this is separate from ME3 Cloud subscription billing.
-
-Configure Stripe on the Worker:
-
-```bash
-cd apps/worker
-pnpm wrangler secret put STRIPE_SECRET_KEY --config wrangler.core.example.toml
-```
-
-Use a Stripe secret key from your own Stripe account. After the secret is set, create a paid booking offer in the site wizard, publish the site, and test the booking form from the live `/me` page or your configured public site domain.
-
-Local development can use `apps/worker/.dev.vars` with `STRIPE_SECRET_KEY=sk_test_...`. Do not commit real Stripe keys.
-
-### Core File Storage
-
-ME3 Core uses D1 for structured data and R2 for files.
-
-## Public Distribution
-
-ME3 Core is licensed under the MIT License. See [LICENSE](./LICENSE).
-
-Before redistributing a fork or public template, review [ASSET_PROVENANCE.md](./ASSET_PROVENANCE.md) for included public assets and [SECURITY.md](./SECURITY.md) for responsible disclosure and secret-handling expectations.
+[MIT](./LICENSE)

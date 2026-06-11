@@ -34,4 +34,4 @@ playwright-report/
 .gitattributes
 AGENTS.md
 
-apps/web/public/page-builder-resources
+/docs
