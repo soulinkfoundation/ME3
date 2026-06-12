@@ -6,7 +6,7 @@ Ready to take ownership of your digital life? ME too!
 
 With ME3, now you can.
 
-[ screenshot ]
+![ME3 screenshot](apps/web/public/me3.gif)
 
 (Note: some features require $5/month 'workers paid' plan in Cloudflare) 
 
