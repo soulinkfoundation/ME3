@@ -1,6 +1,6 @@
 # 🤖 ME3
 
-**A free, open-source personal OS and AI assistant**
+**Self-host your AI assistant, email, calendar, website and more.**
 
 Ready to take ownership of your digital life? ME too!
 
@@ -8,42 +8,30 @@ With ME3, now you can.
 
 ![ME3 screenshot](apps/web/public/me3.gif)
 
-(Note: some features require $5/month 'workers paid' plan in Cloudflare) 
+```Note: some features may require the $5/month 'workers paid' plan in Cloudflare```
 
 ## ☁️ Install
 
-1. [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
-2. Follow the yellow brick road (steps).
-3. Name ME3 and train ME3.
+All you need is a GitHub and Cloudflare account, and the nerve to press the button.
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
 
 ## 🤔 Why ME3?
 
-Why You!? Let ME3 tell you...
-
-They (whoever they are) want you locked in.
-
-Pampered by convenience, endless subscriptions, chi-sucking feeds and doom-scrolling.
-
-Consume. Consume. Consume.
-
-No! No more. Not ME3.
-
-We're on a mission, you see, and any **mission-bearing soul needs an assistant** to take care of as much matrix donkey work as possible, so you have more time to 🧘‍♀️ remember and 💥 unleash the innate genius ❤️ you were born with.
-
-It's time, grasshopper... time to take ownership of your digital life.
+Because it's time, grasshopper... time to take ownership of your digital life.
 
 ## 🖥️ What's in ME3
 
-- **🚀 Mission Control** for you, the HUMAN.
-- **🤖 An AI Assistant** you control. Pick its brains 🧠. Give it jobs 💼.
-- **📧 Email** for you, your assistant or whoever will free you from 3000 unread inbox messages. An end to email slavery. That's the goal, Obe Wan.
-- **📆 A Calendar** your assistant helps you manage so you can spend more time with other humans.
+- **🚀 Mission Control** where you, the HUMAN, manage things.
+- **🤖 An AI Assistant** you can create jobs for 💼.
+- **📧 Email** for you or your 🤖 assistant.
+- **📆 A Calendar** your 🤖 can use to help you spend time with the other humans that matter to you.
 - **🧩 Plugins**: you can build, extend and modify to make ME3 yours.
-- **🌐 A ME3 profile**: that doubles as a personal website if you need it. (Do we even need those anymore? Yes, yes, we do, trust me, you'll see). Think of it like a digital business card. It uses the [ME3 Protocol](https://me3.app/protocol) so AI agents know who you are.
+- **🌐 A ME3 site/profile**: is like a digital business card built for humans and AI agents. Find out more here [ME3 Protocol](https://me3.app/protocol).
 
-## 🕰️ After setup
+## 📜 Docs
 
-Be honest, you were never going to read the docs, so ME3 ate them all.
+Be honest, you were never going to read them; that's why ME3 ate them all.
 
 Once you're set up, you can ask him/her/it anything you need to know, like how to:
 
@@ -53,7 +41,7 @@ Once you're set up, you can ask him/her/it anything you need to know, like how t
 
 ## 😘 Support
 
-ME3 is open source. Donations to Soulink Foundation CLG (non-profit) help support ongoing
+ME3 is free and open source. Donations to the Soulink Foundation (non-profit) help support ongoing
 development, maintenance, and open technology infrastructure.
 
 [Support Soulink Foundation](https://soulinkfoundation.org/support)
