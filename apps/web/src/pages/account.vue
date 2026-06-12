@@ -328,6 +328,7 @@ const emailProviderInputs = ref<Record<EmailProviderId, EmailProviderInputs>>(
 const emailProviderTestTo = ref("");
 const emailProviderMessage = ref<string | null>(null);
 const emailProviderError = ref<string | null>(null);
+const domainEmailGuideOpen = ref(false);
 const appConnectionsLoading = ref(false);
 const appConnectionsSaving = ref(false);
 const me3Connection = ref<AppConnectionsResponse["me3"] | null>(null);
@@ -467,6 +468,14 @@ const mailboxRoutedAddress = computed(() => {
 const customDomainSuggestedDomain = computed(
   () => customDomainSite.value?.custom_domain || emailAddressDomain.value || "",
 );
+
+const emailAddressNeedsSavedDomain = computed(() => {
+  if (!emailAddressDomain.value) return false;
+  const savedDomain = normalizeEmailDomain(
+    customDomainSite.value?.custom_domain || "",
+  );
+  return savedDomain !== emailAddressDomain.value;
+});
 
 const selectedProviderNeedsSecret = computed(() => {
   const active = activeEmailProvider.value;
@@ -1656,7 +1665,7 @@ onMounted(async () => {
     route.query.section === "domain" ||
     route.query.section === "custom-domain"
   ) {
-    openSection.value.advanced = true;
+    openSection.value.mailbox = true;
   }
   if (route.query.section === "ai" || route.query.section === "providers") {
     openSection.value.advanced = true;
@@ -1795,9 +1804,12 @@ onMounted(async () => {
             @click="openSection.mailbox = !openSection.mailbox"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Mailbox settings</h2>
+              <h2>Domain &amp; email address</h2>
               <template v-if="mailboxAvailable">
                 <span class="accordion-status-badges">
+                  <StatusBadge :tone="customDomainStatusClass">
+                    {{ customDomainStatusLabel }}
+                  </StatusBadge>
                   <StatusBadge :tone="mailbox?.status || 'pending_setup'">
                     {{ mailboxStatusLabel }}
                   </StatusBadge>
@@ -1821,6 +1833,43 @@ onMounted(async () => {
             </div>
 
             <template v-else-if="mailboxAvailable">
+              <section class="domain-email-setup">
+                <div class="domain-email-setup__header">
+                  <div>
+                    <h3>Custom domain</h3>
+                    <p>
+                      Connect the public profile hostname before routing mail to
+                      this Worker.
+                    </p>
+                  </div>
+                  <Button
+                    color="outline"
+                    size="compact"
+                    type="button"
+                    @click="domainEmailGuideOpen = true"
+                  >
+                    Setup guide
+                  </Button>
+                </div>
+
+                <div v-if="sites.loading" class="status-row">
+                  Loading site domain settings...
+                </div>
+                <template v-else-if="customDomainSite">
+                  <CustomDomain
+                    embedded
+                    :username="customDomainSite.username"
+                    :show-settings-link="false"
+                    :profile-published="Boolean(customDomainSite.published_at)"
+                    :initial-domain="customDomainSuggestedDomain"
+                    @domain-status-changed="() => void sites.fetchSites()"
+                  />
+                </template>
+                <p v-else class="error">
+                  Create a ME3 site before connecting a custom domain.
+                </p>
+              </section>
+
               <div class="email-settings">
                 <label class="field email-address-field">
                   <span>Email address</span>
@@ -1839,7 +1888,22 @@ onMounted(async () => {
                     Enter an address like name@your-domain.com. Use letters,
                     numbers, dots, underscores, or hyphens before @.
                   </p>
+                  <p
+                    v-else-if="emailAddressNeedsSavedDomain"
+                    class="field-hint"
+                  >
+                    Save this domain first, then route incoming mail to the ME3
+                    Worker in Cloudflare.
+                  </p>
                 </label>
+
+                <ol class="domain-email-steps">
+                  <li>Connect domain</li>
+                  <li>Choose mailbox address</li>
+                  <li>Route incoming mail in Cloudflare</li>
+                  <li>Choose sending provider</li>
+                  <li>Send test</li>
+                </ol>
 
                 <details class="email-disclosure">
                   <summary>Forward a copy</summary>
@@ -2258,32 +2322,6 @@ onMounted(async () => {
                 </p>
                 <p v-if="telegramPanelRef?.error" class="error">
                   {{ telegramPanelRef.error }}
-                </p>
-              </section>
-
-              <section class="advanced-subsection">
-                <div class="advanced-subsection__header">
-                  <h3>Custom domain</h3>
-                  <StatusBadge :tone="customDomainStatusClass">
-                    {{ customDomainStatusLabel }}
-                  </StatusBadge>
-                </div>
-
-                <div v-if="sites.loading" class="status-row">
-                  Loading site domain settings...
-                </div>
-                <template v-else-if="customDomainSite">
-                  <CustomDomain
-                    embedded
-                    :username="customDomainSite.username"
-                    :show-settings-link="false"
-                    :profile-published="Boolean(customDomainSite.published_at)"
-                    :initial-domain="customDomainSuggestedDomain"
-                    @domain-status-changed="() => void sites.fetchSites()"
-                  />
-                </template>
-                <p v-else class="error">
-                  Create a ME3 site before connecting a custom domain.
                 </p>
               </section>
 
@@ -2893,6 +2931,74 @@ onMounted(async () => {
       </div>
     </Teleport>
 
+    <Teleport to="body">
+      <div
+        v-if="domainEmailGuideOpen"
+        class="modal-overlay"
+        @click.self="domainEmailGuideOpen = false"
+      >
+        <section
+          class="modal domain-email-guide-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="domain-email-guide-title"
+          tabindex="-1"
+          @keydown.escape="domainEmailGuideOpen = false"
+        >
+          <header class="modal-header">
+            <h2 id="domain-email-guide-title">Domain &amp; email setup</h2>
+            <button
+              class="modal-close"
+              type="button"
+              aria-label="Close domain and email setup guide"
+              @click="domainEmailGuideOpen = false"
+            >
+              ×
+            </button>
+          </header>
+
+          <ol class="domain-email-guide-list">
+            <li>
+              <strong>Save the root profile hostname.</strong>
+              <span>
+                Use the root domain you control, such as
+                <code>customdomain.com</code>.
+              </span>
+            </li>
+            <li>
+              <strong>Add Worker custom domains in Cloudflare.</strong>
+              <span>
+                Add exact hostnames for the public profile and the ME3 app,
+                such as <code>customdomain.com</code> and
+                <code>me3.customdomain.com</code>.
+              </span>
+            </li>
+            <li>
+              <strong>Route incoming mail to the ME3 Worker.</strong>
+              <span>
+                In Cloudflare Email Routing, create a rule for the local part
+                you chose and set the action to send mail to this Worker.
+              </span>
+            </li>
+            <li>
+              <strong>Choose a sending provider.</strong>
+              <span>
+                Use Cloudflare Email Sending if it is available on your
+                account. Otherwise use SMTP, Mailgun, or Postmark.
+              </span>
+            </li>
+            <li>
+              <strong>Send a test email.</strong>
+              <span>
+                Save the address and provider settings, then send a test before
+                relying on outbound mail.
+              </span>
+            </li>
+          </ol>
+        </section>
+      </div>
+    </Teleport>
+
   </div>
 </template>
 
@@ -3255,6 +3361,81 @@ h1 {
 .email-settings {
   display: grid;
   gap: 16px;
+}
+
+.domain-email-setup {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--ui-border, var(--color-border));
+}
+
+.domain-email-setup__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.domain-email-setup__header h3 {
+  margin: 0 0 4px;
+  color: var(--ui-text, var(--color-text));
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.domain-email-setup__header p {
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.domain-email-steps,
+.domain-email-guide-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.domain-email-steps li::marker,
+.domain-email-guide-list li::marker {
+  color: var(--ui-accent, var(--color-accent));
+  font-weight: 700;
+}
+
+.domain-email-guide-modal {
+  display: grid;
+  gap: 16px;
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+}
+
+.domain-email-guide-list li {
+  padding-left: 2px;
+}
+
+.domain-email-guide-list strong,
+.domain-email-guide-list span {
+  display: block;
+}
+
+.domain-email-guide-list strong {
+  color: var(--ui-text, var(--color-text));
+}
+
+.domain-email-guide-list code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text, var(--color-text));
+  font-size: 12px;
 }
 
 .email-settings__actions {

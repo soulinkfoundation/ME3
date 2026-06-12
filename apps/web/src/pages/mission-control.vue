@@ -825,7 +825,7 @@ onMounted(() => {
       <div v-if="!loading" class="mission-dashboard__grid">
         <article
           v-if="!setupChecklistDismissed"
-          class="dashboard-card dashboard-card--wide setup-checklist-card"
+          class="dashboard-card dashboard-card--small setup-checklist-card"
         >
           <header class="dashboard-card__header">
             <h2 class="dashboard-card__title">
@@ -847,28 +847,32 @@ onMounted(() => {
           <p class="dashboard-card__body">
             To make the most of ME3 do the following.
           </p>
-          <ol class="setup-checklist-card__list">
+          <ul class="setup-checklist-card__list">
             <li>
+              <UiIcon name="CircleCheck" :size="15" aria-hidden="true" />
               <RouterLink :to="setupProfilePath">
                 Complete your profile
               </RouterLink>
             </li>
             <li>
+              <UiIcon name="CircleCheck" :size="15" aria-hidden="true" />
               <RouterLink to="/account?section=mailbox">
                 Configure email
               </RouterLink>
             </li>
             <li>
+              <UiIcon name="CircleCheck" :size="15" aria-hidden="true" />
               <RouterLink to="/account?section=app-connections">
                 Connect a messaging app
               </RouterLink>
             </li>
             <li>
+              <UiIcon name="CircleCheck" :size="15" aria-hidden="true" />
               <RouterLink to="/assistant">
                 Activate a job for your assistant
               </RouterLink>
             </li>
-          </ol>
+          </ul>
         </article>
 
         <article
@@ -1717,18 +1721,27 @@ onMounted(() => {
   justify-items: start;
 }
 
-.setup-checklist-card {
-  grid-column: 1 / -1;
-}
-
 .setup-checklist-card__list {
   display: grid;
   gap: 8px;
   margin: 0;
-  padding-left: 20px;
+  padding: 0;
+  list-style: none;
   color: var(--ui-text-muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.setup-checklist-card__list li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.setup-checklist-card__list svg {
+  margin-top: 2px;
+  color: var(--ui-accent);
 }
 
 .setup-checklist-card__list a {

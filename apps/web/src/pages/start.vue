@@ -304,7 +304,7 @@ function skipPlugins() {
 }
 
 async function finish() {
-  await router.push("/mission-control");
+  await router.push("/assistant");
 }
 
 watch(handle, queueUsernameAvailabilityCheck, { immediate: true });

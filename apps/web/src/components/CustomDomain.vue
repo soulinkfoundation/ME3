@@ -412,7 +412,6 @@ watch(
               class="domain-input"
             />
             <button
-              v-if="!embedded"
               class="button primary"
               type="submit"
               :disabled="
@@ -422,7 +421,13 @@ watch(
                 !isValidDomain
               "
             >
-              {{ domainLoading ? "Connecting..." : "Connect" }}
+              {{
+                domainLoading
+                  ? "Connecting..."
+                  : embedded
+                    ? "Save domain"
+                    : "Connect"
+              }}
             </button>
             <button
               v-if="!embedded"
