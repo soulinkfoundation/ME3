@@ -348,10 +348,13 @@ const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
 );
 
 const openSection = ref({
-  advanced: false,
+  ai: false,
+  appConnections: false,
   mailbox: false,
+  payments: false,
   plugins: false,
   signin: false,
+  timezone: false,
 });
 const showAiModelSection = true;
 
@@ -1649,14 +1652,14 @@ onMounted(async () => {
     route.query.section === "connections" ||
     route.query.section === "app-connections"
   ) {
-    openSection.value.advanced = true;
+    openSection.value.appConnections = true;
   }
   if (typeof route.query.me3_claim_error === "string") {
-    openSection.value.advanced = true;
+    openSection.value.appConnections = true;
     appConnectionsError.value = "ME3.app connection failed. Please try again.";
   }
   if (route.query.section === "soulink" || route.query.section === "telegram") {
-    openSection.value.advanced = true;
+    openSection.value.appConnections = true;
   }
   if (route.query.section === "mailbox") {
     openSection.value.mailbox = true;
@@ -1668,7 +1671,7 @@ onMounted(async () => {
     openSection.value.mailbox = true;
   }
   if (route.query.section === "ai" || route.query.section === "providers") {
-    openSection.value.advanced = true;
+    openSection.value.ai = true;
   }
   if (route.query.section === "plugins") {
     openSection.value.plugins = true;
@@ -1677,7 +1680,10 @@ onMounted(async () => {
     route.query.section === "payments" ||
     route.query.section === "commerce"
   ) {
-    openSection.value.advanced = true;
+    openSection.value.payments = true;
+  }
+  if (route.query.section === "timezone") {
+    openSection.value.timezone = true;
   }
   await scrollToRouteHash();
 });
@@ -2163,35 +2169,31 @@ onMounted(async () => {
           </div>
         </section>
 
-        <section class="card accordion-card advanced-section">
+        <section class="card accordion-card app-connections-section">
           <button
-            id="account-trigger-advanced"
+            id="account-trigger-app-connections"
             class="accordion-trigger"
             type="button"
-            :aria-expanded="openSection.advanced"
-            aria-controls="account-panel-advanced"
-            @click="openSection.advanced = !openSection.advanced"
+            :aria-expanded="openSection.appConnections"
+            aria-controls="account-panel-app-connections"
+            @click="openSection.appConnections = !openSection.appConnections"
           >
             <span class="accordion-title-wrap accordion-title-flex">
-              <h2>Advanced</h2>
+              <h2>App Connections</h2>
               <span class="accordion-header-hint">
-                App connections, domain, payments, AI, and timezone
+                Connect ME3.app, Soulink, and Telegram
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
           <div
-            id="account-panel-advanced"
+            id="account-panel-app-connections"
             class="accordion-panel"
             role="region"
-            aria-labelledby="account-trigger-advanced"
-            :hidden="!openSection.advanced"
+            aria-labelledby="account-trigger-app-connections"
+            :hidden="!openSection.appConnections"
           >
-            <div class="advanced-settings">
-              <section class="advanced-subsection">
-                <div class="advanced-subsection__header">
-                  <h3>App connections</h3>
-                </div>
+            <div class="advanced-subsection">
 
                 <div class="connection-lines">
                   <div
@@ -2323,19 +2325,44 @@ onMounted(async () => {
                 <p v-if="telegramPanelRef?.error" class="error">
                   {{ telegramPanelRef.error }}
                 </p>
-              </section>
+            </div>
+          </div>
+        </section>
 
-              <section
-                v-if="showAiModelSection"
-                id="account-ai-model"
-                class="advanced-subsection"
-              >
-                <div class="advanced-subsection__header">
-                  <h3>AI model</h3>
-                  <StatusBadge :tone="aiSettingsSummaryStatusClass">
-                    {{ aiSettingsSummaryLabel }}
-                  </StatusBadge>
-                </div>
+        <section
+          v-if="showAiModelSection"
+          id="account-ai-model"
+          class="card accordion-card ai-section"
+        >
+          <button
+            id="account-trigger-ai"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.ai"
+            aria-controls="account-panel-ai"
+            @click="openSection.ai = !openSection.ai"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>AI</h2>
+              <span class="accordion-header-hint">
+                Model and gateway settings
+              </span>
+              <span class="accordion-status-badges">
+                <StatusBadge :tone="aiSettingsSummaryStatusClass">
+                  {{ aiSettingsSummaryLabel }}
+                </StatusBadge>
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-ai"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-ai"
+            :hidden="!openSection.ai"
+          >
+            <div class="advanced-subsection">
 
                 <div v-if="aiSettingsLoading" class="status-row">
                   Loading AI provider settings...
@@ -2541,15 +2568,37 @@ onMounted(async () => {
                     {{ aiGatewayError }}
                   </p>
                 </template>
-              </section>
+            </div>
+          </div>
+        </section>
 
-              <section id="account-payments" class="advanced-subsection">
-                <div class="advanced-subsection__header">
-                  <h3>Payments</h3>
-                  <StatusBadge :tone="paymentsStatusClass">
-                    {{ paymentsStatusLabel }}
-                  </StatusBadge>
-                </div>
+        <section id="account-payments" class="card accordion-card payments-section">
+          <button
+            id="account-trigger-payments"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.payments"
+            aria-controls="account-panel-payments"
+            @click="openSection.payments = !openSection.payments"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Payments</h2>
+              <span class="accordion-status-badges">
+                <StatusBadge :tone="paymentsStatusClass">
+                  {{ paymentsStatusLabel }}
+                </StatusBadge>
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-payments"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-payments"
+            :hidden="!openSection.payments"
+          >
+            <div class="advanced-subsection">
 
                 <div v-if="commerceLoading" class="status-row">
                   Loading payment settings...
@@ -2625,15 +2674,35 @@ onMounted(async () => {
                   </p>
                   <p v-if="commerceError" class="error">{{ commerceError }}</p>
                 </template>
-              </section>
+            </div>
+          </div>
+        </section>
 
-              <section class="advanced-subsection">
-                <div class="advanced-subsection__header">
-                  <h3>Set Timezone</h3>
-                  <span class="accordion-header-hint">
-                    {{ timezoneDisplay }}
-                  </span>
-                </div>
+        <section class="card accordion-card timezone-section">
+          <button
+            id="account-trigger-timezone"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.timezone"
+            aria-controls="account-panel-timezone"
+            @click="openSection.timezone = !openSection.timezone"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Timezone</h2>
+              <span class="accordion-header-hint">
+                {{ timezoneDisplay }}
+              </span>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-timezone"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-timezone"
+            :hidden="!openSection.timezone"
+          >
+            <div class="advanced-subsection">
 
                 <div class="timezone-row">
                   <label class="field timezone-row__field">
@@ -2677,9 +2746,8 @@ onMounted(async () => {
                   </div>
                 </div>
 
-                <p v-if="message" class="success">{{ message }}</p>
-                <p v-if="error" class="error">{{ error }}</p>
-              </section>
+              <p v-if="message" class="success">{{ message }}</p>
+              <p v-if="error" class="error">{{ error }}</p>
             </div>
           </div>
         </section>
@@ -3078,8 +3146,20 @@ h1 {
   order: 3;
 }
 
-.advanced-section {
+.app-connections-section {
   order: 4;
+}
+
+.ai-section {
+  order: 5;
+}
+
+.payments-section {
+  order: 6;
+}
+
+.timezone-section {
+  order: 7;
 }
 
 .card {
@@ -3266,11 +3346,6 @@ h1 {
 .selected-model-note--compact {
   font-size: 12px;
   line-height: 1.4;
-}
-
-.advanced-settings {
-  display: grid;
-  gap: 20px;
 }
 
 .advanced-subsection {
