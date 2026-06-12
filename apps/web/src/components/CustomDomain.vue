@@ -395,6 +395,7 @@ watch(
         <form
           v-if="showDomainInput"
           class="domain-input-wrapper"
+          :class="{ 'domain-input-wrapper--embedded': embedded }"
           @submit.prevent="connectDomain"
         >
           <div class="input-row">
@@ -418,7 +419,7 @@ watch(
                 domainLoading
                   ? "Connecting..."
                   : embedded
-                    ? "Save domain"
+                    ? "Save"
                     : "Connect"
               }}
             </button>
@@ -841,9 +842,15 @@ watch(
   gap: 12px;
 }
 
+.domain-input-wrapper--embedded .input-row .button.primary {
+  flex: 0 0 96px;
+  padding-inline: 24px;
+}
+
 .input-row {
   display: flex;
   gap: 12px;
+  min-width: 0;
 }
 
 .domain-options {
@@ -881,6 +888,7 @@ watch(
 
 .domain-input {
   flex: 1;
+  min-width: 0;
   padding: 12px 16px;
   font-size: 14px;
   border: 2px solid var(--color-border);
@@ -890,7 +898,7 @@ watch(
 }
 
 @media (max-width: 720px) {
-  .input-row,
+  .domain-input-wrapper:not(.domain-input-wrapper--embedded) .input-row,
   .hostname-list li {
     align-items: stretch;
     flex-direction: column;

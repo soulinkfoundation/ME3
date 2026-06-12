@@ -1858,7 +1858,7 @@ onMounted(async () => {
                         emailProviderSaving ||
                         mailboxActivating
                           ? "Saving..."
-                          : "Save email"
+                          : "Save"
                       }}
                     </button>
                   </div>
@@ -3623,10 +3623,11 @@ h1 {
   display: flex;
   align-items: flex-end;
   gap: 12px;
+  min-width: 0;
 }
 
 .email-address-save__button {
-  flex: 0 0 auto;
+  flex: 0 0 96px;
   min-height: 44px;
   padding-inline: 24px;
 }
@@ -4267,17 +4268,8 @@ h1 {
   }
 
   .timezone-row,
-  .email-address-save,
   .payment-key-row {
     align-items: stretch;
-  }
-
-  .email-address-save {
-    flex-direction: column;
-  }
-
-  .email-address-save__button {
-    width: 100%;
   }
 
   .payment-key-row {
