@@ -720,7 +720,7 @@ const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const jobBuilderStarterPrompt =
   "/job Every friday, review my projects and outstanding tasks";
 const configureStarterPrompt =
-  "Help me configure this ME3 Core install. Start Configure mode and ask which ME3 area I want to work on first: install and updates, account/domain/email, assistant settings, jobs, plugins, local executor, or recovery. Use the bundled ME3 Core Configuration skill. If the task becomes Cloudflare-specific, use the bundled Cloudflare Platform skill and do not guess provider steps.";
+  "Help me set up ME3. Ask me what I want to configure first: custom domain, email, Soulink or Telegram, assistant/AI, jobs, plugins, or updates. If I'm not sure, walk me through the basics.";
 type StarterPrompt = {
   label: string;
   icon: string;
