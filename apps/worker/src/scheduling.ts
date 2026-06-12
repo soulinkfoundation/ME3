@@ -684,10 +684,11 @@ async function loadSchedulingBlockers(
     env.DB.prepare(
       `SELECT cse.id, cse.source_id, cse.external_key, cse.external_uid, cse.title,
               cse.notes, cse.location, cse.starts_at, cse.ends_at, cse.timezone,
-              cse.all_day, cse.created_at
+              cse.all_day, cse.is_busy, cse.created_at
        FROM calendar_source_events cse
        JOIN calendar_sources cs ON cs.id = cse.source_id
        WHERE cs.user_id = ? AND cs.status = 'active'
+         AND cse.is_busy = 1
          AND cse.ends_at > ? AND cse.starts_at < ?`,
     )
       .bind(ownerId, window.startsAt, window.endsAt)

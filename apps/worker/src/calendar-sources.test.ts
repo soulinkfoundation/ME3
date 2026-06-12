@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchDueCalendarSourceRefreshes,
+  importIcsUpload,
   refreshCalendarSource,
   subscribeIcsUrl,
 } from "./calendar-sources";
@@ -34,6 +35,7 @@ type EventRow = {
   ends_at: string;
   timezone: string | null;
   all_day: number;
+  is_busy: number;
   created_at: string;
   updated_at: string;
 };
@@ -77,6 +79,42 @@ DTSTART:20240101T090000Z
 DTEND:20240101T100000Z
 RRULE:FREQ=MONTHLY
 SUMMARY:Monthly planning
+END:VEVENT
+END:VCALENDAR`;
+
+const FEED_TRANSPARENT_ALL_DAY = `BEGIN:VCALENDAR
+VERSION:2.0
+X-WR-CALNAME:Personal Calendar
+BEGIN:VEVENT
+UID:event-transparent
+DTSTART;VALUE=DATE:20260615
+DTEND;VALUE=DATE:20260616
+SUMMARY:Center parks
+TRANSP:TRANSPARENT
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR`;
+
+const FEED_WITH_MANY_PAST_EVENTS = `BEGIN:VCALENDAR
+VERSION:2.0
+X-WR-CALNAME:Large Calendar
+${Array.from({ length: 2501 }, (_, index) => {
+  const day = String((index % 28) + 1).padStart(2, "0");
+  const month = String((Math.floor(index / 28) % 12) + 1).padStart(2, "0");
+  const year = 2017 + Math.floor(index / 336);
+  return `BEGIN:VEVENT
+UID:past-${index}
+DTSTART:${year}${month}${day}T090000Z
+DTEND:${year}${month}${day}T100000Z
+SUMMARY:Past ${index}
+END:VEVENT`;
+}).join("\n")}
+BEGIN:VEVENT
+UID:future-target
+DTSTART;VALUE=DATE:20260615
+DTEND;VALUE=DATE:20260620
+SUMMARY:Center parks
+TRANSP:TRANSPARENT
 END:VEVENT
 END:VCALENDAR`;
 
@@ -164,6 +202,43 @@ describe("calendar source subscriptions", () => {
     expect(Date.parse(state.events[0]!.starts_at)).toBeGreaterThanOrEqual(
       Date.parse("2026-03-12T12:00:00.000Z"),
     );
+  });
+
+  it("imports transparent Google events for display without marking them busy", async () => {
+    const { env, state } = createCalendarSourceEnv();
+    const file = new File([FEED_TRANSPARENT_ALL_DAY], "personal.ics", {
+      type: "text/calendar",
+    });
+    const formData = new FormData();
+    formData.set("file", file);
+    formData.set("name", "Google");
+
+    const result = await importIcsUpload(env, "owner", formData);
+
+    expect(result.importedCount).toBe(1);
+    expect(state.events).toHaveLength(1);
+    expect(state.events[0]).toMatchObject({
+      title: "Center parks",
+      starts_at: "2026-06-15T00:00:00.000Z",
+      ends_at: "2026-06-16T00:00:00.000Z",
+      all_day: 1,
+      is_busy: 0,
+    });
+  });
+
+  it("keeps current and upcoming events when a large import hits the source cap", async () => {
+    const { env, state } = createCalendarSourceEnv();
+    const file = new File([FEED_WITH_MANY_PAST_EVENTS], "large.ics", {
+      type: "text/calendar",
+    });
+    const formData = new FormData();
+    formData.set("file", file);
+
+    const result = await importIcsUpload(env, "owner", formData);
+
+    expect(result.importedCount).toBe(2500);
+    expect(state.events).toHaveLength(2500);
+    expect(state.events.some((event) => event.title === "Center parks")).toBe(true);
   });
 
   it("keeps existing events and records an error when refresh fails", async () => {
@@ -347,6 +422,7 @@ function applyStatement(state: TestState, sql: string, values: unknown[]) {
       endsAt,
       timezone,
       allDay,
+      isBusy,
     ] = values;
     state.events.push({
       id: id as string,
@@ -360,6 +436,7 @@ function applyStatement(state: TestState, sql: string, values: unknown[]) {
       ends_at: endsAt as string,
       timezone: timezone as string | null,
       all_day: allDay as number,
+      is_busy: isBusy as number,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });

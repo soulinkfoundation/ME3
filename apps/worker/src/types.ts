@@ -247,6 +247,7 @@ export interface DbCalendarSourceEvent {
   ends_at: string;
   timezone: string | null;
   all_day: number;
+  is_busy?: number;
   created_at: string;
 }
 

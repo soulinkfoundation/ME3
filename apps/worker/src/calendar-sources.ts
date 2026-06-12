@@ -18,6 +18,7 @@ type ParsedCalendarEvent = {
   endsAt: string;
   timezone: string | null;
   allDay: boolean;
+  isBusy: boolean;
 };
 
 type CalendarSourceRow = DbCalendarSource & {
@@ -335,7 +336,6 @@ function parseIcsEvents(
     const event = new ICAL.Event(component);
     if (event.isRecurrenceException()) continue;
     if (eventStatus(event) === "CANCELLED") continue;
-    if (eventTransparency(event) === "TRANSPARENT") continue;
 
     if (event.isRecurring()) {
       appendRecurringEventOccurrences(parsedEvents, event, startsAfter, startsBefore);
@@ -346,7 +346,6 @@ function parseIcsEvents(
       }
     }
 
-    if (parsedEvents.length >= MAX_SOURCE_EVENTS) break;
   }
 
   if (parsedEvents.length === 0) {
@@ -354,7 +353,7 @@ function parseIcsEvents(
   }
 
   return parsedEvents
-    .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
+    .sort((a, b) => compareCalendarSourceEventRelevance(a, b, now))
     .slice(0, MAX_SOURCE_EVENTS);
 }
 
@@ -369,7 +368,6 @@ function appendRecurringEventOccurrences(
   let occurrence: IcalTime | null = null;
 
   while (
-    output.length < MAX_SOURCE_EVENTS &&
     guard < MAX_RECURRING_OCCURRENCES_PER_EVENT &&
     (occurrence = iterator.next())
   ) {
@@ -377,7 +375,6 @@ function appendRecurringEventOccurrences(
     const details = event.getOccurrenceDetails(occurrence);
     const detailEvent = details.item as IcalEvent;
     if (eventStatus(detailEvent) === "CANCELLED") continue;
-    if (eventTransparency(detailEvent) === "TRANSPARENT") continue;
 
     const item = parsedEventFromTimes(detailEvent, details.startDate, details.endDate);
     if (!item) continue;
@@ -388,6 +385,29 @@ function appendRecurringEventOccurrences(
       output.push(item);
     }
   }
+}
+
+function compareCalendarSourceEventRelevance(
+  a: ParsedCalendarEvent,
+  b: ParsedCalendarEvent,
+  now: number,
+): number {
+  const aStartsAt = Date.parse(a.startsAt);
+  const bStartsAt = Date.parse(b.startsAt);
+  const aEndsAt = Date.parse(a.endsAt);
+  const bEndsAt = Date.parse(b.endsAt);
+  const aCurrentOrFuture = Number.isFinite(aEndsAt) && aEndsAt >= now;
+  const bCurrentOrFuture = Number.isFinite(bEndsAt) && bEndsAt >= now;
+
+  if (aCurrentOrFuture !== bCurrentOrFuture) {
+    return aCurrentOrFuture ? -1 : 1;
+  }
+
+  if (aCurrentOrFuture && bCurrentOrFuture) {
+    return aStartsAt - bStartsAt;
+  }
+
+  return bStartsAt - aStartsAt;
 }
 
 function parsedEventFromTimes(
@@ -415,6 +435,7 @@ function parsedEventFromTimes(
     endsAt,
     timezone: icalTimeZone(startDate),
     allDay: startDate.isDate === true,
+    isBusy: eventTransparency(event) !== "TRANSPARENT",
   };
 }
 
@@ -550,9 +571,9 @@ async function replaceSourceWithEvents(
   const eventStatement = env.DB.prepare(
     `INSERT INTO calendar_source_events (
        id, source_id, external_key, external_uid, title, notes, location,
-       starts_at, ends_at, timezone, all_day, created_at, updated_at
+       starts_at, ends_at, timezone, all_day, is_busy, created_at, updated_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
   );
 
   for (const event of input.events) {
@@ -569,6 +590,7 @@ async function replaceSourceWithEvents(
         event.endsAt,
         event.timezone,
         event.allDay ? 1 : 0,
+        event.isBusy ? 1 : 0,
       ),
     );
   }
