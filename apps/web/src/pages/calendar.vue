@@ -11,6 +11,7 @@ import type { UiIconName } from "../utils/icons";
 import BookingAvailabilityEditor, {
   type BookingAvailability,
 } from "../components/booking/BookingAvailabilityEditor.vue";
+import { useAppToast } from "../composables/useAppToast";
 import type {
   CalendarAgendaEvent,
   CalendarRangeMode,
@@ -152,11 +153,13 @@ const events = ref<CalendarEventRow[]>([]);
 const importedEvents = ref<CalendarEventRow[]>([]);
 const sources = ref<CalendarSourceRow[]>([]);
 const loading = ref(false);
+const calendarLoaded = ref(false);
 const error = ref("");
-const statusMessage = ref("");
 const updatingReminderId = ref<string | null>(null);
 const cancellingBookingId = ref<string | null>(null);
 const deletingEventId = ref<string | null>(null);
+const { toastSuccess, toastFromUnknown } = useAppToast();
+let calendarLoadToken = 0;
 /** Matches `.cal-shell` stacked layout at `max-width: 1100px`. */
 const CALENDAR_COMPACT_MAX_WIDTH_PX = 1100;
 
@@ -766,6 +769,16 @@ const visibleEvents = computed(() => {
   );
 });
 
+const initialCalendarLoading = computed(
+  () => loading.value && !calendarLoaded.value,
+);
+const calendarRefreshing = computed(
+  () => loading.value && calendarLoaded.value,
+);
+const showCalendarUnavailable = computed(
+  () => !!error.value && !calendarLoaded.value,
+);
+
 const selectedBoardEvent = computed(() => {
   if (!boardHighlightId.value) return null;
   return (
@@ -775,6 +788,7 @@ const selectedBoardEvent = computed(() => {
 });
 
 async function reloadCalendar() {
+  const token = ++calendarLoadToken;
   loading.value = true;
   error.value = "";
 
@@ -787,21 +801,30 @@ async function reloadCalendar() {
     const response = await api.get<CalendarFeedResponse>(
       `/calendar/feed?${qs.toString()}`,
     );
+    if (token !== calendarLoadToken) return;
     bookings.value = response.bookings || [];
     reminders.value = response.reminders || [];
     events.value = response.events || [];
     importedEvents.value = response.importedEvents || [];
     sources.value = response.sources || [];
+    calendarLoaded.value = true;
   } catch (err) {
+    if (token !== calendarLoadToken) return;
     error.value =
       err instanceof Error ? err.message : "Failed to load calendar";
-    bookings.value = [];
-    reminders.value = [];
-    events.value = [];
-    importedEvents.value = [];
-    sources.value = [];
+    if (!calendarLoaded.value) {
+      bookings.value = [];
+      reminders.value = [];
+      events.value = [];
+      importedEvents.value = [];
+      sources.value = [];
+    } else {
+      toastFromUnknown(err, "Failed to refresh calendar");
+    }
   } finally {
-    loading.value = false;
+    if (token === calendarLoadToken) {
+      loading.value = false;
+    }
   }
 }
 
@@ -810,7 +833,7 @@ async function cancelReminder(reminderId: string) {
   updatingReminderId.value = reminderId;
   try {
     await api.put(`/agent/reminders/${reminderId}/cancel`);
-    statusMessage.value = "Reminder cancelled.";
+    toastSuccess("Reminder cancelled.");
     await reloadCalendar();
   } finally {
     updatingReminderId.value = null;
@@ -825,7 +848,7 @@ async function deleteCalendarEvent(eventId: string) {
   deletingEventId.value = eventId;
   try {
     await api.delete(`/calendar/events/${eventId}`);
-    statusMessage.value = "Event deleted.";
+    toastSuccess("Event deleted.");
     await reloadCalendar();
   } catch (err) {
     error.value =
@@ -874,7 +897,7 @@ async function handleCancelBooking(event: CalendarAgendaEvent) {
   cancellingBookingId.value = event.id;
   try {
     await api.delete(`/book/cancel/${event.id}`);
-    statusMessage.value = "Booking cancelled.";
+    toastSuccess("Booking cancelled.");
     await reloadCalendar();
   } catch (err) {
     error.value =
@@ -1097,7 +1120,6 @@ async function openAvailabilitySettings() {
   showSettingsMenu.value = false;
   showCreateMenu.value = false;
   calendarPickerOpen.value = false;
-  statusMessage.value = "";
   availabilityModalOpen.value = true;
   availabilitySiteUsername.value = preferredAvailabilitySiteUsername();
   await loadAvailabilitySettings();
@@ -1174,7 +1196,7 @@ async function saveAvailabilitySettings() {
     }
 
     availabilitySourceProfile.value = nextProfile;
-    statusMessage.value = "Booking availability updated.";
+    toastSuccess("Booking availability updated.");
     closeAvailabilitySettings();
   } catch (err) {
     availabilityError.value =
@@ -1403,7 +1425,6 @@ function openCreateMode(mode: Exclude<CreateMode, null>, dayKey?: string) {
   showCreateMenu.value = false;
   showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
-  statusMessage.value = "";
   if (dayKey) {
     focusedDayKey.value = dayKey;
   }
@@ -1434,7 +1455,6 @@ function openEditReminder(reminderId: string) {
   showCreateMenu.value = false;
   showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
-  statusMessage.value = "";
   newReminderError.value = "";
   editingReminderId.value = reminder.id;
   quickCreateDayKey.value = dateInputFromIso(reminder.remindAt);
@@ -1455,7 +1475,6 @@ function openEditEvent(eventId: string) {
   showCreateMenu.value = false;
   showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
-  statusMessage.value = "";
   newEventError.value = "";
   editingEventId.value = event.id;
   quickCreateDayKey.value = dateInputFromIso(event.startsAt);
@@ -1538,7 +1557,7 @@ async function submitNewBooking() {
     );
     preferSelectEventId.value = response.booking.id;
     boardHighlightId.value = response.booking.id;
-    statusMessage.value = "Booking created.";
+    toastSuccess("Booking created.");
     closeCreateMode();
     await reloadCalendar();
   } catch (err) {
@@ -1582,9 +1601,11 @@ async function submitNewReminder() {
         );
     preferSelectEventId.value = response.reminder.id;
     boardHighlightId.value = response.reminder.id;
-    statusMessage.value = editingReminderId.value
-      ? "Reminder updated."
-      : "Reminder added to your calendar.";
+    toastSuccess(
+      editingReminderId.value
+        ? "Reminder updated."
+        : "Reminder added to your calendar.",
+    );
     closeCreateMode();
     await reloadCalendar();
   } catch (err) {
@@ -1639,12 +1660,14 @@ async function submitNewEvent() {
       : await api.post<{ ok: boolean; event: { id: string } }>(
           "/calendar/events",
           payload,
-        );
+    );
     preferSelectEventId.value = response.event.id;
     boardHighlightId.value = response.event.id;
-    statusMessage.value = editingEventId.value
-      ? "Event updated."
-      : "Event added to your calendar.";
+    toastSuccess(
+      editingEventId.value
+        ? "Event updated."
+        : "Event added to your calendar.",
+    );
     closeCreateMode();
     await reloadCalendar();
   } catch (err) {
@@ -1687,12 +1710,14 @@ async function submitNewBirthday() {
       : await api.post<{ ok: boolean; event: { id: string } }>(
           "/calendar/events",
           payload,
-        );
+    );
     preferSelectEventId.value = response.event.id;
     boardHighlightId.value = response.event.id;
-    statusMessage.value = editingEventId.value
-      ? "Birthday updated."
-      : "Birthday added to your calendar.";
+    toastSuccess(
+      editingEventId.value
+        ? "Birthday updated."
+        : "Birthday added to your calendar.",
+    );
     closeCreateMode();
     await reloadCalendar();
   } catch (err) {
@@ -1753,7 +1778,9 @@ async function submitImport() {
       }>("/calendar/import/ics", formData);
     }
 
-    statusMessage.value = `${importForm.value.mode === "url" ? "Synced" : "Imported"} ${response.importedCount} events from ${response.source.name}.`;
+    toastSuccess(
+      `${importForm.value.mode === "url" ? "Synced" : "Imported"} ${response.importedCount} events from ${response.source.name}.`,
+    );
     closeCreateMode();
     await reloadCalendar();
   } catch (err) {
@@ -1822,7 +1849,11 @@ onBeforeUnmount(() => {
 <template>
   <div class="ops-page calendar-spike">
     <Teleport to="#app-side-nav-mobile-page-controls">
-      <div v-if="!loading && !error" class="cal-mobile-nav-controls" @click.stop>
+      <div
+        v-if="!initialCalendarLoading && !showCalendarUnavailable"
+        class="cal-mobile-nav-controls"
+        @click.stop
+      >
         <div class="cal-period-switcher cal-period-switcher--mobile" aria-label="Calendar period">
           <Button
             color="ghost"
@@ -1958,7 +1989,11 @@ onBeforeUnmount(() => {
     </Teleport>
 
     <main class="main">
-      <div v-if="!loading && !error" class="cal-toolbar" @click.stop>
+      <div
+        v-if="!initialCalendarLoading && !showCalendarUnavailable"
+        class="cal-toolbar"
+        @click.stop
+      >
         <div class="cal-toolbar-left">
           <div class="cal-view-toggle" role="group" aria-label="Calendar range">
             <button
@@ -2098,17 +2133,28 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="loading" class="cal-loading">Loading calendar…</div>
-      <div v-else-if="error" class="cal-error-banner">{{ error }}</div>
+      <div v-if="initialCalendarLoading" class="cal-loading">
+        Loading calendar…
+      </div>
+      <div v-else-if="showCalendarUnavailable" class="cal-error-banner">
+        {{ error }}
+      </div>
       <template v-else>
-        <div v-if="statusMessage" class="cal-status-banner">
-          {{ statusMessage }}
-        </div>
-
         <div
           class="cal-shell"
-          :class="{ 'cal-shell--board-view': rangeMode !== 'schedule' }"
+          :class="{
+            'cal-shell--board-view': rangeMode !== 'schedule',
+            'cal-shell--refreshing': calendarRefreshing,
+          }"
         >
+            <div
+              v-if="calendarRefreshing"
+              class="cal-refresh-indicator"
+              role="status"
+              aria-live="polite"
+            >
+              Updating…
+            </div>
             <aside class="cal-sidebar">
               <div class="cal-sidebar-calendar-tools">
                 <CalendarMiniMonth
@@ -3175,8 +3221,7 @@ onBeforeUnmount(() => {
 }
 
 .cal-loading,
-.cal-error-banner,
-.cal-status-banner {
+.cal-error-banner {
   padding: 20px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -3189,15 +3234,33 @@ onBeforeUnmount(() => {
   color: #b33b2e;
 }
 
-.cal-status-banner {
-  color: var(--color-text);
-}
-
 .cal-shell {
+  position: relative;
   display: grid;
   grid-template-columns: 228px minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+
+.cal-shell--refreshing .cal-board-wrap {
+  opacity: 0.72;
+  transition: opacity 140ms ease;
+}
+
+.cal-refresh-indicator {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  padding: 6px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text-muted);
+  box-shadow: var(--ui-shadow-sm);
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
 }
 
 .cal-sidebar {
