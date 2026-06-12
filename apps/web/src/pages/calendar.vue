@@ -158,6 +158,7 @@ const error = ref("");
 const updatingReminderId = ref<string | null>(null);
 const cancellingBookingId = ref<string | null>(null);
 const deletingEventId = ref<string | null>(null);
+const removingSourceId = ref<string | null>(null);
 const { toastSuccess, toastFromUnknown } = useAppToast();
 let calendarLoadToken = 0;
 /** Matches `.cal-shell` stacked layout at `max-width: 1100px`. */
@@ -908,6 +909,45 @@ async function handleCancelBooking(event: CalendarAgendaEvent) {
           : "Failed to cancel booking";
   } finally {
     cancellingBookingId.value = null;
+  }
+}
+
+async function removeImportedCalendarSource(source: CalendarSourceRow) {
+  if (removingSourceId.value) return;
+  if (
+    !window.confirm(
+      `Remove ${source.name} from your calendar? Imported events from this source will be removed locally.`,
+    )
+  ) {
+    return;
+  }
+
+  removingSourceId.value = source.id;
+  try {
+    await api.delete(`/calendar/sources/${encodeURIComponent(source.id)}`);
+    const sourceKey = `import:${source.id}`;
+    if (sidebarSiteFilter.value === sourceKey) {
+      sidebarSiteFilter.value = "all";
+    }
+    if (boardHighlightId.value) {
+      const removedEventIds = new Set(
+        importedEvents.value
+          .filter((event) => event.sourceId === source.id)
+          .map((event) => event.id),
+      );
+      if (removedEventIds.has(boardHighlightId.value)) {
+        boardHighlightId.value = "";
+      }
+    }
+    sources.value = sources.value.filter((item) => item.id !== source.id);
+    importedEvents.value = importedEvents.value.filter(
+      (event) => event.sourceId !== source.id,
+    );
+    toastSuccess(`${source.name} removed.`);
+  } catch (err) {
+    toastFromUnknown(err, "Could not remove calendar source");
+  } finally {
+    removingSourceId.value = null;
   }
 }
 
@@ -2242,32 +2282,44 @@ onBeforeUnmount(() => {
                   />
                   <span class="cal-filter-label">Birthdays</span>
                 </label>
-                <label
+                <div
                   v-for="source in sources"
                   :key="source.id"
-                  class="cal-filter-row"
+                  class="cal-filter-row cal-filter-row--with-action"
                 >
-                  <input
-                    v-model="sidebarSiteFilter"
-                    type="radio"
-                    class="cal-filter-input"
-                    :value="`import:${source.id}`"
-                  />
-                  <span
-                    class="cal-swatch"
-                    :style="{ background: siteDotColor(`import:${source.id}`) }"
-                    aria-hidden="true"
-                  />
-                  <span class="cal-filter-label">
-                    {{ source.name }}
-                    <small v-if="source.lastSyncError" class="cal-filter-meta cal-filter-meta--error">
-                      Sync failed
-                    </small>
-                    <small v-else-if="source.kind === 'ics_url'" class="cal-filter-meta">
-                      {{ source.sourceUrlHint || "Subscribed" }}
-                    </small>
-                  </span>
-                </label>
+                  <label class="cal-filter-choice">
+                    <input
+                      v-model="sidebarSiteFilter"
+                      type="radio"
+                      class="cal-filter-input"
+                      :value="`import:${source.id}`"
+                    />
+                    <span
+                      class="cal-swatch"
+                      :style="{ background: siteDotColor(`import:${source.id}`) }"
+                      aria-hidden="true"
+                    />
+                    <span class="cal-filter-label">
+                      {{ source.name }}
+                      <small v-if="source.lastSyncError" class="cal-filter-meta cal-filter-meta--error">
+                        Sync failed
+                      </small>
+                      <small v-else-if="source.kind === 'ics_url'" class="cal-filter-meta">
+                        {{ source.sourceUrlHint || "Subscribed" }}
+                      </small>
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    class="cal-filter-action"
+                    :disabled="removingSourceId === source.id"
+                    :aria-label="`Remove ${source.name}`"
+                    :title="`Remove ${source.name}`"
+                    @click="removeImportedCalendarSource(source)"
+                  >
+                    <UiIcon name="Trash2" :size="14" />
+                  </button>
+                </div>
               </section>
             </aside>
 
@@ -3350,6 +3402,46 @@ onBeforeUnmount(() => {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
+}
+
+.cal-filter-row--with-action {
+  gap: 6px;
+  cursor: default;
+}
+
+.cal-filter-choice {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.cal-filter-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.cal-filter-action:hover:not(:disabled),
+.cal-filter-action:focus-visible {
+  border-color: color-mix(in oklab, #b33b2e, var(--ui-border) 50%);
+  background: color-mix(in oklab, #b33b2e, transparent 90%);
+  color: #b33b2e;
+}
+
+.cal-filter-action:disabled {
+  cursor: wait;
+  opacity: 0.5;
 }
 
 .cal-filter-input {

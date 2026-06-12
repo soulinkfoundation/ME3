@@ -196,6 +196,33 @@ export async function refreshCalendarSource(
   return refreshCalendarSourceRow(env, source, fetcher);
 }
 
+export async function removeCalendarSource(
+  env: Env,
+  ownerId: string,
+  sourceId: string,
+): Promise<{ ok: true; sourceId: string }> {
+  const source = await getCalendarSource(env, ownerId, sourceId);
+  if (!source) {
+    throw new CalendarSourceInputError("Calendar source not found.", 404);
+  }
+
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM calendar_source_events WHERE source_id = ?")
+      .bind(source.id),
+    env.DB.prepare(
+      `UPDATE calendar_sources
+       SET status = 'archived',
+           encrypted_source_url = NULL,
+           imported_event_count = 0,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(source.id, ownerId),
+  ]);
+
+  return { ok: true, sourceId: source.id };
+}
+
 export async function dispatchDueCalendarSourceRefreshes(
   env: Env,
   fetcher: FetchLike = fetch,

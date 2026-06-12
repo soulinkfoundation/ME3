@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchDueCalendarSourceRefreshes,
   importIcsUpload,
+  removeCalendarSource,
   refreshCalendarSource,
   subscribeIcsUrl,
 } from "./calendar-sources";
@@ -258,6 +259,24 @@ describe("calendar source subscriptions", () => {
     expect(state.events).toHaveLength(1);
     expect(state.events[0]!.title).toBe("Client call");
   });
+
+  it("removes an imported source and its events", async () => {
+    const { env, state } = createCalendarSourceEnv();
+    const fetcher = vi.fn(async () => new Response(FEED_ONE)) as typeof fetch;
+    const subscribed = await subscribeIcsUrl(env, "owner", {
+      url: "https://calendar.google.com/calendar/ical/private/basic.ics",
+    }, fetcher);
+
+    const result = await removeCalendarSource(env, "owner", subscribed.source.id);
+
+    expect(result).toEqual({ ok: true, sourceId: subscribed.source.id });
+    expect(state.sources[0]).toMatchObject({
+      status: "archived",
+      imported_event_count: 0,
+      encrypted_source_url: null,
+    });
+    expect(state.events).toHaveLength(0);
+  });
 });
 
 function createCalendarSourceEnv() {
@@ -386,6 +405,17 @@ function applyStatement(state: TestState, sql: string, values: unknown[]) {
   if (sql.includes("DELETE FROM calendar_source_events")) {
     const [sourceId] = values;
     state.events = state.events.filter((event) => event.source_id !== sourceId);
+    return;
+  }
+
+  if (sql.includes("UPDATE calendar_sources") && sql.includes("status = 'archived'")) {
+    const [sourceId] = values;
+    const source = state.sources.find((item) => item.id === sourceId);
+    if (!source) return;
+    source.status = "archived";
+    source.encrypted_source_url = null;
+    source.imported_event_count = 0;
+    source.updated_at = new Date().toISOString();
     return;
   }
 
