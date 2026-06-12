@@ -4,11 +4,11 @@
 
 Ready to take ownership of your digital life? ME too!
 
-With ME3, you can.
-
-(Note: some features require $5/month 'workers paid' plan in Cloudflare) 
+With ME3, now you can.
 
 [ screenshot ]
+
+(Note: some features require $5/month 'workers paid' plan in Cloudflare) 
 
 ## ☁️ Install
 
