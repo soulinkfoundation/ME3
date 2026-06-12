@@ -4,7 +4,9 @@
 
 Ready to take ownership of your digital life? ME too!
 
-With ME3 (+ $5/month for hosting), you can.
+With ME3, you can.
+
+(Note: some features require $5/month 'workers paid' plan in Cloudflare) 
 
 [ screenshot ]
 
