@@ -13,6 +13,11 @@ new_sqlite_classes = ["Me3UserAgent"]
 [ai]
 binding = "AI"
 
+# Cloudflare Email Service sender binding. Account -> Email stores the sender
+# address; this deploy-time binding lets the Worker call env.EMAIL.send().
+[[send_email]]
+name = "EMAIL"
+
 [triggers]
 crons = ["* * * * *"]
 
