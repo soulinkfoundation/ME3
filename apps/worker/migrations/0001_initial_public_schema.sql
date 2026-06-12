@@ -1,5 +1,5 @@
 -- ME3 Core initial public D1 schema baseline.
--- Generated from the private pre-release migration chain through 0037_ai_gateway_external_routing_default.sql.
+-- Squashed from the private pre-release migration chain plus launch-ready Core migrations.
 -- After the first public release, published migration files are immutable; append new numbered migrations only.
 
 CREATE TABLE "agent_channel_connections" (
@@ -370,6 +370,7 @@ CREATE TABLE calendar_source_events (
   ends_at TEXT NOT NULL,
   timezone TEXT,
   all_day INTEGER NOT NULL DEFAULT 0,
+  is_busy INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (source_id) REFERENCES calendar_sources(id) ON DELETE CASCADE
@@ -377,11 +378,15 @@ CREATE TABLE calendar_source_events (
 CREATE TABLE calendar_sources (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT 'owner',
-  kind TEXT NOT NULL DEFAULT 'ics_upload' CHECK (kind IN ('ics_upload')),
+  kind TEXT NOT NULL DEFAULT 'ics_upload' CHECK (kind IN ('ics_upload', 'ics_url')),
   name TEXT NOT NULL,
   original_filename TEXT,
+  encrypted_source_url TEXT,
+  source_url_hint TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
   imported_event_count INTEGER NOT NULL DEFAULT 0,
+  last_synced_at TEXT,
+  last_sync_error TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
@@ -957,9 +962,12 @@ CREATE TABLE owner_profile (
   bio TEXT,
   avatar_url TEXT,
   timezone TEXT,
+  password_hash TEXT,
+  locale TEXT,
+  assistant_name TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-, password_hash TEXT, locale TEXT);
+);
 CREATE TABLE plugin_installations (
   plugin_id TEXT PRIMARY KEY,
   version TEXT NOT NULL,
@@ -1335,6 +1343,8 @@ CREATE INDEX idx_bookings_starts_at ON bookings(starts_at);
 CREATE INDEX idx_bookings_status ON bookings(status);
 CREATE INDEX idx_calendar_source_events_window
   ON calendar_source_events(source_id, starts_at, ends_at);
+CREATE INDEX idx_calendar_sources_url_refresh
+  ON calendar_sources(kind, status, last_synced_at);
 CREATE INDEX idx_contacts_next_followup ON contacts(user_id, next_followup_at)
   WHERE next_followup_at IS NOT NULL;
 CREATE INDEX idx_contacts_status ON contacts(user_id, status);
