@@ -50,6 +50,7 @@ const ICS_UPLOAD_SYNC_FUTURE_DAYS = 3650;
 const MAX_ICS_BYTES = 2_000_000;
 const MAX_SOURCE_EVENTS = 2500;
 const MAX_RECURRING_OCCURRENCES_PER_EVENT = 1000;
+const MAX_RECURRING_SCAN_PER_EVENT = 10_000;
 const URL_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export class CalendarSourceInputError extends Error {
@@ -390,15 +391,17 @@ function appendRecurringEventOccurrences(
   startsAfter: number,
   startsBefore: number,
 ) {
-  const iterator = event.iterator(ICAL.Time.fromJSDate(new Date(startsAfter), true));
-  let guard = 0;
+  const iterator = event.iterator();
+  let scanGuard = 0;
+  let addedCount = 0;
   let occurrence: IcalTime | null = null;
 
   while (
-    guard < MAX_RECURRING_OCCURRENCES_PER_EVENT &&
+    scanGuard < MAX_RECURRING_SCAN_PER_EVENT &&
+    addedCount < MAX_RECURRING_OCCURRENCES_PER_EVENT &&
     (occurrence = iterator.next())
   ) {
-    guard += 1;
+    scanGuard += 1;
     const details = event.getOccurrenceDetails(occurrence);
     const detailEvent = details.item as IcalEvent;
     if (eventStatus(detailEvent) === "CANCELLED") continue;
@@ -410,6 +413,7 @@ function appendRecurringEventOccurrences(
     if (Number.isFinite(startsAt) && startsAt > startsBefore) break;
     if (eventOverlapsWindow(item, startsAfter, startsBefore)) {
       output.push(item);
+      addedCount += 1;
     }
   }
 }

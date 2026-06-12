@@ -83,6 +83,29 @@ SUMMARY:Monthly planning
 END:VEVENT
 END:VCALENDAR`;
 
+const FEED_YEARLY_BIRTHDAY = `BEGIN:VCALENDAR
+VERSION:2.0
+X-WR-CALNAME:Birthdays
+BEGIN:VEVENT
+UID:birthday-1
+DTSTART;VALUE=DATE:20200523
+DTEND;VALUE=DATE:20200524
+RRULE:FREQ=YEARLY
+SUMMARY:Stephens Birthday
+TRANSP:TRANSPARENT
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:timed-1
+DTSTART;TZID=Europe/Dublin:20160519T133000
+DTEND;TZID=Europe/Dublin:20160519T143000
+RRULE:FREQ=YEARLY;WKST=MO
+SUMMARY:Ide and ruain
+TRANSP:OPAQUE
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR`;
+
 const FEED_TRANSPARENT_ALL_DAY = `BEGIN:VCALENDAR
 VERSION:2.0
 X-WR-CALNAME:Personal Calendar
@@ -203,6 +226,43 @@ describe("calendar source subscriptions", () => {
     expect(Date.parse(state.events[0]!.starts_at)).toBeGreaterThanOrEqual(
       Date.parse("2026-03-12T12:00:00.000Z"),
     );
+  });
+
+  it("preserves yearly all-day and timed recurrence dates from Google exports", async () => {
+    const { env, state } = createCalendarSourceEnv();
+    const file = new File([FEED_YEARLY_BIRTHDAY], "birthdays.ics", {
+      type: "text/calendar",
+    });
+    const formData = new FormData();
+    formData.set("file", file);
+
+    await importIcsUpload(env, "owner", formData);
+
+    expect(state.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Stephens Birthday",
+          starts_at: "2026-05-23T00:00:00.000Z",
+          ends_at: "2026-05-24T00:00:00.000Z",
+          all_day: 1,
+          is_busy: 0,
+        }),
+        expect.objectContaining({
+          title: "Ide and ruain",
+          starts_at: "2026-05-19T12:30:00.000Z",
+          ends_at: "2026-05-19T13:30:00.000Z",
+          all_day: 0,
+          is_busy: 1,
+        }),
+      ]),
+    );
+    expect(
+      state.events.some(
+        (event) =>
+          event.title === "Stephens Birthday" &&
+          event.starts_at === "2026-06-14T20:43:29.000Z",
+      ),
+    ).toBe(false);
   });
 
   it("imports transparent Google events for display without marking them busy", async () => {
