@@ -2205,27 +2205,32 @@ onMounted(async () => {
                   </div>
 
                   <div
-                    class="connection-line"
+                    class="connection-line connection-line--telegram"
                     :class="{
                       'connection-line--connected':
                         telegramPanelRef?.connection?.status === 'active',
                     }"
                   >
-                    <div class="connection-line__copy">
+                    <div class="connection-line__header">
                       <span class="connection-line__title">Telegram</span>
-                      <p class="connection-line__description">
-                        Connect your own bot for assistant messages.
-                      </p>
-                    </div>
-                    <div class="connection-line__end">
                       <StatusBadge
                         v-if="telegramPanelRef?.available"
                         :tone="telegramStatusClass"
                       >
                         {{ telegramStatusLabel }}
                       </StatusBadge>
+                    </div>
+                    <ol class="telegram-setup-steps">
+                      <li>Open Telegram and search for BotFather.</li>
+                      <li>Type <code>/newbot</code> and follow the instructions.</li>
+                      <li>
+                        You will get a bot name and token. Save them here.
+                      </li>
+                    </ol>
+                    <div class="connection-line__end">
                       <TelegramConnectPanel
                         ref="telegramPanelRef"
+                        :show-status-row="false"
                         :auto-prepare-when-not-connected="
                           route.query.section === 'telegram'
                         "
@@ -3753,6 +3758,12 @@ h1 {
   );
 }
 
+.connection-line--telegram {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
 .connection-line__copy {
   flex: 1;
   min-width: 0;
@@ -3775,6 +3786,13 @@ h1 {
   line-height: 1.4;
 }
 
+.connection-line__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .connection-line__meta {
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 12px;
@@ -3787,6 +3805,34 @@ h1 {
   gap: 8px;
   flex-shrink: 0;
   padding-top: 2px;
+}
+
+.connection-line--telegram .connection-line__end {
+  display: block;
+  padding-top: 0;
+}
+
+.telegram-setup-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.telegram-setup-steps li::marker {
+  color: var(--ui-accent, var(--color-accent));
+  font-weight: 700;
+}
+
+.telegram-setup-steps code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font-size: 12px;
 }
 
 .connection-lines__hint {
@@ -4191,6 +4237,10 @@ h1 {
     width: 100%;
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .connection-line__header {
+    align-items: flex-start;
   }
 
   .timezone-row,

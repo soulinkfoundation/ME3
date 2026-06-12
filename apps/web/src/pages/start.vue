@@ -598,8 +598,8 @@ onBeforeUnmount(clearUsernameCheck);
           </header>
           <ul class="telegram-setup-steps">
             <li>Open Telegram and search for BotFather.</li>
-            <li>Follow BotFather's instructions to create a new bot.</li>
-            <li>Paste the bot username, token, and webhook secret below.</li>
+            <li>Type /newbot and follow BotFather's instructions.</li>
+            <li>Paste the bot username and token below.</li>
           </ul>
           <TelegramConnectPanel
             variant="default"

@@ -52,10 +52,12 @@ const props = withDefaults(
     variant?: "default" | "compact";
     /** After first load, call setup when user can connect but is not active yet (e.g. ?section=telegram or dashboard modal). */
     autoPrepareWhenNotConnected?: boolean;
+    showStatusRow?: boolean;
   }>(),
   {
     variant: "default",
     autoPrepareWhenNotConnected: false,
+    showStatusRow: true,
   },
 );
 
@@ -103,7 +105,7 @@ const statusHint = computed(() => {
   }
 
   if (!configured.value) {
-    return "Paste your BotFather details to connect Telegram.";
+    return "Paste the bot name and token from BotFather to connect Telegram.";
   }
 
   if (!connection.value) {
@@ -168,20 +170,13 @@ const telegramWebhookSyncDisabled = computed(
     webhookSyncing.value ||
     settingsSaving.value ||
     !botUsernameInput.value.trim() ||
-    (!tokenConfigured.value && !botTokenInput.value.trim()) ||
-    (!webhookSecretConfigured.value && !webhookSecretInput.value.trim()),
+    (!tokenConfigured.value && !botTokenInput.value.trim()),
 );
 
 const botTokenPlaceholder = computed(() =>
   botTokenHint.value
     ? `Stored token ${botTokenHint.value}; paste a new token to replace`
     : "Paste BotFather token",
-);
-
-const webhookSecretPlaceholder = computed(() =>
-  webhookSecretHint.value
-    ? `Stored secret ${webhookSecretHint.value}; paste a new secret to replace`
-    : "Generate or paste webhook secret",
 );
 
 function formatTelegramUser(current: TelegramConnectionRecord) {
@@ -267,6 +262,9 @@ async function saveTelegramSettings() {
 
 async function saveAndSyncTelegramWebhook() {
   if (telegramWebhookSyncDisabled.value) return;
+  if (!webhookSecretConfigured.value && !webhookSecretInput.value.trim()) {
+    generateWebhookSecret();
+  }
   await saveTelegramSettings();
   if (error.value) return;
 
@@ -418,7 +416,7 @@ defineExpose({
     <div v-if="loading" class="status-row">Loading Telegram…</div>
 
     <template v-else-if="available">
-      <template v-if="variant === 'default'">
+      <template v-if="variant === 'default' && showStatusRow">
         <div
           class="status-row"
           :class="{ verified: connection?.status === 'active' }"
@@ -437,8 +435,8 @@ defineExpose({
       <div v-if="showSetupForm" class="telegram-operator-note">
         <h3>Bot setup</h3>
         <p>
-          Paste the username and token from @BotFather. ME3 will save them and
-          set the webhook for this install.
+          Paste the bot name and token from BotFather. ME3 will generate the
+          webhook secret and set the webhook for this install.
         </p>
         <form class="telegram-settings-form" @submit.prevent="saveAndSyncTelegramWebhook">
           <label class="telegram-field">
@@ -459,25 +457,6 @@ defineExpose({
               autocomplete="off"
               :placeholder="botTokenPlaceholder"
             />
-          </label>
-          <label class="telegram-field">
-            <span>Webhook secret</span>
-            <div class="telegram-secret-row">
-              <input
-                v-model="webhookSecretInput"
-                type="password"
-                autocomplete="off"
-                :placeholder="webhookSecretPlaceholder"
-              />
-              <Button
-                color="secondary"
-                size="small"
-                type="button"
-                @click="generateWebhookSecret"
-              >
-                Generate
-              </Button>
-            </div>
           </label>
           <div class="telegram-settings-actions">
             <Button
@@ -680,13 +659,6 @@ defineExpose({
   border-color: var(--ui-accent, var(--color-border));
 }
 
-.telegram-secret-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
 .telegram-settings-actions {
   display: flex;
   flex-wrap: wrap;
@@ -801,12 +773,10 @@ defineExpose({
 }
 
 @media (max-width: 520px) {
-  .telegram-secret-row,
   .telegram-settings-actions {
     grid-template-columns: 1fr;
   }
 
-  .telegram-secret-row .me3-btn,
   .telegram-settings-actions .me3-btn {
     width: 100%;
     justify-content: center;
