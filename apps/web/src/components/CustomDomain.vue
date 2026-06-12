@@ -370,13 +370,6 @@ watch(
 
       <!-- No domain connected -->
       <div v-else class="no-domain">
-        <p class="default-me3-url">
-          Default ME3 url:
-          <a :href="workerFallbackUrl" target="_blank" rel="noopener">
-            {{ workerFallbackUrl }}
-          </a>
-        </p>
-
         <!-- Connect existing domain -->
         <div v-if="!showDomainInput && !embedded" class="domain-actions">
           <p v-if="!isProfilePublished" class="domain-requirement">
@@ -444,6 +437,10 @@ watch(
               <template v-if="adminHost">
                 · ME3 login: <strong>{{ adminHost }}</strong>
               </template>
+              · Default ME3 url:
+              <a :href="workerFallbackUrl" target="_blank" rel="noopener">
+                <strong>{{ workerFallbackUrl }}</strong>
+              </a>
             </span>
             <span v-else-if="normalizedDomainInput" class="domain-note">
               Use the root domain you control, like

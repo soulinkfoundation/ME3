@@ -432,48 +432,45 @@ defineExpose({
         {{ statusHint }}
       </p>
 
-      <div v-if="showSetupForm" class="telegram-operator-note">
-        <h3>Bot setup</h3>
-        <p>
-          Paste the bot name and token from BotFather. ME3 will generate the
-          webhook secret and set the webhook for this install.
-        </p>
-        <form class="telegram-settings-form" @submit.prevent="saveAndSyncTelegramWebhook">
-          <label class="telegram-field">
-            <span>Bot username</span>
-            <input
-              v-model="botUsernameInput"
-              type="text"
-              inputmode="text"
-              autocomplete="off"
-              placeholder="your_me3_bot"
-            />
-          </label>
-          <label class="telegram-field">
-            <span>Bot token</span>
-            <input
-              v-model="botTokenInput"
-              type="password"
-              autocomplete="off"
-              :placeholder="botTokenPlaceholder"
-            />
-          </label>
-          <div class="telegram-settings-actions">
-            <Button
-              color="primary"
-              size="small"
-              type="submit"
-              :disabled="telegramWebhookSyncDisabled"
-            >
-              {{
-                webhookSyncing || settingsSaving
-                  ? "Connecting..."
-                  : "Save & connect"
-              }}
-            </Button>
-          </div>
-        </form>
-      </div>
+      <form
+        v-if="showSetupForm"
+        class="telegram-settings-form"
+        @submit.prevent="saveAndSyncTelegramWebhook"
+      >
+        <label class="telegram-field">
+          <span>Bot username</span>
+          <input
+            v-model="botUsernameInput"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            placeholder="your_me3_bot"
+          />
+        </label>
+        <label class="telegram-field">
+          <span>Bot token</span>
+          <input
+            v-model="botTokenInput"
+            type="password"
+            autocomplete="off"
+            :placeholder="botTokenPlaceholder"
+          />
+        </label>
+        <div class="telegram-settings-actions">
+          <Button
+            color="primary"
+            size="small"
+            type="submit"
+            :disabled="telegramWebhookSyncDisabled"
+          >
+            {{
+              webhookSyncing || settingsSaving
+                ? "Connecting..."
+                : "Save & connect"
+            }}
+          </Button>
+        </div>
+      </form>
 
       <div v-if="configured" class="telegram-qr-section">
         <dl
@@ -604,26 +601,6 @@ defineExpose({
   font-size: 14px;
   line-height: 1.45;
   color: var(--color-text-muted);
-}
-
-.telegram-operator-note {
-  margin-top: 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface-muted, rgba(0, 0, 0, 0.03));
-}
-
-.telegram-operator-note h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.telegram-operator-note p {
-  margin: 6px 0 0;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 .telegram-settings-form {

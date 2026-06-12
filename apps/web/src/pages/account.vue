@@ -1783,59 +1783,56 @@ onMounted(async () => {
 
             <template v-else-if="mailboxAvailable">
               <div class="email-settings">
-                <details class="email-disclosure domain-email-disclosure">
-                  <summary>Custom domain</summary>
-                  <div class="email-disclosure-body">
-                    <div class="setup-disclosure-intro">
+                <section class="domain-email-section">
+                  <div class="setup-disclosure-intro">
+                    <div>
+                      <h3>Custom domain</h3>
                       <p>
-                        A custom domain is required to set up email. Follow the
-                        steps here.
+                        Follow the steps in the
+                        <button
+                          class="setup-guide-link"
+                          type="button"
+                          @click="customDomainGuideOpen = true"
+                        >
+                          setup guide</button
+                        >.
                       </p>
-                      <Button
-                        color="outline"
-                        size="compact"
-                        type="button"
-                        @click="customDomainGuideOpen = true"
-                      >
-                        Setup guide
-                      </Button>
                     </div>
-
-                    <div v-if="sites.loading" class="status-row">
-                      Loading site domain settings...
-                    </div>
-                    <template v-else-if="customDomainSite">
-                      <CustomDomain
-                        embedded
-                        :username="customDomainSite.username"
-                        :show-settings-link="false"
-                        :profile-published="
-                          Boolean(customDomainSite.published_at)
-                        "
-                        :initial-domain="customDomainSuggestedDomain"
-                        @domain-status-changed="() => void sites.fetchSites()"
-                      />
-                    </template>
-                    <p v-else class="error">
-                      Create a ME3 site before connecting a custom domain.
-                    </p>
                   </div>
-                </details>
+
+                  <div v-if="sites.loading" class="status-row">
+                    Loading site domain settings...
+                  </div>
+                  <template v-else-if="customDomainSite">
+                    <CustomDomain
+                      embedded
+                      :username="customDomainSite.username"
+                      :show-settings-link="false"
+                      :profile-published="Boolean(customDomainSite.published_at)"
+                      :initial-domain="customDomainSuggestedDomain"
+                      @domain-status-changed="() => void sites.fetchSites()"
+                    />
+                  </template>
+                  <p v-else class="error">
+                    Create a ME3 site before connecting a custom domain.
+                  </p>
+                </section>
 
                 <section class="mailbox-setup">
                   <div class="setup-disclosure-intro">
                     <div>
                       <h3>Mailbox</h3>
-                      <p>To receive/send email follow the steps here.</p>
+                      <p>
+                        Follow the steps in the
+                        <button
+                          class="setup-guide-link"
+                          type="button"
+                          @click="mailboxGuideOpen = true"
+                        >
+                          setup guide</button
+                        >.
+                      </p>
                     </div>
-                    <Button
-                      color="outline"
-                      size="compact"
-                      type="button"
-                      @click="mailboxGuideOpen = true"
-                    >
-                      Setup guide
-                    </Button>
                   </div>
 
                   <div class="email-address-save">
@@ -1903,9 +1900,12 @@ onMounted(async () => {
                       be saved.
                     </p>
 
-                    <label class="field">
-                      <span>Provider</span>
-                      <select v-model="selectedEmailProviderId" class="input">
+                    <div class="field">
+                      <select
+                        v-model="selectedEmailProviderId"
+                        class="input"
+                        aria-label="Email sender provider"
+                      >
                         <option
                           v-for="provider in emailProviders"
                           :key="provider.id"
@@ -1914,7 +1914,7 @@ onMounted(async () => {
                           {{ provider.label }}
                         </option>
                       </select>
-                    </label>
+                    </div>
 
                     <div
                       v-if="activeEmailProvider"
@@ -3095,7 +3095,13 @@ onMounted(async () => {
                 >.
               </li>
               <li>Select your domain and click done.</li>
-              <li>Visit <router-link to="/email">/email</router-link> to send an email.</li>
+              <li>
+                Visit
+                <a href="/email" target="_blank" rel="noopener noreferrer"
+                  >/email</a
+                >
+                to send an email.
+              </li>
             </ol>
             <p>
               If you want to use another sender/provider like Postmark,
@@ -3564,11 +3570,6 @@ h1 {
   margin-top: 4px;
 }
 
-.domain-email-disclosure {
-  border-top: 0;
-  padding-top: 0;
-}
-
 .setup-disclosure-intro {
   display: flex;
   align-items: flex-start;
@@ -3589,6 +3590,28 @@ h1 {
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 13px;
   line-height: 1.45;
+}
+
+.domain-email-section {
+  display: grid;
+  gap: 12px;
+}
+
+.setup-guide-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ui-accent, var(--color-accent));
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.setup-guide-link:hover,
+.setup-guide-link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .mailbox-setup {
