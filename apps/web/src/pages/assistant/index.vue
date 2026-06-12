@@ -719,7 +719,21 @@ const weekdayOptions = [
 const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const jobBuilderStarterPrompt =
   "/job Every friday, review my projects and outstanding tasks";
-const starterPrompts = [
+const configureStarterPrompt =
+  "Help me configure this ME3 Core install. Start Configure mode and ask which ME3 area I want to work on first: install and updates, account/domain/email, assistant settings, jobs, plugins, local executor, or recovery. Use the bundled ME3 Core Configuration skill. If the task becomes Cloudflare-specific, use the bundled Cloudflare Platform skill and do not guess provider steps.";
+type StarterPrompt = {
+  label: string;
+  icon: string;
+  prompt: string;
+  tone?: "configure";
+};
+const starterPrompts: StarterPrompt[] = [
+  {
+    label: "Configure",
+    icon: "⚙️",
+    prompt: configureStarterPrompt,
+    tone: "configure",
+  },
   {
     label: "Set up a job",
     icon: "💼",
@@ -4357,6 +4371,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 :key="prompt.label"
                 type="button"
                 class="starter-prompt"
+                :class="{
+                  'starter-prompt--configure': prompt.tone === 'configure',
+                }"
                 @click="useStarterPrompt(prompt.prompt)"
               >
                 <span class="starter-prompt__icon" aria-hidden="true">
@@ -5450,8 +5467,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <div>
                   <h4>{{ skill.name }}</h4>
                   <p>{{ skill.description || skill.sourceRef }}</p>
+                  <span
+                    v-if="skill.sourceKind === 'core'"
+                    class="assistant-skills__badge"
+                  >
+                    Built in
+                  </span>
                 </div>
                 <Button
+                  v-if="skill.sourceKind !== 'core'"
                   color="ghost"
                   shape="soft"
                   size="compact"
@@ -6915,6 +6939,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text);
 }
 
+.starter-prompt--configure {
+  border-color: color-mix(in oklab, var(--ui-accent) 62%, var(--ui-border));
+  background: color-mix(in oklab, var(--ui-accent-soft) 70%, var(--ui-surface));
+  color: var(--ui-text);
+}
+
 .assistant-message {
   display: flex;
   flex-direction: column;
@@ -8105,6 +8135,18 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-skills__card h4,
 .assistant-skills__card p {
   margin: 0;
+}
+
+.assistant-skills__badge {
+  display: inline-flex;
+  margin-top: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .assistant-skills__card h4 {

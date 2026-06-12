@@ -92,21 +92,6 @@ router.beforeEach(async (to, _from, next) => {
     return;
   }
 
-  if (to.path === "/start" && auth.isAuthenticated) {
-    const sites = useSitesStore();
-    try {
-      await sites.fetchSites();
-      if (
-        sites.sites.some((site) => (site.site_type || "profile") === "profile")
-      ) {
-        next({ path: DEFAULT_APP_PATH, replace: true });
-        return;
-      }
-    } catch {
-      // Stay on onboarding when site state cannot be resolved.
-    }
-  }
-
   if (to.path === "/dashboard" || to.path === "/dashboard/") {
     next({
       path: DEFAULT_APP_PATH,

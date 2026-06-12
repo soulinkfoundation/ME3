@@ -34,4 +34,5 @@ playwright-report/
 .gitattributes
 AGENTS.md
 
-/docs
+# Local-only development docs
+/dev-docs/

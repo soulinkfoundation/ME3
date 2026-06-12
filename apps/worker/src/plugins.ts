@@ -789,7 +789,7 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   name: "ME3 Agent Chat",
   version: "0.1.0",
   description:
-    "Chat with your ME3 assistant from the side panel.",
+    "Chat with your ME3 assistant in the full AI chat workspace.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",

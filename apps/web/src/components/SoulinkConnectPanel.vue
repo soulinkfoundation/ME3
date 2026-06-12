@@ -33,10 +33,12 @@ const props = withDefaults(
   defineProps<{
     variant?: "default" | "compact" | "inline";
     autoPrepareWhenNotConnected?: boolean;
+    showStatusDetails?: boolean;
   }>(),
   {
     variant: "default",
     autoPrepareWhenNotConnected: false,
+    showStatusDetails: true,
   },
 );
 
@@ -295,7 +297,7 @@ defineExpose({
       </div>
 
       <div
-        v-else-if="variant === 'default'"
+        v-else-if="variant === 'default' && showStatusDetails"
         class="status-row"
       >
         <span class="status-pill">
@@ -304,10 +306,12 @@ defineExpose({
         </span>
         <span>{{ statusHint }}</span>
       </div>
-      <p v-else class="soulink-compact-hint">{{ statusHint }}</p>
+      <p v-else-if="showStatusDetails" class="soulink-compact-hint">
+        {{ statusHint }}
+      </p>
 
       <dl
-        v-if="connectionDetails.length"
+        v-if="showStatusDetails && connectionDetails.length"
         class="soulink-health"
         aria-label="Soulink connection health"
       >

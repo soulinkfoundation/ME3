@@ -117,7 +117,13 @@ describe("assistant skills", () => {
     expect(created.skill.name).toBe("Cloudflare skill");
     expect(created.skill.sourceKind).toBe("repo");
     expect(created.skill.scriptsAvailable).toBe(false);
-    expect(listed).toHaveLength(1);
+    expect(listed.map((skill) => skill.name)).toEqual([
+      "ME3 Core Configuration",
+      "Cloudflare Platform",
+      "Cloudflare skill",
+    ]);
+    expect(listed[0]?.sourceKind).toBe("core");
+    expect(listed[0]?.scriptsAvailable).toBe(false);
   });
 
   it("rejects duplicate active skill sources", async () => {
@@ -162,9 +168,11 @@ describe("assistant skills", () => {
       "Can you help deploy a Cloudflare Worker?",
     );
 
-    expect(matches).toHaveLength(1);
-    expect(matches[0]?.name).toBe("Cloudflare deploy");
-    expect(matches[0]?.instructions).toContain("Use Wrangler");
+    expect(matches.map((match) => match.name)).toContain("Cloudflare Platform");
+    expect(matches.map((match) => match.name)).toContain("Cloudflare deploy");
+    expect(matches.find((match) => match.name === "Cloudflare deploy")?.instructions).toContain(
+      "Use Wrangler",
+    );
   });
 
   it("fetches and installs multiple SKILL.md files from a GitHub repo", async () => {
@@ -199,8 +207,13 @@ describe("assistant skills", () => {
     const listed = await listAssistantSkills(env as never, "owner");
 
     expect(created.skills).toHaveLength(2);
-    expect(listed.map((skill) => skill.name)).toEqual(["TDD", "Handoff"]);
-    expect(listed[0]?.description).toBe(
+    expect(listed.map((skill) => skill.name)).toEqual([
+      "ME3 Core Configuration",
+      "Cloudflare Platform",
+      "TDD",
+      "Handoff",
+    ]);
+    expect(listed[2]?.description).toBe(
       "Test-driven development with red-green-refactor loop.",
     );
     expect(listed.every((skill) => skill.hasSkillMarkdown)).toBe(true);

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import Button from "../Button.vue";
 import IconPicker from "../IconPicker.vue";
+import LifeWheelChart from "./LifeWheelChart.vue";
 import UiIcon from "../UiIcon.vue";
 import { api } from "../../api";
 import { isUiIconName, type UiIconName } from "../../utils/icons";
@@ -52,11 +53,6 @@ const STORAGE_KEY = "me3.missionControl.wheelOfLife.v1";
 const MIGRATED_STORAGE_KEY = "me3.missionControl.wheelOfLife.v1.serverMigrated";
 const MIN_SEGMENTS = 6;
 const MAX_SEGMENTS = 8;
-const OUTER_RADIUS = 108;
-const VIEWBOX_MIN = -154;
-const VIEWBOX_SIZE = 308;
-const WHEEL_CENTER = VIEWBOX_MIN + VIEWBOX_SIZE / 2;
-const LABEL_RADIUS_PERCENT = 27;
 
 const legacyDefaultEmojiById: Record<string, Record<string, string>> = {
   health: { "💙": "❤️" },
@@ -119,11 +115,8 @@ const defaultSegments: WheelSegment[] = [
   },
 ];
 
-const wheelSvg = ref<SVGSVGElement | null>(null);
 const segments = ref<WheelSegment[]>([]);
 const snapshots = ref<WheelSnapshot[]>([]);
-const hoverSegmentId = ref("");
-const hoverRating = ref<number | null>(null);
 const editModalOpen = ref(false);
 const saveModalOpen = ref(false);
 const historyModalOpen = ref(false);
@@ -132,47 +125,6 @@ const loading = ref(true);
 const saving = ref(false);
 const syncError = ref("");
 let settingsSyncTimer: ReturnType<typeof setTimeout> | null = null;
-
-const rings = computed(() =>
-  Array.from({ length: 10 }, (_, index) => ({
-    id: `ring-${index + 1}`,
-    radius: ((index + 1) / 10) * OUTER_RADIUS,
-    strong: index === 9,
-  })),
-);
-
-const wheelSegments = computed(() => {
-  const total = segments.value.length;
-  return segments.value.map((segment, index) => {
-    const startAngle = (index / total) * 360;
-    const endAngle = ((index + 1) / total) * 360;
-    const midAngle = (startAngle + endAngle) / 2;
-    const valueRadius = ((segment.value || 0) / 10) * OUTER_RADIUS;
-    const isHovered = hoverSegmentId.value === segment.id;
-    const activeRating = isHovered ? hoverRating.value : null;
-    const hoverRadius = ((activeRating || 0) / 10) * OUTER_RADIUS;
-
-    return {
-      ...segment,
-      index,
-      startAngle,
-      endAngle,
-      midAngle,
-      divider: polarPoint(startAngle, OUTER_RADIUS),
-      hitPath: sectorPath(OUTER_RADIUS, startAngle, endAngle),
-      valuePath: valueRadius > 0 ? sectorPath(valueRadius, startAngle, endAngle) : "",
-      hoverPath:
-        isHovered && hoverRadius > 0
-          ? sectorPath(hoverRadius, startAngle, endAngle)
-          : "",
-      hoverLabelPoint: polarPoint(
-        midAngle,
-        Math.max(14, ((activeRating || 1) - 0.5) * (OUTER_RADIUS / 10)),
-      ),
-      labelStyle: labelPositionStyle(midAngle),
-    };
-  });
-});
 
 const allSegmentsScored = computed(() =>
   segments.value.every((segment) => segment.value !== null),
@@ -388,95 +340,10 @@ function queueSettingsSync() {
   }, 500);
 }
 
-function polarPoint(angleDeg: number, radius: number) {
-  const angle = ((angleDeg - 90) * Math.PI) / 180;
-  return {
-    x: Math.cos(angle) * radius,
-    y: Math.sin(angle) * radius,
-  };
-}
-
-function sectorPath(radius: number, startAngle: number, endAngle: number) {
-  const start = polarPoint(startAngle, radius);
-  const end = polarPoint(endAngle, radius);
-  const largeArc = endAngle - startAngle > 180 ? 1 : 0;
-  return `M ${WHEEL_CENTER} ${WHEEL_CENTER} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`;
-}
-
-function labelPositionStyle(midAngle: number) {
-  const angle = ((midAngle - 90) * Math.PI) / 180;
-  const cos = Math.cos(angle);
-  const x = 50 + cos * LABEL_RADIUS_PERCENT;
-  const y = 50 + Math.sin(angle) * LABEL_RADIUS_PERCENT;
-  const mobileNudge = cos > 0.7 ? "-18%" : cos < -0.7 ? "18%" : "0%";
-  return {
-    left: `${x}%`,
-    top: `${y}%`,
-    "--life-wheel-label-transform-x": "-50%",
-    "--life-wheel-label-mobile-nudge": mobileNudge,
-  };
-}
-
-function ratingFromPointer(event: PointerEvent) {
-  if (!wheelSvg.value) return null;
-  const rect = wheelSvg.value.getBoundingClientRect();
-  const x = ((event.clientX - rect.left) / rect.width) * VIEWBOX_SIZE + VIEWBOX_MIN;
-  const y = ((event.clientY - rect.top) / rect.height) * VIEWBOX_SIZE + VIEWBOX_MIN;
-  const radius = Math.hypot(x - WHEEL_CENTER, y - WHEEL_CENTER);
-  if (radius > OUTER_RADIUS + 1) return null;
-  return Math.min(10, Math.max(1, Math.ceil(radius / (OUTER_RADIUS / 10))));
-}
-
 function setSegmentValue(segmentId: string, value: number | null) {
   const segment = segments.value.find((item) => item.id === segmentId);
   if (!segment) return;
   segment.value = value === null ? null : Math.min(10, Math.max(1, value));
-}
-
-function handlePointerMove(event: PointerEvent, segmentId: string) {
-  hoverSegmentId.value = segmentId;
-  hoverRating.value = ratingFromPointer(event);
-}
-
-function handlePointerLeave() {
-  hoverSegmentId.value = "";
-  hoverRating.value = null;
-}
-
-function handleSegmentClick(event: PointerEvent, segmentId: string) {
-  const rating = ratingFromPointer(event);
-  if (!rating) return;
-  setSegmentValue(segmentId, rating);
-}
-
-function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
-  const segment = segments.value.find((item) => item.id === segmentId);
-  if (!segment) return;
-
-  if (event.key === "Home") {
-    event.preventDefault();
-    setSegmentValue(segmentId, 1);
-    return;
-  }
-  if (event.key === "End") {
-    event.preventDefault();
-    setSegmentValue(segmentId, 10);
-    return;
-  }
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    setSegmentValue(segmentId, segment.value || 5);
-    return;
-  }
-  if (event.key === "ArrowRight" || event.key === "ArrowUp") {
-    event.preventDefault();
-    setSegmentValue(segmentId, (segment.value || 0) + 1);
-    return;
-  }
-  if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
-    event.preventDefault();
-    setSegmentValue(segmentId, (segment.value || 2) - 1);
-  }
 }
 
 function addSegment() {
@@ -631,109 +498,11 @@ watch(snapshots, persistState, { deep: true });
 
     <div class="life-wheel__workspace">
       <div class="life-wheel__stage">
-        <div class="life-wheel__canvas">
-          <svg
-            ref="wheelSvg"
-            class="life-wheel__svg"
-            :viewBox="`${VIEWBOX_MIN} ${VIEWBOX_MIN} ${VIEWBOX_SIZE} ${VIEWBOX_SIZE}`"
-            aria-label="Wheel of Life score selector"
-            @pointerleave="handlePointerLeave"
-          >
-            <g class="life-wheel__values" aria-hidden="true">
-              <path
-                v-for="segment in wheelSegments"
-                :key="`${segment.id}-value`"
-                :d="segment.valuePath"
-                :fill="segment.color"
-                :opacity="segment.valuePath ? 0.32 : 0"
-              />
-              <path
-                v-for="segment in wheelSegments"
-                :key="`${segment.id}-hover`"
-                :d="segment.hoverPath"
-                :fill="segment.color"
-                :opacity="segment.hoverPath ? 0.2 : 0"
-              />
-            </g>
-
-            <g class="life-wheel__grid" aria-hidden="true">
-              <circle
-                v-for="ring in rings"
-                :key="ring.id"
-                :r="ring.radius"
-                :class="{ 'is-outer': ring.strong }"
-              />
-              <line
-                v-for="segment in wheelSegments"
-                :key="`${segment.id}-divider`"
-                :x1="WHEEL_CENTER"
-                :y1="WHEEL_CENTER"
-                :x2="segment.divider.x"
-                :y2="segment.divider.y"
-              />
-              <circle r="2.6" class="life-wheel__center-dot" />
-            </g>
-
-            <g>
-              <path
-                v-for="segment in wheelSegments"
-                :key="`${segment.id}-hit`"
-                class="life-wheel__hit-area"
-                :d="segment.hitPath"
-                fill="transparent"
-                tabindex="0"
-                role="button"
-                :aria-label="`${segment.label}, ${segment.value ? `${segment.value} of 10` : 'not scored'}`"
-                @pointermove="handlePointerMove($event, segment.id)"
-                @click="handleSegmentClick($event, segment.id)"
-                @keydown="handleSegmentKeydown($event, segment.id)"
-              >
-                <title>{{ segment.helper }}</title>
-              </path>
-            </g>
-
-            <g class="life-wheel__hover-number" aria-hidden="true">
-              <text
-                v-for="segment in wheelSegments"
-                v-show="hoverSegmentId === segment.id && hoverRating"
-                :key="`${segment.id}-hover-number`"
-                :x="segment.hoverLabelPoint.x"
-                :y="segment.hoverLabelPoint.y"
-              >
-                {{ hoverRating }}
-              </text>
-            </g>
-          </svg>
-
-          <div class="life-wheel__labels">
-            <button
-              v-for="segment in wheelSegments"
-              :key="`${segment.id}-label`"
-              type="button"
-              class="life-wheel__label"
-              :class="{ 'is-active': hoverSegmentId === segment.id }"
-              :style="segment.labelStyle"
-              :aria-label="`${segment.label}${segment.value ? `, ${segment.value} of 10` : ', not scored'}. ${segment.helper}`"
-              :title="segment.helper"
-              @pointerenter="hoverSegmentId = segment.id"
-              @pointerleave="handlePointerLeave"
-              @click="setSegmentValue(segment.id, segment.value || 5)"
-            >
-              <span class="life-wheel__label-emoji" aria-hidden="true">
-                <UiIcon
-                  v-if="isUiIconName(segment.emoji)"
-                  :name="segment.emoji as UiIconName"
-                  :size="18"
-                />
-                <template v-else>{{ segment.emoji }}</template>
-              </span>
-              <span class="life-wheel__label-name">{{ segment.label }}</span>
-              <span v-if="segment.value" class="life-wheel__label-score">
-                {{ segment.value }}/10
-              </span>
-            </button>
-          </div>
-        </div>
+        <LifeWheelChart
+          :segments="segments"
+          aria-label="Wheel of Life score selector"
+          @update:segment-value="setSegmentValue"
+        />
 
         <p v-if="latestSnapshot" class="life-wheel__latest">
           Last saved {{ formatSnapshotDate(latestSnapshot.createdAt) }}

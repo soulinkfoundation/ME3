@@ -1,4 +1,5 @@
 export * from "./agent-context";
+export * from "./bundled-agent-skills";
 
 export const ME3_KNOWLEDGE_SCHEMA_VERSION = "2026-05-15.v1";
 

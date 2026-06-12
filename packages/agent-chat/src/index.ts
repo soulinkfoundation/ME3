@@ -6,6 +6,7 @@ import {
   buildMe3AgentContextPrompt,
   buildMe3CapabilityContext,
   createMe3AgentContextManifest,
+  ME3_BUNDLED_AGENT_SKILLS,
   resolveMe3AgentContextPacket,
   summarizeMe3AgentContextManifest,
   type Me3AgentContextCalendarEvent,
@@ -3930,6 +3931,7 @@ async function loadCoreContextSkills(
 ): Promise<Me3AgentContextSkill[]> {
   const requestTokens = tokenizeContextText(requestText);
   if (requestTokens.length === 0) return [];
+  const bundledMatches = matchBundledCoreContextSkills(requestTokens);
   try {
     const rows = await env.DB.prepare(
       `SELECT id, name, description, source_kind, source_ref, trust_level,
@@ -3942,7 +3944,9 @@ async function loadCoreContextSkills(
       .bind(ownerId)
       .all<DbAssistantSkillRow>();
 
-    return (rows.results || [])
+    const bundledSourceRefs = new Set(ME3_BUNDLED_AGENT_SKILLS.map((skill) => skill.sourceRef));
+    const storedMatches = (rows.results || [])
+      .filter((row) => !row.source_ref || !bundledSourceRefs.has(row.source_ref))
       .map((row) => ({
         row,
         score: scoreContextSkillMatch(
@@ -3957,7 +3961,6 @@ async function loadCoreContextSkills(
       }))
       .filter((item) => item.score > 0)
       .sort((left, right) => right.score - left.score || left.row.name.localeCompare(right.row.name))
-      .slice(0, 4)
       .map(({ row, score }) => ({
         id: row.id,
         name: row.name,
@@ -3980,9 +3983,49 @@ async function loadCoreContextSkills(
           updatedAt: row.updated_at,
         }),
       }));
+    return [...bundledMatches, ...storedMatches].slice(0, 4);
   } catch {
-    return [];
+    return bundledMatches.slice(0, 4);
   }
+}
+
+function matchBundledCoreContextSkills(
+  requestTokens: string[],
+): Me3AgentContextSkill[] {
+  return ME3_BUNDLED_AGENT_SKILLS
+    .map((skill) => ({
+      skill,
+      score: scoreContextSkillMatch(
+        requestTokens,
+        [
+          skill.name,
+          skill.description,
+          skill.sourceRef,
+          ...skill.triggerHints,
+        ].join(" "),
+      ),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.skill.name.localeCompare(right.skill.name))
+    .map(({ skill, score }) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      instructions: summarizeContextText(skill.instructions, 3200),
+      reason:
+        score >= 3
+          ? "Bundled core skill triggers matched this request."
+          : "Bundled core skill metadata matched this request.",
+      source: contextSource({
+        id: skill.id,
+        kind: "agent_skill",
+        label: skill.name,
+        visibility: "private",
+        reason: "Bundled core skill instructions loaded for this turn.",
+        sourceRef: skill.sourceRef,
+        updatedAt: skill.updatedAt,
+      }),
+    }));
 }
 
 async function loadCoreContextMissionStatement(

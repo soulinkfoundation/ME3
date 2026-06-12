@@ -172,5 +172,5 @@ Generated from the typed ME3 knowledge package. This file is public-safe and sho
 - [ME3 Core README](https://github.com/Soulink-Foundation/me3/blob/main/README.md): Installable Core overview, product principles, local setup, deploy flow, and Core vs hosted boundaries.
 - [ME3 Knowledge README](https://github.com/Soulink-Foundation/me3/blob/main/packages/knowledge/README.md): Explains the shared typed product and capability knowledge package that powers this artifact.
 - [ME3 Knowledge Source](https://github.com/Soulink-Foundation/me3/blob/main/packages/knowledge/src/index.ts): Typed product facts, capability map, approval modes, side effects, data boundaries, routes, and agent tool ids.
-- [Mission Control Plugin MVP](https://github.com/Soulink-Foundation/me3/blob/main/docs/mission-control-plugin-mvp.md): Implementation outline for the default private workspace plugin in ME3 Core.
+- [ME3 How-To Guide](https://github.com/Soulink-Foundation/me3/blob/main/docs/how-to-me3.md): Public configuration and troubleshooting guide for ME3 Core installs.
 

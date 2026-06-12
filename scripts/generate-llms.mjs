@@ -29,16 +29,16 @@ const sourceDocuments = [
       "Typed product facts, capability map, approval modes, side effects, data boundaries, routes, and agent tool ids.",
   },
   {
-    title: "Mission Control Plugin MVP",
-    url: `${repositoryUrl}/blob/main/docs/mission-control-plugin-mvp.md`,
+    title: "ME3 How-To Guide",
+    url: `${repositoryUrl}/blob/main/docs/how-to-me3.md`,
     description:
-      "Implementation outline for the default private workspace plugin in ME3 Core.",
+      "Public configuration and troubleshooting guide for ME3 Core installs.",
   },
 ];
 
 const knowledgeSource = await readFile(knowledgeSourcePath, "utf8");
 const llmsKnowledgeSource = knowledgeSource.replace(
-  /^export \* from "\.\/agent-context";\n/m,
+  /^export \* from "\.\/(?:agent-context|bundled-agent-skills)";\n/gm,
   "",
 );
 const compiledKnowledge = ts.transpileModule(llmsKnowledgeSource, {

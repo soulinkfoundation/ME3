@@ -1,3 +1,4 @@
+import { ME3_BUNDLED_AGENT_SKILLS } from "@me3/knowledge";
 import type { Env } from "./types";
 
 export class AssistantSkillsInputError extends Error {
@@ -87,7 +88,10 @@ export async function listAssistantSkills(env: Env, userId: string, limitInput =
   )
     .bind(userId, limit)
     .all<AssistantSkillRow>();
-  return (rows.results || []).map(serializeAssistantSkill);
+  return mergeBundledAssistantSkills(
+    userId,
+    (rows.results || []).map(serializeAssistantSkill),
+  ).slice(0, limit);
 }
 
 export async function createAssistantSkill(env: Env, userId: string, input: unknown) {
@@ -283,6 +287,8 @@ export async function matchAssistantSkills(
   requestText: string,
   limit = MAX_MATCHED_SKILLS,
 ): Promise<AssistantSkillMatch[]> {
+  const queryTokens = tokenize(requestText);
+  if (queryTokens.length === 0) return [];
   const rows = await env.DB.prepare(
     `SELECT id, user_id, name, description, source_kind, source_ref, status,
             trust_level, trigger_hints_json, skill_md, metadata_json,
@@ -295,10 +301,36 @@ export async function matchAssistantSkills(
   )
     .bind(userId)
     .all<AssistantSkillRow>();
-  const queryTokens = tokenize(requestText);
-  if (queryTokens.length === 0) return [];
 
-  return (rows.results || [])
+  const bundledSourceRefs = new Set(ME3_BUNDLED_AGENT_SKILLS.map((skill) => skill.sourceRef));
+  const bundledMatches: AssistantSkillMatch[] = ME3_BUNDLED_AGENT_SKILLS
+    .map((skill) => {
+      const score = scoreSkillMatch(
+        queryTokens,
+        tokenize([skill.name, skill.description, skill.sourceRef, ...skill.triggerHints].join(" ")),
+        skill.triggerHints,
+      );
+      return { skill, score };
+    })
+    .filter((item) => item.score > 0)
+    .map(({ skill, score }) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      sourceKind: "core",
+      sourceRef: skill.sourceRef,
+      trustLevel: "core",
+      triggerHints: skill.triggerHints,
+      updatedAt: skill.updatedAt,
+      reason:
+        score >= 4
+          ? "Bundled core skill strongly matched the request."
+          : "Bundled core skill metadata matched the request.",
+      instructions: truncateText(skill.instructions, MAX_SKILL_MD_CHARS),
+    }));
+
+  const storedMatches = (rows.results || [])
+    .filter((row) => !row.source_ref || !bundledSourceRefs.has(row.source_ref))
     .map((row) => {
       const skill = serializeAssistantSkill(row);
       const hints = skill.triggerHints;
@@ -321,6 +353,13 @@ export async function matchAssistantSkills(
       reason: score >= 4 ? "Skill trigger strongly matched the request." : "Skill metadata matched the request.",
       instructions: row.skill_md ? truncateText(row.skill_md, MAX_SKILL_MD_CHARS) : null,
     }));
+
+  return [...bundledMatches, ...storedMatches]
+    .sort((a, b) => {
+      const coreRank = Number(b.sourceKind === "core") - Number(a.sourceKind === "core");
+      return coreRank || a.name.localeCompare(b.name);
+    })
+    .slice(0, Math.max(1, Math.min(limit, MAX_MATCHED_SKILLS)));
 }
 
 async function getAssistantSkill(env: Pick<Env, "DB">, userId: string, skillId: string) {
@@ -358,6 +397,33 @@ function serializeAssistantSkill(row: AssistantSkillRow): AssistantSkill {
     updatedAt: row.updated_at,
     installedAt: row.installed_at,
   };
+}
+
+function mergeBundledAssistantSkills(userId: string, storedSkills: AssistantSkill[]) {
+  const storedSourceRefs = new Set(
+    storedSkills.map((skill) => skill.sourceRef).filter(Boolean),
+  );
+  const bundledSkills = ME3_BUNDLED_AGENT_SKILLS
+    .filter((skill) => !storedSourceRefs.has(skill.sourceRef))
+    .map((skill): AssistantSkill => ({
+      id: skill.id,
+      userId,
+      name: skill.name,
+      description: skill.description,
+      sourceKind: "core",
+      sourceRef: skill.sourceRef,
+      status: "active",
+      trustLevel: "core",
+      triggerHints: skill.triggerHints,
+      hasSkillMarkdown: true,
+      metadata: { bundled: true, removable: false },
+      validationErrors: [],
+      scriptsAvailable: false,
+      createdAt: skill.updatedAt,
+      updatedAt: skill.updatedAt,
+      installedAt: skill.updatedAt,
+    }));
+  return [...bundledSkills, ...storedSkills];
 }
 
 function validateSkillInput(

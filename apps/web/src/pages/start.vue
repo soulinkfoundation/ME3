@@ -4,6 +4,7 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { RouterLink, useRouter } from "vue-router";
 import { api, getUsernameAvailability } from "../api";
 import PluginList from "../components/PluginList.vue";
+import LifeWheelChart from "../components/mission-control/LifeWheelChart.vue";
 import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
 import { usePublish } from "../composables/usePublish";
@@ -29,9 +30,79 @@ definePage({
   },
 });
 
-const STEPS = ["Profile", "Plugins", "Messaging"] as const;
+type AssistantSettingsResponse = {
+  assistantName: string | null;
+  displayName: string;
+};
+
+type StartWheelSegment = {
+  id: string;
+  label: string;
+  helper: string;
+  color: string;
+  emoji: string;
+  value: number;
+};
+
+type WheelSnapshotResponse = {
+  snapshot: unknown;
+};
+
+const STEPS = ["Profile", "Agent", "Plugins", "Messaging", "Wheel"] as const;
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
 const START_PLUGIN_EXCLUDED_IDS = new Set(["me3.telegram"]);
+const DEFAULT_ASSISTANT_NAME = "ME3";
+const ASSISTANT_NAME_MAX_LENGTH = 48;
+const DEFAULT_START_WHEEL_SEGMENTS: StartWheelSegment[] = [
+  {
+    id: "health",
+    label: "Health",
+    helper: "Physical, mental and emotional wellbeing",
+    color: "#26806f",
+    emoji: "❤️",
+    value: 5,
+  },
+  {
+    id: "spirituality",
+    label: "Spirituality",
+    helper: "Meaning, purpose and connection",
+    color: "#7c3aed",
+    emoji: "🌿",
+    value: 5,
+  },
+  {
+    id: "work",
+    label: "Work",
+    helper: "What you do and how you serve",
+    color: "#2563eb",
+    emoji: "💼",
+    value: 5,
+  },
+  {
+    id: "finances",
+    label: "Finances",
+    helper: "Money, resources and security",
+    color: "#ca8a04",
+    emoji: "💰",
+    value: 5,
+  },
+  {
+    id: "home",
+    label: "Home",
+    helper: "Environment, routines and living space",
+    color: "#c2410c",
+    emoji: "🏡",
+    value: 5,
+  },
+  {
+    id: "joy",
+    label: "Joy",
+    helper: "Fun, play and aliveness",
+    color: "#be123c",
+    emoji: "🤗",
+    value: 5,
+  },
+];
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -56,6 +127,14 @@ const pluginsError = ref("");
 const selectedPluginIds = ref<Set<string>>(
   new Set(RECOMMENDED_START_PLUGIN_IDS),
 );
+const assistantName = ref(DEFAULT_ASSISTANT_NAME);
+const assistantNameLoading = ref(false);
+const assistantNameSaving = ref(false);
+const assistantNameError = ref("");
+const wheelSegments = ref<StartWheelSegment[]>(cloneStartWheelSegments());
+const wheelFocusNote = ref("");
+const wheelSaving = ref(false);
+const wheelError = ref("");
 const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
   null,
 );
@@ -87,6 +166,39 @@ const pluginBusyIds = computed(() =>
 const pluginsCanContinue = computed(
   () => !pluginsLoading.value && !pluginsSaving.value,
 );
+const normalizedAssistantName = computed(
+  () =>
+    assistantName.value.replace(/\s+/g, " ").trim() || DEFAULT_ASSISTANT_NAME,
+);
+const assistantNameInvalid = computed(
+  () => normalizedAssistantName.value.length > ASSISTANT_NAME_MAX_LENGTH,
+);
+const assistantNameCanContinue = computed(
+  () =>
+    !assistantNameLoading.value &&
+    !assistantNameSaving.value &&
+    !assistantNameInvalid.value,
+);
+const wheelAverage = computed(() => {
+  const total = wheelSegments.value.reduce(
+    (sum, segment) => sum + segment.value,
+    0,
+  );
+  return (total / wheelSegments.value.length).toFixed(1);
+});
+const wheelPrioritySegment = computed(() => {
+  const [firstSegment] = wheelSegments.value;
+  if (!firstSegment) return null;
+  return wheelSegments.value.reduce((lowest, segment) =>
+    segment.value < lowest.value ? segment : lowest,
+  );
+});
+const wheelContextSummary = computed(() => {
+  const segment = wheelPrioritySegment.value;
+  return segment
+    ? `${segment.label} is the lowest-scored area right now.`
+    : "Save a quick snapshot so your agent has better context.";
+});
 
 const profileCanContinue = computed(
   () =>
@@ -126,6 +238,21 @@ function normalizeUsername(value: string): string {
     .replace(/^[^a-z0-9]+/, "")
     .replace(/[^a-z0-9]+$/, "")
     .slice(0, 30);
+}
+
+function cloneStartWheelSegments() {
+  return DEFAULT_START_WHEEL_SEGMENTS.map((segment) => ({ ...segment }));
+}
+
+function createStartId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function messageFromUnknown(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function clearUsernameCheck() {
@@ -206,6 +333,54 @@ async function publishProfile() {
 
   await sites.fetchSites();
   advanceTo(2);
+}
+
+async function loadAssistantSettings() {
+  assistantNameLoading.value = true;
+  assistantNameError.value = "";
+
+  try {
+    const response = await api.get<AssistantSettingsResponse>(
+      "/assistant/settings",
+    );
+    assistantName.value =
+      response.assistantName || response.displayName || DEFAULT_ASSISTANT_NAME;
+  } catch {
+    assistantName.value = assistantName.value || DEFAULT_ASSISTANT_NAME;
+  } finally {
+    assistantNameLoading.value = false;
+  }
+}
+
+async function saveAssistantNameAndContinue() {
+  if (!assistantNameCanContinue.value) return;
+
+  assistantNameSaving.value = true;
+  assistantNameError.value = "";
+
+  try {
+    const response = await api.put<AssistantSettingsResponse>(
+      "/assistant/settings",
+      {
+        assistantName: normalizedAssistantName.value,
+      },
+    );
+    assistantName.value =
+      response.assistantName || response.displayName || DEFAULT_ASSISTANT_NAME;
+    advanceTo(3);
+  } catch (error) {
+    assistantNameError.value = messageFromUnknown(
+      error,
+      "Could not save your agent name.",
+    );
+  } finally {
+    assistantNameSaving.value = false;
+  }
+}
+
+function skipAssistantName() {
+  assistantNameError.value = "";
+  advanceTo(3);
 }
 
 function applyDefaultPluginSelection(nextPlugins: PluginRecord[]) {
@@ -289,7 +464,7 @@ async function savePlugins() {
       syncPlugin(response.plugin);
     }
 
-    advanceTo(3);
+    advanceTo(4);
   } catch (error) {
     pluginsError.value =
       error instanceof Error ? error.message : "Could not save plugins.";
@@ -300,7 +475,63 @@ async function savePlugins() {
 
 function skipPlugins() {
   pluginsError.value = "";
-  advanceTo(3);
+  advanceTo(4);
+}
+
+function continueFromMessaging() {
+  advanceTo(5);
+}
+
+function setStartWheelSegmentValue(segmentId: string, value: number) {
+  const segment = wheelSegments.value.find((item) => item.id === segmentId);
+  if (!segment) return;
+  segment.value = Math.min(10, Math.max(1, Math.round(value)));
+}
+
+async function saveWheelSnapshotAndFinish() {
+  if (wheelSaving.value) return;
+  wheelSaving.value = true;
+  wheelError.value = "";
+
+  const createdAt = new Date().toISOString();
+  const focusNote = wheelFocusNote.value.trim();
+  const segments = wheelSegments.value.map((segment) => ({
+    id: segment.id,
+    label: segment.label,
+    helper: segment.helper,
+    color: segment.color,
+    emoji: segment.emoji,
+    value: Math.min(10, Math.max(1, Math.round(segment.value))),
+  }));
+  const prioritySegmentId = wheelPrioritySegment.value?.id || segments[0]?.id || "";
+  const notes = Object.fromEntries(
+    segments.map((segment) => [
+      segment.id,
+      segment.id === prioritySegmentId ? focusNote : "",
+    ]),
+  );
+
+  try {
+    await api.post<WheelSnapshotResponse>("/mission-control/wheel/snapshots", {
+      id: createStartId("snapshot"),
+      createdAt,
+      segments,
+      notes,
+    });
+    await finish();
+  } catch (error) {
+    wheelError.value = messageFromUnknown(
+      error,
+      "Could not save this Wheel snapshot.",
+    );
+  } finally {
+    wheelSaving.value = false;
+  }
+}
+
+async function skipWheel() {
+  wheelError.value = "";
+  await finish();
 }
 
 async function finish() {
@@ -310,13 +541,14 @@ async function finish() {
 watch(handle, queueUsernameAvailabilityCheck, { immediate: true });
 
 watch(currentStep, (step) => {
-  if (step === 2 && !pluginsLoading.value && plugins.value.length === 0) {
+  if (step === 3 && !pluginsLoading.value && plugins.value.length === 0) {
     void loadPlugins();
   }
 });
 
 onMounted(() => {
   void sites.fetchSites();
+  void loadAssistantSettings();
 });
 
 onBeforeUnmount(clearUsernameCheck);
@@ -328,7 +560,12 @@ onBeforeUnmount(clearUsernameCheck);
       <div class="progress-track" aria-hidden="true">
         <div class="progress-fill" :style="{ width: `${progress}%` }" />
       </div>
-      <div class="progress-steps">
+      <div
+        class="progress-steps"
+        :style="{
+          gridTemplateColumns: `repeat(${STEPS.length}, minmax(0, 1fr))`,
+        }"
+      >
         <button
           v-for="step in progressSteps"
           :key="step.name"
@@ -464,13 +701,75 @@ onBeforeUnmount(clearUsernameCheck);
       <section
         v-else-if="currentStep === 2"
         class="start-step"
+        aria-labelledby="agent-title"
+      >
+        <div class="step-copy">
+          <h1 id="agent-title">Name your agent</h1>
+          <p>For fun, give your ME3 agent a name.</p>
+        </div>
+
+        <form class="start-form" @submit.prevent="saveAssistantNameAndContinue">
+          <label class="field" for="start-agent-name">
+            <span>Agent name</span>
+            <input
+              id="start-agent-name"
+              v-model="assistantName"
+              type="text"
+              :maxlength="ASSISTANT_NAME_MAX_LENGTH"
+              placeholder="007"
+              autocomplete="off"
+              :disabled="assistantNameLoading || assistantNameSaving"
+              required
+            />
+          </label>
+
+          <p v-if="assistantNameLoading" class="field-hint">
+            Loading your agent identity...
+          </p>
+          <p v-else-if="assistantNameInvalid" class="error">
+            Name must be {{ ASSISTANT_NAME_MAX_LENGTH }} characters or fewer.
+          </p>
+          <p v-else class="field-hint">
+            {{ normalizedAssistantName }} will be the name of your ME3 agent.
+          </p>
+          <p v-if="assistantNameError" class="error">
+            {{ assistantNameError }}
+          </p>
+
+          <div class="step-nav split">
+            <button class="nav-btn back" type="button" @click="goToStep(1)">
+              ← Back
+            </button>
+            <div class="nav-actions-right">
+              <button
+                class="nav-btn ghost"
+                type="button"
+                @click="skipAssistantName"
+              >
+                Skip
+              </button>
+              <button
+                class="nav-btn next"
+                type="submit"
+                :disabled="!assistantNameCanContinue"
+              >
+                {{ assistantNameSaving ? "Saving..." : "Next →" }}
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section
+        v-else-if="currentStep === 3"
+        class="start-step"
         aria-labelledby="plugins-title"
       >
         <div class="step-copy">
           <h1 id="plugins-title">Choose plugins</h1>
           <p>
-            Start with chat, Mission Control, and Calendar. Add the other
-            workspace plugins when they match how you want to run ME3.
+            Activate the features you need. More coming soon, you can always
+            build one if you like.
           </p>
         </div>
 
@@ -493,7 +792,7 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
 
         <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(1)">
+          <button class="nav-btn back" type="button" @click="goToStep(2)">
             ← Back
           </button>
           <div class="nav-actions-right">
@@ -512,14 +811,14 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
       </section>
 
-      <section v-else class="start-step" aria-labelledby="messaging-title">
+      <section
+        v-else-if="currentStep === 4"
+        class="start-step"
+        aria-labelledby="messaging-title"
+      >
         <div class="step-copy">
           <h1 id="messaging-title">Connect a messaging app</h1>
-          <p>
-            Chat with your ME3 assistant on the go. Soulink is the recommended
-            option, and Telegram is available if you want to connect your own
-            bot.
-          </p>
+          <p>Chat with your assistant on the go.</p>
         </div>
 
         <div class="messaging-options">
@@ -527,7 +826,10 @@ onBeforeUnmount(clearUsernameCheck);
             <div class="messaging-option__header">
               <div>
                 <h2>Soulink</h2>
-                <p>Recommended for the fastest assistant messaging setup.</p>
+                <p>
+                  A messaging app from the team behind ME3, built for the
+                  deepest assistant integrations as ME3 grows.
+                </p>
               </div>
               <span class="messaging-option__badge">Recommended</span>
             </div>
@@ -535,6 +837,7 @@ onBeforeUnmount(clearUsernameCheck);
               ref="soulinkPanelRef"
               variant="default"
               :auto-prepare-when-not-connected="true"
+              :show-status-details="false"
             />
           </section>
 
@@ -556,15 +859,82 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
 
         <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(2)">
+          <button class="nav-btn back" type="button" @click="goToStep(3)">
             ← Back
           </button>
           <div class="nav-actions-right">
-            <button class="nav-btn ghost" type="button" @click="finish">
+            <button
+              class="nav-btn ghost"
+              type="button"
+              @click="continueFromMessaging"
+            >
               Skip
             </button>
-            <button class="nav-btn next" type="button" @click="finish">
-              Finish →
+            <button
+              class="nav-btn next"
+              type="button"
+              @click="continueFromMessaging"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section v-else class="start-step" aria-labelledby="wheel-title">
+        <div class="step-copy">
+          <h1 id="wheel-title">The Wheel Of Life</h1>
+          <p>
+            Optionally rate each area to give ME3 a snapshot of where you're
+            at. You can update or change this later in Mission Control.
+          </p>
+        </div>
+
+        <div class="wheel-start-panel">
+          <div class="wheel-start-summary">
+            <strong>{{ wheelAverage }}/10</strong>
+            <span>{{ wheelContextSummary }}</span>
+          </div>
+
+          <LifeWheelChart
+            :segments="wheelSegments"
+            compact
+            aria-label="Wheel of Life onboarding score selector"
+            @update:segment-value="setStartWheelSegmentValue"
+          />
+
+          <label class="field" for="start-wheel-note">
+            <span>What's your main goal right now?</span>
+            <textarea
+              id="start-wheel-note"
+              v-model="wheelFocusNote"
+              maxlength="600"
+              rows="3"
+              placeholder="e.g. I want more energy for creative work."
+            />
+          </label>
+          <p class="field-hint">
+            You can update this later from Mission Control.
+          </p>
+
+          <p v-if="wheelError" class="error">{{ wheelError }}</p>
+        </div>
+
+        <div class="step-nav split">
+          <button class="nav-btn back" type="button" @click="goToStep(4)">
+            ← Back
+          </button>
+          <div class="nav-actions-right">
+            <button class="nav-btn ghost" type="button" @click="skipWheel">
+              Skip
+            </button>
+            <button
+              class="nav-btn next"
+              type="button"
+              :disabled="wheelSaving"
+              @click="saveWheelSnapshotAndFinish"
+            >
+              {{ wheelSaving ? "Saving..." : "Save & finish →" }}
             </button>
           </div>
         </div>
@@ -821,9 +1191,10 @@ onBeforeUnmount(clearUsernameCheck);
 }
 
 .field input,
+.field select,
+.field textarea,
 .handle-input {
   width: 100%;
-  min-height: 52px;
   box-sizing: border-box;
   border: 2px solid var(--ui-border-strong, var(--color-text));
   border-radius: var(--ui-radius-md, 10px);
@@ -834,11 +1205,22 @@ onBeforeUnmount(clearUsernameCheck);
   font-weight: 500;
 }
 
-.field input {
+.field input,
+.field select {
+  min-height: 52px;
   padding: 12px 14px;
 }
 
+.field textarea {
+  min-height: 96px;
+  padding: 12px 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
 .field input:focus,
+.field select:focus,
+.field textarea:focus,
 .handle-input:focus-within {
   outline: 2px solid var(--ui-accent-soft, rgba(20, 184, 166, 0.28));
   outline-offset: 2px;
@@ -913,6 +1295,8 @@ onBeforeUnmount(clearUsernameCheck);
   border-radius: 10px;
   font-size: 15px;
   font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -1007,6 +1391,41 @@ onBeforeUnmount(clearUsernameCheck);
   padding: 9px 14px;
 }
 
+.wheel-start-panel {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface, var(--color-bg));
+}
+
+.wheel-start-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--ui-border, var(--color-border));
+}
+
+.wheel-start-summary strong {
+  flex: 0 0 auto;
+  min-width: 86px;
+  color: var(--ui-accent-strong, #0f766e);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.wheel-start-summary span {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.wheel-start-panel :deep(.life-wheel-chart) {
+  margin-block: -2px 2px;
+}
+
 .start-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -1080,15 +1499,52 @@ onBeforeUnmount(clearUsernameCheck);
     padding: 36px 18px 40px;
   }
 
-  .step-nav,
-  .step-nav.split,
-  .nav-actions-right {
+  .step-nav {
     display: grid;
     grid-template-columns: 1fr;
   }
 
-  .nav-btn {
+  .step-nav:not(.split) .nav-btn {
     width: 100%;
+  }
+
+  .step-nav.split {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  .step-nav.split > .nav-btn.back {
+    flex: 0 0 auto;
+  }
+
+  .nav-actions-right {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .nav-actions-right .nav-btn {
+    flex: 1 1 0;
+  }
+
+  .nav-btn {
+    min-width: 0;
+    padding: 13px 12px;
+    font-size: 14px;
+  }
+
+  .wheel-start-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .wheel-start-summary strong {
+    min-width: 0;
   }
 }
 </style>
