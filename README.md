@@ -1,14 +1,14 @@
 # 🤖 ME3
 
-**Self-host your AI assistant, email, calendar, website and more.**
+### Your AI assistant, email, calendar, website and more in ONE place, hosted by you.
 
-Ready to take ownership of your digital life? ME too!
+**Ready to take ownership of your digital life? ME too!**
 
 With ME3, now you can.
 
 ![ME3 screenshot](apps/web/public/me3.gif)
 
-```Note: some features may require the $5/month 'workers paid' plan in Cloudflare```
+```Heads up: some features may require the $5/month plan in Cloudflare```
 
 ## ☁️ Install
 
@@ -22,12 +22,12 @@ Because it's time, grasshopper... time to take ownership of your digital life.
 
 ## 🖥️ What's in ME3
 
-- **🚀 Mission Control** where you, the HUMAN, manage things.
-- **🤖 An AI Assistant** you can create jobs for 💼.
-- **📧 Email** for you or your 🤖 assistant.
-- **📆 A Calendar** your 🤖 can use to help you spend time with the other humans that matter to you.
-- **🧩 Plugins**: you can build, extend and modify to make ME3 yours.
-- **🌐 A ME3 site/profile**: is like a digital business card built for humans and AI agents. Find out more here [ME3 Protocol](https://me3.app/protocol).
+- **🚀 Mission Control** where you manage THINGS.
+- **🤖 An AI Assistant** you create jobs 💼 for.
+- **🌐 A ME3 site/profile**: is like a digital business card built for humans and AI agents.
+- **📧 Email** for you or your 🤖, whatever allows you to check email WAY LESS.
+- **📆 A Calendar** your 🤖 can use to help you spend more time with the humans that matter to you.
+- **🧩 Plugins**: you can build, extend and modify to make ME3 useful to you.
 
 ## 📜 Docs
 
