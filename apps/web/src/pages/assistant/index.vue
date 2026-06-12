@@ -4012,23 +4012,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
         size="compact"
         icon-only
         type="button"
-        aria-label="Skills"
-        title="Skills"
-        @click="openAssistantSkillsModal"
+        aria-label="New chat"
+        title="New chat"
+        @click="startNewAssistantChat(null)"
       >
-        <UiIcon name="Sparkles" :size="18" aria-hidden="true" />
-      </Button>
-      <Button
-        color="ghost"
-        shape="soft"
-        size="compact"
-        icon-only
-        type="button"
-        aria-label="Assistant settings"
-        title="Assistant settings"
-        @click="openAssistantSettings('context')"
-      >
-        <UiIcon name="Brain" :size="18" aria-hidden="true" />
+        <UiIcon name="Plus" :size="18" aria-hidden="true" />
       </Button>
     </div>
     <aside
