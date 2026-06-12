@@ -77,7 +77,9 @@ type DailyBriefingCardData = {
 
 type MissionStatementCardData = {
   missionStatement: string;
+  mainGoal: string;
   placeholder: string;
+  mainGoalPlaceholder: string;
 };
 
 type WheelSnapshotCardData = {
@@ -156,6 +158,11 @@ type MissionDashboardResponse = {
   }>;
   destinations: Record<string, DashboardDestination>;
   missionStatement: string;
+  mainGoal: string;
+  settings: {
+    kanbanEnabled: boolean;
+    mainGoal: string;
+  };
   data: {
     "mission.daily-briefing": DailyBriefingCardData;
     "mission.mission-statement": MissionStatementCardData;
@@ -185,6 +192,7 @@ const dashboard = ref<MissionDashboardResponse | null>(null);
 const loading = ref(true);
 const error = ref("");
 const missionStatementDraft = ref("");
+const mainGoalDraft = ref("");
 const missionStatementEditing = ref(false);
 const missionStatementSaving = ref(false);
 const dashboardEditing = ref(false);
@@ -391,6 +399,17 @@ function missionStatementDisplayText(): string {
   );
 }
 
+const mainGoalHasValue = computed(() => Boolean(mainGoalDisplayText().trim()));
+
+function mainGoalDisplayText(): string {
+  return (
+    mainGoalDraft.value.trim() ||
+    dashboard.value?.mainGoal?.trim() ||
+    missionStatement.value?.mainGoal?.trim() ||
+    ""
+  );
+}
+
 function projectStatusCountLabel(
   summary: ProjectDashboardSummary,
   status: ProjectBoardStatus,
@@ -441,6 +460,7 @@ function closeDashboardEditor() {
 
 function startMissionStatementEdit() {
   missionStatementDraft.value = dashboard.value?.missionStatement || "";
+  mainGoalDraft.value = dashboard.value?.mainGoal || "";
   missionStatementEditing.value = true;
 }
 
@@ -596,6 +616,7 @@ async function loadDashboard() {
       "/mission-control/dashboard",
     );
     missionStatementDraft.value = dashboard.value.missionStatement;
+    mainGoalDraft.value = dashboard.value.mainGoal;
     syncDashboardDrafts();
     if (visibleCardEnabled("mission.ai-usage")) {
       void loadAiUsage();
@@ -662,13 +683,15 @@ async function saveMissionStatement() {
       "/mission-control/dashboard",
       {
         missionStatement: missionStatementDraft.value,
+        mainGoal: mainGoalDraft.value,
       },
     );
     missionStatementDraft.value = dashboard.value.missionStatement;
+    mainGoalDraft.value = dashboard.value.mainGoal;
     missionStatementEditing.value = false;
-    toastSuccess("Mission statement saved");
+    toastSuccess("Mission context saved");
   } catch (err) {
-    toastFromUnknown(err, "Mission statement could not be saved");
+    toastFromUnknown(err, "Mission context could not be saved");
   } finally {
     missionStatementSaving.value = false;
   }
@@ -950,54 +973,84 @@ onMounted(() => {
                 <UiIcon name="Rocket" :size="16" />
                 <span>Mission Statement</span>
               </h2>
+              <div
+                v-if="!dashboardEditing"
+                class="dashboard-card__actions dashboard-card__actions--inline"
+                :class="{ 'is-active': missionStatementEditing }"
+              >
+                <Button
+                  v-if="!missionStatementEditing"
+                  class="dashboard-card__action-button"
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  aria-label="Edit mission context"
+                  title="Edit mission context"
+                  @click="startMissionStatementEdit"
+                >
+                  <UiIcon name="Pencil" :size="16" />
+                </Button>
+                <Button
+                  v-else
+                  class="dashboard-card__action-button is-saving"
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  aria-label="Save mission context"
+                  title="Save mission context"
+                  :disabled="missionStatementSaving"
+                  @click="saveMissionStatement"
+                >
+                  <UiIcon name="Save" :size="16" />
+                </Button>
+              </div>
             </header>
-            <div
-              v-if="!dashboardEditing"
-              class="dashboard-card__actions"
-              :class="{ 'is-active': missionStatementEditing }"
-            >
-              <Button
-                v-if="!missionStatementEditing"
-                class="dashboard-card__action-button"
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                aria-label="Edit mission statement"
-                title="Edit mission statement"
-                @click="startMissionStatementEdit"
-              >
-                <UiIcon name="Pencil" :size="16" />
-              </Button>
-              <Button
-                v-else
-                class="dashboard-card__action-button is-saving"
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                aria-label="Save mission statement"
-                title="Save mission statement"
-                :disabled="missionStatementSaving"
-                @click="saveMissionStatement"
-              >
-                <UiIcon name="Save" :size="16" />
-              </Button>
-            </div>
             <form
               v-if="missionStatementEditing"
               class="mission-statement-form"
               @submit.prevent="saveMissionStatement"
             >
-              <textarea
-                v-model="missionStatementDraft"
-                :placeholder="missionStatement?.placeholder"
-                rows="6"
-              />
+              <label class="mission-statement-form__field">
+                <span>Mission statement</span>
+                <textarea
+                  v-model="missionStatementDraft"
+                  :placeholder="missionStatement?.placeholder"
+                  rows="5"
+                />
+              </label>
+              <label class="mission-statement-form__field">
+                <span>Main goal</span>
+                <textarea
+                  v-model="mainGoalDraft"
+                  :placeholder="missionStatement?.mainGoalPlaceholder"
+                  rows="3"
+                  maxlength="600"
+                />
+              </label>
             </form>
-            <p v-else class="mission-statement-display">
-              {{ missionStatementDisplayText() }}
-            </p>
+            <div v-else class="mission-context-display">
+              <p class="mission-statement-display">
+                {{ missionStatementDisplayText() }}
+              </p>
+              <div
+                class="mission-goal-display"
+                :class="{ 'is-empty': !mainGoalHasValue }"
+              >
+                <h3 class="dashboard-card__title mission-goal-display__title">
+                  <UiIcon name="Target" :size="16" />
+                  <span>Main goal</span>
+                </h3>
+                <p>
+                  {{
+                    mainGoalHasValue
+                      ? mainGoalDisplayText()
+                      : "No main goal set yet."
+                  }}
+                </p>
+              </div>
+            </div>
           </template>
 
           <template v-else-if="cardComponentKey(card) === 'WheelSnapshotCard'">
@@ -1695,6 +1748,14 @@ onMounted(() => {
   transition: opacity 120ms ease;
 }
 
+.dashboard-card__actions--inline {
+  position: static;
+  z-index: auto;
+  flex: 0 0 auto;
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .dashboard-card:hover .dashboard-card__actions,
 .dashboard-card:focus-within .dashboard-card__actions,
 .dashboard-card__actions:focus-within,
@@ -1759,8 +1820,23 @@ onMounted(() => {
 
 .mission-statement-form {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   margin-top: 8px;
+}
+
+.mission-statement-form__field {
+  display: grid;
+  gap: 7px;
+}
+
+.mission-statement-form__field span,
+.mission-statement-form__field span {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
 .mission-statement-form textarea {
@@ -1783,6 +1859,11 @@ onMounted(() => {
   outline-offset: 1px;
 }
 
+.mission-context-display {
+  display: grid;
+  gap: 12px;
+}
+
 .mission-statement-display {
   color: var(--ui-text) !important;
   font-size: 14px;
@@ -1794,6 +1875,34 @@ onMounted(() => {
   padding: 10px;
   background: var(--ui-surface-muted);
   border-radius: 15px;
+}
+
+.mission-goal-display {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--ui-border);
+}
+
+.mission-goal-display__title {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.mission-goal-display p {
+  margin: 0;
+  color: var(--ui-text) !important;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.45 !important;
+  white-space: pre-wrap;
+}
+
+.mission-goal-display.is-empty p {
+  color: var(--ui-text-muted) !important;
+  font-weight: 500;
 }
 
 .wheel-summary {

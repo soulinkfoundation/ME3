@@ -109,7 +109,8 @@ describe("Mission Control dashboard settings", () => {
       "journal.today",
       "social.schedule",
     ]);
-    expect(dashboard.settings).toEqual({ kanbanEnabled: false });
+    expect(dashboard.settings).toEqual({ kanbanEnabled: false, mainGoal: "" });
+    expect(dashboard.mainGoal).toBe("");
     expect(dashboard.missionStatement).toContain("I am here to help");
     expect(dashboard.data["mission.daily-briefing"]).toMatchObject({
       message: "A calm operational day.",
@@ -122,6 +123,7 @@ describe("Mission Control dashboard settings", () => {
 
     const dashboard = await updateMissionDashboard(env, "owner", {
       missionStatement: "  Help owners steer the day.  ",
+      mainGoal: "  Finish the onboarding polish.  ",
       kanbanEnabled: true,
       cards: [
         {
@@ -158,7 +160,11 @@ describe("Mission Control dashboard settings", () => {
     });
 
     expect(dashboard.missionStatement).toBe("Help owners steer the day.");
-    expect(dashboard.settings).toEqual({ kanbanEnabled: true });
+    expect(dashboard.mainGoal).toBe("Finish the onboarding polish.");
+    expect(dashboard.settings).toEqual({
+      kanbanEnabled: true,
+      mainGoal: "Finish the onboarding polish.",
+    });
     expect(dashboard.cards.find((card) => card.cardId === "unknown.card")).toBeUndefined();
     expect(
       dashboard.cards.find((card) => card.cardId === "mission.wheel-latest-snapshot"),
@@ -220,6 +226,10 @@ describe("Mission Control dashboard settings", () => {
     expect(
       dashboard.data["mission.wheel-latest-snapshot"]?.snapshot?.segments[0],
     ).toMatchObject({ id: "health", notes: "Slept well." });
+    expect(dashboard.mainGoal).toBe("Slept well.");
+    expect(dashboard.data["mission.mission-statement"]).toMatchObject({
+      mainGoal: "Slept well.",
+    });
   });
 
   it("preserves inactive plugin dashboard settings while marking them unavailable", async () => {

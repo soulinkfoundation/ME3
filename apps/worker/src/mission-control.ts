@@ -975,6 +975,8 @@ export async function getMissionDashboard(env: Env, userId: string) {
     quickActionContributions,
   );
   const settings = normalizeDashboardSettings(parseJsonRecord(row.settings_json));
+  const mainGoal =
+    settings.mainGoal || latestWheelSnapshotMainGoal(latestWheelSnapshot);
 
   return {
     availableCards: cardContributions,
@@ -984,11 +986,14 @@ export async function getMissionDashboard(env: Env, userId: string) {
     quickLinks,
     settings,
     missionStatement,
+    mainGoal,
     data: {
       "mission.daily-briefing": latestDailyBriefing,
       "mission.mission-statement": {
         missionStatement,
+        mainGoal,
         placeholder: DEFAULT_MISSION_STATEMENT,
+        mainGoalPlaceholder: "What's your main goal right now?",
       },
       "mission.wheel-latest-snapshot": {
         snapshot: latestWheelSnapshot,
@@ -1032,6 +1037,7 @@ export async function updateMissionDashboard(
     ...existing.settings,
     ...(isRecord(body.settings) ? body.settings : {}),
     ...(body.kanbanEnabled === undefined ? {} : { kanbanEnabled: body.kanbanEnabled }),
+    ...(body.mainGoal === undefined ? {} : { mainGoal: body.mainGoal }),
   });
 
   await env.DB.prepare(
@@ -2068,16 +2074,20 @@ async function ensureBaselineContextSources(env: Env, userId: string) {
   const missionStatement = normalizeContextMissionStatement(
     dashboardRow?.mission_statement || null,
   );
+  const dashboardSettings = normalizeDashboardSettings(
+    parseJsonRecord(dashboardRow?.settings_json || "{}"),
+  );
+  const hasMissionContext = Boolean(missionStatement || dashboardSettings.mainGoal);
   const baselines = [
     {
       id: `mission-source-mission-statement-${userId}`,
       kind: "mission_statement",
       label: "Mission statement",
-      description: missionStatement
-        ? "The owner's main intent and direction for assistant help."
-        : "Missing: write a mission statement so ME3 understands the owner's main intent.",
+      description: hasMissionContext
+        ? "The owner's main intent, direction, and current goal for assistant help."
+        : "Missing: write a mission statement or main goal so ME3 understands the owner's main intent.",
       visibility: "private",
-      status: missionStatement ? "active" : "setup_required",
+      status: hasMissionContext ? "active" : "setup_required",
       sourceRef: "/mission-control",
     },
     {
@@ -2855,6 +2865,11 @@ function normalizeMissionStatement(value: unknown): string {
   return trimmed ? trimmed.slice(0, 2000) : DEFAULT_MISSION_STATEMENT;
 }
 
+function normalizeMainGoal(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, 600);
+}
+
 function normalizeContextMissionStatement(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -2928,7 +2943,19 @@ function normalizeIsoDateTime(value: unknown): string | null {
 function normalizeDashboardSettings(value: Record<string, unknown>) {
   return {
     kanbanEnabled: value.kanbanEnabled === true,
+    mainGoal: normalizeMainGoal(value.mainGoal),
   };
+}
+
+function latestWheelSnapshotMainGoal(
+  snapshot: ReturnType<typeof serializeMissionWheelSnapshot> | null,
+): string {
+  if (!snapshot) return "";
+  for (const segment of snapshot.segments) {
+    const note = normalizeMainGoal(segment.notes);
+    if (note) return note;
+  }
+  return "";
 }
 
 function activeTaskSortValue(row: MissionTaskRow): string {

@@ -179,25 +179,12 @@ const assistantNameCanContinue = computed(
     !assistantNameSaving.value &&
     !assistantNameInvalid.value,
 );
-const wheelAverage = computed(() => {
-  const total = wheelSegments.value.reduce(
-    (sum, segment) => sum + segment.value,
-    0,
-  );
-  return (total / wheelSegments.value.length).toFixed(1);
-});
 const wheelPrioritySegment = computed(() => {
   const [firstSegment] = wheelSegments.value;
   if (!firstSegment) return null;
   return wheelSegments.value.reduce((lowest, segment) =>
     segment.value < lowest.value ? segment : lowest,
   );
-});
-const wheelContextSummary = computed(() => {
-  const segment = wheelPrioritySegment.value;
-  return segment
-    ? `${segment.label} is the lowest-scored area right now.`
-    : "Save a quick snapshot so your agent has better context.";
 });
 
 const profileCanContinue = computed(
@@ -891,11 +878,6 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
 
         <div class="wheel-start-panel">
-          <div class="wheel-start-summary">
-            <strong>{{ wheelAverage }}/10</strong>
-            <span>{{ wheelContextSummary }}</span>
-          </div>
-
           <LifeWheelChart
             :segments="wheelSegments"
             compact
@@ -913,9 +895,6 @@ onBeforeUnmount(clearUsernameCheck);
               placeholder="e.g. I want more energy for creative work."
             />
           </label>
-          <p class="field-hint">
-            You can update this later from Mission Control.
-          </p>
 
           <p v-if="wheelError" class="error">{{ wheelError }}</p>
         </div>
@@ -1400,30 +1379,15 @@ onBeforeUnmount(clearUsernameCheck);
   background: var(--ui-surface, var(--color-bg));
 }
 
-.wheel-start-summary {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
-}
-
-.wheel-start-summary strong {
-  flex: 0 0 auto;
-  min-width: 86px;
-  color: var(--ui-accent-strong, #0f766e);
-  font-size: 24px;
-  line-height: 1;
-}
-
-.wheel-start-summary span {
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 14px;
-  line-height: 1.45;
-}
-
 .wheel-start-panel :deep(.life-wheel-chart) {
-  margin-block: -2px 2px;
+  width: 100%;
+  max-width: none;
+  margin-block: 0 2px;
+}
+
+.wheel-start-panel :deep(.life-wheel-chart__svg) {
+  width: 100%;
+  max-width: none;
 }
 
 .start-modal-backdrop {
@@ -1538,13 +1502,5 @@ onBeforeUnmount(clearUsernameCheck);
     font-size: 14px;
   }
 
-  .wheel-start-summary {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .wheel-start-summary strong {
-    min-width: 0;
-  }
 }
 </style>
