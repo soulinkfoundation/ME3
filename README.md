@@ -1,6 +1,6 @@
 # 🤖 ME3
 
-### Your AI assistant, email, calendar, website and more in ONE place, hosted by you.
+### Your Personal AI assistant, Email, Calendar, Website and more, in ONE place, hosted by you.
 
 **Ready to take ownership of your digital life? ME too!**
 
