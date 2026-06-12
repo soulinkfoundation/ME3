@@ -63,8 +63,7 @@ async function resolveDefaultAppPathForSession(): Promise<string> {
   try {
     await sites.fetchSites();
     return sites.sites.some(
-      (site) =>
-        (site.site_type || "profile") === "profile" && !!site.published_at,
+      (site) => (site.site_type || "profile") === "profile",
     )
       ? DEFAULT_APP_PATH
       : "/start";
@@ -91,6 +90,21 @@ router.beforeEach(async (to, _from, next) => {
   if ((to.path === "/" || to.path === "/login") && auth.isAuthenticated) {
     next({ path: await resolveDefaultAppPathForSession() });
     return;
+  }
+
+  if (to.path === "/start" && auth.isAuthenticated) {
+    const sites = useSitesStore();
+    try {
+      await sites.fetchSites();
+      if (
+        sites.sites.some((site) => (site.site_type || "profile") === "profile")
+      ) {
+        next({ path: DEFAULT_APP_PATH, replace: true });
+        return;
+      }
+    } catch {
+      // Stay on onboarding when site state cannot be resolved.
+    }
   }
 
   if (to.path === "/dashboard" || to.path === "/dashboard/") {

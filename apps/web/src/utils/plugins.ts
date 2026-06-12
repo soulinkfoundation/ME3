@@ -68,8 +68,8 @@ export const RECOMMENDED_START_PLUGIN_ID_SET = new Set<string>(
 const pluginDisplayOrder = [
   "me3.agent-chat",
   "me3.mission-control",
-  "me3.journal",
   "me3.calendar",
+  "me3.journal",
   "me3.accounts",
   "me3.local-executor",
   "me3.telegram",

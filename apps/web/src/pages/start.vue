@@ -5,11 +5,11 @@ import { RouterLink, useRouter } from "vue-router";
 import { api, getUsernameAvailability } from "../api";
 import PluginList from "../components/PluginList.vue";
 import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
+import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
 import { usePublish } from "../composables/usePublish";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { useWizardStore } from "../stores/wizard";
-import { DEFAULT_APP_PATH } from "../utils/navigation";
 import {
   RECOMMENDED_START_PLUGIN_ID_SET,
   RECOMMENDED_START_PLUGIN_IDS,
@@ -29,30 +29,9 @@ definePage({
   },
 });
 
-type EmailProviderId = "cloudflare-email" | "smtp" | "mailgun" | "postmark";
-
-type MailboxRecord = {
-  aliasLocalPart: string;
-  aliasAddress?: string;
-  status: "pending_setup" | "active" | "paused";
-  forwardingEnabled: boolean;
-  forwardingEmail: string;
-};
-
-type MailboxResponse = {
-  available: boolean;
-  mailbox: MailboxRecord | null;
-  suggestedAliasLocalPart: string;
-};
-
-type EmailProviderSettingsResponse = {
-  encryptionConfigured: boolean;
-  activeProviderId: EmailProviderId;
-  providers: Array<{ id: EmailProviderId }>;
-};
-
-const STEPS = ["Profile", "Email", "Plugins", "Soulink"] as const;
+const STEPS = ["Profile", "Plugins", "Messaging"] as const;
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
+const START_PLUGIN_EXCLUDED_IDS = new Set(["me3.telegram"]);
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -66,18 +45,10 @@ const name = ref(wizard.profile.name || auth.user?.name || "");
 const handle = ref(
   wizard.profile.handle || wizard.username || auth.user?.username || "",
 );
-const domain = ref("");
-const emailAddress = ref("");
-const lastSuggestedEmailDomain = ref("");
 const isCheckingUsername = ref(false);
 const isUsernameAvailable = ref<boolean | null>(null);
 const usernameMessage = ref("");
 const profileError = ref("");
-const emailLoading = ref(false);
-const emailSaving = ref(false);
-const emailMessage = ref("");
-const emailError = ref("");
-const mailboxAvailable = ref(true);
 const pluginsLoading = ref(false);
 const pluginsSaving = ref(false);
 const plugins = ref<PluginRecord[]>([]);
@@ -88,6 +59,7 @@ const selectedPluginIds = ref<Set<string>>(
 const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
   null,
 );
+const telegramModalOpen = ref(false);
 
 let usernameCheckTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -95,27 +67,22 @@ const progress = computed(
   () => ((currentStep.value - 1) / (STEPS.length - 1)) * 100,
 );
 const normalizedHandle = computed(() => normalizeUsername(handle.value));
-const normalizedDomain = computed(() => normalizeEmailDomain(domain.value));
-const normalizedEmail = computed(() => emailAddress.value.trim().toLowerCase());
-const emailLocalPart = computed(() =>
-  normalizeMailboxAlias(normalizedEmail.value.split("@")[0] || ""),
+const profileSite = computed(() =>
+  sites.sites.find((site) => (site.site_type || "profile") === "profile"),
 );
-const emailDomain = computed(() =>
-  normalizeEmailDomain(normalizedEmail.value.split("@")[1] || ""),
-);
-const profileSiteUsername = computed(
-  () => wizard.username || wizard.profile.handle || normalizedHandle.value,
-);
-const finishDestination = computed(() =>
-  profileSiteUsername.value
-    ? `/sites/${encodeURIComponent(profileSiteUsername.value)}`
-    : DEFAULT_APP_PATH,
+const profileLink = computed(() =>
+  profileSite.value?.username
+    ? `/sites/${encodeURIComponent(profileSite.value.username)}`
+    : "/create",
 );
 const selectedPluginIdList = computed(() =>
   Array.from(selectedPluginIds.value),
 );
+const startPlugins = computed(() =>
+  plugins.value.filter((plugin) => !START_PLUGIN_EXCLUDED_IDS.has(plugin.id)),
+);
 const pluginBusyIds = computed(() =>
-  pluginsSaving.value ? plugins.value.map((plugin) => plugin.id) : [],
+  pluginsSaving.value ? startPlugins.value.map((plugin) => plugin.id) : [],
 );
 const pluginsCanContinue = computed(
   () => !pluginsLoading.value && !pluginsSaving.value,
@@ -129,23 +96,6 @@ const profileCanContinue = computed(
     isUsernameAvailable.value === true &&
     !isCheckingUsername.value &&
     !isPublishing.value,
-);
-
-const emailAddressIsValid = computed(
-  () =>
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail.value) &&
-    emailLocalPart.value === normalizedEmail.value.split("@")[0] &&
-    Boolean(emailDomain.value),
-);
-
-const emailCanSave = computed(
-  () =>
-    !emailSaving.value &&
-    !emailLoading.value &&
-    mailboxAvailable.value &&
-    Boolean(normalizedDomain.value) &&
-    emailAddressIsValid.value &&
-    emailDomain.value === normalizedDomain.value,
 );
 
 const progressSteps = computed(() =>
@@ -176,49 +126,6 @@ function normalizeUsername(value: string): string {
     .replace(/^[^a-z0-9]+/, "")
     .replace(/[^a-z0-9]+$/, "")
     .slice(0, 30);
-}
-
-function normalizeMailboxAlias(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]/g, "")
-    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
-}
-
-function normalizeEmailDomain(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .split("/")[0]
-    .replace(/^www\./, "")
-    .replace(/[^a-z0-9.-]/g, "")
-    .replace(/^[.-]+|[.-]+$/g, "");
-}
-
-function canAutofillEmailDomain(value: string): boolean {
-  const cleaned = normalizeEmailDomain(value);
-  return (
-    Boolean(cleaned) &&
-    cleaned !== "localhost" &&
-    !cleaned.endsWith(".localhost") &&
-    cleaned !== "workers.dev" &&
-    !cleaned.endsWith(".workers.dev") &&
-    cleaned !== "local" &&
-    !cleaned.endsWith(".local")
-  );
-}
-
-function inferDomainFromHost(hostname: string): string {
-  const inferred = normalizeEmailDomain(hostname);
-  if (!canAutofillEmailDomain(inferred)) {
-    return "";
-  }
-  const parts = inferred.split(".");
-  return parts.length > 2 && ["api", "me3", "www"].includes(parts[0])
-    ? parts.slice(1).join(".")
-    : inferred;
 }
 
 function clearUsernameCheck() {
@@ -278,24 +185,6 @@ function advanceTo(step: number) {
   furthestStep.value = Math.max(furthestStep.value, step);
 }
 
-function syncEmailForDomain(nextDomain: string) {
-  const cleanedDomain = normalizeEmailDomain(nextDomain);
-  if (!cleanedDomain) return;
-
-  const [currentLocalPart = "", currentDomain = ""] =
-    normalizedEmail.value.split("@");
-  const shouldUseSuggestedAddress =
-    !emailAddress.value.trim() ||
-    !currentDomain ||
-    currentDomain === lastSuggestedEmailDomain.value;
-  if (!shouldUseSuggestedAddress) return;
-
-  const localPart =
-    normalizeMailboxAlias(currentLocalPart) || normalizedHandle.value || "user";
-  emailAddress.value = `${localPart}@${cleanedDomain}`;
-  lastSuggestedEmailDomain.value = cleanedDomain;
-}
-
 async function publishProfile() {
   if (!profileCanContinue.value) return;
 
@@ -316,113 +205,14 @@ async function publishProfile() {
   }
 
   await sites.fetchSites();
-  if (!emailAddress.value && normalizedDomain.value) {
-    emailAddress.value = `${nextHandle}@${normalizedDomain.value}`;
-    lastSuggestedEmailDomain.value = normalizedDomain.value;
-  }
   advanceTo(2);
-}
-
-async function loadEmailDefaults() {
-  emailLoading.value = true;
-  emailError.value = "";
-  try {
-    const response = await api.get<MailboxResponse>("/mailbox");
-    mailboxAvailable.value = response.available;
-    const alias =
-      response.mailbox?.aliasLocalPart ||
-      response.suggestedAliasLocalPart ||
-      normalizedHandle.value;
-    const mailboxDomain = normalizeEmailDomain(
-      response.mailbox?.aliasAddress?.split("@")[1] || "",
-    );
-    const inferredDomain = canAutofillEmailDomain(mailboxDomain)
-      ? mailboxDomain
-      : inferDomainFromHost(window.location.hostname);
-    if (!domain.value && inferredDomain) domain.value = inferredDomain;
-    if (
-      !emailAddress.value &&
-      alias &&
-      (normalizedDomain.value || inferredDomain)
-    ) {
-      emailAddress.value = `${alias}@${normalizedDomain.value || inferredDomain}`;
-      lastSuggestedEmailDomain.value = normalizedDomain.value || inferredDomain;
-    }
-  } catch (error) {
-    emailError.value =
-      error instanceof Error ? error.message : "Could not load email setup.";
-  } finally {
-    emailLoading.value = false;
-  }
-}
-
-async function saveEmail() {
-  if (!emailCanSave.value) return;
-
-  emailSaving.value = true;
-  emailMessage.value = "";
-  emailError.value = "";
-
-  try {
-    const mailboxResponse = await api.put<{
-      mailbox: MailboxRecord | null;
-    }>("/mailbox", {
-      aliasLocalPart: emailLocalPart.value,
-      forwardingEnabled: false,
-      forwardingEmail: "",
-    });
-
-    if (mailboxResponse.mailbox?.status !== "active") {
-      await api.post<{ mailbox: MailboxRecord | null }>(
-        "/mailbox/activate",
-        {},
-      );
-    }
-
-    await api.put<EmailProviderSettingsResponse>("/email-provider-settings", {
-      activeProviderId: "cloudflare-email",
-      providers: [
-        {
-          id: "cloudflare-email",
-          transport: "binding",
-          fromAddress: normalizedEmail.value,
-          fromName:
-            auth.user?.name?.trim() && auth.user.name !== "ME3 Core Owner"
-              ? auth.user.name.trim()
-              : name.value.trim(),
-          replyToAddress: normalizedEmail.value,
-          sendingDomain: normalizedDomain.value,
-          accountId: "",
-          messageStream: "",
-          smtpHost: "",
-          smtpPort: "",
-          smtpSecurity: "none",
-          smtpUsername: "",
-          mailgunRegion: "us",
-        },
-      ],
-    });
-
-    emailMessage.value = "Email saved.";
-    advanceTo(3);
-  } catch (error) {
-    emailError.value =
-      error instanceof Error ? error.message : "Could not save email setup.";
-  } finally {
-    emailSaving.value = false;
-  }
-}
-
-function skipEmail() {
-  emailError.value = "";
-  emailMessage.value = "";
-  advanceTo(3);
 }
 
 function applyDefaultPluginSelection(nextPlugins: PluginRecord[]) {
   const nextSelection = new Set<string>();
   for (const plugin of nextPlugins) {
     if (
+      !START_PLUGIN_EXCLUDED_IDS.has(plugin.id) &&
       !isPluginComingSoon(plugin) &&
       RECOMMENDED_START_PLUGIN_ID_SET.has(plugin.id)
     ) {
@@ -483,7 +273,7 @@ async function savePlugins() {
 
   try {
     const requestedPluginIds = selectedPluginIds.value;
-    const pluginsToUpdate = plugins.value.filter((plugin) => {
+    const pluginsToUpdate = startPlugins.value.filter((plugin) => {
       if (isPluginComingSoon(plugin)) return false;
       return isPluginEnabled(plugin) !== requestedPluginIds.has(plugin.id);
     });
@@ -499,7 +289,7 @@ async function savePlugins() {
       syncPlugin(response.plugin);
     }
 
-    advanceTo(4);
+    advanceTo(3);
   } catch (error) {
     pluginsError.value =
       error instanceof Error ? error.message : "Could not save plugins.";
@@ -510,31 +300,23 @@ async function savePlugins() {
 
 function skipPlugins() {
   pluginsError.value = "";
-  advanceTo(4);
+  advanceTo(3);
 }
 
 async function finish() {
-  await router.push(finishDestination.value);
+  await router.push("/mission-control");
 }
 
 watch(handle, queueUsernameAvailabilityCheck, { immediate: true });
 
-watch(domain, (value) => {
-  syncEmailForDomain(value);
-});
-
 watch(currentStep, (step) => {
-  if (step === 2 && !emailLoading.value && !emailAddress.value) {
-    void loadEmailDefaults();
-  }
-  if (step === 3 && !pluginsLoading.value && plugins.value.length === 0) {
+  if (step === 2 && !pluginsLoading.value && plugins.value.length === 0) {
     void loadPlugins();
   }
 });
 
 onMounted(() => {
-  const inferred = inferDomainFromHost(window.location.hostname);
-  if (inferred) domain.value = inferred;
+  void sites.fetchSites();
 });
 
 onBeforeUnmount(clearUsernameCheck);
@@ -588,7 +370,7 @@ onBeforeUnmount(clearUsernameCheck);
           <p>
             Configure the essentials now, complete your full
             <RouterLink
-              to="/account?section=mailbox"
+              :to="profileLink"
               target="_blank"
               rel="noopener noreferrer"
               >site profile</RouterLink
@@ -682,97 +464,6 @@ onBeforeUnmount(clearUsernameCheck);
       <section
         v-else-if="currentStep === 2"
         class="start-step"
-        aria-labelledby="email-title"
-      >
-        <div class="step-copy">
-          <h1 id="email-title">Set up email</h1>
-          <p>
-            Set your custom domain and email address here. Then ensure you
-            <a
-              href="https://developers.cloudflare.com/fundamentals/manage-domains/add-site/"
-              target="_blank"
-              rel="noopener noreferrer"
-              >onboard that domain</a
-            >
-            and configure
-            <a
-              href="https://developers.cloudflare.com/email-routing/"
-              target="_blank"
-              rel="noopener noreferrer"
-              >email routing</a
-            >
-            in your Cloudflare account later.
-          </p>
-        </div>
-
-        <form class="start-form" autocomplete="off" @submit.prevent="saveEmail">
-          <label class="field" for="start-domain">
-            <span>Custom Domain</span>
-            <input
-              id="start-domain"
-              v-model="domain"
-              type="text"
-              placeholder="example.com"
-              inputmode="url"
-              autocomplete="off"
-              autocapitalize="off"
-              autocorrect="off"
-              spellcheck="false"
-            />
-          </label>
-
-          <label class="field" for="start-email">
-            <span>Email address</span>
-            <input
-              id="start-email"
-              v-model="emailAddress"
-              type="email"
-              placeholder="you@example.com"
-              autocomplete="email"
-              spellcheck="false"
-            />
-          </label>
-
-          <p v-if="emailLoading" class="field-hint">Loading email setup...</p>
-          <p
-            v-if="
-              normalizedEmail &&
-              emailAddressIsValid &&
-              emailDomain !== normalizedDomain
-            "
-            class="error"
-          >
-            The email address must use the domain above.
-          </p>
-          <p v-if="!mailboxAvailable" class="error">
-            Mailbox setup is not available in this Core install yet.
-          </p>
-          <p v-if="emailMessage" class="success">{{ emailMessage }}</p>
-          <p v-if="emailError" class="error">{{ emailError }}</p>
-
-          <div class="step-nav split">
-            <button class="nav-btn back" type="button" @click="goToStep(1)">
-              ← Back
-            </button>
-            <div class="nav-actions-right">
-              <button class="nav-btn ghost" type="button" @click="skipEmail">
-                Skip
-              </button>
-              <button
-                class="nav-btn next"
-                type="submit"
-                :disabled="!emailCanSave"
-              >
-                {{ emailSaving ? "Saving..." : "Next →" }}
-              </button>
-            </div>
-          </div>
-        </form>
-      </section>
-
-      <section
-        v-else-if="currentStep === 3"
-        class="start-step"
         aria-labelledby="plugins-title"
       >
         <div class="step-copy">
@@ -789,8 +480,8 @@ onBeforeUnmount(clearUsernameCheck);
           </div>
           <p v-else-if="pluginsError" class="error">{{ pluginsError }}</p>
           <PluginList
-            v-else-if="plugins.length"
-            :plugins="plugins"
+            v-else-if="startPlugins.length"
+            :plugins="startPlugins"
             :busy-plugin-ids="pluginBusyIds"
             :selected-plugin-ids="selectedPluginIdList"
             :recommended-plugin-ids="RECOMMENDED_START_PLUGIN_IDS"
@@ -802,7 +493,7 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
 
         <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(2)">
+          <button class="nav-btn back" type="button" @click="goToStep(1)">
             ← Back
           </button>
           <div class="nav-actions-right">
@@ -821,30 +512,51 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
       </section>
 
-      <section v-else class="start-step" aria-labelledby="soulink-title">
+      <section v-else class="start-step" aria-labelledby="messaging-title">
         <div class="step-copy">
-          <h1 id="soulink-title">Connect Soulink</h1>
+          <h1 id="messaging-title">Connect a messaging app</h1>
           <p>
-            Chat with your ME3 assistant on the go with
-            <a
-              href="https://soulinkfoundation.org"
-              target="_blank"
-              rel="noopener noreferrer"
-              >Soulink</a
-            >.
+            Chat with your ME3 assistant on the go. Soulink is the recommended
+            option, and Telegram is available if you want to connect your own
+            bot.
           </p>
         </div>
 
-        <div class="soulink-panel-wrap">
-          <SoulinkConnectPanel
-            ref="soulinkPanelRef"
-            variant="default"
-            :auto-prepare-when-not-connected="true"
-          />
+        <div class="messaging-options">
+          <section class="messaging-option">
+            <div class="messaging-option__header">
+              <div>
+                <h2>Soulink</h2>
+                <p>Recommended for the fastest assistant messaging setup.</p>
+              </div>
+              <span class="messaging-option__badge">Recommended</span>
+            </div>
+            <SoulinkConnectPanel
+              ref="soulinkPanelRef"
+              variant="default"
+              :auto-prepare-when-not-connected="true"
+            />
+          </section>
+
+          <section class="messaging-option">
+            <div class="messaging-option__header">
+              <div>
+                <h2>Telegram</h2>
+                <p>Use your own Telegram bot for assistant messages.</p>
+              </div>
+              <button
+                class="nav-btn ghost messaging-option__action"
+                type="button"
+                @click="telegramModalOpen = true"
+              >
+                Set up
+              </button>
+            </div>
+          </section>
         </div>
 
         <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(3)">
+          <button class="nav-btn back" type="button" @click="goToStep(2)">
             ← Back
           </button>
           <div class="nav-actions-right">
@@ -858,6 +570,44 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
       </section>
     </main>
+
+    <Teleport to="body">
+      <div
+        v-if="telegramModalOpen"
+        class="start-modal-backdrop"
+        @click.self="telegramModalOpen = false"
+      >
+        <section
+          class="start-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="telegram-setup-title"
+          tabindex="-1"
+          @keydown.escape="telegramModalOpen = false"
+        >
+          <header class="start-modal__header">
+            <h2 id="telegram-setup-title">Set up Telegram</h2>
+            <button
+              class="start-modal__close"
+              type="button"
+              aria-label="Close Telegram setup"
+              @click="telegramModalOpen = false"
+            >
+              ×
+            </button>
+          </header>
+          <ul class="telegram-setup-steps">
+            <li>Open Telegram and search for BotFather.</li>
+            <li>Follow BotFather's instructions to create a new bot.</li>
+            <li>Paste the bot username, token, and webhook secret below.</li>
+          </ul>
+          <TelegramConnectPanel
+            variant="default"
+            :auto-prepare-when-not-connected="true"
+          />
+        </section>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -899,7 +649,7 @@ onBeforeUnmount(clearUsernameCheck);
 .progress-steps {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
 }
 
@@ -1203,11 +953,110 @@ onBeforeUnmount(clearUsernameCheck);
 }
 
 .plugins-panel-wrap,
-.soulink-panel-wrap {
+.messaging-option {
   padding: 18px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-md, 10px);
   background: var(--ui-surface, var(--color-bg));
+}
+
+.messaging-options {
+  display: grid;
+  gap: 12px;
+}
+
+.messaging-option {
+  display: grid;
+  gap: 16px;
+}
+
+.messaging-option__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.messaging-option__header h2,
+.start-modal__header h2 {
+  margin: 0;
+  color: var(--ui-text, var(--color-text));
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.messaging-option__header p {
+  margin: 4px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.messaging-option__badge {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--ui-accent-soft, rgba(20, 184, 166, 0.14));
+  color: var(--ui-accent-strong, #0f766e);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.messaging-option__action {
+  padding: 9px 14px;
+}
+
+.start-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.start-modal {
+  display: grid;
+  gap: 16px;
+  width: min(640px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 18px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-lg, 14px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  box-shadow: var(--ui-shadow-md, 0 24px 80px rgba(0, 0, 0, 0.2));
+}
+
+.start-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.start-modal__close {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: transparent;
+  color: var(--ui-text, var(--color-text));
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.telegram-setup-steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .status-row {

@@ -12,6 +12,7 @@ import {
 } from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
+import { useSitesStore } from "../stores/sites";
 import { resolveUiIconName, type UiIconName } from "../utils/icons";
 import type {
   MissionProject,
@@ -179,6 +180,7 @@ const dashboardCardRegistry = new Set([
 const { toastFromUnknown, toastSuccess } = useAppToast();
 const route = useRoute();
 const router = useRouter();
+const sites = useSitesStore();
 const dashboard = ref<MissionDashboardResponse | null>(null);
 const loading = ref(true);
 const error = ref("");
@@ -201,6 +203,10 @@ const aiUsage = ref<AiUsageCardData | null>(null);
 const aiUsageLoading = ref(false);
 const aiUsageError = ref("");
 const aiUsageModalOpen = ref(false);
+const setupChecklistDismissed = ref(
+  localStorage.getItem("me3:mission-control:setup-checklist-dismissed") ===
+    "true",
+);
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
@@ -282,6 +288,14 @@ const activeDashboardProjectTasks = computed(() =>
     activeProjectTaskStatuses.includes(task.status as ProjectBoardStatus),
   ),
 );
+const setupProfilePath = computed(() => {
+  const profileSite = sites.sites.find(
+    (site) => (site.site_type || "profile") === "profile",
+  );
+  return profileSite?.username
+    ? `/sites/${encodeURIComponent(profileSite.username)}`
+    : "/create";
+});
 const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
   const activeProjects = dashboardProjects.value.filter(
     (project) => project.status === "active",
@@ -395,6 +409,11 @@ function projectSummaryPath(summary: ProjectDashboardSummary): string {
 
 function visibleCardEnabled(cardId: string): boolean {
   return visibleCards.value.some((card) => card.cardId === cardId);
+}
+
+function dismissSetupChecklist() {
+  setupChecklistDismissed.value = true;
+  localStorage.setItem("me3:mission-control:setup-checklist-dismissed", "true");
 }
 
 function syncDashboardDrafts() {
@@ -690,6 +709,7 @@ async function saveDashboardLayout() {
 
 onMounted(() => {
   cleanLegacySectionQuery();
+  void sites.fetchSites();
   void loadDashboard();
   void loadProjectsSummary();
 });
@@ -803,6 +823,54 @@ onMounted(() => {
       </div>
 
       <div v-if="!loading" class="mission-dashboard__grid">
+        <article
+          v-if="!setupChecklistDismissed"
+          class="dashboard-card dashboard-card--wide setup-checklist-card"
+        >
+          <header class="dashboard-card__header">
+            <h2 class="dashboard-card__title">
+              <UiIcon name="ClipboardCheck" :size="16" />
+              <span>Setup checklist</span>
+            </h2>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              aria-label="Dismiss setup checklist"
+              title="Dismiss setup checklist"
+              @click="dismissSetupChecklist"
+            >
+              <UiIcon name="X" :size="15" />
+            </Button>
+          </header>
+          <p class="dashboard-card__body">
+            To make the most of ME3 do the following.
+          </p>
+          <ol class="setup-checklist-card__list">
+            <li>
+              <RouterLink :to="setupProfilePath">
+                Complete your profile
+              </RouterLink>
+            </li>
+            <li>
+              <RouterLink to="/account?section=mailbox">
+                Configure email
+              </RouterLink>
+            </li>
+            <li>
+              <RouterLink to="/account?section=app-connections">
+                Connect a messaging app
+              </RouterLink>
+            </li>
+            <li>
+              <RouterLink to="/assistant">
+                Activate a job for your assistant
+              </RouterLink>
+            </li>
+          </ol>
+        </article>
+
         <article
           v-for="card in visibleCards"
           :key="card.instanceId"
@@ -1647,6 +1715,33 @@ onMounted(() => {
   display: grid;
   gap: 12px;
   justify-items: start;
+}
+
+.setup-checklist-card {
+  grid-column: 1 / -1;
+}
+
+.setup-checklist-card__list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.setup-checklist-card__list a {
+  color: var(--ui-text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.setup-checklist-card__list a:hover,
+.setup-checklist-card__list a:focus-visible {
+  color: var(--ui-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .mission-statement-form {

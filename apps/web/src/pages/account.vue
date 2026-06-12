@@ -24,7 +24,6 @@ import {
   type AiAgentModelOption,
 } from "../utils/aiModelCatalog";
 import {
-  canActivatePlugin,
   isPluginComingSoon,
   isPluginEnabled,
   type PluginRecord,
@@ -265,20 +264,6 @@ type CommerceSettingsResponse = {
   };
 };
 
-type AssistantSetupItem = {
-  id: "profile" | "email" | "mission-control";
-  title: string;
-  description: string;
-  statusLabel: string;
-  statusClass: string;
-  actionLabel: string;
-  icon: "UserRound" | "Mail" | "ClipboardCheck";
-  done: boolean;
-  optional?: boolean;
-};
-
-type AccountSection = "advanced" | "mailbox" | "plugins";
-
 const auth = useAuthStore();
 const sites = useSitesStore();
 const { themePreference, setThemePreference } = useTheme();
@@ -387,14 +372,6 @@ const customDomainSiteUsername = computed(() => {
 
 const customDomainSite = computed(() =>
   sites.sites.find((site) => site.username === customDomainSiteUsername.value),
-);
-
-const profileSite = computed(() =>
-  sites.sites.find((site) => (site.site_type || "profile") === "profile"),
-);
-
-const profileSetupReady = computed(() =>
-  Boolean(profileSite.value?.published_at || profileSite.value),
 );
 
 const customDomainStatusLabel = computed(() => {
@@ -619,26 +596,6 @@ const localExecutorPairingCommand = computed(
   () => localExecutorPairing.value?.sourceCommand || "",
 );
 
-const missionControlPlugin = computed(
-  () =>
-    plugins.value.find((plugin) => plugin.id === "me3.mission-control") || null,
-);
-
-const missionControlReady = computed(() =>
-  Boolean(
-    missionControlPlugin.value?.enabled &&
-    missionControlPlugin.value.status === "installed",
-  ),
-);
-
-const missionControlActionLabel = computed(() => {
-  const plugin = missionControlPlugin.value;
-  if (pluginsLoading.value) return "Loading";
-  if (missionControlReady.value) return "Open";
-  if (plugin && canActivatePlugin(plugin)) return "Turn on";
-  return "Review";
-});
-
 const aiDefaultRouteInput = computed(
   () => aiRouteInputs.value.default || { providerId: "", model: "" },
 );
@@ -797,12 +754,6 @@ const emailProviderTestDisabled = computed(
     !emailProviderTestTo.value.trim(),
 );
 
-const emailSetupReady = computed(() =>
-  Boolean(
-    mailbox.value?.status === "active" || activeEmailProvider.value?.configured,
-  ),
-);
-
 const paymentsStatusLabel = computed(() => {
   if (commerceLoading.value) return "Loading";
   if (commerceSettings.value?.stripe.configured) return "Ready";
@@ -828,42 +779,6 @@ const commerceSaveDisabled = computed(
 const commerceClearDisabled = computed(
   () => commerceSaving.value || commerceLoading.value,
 );
-
-const assistantSetupItems = computed<AssistantSetupItem[]>(() => [
-  {
-    id: "profile",
-    title: "Create your profile",
-    description:
-      "Give ME3 the public identity and baseline context it needs to represent you.",
-    statusLabel: profileSetupReady.value ? "Ready" : "Start here",
-    statusClass: profileSetupReady.value ? "active" : "setup_required",
-    actionLabel: profileSetupReady.value ? "Edit profile" : "Create profile",
-    icon: "UserRound",
-    done: profileSetupReady.value,
-  },
-  {
-    id: "email",
-    title: "Connect email",
-    description:
-      "Let the assistant work around real messages, drafts, and approvals.",
-    statusLabel: emailSetupReady.value ? "Ready" : "Needs setup",
-    statusClass: emailSetupReady.value ? "active" : "setup_required",
-    actionLabel: "Set up email",
-    icon: "Mail",
-    done: emailSetupReady.value,
-  },
-  {
-    id: "mission-control",
-    title: "Open Mission Control",
-    description:
-      "Use the workspace for capture, tasks, projects, approvals, and memory.",
-    statusLabel: missionControlReady.value ? "Ready" : "Needs setup",
-    statusClass: missionControlReady.value ? "active" : "setup_required",
-    actionLabel: missionControlActionLabel.value,
-    icon: "ClipboardCheck",
-    done: missionControlReady.value,
-  },
-]);
 
 const me3ConnectionStatusLabel = computed(() => {
   if (appConnectionsLoading.value) return "Loading";
@@ -971,35 +886,6 @@ function syncEmailAddressInput(force = false) {
   if (inferred && (force || !emailAddressInput.value.trim())) {
     emailAddressInput.value = inferred;
   }
-}
-
-function openAccountSection(section: AccountSection) {
-  openSection.value[section] = true;
-}
-
-async function handleAssistantSetupAction(item: AssistantSetupItem) {
-  if (item.id === "profile") {
-    await router.push("/create");
-    return;
-  }
-
-  if (item.id === "email") {
-    openAccountSection("mailbox");
-    return;
-  }
-
-  if (missionControlReady.value) {
-    await router.push("/mission-control");
-    return;
-  }
-
-  const plugin = missionControlPlugin.value;
-  if (plugin && canActivatePlugin(plugin)) {
-    await activatePlugin(plugin);
-    return;
-  }
-
-  openAccountSection("plugins");
 }
 
 function syncAccount(response: AccountResponse) {
@@ -1750,7 +1636,10 @@ onMounted(async () => {
   void loadPlugins();
   void loadAppConnections();
   void loadCommerceSettings();
-  if (route.query.section === "connections") {
+  if (
+    route.query.section === "connections" ||
+    route.query.section === "app-connections"
+  ) {
     openSection.value.advanced = true;
   }
   if (typeof route.query.me3_claim_error === "string") {
@@ -1849,33 +1738,6 @@ onMounted(async () => {
       <div v-if="loading" class="status-row">Loading account...</div>
 
       <template v-else>
-        <section
-          class="setup-checklist"
-          aria-labelledby="assistant-setup-title"
-        >
-          <div class="setup-checklist__header">
-            <h2 id="assistant-setup-title">Setup</h2>
-          </div>
-
-          <div class="setup-checklist__items">
-            <button
-              v-for="item in assistantSetupItems"
-              :key="item.id"
-              class="setup-item"
-              :class="{ 'setup-item--done': item.done }"
-              type="button"
-              :disabled="item.id === 'mission-control' && pluginsLoading"
-              :aria-pressed="item.done"
-              @click="handleAssistantSetupAction(item)"
-            >
-              <span class="setup-item__check" aria-hidden="true">
-                <UiIcon v-if="item.done" name="Check" :size="14" />
-              </span>
-              <span class="setup-item__title">{{ item.title }}</span>
-            </button>
-          </div>
-        </section>
-
         <section class="card accordion-card signin-section primary-section">
           <button
             id="account-trigger-signin"
@@ -3095,89 +2957,11 @@ h1 {
   text-align: center;
 }
 
-.setup-checklist {
-  display: grid;
-  gap: 14px;
-  margin-bottom: 28px;
-  padding: 16px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 8px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-}
-
-.setup-checklist__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.setup-checklist__header h2,
 .account-section-heading {
   margin: 0;
   color: var(--ui-text, var(--color-text));
   font-size: 18px;
   line-height: 1.2;
-}
-
-.setup-checklist__items {
-  display: grid;
-  gap: 4px;
-}
-
-.setup-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 40px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--ui-radius-sm, 8px);
-  background: transparent;
-  color: var(--ui-text, var(--color-text));
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.setup-item:hover,
-.setup-item:focus-visible {
-  background: var(--ui-surface, var(--color-bg));
-}
-
-.setup-item:focus-visible {
-  outline: 2px solid var(--ui-focus, var(--color-primary));
-  outline-offset: 2px;
-}
-
-.setup-item:disabled {
-  cursor: wait;
-  opacity: 0.7;
-}
-
-.setup-item__check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  border: 1.5px solid var(--ui-border-strong, var(--color-border-strong));
-  border-radius: 999px;
-  color: var(--ui-on-accent, #fff);
-}
-
-.setup-item--done .setup-item__check {
-  border-color: var(--ui-accent, #4caf50);
-  background: var(--ui-accent, #4caf50);
-}
-
-.setup-item__title {
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.3;
 }
 
 .primary-section {
