@@ -1855,7 +1855,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="agent-page">
+  <div
+    class="agent-page"
+    :class="{ 'agent-page--with-mobile-controls': isEmailTab(activeTab) }"
+  >
     <Teleport to="#app-side-nav-mobile-page-controls">
       <form
         v-if="isEmailTab(activeTab)"
@@ -2717,15 +2720,30 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .agent-page {
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.agent-page--with-mobile-controls {
+  height: calc(100vh - var(--app-shell-mobile-nav-height));
+  height: calc(100dvh - var(--app-shell-mobile-nav-height));
 }
 
 .agent-main {
   margin: 0 auto;
   padding: 0;
-  display: grid;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   gap: 10px;
+  min-height: 0;
+  width: 100%;
   max-width: none;
+  overflow: hidden;
 }
 
 .panel-pad {
@@ -3255,13 +3273,14 @@ onBeforeUnmount(() => {
 /* Panel */
 .inbox-panel {
   border-bottom: 1px solid var(--color-border);
-  height: 100dvh;
+  flex: 1 1 auto;
+  height: auto;
   min-height: 0;
   overflow: hidden;
 }
 
 .inbox-panel--with-mobile-controls {
-  height: calc(100dvh - var(--app-shell-mobile-nav-height));
+  height: auto;
 }
 
 .mail-workspace {
@@ -3316,7 +3335,9 @@ onBeforeUnmount(() => {
 .conversation-list {
   order: 2;
   flex: 1 1 auto;
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .thread-pane {
@@ -3447,11 +3468,14 @@ onBeforeUnmount(() => {
 .conversation-scroll,
 .thread-scroll {
   min-height: 0;
-  overflow-y: auto;
 }
 
 .conversation-scroll {
-  flex: 1;
+  flex: 0 0 auto;
+}
+
+.thread-scroll {
+  overflow-y: auto;
 }
 
 .bulk-mail-toolbar {
@@ -4379,6 +4403,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .empty-state__stack {
@@ -4689,7 +4714,7 @@ onBeforeUnmount(() => {
   }
 
   .inbox-panel {
-    height: calc(100dvh - var(--app-shell-mobile-nav-height));
+    height: auto;
   }
 
   .conversation-list__head {
@@ -4697,11 +4722,9 @@ onBeforeUnmount(() => {
   }
 
   .conversation-scroll {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     min-height: 0;
     max-height: none;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
   }
 
   .bulk-mail-toolbar {
