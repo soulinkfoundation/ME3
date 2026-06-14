@@ -3760,6 +3760,48 @@ describe("ME3 Core Worker auth", () => {
     fetchMock.mockRestore();
   });
 
+  it("exposes linked ME3 app connection metadata for the Core install", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    const session = cookieHeader(await bootstrap(env));
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    env.installSecrets.set(
+      "ME3_CORE_INSTALL_ID",
+      "core_11111111-1111-4111-8111-111111111111",
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/account/app-connections", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      me3: {
+        connected: boolean;
+        origin: string;
+        disconnectAvailable: boolean;
+        installId: string;
+        coreOrigin: string;
+        coreApiOrigin: string;
+        meJsonUrl: string;
+        meJsonSource: string;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.me3).toEqual({
+      connected: true,
+      origin: "https://me3.example",
+      disconnectAvailable: true,
+      installId: "core_11111111-1111-4111-8111-111111111111",
+      coreOrigin: "http://localhost:4000",
+      coreApiOrigin: "http://localhost:8787",
+      meJsonUrl: "http://localhost:4000/.well-known/me.json",
+      meJsonSource: "core_install",
+    });
+  });
+
   it("disconnects ME3 app auth only when password login remains available", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

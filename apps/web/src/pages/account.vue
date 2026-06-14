@@ -239,6 +239,11 @@ type AppConnectionsResponse = {
     connected: boolean;
     origin: string;
     disconnectAvailable: boolean;
+    installId: string | null;
+    coreOrigin: string;
+    coreApiOrigin: string;
+    meJsonUrl: string;
+    meJsonSource: "core_install" | "hosted_profile";
   };
 };
 
@@ -771,6 +776,25 @@ const me3ConnectionStatusLabel = computed(() => {
 const me3ConnectionStatusClass = computed(() =>
   me3Connection.value?.connected ? "active" : "pending_setup",
 );
+
+const me3ConnectionDescription = computed(() => {
+  const connection = me3Connection.value;
+  if (!connection) return "Use ME3.app to claim and sign in to this Core install.";
+  if (connection.connected) {
+    return connection.meJsonSource === "core_install"
+      ? "ME3.app is linked and should prefer this Core install's public me.json."
+      : "ME3.app is linked.";
+  }
+  return "Use ME3.app to claim and sign in to this Core install.";
+});
+
+const me3InstallIdLabel = computed(() => {
+  const installId = me3Connection.value?.installId;
+  if (!installId) return null;
+  return installId.length > 18
+    ? `${installId.slice(0, 10)}...${installId.slice(-8)}`
+    : installId;
+});
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -2139,7 +2163,31 @@ onMounted(async () => {
                       'connection-line--connected': me3Connection?.connected,
                     }"
                   >
-                    <span class="connection-line__title">ME3.app</span>
+                    <div class="connection-line__copy">
+                      <span class="connection-line__title">ME3.app</span>
+                      <p class="connection-line__description">
+                        {{ me3ConnectionDescription }}
+                      </p>
+                      <div
+                        v-if="me3Connection"
+                        class="connection-line__details"
+                      >
+                        <span
+                          v-if="me3InstallIdLabel"
+                          :title="me3Connection.installId || undefined"
+                        >
+                          Core {{ me3InstallIdLabel }}
+                        </span>
+                        <a
+                          v-if="me3Connection.connected"
+                          :href="me3Connection.meJsonUrl"
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          Core me.json
+                        </a>
+                      </div>
+                    </div>
                     <div class="connection-line__end">
                       <StatusBadge :tone="me3ConnectionStatusClass">
                         {{ me3ConnectionStatusLabel }}
@@ -3808,6 +3856,24 @@ h1 {
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 12px;
   line-height: 1.4;
+}
+
+.connection-line__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.connection-line__details a {
+  color: var(--ui-accent-strong, var(--color-text));
+  text-decoration: none;
+}
+
+.connection-line__details a:hover {
+  text-decoration: underline;
 }
 
 .connection-line__header {

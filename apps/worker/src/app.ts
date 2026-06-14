@@ -259,6 +259,16 @@ type OwnerAuthState = {
   passwordConfigured: boolean;
   me3Configured: boolean;
 };
+type Me3AppConnectionDetails = {
+  connected: boolean;
+  origin: string;
+  disconnectAvailable: boolean;
+  installId: string | null;
+  coreOrigin: string;
+  coreApiOrigin: string;
+  meJsonUrl: string;
+  meJsonSource: "core_install" | "hosted_profile";
+};
 type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
 type SessionPayload = { sub: string; iat: number; exp: number };
 type OwnerRecord = OwnerProfile & { password_hash: string | null };
@@ -711,13 +721,8 @@ app.get("/api/account/app-connections", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
 
-  const authState = await getOwnerAuthState(c.env);
   return c.json({
-    me3: {
-      connected: authState.me3Configured,
-      origin: getMe3CloudOrigin(c.env),
-      disconnectAvailable: authState.passwordConfigured,
-    },
+    me3: await getMe3AppConnectionDetails(c),
   });
 });
 
@@ -2032,6 +2037,25 @@ async function getOwnerAuthState(env: Env): Promise<OwnerAuthState> {
   };
 }
 
+async function getMe3AppConnectionDetails(c: AppContext): Promise<Me3AppConnectionDetails> {
+  const authState = await getOwnerAuthState(c.env);
+  const coreOrigin = getCoreWebOrigin(c.env, c.req.url);
+  const storedInstallId = await getStoredMe3CoreInstallId(c.env);
+
+  return {
+    connected: authState.me3Configured,
+    origin: getMe3CloudOrigin(c.env),
+    disconnectAvailable: authState.passwordConfigured,
+    installId:
+      storedInstallId ||
+      (authState.me3Configured ? await getOrCreateMe3CoreInstallId(c.env) : null),
+    coreOrigin,
+    coreApiOrigin: getCoreApiOrigin(c.env, c.req.url),
+    meJsonUrl: `${coreOrigin}/.well-known/me.json`,
+    meJsonSource: authState.me3Configured ? "core_install" : "hosted_profile",
+  };
+}
+
 async function getOwnerAuthConfigured(env: Env): Promise<boolean> {
   return (await getOwnerAuthState(env)).configured;
 }
@@ -2088,15 +2112,19 @@ function normalizeMe3CoreInstallId(value: unknown): string | null {
 }
 
 async function getOrCreateMe3CoreInstallId(env: Env): Promise<string> {
-  const stored = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
-    .bind(ME3_CORE_INSTALL_ID_SECRET_NAME)
-    .first<{ value: string }>();
-  const existing = normalizeMe3CoreInstallId(stored?.value);
+  const existing = await getStoredMe3CoreInstallId(env);
   if (existing) return existing;
 
   const installId = `core_${crypto.randomUUID()}`;
   await setStoredInstallSecret(env, ME3_CORE_INSTALL_ID_SECRET_NAME, installId);
   return installId;
+}
+
+async function getStoredMe3CoreInstallId(env: Env): Promise<string | null> {
+  const stored = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
+    .bind(ME3_CORE_INSTALL_ID_SECRET_NAME)
+    .first<{ value: string }>();
+  return normalizeMe3CoreInstallId(stored?.value);
 }
 
 async function deleteMe3ClaimState(env: Env, state: string): Promise<void> {
