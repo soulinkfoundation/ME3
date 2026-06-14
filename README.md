@@ -18,9 +18,11 @@ All you need is a GitHub and Cloudflare account, and the nerve to press the butt
 
 ## 🤔 Why ME3?
 
-Because... 
-- Your AI, inbox, calendar, and website should not all belong to someone else.
-- And you shouldn't need to spend a weekend in the terminal to get a PAI running. 
+Because your AI, inbox, calendar, and website should not all belong to someone else.
+
+## ☁️ Why Cloudflare?
+
+Because ME3 needs a home that's yours, without you having to spend your weekends in the terminal.
 
 ## 🖥️ What's in ME3
 
