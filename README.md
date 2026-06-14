@@ -1,16 +1,20 @@
 # 🤖 ME3
 
-### Your personal AI assistant, email, calendar, website, and more. Hosted by you.
+### Your personal AI assistant, email, calendar, website, and more.
 
-**Ready to take ownership of your digital life? Me too!**
+#### Ready to take ownership of your digital life without spending your weekend in the terminal? 
 
-ME3 provides a home to the parts of your digital life that should belong to you.
+**Me too!**
+
+**ME3:**
 
 ![ME3 screenshot](apps/web/public/me3.gif)
 
+ME3 provides a home for the parts of your digital life that should belong to you.
+
 ## ☁️ Install
 
-All you need is a GitHub and Cloudflare account, and the nerve to press the button.
+All you need is the gumption to press the button (and a free Cloudflare and Github account).
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
 
@@ -18,11 +22,8 @@ note: some features may require Cloudflare’s $5/month plan.
 
 ## 🤔 Why ME3?
 
-Because your AI, inbox, calendar, and website should not all belong to someone else.
-
-## ☁️ Why Cloudflare?
-
-Because ME3 needs a home that's yours, without you having to spend your weekends in the terminal.
+Because your AI, inbox, calendar, and website shouldn't belong to someone else.
+And making this happen shouldn't be such a pain in the ass.
 
 ## 🖥️ What's in ME3
 
@@ -46,3 +47,5 @@ ME3 is free and open source. Donations to the Soulink Foundation (non-profit) he
 ## License
 
 [MIT](./LICENSE)
+
+It's time grasshopper... time to take ownership of your digital life. 
