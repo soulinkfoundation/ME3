@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useWizardStore } from "./wizard";
 import { API_BASE, ApiError, api } from "../api";
 import type { Me3Profile } from "me3-protocol";
@@ -294,6 +294,10 @@ export const useSitesStore = defineStore("sites", () => {
   const sites = ref<Site[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
+  const hasProfileSite = computed(() =>
+    sites.value.some((site) => (site.site_type || "profile") === "profile"),
+  );
+
   function resetSessionState() {
     sites.value = [];
     loading.value = false;
@@ -1056,6 +1060,7 @@ export const useSitesStore = defineStore("sites", () => {
     sites,
     loading,
     error,
+    hasProfileSite,
     resetSessionState,
     fetchSites,
     fetchPublishManifest,

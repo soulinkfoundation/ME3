@@ -79,6 +79,45 @@ describe("sites store", () => {
       expect(api.get).toHaveBeenCalledWith("/sites");
     });
 
+    it("treats draft profile sites as existing profile setup", async () => {
+      const store = useSitesStore();
+      store.sites = [
+        {
+          id: "profile-draft",
+          username: "owner",
+          user_id: "user1",
+          site_type: "profile",
+          custom_domain: null,
+          custom_domain_status: null,
+          created_at: "2024-01-01T00:00:00Z",
+          updated_at: "2024-01-01T00:00:00Z",
+          published_at: null,
+        },
+      ];
+
+      expect(store.hasProfileSite).toBe(true);
+    });
+
+    it("does not treat landing pages as profile setup", async () => {
+      const store = useSitesStore();
+      store.sites = [
+        {
+          id: "landing-page",
+          username: "offer",
+          user_id: "user1",
+          site_type: "landing_page",
+          template_id: "service" as const,
+          custom_domain: null,
+          custom_domain_status: null,
+          created_at: "2024-01-01T00:00:00Z",
+          updated_at: "2024-01-01T00:00:00Z",
+          published_at: "2024-01-02T00:00:00Z",
+        },
+      ];
+
+      expect(store.hasProfileSite).toBe(false);
+    });
+
     it("should handle fetch errors", async () => {
       vi.mocked(api.get).mockRejectedValue(new Error("Network error"));
 

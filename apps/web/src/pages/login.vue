@@ -136,15 +136,23 @@ function deriveUsername() {
 async function resolveDefaultPostLoginRedirect(): Promise<string> {
   try {
     await sites.fetchSites();
-    return sites.sites.some(
-      (site) =>
-        (site.site_type || "profile") === "profile" && !!site.published_at,
-    )
-      ? DEFAULT_APP_PATH
-      : "/start";
+    return sites.hasProfileSite ? DEFAULT_APP_PATH : "/start";
   } catch {
     return DEFAULT_APP_PATH;
   }
+}
+
+async function resolveStartPostLoginRedirect(redirect: string): Promise<string> {
+  try {
+    await sites.fetchSites();
+    return sites.hasProfileSite ? DEFAULT_APP_PATH : redirect;
+  } catch {
+    return DEFAULT_APP_PATH;
+  }
+}
+
+function isStartRedirectPath(pathname: string): boolean {
+  return pathname === "/start" || pathname === "/start/";
 }
 
 async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
@@ -153,6 +161,10 @@ async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
   if (!redirect) return resolveDefaultPostLoginRedirect();
 
   if (redirect.startsWith("/") && !redirect.startsWith("//")) {
+    const parsed = new URL(redirect, window.location.origin);
+    if (isStartRedirectPath(parsed.pathname)) {
+      return resolveStartPostLoginRedirect(redirect);
+    }
     return redirect;
   }
 
@@ -167,6 +179,9 @@ async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
       (sameHost || devLocalhost) &&
       ["http:", "https:"].includes(parsed.protocol)
     ) {
+      if (isStartRedirectPath(parsed.pathname)) {
+        return resolveStartPostLoginRedirect(parsed.toString());
+      }
       return parsed.toString();
     }
   } catch {
