@@ -159,6 +159,7 @@ const updatingReminderId = ref<string | null>(null);
 const cancellingBookingId = ref<string | null>(null);
 const deletingEventId = ref<string | null>(null);
 const removingSourceId = ref<string | null>(null);
+const addingImportedBirthdayId = ref<string | null>(null);
 const { toastSuccess, toastFromUnknown } = useAppToast();
 let calendarLoadToken = 0;
 /** Matches `.cal-shell` stacked layout at `max-width: 1100px`. */
@@ -692,6 +693,7 @@ function mapReminderToCalendarEvent(
 function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
   const isImported = event.sourceKind === "imported";
   const isBirthday = event.kind === "birthday";
+  const importedBirthdayCandidate = isImportedBirthdayCandidate(event);
   const siteKey = isImported
     ? `import:${event.sourceId}`
     : isBirthday
@@ -733,9 +735,23 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
           ]),
     ],
     notes: event.notes,
-    actionLabel: isImported ? null : "Edit event",
+    actionLabel: isImported
+      ? importedBirthdayCandidate
+        ? addingImportedBirthdayId.value === event.id
+          ? "Adding..."
+          : "Add to Birthdays"
+        : null
+      : "Edit event",
     dangerActionLabel: isImported ? null : "Delete event",
   };
+}
+
+function isImportedBirthdayCandidate(event: CalendarEventRow): boolean {
+  return (
+    event.sourceKind === "imported" &&
+    event.allDay === true &&
+    /\bbirthdays?\b/i.test(event.title)
+  );
 }
 
 const siteOptions = computed<CalendarSiteOption[]>(() => [
@@ -869,6 +885,14 @@ function handleEventAction(event: CalendarAgendaEvent) {
     return;
   }
 
+  const importedSourceEvent = importedEvents.value.find(
+    (item) => item.id === event.id,
+  );
+  if (importedSourceEvent && isImportedBirthdayCandidate(importedSourceEvent)) {
+    void addImportedEventToBirthdays(event);
+    return;
+  }
+
   if (event.sourceLabel === "Event" || event.sourceLabel === "Birthday") {
     openEditEvent(event.id);
   }
@@ -948,6 +972,38 @@ async function removeImportedCalendarSource(source: CalendarSourceRow) {
     toastFromUnknown(err, "Could not remove calendar source");
   } finally {
     removingSourceId.value = null;
+  }
+}
+
+async function addImportedEventToBirthdays(event: CalendarAgendaEvent) {
+  if (addingImportedBirthdayId.value) return;
+  const startDate = dateInputFromIso(event.startsAt);
+  if (!startDate) return;
+
+  addingImportedBirthdayId.value = event.id;
+  try {
+    const response = await api.post<{ ok: boolean; event: { id: string } }>(
+      "/calendar/events",
+      {
+        title: event.title,
+        startDate,
+        endDate: startDate,
+        timezone: defaultFormTimeZone,
+        allDay: true,
+        kind: "birthday",
+        recurrenceRule: "yearly",
+        notes: event.notes || undefined,
+      },
+    );
+    preferSelectEventId.value = response.event.id;
+    boardHighlightId.value = response.event.id;
+    sidebarSiteFilter.value = BIRTHDAYS_KEY;
+    toastSuccess("Added to Birthdays.");
+    await reloadCalendar();
+  } catch (err) {
+    toastFromUnknown(err, "Could not add birthday");
+  } finally {
+    addingImportedBirthdayId.value = null;
   }
 }
 
