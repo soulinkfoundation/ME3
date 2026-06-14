@@ -3069,14 +3069,33 @@ describe("ME3 Core Worker auth", () => {
   it("adds security and no-store headers to API responses", async () => {
     const env = createEnv();
 
-    const response = await app.fetch(new Request("http://localhost/api/config"), env);
+    const response = await app.fetch(new Request("https://example.com/api/config"), env);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(response.headers.get("Referrer-Policy")).toBe("strict-origin-when-cross-origin");
+    expect(response.headers.get("Strict-Transport-Security")).toBe("max-age=31536000");
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.get("X-Frame-Options")).toBe("DENY");
     expect(response.headers.get("Content-Security-Policy")).toBe("frame-ancestors 'none'");
+  });
+
+  it("redirects non-local HTTP requests to HTTPS", async () => {
+    const env = createEnv();
+
+    const response = await app.fetch(new Request("http://kieranbutler.com/account?tab=security"), env);
+
+    expect(response.status).toBe(301);
+    expect(response.headers.get("Location")).toBe("https://kieranbutler.com/account?tab=security");
+  });
+
+  it("does not redirect local HTTP requests", async () => {
+    const env = createEnv();
+
+    const response = await app.fetch(new Request("http://localhost/api/config"), env);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Strict-Transport-Security")).toBeNull();
   });
 
   it("serves the published site profile at the root me.json discovery path", async () => {
@@ -3123,6 +3142,25 @@ describe("ME3 Core Worker auth", () => {
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(body.name).toBe("Booking Owner");
     expect(body.handle).toBe("owner");
+  });
+
+  it("serves security.txt from public site hosts instead of the generated site", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    env.ME3_SITE_USERNAME = "owner";
+    env.ME3_SECURITY_CONTACT = "mailto:security@example.com";
+
+    const response = await app.fetch(
+      new Request("https://kieranbutler.com/.well-known/security.txt"),
+      env,
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/plain");
+    expect(body).toContain("Contact: mailto:security@example.com");
+    expect(body).toContain("Canonical: https://kieranbutler.com/.well-known/security.txt");
+    expect(body).not.toContain("<!doctype html>");
   });
 
   it("falls back to a Core owner me.json before a site is published", async () => {

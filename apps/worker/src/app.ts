@@ -346,6 +346,7 @@ const OWNER_APP_ROUTE_PREFIXES = [
   "/social",
   "/start",
 ];
+const STRICT_TRANSPORT_SECURITY_HEADER = "max-age=31536000";
 
 const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
@@ -371,6 +372,16 @@ app.onError((error, c) => {
   return c.text("Internal Server Error", 500);
 });
 
+app.use("*", async (c, next) => {
+  const requestUrl = new URL(c.req.url);
+  if (shouldRedirectToHttps(requestUrl)) {
+    requestUrl.protocol = "https:";
+    return c.redirect(requestUrl.toString(), 301);
+  }
+
+  await next();
+});
+
 app.use(
   "*",
   cors({
@@ -388,17 +399,15 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname;
-  const isMeJsonDiscoveryPath =
-    pathname === "/me.json" || pathname === "/.well-known/me.json";
   if (
-    !isMeJsonDiscoveryPath &&
+    !isPublicDiscoveryPath(pathname) &&
     pathname.startsWith("/api/auth/") &&
     await isPublicSiteHost(c.env, c.req.url)
   ) {
     return c.json({ error: "Not found" }, 404);
   }
   if (
-    !isMeJsonDiscoveryPath &&
+    !isPublicDiscoveryPath(pathname) &&
     !pathname.startsWith("/api/") &&
     await isPublicSiteHost(c.env, c.req.url)
   ) {
@@ -1672,10 +1681,14 @@ function getRateLimitClientKey(c: AppContext): string {
 }
 
 function applyResponseSecurityHeaders(c: AppContext) {
-  const pathname = new URL(c.req.url).pathname;
+  const requestUrl = new URL(c.req.url);
+  const pathname = requestUrl.pathname;
 
   setDefaultHeader(c, "X-Content-Type-Options", "nosniff");
   setDefaultHeader(c, "Referrer-Policy", "strict-origin-when-cross-origin");
+  if (requestUrl.protocol === "https:") {
+    setDefaultHeader(c, "Strict-Transport-Security", STRICT_TRANSPORT_SECURITY_HEADER);
+  }
 
   if (pathname.startsWith("/api/")) {
     setDefaultHeader(c, "Cache-Control", "no-store");
@@ -1689,6 +1702,30 @@ function applyResponseSecurityHeaders(c: AppContext) {
 
 function setDefaultHeader(c: AppContext, name: string, value: string) {
   if (!c.res.headers.has(name)) c.header(name, value);
+}
+
+function shouldRedirectToHttps(requestUrl: URL): boolean {
+  return requestUrl.protocol === "http:" && !isLocalDevelopmentHost(requestUrl.hostname);
+}
+
+function isLocalDevelopmentHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]" ||
+    normalized.endsWith(".localhost")
+  );
+}
+
+function isPublicDiscoveryPath(pathname: string): boolean {
+  return (
+    pathname === "/me.json" ||
+    pathname === "/.well-known/me.json" ||
+    pathname === "/security.txt" ||
+    pathname === "/.well-known/security.txt"
+  );
 }
 
 function isOwnerSurfaceRequest(c: AppContext, pathname: string): boolean {

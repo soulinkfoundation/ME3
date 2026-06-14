@@ -1050,4 +1050,46 @@ export function registerPublicSiteRoutes(app: AppHono) {
   app.get("/.well-known/me.json", async (c) => {
     return serveMeJsonResponse(c.env, c.req.raw);
   });
+
+  app.get("/.well-known/security.txt", (c) => {
+    return c.text(buildSecurityTxt(c.env, c.req.url), 200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "public, max-age=3600",
+    });
+  });
+
+  app.get("/security.txt", (c) => {
+    const canonicalUrl = new URL("/.well-known/security.txt", c.req.url);
+    return c.redirect(canonicalUrl.toString(), 301);
+  });
+}
+
+function buildSecurityTxt(env: { ME3_SECURITY_CONTACT?: string }, requestUrl: string): string {
+  const url = new URL(requestUrl);
+  const canonical = new URL("/.well-known/security.txt", url);
+  canonical.protocol = "https:";
+  const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+  const contact = normalizeSecurityContact(env.ME3_SECURITY_CONTACT) || new URL("/account", canonical).toString();
+
+  return [
+    `Contact: ${contact}`,
+    `Expires: ${expires}`,
+    "Preferred-Languages: en",
+    `Canonical: ${canonical.toString()}`,
+    "",
+  ].join("\n");
+}
+
+function normalizeSecurityContact(value: string | undefined): string | null {
+  const contact = value?.trim();
+  if (!contact) return null;
+
+  try {
+    const url = new URL(contact);
+    if (url.protocol === "https:" || url.protocol === "mailto:") return url.toString();
+  } catch {
+    return null;
+  }
+
+  return null;
 }
