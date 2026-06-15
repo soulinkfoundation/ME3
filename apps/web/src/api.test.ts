@@ -156,13 +156,13 @@ describe('api client', () => {
   })
 
   describe('username availability', () => {
-    it('should check hosted ME3 Cloud username availability', async () => {
+    it('should check Core username availability through the local API', async () => {
       vi.mocked(fetch).mockResolvedValue(mockJsonResponse({ available: true }))
 
       await expect(getUsernameAvailability('testuser')).resolves.toBe(true)
 
       expect(fetch).toHaveBeenCalledWith(
-        'https://api.me3.app/api/usernames/testuser/available',
+        '/api/usernames/testuser/available',
         expect.objectContaining({
           method: 'GET',
           credentials: 'include',
@@ -176,7 +176,7 @@ describe('api client', () => {
       await expect(getUsernameAvailability('test user')).resolves.toBe(false)
 
       expect(fetch).toHaveBeenCalledWith(
-        'https://api.me3.app/api/usernames/test%20user/available',
+        '/api/usernames/test%20user/available',
         expect.any(Object)
       )
     })

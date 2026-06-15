@@ -15,6 +15,13 @@ export const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
 export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const D1_SITE_FILE_MAX_BYTES = 1_900_000;
 
+export type Me3CloudUsernameAvailability = {
+  available: boolean;
+  username: string;
+  reason?: string;
+  message?: string;
+};
+
 type OwnerRecord = OwnerProfile & { password_hash: string | null };
 
 export type PublishManifest = {
@@ -251,24 +258,41 @@ export async function getMe3CloudUsernamePublishBlockReason(
   env: Env,
   usernameInput: unknown,
 ): Promise<string | null> {
-  const cloudOwnerId = await getStoredMe3CloudOwnerId(env);
-  if (!cloudOwnerId) return null;
+  if (!(await getStoredMe3CloudOwnerId(env))) return null;
 
+  const availability = await getMe3CloudUsernameAvailability(env, usernameInput);
+  if (!availability) return null;
+  return availability.available === false ? ME3_CLOUD_USERNAME_CONFLICT_MESSAGE : null;
+}
+
+export async function getMe3CloudUsernameAvailability(
+  env: Env,
+  usernameInput: unknown,
+): Promise<Me3CloudUsernameAvailability | null> {
+  const cloudOwnerId = await getStoredMe3CloudOwnerId(env);
   const username = normalizeUsername(usernameInput);
-  if (!username || !USERNAME_REGEX.test(username)) return null;
+  if (!username || !USERNAME_REGEX.test(username)) {
+    return {
+      available: false,
+      username,
+      reason: "invalid",
+      message: "Use letters, numbers, underscores, or hyphens.",
+    };
+  }
 
   const url = buildApiUrl(
     getMe3CloudApiOrigin(env),
     `/api/usernames/${encodeURIComponent(username)}/available`,
   );
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (cloudOwnerId) {
+    headers["X-ME3-Core-Owner-ID"] = cloudOwnerId;
+  }
 
   try {
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-        "X-ME3-Core-Owner-ID": cloudOwnerId,
-      },
+      headers,
     });
     const body = await readResponseJson(response);
 
@@ -279,7 +303,12 @@ export async function getMe3CloudUsernamePublishBlockReason(
       return null;
     }
 
-    return body.available === false ? ME3_CLOUD_USERNAME_CONFLICT_MESSAGE : null;
+    return {
+      available: body.available === true,
+      username,
+      reason: typeof body.reason === "string" ? body.reason : undefined,
+      message: typeof body.message === "string" ? body.message : undefined,
+    };
   } catch (error) {
     console.warn("ME3 Cloud username availability check failed:", error);
     return null;

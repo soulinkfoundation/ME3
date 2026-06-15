@@ -110,6 +110,7 @@ import {
 import { registerMissionControlRoutes } from "./routes/mission-control";
 import { registerSchedulingRoutes } from "./routes/scheduling";
 import { registerPublicSiteRoutes, registerSiteRoutes } from "./routes/sites";
+import { registerUsernameRoutes } from "./routes/usernames";
 import {
   getMe3KnowledgeSnapshot,
   type Me3KnowledgeRuntimeContext,
@@ -495,6 +496,7 @@ app.put("/api/commerce/settings", async (c) => {
 });
 
 registerBookingRoutes(app);
+registerUsernameRoutes(app);
 
 app.post("/api/auth/me3/start", async (c) => {
   const authState = await getOwnerAuthState(c.env);

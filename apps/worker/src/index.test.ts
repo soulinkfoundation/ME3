@@ -3893,6 +3893,39 @@ describe("ME3 Core Worker auth", () => {
     fetchMock.mockRestore();
   });
 
+  it("checks onboarding username availability through ME3 Cloud with the linked owner", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ available: true, handle: "soup" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/usernames/soup/available"),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      available: true,
+      username: "soup",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.me3.example/api/usernames/soup/available",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-ME3-Core-Owner-ID": "user123",
+        }),
+      }),
+    );
+
+    fetchMock.mockRestore();
+  });
+
   it("rejects invalid bootstrap codes without issuing a session", async () => {
     const env = createEnv();
 

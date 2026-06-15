@@ -5,7 +5,7 @@
 // Use relative /api by default so OSS installs do not point at ME3 Cloud.
 export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 export const USERNAME_AVAILABILITY_API_BASE =
-  import.meta.env.VITE_USERNAME_AVAILABILITY_API_BASE || 'https://api.me3.app/api'
+  import.meta.env.VITE_USERNAME_AVAILABILITY_API_BASE || API_BASE
 
 export type LocationPrecision =
   | 'locality'
