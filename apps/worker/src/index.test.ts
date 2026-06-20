@@ -2985,6 +2985,7 @@ async function createSignedMe3ClaimToken(input: {
   coreOrigin: string;
   callbackUrl: string;
   email: string;
+  name?: string | null;
   handle?: string | null;
   installId?: string;
 }): Promise<{ token: string; publicJwk: JsonWebKey & { kid?: string; alg?: string; use?: string } }> {
@@ -3025,6 +3026,9 @@ async function createSignedMe3ClaimToken(input: {
   };
   if (input.handle !== null) {
     payload.handle = input.handle || "kieran";
+  }
+  if (input.name !== undefined) {
+    payload.name = input.name;
   }
   const signingInput = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
   const signature = await crypto.subtle.sign(
@@ -3599,12 +3603,108 @@ describe("ME3 Core Worker auth", () => {
     expect(env.owner).toMatchObject({
       id: "owner",
       email: "owner@example.com",
+      name: "Owner",
       username: "kieran",
       password_hash: null,
     });
     expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBe("user123");
     expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
     expect(env.me3ClaimStates).toHaveLength(0);
+
+    fetchMock.mockRestore();
+  });
+
+  it("uses the ME3 Cloud display name when claiming an install", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+
+    const startResponse = await app.fetch(
+      new Request("https://core.example/api/auth/me3/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+      env,
+    );
+    const startBody = (await startResponse.json()) as { state: string };
+    const signedClaim = await createSignedMe3ClaimToken({
+      issuer: "https://api.me3.example",
+      state: startBody.state,
+      installId: env.me3ClaimStates[0].install_id || "",
+      coreOrigin: "http://localhost:4000",
+      callbackUrl: "http://localhost:8787/api/auth/me3/callback",
+      email: "kieranbutler22@gmail.com",
+      name: "Kieran Butler",
+      handle: "kieranbutler22",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ keys: [signedClaim.publicJwk] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const callbackResponse = await app.fetch(
+      new Request(
+        `http://localhost:8787/api/auth/me3/callback?state=${encodeURIComponent(
+          startBody.state,
+        )}&claim_token=${encodeURIComponent(signedClaim.token)}`,
+      ),
+      env,
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    expect(env.owner).toMatchObject({
+      email: "kieranbutler22@gmail.com",
+      name: "Kieran Butler",
+      username: "kieranbutler22",
+    });
+
+    fetchMock.mockRestore();
+  });
+
+  it("humanizes the email local part when a ME3 Cloud claim has no display name", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+
+    const startResponse = await app.fetch(
+      new Request("https://core.example/api/auth/me3/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+      env,
+    );
+    const startBody = (await startResponse.json()) as { state: string };
+    const signedClaim = await createSignedMe3ClaimToken({
+      issuer: "https://api.me3.example",
+      state: startBody.state,
+      installId: env.me3ClaimStates[0].install_id || "",
+      coreOrigin: "http://localhost:4000",
+      callbackUrl: "http://localhost:8787/api/auth/me3/callback",
+      email: "kieranbutler22@gmail.com",
+      handle: "kieranbutler22",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ keys: [signedClaim.publicJwk] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const callbackResponse = await app.fetch(
+      new Request(
+        `http://localhost:8787/api/auth/me3/callback?state=${encodeURIComponent(
+          startBody.state,
+        )}&claim_token=${encodeURIComponent(signedClaim.token)}`,
+      ),
+      env,
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    expect(env.owner).toMatchObject({
+      email: "kieranbutler22@gmail.com",
+      name: "Kieranbutler",
+      username: "kieranbutler22",
+    });
 
     fetchMock.mockRestore();
   });

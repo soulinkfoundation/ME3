@@ -239,6 +239,8 @@ type Me3ClaimTokenPayload = {
   sub?: unknown;
   aud?: unknown;
   email?: unknown;
+  name?: unknown;
+  display_name?: unknown;
   handle?: unknown;
   install_id?: unknown;
   core_origin?: unknown;
@@ -1803,6 +1805,30 @@ function normalizeNullableText(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
+function normalizeOwnerDisplayName(value: unknown): string | null {
+  const normalized = normalizeNullableText(value)?.replace(/\s+/g, " ");
+  if (!normalized || normalized.length > 120) return null;
+  if (EMAIL_REGEX.test(normalized)) return null;
+  return normalized;
+}
+
+function humanizeEmailLocalPart(email: string): string | null {
+  const localPart = email.split("@")[0]?.split("+")[0] || "";
+  const withoutTrailingDigits = localPart.replace(/\d+$/g, "");
+  const source = withoutTrailingDigits || localPart;
+  const words = source
+    .replace(/[_\-.]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/\s+/)
+    .map((word) => word.replace(/[^A-Za-z]+/g, ""))
+    .filter((word) => word.length > 0);
+
+  if (words.length === 0) return null;
+  return words
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
 function normalizeTimeZone(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const timezone = value.trim();
@@ -2188,7 +2214,11 @@ async function upsertMe3ClaimedOwner(
   handle: string,
 ): Promise<void> {
   const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
-  const name = email ? email.split("@")[0] || "ME3 Core Owner" : "ME3 Core Owner";
+  const name =
+    normalizeOwnerDisplayName(payload.name) ||
+    normalizeOwnerDisplayName(payload.display_name) ||
+    (email ? humanizeEmailLocalPart(email) : null) ||
+    "ME3 Core Owner";
 
   await env.DB.prepare(
     `INSERT INTO owner_profile (id, email, name, username, bio, avatar_url, timezone, password_hash, updated_at)
