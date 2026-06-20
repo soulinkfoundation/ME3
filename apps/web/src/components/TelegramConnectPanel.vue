@@ -53,11 +53,13 @@ const props = withDefaults(
     /** After first load, call setup when user can connect but is not active yet (e.g. ?section=telegram or dashboard modal). */
     autoPrepareWhenNotConnected?: boolean;
     showStatusRow?: boolean;
+    compactConnected?: boolean;
   }>(),
   {
     variant: "default",
     autoPrepareWhenNotConnected: false,
     showStatusRow: true,
+    compactConnected: false,
   },
 );
 
@@ -134,6 +136,9 @@ const statusHint = computed(() => {
 const isConnected = computed(() => connection.value?.status === "active");
 const showSetupForm = computed(
   () => props.variant === "default" && !isConnected.value,
+);
+const showConnectionDetails = computed(
+  () => !(props.compactConnected && isConnected.value),
 );
 
 const refreshButtonTooltip = computed(() => {
@@ -472,9 +477,16 @@ defineExpose({
         </div>
       </form>
 
-      <div v-if="configured" class="telegram-qr-section">
+      <div
+        v-if="configured"
+        class="telegram-qr-section"
+        :class="{
+          'telegram-qr-section--compact-connected':
+            compactConnected && isConnected,
+        }"
+      >
         <dl
-          v-if="connectionDetails.length"
+          v-if="showConnectionDetails && connectionDetails.length"
           class="telegram-health"
           aria-label="Telegram connection health"
         >
@@ -652,6 +664,13 @@ defineExpose({
   border-radius: 12px;
 }
 
+.telegram-qr-section--compact-connected {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
 .telegram-health {
   display: grid;
   gap: 8px;
@@ -691,6 +710,12 @@ defineExpose({
   justify-content: center;
   margin-top: 12px;
   padding-top: 4px;
+}
+
+.telegram-qr-section--compact-connected .telegram-qr-section__footer {
+  margin: 0;
+  padding: 0;
+  justify-content: flex-end;
 }
 
 .telegram-qr-section .hint {

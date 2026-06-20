@@ -2257,28 +2257,53 @@ onMounted(async () => {
                     :class="{
                       'connection-line--connected':
                         telegramPanelRef?.connection?.status === 'active',
+                      'connection-line--telegram-connected':
+                        telegramPanelRef?.connection?.status === 'active',
                     }"
                   >
-                    <div class="connection-line__header">
+                    <div
+                      v-if="telegramPanelRef?.connection?.status === 'active'"
+                      class="connection-line__copy"
+                    >
                       <span class="connection-line__title">Telegram</span>
+                      <p class="connection-line__description">
+                        Chat with your ME3 assistant in Telegram.
+                      </p>
+                    </div>
+                    <template v-else>
+                      <div class="connection-line__header">
+                        <span class="connection-line__title">Telegram</span>
+                        <StatusBadge
+                          v-if="telegramPanelRef?.available"
+                          :tone="telegramStatusClass"
+                        >
+                          {{ telegramStatusLabel }}
+                        </StatusBadge>
+                      </div>
+                      <ol class="telegram-setup-steps">
+                        <li>Open Telegram and search for BotFather.</li>
+                        <li>
+                          Type <code>/newbot</code> and follow the instructions.
+                        </li>
+                        <li>
+                          You will get a bot name and token. Save them here.
+                        </li>
+                      </ol>
+                    </template>
+                    <div class="connection-line__end">
                       <StatusBadge
-                        v-if="telegramPanelRef?.available"
+                        v-if="
+                          telegramPanelRef?.available &&
+                          telegramPanelRef?.connection?.status === 'active'
+                        "
                         :tone="telegramStatusClass"
                       >
                         {{ telegramStatusLabel }}
                       </StatusBadge>
-                    </div>
-                    <ol class="telegram-setup-steps">
-                      <li>Open Telegram and search for BotFather.</li>
-                      <li>Type <code>/newbot</code> and follow the instructions.</li>
-                      <li>
-                        You will get a bot name and token. Save them here.
-                      </li>
-                    </ol>
-                    <div class="connection-line__end">
                       <TelegramConnectPanel
                         ref="telegramPanelRef"
                         :show-status-row="false"
+                        :compact-connected="true"
                         :auto-prepare-when-not-connected="
                           route.query.section === 'telegram'
                         "
@@ -2288,15 +2313,6 @@ onMounted(async () => {
                 </div>
 
                 <template v-if="!appConnectionsLoading">
-                  <p
-                    v-if="
-                      me3Connection?.connected &&
-                      !me3Connection.disconnectAvailable
-                    "
-                    class="field-hint connection-lines__hint"
-                  >
-                    Add password authentication before disconnecting ME3.app.
-                  </p>
                   <p v-if="appConnectionsError" class="error">
                     {{ appConnectionsError }}
                   </p>
@@ -3836,6 +3852,12 @@ h1 {
   padding: 12px;
 }
 
+.connection-line--telegram-connected {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+}
+
 .connection-line__copy {
   flex: 1;
   min-width: 0;
@@ -3900,6 +3922,11 @@ h1 {
 .connection-line--telegram .connection-line__end {
   display: block;
   padding-top: 0;
+}
+
+.connection-line--telegram-connected .connection-line__end {
+  display: inline-flex;
+  padding-top: 2px;
 }
 
 .telegram-setup-steps {
@@ -4331,6 +4358,10 @@ h1 {
 
   .connection-line__header {
     align-items: flex-start;
+  }
+
+  .connection-line--telegram-connected {
+    align-items: stretch;
   }
 
   .timezone-row,
