@@ -8507,7 +8507,7 @@ describe("ME3 Core Worker auth", () => {
       }),
       env,
     );
-    await app.fetch(
+    const gatewayResponse = await app.fetch(
       new Request("http://localhost/api/ai-gateway-settings", {
         method: "PUT",
         headers: {
@@ -8516,13 +8516,17 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           accountId: "cf-account",
-          gatewayId: "me3",
           apiToken: "cf-gateway-token",
-          routeExternalProviders: true,
         }),
       }),
       env,
     );
+    expect(await gatewayResponse.json()).toMatchObject({
+      configured: true,
+      gatewayId: "default",
+      routeWorkersAi: true,
+      routeExternalProviders: true,
+    });
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Response.json({ choices: [{ message: { content: "Gateway reply" } }] }),
     );
@@ -8537,7 +8541,7 @@ describe("ME3 Core Worker auth", () => {
 
       expect(result.text).toBe("Gateway reply");
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://gateway.ai.cloudflare.com/v1/cf-account/me3/openai/chat/completions",
+        "https://gateway.ai.cloudflare.com/v1/cf-account/default/openai/chat/completions",
         expect.any(Object),
       );
       expect(init.headers).toMatchObject({
@@ -8608,7 +8612,7 @@ describe("ME3 Core Worker auth", () => {
     }
   });
 
-  it("keeps direct OpenAI text generation available when Gateway routing is disabled", async () => {
+  it("routes OpenAI text generation through AI Gateway when legacy routing flags are disabled", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
 
@@ -8642,7 +8646,7 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      Response.json({ choices: [{ message: { content: "Direct reply" } }] }),
+      Response.json({ choices: [{ message: { content: "Gateway reply" } }] }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -8653,12 +8657,15 @@ describe("ME3 Core Worker auth", () => {
       });
       const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
 
-      expect(result.text).toBe("Direct reply");
+      expect(result.text).toBe("Gateway reply");
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://api.openai.com/v1/chat/completions",
+        "https://gateway.ai.cloudflare.com/v1/cf-account/me3/openai/chat/completions",
         expect.any(Object),
       );
-      expect(init.headers).not.toHaveProperty("cf-aig-authorization");
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer sk-openai-secret",
+        "cf-aig-authorization": "Bearer cf-gateway-token",
+      });
     } finally {
       vi.unstubAllGlobals();
     }

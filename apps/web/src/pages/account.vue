@@ -304,10 +304,7 @@ const aiGatewayLoading = ref(false);
 const aiGatewaySaving = ref(false);
 const aiGatewaySettings = ref<AiGatewaySettingsResponse | null>(null);
 const aiGatewayAccountIdInput = ref("");
-const aiGatewayIdInput = ref("");
 const aiGatewayTokenInput = ref("");
-const aiGatewayRouteWorkersAiInput = ref(true);
-const aiGatewayRouteExternalProvidersInput = ref(true);
 const aiGatewayMessage = ref<string | null>(null);
 const aiGatewayError = ref<string | null>(null);
 const emailProviderLoading = ref(false);
@@ -699,7 +696,6 @@ const aiGatewaySaveDisabled = computed(
     aiGatewaySaving.value ||
     aiGatewayLoading.value ||
     !aiGatewayAccountIdInput.value.trim() ||
-    !aiGatewayIdInput.value.trim() ||
     (!aiGatewayTokenInput.value.trim() &&
       !Boolean(aiGatewaySettings.value?.apiTokenHint)) ||
     (!aiGatewaySettings.value?.apiTokenHint &&
@@ -1299,10 +1295,7 @@ function syncAiSettings(response: AiSettingsResponse) {
 function syncAiGatewaySettings(response: AiGatewaySettingsResponse) {
   aiGatewaySettings.value = response;
   aiGatewayAccountIdInput.value = response.accountId || "";
-  aiGatewayIdInput.value = response.gatewayId || "";
   aiGatewayTokenInput.value = "";
-  aiGatewayRouteWorkersAiInput.value = response.routeWorkersAi;
-  aiGatewayRouteExternalProvidersInput.value = response.routeExternalProviders;
 }
 
 async function loadAiSettings() {
@@ -1381,10 +1374,10 @@ async function saveAiGatewaySettings() {
       "/ai-gateway-settings",
       {
         accountId: aiGatewayAccountIdInput.value,
-        gatewayId: aiGatewayIdInput.value,
+        gatewayId: "default",
         apiToken: aiGatewayTokenInput.value,
-        routeWorkersAi: aiGatewayRouteWorkersAiInput.value,
-        routeExternalProviders: aiGatewayRouteExternalProvidersInput.value,
+        routeWorkersAi: true,
+        routeExternalProviders: true,
       },
     );
     syncAiGatewaySettings(response);
@@ -2460,7 +2453,10 @@ onMounted(async () => {
                     <div class="email-disclosure-body">
                       <p class="hint">
                         Connect Cloudflare AI Gateway to show model token usage
-                        and estimated spend in Mission Control.
+                        and estimated spend in Mission Control. ME3 uses
+                        Cloudflare's default gateway automatically; create a
+                        custom gateway only if you want custom Cloudflare
+                        controls later.
                       </p>
                       <p v-if="aiGatewayLoading" class="status-row">
                         Loading AI Gateway settings...
@@ -2487,16 +2483,6 @@ onMounted(async () => {
                               spellcheck="false"
                             />
                           </label>
-                          <label class="field">
-                            <span>AI Gateway ID</span>
-                            <input
-                              v-model="aiGatewayIdInput"
-                              class="input"
-                              type="text"
-                              autocomplete="off"
-                              spellcheck="false"
-                            />
-                          </label>
                         </div>
                         <label class="field">
                           <span>Cloudflare API token</span>
@@ -2512,20 +2498,6 @@ onMounted(async () => {
                                 : 'Paste API token'
                             "
                           />
-                        </label>
-                        <label class="checkbox-row">
-                          <input
-                            v-model="aiGatewayRouteWorkersAiInput"
-                            type="checkbox"
-                          />
-                          <span>Route Workers AI calls through this gateway</span>
-                        </label>
-                        <label class="checkbox-row">
-                          <input
-                            v-model="aiGatewayRouteExternalProvidersInput"
-                            type="checkbox"
-                          />
-                          <span>Route OpenAI and Anthropic through this gateway</span>
                         </label>
                         <div class="account-inline-actions">
                           <Button
@@ -3441,7 +3413,7 @@ h1 {
 
 .ai-gateway-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 

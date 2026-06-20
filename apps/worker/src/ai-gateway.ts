@@ -40,6 +40,8 @@ type CloudflareListLogsResponse = {
   };
 };
 
+const DEFAULT_AI_GATEWAY_ID = "default";
+
 export type AiGatewaySettingsResponse = {
   encryptionConfigured: boolean;
   configured: boolean;
@@ -118,26 +120,31 @@ export async function getAiGatewaySettings(
 ): Promise<AiGatewaySettingsResponse> {
   const row = await getAiGatewaySettingsRow(env, userId);
   const accountId = row?.account_id || env.CLOUDFLARE_ACCOUNT_ID || "";
-  const gatewayId =
-    row?.gateway_id || env.CLOUDFLARE_AI_GATEWAY_ID || env.ME3_AI_GATEWAY_ID || "";
+  const explicitGatewayId = resolveAiGatewayId(
+    row?.gateway_id,
+    env.CLOUDFLARE_AI_GATEWAY_ID,
+    env.ME3_AI_GATEWAY_ID,
+  );
+  const gatewayId = explicitGatewayId || DEFAULT_AI_GATEWAY_ID;
   const hasStoredToken = Boolean(row?.encrypted_api_token);
   const hasEnvToken = Boolean(env.CLOUDFLARE_API_TOKEN);
+  const configured = Boolean(accountId && gatewayId && (hasStoredToken || hasEnvToken));
   const source =
     row && (row.account_id || row.gateway_id || hasStoredToken)
       ? "stored"
-      : accountId || gatewayId || hasEnvToken
+      : accountId || explicitGatewayId || hasEnvToken
         ? "environment"
         : "not_configured";
 
   return {
     encryptionConfigured: await hasInstallEncryptionKey(env),
-    configured: Boolean(accountId && gatewayId && (hasStoredToken || hasEnvToken)),
+    configured,
     accountId,
     gatewayId,
     apiTokenHint: row?.api_token_hint || (hasEnvToken ? "environment" : null),
     apiTokenUpdatedAt: normalizeDbDateTime(row?.api_token_updated_at || null),
-    routeWorkersAi: row ? row.route_workers_ai !== 0 : Boolean(gatewayId),
-    routeExternalProviders: row ? row.route_external_providers !== 0 : Boolean(gatewayId),
+    routeWorkersAi: configured,
+    routeExternalProviders: configured,
     source,
   };
 }
@@ -233,17 +240,19 @@ export async function getAiGatewayRuntimeConfig(
   const row = await getAiGatewaySettingsRow(env, userId);
   const accountId = row?.account_id || env.CLOUDFLARE_ACCOUNT_ID || null;
   const gatewayId =
-    row?.gateway_id || env.CLOUDFLARE_AI_GATEWAY_ID || env.ME3_AI_GATEWAY_ID || null;
+    resolveAiGatewayId(row?.gateway_id, env.CLOUDFLARE_AI_GATEWAY_ID, env.ME3_AI_GATEWAY_ID) ||
+    (accountId ? DEFAULT_AI_GATEWAY_ID : null);
   const storedToken = row?.encrypted_api_token
     ? await decryptSecretSafely(env, row.encrypted_api_token)
     : null;
+  const apiToken = storedToken || env.CLOUDFLARE_API_TOKEN || null;
 
   return {
     accountId,
     gatewayId,
-    apiToken: storedToken || env.CLOUDFLARE_API_TOKEN || null,
-    routeWorkersAi: row ? row.route_workers_ai !== 0 : Boolean(gatewayId),
-    routeExternalProviders: row ? row.route_external_providers !== 0 : Boolean(gatewayId),
+    apiToken,
+    routeWorkersAi: Boolean(accountId && gatewayId && apiToken),
+    routeExternalProviders: Boolean(accountId && gatewayId && apiToken),
   };
 }
 
@@ -262,7 +271,7 @@ export async function getAiGatewayUsageSummary(
       ...empty,
       configured: false,
       setupRequired: true,
-      error: "AI Gateway usage needs a Cloudflare account ID, gateway ID, and API token.",
+      error: "AI Gateway usage needs a Cloudflare account ID and API token.",
     };
   }
 
@@ -469,6 +478,13 @@ function createEmptyUsageSummary(startsAt: Date, endsAt: Date): AiGatewayUsageSu
 function normalizeOptionalText(value: unknown, maxLength: number): string {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, maxLength);
+}
+
+function resolveAiGatewayId(...values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 function normalizeNumber(value: unknown): number {
