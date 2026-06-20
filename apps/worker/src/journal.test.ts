@@ -40,8 +40,7 @@ function createJournalEnv(rows: StoredJournalRow[] = []) {
                 .filter(
                   (row) =>
                     row.user_id === userId &&
-                    row.archived_at === null &&
-                    (row.body.trim().length > 0 || (row.title || "").trim().length > 0),
+                    row.archived_at === null,
                 )
                 .sort((a, b) => b.entry_date.localeCompare(a.entry_date))
                 .slice(0, Number(limit || 100));
@@ -129,12 +128,24 @@ describe("Journal plugin entries", () => {
         id: "blank",
         user_id: "owner",
         entry_date: "2026-05-21",
-        title: null,
-        body: "   ",
+        title: "",
+        body: "<p></p>",
         body_format: "html",
         metadata_json: "{}",
         created_at: "2026-05-21T09:00:00Z",
         updated_at: "2026-05-21T09:00:00Z",
+        archived_at: null,
+      },
+      {
+        id: "title-only",
+        user_id: "owner",
+        entry_date: "2026-05-23",
+        title: "Title only",
+        body: "<p></p>",
+        body_format: "html",
+        metadata_json: "{}",
+        created_at: "2026-05-23T09:00:00Z",
+        updated_at: "2026-05-23T09:00:00Z",
         archived_at: null,
       },
       {
@@ -153,6 +164,7 @@ describe("Journal plugin entries", () => {
 
     await expect(listJournalArchive(env, "owner")).resolves.toMatchObject({
       entries: [
+        { id: "title-only", title: "Title only", preview: "" },
         { id: "new", title: "Newer", preview: "A newer entry." },
         { id: "old", title: null, preview: "Older entry" },
       ],

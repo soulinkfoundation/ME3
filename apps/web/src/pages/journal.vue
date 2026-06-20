@@ -47,6 +47,7 @@ const description = ref("");
 const loadedEntry = ref<JournalEntry | null>(null);
 const archiveEntries = ref<JournalArchiveEntry[]>([]);
 const archiveOpen = ref(false);
+const archiveLoaded = ref(false);
 const loading = ref(false);
 const archiveLoading = ref(false);
 const error = ref("");
@@ -69,6 +70,12 @@ const saveStatusText = computed(() => {
 });
 const hasLoadedEntry = computed(
   () => loadedEntry.value?.date === selectedDate.value,
+);
+const nonEmptyArchiveEntries = computed(() =>
+  archiveEntries.value.filter(entryHasContent),
+);
+const journalEntryDates = computed(() =>
+  nonEmptyArchiveEntries.value.map((entry) => entry.date),
 );
 
 function dateToKey(date: Date): string {
@@ -111,20 +118,54 @@ function formatDaySwitcherDate(value: string): string {
   }).format(date);
 }
 
-function formatEntrySheetDate(value: string): string {
+function formatArchiveDate(value: string): string {
   const date = new Date(`${value}T12:00:00`);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
     day: "numeric",
     month: "short",
     year: "numeric",
   }).format(date);
 }
 
-function formatArchiveDate(value: string): string {
-  if (value === todayKey()) return "Today";
-  return formatEntrySheetDate(value);
+function formatArchiveTitle(entry: JournalArchiveEntry): string {
+  const date = formatArchiveDate(entry.date);
+  const entryTitle = entry.title?.trim();
+  return entryTitle ? `${date} - ${entryTitle}` : date;
+}
+
+function htmlToPlainText(value: string): string {
+  if (!value) return "";
+  const doc = new DOMParser().parseFromString(value, "text/html");
+  return (doc.body.textContent || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function entryHasContent(entry: Pick<JournalArchiveEntry, "title" | "body" | "preview">): boolean {
+  return Boolean(
+    entry.title?.trim() ||
+      entry.preview?.trim() ||
+      htmlToPlainText(entry.body).length > 0,
+  );
+}
+
+function previewFromEntry(entry: JournalEntry): string {
+  return htmlToPlainText(entry.body).slice(0, 180);
+}
+
+function updateArchiveEntry(entry: JournalEntry) {
+  const archivedEntry: JournalArchiveEntry = {
+    ...entry,
+    preview: previewFromEntry(entry),
+  };
+  archiveEntries.value = [
+    archivedEntry,
+    ...archiveEntries.value.filter((candidate) => candidate.date !== entry.date),
+  ]
+    .filter(entryHasContent)
+    .sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt.localeCompare(a.updatedAt));
 }
 
 function clearSaveTimer() {
@@ -156,6 +197,7 @@ async function saveEntry() {
       },
     );
     loadedEntry.value = response.entry;
+    updateArchiveEntry(response.entry);
     saveState.value = "saved";
     if (archiveOpen.value) void loadArchive();
   } catch (saveError) {
@@ -207,7 +249,8 @@ async function loadArchive() {
     const response = await api.get<{ entries: JournalArchiveEntry[] }>(
       "/journal/archive?limit=100",
     );
-    archiveEntries.value = response.entries || [];
+    archiveEntries.value = (response.entries || []).filter(entryHasContent);
+    archiveLoaded.value = true;
   } catch (archiveError) {
     error.value =
       archiveError instanceof Error
@@ -235,6 +278,9 @@ function moveDatePickerMonth(direction: number) {
 function toggleDatePicker() {
   datePickerOpen.value = !datePickerOpen.value;
   datePickerMonth.value = monthKey(selectedDate.value);
+  if (datePickerOpen.value && !archiveLoaded.value) {
+    void loadArchive();
+  }
 }
 
 async function toggleArchive() {
@@ -316,6 +362,7 @@ onBeforeUnmount(() => {
           :month-key="datePickerMonth"
           :selected-date="selectedDate"
           :today-date="todayKey()"
+          :marked-dates="journalEntryDates"
           aria-label="Choose journal date"
           secondary-action-label="View archive"
           @move-month="moveDatePickerMonth"
@@ -352,20 +399,18 @@ onBeforeUnmount(() => {
           <span v-if="archiveLoading">Loading</span>
         </div>
         <button
-          v-for="entry in archiveEntries"
+          v-for="entry in nonEmptyArchiveEntries"
           :key="entry.id"
           type="button"
           class="journal__archive-row"
           :class="{ 'is-active': entry.date === selectedDate }"
           @click="setDate(entry.date)"
         >
-          <strong>{{ entry.title || formatArchiveDate(entry.date) }}</strong>
-          <span>{{
-            entry.title ? formatArchiveDate(entry.date) : entry.preview
-          }}</span>
+          <strong>{{ formatArchiveTitle(entry) }}</strong>
+          <span v-if="entry.preview">{{ entry.preview }}</span>
         </button>
         <p
-          v-if="!archiveLoading && archiveEntries.length === 0"
+          v-if="!archiveLoading && nonEmptyArchiveEntries.length === 0"
           class="journal__empty"
         >
           No saved entries yet.

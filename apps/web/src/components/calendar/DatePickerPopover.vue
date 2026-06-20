@@ -9,6 +9,7 @@ type DatePickerCell = {
   inMonth: boolean;
   isSelected: boolean;
   isToday: boolean;
+  isMarked: boolean;
 };
 
 const props = withDefaults(
@@ -16,12 +17,14 @@ const props = withDefaults(
     monthKey: string;
     selectedDate?: string | null;
     todayDate: string;
+    markedDates?: string[];
     ariaLabel?: string;
     todayActionLabel?: string;
     secondaryActionLabel?: string;
   }>(),
   {
     selectedDate: null,
+    markedDates: () => [],
     ariaLabel: "Choose date",
     todayActionLabel: "Today",
     secondaryActionLabel: undefined,
@@ -36,6 +39,8 @@ const emit = defineEmits<{
 }>();
 
 const weekdays = ["M", "T", "W", "T", "F", "S", "S"];
+
+const markedDateSet = computed(() => new Set(props.markedDates));
 
 const monthLabel = computed(() => {
   const date = new Date(`${props.monthKey}-01T12:00:00`);
@@ -61,6 +66,7 @@ const cells = computed<DatePickerCell[]>(() => {
       inMonth: cursor.getMonth() === month - 1,
       isSelected: date === props.selectedDate,
       isToday: date === props.todayDate,
+      isMarked: markedDateSet.value.has(date),
     });
     cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
   }
@@ -129,12 +135,13 @@ function formatDateLabel(value: string): string {
           'is-off-month': !cell.inMonth,
           'is-today': cell.isToday,
           'is-selected': cell.isSelected,
+          'has-marker': cell.isMarked,
         }"
-        :aria-label="formatDateLabel(cell.date)"
+        :aria-label="`${formatDateLabel(cell.date)}${cell.isMarked ? ', journal entry saved' : ''}`"
         :aria-pressed="cell.isSelected"
         @click="emit('select-date', cell.date)"
       >
-        {{ cell.day }}
+        <span>{{ cell.day }}</span>
       </button>
     </div>
     <div class="date-picker-popover__actions">
@@ -223,10 +230,23 @@ function formatDateLabel(value: string): string {
   width: 100%;
   aspect-ratio: 1;
   place-items: center;
+  position: relative;
   border-radius: var(--ui-radius-sm);
   color: var(--ui-text);
   font-size: 12px;
   font-weight: 650;
+}
+
+.date-picker-popover__day.has-marker::after {
+  content: "";
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--ui-text-muted), transparent 22%);
+  transform: translateX(-50%);
 }
 
 .date-picker-popover__day:hover {
@@ -246,6 +266,10 @@ function formatDateLabel(value: string): string {
   border-color: var(--ui-accent);
   background: var(--ui-accent);
   color: var(--ui-accent-contrast);
+}
+
+.date-picker-popover__day.is-selected.has-marker::after {
+  background: color-mix(in oklab, var(--ui-accent-contrast), transparent 20%);
 }
 
 .date-picker-popover__actions {

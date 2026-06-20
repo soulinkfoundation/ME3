@@ -73,15 +73,24 @@ function serializeEntry(row: JournalEntryRow) {
   };
 }
 
-function serializeArchiveEntry(row: JournalEntryRow) {
-  const textPreview = row.body
+function journalBodyPreview(body: string): string {
+  return body
     .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 180);
+}
+
+function rowHasJournalContent(row: JournalEntryRow): boolean {
+  return Boolean((row.title || "").trim() || journalBodyPreview(row.body));
+}
+
+function serializeArchiveEntry(row: JournalEntryRow) {
   return {
     ...serializeEntry(row),
-    preview: textPreview,
+    preview: journalBodyPreview(row.body),
   };
 }
 
@@ -152,15 +161,16 @@ export async function listJournalArchive(
      FROM journal_entries
      WHERE user_id = ?
        AND archived_at IS NULL
-       AND (
-         LENGTH(TRIM(REPLACE(REPLACE(body, char(10), ' '), char(13), ' '))) > 0
-         OR LENGTH(TRIM(COALESCE(title, ''))) > 0
-       )
      ORDER BY entry_date DESC, updated_at DESC
      LIMIT ?`,
   )
-    .bind(userId, limit)
+    .bind(userId, 200)
     .all<JournalEntryRow>();
 
-  return { entries: (rows.results || []).map(serializeArchiveEntry) };
+  return {
+    entries: (rows.results || [])
+      .filter(rowHasJournalContent)
+      .slice(0, limit)
+      .map(serializeArchiveEntry),
+  };
 }

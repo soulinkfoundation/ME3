@@ -790,6 +790,22 @@ function insertCarouselBlock() {
     .run();
 }
 
+function toggleBulletList() {
+  editor.value?.chain().focus().toggleBulletList().run();
+}
+
+function toggleOrderedList() {
+  editor.value?.chain().focus().toggleOrderedList().run();
+}
+
+function sinkListItem() {
+  editor.value?.chain().focus().sinkListItem("listItem").run();
+}
+
+function liftListItem() {
+  editor.value?.chain().focus().liftListItem("listItem").run();
+}
+
 function syncActiveImages() {
   const ids = getActiveImageIds(editor.value);
   for (const id of lastActiveImageIds.value) {
@@ -1038,8 +1054,9 @@ defineExpose({
     :class="{ 'tiptap-editor--workspace': variant === 'workspace' }"
   >
     <!-- Toolbar -->
-    <div class="editor-toolbar">
+    <div class="editor-toolbar" @mousedown.prevent>
       <button
+        type="button"
         class="toolbar-btn"
         :disabled="!editor || !editor.can().chain().focus().undo().run()"
         @click="editor?.chain().focus().undo().run()"
@@ -1048,6 +1065,7 @@ defineExpose({
         <UiIcon name="Undo" :size="16" aria-hidden="true" />
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :disabled="!editor || !editor.can().chain().focus().redo().run()"
         @click="editor?.chain().focus().redo().run()"
@@ -1057,6 +1075,7 @@ defineExpose({
       </button>
       <span class="toolbar-divider"></span>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('bold') }"
         @click="editor?.chain().focus().toggleBold().run()"
@@ -1065,6 +1084,7 @@ defineExpose({
         <strong>B</strong>
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('italic') }"
         @click="editor?.chain().focus().toggleItalic().run()"
@@ -1073,6 +1093,7 @@ defineExpose({
         <em>I</em>
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('underline') }"
         @click="editor?.chain().focus().toggleUnderline().run()"
@@ -1081,6 +1102,7 @@ defineExpose({
         <span class="toolbar-underline">U</span>
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('strike') }"
         @click="editor?.chain().focus().toggleStrike().run()"
@@ -1089,6 +1111,7 @@ defineExpose({
         <s>S</s>
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('code') }"
         @click="editor?.chain().focus().toggleCode().run()"
@@ -1098,6 +1121,7 @@ defineExpose({
       </button>
       <span class="toolbar-divider"></span>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('heading', { level: 1 }) }"
         @click="editor?.chain().focus().toggleHeading({ level: 1 }).run()"
@@ -1106,6 +1130,7 @@ defineExpose({
         H1
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('heading', { level: 2 }) }"
         @click="editor?.chain().focus().toggleHeading({ level: 2 }).run()"
@@ -1114,6 +1139,7 @@ defineExpose({
         H2
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('heading', { level: 3 }) }"
         @click="editor?.chain().focus().toggleHeading({ level: 3 }).run()"
@@ -1123,23 +1149,44 @@ defineExpose({
       </button>
       <span class="toolbar-divider"></span>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('bulletList') }"
-        @click="editor?.chain().focus().toggleBulletList().run()"
+        @click="toggleBulletList"
         title="Bullet list"
       >
         •
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('orderedList') }"
-        @click="editor?.chain().focus().toggleOrderedList().run()"
+        @click="toggleOrderedList"
         title="Numbered list"
       >
         1.
       </button>
+      <button
+        type="button"
+        class="toolbar-btn"
+        @click="liftListItem"
+        title="Decrease list indent"
+        aria-label="Decrease list indent"
+      >
+        <UiIcon name="IndentDecrease" :size="16" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="toolbar-btn"
+        @click="sinkListItem"
+        title="Increase list indent"
+        aria-label="Increase list indent"
+      >
+        <UiIcon name="IndentIncrease" :size="16" aria-hidden="true" />
+      </button>
       <span class="toolbar-divider"></span>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('blockquote') }"
         @click="editor?.chain().focus().toggleBlockquote().run()"
@@ -1149,6 +1196,7 @@ defineExpose({
       </button>
       <span class="toolbar-divider"></span>
       <button
+        type="button"
         class="toolbar-btn"
         @click="editor?.chain().focus().setHorizontalRule().run()"
         title="Divider"
@@ -1156,6 +1204,7 @@ defineExpose({
         ─
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('link') }"
         @click="openLinkModal"
@@ -1164,6 +1213,7 @@ defineExpose({
         <UiIcon name="Link" :size="16" aria-hidden="true" />
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('youtubeEmbed') }"
         @click="openYouTubeModal"
@@ -1173,6 +1223,7 @@ defineExpose({
         <UiIcon name="Play" :size="16" aria-hidden="true" />
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :disabled="isProcessingImage"
         @click="triggerImagePicker('single')"
@@ -1182,6 +1233,7 @@ defineExpose({
         <UiIcon v-else name="Image" :size="16" aria-hidden="true" />
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('gallery') }"
         :disabled="isProcessingImage"
@@ -1192,6 +1244,7 @@ defineExpose({
       </button>
       <span class="toolbar-divider"></span>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('faqBlock') }"
         @click="insertFaqBlock"
@@ -1200,6 +1253,7 @@ defineExpose({
         <UiIcon name="HelpCircle" :size="16" aria-hidden="true" />
       </button>
       <button
+        type="button"
         class="toolbar-btn"
         :class="{ active: editor?.isActive('carouselBlock') }"
         @click="insertCarouselBlock"
@@ -1262,17 +1316,18 @@ defineExpose({
         <p v-if="linkError" class="link-error" role="alert">{{ linkError }}</p>
 
         <div class="link-actions">
-          <button class="link-btn secondary" @click="closeLinkModal">
+          <button type="button" class="link-btn secondary" @click="closeLinkModal">
             Cancel
           </button>
           <button
+            type="button"
             v-if="editor?.isActive('link')"
             class="link-btn danger"
             @click="removeLink"
           >
             Remove
           </button>
-          <button class="link-btn primary" @click="applyLink">Save</button>
+          <button type="button" class="link-btn primary" @click="applyLink">Save</button>
         </div>
       </div>
     </div>
@@ -1306,10 +1361,10 @@ defineExpose({
         </p>
 
         <div class="link-actions">
-          <button class="link-btn secondary" @click="closeYouTubeModal">
+          <button type="button" class="link-btn secondary" @click="closeYouTubeModal">
             Cancel
           </button>
-          <button class="link-btn primary" @click="applyYouTubeEmbed">
+          <button type="button" class="link-btn primary" @click="applyYouTubeEmbed">
             Insert
           </button>
         </div>
@@ -1404,6 +1459,33 @@ defineExpose({
 .editor-content-wrapper :deep(.ProseMirror) {
   outline: none;
   min-height: 200px;
+}
+
+.editor-content-wrapper :deep(.ProseMirror ul),
+.editor-content-wrapper :deep(.ProseMirror ol) {
+  margin: 0.75em 0;
+  padding-left: 1.5em;
+}
+
+.editor-content-wrapper :deep(.ProseMirror ul) {
+  list-style-type: disc;
+}
+
+.editor-content-wrapper :deep(.ProseMirror ul ul) {
+  list-style-type: circle;
+}
+
+.editor-content-wrapper :deep(.ProseMirror ol) {
+  list-style-type: decimal;
+}
+
+.editor-content-wrapper :deep(.ProseMirror li) {
+  margin: 0.25em 0;
+  padding-left: 0.15em;
+}
+
+.editor-content-wrapper :deep(.ProseMirror li > p) {
+  margin: 0;
 }
 
 .editor-content-wrapper :deep(.ProseMirror) img {
