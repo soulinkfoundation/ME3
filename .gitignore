@@ -29,6 +29,7 @@ Thumbs.db
 coverage/
 test-results/
 playwright-report/
+.playwright-mcp/
 
 # Local-only repository metadata
 .gitattributes
