@@ -5,6 +5,7 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../api";
 import Button from "../components/Button.vue";
 import IconPicker from "../components/IconPicker.vue";
+import PageLoading from "../components/PageLoading.vue";
 import {
   activeProjectTaskStatuses,
   missionTasksUrl,
@@ -278,6 +279,9 @@ const addableCardDrafts = computed(() =>
 );
 const addableQuickActionDrafts = computed(() =>
   availableQuickActionDrafts.value.filter((link) => !link.enabled),
+);
+const dashboardReady = computed(
+  () => !loading.value && Boolean(dashboard.value),
 );
 const dailyBriefing = computed(
   () => dashboard.value?.data["mission.daily-briefing"] || null,
@@ -743,7 +747,7 @@ onMounted(() => {
     <header class="mission-dashboard__topbar">
       <div class="mission-dashboard__topbar-spacer" aria-hidden="true" />
       <div
-        v-if="!loading && (visibleQuickLinks.length || dashboardEditing)"
+        v-if="dashboardReady && (visibleQuickLinks.length || dashboardEditing)"
         class="mission-dashboard__topbar-quicklinks"
         aria-label="Quick actions"
         @dragover.prevent
@@ -797,7 +801,7 @@ onMounted(() => {
           </Button>
         </div>
       </div>
-      <div class="mission-dashboard__topbar-actions">
+      <div v-if="dashboardReady" class="mission-dashboard__topbar-actions">
         <Button
           v-if="dashboardEditing"
           color="ghost"
@@ -841,11 +845,9 @@ onMounted(() => {
       <p v-if="error" class="mission-dashboard__message is-error">
         {{ error }}
       </p>
-      <div v-if="loading" class="mission-dashboard__message">
-        Loading Mission Control...
-      </div>
+      <PageLoading v-else-if="loading" label="loading mission control..." />
 
-      <div v-if="!loading" class="mission-dashboard__grid">
+      <div v-if="dashboardReady" class="mission-dashboard__grid">
         <article
           v-if="!setupChecklistDismissed"
           class="dashboard-card dashboard-card--small setup-checklist-card"
