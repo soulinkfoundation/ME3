@@ -3,6 +3,10 @@ import {
   normalizeTimeZone,
 } from "@me3-core/plugin-calendar";
 import {
+  isCoreChatReminderCreateRequest,
+  planCoreChatToolTurn,
+} from "./planner";
+import {
   buildMe3AgentContextPrompt,
   buildMe3CapabilityContext,
   createMe3AgentContextManifest,
@@ -23,6 +27,20 @@ import {
   type Me3AgentContextTask,
   type Me3KnowledgeRuntimeContext,
 } from "@me3/knowledge";
+
+export {
+  isCoreChatBookingLookupRequest,
+  isCoreChatCapabilityExplorationRequest,
+  isCoreChatMailboxDraftSaveRequest,
+  isCoreChatReminderCreateRequest,
+  isCoreChatReminderListRequest,
+  planCoreChatToolTurn,
+  type CoreChatCapabilityId,
+  type CoreChatPlannerIntentKind,
+  type CoreChatSideEffectLevel,
+  type CoreChatToolPlannerDecision,
+  type CoreChatToolPlannerInput,
+} from "./planner";
 
 export {
   createAgentContentItem,
@@ -1752,8 +1770,19 @@ async function maybeHandleCoreToolTurn(
 ): Promise<AgentSandboxDispatchResponse | null> {
   const messageText = input.messageText.trim();
   const recent = await loadRecentMessages(env, input.userId, input.threadId);
+  const plannerDecision = planCoreChatToolTurn({
+    messageText,
+    hasRecentAssistantEmailDraft: Boolean(latestAssistantEmailDraft(recent)),
+  });
 
-  if (isMailboxDraftSaveRequest(messageText, recent)) {
+  if (
+    plannerDecision.kind === "conversation" ||
+    plannerDecision.capabilityId === "core.agent-chat.conversation"
+  ) {
+    return null;
+  }
+
+  if (plannerDecision.capabilityId === "core.mailbox.draft") {
     const draftPlan = await parseMailboxDraftSaveRequest(env, input.userId, messageText, recent);
     if ("error" in draftPlan) {
       return toolResponse(input.turnId, "core.mailbox.draft", draftPlan.error, {
@@ -1781,7 +1810,7 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
-  if (isReminderListRequest(messageText)) {
+  if (plannerDecision.capabilityId === "core.reminders.list") {
     const reminders = await listPendingAgentReminders(env, input.userId);
     const replyText = reminders.length
       ? [
@@ -1798,8 +1827,9 @@ async function maybeHandleCoreToolTurn(
     });
   }
 
-  const reminderPlan = parseReminderChatRequest(messageText, owner);
-  if (reminderPlan) {
+  if (plannerDecision.capabilityId === "core.reminders.create") {
+    const reminderPlan = parseReminderChatRequest(messageText, owner);
+    if (!reminderPlan) return null;
     if ("error" in reminderPlan) {
       return toolResponse(input.turnId, "core.reminders.create", reminderPlan.error, {
         fallbackReason: "Reminder details required",
@@ -1828,7 +1858,7 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
-  if (isBookingLookupRequest(messageText)) {
+  if (plannerDecision.capabilityId === "core.bookings.lookup") {
     const bookings = await listUpcomingBookings(env, input.userId);
     const replyText = bookings.length
       ? [
@@ -1872,17 +1902,6 @@ function toolResponse(
     contentAction: null,
     contactsChanged: false,
   };
-}
-
-function isMailboxDraftSaveRequest(
-  messageText: string,
-  recent: Array<{ role: "user" | "assistant"; content: string }>,
-): boolean {
-  const asksToSave = /\b(save|store|keep|create|make)\b/i.test(messageText) &&
-    /\b(it|that|this|draft|email|reply|message)\b/i.test(messageText);
-  if (!asksToSave) return false;
-  if (/\b(draft|mailbox|email|\/email)\b/i.test(messageText)) return true;
-  return Boolean(latestAssistantEmailDraft(recent));
 }
 
 async function parseMailboxDraftSaveRequest(
@@ -2002,60 +2021,11 @@ async function resolveDraftRecipientFromContacts(
   return normalizeEmail(row?.email);
 }
 
-function isReminderListRequest(messageText: string): boolean {
-  if (isReminderCreateRequest(messageText)) return false;
-  if (!/\b(reminders?|todo|todos|nudges?)\b/i.test(messageText)) return false;
-  if (isCapabilityExplorationRequest(messageText)) return false;
-
-  return (
-    /\b(?:list|show|check|review|pull up)\s+(?:my\s+|the\s+)?(?:pending\s+|upcoming\s+|due\s+)?(?:reminders?|todos?|nudges?)\b/i.test(
-      messageText,
-    ) ||
-    /\b(?:do|can)\s+i\s+have\s+any\s+(?:pending\s+|upcoming\s+|due\s+)?(?:reminders?|todos?|nudges?)\b/i.test(
-      messageText,
-    ) ||
-    /\b(?:what|which)\s+(?:reminders?|todos?|nudges?)\s+(?:do\s+i\s+have|are\s+(?:pending|upcoming|due))\b/i.test(
-      messageText,
-    ) ||
-    /\b(?:any|pending|upcoming|due)\s+(?:reminders?|todos?|nudges?)\??$/i.test(
-      messageText,
-    )
-  );
-}
-
-function isCapabilityExplorationRequest(messageText: string): boolean {
-  const normalized = messageText.toLowerCase();
-  const mentionsAssistantScope =
-    /\b(?:what|which)\s+(?:you|me3|the\s+agent|the\s+assistant)\s+can\s+(?:do|access|use|help\s+with)\b/i.test(
-      messageText,
-    ) ||
-    /\b(?:tools?|capabilit(?:y|ies)|context|available|access|test\s+run|setting\s+up|setup|first\s+time|make\s+sense)\b/i.test(
-      messageText,
-    );
-  if (!mentionsAssistantScope) return false;
-
-  return (
-    /\b(?:tools?|capabilit(?:y|ies)|what\s+you\s+can\s+do|what\s+context|context\s+you\s+have|access\s+here)\b/i.test(
-      messageText,
-    ) ||
-    normalized.includes("for example") ||
-    normalized.includes("such as") ||
-    normalized.includes("ie ") ||
-    normalized.includes("i.e.")
-  );
-}
-
-function isReminderCreateRequest(messageText: string): boolean {
-  return /\b(remind me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder|don't let me forget|dont let me forget)\b/i.test(
-    messageText,
-  );
-}
-
 function parseReminderChatRequest(
   messageText: string,
   owner: OwnerProfileRow | null,
 ): { input: AgentReminderInput } | { error: string } | null {
-  if (!isReminderCreateRequest(messageText)) return null;
+  if (!isCoreChatReminderCreateRequest(messageText)) return null;
 
   const timezone = normalizeTimeZone(owner?.timezone) || "UTC";
   const explicitDate = parseExplicitDate(messageText);
@@ -2171,11 +2141,6 @@ async function listPendingAgentReminders(
   } catch {
     return [];
   }
-}
-
-function isBookingLookupRequest(messageText: string): boolean {
-  return /\b(bookings?|appointments?|calls?|sessions?)\b/i.test(messageText) &&
-    /\b(check|show|list|what|when|any|upcoming|today|week|schedule)\b/i.test(messageText);
 }
 
 async function listUpcomingBookings(
