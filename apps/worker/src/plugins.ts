@@ -7,7 +7,6 @@ import { LANDING_PAGES_RUNTIME } from "@me3-core/plugin-landing-pages";
 import { LOCAL_EXECUTOR_PLUGIN_ID, LOCAL_EXECUTOR_RUNTIME } from "@me3-core/plugin-local-executor";
 import { MISSION_CONTROL_RUNTIME } from "@me3-core/plugin-mission-control";
 import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
-import { TELEGRAM_PLUGIN_ID, TELEGRAM_RUNTIME } from "@me3-core/plugin-telegram";
 
 export const CORE_PLUGIN_CATALOG_VERSION = "2026-06-11.v1";
 const PUBLIC_BASELINE_MIGRATION_PATH =
@@ -1171,118 +1170,6 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
   ],
 };
 
-const TELEGRAM_PLUGIN: CorePluginManifestSummary = {
-  schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
-  id: TELEGRAM_PLUGIN_ID,
-  name: "Telegram",
-  version: "0.1.0",
-  description:
-    "Connect ME3 Core to an owner-controlled Telegram bot for assistant messages.",
-  trustTier: "first_party",
-  distribution: "workspace_package",
-  installMode: "enabled_by_owner_config",
-  defaultEnabled: false,
-  implementationStatus: TELEGRAM_RUNTIME.bundled ? "bundled" : "catalog_only",
-  capabilityIds: ["channel.telegram_chat"],
-  permissions: [
-    {
-      id: "agent.channel.telegram.reply",
-      label: "Reply to owner Telegram messages",
-    },
-    {
-      id: "agent.channel.telegram.events.read",
-      label: "Read Telegram channel events for assistant context",
-    },
-  ],
-  routes: [
-    {
-      id: "telegram.status.api",
-      path: "/api/telegram/status",
-      methods: ["GET"],
-      auth: "owner",
-    },
-    {
-      id: "telegram.settings.api",
-      path: "/api/telegram/settings",
-      methods: ["PUT"],
-      auth: "owner",
-    },
-    {
-      id: "telegram.setup.api",
-      path: "/api/telegram/setup",
-      methods: ["POST"],
-      auth: "owner",
-    },
-    {
-      id: "telegram.webhook-sync.api",
-      path: "/api/telegram/webhook/sync",
-      methods: ["POST"],
-      auth: "owner",
-    },
-    {
-      id: "telegram.disconnect.api",
-      path: "/api/telegram/disconnect",
-      methods: ["POST"],
-      auth: "owner",
-    },
-    {
-      id: "telegram.webhook.api",
-      path: "/api/telegram/webhook",
-      methods: ["POST"],
-      auth: "telegram_webhook_secret",
-    },
-  ],
-  uiSlots: [
-    {
-      id: "telegram.account.connection",
-      slot: "account.advanced.connection",
-      label: "Telegram",
-    },
-  ],
-  dashboardQuickActions: [
-    {
-      id: "telegram.connect",
-      label: "Connect Telegram",
-      icon: "Send",
-      defaultEnabled: false,
-      destinationId: "account.telegram",
-      requiresPluginIds: [TELEGRAM_PLUGIN_ID],
-    },
-  ],
-  agentTools: [
-    {
-      id: "agent.channel.telegram.reply",
-      label: "Send Telegram reply",
-      sideEffect: "external_write",
-      approvalMode: "none",
-    },
-  ],
-  secrets: [
-    {
-      name: "TELEGRAM_BOT_TOKEN",
-      label: "Telegram bot token",
-      required: false,
-    },
-    {
-      name: "TELEGRAM_WEBHOOK_SECRET",
-      label: "Telegram webhook secret",
-      required: false,
-    },
-  ],
-  migrations: [
-    publicBaselineMigration(
-      "telegram.public-baseline",
-      "Telegram settings, channel connections, and channel event tables are included in the initial public schema.",
-    ),
-  ],
-  queuesAndCrons: [],
-  notes: [
-    ...TELEGRAM_RUNTIME.notes,
-    "Owner-supplied bot credentials can be stored through Account Advanced using the install encryption key; full secret values are never returned to the browser.",
-    "The public API stays on /api/telegram/* while shared agent channel adapter extraction continues.",
-  ],
-};
-
 export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   AGENT_CHAT_PLUGIN,
   MISSION_CONTROL_PLUGIN,
@@ -1290,7 +1177,6 @@ export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   ACCOUNTS_PLUGIN,
   CALENDAR_PLUGIN,
   LOCAL_EXECUTOR_PLUGIN,
-  TELEGRAM_PLUGIN,
   LANDING_PAGES_PLUGIN,
   SOCIAL_PUBLISHING_PLUGIN,
 ];

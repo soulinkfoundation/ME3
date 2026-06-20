@@ -7153,6 +7153,13 @@ describe("ME3 Core Worker auth", () => {
         }),
       ]),
     );
+    expect(body.plugins).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "me3.telegram",
+        }),
+      ]),
+    );
     const socialPlugin = body.plugins.find(
       (plugin) => plugin.id === "me3.social-publishing",
     );

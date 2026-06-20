@@ -50,7 +50,6 @@ type WheelSnapshotResponse = {
 
 const STEPS = ["Profile", "Agent", "Plugins", "Messaging", "Wheel"] as const;
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
-const START_PLUGIN_EXCLUDED_IDS = new Set(["me3.telegram"]);
 const DEFAULT_ASSISTANT_NAME = "ME3";
 const ASSISTANT_NAME_MAX_LENGTH = 48;
 const DEFAULT_START_WHEEL_SEGMENTS: StartWheelSegment[] = [
@@ -154,9 +153,7 @@ const profileLink = computed(() =>
 const selectedPluginIdList = computed(() =>
   Array.from(selectedPluginIds.value),
 );
-const startPlugins = computed(() =>
-  plugins.value.filter((plugin) => !START_PLUGIN_EXCLUDED_IDS.has(plugin.id)),
-);
+const startPlugins = computed(() => plugins.value);
 const pluginBusyIds = computed(() =>
   pluginsSaving.value ? startPlugins.value.map((plugin) => plugin.id) : [],
 );
@@ -371,7 +368,6 @@ function applyDefaultPluginSelection(nextPlugins: PluginRecord[]) {
   const nextSelection = new Set<string>();
   for (const plugin of nextPlugins) {
     if (
-      !START_PLUGIN_EXCLUDED_IDS.has(plugin.id) &&
       !isPluginComingSoon(plugin) &&
       RECOMMENDED_START_PLUGIN_ID_SET.has(plugin.id)
     ) {
