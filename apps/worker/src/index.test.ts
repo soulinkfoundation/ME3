@@ -10195,7 +10195,8 @@ describe("ME3 Core Worker auth", () => {
         auditId: null,
         turnId: "turn-1",
         specialist: "core.agent-chat",
-        replyText: "Hello from Telegram Core.",
+        replyText:
+          "## 1) Setup\n**Set goal:** Use [ME3](https://me3.app) and `code`.",
         model: "test-model",
         source: "fallback",
         fallbackReason: null,
@@ -10253,7 +10254,8 @@ describe("ME3 Core Worker auth", () => {
             channel: "telegram",
             direction: "outbound",
             event_type: "send",
-            text_body: "Hello from Telegram Core.",
+            text_body:
+              "## 1) Setup\n**Set goal:** Use [ME3](https://me3.app) and `code`.",
           }),
         ]),
       );
@@ -10261,7 +10263,9 @@ describe("ME3 Core Worker auth", () => {
       const sendInit = sendMock.mock.calls[0]?.[1] as RequestInit;
       expect(JSON.parse(String(sendInit.body))).toMatchObject({
         chat_id: "456",
-        text: "Hello from Telegram Core.",
+        text:
+          '<b>1) Setup</b>\n<b>Set goal:</b> Use <a href="https://me3.app">ME3</a> and <code>code</code>.',
+        parse_mode: "HTML",
         reply_to_message_id: 11,
       });
     } finally {

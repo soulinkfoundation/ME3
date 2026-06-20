@@ -1223,7 +1223,9 @@ async function handleTelegramWebhookUpdate(
   }
 
   if (response.replyText) {
-    await sendTelegramMessage(botToken, chatId, response.replyText, message.message_id);
+    await sendTelegramMessage(botToken, chatId, response.replyText, message.message_id, {
+      formatMarkdown: true,
+    });
     await insertTelegramChannelEvent(env, {
       connectionId: connection.id,
       direction: "outbound",
@@ -1377,26 +1379,42 @@ async function sendTelegramMessage(
   chatId: string,
   text: string,
   replyToMessageId?: unknown,
+  options: { formatMarkdown?: boolean } = {},
 ) {
+  const truncatedText = truncateTelegramMessage(text);
+  const formatted = options.formatMarkdown
+    ? formatTelegramMarkdownAsHtml(truncatedText)
+    : { text: truncatedText, parseMode: null };
   const body: Record<string, unknown> = {
     chat_id: chatId,
-    text: truncateTelegramMessage(text),
+    text: formatted.text,
   };
+  if (formatted.parseMode) body.parse_mode = formatted.parseMode;
   if (typeof replyToMessageId === "string" || typeof replyToMessageId === "number") {
     body.reply_to_message_id = replyToMessageId;
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  let response = await postTelegramMessage(url, body);
+  if (!response.ok && formatted.parseMode && response.status === 400) {
+    body.text = truncatedText;
+    delete body.parse_mode;
+    response = await postTelegramMessage(url, body);
+  }
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as
       | { description?: string }
       | null;
     throw new Error(payload?.description || `Telegram sendMessage failed (${response.status})`);
   }
+}
+
+function postTelegramMessage(url: string, body: Record<string, unknown>) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 function parseTelegramStartToken(text: string) {
@@ -1416,6 +1434,110 @@ function stringOrNull(value: unknown) {
 
 function truncateTelegramMessage(value: string) {
   return value.length > 4000 ? `${value.slice(0, 3997)}...` : value;
+}
+
+function formatTelegramMarkdownAsHtml(markdown: string): {
+  text: string;
+  parseMode: "HTML";
+} {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const output: string[] = [];
+  let codeFence: string[] | null = null;
+  let quoteLines: string[] = [];
+
+  function flushQuote() {
+    if (!quoteLines.length) return;
+    output.push(
+      `<blockquote>${quoteLines.map((line) => formatTelegramInlineMarkdown(line)).join("\n")}</blockquote>`,
+    );
+    quoteLines = [];
+  }
+
+  for (const line of lines) {
+    const fenceMatch = line.match(/^```/);
+    if (fenceMatch) {
+      if (codeFence) {
+        output.push(`<pre>${escapeTelegramHtml(codeFence.join("\n"))}</pre>`);
+        codeFence = null;
+      } else {
+        flushQuote();
+        codeFence = [];
+      }
+      continue;
+    }
+
+    if (codeFence) {
+      codeFence.push(line);
+      continue;
+    }
+
+    const quoteMatch = line.match(/^>\s?(.*)$/);
+    if (quoteMatch) {
+      quoteLines.push(quoteMatch[1] || "");
+      continue;
+    }
+
+    flushQuote();
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      output.push(`<b>${formatTelegramInlineMarkdown(headingMatch[2] || "")}</b>`);
+      continue;
+    }
+
+    const bulletMatch = line.match(/^(\s*)[-*]\s+(.+)$/);
+    if (bulletMatch) {
+      output.push(
+        `${escapeTelegramHtml(bulletMatch[1] || "")}• ${formatTelegramInlineMarkdown(
+          bulletMatch[2] || "",
+        )}`,
+      );
+      continue;
+    }
+
+    output.push(formatTelegramInlineMarkdown(line));
+  }
+
+  if (codeFence) {
+    output.push(`<pre>${escapeTelegramHtml(codeFence.join("\n"))}</pre>`);
+  }
+  flushQuote();
+
+  return { text: output.join("\n"), parseMode: "HTML" };
+}
+
+function formatTelegramInlineMarkdown(value: string): string {
+  let output = "";
+  let cursor = 0;
+  const tokenPattern =
+    /(`([^`\n]+)`)|(\*\*([^*\n]+)\*\*)|(\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\))/g;
+  for (const match of value.matchAll(tokenPattern)) {
+    const index = match.index ?? 0;
+    output += escapeTelegramHtml(value.slice(cursor, index));
+    if (match[2] !== undefined) {
+      output += `<code>${escapeTelegramHtml(match[2])}</code>`;
+    } else if (match[4] !== undefined) {
+      output += `<b>${escapeTelegramHtml(match[4])}</b>`;
+    } else if (match[6] !== undefined && match[7] !== undefined) {
+      output += `<a href="${escapeTelegramHtmlAttribute(match[7])}">${escapeTelegramHtml(
+        match[6],
+      )}</a>`;
+    }
+    cursor = index + match[0].length;
+  }
+  output += escapeTelegramHtml(value.slice(cursor));
+  return output;
+}
+
+function escapeTelegramHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function escapeTelegramHtmlAttribute(value: string) {
+  return escapeTelegramHtml(value).replace(/"/g, "&quot;");
 }
 
 function parseJsonRecord(value: string | null): Record<string, unknown> {
