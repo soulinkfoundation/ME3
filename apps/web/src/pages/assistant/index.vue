@@ -21,6 +21,7 @@ import {
   formatAgentRuntimeMetadata,
   resolveAgentReplyText,
 } from "../../utils/agentChat";
+import { renderAssistantMarkdown } from "../../utils/assistantMarkdown";
 import {
   AI_AGENT_MODEL_OPTIONS,
   type AiAgentModelCapability,
@@ -2280,26 +2281,6 @@ function newAssistantMessageId(role: "user" | "assistant") {
 
 function assistantMessageIndex(message: (typeof chatMessages.value)[number]) {
   return chatMessages.value.indexOf(message);
-}
-
-function renderAssistantMarkdown(text: string) {
-  const escaped = escapeHtml(text)
-    .replace(/\*\*([^*\n][\s\S]*?[^*\n])\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*\n][^*\n]*?[^*\n])\*/g, "<em>$1</em>")
-    .replace(/`([^`\n]+)`/g, "<code>$1</code>");
-  return escaped
-    .split(/\n{2,}/)
-    .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br>")}</p>`)
-    .join("");
-}
-
-function escapeHtml(text: string) {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 async function submitAssistantText(
@@ -6987,7 +6968,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-message--user .assistant-message__content,
-.assistant-message--user .assistant-message__content :where(p, strong, em, code, a),
+.assistant-message--user .assistant-message__content :deep(:where(p, strong, em, code, a)),
 .assistant-message--user .assistant-message__meta,
 .assistant-message--user .assistant-message__detail {
   color: #12231d;
@@ -7000,8 +6981,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text-muted);
 }
 
-.assistant-message__bubble p {
+.assistant-message__content :deep(:where(p, ul, ol, blockquote, pre, h1, h2, h3)) {
   margin: 0;
+}
+
+.assistant-message__bubble p,
+.assistant-message__content :deep(li) {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 14px;
@@ -7013,15 +6998,75 @@ function messageFromUnknown(err: unknown, fallback: string) {
   gap: 10px;
 }
 
-.assistant-message__content strong {
+.assistant-message__content :deep(strong) {
   font-weight: 800;
 }
 
-.assistant-message__content code {
+.assistant-message__content :deep(:where(h1, h2, h3)) {
+  color: var(--ui-text);
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.assistant-message__content :deep(h1) {
+  font-size: 20px;
+}
+
+.assistant-message__content :deep(h2) {
+  font-size: 17px;
+}
+
+.assistant-message__content :deep(h3) {
+  font-size: 15px;
+}
+
+.assistant-message__content :deep(:where(ul, ol)) {
+  display: grid;
+  gap: 6px;
+  padding-left: 20px;
+}
+
+.assistant-message__content :deep(blockquote) {
+  border-left: 3px solid var(--ui-border-strong);
+  padding-left: 12px;
+  color: var(--ui-text-muted);
+}
+
+.assistant-message__content :deep(pre) {
+  overflow-x: auto;
+  border-radius: var(--ui-radius-sm);
+  padding: 10px 12px;
+  background: var(--ui-surface-muted);
+}
+
+.assistant-message__content :deep(code) {
   border-radius: 4px;
   padding: 1px 4px;
   background: var(--ui-surface-muted);
   font-size: 0.92em;
+}
+
+.assistant-message__content :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.assistant-message__content :deep(a) {
+  color: var(--ui-accent);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.assistant-message__content :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.assistant-message__content :deep(hr) {
+  width: 100%;
+  height: 1px;
+  border: 0;
+  background: var(--ui-border);
 }
 
 .assistant-message__meta,

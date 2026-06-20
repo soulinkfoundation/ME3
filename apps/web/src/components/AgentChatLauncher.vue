@@ -8,6 +8,7 @@ import {
   formatAgentRuntimeMetadata,
   resolveAgentReplyText,
 } from "../utils/agentChat";
+import { renderAssistantMarkdown } from "../utils/assistantMarkdown";
 import UiIcon from "./UiIcon.vue";
 
 type AgentSandboxResponse = {
@@ -245,7 +246,10 @@ onMounted(async () => {
             class="agent-message"
             :class="message.role"
           >
-            <p class="agent-message-text">{{ message.text }}</p>
+            <div
+              class="agent-message-text"
+              v-html="renderAssistantMarkdown(message.text)"
+            ></div>
             <p v-if="message.meta" class="agent-message-meta">
               {{ message.meta }}
             </p>
@@ -472,9 +476,86 @@ onMounted(async () => {
 }
 
 .agent-message-text {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-message-text :deep(:where(p, ul, ol, blockquote, pre, h1, h2, h3)) {
+  margin: 0;
+}
+
+.agent-message-text :deep(:where(p, li)) {
   white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-message-text :deep(:where(h1, h2, h3)) {
+  color: var(--color-text);
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.agent-message-text :deep(h1) {
+  font-size: 18px;
+}
+
+.agent-message-text :deep(h2) {
+  font-size: 16px;
+}
+
+.agent-message-text :deep(h3) {
+  font-size: 14px;
+}
+
+.agent-message-text :deep(:where(ul, ol)) {
+  display: grid;
+  gap: 5px;
+  padding-left: 20px;
+}
+
+.agent-message-text :deep(blockquote) {
+  border-left: 3px solid var(--color-border);
+  padding-left: 10px;
+  color: var(--color-text-muted);
+}
+
+.agent-message-text :deep(pre) {
+  overflow-x: auto;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--color-bg);
+}
+
+.agent-message-text :deep(code) {
+  border-radius: 4px;
+  padding: 1px 4px;
+  background: var(--color-bg);
+  font-size: 0.92em;
+}
+
+.agent-message-text :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.agent-message-text :deep(a) {
+  color: var(--color-accent);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.agent-message-text :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.agent-message-text :deep(hr) {
+  width: 100%;
+  height: 1px;
+  border: 0;
+  background: var(--color-border);
 }
 
 .agent-message-typing {
