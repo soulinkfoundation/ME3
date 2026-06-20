@@ -2003,9 +2003,46 @@ async function resolveDraftRecipientFromContacts(
 }
 
 function isReminderListRequest(messageText: string): boolean {
-  return /\b(reminders?|todo|todos|nudges?)\b/i.test(messageText) &&
-    /\b(list|show|what|which|any|pending|upcoming|due)\b/i.test(messageText) &&
-    !isReminderCreateRequest(messageText);
+  if (isReminderCreateRequest(messageText)) return false;
+  if (!/\b(reminders?|todo|todos|nudges?)\b/i.test(messageText)) return false;
+  if (isCapabilityExplorationRequest(messageText)) return false;
+
+  return (
+    /\b(?:list|show|check|review|pull up)\s+(?:my\s+|the\s+)?(?:pending\s+|upcoming\s+|due\s+)?(?:reminders?|todos?|nudges?)\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:do|can)\s+i\s+have\s+any\s+(?:pending\s+|upcoming\s+|due\s+)?(?:reminders?|todos?|nudges?)\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:what|which)\s+(?:reminders?|todos?|nudges?)\s+(?:do\s+i\s+have|are\s+(?:pending|upcoming|due))\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:any|pending|upcoming|due)\s+(?:reminders?|todos?|nudges?)\??$/i.test(
+      messageText,
+    )
+  );
+}
+
+function isCapabilityExplorationRequest(messageText: string): boolean {
+  const normalized = messageText.toLowerCase();
+  const mentionsAssistantScope =
+    /\b(?:what|which)\s+(?:you|me3|the\s+agent|the\s+assistant)\s+can\s+(?:do|access|use|help\s+with)\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:tools?|capabilit(?:y|ies)|context|available|access|test\s+run|setting\s+up|setup|first\s+time|make\s+sense)\b/i.test(
+      messageText,
+    );
+  if (!mentionsAssistantScope) return false;
+
+  return (
+    /\b(?:tools?|capabilit(?:y|ies)|what\s+you\s+can\s+do|what\s+context|context\s+you\s+have|access\s+here)\b/i.test(
+      messageText,
+    ) ||
+    normalized.includes("for example") ||
+    normalized.includes("such as") ||
+    normalized.includes("ie ") ||
+    normalized.includes("i.e.")
+  );
 }
 
 function isReminderCreateRequest(messageText: string): boolean {
@@ -3574,6 +3611,7 @@ function buildChatMessages(
     knowledgeContext,
     agentContextPrompt,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
+    "When the owner is setting up ME3, testing the assistant, or asking what you can do, acknowledge their goal and explain useful next steps from the available capability/context map. Treat capability examples as context unless the owner clearly asks for one concrete action.",
     "For email drafting, say 'save a draft' instead of 'stage a draft' or 'stage it in the ME3 mailbox'. If the owner asks to save the draft, the tool layer will handle saving it to /email.",
     "Core can converse with the owner and can use bundled first-party API surfaces for reminders, contacts, mailbox, content, calendar, and site workflows as they are routed by the host.",
   ]

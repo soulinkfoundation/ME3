@@ -459,6 +459,85 @@ describe("Core chat native context", () => {
     });
   });
 
+  it("keeps setup and capability exploration prompts in the model path", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response:
+        "Yes, that makes sense. I can help you explore ME3, inspect context, and turn useful gaps into code improvements.",
+    }));
+    const env = createEnv({
+      reminders: [
+        {
+          id: "reminder-existing",
+          user_id: "owner",
+          title: "Ship ME3",
+          notes: null,
+          remind_at: "2026-06-07T09:00:00.000Z",
+          timezone: "Europe/Dublin",
+          recurrence_rule: null,
+          status: "pending",
+          delivered_at: null,
+          dismissed_at: null,
+          created_at: "2026-06-01T09:00:00.000Z",
+        },
+      ],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput(
+        "I am setting up ME3 for the first time. I want to explore what you can do, ie the tools you can access here: profile, setting calendar reminders/events, updating mission control, tasks projects, what context you have available. Make sense?",
+      ),
+    );
+
+    expect(response).toMatchObject({
+      source: "workers-ai",
+      specialist: "core.agent-chat",
+      reminderAction: null,
+    });
+    expect(response.replyText).toContain("Yes, that makes sense");
+    expect(aiRun).toHaveBeenCalledOnce();
+    const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(modelInput.messages[0]?.content).toContain(
+      "When the owner is setting up ME3, testing the assistant, or asking what you can do",
+    );
+  });
+
+  it("still lists reminders for direct reminder list requests", async () => {
+    const env = createEnv({
+      reminders: [
+        {
+          id: "reminder-existing",
+          user_id: "owner",
+          title: "Ship ME3",
+          notes: null,
+          remind_at: "2026-06-07T09:00:00.000Z",
+          timezone: "Europe/Dublin",
+          recurrence_rule: null,
+          status: "pending",
+          delivered_at: null,
+          dismissed_at: null,
+          created_at: "2026-06-01T09:00:00.000Z",
+        },
+      ],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      env as never,
+      createStorage(),
+      dispatchInput("Do I have any pending reminders?"),
+    );
+
+    expect(response).toMatchObject({
+      source: "tool",
+      specialist: "core.reminders.list",
+      reminderAction: { kind: "listed" },
+    });
+    expect(response.replyText).toContain("Ship ME3");
+  });
+
   it("creates reminders directly from sandbox chat", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
