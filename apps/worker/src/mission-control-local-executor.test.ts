@@ -350,8 +350,9 @@ class FakeMissionLocalExecutorStatement {
         description: values[4] as string | null,
         status: values[5] as string,
         priority: values[6] as number,
-        due_at: values[7] as string | null,
-        scheduled_for: values[8] as string | null,
+        pinned_at: values[7] ? "2026-06-01T09:05:00Z" : null,
+        due_at: values[8] as string | null,
+        scheduled_for: values[9] as string | null,
         source_kind: "manual",
         source_ref: null,
         approval_id: null,
@@ -365,7 +366,7 @@ class FakeMissionLocalExecutorStatement {
 
     if (sql.includes("UPDATE mission_tasks")) {
       const task = this.state.tasks.find(
-        (candidate) => candidate.id === values[7] && candidate.user_id === values[8],
+        (candidate) => candidate.id === values[9] && candidate.user_id === values[10],
       );
       if (task) {
         task.project_id = values[0] as string | null;
@@ -373,8 +374,10 @@ class FakeMissionLocalExecutorStatement {
         task.description = values[2] as string | null;
         task.status = values[3] as string;
         task.priority = values[4] as number;
-        task.due_at = values[5] as string | null;
-        task.scheduled_for = values[6] as string | null;
+        if (values[5]) task.pinned_at = task.pinned_at || "2026-06-01T09:10:00Z";
+        if (values[6]) task.pinned_at = null;
+        task.due_at = values[7] as string | null;
+        task.scheduled_for = values[8] as string | null;
         task.updated_at = "2026-06-01T09:10:00Z";
       }
       return { success: true };

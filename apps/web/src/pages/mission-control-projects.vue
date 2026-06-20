@@ -28,6 +28,7 @@ import {
   projectBoardStatuses,
   projectForTask,
   projectName,
+  sortProjectTasks,
   weeklyReviewMetadata,
 } from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
@@ -266,6 +267,7 @@ const projectTaskDetailDraft = ref<ProjectTaskDetailDraft>({
   title: "",
   description: "",
   status: "backlog",
+  projectId: "",
 });
 const projectTaskDetailSaving = ref(false);
 const projectTaskDetailError = ref("");
@@ -1235,6 +1237,7 @@ function syncProjectTaskDetailDraft(task: MissionTask) {
       task.status === "cancelled"
         ? "backlog"
         : (task.status as ProjectBoardStatus),
+    projectId: task.projectId || projects.value[0]?.id || "",
   };
 }
 
@@ -1316,7 +1319,7 @@ async function addProjectTask(status: ProjectBoardStatus) {
         status,
       },
     );
-    projectTasks.value = [response.task, ...projectTasks.value];
+    projectTasks.value = sortProjectTasks([response.task, ...projectTasks.value]);
     resetProjectTaskComposer();
   } catch (e) {
     projectTasksError.value =
@@ -1370,6 +1373,7 @@ async function saveProjectTaskDetail() {
         title,
         description: projectTaskDetailDraft.value.description.trim() || null,
         status: projectTaskDetailDraft.value.status,
+        projectId: projectTaskDetailDraft.value.projectId,
       },
     );
     replaceProjectTask(response.task);
@@ -1381,6 +1385,24 @@ async function saveProjectTaskDetail() {
       e instanceof ApiError ? e.message : "Could not update task";
   } finally {
     projectTaskDetailSaving.value = false;
+  }
+}
+
+async function toggleProjectTaskPin(task: MissionTask) {
+  if (projectTaskActionId.value) return;
+  projectTaskActionId.value = task.id;
+  projectTasksError.value = "";
+  try {
+    const response = await api.patch<{ task: MissionTask }>(
+      `/mission-control/tasks/${encodeURIComponent(task.id)}`,
+      { pinned: !task.pinnedAt },
+    );
+    replaceProjectTask(response.task);
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not update task";
+  } finally {
+    projectTaskActionId.value = "";
   }
 }
 
@@ -1556,6 +1578,7 @@ function replaceProjectTask(next: MissionTask) {
   const index = projectTasks.value.findIndex((item) => item.id === next.id);
   if (index >= 0) projectTasks.value.splice(index, 1, next);
   else projectTasks.value.unshift(next);
+  projectTasks.value = sortProjectTasks(projectTasks.value);
 }
 
 async function addMemory() {
@@ -2016,6 +2039,7 @@ onBeforeUnmount(() => {
           @archive-task="archiveProjectTask"
           @run-task-locally="runProjectTaskLocally"
           @set-status="setProjectTaskStatus"
+          @toggle-pin="toggleProjectTaskPin"
           @edit-project="openEditProjectModal"
           @add-task="addProjectTask"
           @open-composer="openProjectTaskListComposer"
@@ -2051,6 +2075,7 @@ onBeforeUnmount(() => {
           @task-drag-end="endProjectTaskDrag"
           @archive-task="archiveProjectTask"
           @run-task-locally="runProjectTaskLocally"
+          @toggle-pin="toggleProjectTaskPin"
           @add-task="addProjectTask"
           @open-composer="openProjectTaskComposer"
           @cancel-composer="cancelProjectTaskComposer"

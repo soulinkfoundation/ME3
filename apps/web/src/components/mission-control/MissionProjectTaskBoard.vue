@@ -56,6 +56,7 @@ const emit = defineEmits<{
   "task-drag-end": [];
   "archive-task": [task: MissionTask];
   "run-task-locally": [task: MissionTask];
+  "toggle-pin": [task: MissionTask];
   "add-task": [status: ProjectBoardStatus];
   "open-composer": [status: ProjectBoardStatus];
   "cancel-composer": [];
@@ -180,6 +181,20 @@ function taskDescription(task: MissionTask): string {
               {{ weeklyReviewCardLabel(task) }}
             </span>
             <div class="project-task-card__actions">
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                :aria-label="task.pinnedAt ? 'Unpin task' : 'Pin task'"
+                :title="task.pinnedAt ? 'Unpin task' : 'Pin task'"
+                :active="Boolean(task.pinnedAt)"
+                :disabled="actionId === task.id || localRunId === task.id"
+                @click.stop="emit('toggle-pin', task)"
+              >
+                <UiIcon name="Star" :size="15" />
+              </Button>
               <button
                 v-if="isLocalProject(projectForTask(projects, task))"
                 type="button"

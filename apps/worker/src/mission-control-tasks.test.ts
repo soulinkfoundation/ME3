@@ -10,6 +10,7 @@ type StoredTaskRow = {
   description: string | null;
   status: "backlog" | "in_progress" | "review" | "done" | "cancelled";
   priority: number;
+  pinned_at: string | null;
   due_at: string | null;
   scheduled_for: string | null;
   source_kind: "manual" | "capture" | "agent" | "beads" | "daemon";
@@ -35,6 +36,7 @@ function taskRow(
     description: null,
     status: "backlog",
     priority,
+    pinned_at: null,
     due_at: null,
     scheduled_for: sortDate,
     source_kind: "manual",
@@ -84,17 +86,32 @@ function createTaskEnv(rows: StoredTaskRow[]) {
                 results = results.filter((row) => row.project_id === projectId);
               }
 
-              if (sql.includes("priority > ?")) {
-                const priority = Number(values[valueIndex]);
-                const sortValue = String(values[valueIndex + 2]);
-                const id = String(values[valueIndex + 5]);
-                valueIndex += 6;
+              if (sql.includes("COALESCE(pinned_at, '') < ?")) {
+                const pinnedRank = Number(values[valueIndex]);
+                const pinnedAt = String(values[valueIndex + 2]);
+                const priority = Number(values[valueIndex + 5]);
+                const sortValue = String(values[valueIndex + 9]);
+                const id = String(values[valueIndex + 14]);
+                valueIndex += 15;
                 results = results.filter((row) => {
+                  const rowPinnedRank = row.pinned_at ? 0 : 1;
+                  const rowPinnedAt = row.pinned_at || "";
                   const rowSortValue = row.due_at || row.scheduled_for || row.created_at;
                   return (
-                    row.priority > priority ||
-                    (row.priority === priority && rowSortValue > sortValue) ||
-                    (row.priority === priority && rowSortValue === sortValue && row.id > id)
+                    rowPinnedRank > pinnedRank ||
+                    (rowPinnedRank === pinnedRank && rowPinnedAt < pinnedAt) ||
+                    (rowPinnedRank === pinnedRank &&
+                      rowPinnedAt === pinnedAt &&
+                      row.priority > priority) ||
+                    (rowPinnedRank === pinnedRank &&
+                      rowPinnedAt === pinnedAt &&
+                      row.priority === priority &&
+                      rowSortValue > sortValue) ||
+                    (rowPinnedRank === pinnedRank &&
+                      rowPinnedAt === pinnedAt &&
+                      row.priority === priority &&
+                      rowSortValue === sortValue &&
+                      row.id > id)
                   );
                 });
               }
@@ -125,6 +142,14 @@ function createTaskEnv(rows: StoredTaskRow[]) {
                   if (updatedDelta !== 0) return updatedDelta;
                   return a.id.localeCompare(b.id);
                 }
+                const aPinnedRank = a.pinned_at ? 0 : 1;
+                const bPinnedRank = b.pinned_at ? 0 : 1;
+                const pinnedRankDelta = aPinnedRank - bPinnedRank;
+                if (pinnedRankDelta !== 0) return pinnedRankDelta;
+                const pinnedAtDelta = (b.pinned_at || "").localeCompare(
+                  a.pinned_at || "",
+                );
+                if (pinnedAtDelta !== 0) return pinnedAtDelta;
                 const priorityDelta = a.priority - b.priority;
                 if (priorityDelta !== 0) return priorityDelta;
                 const aSort = a.due_at || a.scheduled_for || a.created_at;
@@ -213,6 +238,29 @@ describe("Mission Control task pagination", () => {
 
     expect(secondPage.tasks.map((task) => task.id)).toEqual(["old"]);
     expect(secondPage.nextCursor).toBeNull();
+  });
+
+  it("orders pinned active tasks before regular tasks across projects", async () => {
+    const pinnedOlder = taskRow("pinned-older", "project-1", 3, "2026-05-03");
+    pinnedOlder.pinned_at = "2026-05-03T10:00:00Z";
+    const pinnedNewer = taskRow("pinned-newer", "project-2", 3, "2026-05-04");
+    pinnedNewer.pinned_at = "2026-05-04T10:00:00Z";
+    const env = createTaskEnv([
+      taskRow("regular", "project-1", 1, "2026-05-01"),
+      pinnedOlder,
+      pinnedNewer,
+    ]);
+
+    const page = await listMissionTaskPage(env, "owner", {
+      activeOnly: true,
+      limit: 3,
+    });
+
+    expect(page.tasks.map((task) => task.id)).toEqual([
+      "pinned-newer",
+      "pinned-older",
+      "regular",
+    ]);
   });
 
   it("rejects invalid task cursors", async () => {

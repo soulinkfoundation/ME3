@@ -50,6 +50,7 @@ type MissionTaskRow = {
   description: string | null;
   status: MissionTaskStatus;
   priority: number;
+  pinned_at: string | null;
   due_at: string | null;
   scheduled_for: string | null;
   source_kind: "manual" | "capture" | "agent" | "beads" | "daemon";
@@ -74,6 +75,8 @@ type MissionTaskListOptions = {
 type MissionTaskCursor =
   | {
       order: "active";
+      pinnedRank: number;
+      pinnedAt: string;
       priority: number;
       sortValue: string;
       id: string;
@@ -679,7 +682,7 @@ export async function listMissionTaskPage(
   const order = options.archived ? "archived" : "active";
   const cursor = decodeMissionTaskCursor(options.cursor, order);
   const activeWhere = ACTIVE_TASK_STATUSES.map((item) => `'${item}'`).join(", ");
-  let sql = `SELECT id, user_id, project_id, title, description, status, priority,
+  let sql = `SELECT id, user_id, project_id, title, description, status, priority, pinned_at,
                     due_at, scheduled_for, source_kind, source_ref, approval_id,
                     metadata_json, created_at, updated_at, archived_at
              FROM mission_tasks
@@ -715,14 +718,25 @@ export async function listMissionTaskPage(
     );
   } else if (cursor?.order === "active") {
     sql += ` AND (
-      priority > ?
-      OR (priority = ? AND COALESCE(due_at, scheduled_for, created_at) > ?)
-      OR (priority = ? AND COALESCE(due_at, scheduled_for, created_at) = ? AND id > ?)
+      (CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END) > ?
+      OR ((CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END) = ? AND COALESCE(pinned_at, '') < ?)
+      OR ((CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END) = ? AND COALESCE(pinned_at, '') = ? AND priority > ?)
+      OR ((CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END) = ? AND COALESCE(pinned_at, '') = ? AND priority = ? AND COALESCE(due_at, scheduled_for, created_at) > ?)
+      OR ((CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END) = ? AND COALESCE(pinned_at, '') = ? AND priority = ? AND COALESCE(due_at, scheduled_for, created_at) = ? AND id > ?)
     )`;
     values.push(
+      cursor.pinnedRank,
+      cursor.pinnedRank,
+      cursor.pinnedAt,
+      cursor.pinnedRank,
+      cursor.pinnedAt,
       cursor.priority,
+      cursor.pinnedRank,
+      cursor.pinnedAt,
       cursor.priority,
       cursor.sortValue,
+      cursor.pinnedRank,
+      cursor.pinnedAt,
       cursor.priority,
       cursor.sortValue,
       cursor.id,
@@ -730,7 +744,11 @@ export async function listMissionTaskPage(
   }
   sql += options.archived
     ? " ORDER BY archived_at DESC, updated_at DESC, id ASC LIMIT ?"
-    : " ORDER BY priority ASC, COALESCE(due_at, scheduled_for, created_at) ASC, id ASC LIMIT ?";
+    : ` ORDER BY (CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END) ASC,
+          pinned_at DESC,
+          priority ASC,
+          COALESCE(due_at, scheduled_for, created_at) ASC,
+          id ASC LIMIT ?`;
   values.push(limit + 1);
 
   const rows = await env.DB.prepare(sql)
@@ -769,8 +787,8 @@ export async function createMissionTask(env: Env, userId: string, input: unknown
 
   await env.DB.prepare(
     `INSERT INTO mission_tasks
-       (id, user_id, project_id, title, description, status, priority, due_at, scheduled_for, source_kind)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual')`,
+       (id, user_id, project_id, title, description, status, priority, pinned_at, due_at, scheduled_for, source_kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END, ?, ?, 'manual')`,
   )
     .bind(
       id,
@@ -780,6 +798,7 @@ export async function createMissionTask(env: Env, userId: string, input: unknown
       normalizeNullableText(body.description),
       status,
       priority,
+      body.pinned === true ? 1 : 0,
       normalizeNullableText(body.dueAt),
       normalizeMissionDateKey(body.scheduledFor),
     )
@@ -810,6 +829,11 @@ export async function updateMissionTask(
   await env.DB.prepare(
     `UPDATE mission_tasks
      SET project_id = ?, title = ?, description = ?, status = ?, priority = ?,
+         pinned_at = CASE
+           WHEN ? THEN CASE WHEN pinned_at IS NULL THEN datetime('now') ELSE pinned_at END
+           WHEN ? THEN NULL
+           ELSE pinned_at
+         END,
          due_at = ?, scheduled_for = ?, updated_at = datetime('now')
      WHERE id = ? AND user_id = ?`,
   )
@@ -821,6 +845,8 @@ export async function updateMissionTask(
         : normalizeNullableText(body.description),
       normalizeMissionTaskStatus(body.status) || existing.status,
       normalizePriority(body.priority, existing.priority),
+      body.pinned === true ? 1 : 0,
+      body.pinned === false ? 1 : 0,
       body.dueAt === undefined ? existing.due_at : normalizeNullableText(body.dueAt),
       body.scheduledFor === undefined
         ? existing.scheduled_for
@@ -1877,7 +1903,7 @@ async function getMissionProject(env: Env, userId: string, projectId: string) {
 
 async function getMissionTask(env: Env, userId: string, taskId: string) {
   return env.DB.prepare(
-    `SELECT id, user_id, project_id, title, description, status, priority,
+    `SELECT id, user_id, project_id, title, description, status, priority, pinned_at,
             due_at, scheduled_for, source_kind, source_ref, approval_id,
             metadata_json, created_at, updated_at, archived_at
      FROM mission_tasks
@@ -2539,6 +2565,7 @@ function serializeTask(row: MissionTaskRow) {
     description: row.description,
     status: row.status,
     priority: row.priority,
+    pinnedAt: row.pinned_at,
     dueAt: row.due_at,
     scheduledFor: row.scheduled_for,
     sourceKind: row.source_kind,
@@ -2973,6 +3000,8 @@ function encodeMissionTaskCursor(row: MissionTaskRow, order: "active" | "archive
         }
       : {
           order,
+          pinnedRank: row.pinned_at ? 0 : 1,
+          pinnedAt: row.pinned_at || "",
           priority: row.priority,
           sortValue: activeTaskSortValue(row),
           id: row.id,
@@ -3008,6 +3037,10 @@ function decodeMissionTaskCursor(
     ) {
       return {
         order: "active",
+        pinnedRank:
+          typeof parsed.pinnedRank === "number" ? parsed.pinnedRank : 1,
+        pinnedAt:
+          typeof parsed.pinnedAt === "string" ? parsed.pinnedAt : "",
         priority: parsed.priority,
         sortValue: parsed.sortValue,
         id: parsed.id,

@@ -24,6 +24,7 @@ export type MissionTask = {
   sourceKind: "manual" | "capture" | "agent" | "beads" | "daemon";
   sourceRef: string | null;
   priority: number;
+  pinnedAt: string | null;
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
@@ -113,6 +114,7 @@ export type ProjectTaskDetailDraft = {
   title: string;
   description: string;
   status: ProjectBoardStatus;
+  projectId: string;
 };
 
 export type ProjectTaskListGroup = {
@@ -372,6 +374,24 @@ export function activeProjectTasks(tasks: MissionTask[]): MissionTask[] {
   return tasks.filter((task) =>
     activeProjectTaskStatuses.includes(task.status as ProjectBoardStatus),
   );
+}
+
+export function sortProjectTasks(tasks: MissionTask[]): MissionTask[] {
+  return [...tasks].sort((a, b) => {
+    const aPinned = a.pinnedAt ? 0 : 1;
+    const bPinned = b.pinnedAt ? 0 : 1;
+    if (aPinned !== bPinned) return aPinned - bPinned;
+    if (a.pinnedAt || b.pinnedAt) {
+      const pinnedDelta = (b.pinnedAt || "").localeCompare(a.pinnedAt || "");
+      if (pinnedDelta !== 0) return pinnedDelta;
+    }
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    const aSort = a.dueAt || a.scheduledFor || a.createdAt;
+    const bSort = b.dueAt || b.scheduledFor || b.createdAt;
+    const sortDelta = aSort.localeCompare(bSort);
+    if (sortDelta !== 0) return sortDelta;
+    return a.id.localeCompare(b.id);
+  });
 }
 
 export function groupProjectTasks(

@@ -70,6 +70,10 @@ function statusValue(event: Event): ProjectBoardStatus {
   return (event.target as HTMLSelectElement).value as ProjectBoardStatus;
 }
 
+function selectValue(event: Event): string {
+  return (event.target as HTMLSelectElement).value;
+}
+
 function updateDetailDraft(patch: Partial<ProjectTaskDetailDraft>) {
   emit("update:detailDraft", {
     ...props.detailDraft,
@@ -380,6 +384,22 @@ function closeFromBackdrop() {
                 :value="status.id"
               >
                 {{ status.label }}
+              </option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Project</span>
+            <select
+              :value="detailDraft.projectId"
+              @change="updateDetailDraft({ projectId: selectValue($event) })"
+            >
+              <option
+                v-for="project in projects"
+                :key="project.id"
+                :value="project.id"
+              >
+                {{ project.name }}
               </option>
             </select>
           </label>

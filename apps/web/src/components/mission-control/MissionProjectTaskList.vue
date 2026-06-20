@@ -50,6 +50,7 @@ const emit = defineEmits<{
   "archive-task": [task: MissionTask];
   "run-task-locally": [task: MissionTask];
   "set-status": [task: MissionTask, status: MissionTask["status"]];
+  "toggle-pin": [task: MissionTask];
   "edit-project": [project: MissionProject];
   "add-task": [status: ProjectBoardStatus];
   "open-composer": [projectId: string];
@@ -239,6 +240,20 @@ function taskDescription(task: MissionTask): string {
           </button>
 
           <div class="project-task-row__controls">
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
+              :aria-label="task.pinnedAt ? 'Unpin task' : 'Pin task'"
+              :title="task.pinnedAt ? 'Unpin task' : 'Pin task'"
+              :active="Boolean(task.pinnedAt)"
+              :disabled="actionId === task.id || localRunId === task.id"
+              @click="emit('toggle-pin', task)"
+            >
+              <UiIcon name="Star" :size="15" />
+            </Button>
             <label class="project-task-row__done">
               <input
                 type="checkbox"

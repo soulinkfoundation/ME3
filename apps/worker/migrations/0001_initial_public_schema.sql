@@ -928,6 +928,7 @@ CREATE TABLE mission_tasks (
   status TEXT NOT NULL DEFAULT 'backlog'
     CHECK (status IN ('backlog', 'in_progress', 'review', 'done', 'cancelled')),
   priority INTEGER NOT NULL DEFAULT 3,
+  pinned_at TEXT,
   due_at TEXT,
   scheduled_for TEXT,
   source_kind TEXT NOT NULL DEFAULT 'manual'
