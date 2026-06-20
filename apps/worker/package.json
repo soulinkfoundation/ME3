@@ -21,14 +21,14 @@
     "@me3-core/plugin-social-publishing": "workspace:*",
     "@me3-core/plugin-telegram": "workspace:*",
     "@me3/knowledge": "workspace:*",
-    "hono": "^4.3.0",
+    "hono": "^4.12.26",
     "ical.js": "^2.2.1",
     "stripe": "^17.0.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240405.0",
+    "@cloudflare/workers-types": "^4.20260620.1",
     "typescript": "^5.3.3",
-    "vitest": "^2.0.0",
-    "wrangler": "^4.87.0"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.103.0"
   }
 }
