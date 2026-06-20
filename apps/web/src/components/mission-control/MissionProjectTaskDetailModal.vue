@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import Button from "../Button.vue";
 import UiIcon from "../UiIcon.vue";
 import {
@@ -60,6 +60,7 @@ const emit = defineEmits<{
 const taskProject = computed(() =>
   props.task ? projectForTask(props.projects, props.task) : null,
 );
+const backdropPointerStarted = ref(false);
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement | HTMLTextAreaElement).value;
@@ -75,6 +76,17 @@ function updateDetailDraft(patch: Partial<ProjectTaskDetailDraft>) {
     ...patch,
   });
 }
+
+function markBackdropPointerStart() {
+  backdropPointerStarted.value = true;
+}
+
+function closeFromBackdrop() {
+  if (!backdropPointerStarted.value) return;
+
+  backdropPointerStarted.value = false;
+  emit("close");
+}
 </script>
 
 <template>
@@ -83,7 +95,9 @@ function updateDetailDraft(patch: Partial<ProjectTaskDetailDraft>) {
       v-if="task"
       class="mission-modal"
       role="presentation"
-      @click.self="emit('close')"
+      @pointerdown.self="markBackdropPointerStart"
+      @pointerdown.capture="backdropPointerStarted = false"
+      @click.self="closeFromBackdrop"
     >
       <form
         class="mission-modal__dialog task-detail-modal"

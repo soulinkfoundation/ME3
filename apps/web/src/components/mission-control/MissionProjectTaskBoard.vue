@@ -64,6 +64,10 @@ const emit = defineEmits<{
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement | HTMLSelectElement).value;
 }
+
+function taskDescription(task: MissionTask): string {
+  return task.description?.trim() || "";
+}
 </script>
 
 <template>
@@ -121,7 +125,13 @@ function inputValue(event: Event): string {
             @dragstart="emit('task-drag-start', $event, task)"
             @dragend="emit('task-drag-end')"
           >
-            <p>{{ task.title }}</p>
+            <p class="project-task-card__title">{{ task.title }}</p>
+            <p
+              v-if="taskDescription(task)"
+              class="project-task-card__description"
+            >
+              {{ taskDescription(task) }}
+            </p>
             <div class="project-task-card__meta">
               <span v-if="weeklyReviewMetadata(task)" class="weekly-review-badge"
                 >Weekly Review</span
@@ -422,11 +432,25 @@ function inputValue(event: Event): string {
   opacity: 0.6;
 }
 
-.project-task-card p {
+.project-task-card__title,
+.project-task-card__description {
   margin: 0;
+  min-width: 0;
+}
+
+.project-task-card__title {
   overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.4;
+}
+
+.project-task-card__description {
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-task-card__meta {

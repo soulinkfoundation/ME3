@@ -59,6 +59,10 @@ const emit = defineEmits<{
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement | HTMLSelectElement).value;
 }
+
+function taskDescription(task: MissionTask): string {
+  return task.description?.trim() || "";
+}
 </script>
 
 <template>
@@ -213,6 +217,12 @@ function inputValue(event: Event): string {
             @click="emit('open-detail', task)"
           >
             <span class="project-task-row__title">{{ task.title }}</span>
+            <span
+              v-if="taskDescription(task)"
+              class="project-task-row__description"
+            >
+              {{ taskDescription(task) }}
+            </span>
             <span class="project-task-row__meta">
               <span
                 v-if="weeklyReviewMetadata(task)"
@@ -555,6 +565,17 @@ function inputValue(event: Event): string {
   font-size: 13px;
   font-weight: 650;
   line-height: 1.35;
+}
+
+.project-task-row__description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-task-row__meta {
