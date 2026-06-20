@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, shallowRef } from "vue";
+import { ref, computed, shallowRef, watch, onBeforeUnmount } from "vue";
 import EmojiPicker from "vue3-emoji-picker";
 import "vue3-emoji-picker/css";
 import UiIcon from "./UiIcon.vue";
@@ -25,6 +25,7 @@ const emit = defineEmits<{
 const activeTab = ref<"icons" | "emoji">("icons");
 const showPicker = ref(false);
 const iconSearch = ref("");
+const pickerRoot = ref<HTMLElement | null>(null);
 const iconNames = shallowRef<UiIconName[]>([...UI_ICON_NAMES]);
 const iconMeta = shallowRef<Record<string, IconMeta>>({ ...UI_ICON_META });
 let iconCatalogPromise: Promise<void> | null = null;
@@ -87,6 +88,29 @@ function closePicker() {
   iconSearch.value = "";
 }
 
+function handleOutsidePointerDown(event: PointerEvent) {
+  if (!showPicker.value) return;
+
+  const target = event.target;
+  if (target instanceof Node && pickerRoot.value?.contains(target)) {
+    return;
+  }
+
+  closePicker();
+}
+
+watch(showPicker, (isOpen) => {
+  if (isOpen) {
+    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+  } else {
+    document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+  }
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+});
+
 const filteredIconNames = computed(() => {
   const query = iconSearch.value.trim().toLowerCase();
   if (!query) return iconNames.value;
@@ -107,7 +131,7 @@ const filteredIconNames = computed(() => {
 </script>
 
 <template>
-  <div class="icon-picker">
+  <div ref="pickerRoot" class="icon-picker">
     <!-- Current selection / trigger button -->
     <div class="icon-picker-trigger">
       <button
