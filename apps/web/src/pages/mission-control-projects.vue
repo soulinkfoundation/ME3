@@ -29,6 +29,7 @@ import {
   projectForTask,
   projectName,
   sortProjectTasks,
+  taskDescriptionText,
   weeklyReviewMetadata,
 } from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
@@ -1995,7 +1996,9 @@ onBeforeUnmount(() => {
                 >
                   <td>
                     <strong>{{ task.title }}</strong>
-                    <span v-if="task.description">{{ task.description }}</span>
+                    <span v-if="taskDescriptionText(task)">
+                      {{ taskDescriptionText(task) }}
+                    </span>
                   </td>
                   <td>{{ projectName(projects, task.projectId) }}</td>
                   <td>{{ formatShortDate(task.updatedAt) }}</td>

@@ -11,6 +11,7 @@ import {
   projectIconSource,
   projectTaskComposerProjectLabel,
   projectUiIconName,
+  taskDescriptionText,
   weeklyReviewCardLabel,
   weeklyReviewMetadata,
 } from "./projectWorkspace";
@@ -62,7 +63,7 @@ function inputValue(event: Event): string {
 }
 
 function taskDescription(task: MissionTask): string {
-  return task.description?.trim() || "";
+  return taskDescriptionText(task);
 }
 </script>
 

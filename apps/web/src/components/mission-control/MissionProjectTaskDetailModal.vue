@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import Button from "../Button.vue";
+import TiptapEditor from "../TiptapEditor.vue";
 import UiIcon from "../UiIcon.vue";
 import {
   formatDateTime,
@@ -103,13 +104,12 @@ function closeFromBackdrop() {
       @pointerdown.capture="backdropPointerStarted = false"
       @click.self="closeFromBackdrop"
     >
-      <form
+      <div
         class="mission-modal__dialog task-detail-modal"
         :class="{ 'task-detail-modal--note': !weeklyReview }"
         role="dialog"
         aria-modal="true"
         aria-labelledby="task-detail-modal-title"
-        @submit.prevent="weeklyReview ? emit('submit') : emit('save')"
       >
         <div class="mission-modal__header">
           <h2 id="task-detail-modal-title">
@@ -408,16 +408,17 @@ function closeFromBackdrop() {
             </label>
           </div>
 
-          <label class="field task-note-body-field">
+          <div class="field task-note-body-field">
             <span>Notes</span>
-            <textarea
-              :value="detailDraft.description"
-              class="task-note-body-field__textarea"
-              rows="14"
+            <TiptapEditor
+              :model-value="detailDraft.description"
+              class="task-note-body-field__editor"
               placeholder="Add detail for the runner or reviewer"
-              @input="updateDetailDraft({ description: inputValue($event) })"
+              @update:model-value="
+                updateDetailDraft({ description: $event })
+              "
             />
-          </label>
+          </div>
         </template>
 
         <p v-if="detailError" class="mission-modal__error">
@@ -451,8 +452,9 @@ function closeFromBackdrop() {
               color="primary"
               shape="soft"
               size="compact"
-              type="submit"
+              type="button"
               :disabled="submitDisabled"
+              @click="emit('submit')"
             >
               {{ weeklyReviewSubmitting ? "Submitting..." : "Submit review" }}
             </Button>
@@ -461,14 +463,15 @@ function closeFromBackdrop() {
               color="primary"
               shape="soft"
               size="compact"
-              type="submit"
+              type="button"
               :disabled="saveDisabled"
+              @click="emit('save')"
             >
               {{ detailSaving ? "Saving..." : "Save" }}
             </Button>
           </div>
         </div>
-      </form>
+      </div>
     </div>
   </Teleport>
 </template>
@@ -616,9 +619,26 @@ function closeFromBackdrop() {
   min-height: 0;
 }
 
-.task-note-body-field__textarea {
+.task-note-body-field__editor {
+  min-height: 0;
+}
+
+.task-note-body-field__editor :deep(.editor-toolbar) {
+  position: static;
+  padding: 6px;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface-muted);
+}
+
+.task-note-body-field__editor :deep(.editor-content-wrapper) {
   min-height: 340px;
   max-height: min(520px, calc(100vh - 330px));
+  overflow: auto;
+  background: var(--ui-bg);
+}
+
+.task-note-body-field__editor :deep(.ProseMirror) {
+  min-height: 308px;
   font-size: 15px;
   line-height: 1.65;
 }
@@ -937,9 +957,13 @@ function closeFromBackdrop() {
     grid-template-columns: 1fr;
   }
 
-  .task-note-body-field__textarea {
+  .task-note-body-field__editor :deep(.editor-content-wrapper) {
     min-height: 300px;
     max-height: min(520px, calc(100vh - 360px));
+  }
+
+  .task-note-body-field__editor :deep(.ProseMirror) {
+    min-height: 268px;
   }
 }
 </style>

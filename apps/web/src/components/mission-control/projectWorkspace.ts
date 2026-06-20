@@ -394,6 +394,25 @@ export function sortProjectTasks(tasks: MissionTask[]): MissionTask[] {
   });
 }
 
+export function taskDescriptionText(task: MissionTask | null | undefined): string {
+  const description = task?.description?.trim();
+  if (!description) return "";
+  if (!/[<&]/.test(description)) return description;
+
+  return description
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6]|blockquote)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function groupProjectTasks(
   projects: MissionProject[],
   tasks: MissionTask[],
