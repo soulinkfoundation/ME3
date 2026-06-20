@@ -412,6 +412,7 @@ test.describe("/start onboarding wizard", () => {
     page,
   }) => {
     let uploadBody = "";
+    let soulinkSetupRequestCount = 0;
     await page.route("**/api/sites/*/upload", async (route) => {
       uploadBody = route.request().postData() || "";
       await route.fulfill({
@@ -422,6 +423,14 @@ test.describe("/start onboarding wizard", () => {
           publishedAt: new Date().toISOString(),
         }),
       });
+    });
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        request.url().includes("/api/soulink/setup")
+      ) {
+        soulinkSetupRequestCount += 1;
+      }
     });
 
     await page.goto("/start");
@@ -442,6 +451,7 @@ test.describe("/start onboarding wizard", () => {
     await expect(
       page.getByRole("heading", { name: "Connect a messaging app" }),
     ).toBeVisible();
+    expect(soulinkSetupRequestCount).toBe(0);
     await page.getByRole("button", { name: "Skip" }).click();
     await expect(
       page.getByRole("heading", { name: "The Wheel Of Life" }),

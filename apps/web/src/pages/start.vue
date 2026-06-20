@@ -135,9 +135,6 @@ const wheelSegments = ref<StartWheelSegment[]>(cloneStartWheelSegments());
 const wheelFocusNote = ref("");
 const wheelSaving = ref(false);
 const wheelError = ref("");
-const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
-  null,
-);
 const telegramModalOpen = ref(false);
 
 let usernameCheckTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -821,9 +818,7 @@ onBeforeUnmount(clearUsernameCheck);
               <span class="messaging-option__badge">Recommended</span>
             </div>
             <SoulinkConnectPanel
-              ref="soulinkPanelRef"
               variant="default"
-              :auto-prepare-when-not-connected="true"
               :show-status-details="false"
             />
           </section>
