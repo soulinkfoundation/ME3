@@ -82,6 +82,16 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     description: "Free reasoning model for slower, more careful answers.",
   },
   {
+    id: "openai-gpt-5-5",
+    label: "GPT-5.5",
+    providerId: "openai",
+    model: "gpt-5.5",
+    runtimeLabel: "OpenAI",
+    costLabel: "Paid",
+    capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
+    description: "OpenAI flagship for complex reasoning, coding, and agentic workflows.",
+  },
+  {
     id: "openai-gpt-5-2",
     label: "GPT-5.2",
     providerId: "openai",
@@ -89,7 +99,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     runtimeLabel: "OpenAI",
     costLabel: "Paid",
     capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
-    description: "OpenAI flagship for complex reasoning, coding, and agentic workflows.",
+    description: "Earlier OpenAI reasoning model for complex coding and agentic workflows.",
   },
   {
     id: "openai-gpt-5-mini",
