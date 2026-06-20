@@ -95,6 +95,7 @@ describe("Mission Control dashboard settings", () => {
       "mission.daily-briefing",
       "mission.mission-statement",
       "mission.wheel-latest-snapshot",
+      "mission.quick-task-add",
     ]);
     expect(dashboard.availableCards.map((card) => card.id)).toEqual(
       expect.arrayContaining([

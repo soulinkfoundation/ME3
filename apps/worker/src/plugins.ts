@@ -463,6 +463,13 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       dataEndpoint: "/api/mission-control/dashboard/cards/mission.wheel-latest-snapshot",
     },
     {
+      id: "mission.quick-task-add",
+      label: "Quick Task Add",
+      componentKey: "QuickProjectTaskCard",
+      defaultEnabled: true,
+      defaultSize: "medium",
+    },
+    {
       id: "mission.projects-summary",
       label: "Projects Summary",
       componentKey: "ProjectsSummaryCard",
