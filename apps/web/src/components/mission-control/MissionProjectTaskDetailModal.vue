@@ -105,6 +105,7 @@ function closeFromBackdrop() {
     >
       <form
         class="mission-modal__dialog task-detail-modal"
+        :class="{ 'task-detail-modal--note': !weeklyReview }"
         role="dialog"
         aria-modal="true"
         aria-labelledby="task-detail-modal-title"
@@ -361,10 +362,11 @@ function closeFromBackdrop() {
         </template>
 
         <template v-else>
-          <label class="field">
-            <span>Title</span>
+          <label class="task-note-title-field">
+            <span class="task-note-title-field__label">Title</span>
             <input
               :value="detailDraft.title"
+              class="task-note-title-field__input"
               type="text"
               autocomplete="off"
               autofocus
@@ -372,43 +374,46 @@ function closeFromBackdrop() {
             />
           </label>
 
-          <label class="field">
-            <span>Status</span>
-            <select
-              :value="detailDraft.status"
-              @change="updateDetailDraft({ status: statusValue($event) })"
-            >
-              <option
-                v-for="status in boardStatuses"
-                :key="status.id"
-                :value="status.id"
+          <div class="task-note-meta">
+            <label class="field task-note-meta__field">
+              <span>Project</span>
+              <select
+                :value="detailDraft.projectId"
+                @change="updateDetailDraft({ projectId: selectValue($event) })"
               >
-                {{ status.label }}
-              </option>
-            </select>
-          </label>
+                <option
+                  v-for="project in projects"
+                  :key="project.id"
+                  :value="project.id"
+                >
+                  {{ project.name }}
+                </option>
+              </select>
+            </label>
 
-          <label class="field">
-            <span>Project</span>
-            <select
-              :value="detailDraft.projectId"
-              @change="updateDetailDraft({ projectId: selectValue($event) })"
-            >
-              <option
-                v-for="project in projects"
-                :key="project.id"
-                :value="project.id"
+            <label class="field task-note-meta__field">
+              <span>Status</span>
+              <select
+                :value="detailDraft.status"
+                @change="updateDetailDraft({ status: statusValue($event) })"
               >
-                {{ project.name }}
-              </option>
-            </select>
-          </label>
+                <option
+                  v-for="status in boardStatuses"
+                  :key="status.id"
+                  :value="status.id"
+                >
+                  {{ status.label }}
+                </option>
+              </select>
+            </label>
+          </div>
 
-          <label class="field">
+          <label class="field task-note-body-field">
             <span>Notes</span>
             <textarea
               :value="detailDraft.description"
-              rows="5"
+              class="task-note-body-field__textarea"
+              rows="14"
               placeholder="Add detail for the runner or reviewer"
               @input="updateDetailDraft({ description: inputValue($event) })"
             />
@@ -493,6 +498,14 @@ function closeFromBackdrop() {
   box-shadow: 0 24px 80px color-mix(in oklab, #000, transparent 78%);
 }
 
+.task-detail-modal--note {
+  width: min(720px, 100%);
+  max-height: min(820px, calc(100vh - 48px));
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  gap: 16px;
+  padding: 22px;
+}
+
 .mission-modal__header,
 .mission-modal__actions {
   display: flex;
@@ -556,6 +569,58 @@ function closeFromBackdrop() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.task-note-title-field {
+  display: grid;
+  min-width: 0;
+}
+
+.task-note-title-field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.task-note-title-field__input {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 28px;
+  font-weight: 750;
+  line-height: 1.18;
+}
+
+.task-note-title-field__input:focus {
+  outline: none;
+}
+
+.task-note-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.42fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.task-note-meta__field {
+  min-width: 0;
+}
+
+.task-note-body-field {
+  min-height: 0;
+}
+
+.task-note-body-field__textarea {
+  min-height: 340px;
+  max-height: min(520px, calc(100vh - 330px));
+  font-size: 15px;
+  line-height: 1.65;
 }
 
 .status-badge {
@@ -856,6 +921,25 @@ function closeFromBackdrop() {
 @media (max-width: 959px) {
   .mission-modal {
     padding: 14px;
+  }
+
+  .task-detail-modal--note {
+    width: 100%;
+    max-height: calc(100vh - 28px);
+    padding: 18px;
+  }
+
+  .task-note-title-field__input {
+    font-size: 24px;
+  }
+
+  .task-note-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .task-note-body-field__textarea {
+    min-height: 300px;
+    max-height: min(520px, calc(100vh - 360px));
   }
 }
 </style>
