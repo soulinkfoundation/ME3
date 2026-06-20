@@ -3124,7 +3124,7 @@ onMounted(async () => {
               <li>
                 Visit Cloudflare
                 <a
-                  href="https://dash.cloudflare.com/?to=/:accountemail-service/sending/onboarding"
+                  href="https://dash.cloudflare.com/?to=/:account/email-service/sending/onboarding"
                   target="_blank"
                   rel="noopener noreferrer"
                   >Email Sending</a
