@@ -715,6 +715,7 @@ async function runOpenAiText(
 ): Promise<string> {
   if (!route.apiKey) throw new Error("OpenAI API key is not configured.");
   const gatewayUrl = externalProviderGatewayUrl(route, "openai", "chat/completions");
+  const body = buildOpenAiChatCompletionBody(route.model, messages, options);
   const response = await fetch(gatewayUrl || "https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -724,12 +725,7 @@ async function runOpenAiText(
         ? { "cf-aig-authorization": `Bearer ${route.aiGateway.apiToken}` }
         : {}),
     },
-    body: JSON.stringify({
-      model: route.model,
-      messages,
-      temperature: options.temperature,
-      max_tokens: options.maxTokens,
-    }),
+    body: JSON.stringify(body),
   });
   const payload = (await response.json().catch(() => null)) as
     | { choices?: Array<{ message?: { content?: unknown; refusal?: unknown } }>; error?: { message?: string } }
@@ -742,6 +738,30 @@ async function runOpenAiText(
     extractAiText(payload?.choices?.[0]?.message?.refusal);
   if (!text) throw new Error(`OpenAI (${route.model}) returned an empty reply.`);
   return text;
+}
+
+function buildOpenAiChatCompletionBody(
+  model: string,
+  messages: AiTextMessage[],
+  options: { temperature: number; maxTokens: number },
+): Record<string, unknown> {
+  const usesReasoningChatParameters = isOpenAiReasoningModel(model);
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    [usesReasoningChatParameters ? "max_completion_tokens" : "max_tokens"]: options.maxTokens,
+  };
+
+  if (!usesReasoningChatParameters) {
+    body.temperature = options.temperature;
+  }
+
+  return body;
+}
+
+function isOpenAiReasoningModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return /^gpt-5(?:[.-]|$)/.test(normalized) || /^o\d(?:[.-]|$)/.test(normalized);
 }
 
 async function runAnthropicText(

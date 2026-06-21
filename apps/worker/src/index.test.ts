@@ -8760,6 +8760,50 @@ describe("ME3 Core Worker auth", () => {
     }
   });
 
+  it("omits unsupported sampling controls for OpenAI reasoning models", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/ai-settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          providers: [{ id: "openai", apiKey: "sk-openai-secret" }],
+        }),
+      }),
+      env,
+    );
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ choices: [{ message: { content: "Reasoning reply" } }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await generateAiText(env, "owner", {
+        selectedModel: { providerId: "openai", model: "gpt-5.5" },
+        messages: [{ role: "user", content: "Hello" }],
+        temperature: 0.4,
+        maxTokens: 1600,
+      });
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+
+      expect(result.text).toBe("Reasoning reply");
+      expect(body).toMatchObject({
+        model: "gpt-5.5",
+        max_completion_tokens: 1600,
+      });
+      expect(body).not.toHaveProperty("temperature");
+      expect(body).not.toHaveProperty("max_tokens");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("routes Anthropic text generation through AI Gateway when enabled", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
