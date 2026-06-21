@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import Button from "../Button.vue";
 import UiIcon from "../UiIcon.vue";
+import MissionProjectTaskActionMenu from "./MissionProjectTaskActionMenu.vue";
 import {
   formatShortDate,
   isProjectIconLogo,
@@ -182,20 +183,6 @@ function taskDescription(task: MissionTask): string {
               {{ weeklyReviewCardLabel(task) }}
             </span>
             <div class="project-task-card__actions">
-              <Button
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                type="button"
-                :aria-label="task.pinnedAt ? 'Unpin task' : 'Pin task'"
-                :title="task.pinnedAt ? 'Unpin task' : 'Pin task'"
-                :active="Boolean(task.pinnedAt)"
-                :disabled="actionId === task.id || localRunId === task.id"
-                @click.stop="emit('toggle-pin', task)"
-              >
-                <UiIcon name="Star" :size="15" />
-              </Button>
               <button
                 v-if="isLocalProject(projectForTask(projects, task))"
                 type="button"
@@ -206,18 +193,12 @@ function taskDescription(task: MissionTask): string {
                 <UiIcon name="Play" :size="14" />
                 {{ localRunId === task.id ? "Queuing..." : "Run locally" }}
               </button>
-              <Button
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                type="button"
-                aria-label="Archive task"
+              <MissionProjectTaskActionMenu
+                :task="task"
                 :disabled="actionId === task.id || localRunId === task.id"
-                @click.stop="emit('archive-task', task)"
-              >
-                <UiIcon name="X" :size="15" />
-              </Button>
+                @toggle-pin="emit('toggle-pin', $event)"
+                @archive-task="emit('archive-task', $event)"
+              />
             </div>
           </article>
           <form
@@ -584,14 +565,10 @@ function taskDescription(task: MissionTask): string {
   cursor: not-allowed;
 }
 
-.project-task-card__actions .me3-btn {
-  width: 28px;
-  height: 28px;
-}
-
-.project-task-card__actions .me3-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.project-task-card__actions .project-task-action-menu {
+  --task-action-size: 28px;
+  --task-action-menu-top: auto;
+  --task-action-menu-bottom: calc(100% + 4px);
 }
 
 .project-task-composer {
