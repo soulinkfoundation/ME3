@@ -991,6 +991,41 @@ export async function getAssistantJob(env: Env, userId: string, jobId: string) {
     job: serializeJob(job),
     version,
     runs: serializedRuns,
+    latestReviewTask:
+      job.recipe_id === "weekly-review"
+        ? await getLatestWeeklyReviewTaskSummary(env, userId, job.id)
+        : null,
+  };
+}
+
+async function getLatestWeeklyReviewTaskSummary(env: Env, userId: string, jobId: string) {
+  const row = await env.DB.prepare(
+    `SELECT id, project_id, title, status, source_ref, updated_at
+     FROM mission_tasks
+     WHERE user_id = ?
+       AND archived_at IS NULL
+       AND source_ref LIKE 'weekly-review:%'
+       AND metadata_json LIKE ?
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+  )
+    .bind(userId, `%"assistantJobId":"${jobId}"%`)
+    .first<{
+      id: string;
+      project_id: string | null;
+      title: string;
+      status: string;
+      source_ref: string | null;
+      updated_at: string;
+    }>();
+  if (!row) return null;
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    status: row.status,
+    sourceRef: row.source_ref,
+    updatedAt: row.updated_at,
   };
 }
 

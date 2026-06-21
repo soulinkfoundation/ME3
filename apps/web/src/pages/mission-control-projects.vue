@@ -173,6 +173,7 @@ type MissionTasksResponse = {
   nextCursor: string | null;
   limit: number;
 };
+type MissionTaskResponse = { task: MissionTask };
 
 type ActivityViewItem = {
   id: string;
@@ -884,6 +885,7 @@ async function loadProjectTasks(
     if (selectedProjectTaskScopeId.value !== scopeId) return;
     projectTasks.value = response.tasks || [];
     projectTasksNextCursor.value = response.nextCursor || null;
+    await openTaskFromRouteQuery();
   } catch (e) {
     projectTasksError.value =
       e instanceof ApiError ? e.message : "Project tasks could not load";
@@ -1259,6 +1261,43 @@ function closeProjectTaskDetail(options: { force?: boolean } = {}) {
   selectedProjectTaskDetailId.value = "";
   projectTaskDetailError.value = "";
   resetWeeklyReviewSelection(null);
+  clearTaskRouteQuery();
+}
+
+async function openTaskFromRouteQuery() {
+  const taskId = rawTaskQuery(route.query.task);
+  if (!taskId || selectedProjectTaskDetailId.value === taskId) return;
+  let task =
+    projectTasks.value.find((item) => item.id === taskId) ||
+    completedProjectTasks.value.find((item) => item.id === taskId) ||
+    null;
+  if (!task) {
+    try {
+      const response = await api.get<MissionTaskResponse>(
+        `/mission-control/tasks/${encodeURIComponent(taskId)}`,
+      );
+      task = response.task;
+      stageProjectTaskForDetail(task);
+    } catch {
+      return;
+    }
+  }
+  if (task) openProjectTaskDetail(task);
+}
+
+function stageProjectTaskForDetail(task: MissionTask) {
+  if (task.status === "done") {
+    completedProjectTasks.value = appendUniqueTasks([task], completedProjectTasks.value);
+    projectTasks.value = projectTasks.value.filter((item) => item.id !== task.id);
+    return;
+  }
+  replaceProjectTask(task);
+}
+
+function clearTaskRouteQuery() {
+  if (!rawTaskQuery(route.query.task)) return;
+  const { task: _task, ...query } = route.query;
+  void router.replace({ query });
 }
 
 function openProjectTaskComposer(status: ProjectBoardStatus) {
@@ -1761,6 +1800,11 @@ function rawProjectQuery(value: unknown): string {
   return typeof raw === "string" ? raw : "";
 }
 
+function rawTaskQuery(value: unknown): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" ? raw : "";
+}
+
 function syncSelectedProjectFromRoute() {
   const projectId = rawProjectQuery(route.query.project);
   selectedProjectDetailId.value = projects.value.some(
@@ -1810,6 +1854,13 @@ watch(
   () => route.query.project,
   () => {
     syncSelectedProjectFromRoute();
+  },
+);
+
+watch(
+  () => route.query.task,
+  () => {
+    if (activeSection.value === "projects") void openTaskFromRouteQuery();
   },
 );
 

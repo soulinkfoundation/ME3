@@ -774,6 +774,12 @@ export async function listMissionTasks(
   return (await listMissionTaskPage(env, userId, options)).tasks;
 }
 
+export async function getMissionTaskDetail(env: Env, userId: string, taskId: string) {
+  const task = await getMissionTask(env, userId, taskId);
+  if (!task || task.archived_at) throw new MissionControlInputError("Mission task not found", 404);
+  return { task: serializeTask(task) };
+}
+
 export async function createMissionTask(env: Env, userId: string, input: unknown) {
   const body = isRecord(input) ? input : {};
   const title = normalizeNullableText(body.title);

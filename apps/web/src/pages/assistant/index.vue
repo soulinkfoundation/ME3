@@ -355,10 +355,27 @@ type AssistantJobRun = {
   actionResults: AssistantJobActionResult[];
 };
 
+type AssistantJobReviewTask = {
+  id: string;
+  projectId: string | null;
+  title: string;
+  status: string;
+  sourceRef: string | null;
+  updatedAt: string;
+};
+
 type AssistantJobDetail = {
   job: AssistantJob;
   version: AssistantJobVersion | null;
   runs: AssistantJobRun[];
+  latestReviewTask: AssistantJobReviewTask | null;
+};
+
+type AssistantJobRunNowResponse = {
+  execution?: string;
+  run?: {
+    status?: AssistantJobRunStatus;
+  };
 };
 
 type AgentSandboxResponse = {
@@ -826,9 +843,27 @@ const selectedJobIsDailyBriefing = computed(
   () => selectedDetail.value?.job.recipeId === "daily-briefing",
 );
 
+const selectedJobIsWeeklyReview = computed(
+  () => selectedDetail.value?.job.recipeId === "weekly-review",
+);
+
 const selectedJobIsInboxWatch = computed(
   () => selectedDetail.value?.job.recipeId === "email-triage",
 );
+
+const selectedLatestRun = computed(() => selectedDetail.value?.runs[0] || null);
+
+const selectedLatestReviewTask = computed(
+  () => selectedDetail.value?.latestReviewTask || null,
+);
+
+const selectedLatestRunSummary = computed(() => {
+  const run = selectedLatestRun.value;
+  if (!run) return "";
+  if (run.outputPreview) return cleanPlainText(run.outputPreview);
+  if (run.errorMessage) return cleanPlainText(run.errorMessage);
+  return `Latest run ${runStatusLabel(run.status).toLowerCase()}.`;
+});
 
 const selectedScheduleTrigger = computed(() => {
   const trigger = selectedDetail.value?.version?.trigger;
@@ -3236,13 +3271,36 @@ async function createStarterJob(recipe: AssistantJobRecipe) {
 
 async function runJob(job: AssistantJob) {
   await withBusy(`run:${job.id}`, async () => {
-    await api.post(`/assistant/jobs/${encodeURIComponent(job.id)}/run`);
+    const response = await api.post<AssistantJobRunNowResponse>(
+      `/assistant/jobs/${encodeURIComponent(job.id)}/run`,
+    );
     await loadJobs();
     if (detailModalOpen.value && selectedJobId.value === job.id) {
       await openJob(job.id);
     }
-    toastSuccess("Run started.");
+    const status = response.run?.status;
+    toastSuccess(
+      job.recipeId === "weekly-review" && status === "succeeded"
+        ? "Weekly Review created in Mission Control."
+        : status === "waiting_for_approval"
+          ? "Run is waiting for approval."
+          : status === "blocked" || status === "failed"
+            ? "Run could not complete."
+            : "Run complete.",
+    );
   });
+}
+
+function missionReviewTaskPath(task: AssistantJobReviewTask) {
+  const params = new URLSearchParams({ task: task.id });
+  if (task.projectId) params.set("project", task.projectId);
+  return `/mission-control/projects?${params.toString()}`;
+}
+
+function openLatestReviewTask(task: AssistantJobReviewTask) {
+  closeDetailModal();
+  closeConfigureJobsModal();
+  void router.push(missionReviewTaskPath(task));
 }
 
 async function toggleJob(job: AssistantJob) {
@@ -6078,6 +6136,32 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </dl>
 
             <section
+              v-if="selectedLatestRun || selectedLatestReviewTask"
+              class="job-result-strip"
+            >
+              <div class="job-result-strip__copy">
+                <strong>{{ selectedLatestRunSummary || "Latest run recorded." }}</strong>
+                <span v-if="selectedLatestRun">
+                  {{ runStatusLabel(selectedLatestRun.status) }} ·
+                  {{ formatDate(selectedLatestRun.finishedAt || selectedLatestRun.createdAt) }}
+                </span>
+              </div>
+              <Button
+                v-if="selectedJobIsWeeklyReview && selectedLatestReviewTask"
+                color="outline"
+                shape="soft"
+                size="compact"
+                type="button"
+                @click="openLatestReviewTask(selectedLatestReviewTask)"
+              >
+                <template #icon>
+                  <UiIcon name="ExternalLink" :size="16" />
+                </template>
+                Open latest review
+              </Button>
+            </section>
+
+            <section
               v-if="selectedJobIsInboxWatch"
               class="detail-section inbox-watch-settings"
               aria-labelledby="inbox-watch-rules-title"
@@ -8824,6 +8908,35 @@ button:disabled {
   line-height: 1.35;
 }
 
+.job-result-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 12px;
+  background: var(--ui-surface-muted);
+}
+
+.job-result-strip__copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.job-result-strip__copy strong {
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.job-result-strip__copy span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
 .detail-facts__schedule {
   display: flex;
   flex-wrap: wrap;
@@ -9389,6 +9502,11 @@ button:disabled {
   .detail-facts__meta {
     grid-template-columns: 1fr;
     row-gap: 8px;
+  }
+
+  .job-result-strip {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .briefing-settings__columns {

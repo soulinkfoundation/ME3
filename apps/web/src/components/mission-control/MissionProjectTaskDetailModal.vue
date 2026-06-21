@@ -151,19 +151,11 @@ function closeFromBackdrop() {
 
         <template v-if="weeklyReview">
           <div class="weekly-review-panel">
-            <p class="weekly-review-panel__summary">
-              {{ weeklyReview.summary }}
-            </p>
-
             <section class="weekly-review-panel__section">
               <div class="weekly-review-panel__section-header">
-                <h3>Open task cleanup</h3>
+                <h3>Open tasks</h3>
                 <span>{{ weeklyReview.openTasks.length }}</span>
               </div>
-              <p class="weekly-review-panel__hint">
-                Archive stale tasks or mark finished work done. Anything
-                untouched stays on the board.
-              </p>
               <div
                 v-if="weeklyReview.openTasks.length"
                 class="weekly-review-task-list"
@@ -226,8 +218,38 @@ function closeFromBackdrop() {
                 </div>
               </div>
               <p v-else class="weekly-review-panel__empty">
-                No open tasks to clean up.
+                No open tasks.
               </p>
+            </section>
+
+            <section class="weekly-review-panel__section">
+              <button
+                type="button"
+                class="weekly-review-collapse"
+                @click="
+                  emit(
+                    'update:weeklyReviewCompletedOpen',
+                    !weeklyReviewCompletedOpen,
+                  )
+                "
+              >
+                <span>
+                  Completed tasks
+                  ({{ weeklyReview.completedTasks.length }})
+                </span>
+                <UiIcon
+                  :name="
+                    weeklyReviewCompletedOpen ? 'ChevronUp' : 'ChevronDown'
+                  "
+                  :size="15"
+                />
+              </button>
+              <ul v-if="weeklyReviewCompletedOpen" class="weekly-review-list">
+                <li v-for="item in weeklyReview.completedTasks" :key="item.id">
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ projectName(projects, item.projectId) }}</span>
+                </li>
+              </ul>
             </section>
 
             <section class="weekly-review-panel__section">
@@ -239,11 +261,11 @@ function closeFromBackdrop() {
                 </span>
               </div>
               <label class="weekly-review-memory-field">
-                <span>Add one important fact or data point from this week</span>
                 <textarea
                   :value="weeklyReviewCustomMemory"
                   rows="3"
                   placeholder="e.g. A decision, preference, recurring pattern, or important context worth remembering"
+                  aria-label="Important memory"
                   :disabled="
                     weeklyReviewSubmitting ||
                     Boolean(weeklyReview.submittedAt)
@@ -277,82 +299,6 @@ function closeFromBackdrop() {
                   </span>
                 </label>
               </div>
-              <p v-else class="weekly-review-panel__empty">
-                No automatic memory suggestions met the stricter bar this week.
-              </p>
-            </section>
-
-            <section
-              v-if="weeklyReview.reminders.length"
-              class="weekly-review-panel__section"
-            >
-              <div class="weekly-review-panel__section-header">
-                <h3>Reminders</h3>
-                <span>
-                  {{ weeklyReviewReminderIds.size }} /
-                  {{ weeklyReview.reminders.length }}
-                  reschedule
-                </span>
-              </div>
-              <div class="weekly-review-checklist">
-                <label
-                  v-for="item in weeklyReview.reminders"
-                  :key="item.id"
-                  class="weekly-review-check"
-                >
-                  <input
-                    type="checkbox"
-                    :checked="weeklyReviewReminderIds.has(item.id)"
-                    :disabled="
-                      weeklyReviewSubmitting ||
-                      Boolean(weeklyReview.submittedAt)
-                    "
-                    @change="emit('toggle-weekly-review-reminder', item.id)"
-                  />
-                  <span>
-                    <strong>{{ item.title }}</strong>
-                    <small>
-                      {{
-                        item.remindAt ? formatShortDate(item.remindAt) : "Pending"
-                      }}
-                      / reschedule for tomorrow
-                    </small>
-                  </span>
-                </label>
-              </div>
-            </section>
-
-            <section
-              v-if="weeklyReview.completedTasks.length"
-              class="weekly-review-panel__section"
-            >
-              <button
-                type="button"
-                class="weekly-review-collapse"
-                @click="
-                  emit(
-                    'update:weeklyReviewCompletedOpen',
-                    !weeklyReviewCompletedOpen,
-                  )
-                "
-              >
-                <span>
-                  Completed this week
-                  ({{ weeklyReview.completedTasks.length }})
-                </span>
-                <UiIcon
-                  :name="
-                    weeklyReviewCompletedOpen ? 'ChevronUp' : 'ChevronDown'
-                  "
-                  :size="15"
-                />
-              </button>
-              <ul v-if="weeklyReviewCompletedOpen" class="weekly-review-list">
-                <li v-for="item in weeklyReview.completedTasks" :key="item.id">
-                  <strong>{{ item.title }}</strong>
-                  <span>{{ projectName(projects, item.projectId) }}</span>
-                </li>
-              </ul>
             </section>
 
             <p v-if="weeklyReview.submittedAt" class="weekly-review-panel__done">
@@ -687,18 +633,12 @@ function closeFromBackdrop() {
   min-width: 0;
 }
 
-.weekly-review-panel__summary,
 .weekly-review-panel__empty,
-.weekly-review-panel__done,
-.weekly-review-panel__hint {
+.weekly-review-panel__done {
   margin: 0;
   color: var(--ui-text-muted);
   font-size: 13px;
   line-height: 1.5;
-}
-
-.weekly-review-panel__hint {
-  font-size: 12px;
 }
 
 .weekly-review-panel__done {
@@ -836,17 +776,7 @@ function closeFromBackdrop() {
 
 .weekly-review-memory-field {
   display: grid;
-  gap: 6px;
   min-width: 0;
-  color: var(--ui-text);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.weekly-review-memory-field span {
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 650;
 }
 
 .weekly-review-memory-field textarea {

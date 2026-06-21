@@ -17,6 +17,7 @@ import {
   getMissionDaemonStatus,
   getMissionDashboard,
   getMissionSetup,
+  getMissionTaskDetail,
   getMissionWheel,
   listMissionAgentRuns,
   listMissionApprovals,
@@ -237,6 +238,19 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
         await createMissionTask(c.env, ownerId, await c.req.json().catch(() => ({}))),
         201,
       );
+    } catch (error) {
+      return missionControlErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/mission-control/tasks/:id", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireMissionControlPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      return c.json(await getMissionTaskDetail(c.env, ownerId, c.req.param("id")));
     } catch (error) {
       return missionControlErrorResponse(c, error);
     }
