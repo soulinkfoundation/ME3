@@ -2041,6 +2041,15 @@ onBeforeUnmount(() => {
               <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
               Availability
             </button>
+            <button
+              type="button"
+              class="cal-settings-menu-item"
+              role="menuitem"
+              @click="openCreateMode('import')"
+            >
+              <UiIcon name="RefreshCw" :size="16" aria-hidden="true" />
+              Sync calendar
+            </button>
           </div>
         </div>
         <div class="cal-mobile-create-wrap">
@@ -2075,9 +2084,6 @@ onBeforeUnmount(() => {
             </button>
             <button type="button" role="menuitem" @click="openCreateMode('birthday')">
               New birthday
-            </button>
-            <button type="button" role="menuitem" @click="openCreateMode('import')">
-              Sync calendar
             </button>
           </div>
         </div>
@@ -2187,6 +2193,15 @@ onBeforeUnmount(() => {
                 <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
                 Availability
               </button>
+              <button
+                type="button"
+                class="cal-settings-menu-item"
+                role="menuitem"
+                @click="openCreateMode('import')"
+              >
+                <UiIcon name="RefreshCw" :size="16" aria-hidden="true" />
+                Sync calendar
+              </button>
             </div>
           </div>
           <div class="cal-create-wrap">
@@ -2220,9 +2235,6 @@ onBeforeUnmount(() => {
               </button>
               <button type="button" role="menuitem" @click="openCreateMode('birthday')">
                 New birthday
-              </button>
-              <button type="button" role="menuitem" @click="openCreateMode('import')">
-                Sync calendar
               </button>
             </div>
           </div>
