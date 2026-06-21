@@ -525,6 +525,7 @@ describe("Core chat native context", () => {
         ...env,
         AI: { run: aiRun },
         ME3_AI_CHAT_MODEL: "@cf/qwen/qwen3-30b-a3b-fp8",
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
       } as never,
       createStorage(),
       dispatchInput("Are you working?"),
@@ -539,6 +540,105 @@ describe("Core chat native context", () => {
       model: "@cf/zai-org/glm-4.7-flash",
       source: "workers-ai",
     });
+    expect(response.trace?.modelCall).toMatchObject({
+      status: "succeeded",
+      providerId: "workers-ai",
+      model: "@cf/zai-org/glm-4.7-flash",
+      attempts: [
+        {
+          providerId: "workers-ai",
+          model: "@cf/qwen/qwen3-30b-a3b-fp8",
+          status: "empty",
+          error: "Model returned an empty reply.",
+        },
+        {
+          providerId: "workers-ai",
+          model: "@cf/zai-org/glm-4.7-flash",
+          status: "succeeded",
+          error: null,
+        },
+      ],
+    });
+    expect(response).not.toHaveProperty("modelAttempts");
+  });
+
+  it("falls back helpfully when configured model attempts return empty replies", async () => {
+    const aiRun = vi.fn(async (_model: string) => ({ response: "" }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_AI_CHAT_MODEL: "@cf/qwen/qwen3-30b-a3b-fp8",
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("Are you working?"),
+    );
+
+    expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
+      "@cf/qwen/qwen3-30b-a3b-fp8",
+      "@cf/zai-org/glm-4.7-flash",
+    ]);
+    expect(response).toMatchObject({
+      source: "fallback",
+      fallbackReason: "Model returned empty response",
+      debugError: expect.stringContaining("returned an empty reply"),
+    });
+    expect(response.replyText).toContain("returned an empty reply");
+    expect(response.replyText).toContain("backup model");
+    expect(response.trace?.modelCall).toMatchObject({
+      status: "failed",
+      attempts: [
+        { model: "@cf/qwen/qwen3-30b-a3b-fp8", status: "empty" },
+        { model: "@cf/zai-org/glm-4.7-flash", status: "empty" },
+      ],
+    });
+    expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
+    expect(response).not.toHaveProperty("modelAttempts");
+  });
+
+  it("falls back helpfully when configured model attempts fail", async () => {
+    const aiRun = vi.fn(async (_model: string) => {
+      throw new Error("Workers AI unavailable");
+    });
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_AI_CHAT_MODEL: "@cf/qwen/qwen3-30b-a3b-fp8",
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("Are you working?"),
+    );
+
+    expect(response).toMatchObject({
+      source: "fallback",
+      fallbackReason: "Model request failed",
+      debugError: "Workers AI unavailable",
+    });
+    expect(response.replyText).toContain("model provider failed");
+    expect(response.replyText).toContain("backup model");
+    expect(response.trace?.modelCall).toMatchObject({
+      status: "failed",
+      attempts: [
+        {
+          model: "@cf/qwen/qwen3-30b-a3b-fp8",
+          status: "failed",
+          error: "Workers AI unavailable",
+        },
+        {
+          model: "@cf/zai-org/glm-4.7-flash",
+          status: "failed",
+          error: "Workers AI unavailable",
+        },
+      ],
+    });
+    expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
   });
 
   it("keeps setup and capability exploration prompts in the model path", async () => {

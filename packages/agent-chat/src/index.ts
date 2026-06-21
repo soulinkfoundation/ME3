@@ -153,8 +153,16 @@ export type AgentSandboxDispatchResponse = {
   } | null;
   contentAction?: null;
   contactsChanged?: boolean;
+  modelAttempts?: AgentChatModelAttemptTrace[] | null;
   trace?: AgentChatTurnTrace | null;
   error?: string;
+};
+
+export type AgentChatModelAttemptTrace = {
+  providerId: AiProviderId;
+  model: string;
+  status: "succeeded" | "empty" | "failed";
+  error: string | null;
 };
 
 export type AgentChatTurnTrace = {
@@ -198,6 +206,7 @@ export type AgentChatTurnTrace = {
     model: string | null;
     fallbackReason: string | null;
     debugError: string | null;
+    attempts: AgentChatModelAttemptTrace[];
   };
   toolResult: {
     status: "not_attempted" | "succeeded" | "failed" | "clarified";
@@ -3475,61 +3484,123 @@ async function runModelTurn(
       ? [route.model, route.backupModel]
       : [route.model];
   let lastError: unknown = null;
+  const modelAttempts: AgentChatModelAttemptTrace[] = [];
 
-  try {
-    for (const model of attempts) {
-      try {
-        const attemptRoute = { ...route, model };
-        const replyText =
-          route.providerId === "openai"
-            ? await runOpenAi(attemptRoute, messages)
-            : route.providerId === "anthropic"
-              ? await runAnthropic(attemptRoute, messages)
-              : await runWorkersAi(attemptRoute, messages);
+  for (const model of attempts) {
+    try {
+      const attemptRoute = { ...route, model };
+      const replyText =
+        route.providerId === "openai"
+          ? await runOpenAi(attemptRoute, messages)
+          : route.providerId === "anthropic"
+            ? await runAnthropic(attemptRoute, messages)
+            : await runWorkersAi(attemptRoute, messages);
 
-        if (!isEmptyModelReply(replyText, attemptRoute)) {
-          return {
-            ok: true,
-            auditId: null,
-            turnId,
-            specialist: "core.agent-chat",
-            replyText,
-            model,
-            source: route.providerId,
-            fallbackReason: null,
-            debugError: null,
-            emailAction: null,
-            reminderAction: null,
-            contentAction: null,
-            contactsChanged: false,
-          };
-        }
-
-        lastError = new Error(replyText);
-      } catch (error) {
-        lastError = error;
+      if (!isEmptyModelReply(replyText, attemptRoute)) {
+        modelAttempts.push({
+          providerId: route.providerId,
+          model,
+          status: "succeeded",
+          error: null,
+        });
+        return {
+          ok: true,
+          auditId: null,
+          turnId,
+          specialist: "core.agent-chat",
+          replyText,
+          model,
+          source: route.providerId,
+          fallbackReason: null,
+          debugError: null,
+          emailAction: null,
+          reminderAction: null,
+          contentAction: null,
+          contactsChanged: false,
+          modelAttempts,
+        };
       }
+
+      const message = "Model returned an empty reply.";
+      modelAttempts.push({
+        providerId: route.providerId,
+        model,
+        status: "empty",
+        error: message,
+      });
+      lastError = new Error(emptyModelReply(attemptRoute));
+    } catch (error) {
+      const message = modelErrorMessage(error);
+      modelAttempts.push({
+        providerId: route.providerId,
+        model,
+        status: "failed",
+        error: message,
+      });
+      lastError = error;
     }
-    throw lastError instanceof Error ? lastError : new Error("Model request failed");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Model request failed";
-    return {
+  }
+
+  return modelFallbackResponse(route, turnId, modelAttempts, lastError);
+}
+
+function modelFallbackResponse(
+  route: AiRoute,
+  turnId: string,
+  modelAttempts: AgentChatModelAttemptTrace[],
+  lastError: unknown,
+): AgentSandboxDispatchResponse {
+  const onlyEmptyReplies =
+    modelAttempts.length > 0 && modelAttempts.every((attempt) => attempt.status === "empty");
+  const attemptedBackup = modelAttempts.some((attempt) => attempt.model !== route.model);
+  const debugError =
+    modelErrorMessage(lastError) ||
+    modelAttempts
+      .map((attempt) => attempt.error)
+      .filter(Boolean)
+      .join("; ") ||
+    "Model request failed";
+
+  return {
       ok: true,
       auditId: null,
       turnId,
       specialist: "core.agent-chat",
-      replyText:
-        "I reached the ME3 Core agent runtime, but the model call failed. Check your AI provider settings and try again.",
+      replyText: onlyEmptyReplies
+        ? [
+            "I reached the configured AI model, but it returned an empty reply.",
+            attemptedBackup
+              ? "I also tried the backup model, but it did not return usable text."
+              : null,
+            "Try another model, or check Account > AI model before trying again.",
+          ]
+            .filter(Boolean)
+            .join(" ")
+        : [
+            "I reached the ME3 Core agent runtime, but the model provider failed before it could answer.",
+            attemptedBackup
+              ? "I also tried the backup model and it failed too."
+              : null,
+            "Check your AI provider settings or try another model.",
+          ]
+            .filter(Boolean)
+            .join(" "),
       model: route.model,
       source: "fallback",
-      fallbackReason: "Model request failed",
-      debugError: message,
+      fallbackReason: onlyEmptyReplies
+        ? "Model returned empty response"
+        : "Model request failed",
+      debugError,
       emailAction: null,
       reminderAction: null,
       contentAction: null,
       contactsChanged: false,
-    };
-  }
+      modelAttempts,
+  };
+}
+
+function modelErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : typeof error === "string" ? error : "";
 }
 
 async function runOpenAi(
@@ -3961,8 +4032,9 @@ function attachAgentTurnTrace(
   },
 ): AgentSandboxDispatchResponse {
   if (!isAgentChatTraceEnabled(env)) return removeAgentTurnTrace(response);
+  const { modelAttempts: _modelAttempts, ...publicResponse } = response;
   return {
-    ...response,
+    ...publicResponse,
     trace: buildAgentTurnTrace(response, input),
   };
 }
@@ -3977,7 +4049,7 @@ function applyAgentTurnTracePolicy(
 function removeAgentTurnTrace(
   response: AgentSandboxDispatchResponse,
 ): AgentSandboxDispatchResponse {
-  const { trace: _trace, ...withoutTrace } = response;
+  const { trace: _trace, modelAttempts: _modelAttempts, ...withoutTrace } = response;
   return withoutTrace;
 }
 
@@ -4025,6 +4097,7 @@ function buildAgentTurnTrace(
       model: response.model ?? input.route?.model ?? null,
       fallbackReason: response.fallbackReason ?? null,
       debugError: response.debugError ?? null,
+      attempts: response.modelAttempts ?? [],
     },
     toolResult: {
       status: toolResultTraceStatus(response, input.plannerDecision),
@@ -4092,7 +4165,12 @@ function modelCallTraceStatus(
   ) {
     return "succeeded";
   }
-  if (response.fallbackReason === "Model request failed") return "failed";
+  if (
+    response.fallbackReason === "Model request failed" ||
+    response.fallbackReason === "Model returned empty response"
+  ) {
+    return "failed";
+  }
   return "fallback";
 }
 
@@ -4878,7 +4956,7 @@ async function touchAssistantThread(
 }
 
 function isProviderSetupFallbackMessage(content: string): boolean {
-  return /add an AI provider in Account settings|AI provider setup required|bind Workers AI/i.test(
+  return /add an AI provider in Account settings|AI provider setup required|bind Workers AI|model provider failed|returned an empty reply/i.test(
     content,
   );
 }
