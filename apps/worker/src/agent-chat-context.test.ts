@@ -909,6 +909,16 @@ describe("Core chat native context", () => {
         kind: "created",
         title: "follow up with Sam",
       },
+      actionCards: [
+        {
+          kind: "reminder.created",
+          capabilityId: "core.reminders.create",
+          title: "Reminder created",
+          status: "complete",
+          statusLabel: "Complete",
+          primaryAction: { label: "Open calendar", href: "/calendar" },
+        },
+      ],
     });
     expect(response.replyText).toContain("Done. I set a reminder");
     expect(env.state.reminders).toHaveLength(1);
@@ -918,6 +928,9 @@ describe("Core chat native context", () => {
       timezone: "Europe/Dublin",
       status: "pending",
     });
+    expect(response.actionCards?.[0]?.records).toEqual([
+      { kind: "reminder", id: env.state.reminders[0].id },
+    ]);
     expect(env.state.persistedMessages.map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -1411,6 +1424,17 @@ describe("Core chat mailbox draft continuations", () => {
       text_body: "Hi Ada,\n\nHere is a concise update on the workflow notes.\n\nThanks,\nKieran",
       created_by: "agent",
     });
+    expect(saved.actionCards).toEqual([
+      expect.objectContaining({
+        kind: "mailbox.draft_saved",
+        capabilityId: "core.mailbox.draft",
+        title: "Email draft saved",
+        status: "pending_approval",
+        statusLabel: "Needs review",
+        records: [{ kind: "mailbox_draft", id: env.state.mailboxMessages[0].id }],
+        primaryAction: { label: "Review draft", href: "/email" },
+      }),
+    ]);
   });
 });
 

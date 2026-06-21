@@ -714,6 +714,49 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const updateIntent = isAssistantSiteUpdateIntent(messageText);
     const refinementIntent = isAssistantSiteRefinementIntent(messageText);
     const draftSaveIntent = isAssistantSiteDraftSaveIntent(messageText);
+    const retryIntent = isAssistantSiteRetryIntent(messageText);
+
+    if (retryIntent) {
+      const site = await chooseAssistantSiteForMessage(env, ownerId, messageText);
+      if (site) {
+        const draft = await createAssistantSiteDraftFromRecentThread(
+          env,
+          ownerId,
+          site,
+          threadId,
+          messageText,
+          selectedModel,
+        );
+        if (draft) {
+          const unavailable = await getUnavailableAssistantSiteFeatureForDraft(
+            env,
+            ownerId,
+            site,
+            draft,
+          );
+          if (unavailable) {
+            return unavailableAssistantSiteFeatureAction(env, site, unavailable, requestUrl);
+          }
+          await saveAssistantSiteUpdateDraft(env, draft);
+          return {
+            specialist: "core.sites.update_draft",
+            replyText: formatAssistantSiteDraftReply(draft, env, site, requestUrl),
+            siteAction: {
+              kind: "draft_created",
+              siteId: site.id,
+              username: site.username,
+              pending: true,
+              published: false,
+              files: assistantSiteDraftChangedFiles(draft),
+              postTitle: draft.changes.postTitle || null,
+              url: getAssistantSiteAdminUrl(env, site, requestUrl),
+            },
+            model: draft.changes.generatedBy?.model || null,
+            source: assistantSiteToolSourceFromDraft(draft),
+          };
+        }
+      }
+    }
 
     if (approvalIntent) {
       const action = await maybePublishAssistantSiteDraft(
@@ -791,7 +834,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           await saveAssistantSiteUpdateDraft(env, draft);
           return {
             specialist: "core.sites.update_draft",
-            replyText: formatAssistantSiteDraftReply(draft),
+            replyText: formatAssistantSiteDraftReply(draft, env, site, requestUrl),
             siteAction: {
               kind: "draft_created",
               siteId: site.id,
@@ -863,7 +906,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     await saveAssistantSiteUpdateDraft(env, draft);
     return {
       specialist: "core.sites.update_draft",
-      replyText: formatAssistantSiteDraftReply(draft),
+      replyText: formatAssistantSiteDraftReply(draft, env, site, requestUrl),
       siteAction: {
         kind: "draft_created",
         siteId: site.id,
@@ -952,6 +995,19 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (!text) return false;
     return /\b(save|keep|store)\b.*\b(draft|site update|blog post|post|article)\b/.test(text) ||
       /\b(save it as a draft|save this as a draft|save that as a draft)\b/.test(text);
+  }
+
+  function isAssistantSiteRetryIntent(messageText: string): boolean {
+    const text = normalizeAssistantIntentText(messageText);
+    if (!text) return false;
+    if (
+      /\b(publish|approve|make it live|ship it|send it|just do it|go ahead)\b/.test(
+        text,
+      )
+    ) {
+      return false;
+    }
+    return /\b(try again|enabled it|enabled blog|enabled the blog|turned it on|turned blog on|blog is enabled)\b/.test(text);
   }
 
   function isAssistantSiteRefinementIntent(messageText: string): boolean {
@@ -1262,8 +1318,8 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       specialist: "core.sites.update_draft",
       replyText:
         feature === "blog"
-          ? `I cannot draft a blog post for @${site.username} yet because Blog is not enabled on that site. Enable Blog in the site builder's Additional features step, then ask me again.`
-          : `I cannot draft that site update for @${site.username} yet because the required site feature is not enabled.`,
+          ? "I cannot draft a blog post yet because Blog is not enabled for your site. Enable Blog in the site builder's Additional features step, then ask me again."
+          : "I cannot draft that site update yet because the required site feature is not enabled for your site.",
       siteAction: {
         kind: "unsupported_feature",
         siteId: site.id,
@@ -2000,15 +2056,19 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     return Array.from(files);
   }
 
-  function formatAssistantSiteDraftReply(draft: AssistantSiteUpdateDraft): string {
-    const parts = [`I drafted the site update for @${draft.siteUsername}.`];
+  function formatAssistantSiteDraftReply(
+    draft: AssistantSiteUpdateDraft,
+    env: Env,
+    site: DbSite,
+    requestUrl: string,
+  ): string {
+    const parts = ["Draft saved. I updated your site draft."];
     if (draft.changes.aboutFile) {
       parts.push(`About page: added a new paragraph to ${draft.changes.aboutFile}.`);
     }
     if (draft.changes.postTitle && draft.changes.postFile) {
-      parts.push(
-        `Blog: added ${draft.changes.postDraft ? "draft " : ""}"${draft.changes.postTitle}" at ${draft.changes.postFile}.`,
-      );
+      const label = draft.changes.postDraft ? "Blog draft title" : "Blog title";
+      parts.push(`${label}: "${draft.changes.postTitle}".`);
     }
     if (draft.changes.pageFiles?.length) {
       parts.push(`Pages: updated ${draft.changes.pageFiles.join(", ")}.`);
@@ -2018,12 +2078,14 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     } else if (draft.changes.generatedBy?.model) {
       parts.push(`Generated with ${draft.changes.generatedBy.model}.`);
     }
+    const url = getAssistantSiteAdminUrl(env, site, requestUrl);
+    if (url) parts.push(`Review it in your site dashboard: ${url}`);
     parts.push("Reply `publish` to publish it now, or tell me what to change.");
     return parts.join("\n\n");
   }
 
   function formatAssistantSiteRefinedReply(draft: AssistantSiteUpdateDraft): string {
-    const parts = [`I updated the pending draft for @${draft.siteUsername}.`];
+    const parts = ["I updated your pending site draft."];
     if (draft.changes.aboutFile) parts.push(`About page: revised ${draft.changes.aboutFile}.`);
     if (draft.changes.postTitle && draft.changes.postFile) {
       parts.push(`Blog: revised "${draft.changes.postTitle}" at ${draft.changes.postFile}.`);
@@ -2043,11 +2105,25 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     draft: AssistantSiteUpdateDraft,
     requestUrl: string,
   ): string {
-    const parts = [`Published. I updated @${site.username}.`];
+    const postIsDraft = draft.changes.postDraft === true && Boolean(draft.changes.postTitle);
+    const parts = [
+      postIsDraft
+        ? "Saved. I updated your site with a blog draft."
+        : "Published. I updated your site.",
+    ];
     if (draft.changes.aboutFile) parts.push(`About page: ${draft.changes.aboutFile}.`);
-    if (draft.changes.postTitle) parts.push(`Blog: "${draft.changes.postTitle}".`);
+    if (draft.changes.postTitle) {
+      const label = postIsDraft ? "Blog draft title" : "Blog title";
+      parts.push(`${label}: "${draft.changes.postTitle}".`);
+    }
     const url = getAssistantSiteAdminUrl(env, site, requestUrl);
-    if (url) parts.push(`View it at ${url}`);
+    if (url) {
+      parts.push(
+        postIsDraft
+          ? `Review it in your site dashboard: ${url}`
+          : `Open your site dashboard: ${url}`,
+      );
+    }
     return parts.join("\n\n");
   }
 

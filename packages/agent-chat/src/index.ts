@@ -127,6 +127,42 @@ export type AgentChatModelSelection = {
   optionId?: string | null;
 };
 
+export type AgentChatActionCardStatus =
+  | "draft"
+  | "pending_approval"
+  | "pending"
+  | "complete"
+  | "failed";
+
+export type AgentChatActionCardField = {
+  label: string;
+  value: string;
+};
+
+export type AgentChatActionCardLink = {
+  label: string;
+  href: string;
+};
+
+export type AgentChatActionCardRecord = {
+  kind: "mailbox_draft" | "reminder";
+  id: string;
+};
+
+export type AgentChatActionCard = {
+  id: string;
+  kind: "mailbox.draft_saved" | "reminder.created";
+  capabilityId: string;
+  title: string;
+  summary: string | null;
+  status: AgentChatActionCardStatus;
+  statusLabel: string;
+  changed: AgentChatActionCardField[];
+  records: AgentChatActionCardRecord[];
+  primaryAction: AgentChatActionCardLink | null;
+  secondaryActions: AgentChatActionCardLink[];
+};
+
 export type AgentSandboxDispatchResponse = {
   ok: boolean;
   auditId: string | null;
@@ -151,6 +187,7 @@ export type AgentSandboxDispatchResponse = {
     title?: string;
     remindAt?: string;
   } | null;
+  actionCards?: AgentChatActionCard[] | null;
   contentAction?: null;
   contactsChanged?: boolean;
   modelAttempts?: AgentChatModelAttemptTrace[] | null;
@@ -1806,6 +1843,7 @@ export async function dispatchAgentSandboxTurn(
       debugError: null,
       emailAction: null,
       reminderAction: null,
+      actionCards: null,
       contentAction: null,
       contactsChanged: false,
     };
@@ -1964,6 +2002,13 @@ async function maybeHandleCoreToolTurn(
           kind: "drafted",
           draftId: draft.draft.id,
         },
+        actionCards: [
+          buildMailboxDraftSavedActionCard(
+            draft.draft,
+            draftPlan.input.toAddress,
+            draftPlan.input.subject,
+          ),
+        ],
       },
     );
   }
@@ -2012,6 +2057,7 @@ async function maybeHandleCoreToolTurn(
           title: reminder.title,
           remindAt: reminder.remindAt,
         },
+        actionCards: [buildReminderCreatedActionCard(reminder)],
       },
     );
   }
@@ -2041,7 +2087,11 @@ function toolResponse(
   options: Partial<
     Pick<
       AgentSandboxDispatchResponse,
-      "fallbackReason" | "debugError" | "emailAction" | "reminderAction"
+      | "fallbackReason"
+      | "debugError"
+      | "emailAction"
+      | "reminderAction"
+      | "actionCards"
     >
   > = {},
 ): AgentSandboxDispatchResponse {
@@ -2057,8 +2107,59 @@ function toolResponse(
     debugError: options.debugError ?? null,
     emailAction: options.emailAction ?? null,
     reminderAction: options.reminderAction ?? null,
+    actionCards: options.actionCards ?? null,
     contentAction: null,
     contactsChanged: false,
+  };
+}
+
+function buildMailboxDraftSavedActionCard(
+  draft: AgentMailboxMessage,
+  fallbackToAddress: unknown,
+  fallbackSubject: unknown,
+): AgentChatActionCard {
+  const toAddress = draft.toAddress || normalizeNullableText(fallbackToAddress) || "Unknown";
+  const subject = draft.subject || normalizeNullableText(fallbackSubject) || "(no subject)";
+  return {
+    id: `mailbox-draft:${draft.id}`,
+    kind: "mailbox.draft_saved",
+    capabilityId: "core.mailbox.draft",
+    title: "Email draft saved",
+    summary: "Saved to mailbox drafts for review. It has not been sent.",
+    status: "pending_approval",
+    statusLabel: "Needs review",
+    changed: [
+      { label: "Draft", value: "Saved in mailbox" },
+      { label: "To", value: toAddress },
+      { label: "Subject", value: subject },
+      { label: "Status", value: "Not sent" },
+    ],
+    records: [{ kind: "mailbox_draft", id: draft.id }],
+    primaryAction: { label: "Review draft", href: "/email" },
+    secondaryActions: [],
+  };
+}
+
+function buildReminderCreatedActionCard(reminder: AgentReminder): AgentChatActionCard {
+  return {
+    id: `reminder:${reminder.id}`,
+    kind: "reminder.created",
+    capabilityId: "core.reminders.create",
+    title: "Reminder created",
+    summary: reminder.title,
+    status: "complete",
+    statusLabel: "Complete",
+    changed: [
+      { label: "Reminder", value: reminder.title },
+      {
+        label: "When",
+        value: formatAgentDateTime(reminder.remindAt, reminder.timezone),
+      },
+      { label: "Status", value: "Pending reminder" },
+    ],
+    records: [{ kind: "reminder", id: reminder.id }],
+    primaryAction: { label: "Open calendar", href: "/calendar" },
+    secondaryActions: [],
   };
 }
 
@@ -3515,6 +3616,7 @@ async function runModelTurn(
           debugError: null,
           emailAction: null,
           reminderAction: null,
+          actionCards: null,
           contentAction: null,
           contactsChanged: false,
           modelAttempts,
@@ -3593,6 +3695,7 @@ function modelFallbackResponse(
       debugError,
       emailAction: null,
       reminderAction: null,
+      actionCards: null,
       contentAction: null,
       contactsChanged: false,
       modelAttempts,

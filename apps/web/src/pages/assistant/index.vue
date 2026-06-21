@@ -19,7 +19,10 @@ import { useAppToast } from "../../composables/useAppToast";
 import {
   formatAgentRuntimeDetail,
   formatAgentRuntimeMetadata,
+  normalizeAgentActionCards,
   resolveAgentReplyText,
+  resolveAgentSiteActionLink,
+  type AgentChatActionCard,
 } from "../../utils/agentChat";
 import { renderAssistantMarkdown } from "../../utils/assistantMarkdown";
 import {
@@ -380,9 +383,10 @@ type AgentSandboxResponse = {
   contextManifest?: unknown;
   emailAction?: {
     kind: "drafted" | "sent";
-    messageId: string;
-    to: string;
-    subject: string;
+    draftId?: string;
+    messageId?: string;
+    to?: string;
+    subject?: string;
   } | null;
   reminderAction?: {
     kind: "created" | "updated" | "cancelled" | "dismissed" | "listed";
@@ -390,10 +394,25 @@ type AgentSandboxResponse = {
     title?: string;
     remindAt?: string;
   } | null;
+  actionCards?: AgentChatActionCard[] | null;
   contentAction?: {
     kind: "previewed" | "saved";
     itemId?: string;
     platforms?: Array<"x" | "linkedin" | "instagram" | "instagram_business">;
+  } | null;
+  siteAction?: {
+    kind:
+      | "draft_created"
+      | "draft_refined"
+      | "published"
+      | "approval_status"
+      | "missing_site"
+      | "unsupported_feature"
+      | "listed_blog_posts";
+    url?: string | null;
+    postTitle?: string | null;
+    pending?: boolean;
+    published?: boolean;
   } | null;
   jobBuilderAction?: AssistantJobBuilderAction | null;
   contactsChanged?: boolean;
@@ -2479,15 +2498,19 @@ function applyAssistantResultToMessage(
     showRuntimeMetadata: import.meta.env.DEV,
   });
   message.detail = formatAgentRuntimeDetail(result);
+  message.actionCards = normalizeAgentActionCards(result.actionCards);
   message.inboxLink = result.emailAction?.kind === "drafted";
   message.rolodexLink = result.contactsChanged === true;
   message.reminderLink =
     result.reminderAction?.kind === "created" ||
     result.reminderAction?.kind === "updated";
+  const siteActionLink = resolveAgentSiteActionLink(result);
   message.actionHref =
-    result.contentAction?.kind === "saved" ? "/assistant" : null;
+    siteActionLink?.href ||
+    (result.contentAction?.kind === "saved" ? "/assistant" : null);
   message.actionLabel =
-    result.contentAction?.kind === "saved" ? "Open content bank" : null;
+    siteActionLink?.label ||
+    (result.contentAction?.kind === "saved" ? "Open content bank" : null);
   message.jobBuilderAction = result.jobBuilderAction || null;
 }
 
@@ -4589,10 +4612,86 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </div>
               </div>
               <div
+                v-if="message.actionCards?.length"
+                class="assistant-action-card-list"
+                aria-label="Assistant actions"
+              >
+                <article
+                  v-for="card in message.actionCards"
+                  :key="card.id"
+                  class="assistant-action-card"
+                  :class="`assistant-action-card--${card.status}`"
+                >
+                  <div class="assistant-action-card__header">
+                    <div class="assistant-action-card__title">
+                      <span class="assistant-action-card__icon" aria-hidden="true">
+                        <UiIcon
+                          :name="
+                            card.kind === 'mailbox.draft_saved'
+                              ? 'Mail'
+                              : card.kind === 'reminder.created'
+                                ? 'Bell'
+                                : 'CircleCheck'
+                          "
+                          :size="16"
+                        />
+                      </span>
+                      <div>
+                        <h3>{{ card.title }}</h3>
+                        <p v-if="card.summary">{{ card.summary }}</p>
+                      </div>
+                    </div>
+                    <span
+                      class="assistant-action-card__status"
+                      :class="`assistant-action-card__status--${card.status}`"
+                    >
+                      {{ card.statusLabel }}
+                    </span>
+                  </div>
+                  <dl
+                    v-if="card.changed.length"
+                    class="assistant-action-card__facts"
+                  >
+                    <div
+                      v-for="field in card.changed"
+                      :key="`${card.id}:${field.label}:${field.value}`"
+                    >
+                      <dt>{{ field.label }}</dt>
+                      <dd>{{ field.value }}</dd>
+                    </div>
+                  </dl>
+                  <div
+                    v-if="
+                      card.primaryAction || card.secondaryActions.length > 0
+                    "
+                    class="assistant-action-card__actions"
+                  >
+                    <a
+                      v-if="card.primaryAction"
+                      class="assistant-action-card__button assistant-action-card__button--primary"
+                      :href="card.primaryAction.href"
+                    >
+                      <UiIcon name="ArrowRight" :size="15" aria-hidden="true" />
+                      <span>{{ card.primaryAction.label }}</span>
+                    </a>
+                    <a
+                      v-for="action in card.secondaryActions"
+                      :key="`${card.id}:${action.href}:${action.label}`"
+                      class="assistant-action-card__button"
+                      :href="action.href"
+                    >
+                      <UiIcon name="ArrowRight" :size="15" aria-hidden="true" />
+                      <span>{{ action.label }}</span>
+                    </a>
+                  </div>
+                </article>
+              </div>
+              <div
                 v-if="
-                  message.inboxLink ||
-                  message.reminderLink ||
-                  (message.actionHref && message.actionLabel)
+                  !message.actionCards?.length &&
+                  (message.inboxLink ||
+                    message.reminderLink ||
+                    (message.actionHref && message.actionLabel))
                 "
                 class="assistant-message__actions"
               >
@@ -7116,6 +7215,175 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font-size: 12px;
   font-weight: 800;
   text-decoration: none;
+}
+
+.assistant-action-card-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.assistant-action-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 14px;
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.assistant-action-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-action-card__title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.assistant-action-card__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid color-mix(in oklab, var(--ui-accent) 34%, var(--ui-border));
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+}
+
+.assistant-action-card__title h3,
+.assistant-action-card__title p {
+  margin: 0;
+}
+
+.assistant-action-card__title h3 {
+  color: var(--ui-text);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.assistant-action-card__title p {
+  margin-top: 3px;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.assistant-action-card__status {
+  flex: 0 0 auto;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.assistant-action-card__status--complete {
+  border-color: color-mix(in oklab, var(--ui-accent) 36%, var(--ui-border));
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+}
+
+.assistant-action-card__status--draft,
+.assistant-action-card__status--pending,
+.assistant-action-card__status--pending_approval {
+  border-color: color-mix(in oklab, #c08a18 44%, var(--ui-border));
+  background: color-mix(in oklab, #c08a18 12%, var(--ui-surface));
+  color: color-mix(in oklab, #9a6400 78%, var(--ui-text));
+}
+
+.assistant-action-card__status--failed {
+  border-color: color-mix(in oklab, #c73939 42%, var(--ui-border));
+  background: color-mix(in oklab, #c73939 12%, var(--ui-surface));
+  color: color-mix(in oklab, #a32323 80%, var(--ui-text));
+}
+
+.assistant-action-card__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 9px 14px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.assistant-action-card__facts div {
+  min-width: 0;
+}
+
+.assistant-action-card__facts dt,
+.assistant-action-card__facts dd {
+  margin: 0;
+}
+
+.assistant-action-card__facts dt {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.assistant-action-card__facts dd {
+  margin-top: 2px;
+  color: var(--ui-text);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.assistant-action-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.assistant-action-card__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 0 13px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  transition:
+    border-color 0.14s ease,
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.assistant-action-card__button:hover {
+  border-color: color-mix(in oklab, var(--ui-accent) 42%, var(--ui-border));
+  background: var(--ui-surface-muted);
+}
+
+.assistant-action-card__button--primary {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
+}
+
+.assistant-action-card__button--primary:hover {
+  background: color-mix(in oklab, var(--ui-accent) 88%, var(--ui-text));
+  color: var(--ui-accent-contrast);
 }
 
 .job-builder-card {

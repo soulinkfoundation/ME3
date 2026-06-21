@@ -6,7 +6,10 @@ import { useAgentChat } from "../composables/useAgentChat";
 import {
   formatAgentRuntimeDetail,
   formatAgentRuntimeMetadata,
+  normalizeAgentActionCards,
   resolveAgentReplyText,
+  resolveAgentSiteActionLink,
+  type AgentChatActionCard,
 } from "../utils/agentChat";
 import { renderAssistantMarkdown } from "../utils/assistantMarkdown";
 import UiIcon from "./UiIcon.vue";
@@ -32,9 +35,10 @@ type AgentSandboxResponse = {
   contextManifest?: unknown;
   emailAction?: {
     kind: "drafted" | "sent";
-    messageId: string;
-    to: string;
-    subject: string;
+    draftId?: string;
+    messageId?: string;
+    to?: string;
+    subject?: string;
   } | null;
   reminderAction?: {
     kind: "created" | "updated" | "cancelled" | "dismissed" | "listed";
@@ -42,10 +46,25 @@ type AgentSandboxResponse = {
     title?: string;
     remindAt?: string;
   } | null;
+  actionCards?: AgentChatActionCard[] | null;
   contentAction?: {
     kind: "previewed" | "saved";
     itemId?: string;
     platforms?: Array<"x" | "linkedin" | "instagram" | "instagram_business">;
+  } | null;
+  siteAction?: {
+    kind:
+      | "draft_created"
+      | "draft_refined"
+      | "published"
+      | "approval_status"
+      | "missing_site"
+      | "unsupported_feature"
+      | "listed_blog_posts";
+    url?: string | null;
+    postTitle?: string | null;
+    pending?: boolean;
+    published?: boolean;
   } | null;
   contactsChanged?: boolean;
   error?: string;
@@ -134,19 +153,24 @@ async function sendMessage() {
     });
 
     const replyText = resolveAgentReplyText(result.replyText);
+    const siteActionLink = resolveAgentSiteActionLink(result);
     agentChat.appendMessage({
       role: "assistant",
       text: replyText,
       meta: formatMetadata(result),
       detail: formatDetail(result),
+      actionCards: normalizeAgentActionCards(result.actionCards),
       inboxLink: result.emailAction?.kind === "drafted",
       rolodexLink: result.contactsChanged === true,
       reminderLink:
         result.reminderAction?.kind === "created" ||
         result.reminderAction?.kind === "updated",
-      actionHref: result.contentAction?.kind === "saved" ? "/assistant" : null,
+      actionHref:
+        siteActionLink?.href ||
+        (result.contentAction?.kind === "saved" ? "/assistant" : null),
       actionLabel:
-        result.contentAction?.kind === "saved" ? "Open content bank" : null,
+        siteActionLink?.label ||
+        (result.contentAction?.kind === "saved" ? "Open content bank" : null),
     });
   } catch (cause: any) {
     const message = cause?.message || "Failed to reach ME3 right now";
