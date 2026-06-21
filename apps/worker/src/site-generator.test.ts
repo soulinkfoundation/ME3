@@ -48,6 +48,23 @@ describe("site generator", () => {
     expect(files["index.html"]).not.toContain("County Cork, Eire / Ireland");
   });
 
+  it("uses custom link labels for platform icons", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Links Site",
+        links: {
+          custom_youtube: "kieranbutler",
+          custom_youtube_label: "Youtube",
+        },
+      },
+      [],
+    );
+
+    expect(files["index.html"]).toContain('aria-label="Youtube"');
+    expect(files["index.html"]).toContain("M23.498 6.186");
+  });
+
   it("renders escaped markdown links and images as html", async () => {
     const files = await generateSiteHtml(
       {

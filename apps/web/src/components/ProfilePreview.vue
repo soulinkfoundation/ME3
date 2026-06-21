@@ -106,10 +106,11 @@ watch(
 );
 
 // Get platform icon (SVG path or UiIcon name)
-function getPlatformIcon(platform: string): string {
+function getPlatformIcon(platform: string, label = ""): string {
   const config = getPlatformConfig(platform);
-  if (config) return config.icon;
-  return PLATFORM_ICONS.link;
+  const labelConfig = getPlatformConfig(label.toLowerCase());
+  if (config && config.key !== "website") return config.icon;
+  return labelConfig?.icon || config?.icon || PLATFORM_ICONS.link;
 }
 
 function formatLinkHref(platform: string, value: string): string {
@@ -126,6 +127,9 @@ function formatLinkHref(platform: string, value: string): string {
 }
 
 function formatLinkLabel(platform: string, value: string): string {
+  const customLabel = props.profile.links?.[`${platform}_label`];
+  if (customLabel) return customLabel;
+
   if (value.startsWith("http://") || value.startsWith("https://")) {
     try {
       return new URL(value).hostname.replace("www.", "");
@@ -174,7 +178,8 @@ const parsedBio = computed(() => parseInlineMarkdown(props.profile.bio || ""));
 
 const visibleLinks = computed(() =>
   Object.entries(props.profile.links || {}).filter(
-    ([key, value]) => !key.startsWith("_") && value && value.trim(),
+    ([key, value]) =>
+      !key.startsWith("_") && !key.endsWith("_label") && value && value.trim(),
   ),
 );
 
@@ -1614,8 +1619,8 @@ const vibeCss = computed(() => {
           >
             <span class="link-icon">
               <UiIcon
-                v-if="isUiIconName(getPlatformIcon(platform))"
-                :name="getPlatformIcon(platform) as UiIconName"
+                v-if="isUiIconName(getPlatformIcon(platform, formatLinkLabel(platform, value)))"
+                :name="getPlatformIcon(platform, formatLinkLabel(platform, value)) as UiIconName"
                 :size="20"
               />
               <svg
@@ -1625,7 +1630,7 @@ const vibeCss = computed(() => {
                 width="20"
                 height="20"
               >
-                <path :d="getPlatformIcon(platform)" />
+                <path :d="getPlatformIcon(platform, formatLinkLabel(platform, value))" />
               </svg>
             </span>
             <span class="link-label">{{
