@@ -149,6 +149,21 @@ export async function updateJournalDay(
   return { entry: serializeEntry(saved) };
 }
 
+export async function deleteJournalDay(env: Env, userId: string, date: string) {
+  const normalizedDate = requireDateKey(date);
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `UPDATE journal_entries
+     SET archived_at = ?, updated_at = ?
+     WHERE user_id = ? AND entry_date = ? AND archived_at IS NULL`,
+  )
+    .bind(now, now, userId, normalizedDate)
+    .run();
+
+  return { ok: true };
+}
+
 export async function listJournalArchive(
   env: Env,
   userId: string,

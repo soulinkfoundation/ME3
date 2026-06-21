@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getJournalDay, listJournalArchive, updateJournalDay } from "./journal";
+import {
+  deleteJournalDay,
+  getJournalDay,
+  listJournalArchive,
+  updateJournalDay,
+} from "./journal";
 import type { Env } from "./types";
 
 type StoredJournalRow = {
@@ -47,6 +52,20 @@ function createJournalEnv(rows: StoredJournalRow[] = []) {
               return { results: results as T[] };
             },
             async run() {
+              if (sql.includes("UPDATE journal_entries")) {
+                const [archivedAt, updatedAt, userId, date] = values as string[];
+                const existing = rows.find(
+                  (row) =>
+                    row.user_id === userId &&
+                    row.entry_date === date &&
+                    row.archived_at === null,
+                );
+                if (existing) {
+                  existing.archived_at = archivedAt;
+                  existing.updated_at = updatedAt;
+                }
+                return {};
+              }
               if (!sql.includes("INSERT INTO journal_entries")) return {};
               const [id, userId, date, title, body, bodyFormat, createdAt, updatedAt] =
                 values as string[];
@@ -168,6 +187,34 @@ describe("Journal plugin entries", () => {
         { id: "new", title: "Newer", preview: "A newer entry." },
         { id: "old", title: null, preview: "Older entry" },
       ],
+    });
+  });
+
+  it("soft-deletes an entry from day reads and archive lists", async () => {
+    const env = createJournalEnv([
+      {
+        id: "entry",
+        user_id: "owner",
+        entry_date: "2026-05-24",
+        title: "Delete me",
+        body: "<p>Gone soon.</p>",
+        body_format: "html",
+        metadata_json: "{}",
+        created_at: "2026-05-24T09:00:00Z",
+        updated_at: "2026-05-24T09:00:00Z",
+        archived_at: null,
+      },
+    ]);
+
+    await expect(
+      deleteJournalDay(env, "owner", "2026-05-24"),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(getJournalDay(env, "owner", "2026-05-24")).resolves.toEqual({
+      entry: null,
+    });
+    await expect(listJournalArchive(env, "owner")).resolves.toEqual({
+      entries: [],
     });
   });
 });

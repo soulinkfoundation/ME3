@@ -47,9 +47,12 @@ const description = ref("");
 const loadedEntry = ref<JournalEntry | null>(null);
 const archiveEntries = ref<JournalArchiveEntry[]>([]);
 const archiveOpen = ref(false);
+const archiveMobileDetailOpen = ref(false);
 const archiveLoaded = ref(false);
 const loading = ref(false);
 const archiveLoading = ref(false);
+const archiveActionDate = ref<string | null>(null);
+const deletingDate = ref("");
 const error = ref("");
 const saveState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const hydratingEntry = ref(false);
@@ -261,6 +264,14 @@ async function loadArchive() {
   }
 }
 
+function closeArchiveActions() {
+  archiveActionDate.value = null;
+}
+
+function toggleArchiveActions(date: string) {
+  archiveActionDate.value = archiveActionDate.value === date ? null : date;
+}
+
 async function setDate(date: string) {
   const normalized = normalizeLocalDateInput(date);
   if (!normalized || normalized === selectedDate.value) return;
@@ -269,6 +280,60 @@ async function setDate(date: string) {
   datePickerMonth.value = monthKey(normalized);
   datePickerOpen.value = false;
   await loadDay(normalized);
+}
+
+async function selectArchiveEntry(entry: JournalArchiveEntry) {
+  closeArchiveActions();
+  await setDate(entry.date);
+  archiveMobileDetailOpen.value = true;
+}
+
+function showArchiveList() {
+  closeArchiveActions();
+  archiveMobileDetailOpen.value = false;
+}
+
+function clearCurrentEntryForDeletedDate(date: string) {
+  if (selectedDate.value !== date) return;
+  hydratingEntry.value = true;
+  loadedEntry.value = null;
+  title.value = "";
+  description.value = "";
+  saveState.value = "idle";
+  void nextTick(() => {
+    hydratingEntry.value = false;
+  });
+}
+
+async function deleteArchiveEntry(entry: JournalArchiveEntry) {
+  closeArchiveActions();
+  const confirmed = window.confirm(
+    `Delete "${formatArchiveTitle(entry)}"? This removes it from your journal.`,
+  );
+  if (!confirmed) return;
+
+  deletingDate.value = entry.date;
+  error.value = "";
+  try {
+    await flushPendingSave();
+    await api.delete<{ ok: true }>(
+      `/journal/days/${encodeURIComponent(entry.date)}`,
+    );
+    archiveEntries.value = archiveEntries.value.filter(
+      (candidate) => candidate.date !== entry.date,
+    );
+    clearCurrentEntryForDeletedDate(entry.date);
+    if (archiveMobileDetailOpen.value && selectedDate.value === entry.date) {
+      archiveMobileDetailOpen.value = false;
+    }
+  } catch (deleteError) {
+    error.value =
+      deleteError instanceof Error
+        ? deleteError.message
+        : "Could not delete journal entry.";
+  } finally {
+    deletingDate.value = "";
+  }
 }
 
 function moveDatePickerMonth(direction: number) {
@@ -286,6 +351,8 @@ function toggleDatePicker() {
 async function toggleArchive() {
   archiveOpen.value = !archiveOpen.value;
   datePickerOpen.value = false;
+  archiveMobileDetailOpen.value = false;
+  closeArchiveActions();
   if (archiveOpen.value) {
     await flushPendingSave();
     await loadArchive();
@@ -294,12 +361,18 @@ async function toggleArchive() {
 
 function handleWindowClick() {
   datePickerOpen.value = false;
+  closeArchiveActions();
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
+    if (archiveActionDate.value) {
+      closeArchiveActions();
+      return;
+    }
     datePickerOpen.value = false;
     archiveOpen.value = false;
+    archiveMobileDetailOpen.value = false;
   }
 }
 
@@ -388,7 +461,15 @@ onBeforeUnmount(() => {
       </Button>
     </header>
 
-    <div class="journal__workspace">
+    <div
+      class="journal__workspace"
+      :class="{
+        'journal__workspace--archive-list':
+          archiveOpen && !archiveMobileDetailOpen,
+        'journal__workspace--archive-detail':
+          archiveOpen && archiveMobileDetailOpen,
+      }"
+    >
       <aside
         v-if="archiveOpen"
         class="journal__archive"
@@ -398,17 +479,61 @@ onBeforeUnmount(() => {
           <h2>Archive</h2>
           <span v-if="archiveLoading">Loading</span>
         </div>
-        <button
+        <div
           v-for="entry in nonEmptyArchiveEntries"
           :key="entry.id"
-          type="button"
           class="journal__archive-row"
-          :class="{ 'is-active': entry.date === selectedDate }"
-          @click="setDate(entry.date)"
+          :class="{
+            'is-active': entry.date === selectedDate,
+            'is-menu-open': archiveActionDate === entry.date,
+          }"
         >
-          <strong>{{ formatArchiveTitle(entry) }}</strong>
-          <span v-if="entry.preview">{{ entry.preview }}</span>
-        </button>
+          <button
+            type="button"
+            class="journal__archive-row-main"
+            :disabled="deletingDate === entry.date"
+            @click="selectArchiveEntry(entry)"
+          >
+            <strong>{{ formatArchiveTitle(entry) }}</strong>
+            <span v-if="entry.preview">{{ entry.preview }}</span>
+          </button>
+          <div class="journal__archive-row-actions" @click.stop>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              class="journal__archive-menu-button"
+              :aria-label="`Actions for ${formatArchiveTitle(entry)}`"
+              aria-haspopup="menu"
+              :aria-expanded="
+                archiveActionDate === entry.date ? 'true' : 'false'
+              "
+              title="Note actions"
+              type="button"
+              :disabled="deletingDate === entry.date"
+              @click="toggleArchiveActions(entry.date)"
+            >
+              <UiIcon name="Ellipsis" :size="16" aria-hidden="true" />
+            </Button>
+            <div
+              v-if="archiveActionDate === entry.date"
+              class="journal__archive-menu"
+              role="menu"
+            >
+              <button
+                type="button"
+                class="journal__archive-menu-item is-danger"
+                role="menuitem"
+                :disabled="deletingDate === entry.date"
+                @click="deleteArchiveEntry(entry)"
+              >
+                <UiIcon name="Trash2" :size="15" aria-hidden="true" />
+                Delete note
+              </button>
+            </div>
+          </div>
+        </div>
         <p
           v-if="!archiveLoading && nonEmptyArchiveEntries.length === 0"
           class="journal__empty"
@@ -418,6 +543,21 @@ onBeforeUnmount(() => {
       </aside>
 
       <section class="journal__sheet" aria-label="Journal entry">
+        <div v-if="archiveOpen" class="journal__mobile-detail-nav">
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            type="button"
+            @click="showArchiveList"
+          >
+            <template #icon>
+              <UiIcon name="ArrowLeft" :size="16" aria-hidden="true" />
+            </template>
+            Archive
+          </Button>
+        </div>
+
         <p v-if="error" class="journal__message is-error">{{ error }}</p>
 
         <div class="journal__editor-wrap" :class="{ 'is-loading': loading }">
@@ -585,38 +725,122 @@ onBeforeUnmount(() => {
 }
 
 .journal__archive-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: center;
   width: 100%;
   border: 0;
   border-radius: var(--ui-radius-sm, 8px);
-  padding: 10px 8px;
   background: transparent;
   color: var(--ui-text, var(--color-text));
+}
+
+.journal__archive-row:hover,
+.journal__archive-row.is-active,
+.journal__archive-row.is-menu-open {
+  background: var(--ui-surface-muted, var(--color-surface-muted));
+}
+
+.journal__archive-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  border: 0;
+  padding: 10px 8px;
+  background: transparent;
+  color: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.journal__archive-row:hover,
-.journal__archive-row.is-active {
-  background: var(--ui-surface-muted, var(--color-surface-muted));
+.journal__archive-row-main:disabled {
+  cursor: default;
+  opacity: 0.65;
 }
 
-.journal__archive-row strong,
-.journal__archive-row span {
+.journal__archive-row-main strong,
+.journal__archive-row-main span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.journal__archive-row strong {
+.journal__archive-row-main strong {
   font-size: 0.92rem;
 }
 
-.journal__archive-row span {
+.journal__archive-row-main span {
   font-size: 0.82rem;
   color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.journal__archive-row-actions {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.journal__archive-row:hover .journal__archive-row-actions,
+.journal__archive-row:focus-within .journal__archive-row-actions,
+.journal__archive-row.is-active .journal__archive-row-actions,
+.journal__archive-row.is-menu-open .journal__archive-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.journal__archive-menu-button {
+  min-width: 30px;
+}
+
+.journal__archive-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 4px;
+  z-index: 35;
+  min-width: 152px;
+  box-sizing: border-box;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  padding: 6px;
+  background: var(--ui-surface, var(--color-surface));
+  box-shadow: var(--ui-shadow-md, 0 14px 32px rgba(15, 23, 42, 0.16));
+}
+
+.journal__archive-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--ui-radius-sm, 8px);
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.journal__archive-menu-item:hover,
+.journal__archive-menu-item:focus-visible {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  outline: none;
+}
+
+.journal__archive-menu-item.is-danger {
+  color: var(--color-danger, #b42318);
+}
+
+.journal__archive-menu-item:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .journal__sheet {
@@ -625,6 +849,11 @@ onBeforeUnmount(() => {
   min-height: 0;
   width: min(100%, 700px);
   margin: 0 auto;
+}
+
+.journal__mobile-detail-nav {
+  display: none;
+  flex-shrink: 0;
 }
 
 .journal__editor-wrap {
@@ -709,20 +938,41 @@ onBeforeUnmount(() => {
   .journal__workspace,
   .journal__workspace:has(.journal__archive) {
     grid-template-columns: minmax(0, 1fr);
+    gap: 0;
     padding: 0 14px 12px;
   }
 
   .journal__workspace:has(.journal__archive) {
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .journal__archive {
     position: static;
-    min-height: 0;
-    max-height: 260px;
+    min-height: calc(100dvh - var(--workspace-topbar-height));
+    max-height: none;
     border-right: 0;
-    border-bottom: 1px solid var(--ui-border, var(--color-border));
-    padding: 0 0 14px;
+    border-bottom: 0;
+    padding: 0 0 12px;
+  }
+
+  .journal__workspace--archive-list .journal__sheet {
+    display: none;
+  }
+
+  .journal__workspace--archive-detail .journal__archive {
+    display: none;
+  }
+
+  .journal__mobile-detail-nav {
+    display: flex;
+    padding: 0 0 12px;
+  }
+}
+
+@media (hover: none) {
+  .journal__archive-row-actions {
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 

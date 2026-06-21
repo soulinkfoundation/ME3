@@ -1,6 +1,7 @@
 import { JOURNAL_PLUGIN_ID } from "@me3-core/plugin-journal";
 import {
   JournalInputError,
+  deleteJournalDay,
   getJournalDay,
   listJournalArchive,
   updateJournalDay,
@@ -37,6 +38,19 @@ export function registerJournalRoutes(app: AppHono, deps: OwnerRouteDeps) {
           await c.req.json().catch(() => ({})),
         ),
       );
+    } catch (error) {
+      return journalErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/journal/days/:date", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireJournalPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      return c.json(await deleteJournalDay(c.env, ownerId, c.req.param("date")));
     } catch (error) {
       return journalErrorResponse(c, error);
     }
