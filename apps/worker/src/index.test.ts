@@ -3141,6 +3141,19 @@ describe("ME3 Core Worker auth", () => {
     expect(response.headers.get("X-Frame-Options")).toBeNull();
   });
 
+  it("serves an existing png when published html still asks for a webp page image", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    addSiteFileText(env, "site-booking", "public/files/about-1.png", "PNG", "image/png");
+    env.ME3_SITE_USERNAME = "owner";
+
+    const response = await app.fetch(new Request("https://kieranbutler.com/files/about-1.webp"), env);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(await response.text()).toBe("PNG");
+  });
+
   it("canonicalizes /me so relative site files resolve under the Worker public prefix", async () => {
     const env = createEnv();
     addBookableSite(env);

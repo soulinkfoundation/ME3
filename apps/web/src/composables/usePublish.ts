@@ -148,7 +148,7 @@ function exportContentToMarkdown(
     if (!match) continue;
 
     const index = nextIndex++;
-    const ext = match.ext || "jpg";
+    const ext = getImageExt(match.blob);
     idToIndex.set(id, { index, ext });
 
     exportedImages.push({

@@ -66,6 +66,16 @@ type ExportedContentImage = {
   filename: string; // e.g. "about-1.webp"
 };
 
+function getImageExt(blob: Blob): string {
+  return blob.type === "image/png"
+    ? "png"
+    : blob.type === "image/webp"
+      ? "webp"
+      : blob.type === "image/gif"
+        ? "gif"
+        : "jpg";
+}
+
 function parsePageImagesFromHtml(html: string): string[] {
   if (!html || html.trim() === "") return [];
   try {
@@ -130,7 +140,7 @@ function exportContentToMarkdown(
     if (!match) continue;
 
     const index = nextIndex++;
-    const ext = match.ext || "jpg";
+    const ext = getImageExt(match.blob);
     idToIndex.set(id, { index, ext });
 
     exportedImages.push({

@@ -611,7 +611,7 @@ export async function serveSiteFileResponse(
       ? `public/${requestedPath}.html`
       : null;
   const isMediaPath = publicPath.startsWith("public/files/") || publicPath === "public/favicon.png";
-  const r2File = isMediaPath ? await getR2SiteFile(env, site, publicPath) : null;
+  const r2File = isMediaPath ? await getSiteMediaFile(env, site, publicPath) : null;
   const file =
     r2File ||
     (await getSiteFile(env, site.id, publicPath)) ||
@@ -633,6 +633,19 @@ export async function serveSiteFileResponse(
         : "no-store",
     },
   });
+}
+
+async function getSiteMediaFile(env: Env, site: DbSite, path: string): Promise<SiteFileRecord | null> {
+  const file = await getR2SiteFile(env, site, path) || await getSiteFile(env, site.id, path);
+  if (file || !path.toLowerCase().endsWith(".webp")) return file;
+
+  const base = path.slice(0, -".webp".length);
+  for (const ext of ["png", "jpg", "jpeg", "gif"]) {
+    const fallback = `${base}.${ext}`;
+    const fallbackFile = await getR2SiteFile(env, site, fallback) || await getSiteFile(env, site.id, fallback);
+    if (fallbackFile) return fallbackFile;
+  }
+  return null;
 }
 
 export async function getSiteForOwner(env: Env, ownerId: string, rawUsername: string): Promise<DbSite | null> {
