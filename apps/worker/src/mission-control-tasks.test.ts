@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listMissionTaskPage } from "./mission-control";
+import { createMissionTaskFromJournal, listMissionTaskPage } from "./mission-control";
 import type { Env } from "./types";
 
 type StoredTaskRow = {
@@ -269,5 +269,141 @@ describe("Mission Control task pagination", () => {
     await expect(
       listMissionTaskPage(env, "owner", { cursor: "not-a-valid-cursor" }),
     ).rejects.toThrow("Task cursor is invalid");
+  });
+
+  it("creates a task with a journal source link", async () => {
+    const tasks: StoredTaskRow[] = [];
+    const links: Array<{
+      id: string;
+      user_id: string;
+      journal_entry_id: string;
+      project_id: string;
+      source_text: string | null;
+      created_task_id: string | null;
+      created_reminder_id: string | null;
+      created_at: string;
+    }> = [];
+    const project = {
+      id: "project-1",
+      user_id: "owner",
+      name: "ME3",
+      slug: "me3",
+      description: null,
+      status: "active",
+      color: null,
+      icon: null,
+      source_kind: "manual",
+      source_ref: null,
+      metadata_json: "{}",
+      created_at: "2026-06-21T09:00:00Z",
+      updated_at: "2026-06-21T09:00:00Z",
+    };
+    const env = {
+      DB: {
+        prepare(sql: string) {
+          return {
+            bind(...values: unknown[]) {
+              return {
+                async first<T>() {
+                  if (sql.includes("FROM journal_entries")) {
+                    return { id: "journal-1" } as T;
+                  }
+                  if (sql.includes("FROM mission_projects")) {
+                    return project as T;
+                  }
+                  if (sql.includes("FROM mission_tasks")) {
+                    const [taskId] = values;
+                    return tasks.find((task) => task.id === taskId) as T;
+                  }
+                  if (sql.includes("FROM journal_project_links")) {
+                    const [linkId] = values;
+                    const link = links.find((item) => item.id === linkId);
+                    return {
+                      ...link,
+                      entry_date: "2026-06-21",
+                      entry_title: "Today",
+                      task_title: tasks.find((task) => task.id === link?.created_task_id)
+                        ?.title || null,
+                    } as T;
+                  }
+                  return null as T;
+                },
+                async run() {
+                  if (sql.includes("INSERT INTO mission_tasks")) {
+                    const [
+                      id,
+                      userId,
+                      projectId,
+                      title,
+                      description,
+                      sourceRef,
+                      metadataJson,
+                    ] = values as string[];
+                    tasks.push({
+                      id,
+                      user_id: userId,
+                      project_id: projectId,
+                      title,
+                      description: description || null,
+                      status: "backlog",
+                      priority: 3,
+                      pinned_at: null,
+                      due_at: null,
+                      scheduled_for: null,
+                      source_kind: "capture",
+                      source_ref: sourceRef,
+                      approval_id: null,
+                      metadata_json: metadataJson,
+                      created_at: "2026-06-21T10:00:00Z",
+                      updated_at: "2026-06-21T10:00:00Z",
+                      archived_at: null,
+                    });
+                  }
+                  if (sql.includes("INSERT INTO journal_project_links")) {
+                    const [id, userId, journalEntryId, projectId, sourceText, taskId] =
+                      values as string[];
+                    links.push({
+                      id,
+                      user_id: userId,
+                      journal_entry_id: journalEntryId,
+                      project_id: projectId,
+                      source_text: sourceText,
+                      created_task_id: taskId,
+                      created_reminder_id: null,
+                      created_at: "2026-06-21T10:00:00Z",
+                    });
+                  }
+                  return {};
+                },
+              };
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+
+    const result = await createMissionTaskFromJournal(env, "owner", {
+      journalEntryId: "journal-1",
+      projectId: "project-1",
+      sourceText: "Follow up on markdown import",
+    });
+
+    expect(result.task).toMatchObject({
+      projectId: "project-1",
+      sourceKind: "capture",
+      sourceRef: "journal-1",
+      title: "Follow up on markdown import",
+      metadata: {
+        journalSource: {
+          journalEntryId: "journal-1",
+          quote: "Follow up on markdown import",
+        },
+      },
+    });
+    expect(result.link).toMatchObject({
+      journalEntryId: "journal-1",
+      projectId: "project-1",
+      createdTaskId: result.task.id,
+    });
   });
 });

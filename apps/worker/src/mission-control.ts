@@ -62,6 +62,20 @@ type MissionTaskRow = {
   archived_at: string | null;
 };
 
+type JournalProjectLinkRow = {
+  id: string;
+  user_id: string;
+  journal_entry_id: string;
+  project_id: string;
+  source_text: string | null;
+  created_task_id: string | null;
+  created_reminder_id: string | null;
+  created_at: string;
+  entry_date: string;
+  entry_title: string | null;
+  task_title: string | null;
+};
+
 type MissionTaskListOptions = {
   status?: unknown;
   dueDate?: string;
@@ -819,6 +833,89 @@ export async function createMissionTask(env: Env, userId: string, input: unknown
   };
 }
 
+export async function createMissionTaskFromJournal(
+  env: Env,
+  userId: string,
+  input: unknown,
+) {
+  const body = isRecord(input) ? input : {};
+  const sourceText = normalizeNullableText(body.sourceText);
+  const title = normalizeNullableText(body.title) || sourceText;
+  const journalEntryId = normalizeNullableText(body.journalEntryId);
+  const projectId = normalizeNullableText(body.projectId);
+  if (!title) throw new MissionControlInputError("Task title is required");
+  if (!journalEntryId) throw new MissionControlInputError("Journal entry is required");
+  if (!projectId) throw new MissionControlInputError("Project is required");
+
+  await ensureJournalEntryExists(env, userId, journalEntryId);
+  await ensureProjectExists(env, userId, projectId);
+
+  const taskId = crypto.randomUUID();
+  const linkId = crypto.randomUUID();
+  const metadata = {
+    journalSource: {
+      journalEntryId,
+      quote: sourceText,
+    },
+  };
+
+  await env.DB.prepare(
+    `INSERT INTO mission_tasks
+       (id, user_id, project_id, title, description, status, priority, source_kind, source_ref, metadata_json)
+     VALUES (?, ?, ?, ?, ?, 'backlog', 3, 'capture', ?, ?)`,
+  )
+    .bind(
+      taskId,
+      userId,
+      projectId,
+      title,
+      sourceText && sourceText !== title ? sourceText : null,
+      journalEntryId,
+      JSON.stringify(metadata),
+    )
+    .run();
+
+  await env.DB.prepare(
+    `INSERT INTO journal_project_links
+       (id, user_id, journal_entry_id, project_id, source_text, created_task_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(linkId, userId, journalEntryId, projectId, sourceText, taskId)
+    .run();
+
+  return {
+    task: serializeTask((await getMissionTask(env, userId, taskId)) as MissionTaskRow),
+    link: await getJournalProjectLink(env, userId, linkId),
+  };
+}
+
+export async function createJournalProjectLink(
+  env: Env,
+  userId: string,
+  input: unknown,
+) {
+  const body = isRecord(input) ? input : {};
+  const journalEntryId = normalizeNullableText(body.journalEntryId);
+  const projectId = normalizeNullableText(body.projectId);
+  const sourceText = normalizeNullableText(body.sourceText);
+  if (!journalEntryId) throw new MissionControlInputError("Journal entry is required");
+  if (!projectId) throw new MissionControlInputError("Project is required");
+
+  await ensureJournalEntryExists(env, userId, journalEntryId);
+  await ensureProjectExists(env, userId, projectId);
+
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO journal_project_links
+       (id, user_id, journal_entry_id, project_id, source_text)
+     VALUES (?, ?, ?, ?, ?)`,
+  )
+    .bind(id, userId, journalEntryId, projectId, sourceText)
+    .run();
+
+  return { link: await getJournalProjectLink(env, userId, id) };
+}
+
 export async function updateMissionTask(
   env: Env,
   userId: string,
@@ -869,6 +966,56 @@ export async function updateMissionTask(
   return {
     task: serializeTask(task),
   };
+}
+
+export async function listJournalProjectLinks(
+  env: Env,
+  userId: string,
+  projectId: string,
+) {
+  await ensureProjectExists(env, userId, projectId);
+  const rows = await env.DB.prepare(
+    `SELECT l.id, l.user_id, l.journal_entry_id, l.project_id, l.source_text,
+            l.created_task_id, l.created_reminder_id, l.created_at,
+            e.entry_date, e.title AS entry_title, t.title AS task_title
+     FROM journal_project_links l
+     INNER JOIN journal_entries e
+       ON e.id = l.journal_entry_id AND e.user_id = l.user_id
+     LEFT JOIN mission_tasks t
+       ON t.id = l.created_task_id AND t.user_id = l.user_id
+     WHERE l.user_id = ? AND l.project_id = ? AND e.archived_at IS NULL
+     ORDER BY l.created_at DESC
+     LIMIT 100`,
+  )
+    .bind(userId, projectId)
+    .all<JournalProjectLinkRow>();
+
+  return { links: (rows.results || []).map(serializeJournalProjectLink) };
+}
+
+export async function listJournalEntryLinks(
+  env: Env,
+  userId: string,
+  journalEntryId: string,
+) {
+  await ensureJournalEntryExists(env, userId, journalEntryId);
+  const rows = await env.DB.prepare(
+    `SELECT l.id, l.user_id, l.journal_entry_id, l.project_id, l.source_text,
+            l.created_task_id, l.created_reminder_id, l.created_at,
+            e.entry_date, e.title AS entry_title, t.title AS task_title
+     FROM journal_project_links l
+     INNER JOIN journal_entries e
+       ON e.id = l.journal_entry_id AND e.user_id = l.user_id
+     LEFT JOIN mission_tasks t
+       ON t.id = l.created_task_id AND t.user_id = l.user_id
+     WHERE l.user_id = ? AND l.journal_entry_id = ? AND e.archived_at IS NULL
+     ORDER BY l.created_at DESC
+     LIMIT 100`,
+  )
+    .bind(userId, journalEntryId)
+    .all<JournalProjectLinkRow>();
+
+  return { links: (rows.results || []).map(serializeJournalProjectLink) };
 }
 
 export async function archiveMissionTask(env: Env, userId: string, taskId: string) {
@@ -1922,6 +2069,35 @@ async function getMissionTask(env: Env, userId: string, taskId: string) {
     .first<MissionTaskRow>();
 }
 
+async function getJournalProjectLink(env: Env, userId: string, linkId: string) {
+  const row = await env.DB.prepare(
+    `SELECT l.id, l.user_id, l.journal_entry_id, l.project_id, l.source_text,
+            l.created_task_id, l.created_reminder_id, l.created_at,
+            e.entry_date, e.title AS entry_title, t.title AS task_title
+     FROM journal_project_links l
+     INNER JOIN journal_entries e
+       ON e.id = l.journal_entry_id AND e.user_id = l.user_id
+     LEFT JOIN mission_tasks t
+       ON t.id = l.created_task_id AND t.user_id = l.user_id
+     WHERE l.id = ? AND l.user_id = ?`,
+  )
+    .bind(linkId, userId)
+    .first<JournalProjectLinkRow>();
+  if (!row) throw new MissionControlInputError("Journal link not found", 404);
+  return serializeJournalProjectLink(row);
+}
+
+async function ensureJournalEntryExists(env: Env, userId: string, journalEntryId: string) {
+  const entry = await env.DB.prepare(
+    `SELECT id
+     FROM journal_entries
+     WHERE id = ? AND user_id = ? AND archived_at IS NULL`,
+  )
+    .bind(journalEntryId, userId)
+    .first<{ id: string }>();
+  if (!entry) throw new MissionControlInputError("Journal entry not found", 404);
+}
+
 async function getMissionMemory(env: Env, userId: string, memoryId: string) {
   return env.DB.prepare(
     `SELECT id, user_id, memory_kind, scope_kind, scope_id, title, body, confidence,
@@ -2584,6 +2760,21 @@ function serializeTask(row: MissionTaskRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
+  };
+}
+
+function serializeJournalProjectLink(row: JournalProjectLinkRow) {
+  return {
+    id: row.id,
+    journalEntryId: row.journal_entry_id,
+    projectId: row.project_id,
+    sourceText: row.source_text,
+    createdTaskId: row.created_task_id,
+    createdReminderId: row.created_reminder_id,
+    createdAt: row.created_at,
+    entryDate: row.entry_date,
+    entryTitle: row.entry_title,
+    taskTitle: row.task_title,
   };
 }
 

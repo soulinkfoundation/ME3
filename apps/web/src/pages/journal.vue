@@ -8,7 +8,8 @@ import {
   watch,
 } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
-import { api } from "../api";
+import { useRoute } from "vue-router";
+import { ApiError, api } from "../api";
 import Button from "../components/Button.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import TiptapEditor from "../components/TiptapEditor.vue";
@@ -39,7 +40,28 @@ type JournalArchiveEntry = JournalEntry & {
   preview: string;
 };
 
-const selectedDate = ref(todayKey());
+type MissionProject = {
+  id: string;
+  name: string;
+};
+
+type JournalProjectLink = {
+  id: string;
+  journalEntryId: string;
+  projectId: string;
+  sourceText: string | null;
+  createdTaskId: string | null;
+  createdReminderId: string | null;
+  createdAt: string;
+  entryDate: string;
+  entryTitle: string | null;
+  taskTitle: string | null;
+};
+
+type CaptureMode = "task" | "link";
+
+const route = useRoute();
+const selectedDate = ref(normalizeLocalDateInput(rawDateQuery(route.query.date)) || todayKey());
 const datePickerOpen = ref(false);
 const datePickerMonth = ref(monthKey(selectedDate.value));
 const title = ref("");
@@ -54,6 +76,15 @@ const archiveLoading = ref(false);
 const archiveActionDate = ref<string | null>(null);
 const deletingDate = ref("");
 const error = ref("");
+const projects = ref<MissionProject[]>([]);
+const entryLinks = ref<JournalProjectLink[]>([]);
+const captureOpen = ref(false);
+const captureMode = ref<CaptureMode>("task");
+const captureText = ref("");
+const captureTitle = ref("");
+const captureProjectId = ref("");
+const captureSaving = ref(false);
+const captureError = ref("");
 const saveState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const hydratingEntry = ref(false);
 let saveTimer: number | null = null;
@@ -80,6 +111,10 @@ const nonEmptyArchiveEntries = computed(() =>
 const journalEntryDates = computed(() =>
   nonEmptyArchiveEntries.value.map((entry) => entry.date),
 );
+const captureProjectName = computed(() => projectName(captureProjectId.value));
+const canOpenCapture = computed(
+  () => Boolean(title.value.trim() || htmlToPlainText(description.value)),
+);
 
 function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -91,6 +126,11 @@ function todayKey(): string {
 
 function normalizeLocalDateInput(value: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+function rawDateQuery(value: unknown): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" ? raw : "";
 }
 
 function addDays(dateKey: string, days: number): string {
@@ -144,6 +184,29 @@ function htmlToPlainText(value: string): string {
     .replace(/\u00a0/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function selectedPlainText(): string {
+  return (window.getSelection()?.toString() || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function projectName(projectId: string | null): string {
+  if (!projectId) return "Project";
+  return projects.value.find((project) => project.id === projectId)?.name || "Project";
+}
+
+function defaultCaptureText(): string {
+  return (
+    selectedPlainText() ||
+    htmlToPlainText(description.value) ||
+    title.value.trim()
+  ).slice(0, 1000);
+}
+
+function defaultCaptureTitle(text: string): string {
+  return text.split(/\r?\n/)[0]?.trim().slice(0, 180) || text.slice(0, 180);
 }
 
 function entryHasContent(entry: Pick<JournalArchiveEntry, "title" | "body" | "preview">): boolean {
@@ -201,6 +264,7 @@ async function saveEntry() {
     );
     loadedEntry.value = response.entry;
     updateArchiveEntry(response.entry);
+    void loadEntryLinks(response.entry.id);
     saveState.value = "saved";
     if (archiveOpen.value) void loadArchive();
   } catch (saveError) {
@@ -231,6 +295,8 @@ async function loadDay(date: string) {
     loadedEntry.value = response.entry;
     title.value = response.entry?.title || "";
     description.value = response.entry?.body || "";
+    entryLinks.value = [];
+    if (response.entry) void loadEntryLinks(response.entry.id);
     await nextTick();
     hydratingEntry.value = false;
     saveState.value = response.entry ? "saved" : "idle";
@@ -243,6 +309,95 @@ async function loadDay(date: string) {
   } finally {
     hydratingEntry.value = false;
     if (token === currentLoadToken) loading.value = false;
+  }
+}
+
+async function loadProjects() {
+  if (projects.value.length > 0) return;
+  const response = await api.get<{ projects: MissionProject[] }>(
+    "/mission-control/projects",
+  );
+  projects.value = response.projects || [];
+  if (!captureProjectId.value) captureProjectId.value = projects.value[0]?.id || "";
+}
+
+async function loadEntryLinks(entryId: string) {
+  try {
+    const response = await api.get<{ links: JournalProjectLink[] }>(
+      `/mission-control/journal/entries/${encodeURIComponent(entryId)}/links`,
+    );
+    if (loadedEntry.value?.id === entryId) entryLinks.value = response.links || [];
+  } catch {
+    entryLinks.value = [];
+  }
+}
+
+async function openCapture(mode: CaptureMode) {
+  error.value = "";
+  captureError.value = "";
+  await flushPendingSave();
+  const entry = loadedEntry.value;
+  if (!entry) {
+    error.value = "Write something first, then capture it.";
+    return;
+  }
+  const text = defaultCaptureText();
+  if (!text) {
+    error.value = "Select text or write a note first.";
+    return;
+  }
+  try {
+    await loadProjects();
+  } catch (projectError) {
+    error.value =
+      projectError instanceof Error
+        ? projectError.message
+        : "Could not load projects.";
+    return;
+  }
+  captureMode.value = mode;
+  captureText.value = text;
+  captureTitle.value = defaultCaptureTitle(text);
+  captureProjectId.value = captureProjectId.value || projects.value[0]?.id || "";
+  captureOpen.value = true;
+}
+
+function closeCapture() {
+  if (captureSaving.value) return;
+  captureOpen.value = false;
+  captureError.value = "";
+}
+
+async function submitCapture() {
+  const entry = loadedEntry.value;
+  if (!entry || !captureProjectId.value || captureSaving.value) return;
+  captureSaving.value = true;
+  captureError.value = "";
+  try {
+    const payload = {
+      journalEntryId: entry.id,
+      projectId: captureProjectId.value,
+      sourceText: captureText.value.trim(),
+      title: captureTitle.value.trim(),
+    };
+    const response = await api.post<{ link: JournalProjectLink }>(
+      captureMode.value === "task"
+        ? "/mission-control/journal/tasks"
+        : "/mission-control/journal/links",
+      payload,
+    );
+    entryLinks.value = [
+      response.link,
+      ...entryLinks.value.filter((link) => link.id !== response.link.id),
+    ];
+    captureOpen.value = false;
+  } catch (captureSubmitError) {
+    captureError.value =
+      captureSubmitError instanceof ApiError
+        ? captureSubmitError.message
+        : "Could not capture this journal text.";
+  } finally {
+    captureSaving.value = false;
   }
 }
 
@@ -444,21 +599,50 @@ onBeforeUnmount(() => {
           @secondary-action="toggleArchive"
         />
       </div>
-      <Button
-        color="ghost"
-        shape="soft"
-        size="compact"
-        icon-only
-        class="journal__archive-button"
-        :active="archiveOpen"
-        aria-label="Archive"
-        :aria-pressed="archiveOpen ? 'true' : 'false'"
-        title="Archive"
-        type="button"
-        @click="toggleArchive"
-      >
-        <UiIcon name="Archive" :size="16" />
-      </Button>
+      <div class="journal__topbar-actions">
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          :disabled="!canOpenCapture"
+          aria-label="Create task from journal text"
+          title="Create task"
+          type="button"
+          @mousedown.prevent
+          @click="openCapture('task')"
+        >
+          <UiIcon name="ListTodo" :size="16" />
+        </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          :disabled="!canOpenCapture"
+          aria-label="Link journal text to project"
+          title="Link to project"
+          type="button"
+          @mousedown.prevent
+          @click="openCapture('link')"
+        >
+          <UiIcon name="Link" :size="16" />
+        </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          :active="archiveOpen"
+          aria-label="Archive"
+          :aria-pressed="archiveOpen ? 'true' : 'false'"
+          title="Archive"
+          type="button"
+          @click="toggleArchive"
+        >
+          <UiIcon name="Archive" :size="16" />
+        </Button>
+      </div>
     </header>
 
     <div
@@ -573,11 +757,81 @@ onBeforeUnmount(() => {
           />
         </div>
 
+        <div v-if="entryLinks.length > 0" class="journal__chips" aria-label="Journal captures">
+          <span
+            v-for="link in entryLinks"
+            :key="link.id"
+            class="journal__chip"
+          >
+            <UiIcon
+              :name="link.createdTaskId ? 'ListTodo' : 'Link'"
+              :size="14"
+              aria-hidden="true"
+            />
+            {{ link.createdTaskId ? "Task" : projectName(link.projectId) }}
+          </span>
+        </div>
+
         <div class="journal__status" aria-live="polite">
           <span v-if="loading">Loading</span>
           <span v-else>{{ saveStatusText }}</span>
         </div>
       </section>
+    </div>
+
+    <div v-if="captureOpen" class="journal-capture" role="dialog" aria-modal="true">
+      <form class="journal-capture__panel" @submit.prevent="submitCapture">
+        <header>
+          <h2>{{ captureMode === "task" ? "Create task" : "Link to project" }}</h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Close"
+            title="Close"
+            @click="closeCapture"
+          >
+            <UiIcon name="X" :size="16" />
+          </Button>
+        </header>
+        <label v-if="captureMode === 'task'">
+          <span>Title</span>
+          <input v-model="captureTitle" type="text" maxlength="180" required />
+        </label>
+        <label>
+          <span>Project</span>
+          <select v-model="captureProjectId" required>
+            <option
+              v-for="project in projects"
+              :key="project.id"
+              :value="project.id"
+            >
+              {{ project.name }}
+            </option>
+          </select>
+        </label>
+        <label>
+          <span>Source</span>
+          <textarea v-model="captureText" rows="5" required />
+        </label>
+        <p v-if="captureError" class="journal__message is-error">
+          {{ captureError }}
+        </p>
+        <footer>
+          <span>{{ captureProjectName }}</span>
+          <Button
+            color="accent"
+            shape="soft"
+            size="compact"
+            type="submit"
+            :disabled="captureSaving || !captureProjectId || !captureText.trim()"
+          >
+            {{ captureSaving ? "Saving" : "Confirm" }}
+          </Button>
+        </footer>
+      </form>
     </div>
   </main>
 </template>
@@ -633,6 +887,21 @@ onBeforeUnmount(() => {
   color: var(--ui-text, var(--color-text));
   cursor: pointer;
   border-radius: var(--ui-radius-sm, 8px);
+}
+
+.journal__topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+}
+
+.journal__topbar-actions :deep(button) {
+  min-width: 34px;
+}
+
+.journal__topbar-actions :deep(button:disabled) {
+  opacity: 0.45;
 }
 
 .journal__archive-button {
@@ -911,6 +1180,27 @@ onBeforeUnmount(() => {
   text-align: right;
 }
 
+.journal__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 10px;
+}
+
+.journal__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .journal__message {
   flex-shrink: 0;
   margin: 0 0 16px;
@@ -918,6 +1208,76 @@ onBeforeUnmount(() => {
 
 .journal__message.is-error {
   color: var(--color-danger, #b42318);
+}
+
+.journal-capture {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in srgb, var(--ui-bg, var(--color-bg)) 60%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.journal-capture__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(100%, 440px);
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 8px);
+  padding: 16px;
+  background: var(--ui-surface, var(--color-surface));
+  box-shadow: var(--ui-shadow-md, 0 18px 42px rgba(15, 23, 42, 0.2));
+}
+
+.journal-capture__panel header,
+.journal-capture__panel footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.journal-capture__panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.journal-capture__panel label {
+  display: grid;
+  gap: 6px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.journal-capture__panel input,
+.journal-capture__panel select,
+.journal-capture__panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  padding: 9px 10px;
+  background: var(--ui-bg, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+}
+
+.journal-capture__panel textarea {
+  resize: vertical;
+}
+
+.journal-capture__panel footer span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {
@@ -933,6 +1293,10 @@ onBeforeUnmount(() => {
 
   .journal__day-switcher {
     justify-self: start;
+  }
+
+  .journal__topbar-actions {
+    gap: 2px;
   }
 
   .journal__workspace,
