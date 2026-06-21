@@ -85,6 +85,13 @@ const captureTitle = ref("");
 const captureProjectId = ref("");
 const captureSaving = ref(false);
 const captureError = ref("");
+const editorWrap = ref<HTMLElement | null>(null);
+const selectionToolbar = ref({
+  visible: false,
+  text: "",
+  left: 0,
+  top: 0,
+});
 const saveState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const hydratingEntry = ref(false);
 let saveTimer: number | null = null;
@@ -112,9 +119,6 @@ const journalEntryDates = computed(() =>
   nonEmptyArchiveEntries.value.map((entry) => entry.date),
 );
 const captureProjectName = computed(() => projectName(captureProjectId.value));
-const canOpenCapture = computed(
-  () => Boolean(title.value.trim() || htmlToPlainText(description.value)),
-);
 
 function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -186,23 +190,9 @@ function htmlToPlainText(value: string): string {
     .trim();
 }
 
-function selectedPlainText(): string {
-  return (window.getSelection()?.toString() || "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function projectName(projectId: string | null): string {
   if (!projectId) return "Project";
   return projects.value.find((project) => project.id === projectId)?.name || "Project";
-}
-
-function defaultCaptureText(): string {
-  return (
-    selectedPlainText() ||
-    htmlToPlainText(description.value) ||
-    title.value.trim()
-  ).slice(0, 1000);
 }
 
 function defaultCaptureTitle(text: string): string {
@@ -335,15 +325,16 @@ async function loadEntryLinks(entryId: string) {
 async function openCapture(mode: CaptureMode) {
   error.value = "";
   captureError.value = "";
+  const text = selectionToolbar.value.text;
+  hideSelectionToolbar();
   await flushPendingSave();
   const entry = loadedEntry.value;
   if (!entry) {
     error.value = "Write something first, then capture it.";
     return;
   }
-  const text = defaultCaptureText();
   if (!text) {
-    error.value = "Select text or write a note first.";
+    error.value = "Highlight journal text first.";
     return;
   }
   try {
@@ -360,6 +351,61 @@ async function openCapture(mode: CaptureMode) {
   captureTitle.value = defaultCaptureTitle(text);
   captureProjectId.value = captureProjectId.value || projects.value[0]?.id || "";
   captureOpen.value = true;
+}
+
+function hideSelectionToolbar() {
+  selectionToolbar.value = {
+    visible: false,
+    text: "",
+    left: 0,
+    top: 0,
+  };
+}
+
+function updateSelectionToolbar() {
+  if (captureOpen.value) {
+    hideSelectionToolbar();
+    return;
+  }
+  const selection = window.getSelection();
+  const root = editorWrap.value;
+  const anchorNode = selection?.anchorNode;
+  const focusNode = selection?.focusNode;
+  if (
+    !selection ||
+    selection.isCollapsed ||
+    !root ||
+    !anchorNode ||
+    !focusNode ||
+    !root.contains(anchorNode) ||
+    !root.contains(focusNode)
+  ) {
+    hideSelectionToolbar();
+    return;
+  }
+
+  const text = selection.toString().replace(/\s+/g, " ").trim().slice(0, 1000);
+  if (!text || selection.rangeCount === 0) {
+    hideSelectionToolbar();
+    return;
+  }
+
+  const range = selection.getRangeAt(0);
+  const rects = Array.from(range.getClientRects()).filter(
+    (rect) => rect.width > 0 && rect.height > 0,
+  );
+  const rect = rects[rects.length - 1] || range.getBoundingClientRect();
+  const toolbarWidth = 86;
+  const toolbarHeight = 38;
+  const left =
+    rect.right + toolbarWidth + 12 <= window.innerWidth
+      ? rect.right + 8
+      : Math.max(8, rect.left - toolbarWidth - 8);
+  const top = Math.min(
+    window.innerHeight - toolbarHeight - 8,
+    Math.max(8, rect.top + rect.height / 2 - toolbarHeight / 2),
+  );
+  selectionToolbar.value = { visible: true, text, left, top };
 }
 
 function closeCapture() {
@@ -521,6 +567,10 @@ function handleWindowClick() {
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
+    if (selectionToolbar.value.visible) {
+      hideSelectionToolbar();
+      return;
+    }
     if (archiveActionDate.value) {
       closeArchiveActions();
       return;
@@ -537,12 +587,22 @@ onMounted(() => {
   void loadDay(selectedDate.value);
   window.addEventListener("click", handleWindowClick);
   window.addEventListener("keydown", handleWindowKeydown);
+  document.addEventListener("selectionchange", updateSelectionToolbar);
+  window.addEventListener("mouseup", updateSelectionToolbar);
+  window.addEventListener("keyup", updateSelectionToolbar);
+  window.addEventListener("scroll", updateSelectionToolbar, true);
+  window.addEventListener("resize", updateSelectionToolbar);
 });
 
 onBeforeUnmount(() => {
   clearSaveTimer();
   window.removeEventListener("click", handleWindowClick);
   window.removeEventListener("keydown", handleWindowKeydown);
+  document.removeEventListener("selectionchange", updateSelectionToolbar);
+  window.removeEventListener("mouseup", updateSelectionToolbar);
+  window.removeEventListener("keyup", updateSelectionToolbar);
+  window.removeEventListener("scroll", updateSelectionToolbar, true);
+  window.removeEventListener("resize", updateSelectionToolbar);
 });
 </script>
 
@@ -600,34 +660,6 @@ onBeforeUnmount(() => {
         />
       </div>
       <div class="journal__topbar-actions">
-        <Button
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          :disabled="!canOpenCapture"
-          aria-label="Create task from journal text"
-          title="Create task"
-          type="button"
-          @mousedown.prevent
-          @click="openCapture('task')"
-        >
-          <UiIcon name="ListTodo" :size="16" />
-        </Button>
-        <Button
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          :disabled="!canOpenCapture"
-          aria-label="Link journal text to project"
-          title="Link to project"
-          type="button"
-          @mousedown.prevent
-          @click="openCapture('link')"
-        >
-          <UiIcon name="Link" :size="16" />
-        </Button>
         <Button
           color="ghost"
           shape="soft"
@@ -744,7 +776,11 @@ onBeforeUnmount(() => {
 
         <p v-if="error" class="journal__message is-error">{{ error }}</p>
 
-        <div class="journal__editor-wrap" :class="{ 'is-loading': loading }">
+        <div
+          ref="editorWrap"
+          class="journal__editor-wrap"
+          :class="{ 'is-loading': loading }"
+        >
           <TiptapEditor
             v-model="description"
             v-model:title="title"
@@ -777,6 +813,44 @@ onBeforeUnmount(() => {
           <span v-else>{{ saveStatusText }}</span>
         </div>
       </section>
+    </div>
+
+    <div
+      v-if="selectionToolbar.visible"
+      class="journal-selection-toolbar"
+      :style="{
+        left: `${selectionToolbar.left}px`,
+        top: `${selectionToolbar.top}px`,
+      }"
+      role="toolbar"
+      aria-label="Selected journal text actions"
+      @mousedown.prevent
+      @click.stop
+    >
+      <Button
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        aria-label="Create task from highlighted text"
+        title="Create task"
+        type="button"
+        @click="openCapture('task')"
+      >
+        <UiIcon name="ListTodo" :size="16" />
+      </Button>
+      <Button
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        aria-label="Link highlighted text to project"
+        title="Link to project"
+        type="button"
+        @click="openCapture('link')"
+      >
+        <UiIcon name="Link" :size="16" />
+      </Button>
     </div>
 
     <div v-if="captureOpen" class="journal-capture" role="dialog" aria-modal="true">
@@ -898,10 +972,6 @@ onBeforeUnmount(() => {
 
 .journal__topbar-actions :deep(button) {
   min-width: 34px;
-}
-
-.journal__topbar-actions :deep(button:disabled) {
-  opacity: 0.45;
 }
 
 .journal__archive-button {
@@ -1208,6 +1278,23 @@ onBeforeUnmount(() => {
 
 .journal__message.is-error {
   color: var(--color-danger, #b42318);
+}
+
+.journal-selection-toolbar {
+  position: fixed;
+  z-index: 55;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  padding: 3px;
+  background: var(--ui-surface, var(--color-surface));
+  box-shadow: var(--ui-shadow-md, 0 14px 32px rgba(15, 23, 42, 0.16));
+}
+
+.journal-selection-toolbar :deep(button) {
+  min-width: 34px;
 }
 
 .journal-capture {
