@@ -646,6 +646,10 @@ type CoreChatAgentContextResult = {
   error: string | null;
 };
 
+type CoreChatSetupReadiness = {
+  prompt: string;
+};
+
 type NormalizedMailboxDraftInput = {
   fromAddress: string;
   toAddress: string;
@@ -1732,6 +1736,7 @@ export async function dispatchAgentSandboxTurn(
   );
   const recent = toolPlan.recent;
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
+  const setupReadiness = await loadCoreChatSetupReadiness(env, input.userId, route.configured);
   const agentContext = await loadCoreChatAgentContext(env, {
     ownerId: input.userId,
     owner,
@@ -1744,6 +1749,7 @@ export async function dispatchAgentSandboxTurn(
     runtimeMessageText,
     knowledgeContext,
     agentContext?.prompt ?? null,
+    buildCoreChatOrientationPrompt(toolPlan.decision, setupReadiness),
   );
 
   let response: AgentSandboxDispatchResponse;
@@ -1753,8 +1759,9 @@ export async function dispatchAgentSandboxTurn(
       auditId: null,
       turnId: input.turnId,
       specialist: "core.agent-chat",
-      replyText:
-        "ME3 Core chat is connected. Add an AI provider in Account settings or bind Workers AI to turn this into a live model response.",
+      replyText: isCoreChatOrientationTurn(toolPlan.decision)
+        ? buildCoreChatOrientationFallbackReply(owner, setupReadiness)
+        : "ME3 Core chat is connected. Add an AI provider in Account settings or bind Workers AI to turn this into a live model response.",
       model: route.model,
       source: "fallback",
       fallbackReason: "AI provider setup required",
@@ -3652,6 +3659,7 @@ function buildChatMessages(
   messageText: string,
   knowledgeContext: string,
   agentContextPrompt: string | null,
+  orientationPrompt: string | null,
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
   const ownerName = owner?.name?.trim() || owner?.username?.trim() || "the owner";
   const assistantName = normalizeAssistantDisplayName(owner?.assistant_name);
@@ -3664,6 +3672,7 @@ function buildChatMessages(
     owner?.timezone ? `Owner timezone: ${owner.timezone}` : null,
     knowledgeContext,
     agentContextPrompt,
+    orientationPrompt,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
     "When the owner is setting up ME3, testing the assistant, or asking what you can do, acknowledge their goal and explain useful next steps from the available capability/context map. Treat capability examples as context unless the owner clearly asks for one concrete action.",
     "For email drafting, say 'save a draft' instead of 'stage a draft' or 'stage it in the ME3 mailbox'. If the owner asks to save the draft, the tool layer will handle saving it to /email.",
@@ -3688,6 +3697,55 @@ function normalizeAssistantDisplayName(value: unknown): string {
     .trim()
     .slice(0, 48);
   return safe || "ME3";
+}
+
+function isCoreChatOrientationTurn(decision: CoreChatToolPlannerDecision): boolean {
+  return (
+    decision.kind === "conversation" &&
+    decision.capabilityId === "core.agent-chat.conversation" &&
+    decision.confidence >= 0.9
+  );
+}
+
+function buildCoreChatOrientationPrompt(
+  decision: CoreChatToolPlannerDecision,
+  setupReadiness: CoreChatSetupReadiness,
+): string | null {
+  if (!isCoreChatOrientationTurn(decision)) return null;
+
+  return [
+    "ME3 first-run/setup orientation mode:",
+    "- The owner is exploring setup, context, or capabilities. Treat capability examples as context, not action requests.",
+    "- Acknowledge the owner's setup/testing goal first.",
+    "- Name what is available now using the setup readiness summary and capability map.",
+    "- Name what needs setup plainly. Do not pretend unconfigured tools are ready.",
+    "- Offer 2-4 useful test prompts or next actions.",
+    "- Ask at most one focused question, and only if it materially helps.",
+    "- If Mission statement or Wheel of Life context appears in the ME3 agent context packet, mention it as private context available for planning.",
+    "- Avoid internal product nouns such as recipes, event ingress, capability registry, run artifact, or review packet unless the owner asks about internals.",
+    setupReadiness.prompt,
+  ].join("\n");
+}
+
+function buildCoreChatOrientationFallbackReply(
+  owner: OwnerProfileRow | null,
+  setupReadiness: CoreChatSetupReadiness,
+): string {
+  const name = owner?.name?.trim() || owner?.username?.trim() || "there";
+  return [
+    `Yes, ${name}, ME3 Core chat is connected, and I can help you explore the install.`,
+    "",
+    "Available now: I can explain ME3, inspect the current setup state, use owner-scoped context that Core has loaded, and route direct tool requests when the relevant Core surface is ready.",
+    "",
+    setupReadiness.prompt,
+    "",
+    "Next best setup step: add an AI provider in Account settings or bind Workers AI so setup questions get live model-backed answers.",
+    "",
+    "Good test prompts after that:",
+    "- What context do you have available about me?",
+    "- Do I have any pending reminders?",
+    "- Draft a reply to the latest email from Ada.",
+  ].join("\n");
 }
 
 function attachAgentContextToResponse(
@@ -4439,6 +4497,105 @@ function mapRecentMessagesToContext(
       visibility: "private",
     }),
   }));
+}
+
+async function loadCoreChatSetupReadiness(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+  aiRouteConfigured: boolean,
+): Promise<CoreChatSetupReadiness> {
+  const [mailbox, hasCalendarSource, hasSoulink, hasLocalDaemon] = await Promise.all([
+    loadCoreSetupMailboxReadiness(env, ownerId),
+    hasCoreSetupRow(
+      env,
+      `SELECT id FROM calendar_sources WHERE user_id = ? AND status = 'active' LIMIT 1`,
+      ownerId,
+    ),
+    hasCoreSetupRow(
+      env,
+      `SELECT id FROM agent_channel_connections
+       WHERE user_id = ? AND channel = 'soulink' AND status = 'active'
+       LIMIT 1`,
+      ownerId,
+    ),
+    hasCoreSetupRow(
+      env,
+      `SELECT id FROM local_executor_pairings
+       WHERE user_id = ? AND status = 'active'
+       LIMIT 1`,
+      ownerId,
+    ),
+  ]);
+
+  const mailboxLine = mailbox
+    ? mailbox.status === "active"
+      ? "- Mailbox: active alias configured. Drafting can save to /email; sending is still approval-first."
+      : `- Mailbox: needs setup. Current alias status is ${mailbox.status || "pending"}; configure /email before promising mailbox actions.`
+    : "- Mailbox: needs setup before saving or sending drafts from the mailbox.";
+  const calendarSourceText =
+    hasCalendarSource === true
+      ? "an external calendar source is connected"
+      : hasCalendarSource === false
+        ? "no external calendar source is connected yet"
+        : "external calendar source state is unknown";
+  const soulinkText =
+    hasSoulink === true
+      ? "connected"
+      : hasSoulink === false
+        ? "needs setup for Soulink chat delivery"
+        : "setup state unknown";
+  const localDaemonText =
+    hasLocalDaemon === true
+      ? "paired"
+      : hasLocalDaemon === false
+        ? "not paired; optional setup is needed for local files, repos, or shell/code actions"
+        : "setup state unknown";
+
+  return {
+    prompt: [
+      "ME3 setup readiness summary:",
+      aiRouteConfigured
+        ? "- AI provider: ready for model-backed chat."
+        : "- AI provider: needs setup before live model-backed chat. Add Workers AI, OpenAI, or Anthropic in Account settings.",
+      `- Calendar/reminders: Core native reminders and calendar records are available; ${calendarSourceText}.`,
+      `- Soulink: ${soulinkText}.`,
+      mailboxLine,
+      `- Local daemon: ${localDaemonText}.`,
+    ].join("\n"),
+  };
+}
+
+async function loadCoreSetupMailboxReadiness(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<{ status: string | null } | null> {
+  try {
+    return (
+      (await env.DB.prepare(
+        `SELECT status
+         FROM mailbox_aliases
+         WHERE user_id = ?
+         LIMIT 1`,
+      )
+        .bind(ownerId)
+        .first<{ status: string | null }>()) || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function hasCoreSetupRow(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  sql: string,
+  ownerId: string,
+): Promise<boolean | null> {
+  try {
+    const row = await env.DB.prepare(sql).bind(ownerId).first<Record<string, unknown>>();
+    return Boolean(row);
+  } catch {
+    return null;
+  }
 }
 
 async function loadMe3KnowledgeRuntimeContext(

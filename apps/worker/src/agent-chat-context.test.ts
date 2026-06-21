@@ -8,10 +8,15 @@ type FakeDbState = {
   contacts: Array<Record<string, unknown>>;
   mailboxAliases: Array<Record<string, unknown>>;
   mailboxMessages: Array<Record<string, unknown>>;
+  calendarSources: Array<Record<string, unknown>>;
+  channelConnections: Array<Record<string, unknown>>;
+  localExecutorPairings: Array<Record<string, unknown>>;
   projects: Array<Record<string, unknown>>;
   tasks: Array<Record<string, unknown>>;
   calendarEvents: Array<Record<string, unknown>>;
   memory: Array<Record<string, unknown>>;
+  missionDashboardSettings: Record<string, unknown> | null;
+  wheelSnapshots: Array<Record<string, unknown>>;
   reminders: Array<Record<string, unknown>>;
   bookings: Array<Record<string, unknown>>;
   persistedMessages: Array<{ ownerId: string; role: string; content: string }>;
@@ -45,10 +50,15 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     contacts: [],
     mailboxAliases: [],
     mailboxMessages: [],
+    calendarSources: [],
+    channelConnections: [],
+    localExecutorPairings: [],
     projects: [],
     tasks: [],
     calendarEvents: [],
     memory: [],
+    missionDashboardSettings: null,
+    wheelSnapshots: [],
     reminders: [],
     bookings: [],
     persistedMessages: [],
@@ -67,6 +77,30 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("FROM install_secrets")) return null;
           if (sql.includes("FROM mailbox_aliases")) {
             return (dbState.mailboxAliases.find((alias) => alias.user_id === values[0]) || null) as T;
+          }
+          if (sql.includes("FROM calendar_sources")) {
+            return (dbState.calendarSources.find(
+              (source) => source.user_id === values[0] && source.status === "active",
+            ) || null) as T;
+          }
+          if (sql.includes("FROM agent_channel_connections")) {
+            return (dbState.channelConnections.find(
+              (connection) =>
+                connection.user_id === values[0] &&
+                connection.channel === "soulink" &&
+                connection.status === "active",
+            ) || null) as T;
+          }
+          if (sql.includes("FROM local_executor_pairings")) {
+            return (dbState.localExecutorPairings.find(
+              (pairing) => pairing.user_id === values[0] && pairing.status === "active",
+            ) || null) as T;
+          }
+          if (sql.includes("FROM mission_dashboard_settings")) {
+            return values[0] === "owner" ? (dbState.missionDashboardSettings as T) : null;
+          }
+          if (sql.includes("FROM mission_wheel_snapshots")) {
+            return (dbState.wheelSnapshots.find((snapshot) => snapshot.user_id === values[0]) || null) as T;
           }
           if (sql.includes("FROM mailbox_messages")) {
             if (sql.includes("WHERE id = ? AND mailbox_id = ?")) {
@@ -513,6 +547,10 @@ describe("Core chat native context", () => {
         "Yes, that makes sense. I can help you explore ME3, inspect context, and turn useful gaps into code improvements.",
     }));
     const env = createEnv({
+      missionDashboardSettings: missionDashboardSettingsRow(
+        "Help builders steer their work with calm, useful systems.",
+      ),
+      wheelSnapshots: [wheelSnapshotRow()],
       reminders: [
         {
           id: "reminder-existing",
@@ -551,6 +589,50 @@ describe("Core chat native context", () => {
     expect(modelInput.messages[0]?.content).toContain(
       "When the owner is setting up ME3, testing the assistant, or asking what you can do",
     );
+    expect(modelInput.messages[0]?.content).toContain(
+      "ME3 first-run/setup orientation mode:",
+    );
+    expect(modelInput.messages[0]?.content).toContain("ME3 setup readiness summary:");
+    expect(modelInput.messages[0]?.content).toContain("AI provider: ready");
+    expect(modelInput.messages[0]?.content).toContain("Soulink: needs setup");
+    expect(modelInput.messages[0]?.content).toContain("Mailbox: needs setup");
+    expect(modelInput.messages[0]?.content).toContain("Local daemon: not paired");
+    expect(modelInput.messages[0]?.content).toContain(
+      "Mission statement:\n- Help builders steer their work with calm, useful systems.",
+    );
+    expect(modelInput.messages[0]?.content).toContain("Wheel of Life snapshot:");
+    expect(modelInput.messages[0]?.content).toContain("Offer 2-4 useful test prompts");
+  });
+
+  it("orients first-run setup prompts even before an AI provider is configured", async () => {
+    const env = createEnv({
+      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
+      calendarSources: [calendarSourceRow("calendar-source")],
+      channelConnections: [soulinkConnectionRow("soulink-connection")],
+      localExecutorPairings: [localExecutorPairingRow("local-pairing")],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      env as never,
+      createStorage(),
+      dispatchInput("I'm setting up ME3 for the first time. What can you do here?"),
+    );
+
+    expect(response).toMatchObject({
+      source: "fallback",
+      specialist: "core.agent-chat",
+      fallbackReason: "AI provider setup required",
+      reminderAction: null,
+      emailAction: null,
+    });
+    expect(response.replyText).toContain("ME3 Core chat is connected");
+    expect(response.replyText).toContain("AI provider: needs setup");
+    expect(response.replyText).toContain("Calendar/reminders: Core native reminders");
+    expect(response.replyText).toContain("Soulink: connected");
+    expect(response.replyText).toContain("Mailbox: active alias configured");
+    expect(response.replyText).toContain("Local daemon: paired");
+    expect(response.replyText).toContain("Good test prompts");
+    expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
   });
 
   it("attaches a development trace for model-first turns when enabled", async () => {
@@ -1371,6 +1453,60 @@ function calendarEventRow(
     timezone: "Europe/Dublin",
     created_at: "2026-05-15T09:00:00Z",
     updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function missionDashboardSettingsRow(statement: string): Record<string, unknown> {
+  return {
+    user_id: "owner",
+    mission_statement: statement,
+    timeframe: "weekly",
+    updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function wheelSnapshotRow(): Record<string, unknown> {
+  return {
+    id: "wheel-snapshot",
+    user_id: "owner",
+    segments_json: JSON.stringify([
+      { id: "health", label: "Health", value: 7 },
+      { id: "work", label: "Work", value: 8 },
+      { id: "relationships", label: "Relationships", value: 6 },
+    ]),
+    notes_json: JSON.stringify({
+      work: "Keep useful systems calm and practical.",
+    }),
+    created_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function calendarSourceRow(id: string): Record<string, unknown> {
+  return {
+    id,
+    user_id: "owner",
+    provider: "google",
+    status: "active",
+    created_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function soulinkConnectionRow(id: string): Record<string, unknown> {
+  return {
+    id,
+    user_id: "owner",
+    channel: "soulink",
+    status: "active",
+    created_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function localExecutorPairingRow(id: string): Record<string, unknown> {
+  return {
+    id,
+    user_id: "owner",
+    status: "active",
+    created_at: "2026-05-15T09:00:00Z",
   };
 }
 
