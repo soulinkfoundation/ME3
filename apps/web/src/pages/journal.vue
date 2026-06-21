@@ -674,6 +674,17 @@ onBeforeUnmount(() => {
         >
           <UiIcon name="Archive" :size="16" />
         </Button>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          to="/mission-control"
+          aria-label="Close Journal"
+          title="Close Journal"
+        >
+          <UiIcon name="X" :size="18" />
+        </Button>
       </div>
     </header>
 
@@ -970,7 +981,7 @@ onBeforeUnmount(() => {
   gap: 4px;
 }
 
-.journal__topbar-actions :deep(button) {
+.journal__topbar-actions :deep(.me3-btn) {
   min-width: 34px;
 }
 

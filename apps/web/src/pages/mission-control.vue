@@ -1128,10 +1128,13 @@ onMounted(() => {
 
           <template v-else-if="cardComponentKey(card) === 'WheelSnapshotCard'">
             <header class="dashboard-card__header">
-              <h2 class="dashboard-card__title">
+              <RouterLink
+                class="dashboard-card__title dashboard-card__title-link"
+                to="/mission-control/wheel-of-life"
+              >
                 <UiIcon name="ShipWheel" :size="16" />
                 <span>Wheel of Life</span>
-              </h2>
+              </RouterLink>
               <div class="dashboard-card__header-actions">
                 <span v-if="wheelSnapshot?.snapshot">
                   Saved
@@ -1865,9 +1868,14 @@ onMounted(() => {
 
 .dashboard-card__title {
   display: inline-flex;
+  margin: 0;
   min-width: 0;
   align-items: center;
   gap: 8px;
+  color: var(--ui-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .dashboard-card__title svg {
