@@ -4,19 +4,19 @@ ME3 thinks your personal AI (and the rest... email, calendar, website) should be
 
 ![ME3 screenshot](apps/web/public/me3.gif)
 
-#### It's time, grasshopper...
+**It's time, grasshopper...**
 
-#### Time to take ownership of your digital life!
+**Time to take ownership of your digital life!**
 
-#### Are you ready? 
+**Ready? Me too...**
 
-#### Me too...
+**ME3!** 
 
-#### ME3!
-
-All you need to do is PRESS THE BUTTON!! (+ a free Cloudflare and GitHub account).
+**Just press the BUTTON!** 🔴👇
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3)
+
+(requires Cloudflare + Github accounts) 
 
 ## 🖥️ What's in ME3
 
@@ -31,7 +31,7 @@ Note: some features may require Cloudflare’s $5/month plan.
 
 ## 📜 Docs
 
-Let's be honest, you were never going to read them. Once you're set up, you can ask ME3 what you need to know, like how to configure a custom domain, run the app locally, and create your own plugins.
+Let's be honest, you were never going to read them. Once you're set up, you can ask ME3 what you need to know, like how to configure a custom domain, run the app locally, or create your own plugins.
 
 ## 😘 Support
 
