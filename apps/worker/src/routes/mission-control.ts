@@ -15,6 +15,7 @@ import {
   createMissionTaskLocalExecutorRun,
   createMissionWheelSnapshot,
   deleteMissionContextSource,
+  deleteJournalProjectLink,
   deleteMissionMemory,
   getMissionDaemonStatus,
   getMissionDashboard,
@@ -272,6 +273,21 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
     try {
       return c.json(
         await listJournalEntryLinks(c.env, ownerId, c.req.param("id")),
+      );
+    } catch (error) {
+      return missionControlErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/mission-control/journal/links/:id", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireMissionControlPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      return c.json(
+        await deleteJournalProjectLink(c.env, ownerId, c.req.param("id")),
       );
     } catch (error) {
       return missionControlErrorResponse(c, error);

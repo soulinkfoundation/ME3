@@ -257,6 +257,8 @@ const projectTasks = ref<MissionTask[]>([]);
 const projectJournalLinks = ref<JournalProjectLink[]>([]);
 const projectJournalLinksLoading = ref(false);
 const projectJournalLinksError = ref("");
+const projectJournalLinkMenuId = ref("");
+const projectJournalLinkActionId = ref("");
 const projectTasksLoading = ref(false);
 const projectTasksLoadingMore = ref(false);
 const projectTasksError = ref("");
@@ -952,6 +954,15 @@ async function loadProjectJournalLinks(projectId = selectedProjectTaskScopeId.va
   } finally {
     projectJournalLinksLoading.value = false;
   }
+}
+
+function toggleProjectJournalLinkMenu(linkId: string) {
+  projectJournalLinkMenuId.value =
+    projectJournalLinkMenuId.value === linkId ? "" : linkId;
+}
+
+function closeProjectJournalLinkMenu() {
+  projectJournalLinkMenuId.value = "";
 }
 
 async function loadCompletedProjectTasks(
@@ -1659,6 +1670,26 @@ async function archiveProjectTask(task: MissionTask): Promise<boolean> {
   }
 }
 
+async function deleteProjectJournalLink(link: JournalProjectLink) {
+  if (projectJournalLinkActionId.value) return;
+  const confirmed = window.confirm("Remove this journal link from the project log?");
+  if (!confirmed) return;
+  projectJournalLinkActionId.value = link.id;
+  projectJournalLinksError.value = "";
+  try {
+    await api.delete(`/mission-control/journal/links/${encodeURIComponent(link.id)}`);
+    projectJournalLinks.value = projectJournalLinks.value.filter(
+      (item) => item.id !== link.id,
+    );
+    closeProjectJournalLinkMenu();
+  } catch (e) {
+    projectJournalLinksError.value =
+      e instanceof ApiError ? e.message : "Could not remove journal link";
+  } finally {
+    projectJournalLinkActionId.value = "";
+  }
+}
+
 async function archiveSelectedProjectTask() {
   const task = selectedProjectTaskDetail.value;
   if (!task || projectTaskDetailSaving.value) return;
@@ -1890,6 +1921,10 @@ function syncSelectedProjectFromRoute() {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && projectJournalLinkMenuId.value) {
+    closeProjectJournalLinkMenu();
+    return;
+  }
   if (event.key === "Escape" && projectPickerOpen.value) {
     projectPickerOpen.value = false;
     return;
@@ -1906,6 +1941,7 @@ function handleWindowKeydown(event: KeyboardEvent) {
 
 function handleWindowClick() {
   projectPickerOpen.value = false;
+  closeProjectJournalLinkMenu();
 }
 
 watch(
@@ -2227,7 +2263,7 @@ onBeforeUnmount(() => {
           <header class="project-journal-log__header">
             <div>
               <h2>Log</h2>
-              <p>Journal context linked to {{ selectedProjectDetail.name }}</p>
+              <p>Journal entries linked to {{ selectedProjectDetail.name }}</p>
             </div>
             <Button
               color="ghost"
@@ -2256,18 +2292,58 @@ onBeforeUnmount(() => {
             No journal links yet.
           </div>
           <template v-else>
-            <a
+            <article
               v-for="link in visibleProjectJournalLinks"
               :key="link.id"
               class="project-journal-log__row"
-              :href="journalLinkHref(link)"
+              :class="{ 'is-menu-open': projectJournalLinkMenuId === link.id }"
             >
-              <span>{{ formatShortDate(link.entryDate) }}</span>
-              <strong>{{ journalLinkTitle(link) }}</strong>
-              <p v-if="journalLinkSnippet(link)">
-                {{ journalLinkSnippet(link) }}
-              </p>
-            </a>
+              <a
+                class="project-journal-log__row-main"
+                :href="journalLinkHref(link)"
+              >
+                <span>{{ formatShortDate(link.entryDate) }}</span>
+                <strong>{{ journalLinkTitle(link) }}</strong>
+                <p v-if="journalLinkSnippet(link)">
+                  {{ journalLinkSnippet(link) }}
+                </p>
+              </a>
+              <div class="project-journal-log__actions" @click.stop>
+                <Button
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  type="button"
+                  :aria-label="`Actions for ${journalLinkTitle(link)}`"
+                  aria-haspopup="menu"
+                  :aria-expanded="
+                    projectJournalLinkMenuId === link.id ? 'true' : 'false'
+                  "
+                  title="Journal link actions"
+                  :disabled="projectJournalLinkActionId === link.id"
+                  @click="toggleProjectJournalLinkMenu(link.id)"
+                >
+                  <UiIcon name="Ellipsis" :size="16" aria-hidden="true" />
+                </Button>
+                <div
+                  v-if="projectJournalLinkMenuId === link.id"
+                  class="project-journal-log__menu"
+                  role="menu"
+                >
+                  <button
+                    type="button"
+                    class="project-journal-log__menu-item is-danger"
+                    role="menuitem"
+                    :disabled="projectJournalLinkActionId === link.id"
+                    @click="deleteProjectJournalLink(link)"
+                  >
+                    <UiIcon name="Trash2" :size="15" aria-hidden="true" />
+                    Remove link
+                  </button>
+                </div>
+              </div>
+            </article>
           </template>
         </section>
       </div>
@@ -3002,7 +3078,7 @@ onBeforeUnmount(() => {
 
 .project-journal-log__header h2,
 .project-journal-log__header p,
-.project-journal-log__row p {
+.project-journal-log__row-main p {
   margin: 0;
 }
 
@@ -3012,31 +3088,114 @@ onBeforeUnmount(() => {
 }
 
 .project-journal-log__header p,
-.project-journal-log__row span,
-.project-journal-log__row p {
+.project-journal-log__row-main span,
+.project-journal-log__row-main p {
   color: var(--ui-text-muted);
   font-size: 12px;
 }
 
 .project-journal-log__row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  align-items: start;
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-text);
+}
+
+.project-journal-log__row-main {
   display: grid;
   gap: 3px;
+  min-width: 0;
   border-radius: var(--ui-radius-sm);
   padding: 9px 8px;
-  color: var(--ui-text);
+  color: inherit;
   text-decoration: none;
 }
 
 .project-journal-log__row:hover,
-.project-journal-log__row:focus-visible {
+.project-journal-log__row:focus-within,
+.project-journal-log__row.is-menu-open {
+  background: var(--ui-surface-muted);
+}
+
+.project-journal-log__row-main:focus-visible {
+  outline: none;
+}
+
+.project-journal-log__row-main strong,
+.project-journal-log__row-main p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.project-journal-log__actions {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.project-journal-log__row:hover .project-journal-log__actions,
+.project-journal-log__row:focus-within .project-journal-log__actions,
+.project-journal-log__row.is-menu-open .project-journal-log__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.project-journal-log__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 4px;
+  z-index: 20;
+  min-width: 148px;
+  box-sizing: border-box;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 6px;
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.project-journal-log__menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-journal-log__menu-item:hover,
+.project-journal-log__menu-item:focus-visible {
   background: var(--ui-surface-muted);
   outline: none;
 }
 
-.project-journal-log__row strong,
-.project-journal-log__row p {
-  min-width: 0;
-  overflow-wrap: anywhere;
+.project-journal-log__menu-item.is-danger {
+  color: #b91c1c;
+}
+
+.project-journal-log__menu-item:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+@media (hover: none) {
+  .project-journal-log__actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .completed-tasks-view__header {

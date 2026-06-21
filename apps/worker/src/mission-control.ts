@@ -1018,6 +1018,23 @@ export async function listJournalEntryLinks(
   return { links: (rows.results || []).map(serializeJournalProjectLink) };
 }
 
+export async function deleteJournalProjectLink(
+  env: Env,
+  userId: string,
+  linkId: string,
+) {
+  const result = await env.DB.prepare(
+    `DELETE FROM journal_project_links
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(linkId, userId)
+    .run();
+  if ((result.meta?.changes || 0) === 0) {
+    throw new MissionControlInputError("Journal link not found", 404);
+  }
+  return { ok: true };
+}
+
 export async function archiveMissionTask(env: Env, userId: string, taskId: string) {
   const result = await env.DB.prepare(
     `UPDATE mission_tasks

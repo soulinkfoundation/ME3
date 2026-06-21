@@ -14,6 +14,10 @@ import Button from "../components/Button.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import TiptapEditor from "../components/TiptapEditor.vue";
 import UiIcon from "../components/UiIcon.vue";
+import {
+  parseJournalTaskMarkers,
+  type JournalTaskMarkerSuggestion,
+} from "../utils/journalOrganize";
 
 definePage({
   meta: {
@@ -43,6 +47,7 @@ type JournalArchiveEntry = JournalEntry & {
 type MissionProject = {
   id: string;
   name: string;
+  slug?: string | null;
 };
 
 type JournalProjectLink = {
@@ -59,6 +64,9 @@ type JournalProjectLink = {
 };
 
 type CaptureMode = "task" | "link";
+type OrganizeTaskSuggestion = JournalTaskMarkerSuggestion & {
+  selected: boolean;
+};
 
 const route = useRoute();
 const selectedDate = ref(normalizeLocalDateInput(rawDateQuery(route.query.date)) || todayKey());
@@ -85,6 +93,10 @@ const captureTitle = ref("");
 const captureProjectId = ref("");
 const captureSaving = ref(false);
 const captureError = ref("");
+const organizeOpen = ref(false);
+const organizeSuggestions = ref<OrganizeTaskSuggestion[]>([]);
+const organizeSaving = ref(false);
+const organizeError = ref("");
 const editorWrap = ref<HTMLElement | null>(null);
 const selectionToolbar = ref({
   visible: false,
@@ -188,6 +200,19 @@ function htmlToPlainText(value: string): string {
     .replace(/\u00a0/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function htmlToLineText(value: string): string {
+  if (!value) return "";
+  const doc = new DOMParser().parseFromString(value, "text/html");
+  const blocks = Array.from(
+    doc.body.querySelectorAll("p, li, h1, h2, h3, h4, h5, h6, blockquote"),
+  )
+    .map((node) => (node.textContent || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  return blocks.length
+    ? blocks.join("\n")
+    : (doc.body.textContent || "").replace(/\s+/g, " ").trim();
 }
 
 function projectName(projectId: string | null): string {
@@ -353,6 +378,77 @@ async function openCapture(mode: CaptureMode) {
   captureOpen.value = true;
 }
 
+async function openOrganize() {
+  error.value = "";
+  organizeError.value = "";
+  await flushPendingSave();
+  const entry = loadedEntry.value;
+  if (!entry) {
+    error.value = "Write something first, then organize it.";
+    return;
+  }
+  try {
+    await loadProjects();
+  } catch (projectError) {
+    error.value =
+      projectError instanceof Error
+        ? projectError.message
+        : "Could not load projects.";
+    return;
+  }
+  organizeSuggestions.value = parseJournalTaskMarkers(
+    htmlToLineText(description.value),
+    projects.value,
+  ).map((suggestion) => ({ ...suggestion, selected: true }));
+  if (organizeSuggestions.value.length === 0) {
+    organizeError.value = "No #task markers found.";
+  }
+  organizeOpen.value = true;
+}
+
+function closeOrganize() {
+  if (organizeSaving.value) return;
+  organizeOpen.value = false;
+  organizeError.value = "";
+}
+
+async function submitOrganize() {
+  const entry = loadedEntry.value;
+  const selected = organizeSuggestions.value.filter((suggestion) => suggestion.selected);
+  if (!entry || selected.length === 0 || organizeSaving.value) return;
+  organizeSaving.value = true;
+  organizeError.value = "";
+  try {
+    const links: JournalProjectLink[] = [];
+    for (const suggestion of selected) {
+      const response = await api.post<{ link: JournalProjectLink }>(
+        "/mission-control/journal/tasks",
+        {
+          journalEntryId: entry.id,
+          projectId: suggestion.projectId,
+          sourceText: suggestion.sourceText,
+          title: suggestion.title,
+        },
+      );
+      links.push(response.link);
+    }
+    entryLinks.value = [
+      ...links,
+      ...entryLinks.value.filter(
+        (link) => !links.some((created) => created.id === link.id),
+      ),
+    ];
+    organizeOpen.value = false;
+  } catch (organizeSubmitError) {
+    organizeError.value =
+      organizeSubmitError instanceof ApiError
+        ? organizeSubmitError.message
+        : "Could not create journal tasks.";
+  } finally {
+    organizeSaving.value = false;
+  }
+}
+
 function hideSelectionToolbar() {
   selectionToolbar.value = {
     visible: false,
@@ -363,7 +459,7 @@ function hideSelectionToolbar() {
 }
 
 function updateSelectionToolbar() {
-  if (captureOpen.value) {
+  if (captureOpen.value || organizeOpen.value) {
     hideSelectionToolbar();
     return;
   }
@@ -567,6 +663,10 @@ function handleWindowClick() {
 
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
+    if (organizeOpen.value) {
+      closeOrganize();
+      return;
+    }
     if (selectionToolbar.value.visible) {
       hideSelectionToolbar();
       return;
@@ -660,6 +760,18 @@ onBeforeUnmount(() => {
         />
       </div>
       <div class="journal__topbar-actions">
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          aria-label="Organize journal markers"
+          title="Organize"
+          type="button"
+          @click="openOrganize"
+        >
+          <UiIcon name="Sparkles" :size="16" />
+        </Button>
         <Button
           color="ghost"
           shape="soft"
@@ -914,6 +1026,68 @@ onBeforeUnmount(() => {
             :disabled="captureSaving || !captureProjectId || !captureText.trim()"
           >
             {{ captureSaving ? "Saving" : "Confirm" }}
+          </Button>
+        </footer>
+      </form>
+    </div>
+
+    <div v-if="organizeOpen" class="journal-capture" role="dialog" aria-modal="true">
+      <form
+        class="journal-capture__panel journal-organize"
+        @submit.prevent="submitOrganize"
+      >
+        <header>
+          <h2>Organize</h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Close"
+            title="Close"
+            @click="closeOrganize"
+          >
+            <UiIcon name="X" :size="16" />
+          </Button>
+        </header>
+        <p v-if="organizeError" class="journal__message is-error">
+          {{ organizeError }}
+        </p>
+        <div v-if="organizeSuggestions.length > 0" class="journal-organize__list">
+          <label
+            v-for="suggestion in organizeSuggestions"
+            :key="suggestion.id"
+            class="journal-organize__item"
+          >
+            <input v-model="suggestion.selected" type="checkbox" />
+            <span>
+              <strong>{{ suggestion.title }}</strong>
+              <select v-model="suggestion.projectId">
+                <option
+                  v-for="project in projects"
+                  :key="project.id"
+                  :value="project.id"
+                >
+                  {{ project.name }}
+                </option>
+              </select>
+            </span>
+          </label>
+        </div>
+        <footer>
+          <span>{{ organizeSuggestions.filter((item) => item.selected).length }} tasks</span>
+          <Button
+            color="accent"
+            shape="soft"
+            size="compact"
+            type="submit"
+            :disabled="
+              organizeSaving ||
+              organizeSuggestions.filter((item) => item.selected).length === 0
+            "
+          >
+            {{ organizeSaving ? "Creating" : "Create selected" }}
           </Button>
         </footer>
       </form>
@@ -1376,6 +1550,52 @@ onBeforeUnmount(() => {
   font-size: 0.82rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.journal-organize {
+  width: min(100%, 520px);
+}
+
+.journal-organize__list {
+  display: grid;
+  gap: 8px;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+}
+
+.journal-organize__item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  border-radius: var(--ui-radius-sm, 8px);
+  padding: 8px;
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.journal-organize__item input {
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+}
+
+.journal-organize__item span {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.journal-organize__item strong {
+  min-width: 0;
+  color: var(--ui-text, var(--color-text));
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.journal-organize__item select {
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 0.84rem;
 }
 
 @media (max-width: 900px) {
