@@ -3131,6 +3131,40 @@ describe("ME3 Core Worker auth", () => {
     expect(response.headers.get("X-Frame-Options")).toBeNull();
   });
 
+  it("canonicalizes /me so relative site files resolve under the Worker public prefix", async () => {
+    const env = createEnv();
+    addBookableSite(env);
+    addSiteFileText(
+      env,
+      "site-booking",
+      "public/index.html",
+      '<!doctype html><img src="./files/avatar.png" alt="Owner">',
+      "text/html; charset=utf-8",
+    );
+    addSiteFileText(env, "site-booking", "public/files/avatar.png", "PNG", "image/png");
+    env.ME3_SITE_USERNAME = "owner";
+
+    const redirect = await app.fetch(
+      new Request("https://kierans-me3.example.workers.dev/me?ref=share"),
+      env,
+    );
+    expect(redirect.status).toBe(308);
+    expect(redirect.headers.get("Location")).toBe(
+      "https://kierans-me3.example.workers.dev/me/?ref=share",
+    );
+
+    const pageUrl = "https://kierans-me3.example.workers.dev/me/";
+    const page = await app.fetch(new Request(pageUrl), env);
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(html).toContain('src="./files/avatar.png"');
+
+    const assetUrl = new URL("./files/avatar.png", pageUrl).toString();
+    const asset = await app.fetch(new Request(assetUrl), env);
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("Content-Type")).toBe("image/png");
+  });
+
   it("serves the published site profile at the well-known me.json discovery path", async () => {
     const env = createEnv();
     addBookableSite(env);

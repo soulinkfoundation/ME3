@@ -1035,7 +1035,9 @@ export function registerPublicSiteRoutes(app: AppHono) {
   });
 
   app.get("/me", async (c) => {
-    return serveDefaultPublicSitePath(c.env, c.req.raw, "index.html");
+    const canonicalUrl = new URL(c.req.url);
+    canonicalUrl.pathname = `${canonicalUrl.pathname}/`;
+    return c.redirect(canonicalUrl.toString(), 308);
   });
 
   app.get("/me/*", async (c) => {
