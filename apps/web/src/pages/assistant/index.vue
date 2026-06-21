@@ -760,7 +760,7 @@ const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const jobBuilderStarterPrompt =
   "/job Every friday, review my projects and outstanding tasks";
 const configureStarterPrompt =
-  "Help me set up ME3. Ask me what I want to configure first: custom domain, email, Soulink or Telegram, assistant/AI, jobs, plugins, or updates. If I'm not sure, walk me through the basics.";
+  "Help me configure my ME3 installation. First check what is already set up across my public site/profile, email mailbox, Soulink or Telegram, assistant/AI, jobs, plugins, and updates. Then suggest the missing or most useful next step. If I'm not sure, walk me through the basics.";
 type StarterPrompt = {
   label: string;
   icon: string;

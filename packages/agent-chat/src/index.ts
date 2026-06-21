@@ -520,6 +520,28 @@ type DbPluginInstallationRow = {
   status: string;
 };
 
+type DbCoreSetupProfileSiteRow = {
+  username: string | null;
+  custom_domain: string | null;
+  custom_domain_status: string | null;
+  published_at: string | null;
+};
+
+type CoreSetupPluginReadiness = {
+  total: number;
+  enabled: number;
+  setupRequired: number;
+  disabled: number;
+};
+
+type CoreSetupJobsReadiness = {
+  total: number;
+  active: number;
+  needsSetup: number;
+  paused: number;
+  draft: number;
+};
+
 type DbReminderRow = {
   id: string;
   title: string;
@@ -1833,7 +1855,12 @@ export async function dispatchAgentSandboxTurn(
   );
   const recent = toolPlan.recent;
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
-  const setupReadiness = await loadCoreChatSetupReadiness(env, input.userId, route.configured);
+  const setupReadiness = await loadCoreChatSetupReadiness(
+    env,
+    input.userId,
+    route.configured,
+    owner,
+  );
   const agentContext = await loadCoreChatAgentContext(env, {
     ownerId: input.userId,
     owner,
@@ -1858,7 +1885,7 @@ export async function dispatchAgentSandboxTurn(
       specialist: "core.agent-chat",
       replyText: isCoreChatOrientationTurn(toolPlan.decision)
         ? buildCoreChatOrientationFallbackReply(owner, setupReadiness)
-        : "ME3 Core chat is connected. Add an AI provider in Account settings or bind Workers AI to turn this into a live model response.",
+        : "ME3 chat is connected for your ME3 installation. Add an AI provider in Account settings or bind Workers AI to turn this into a live model response.",
       model: route.model,
       source: "fallback",
       fallbackReason: "AI provider setup required",
@@ -4103,7 +4130,7 @@ function buildChatMessages(
   const ownerName = owner?.name?.trim() || owner?.username?.trim() || "the owner";
   const assistantName = normalizeAssistantDisplayName(owner?.assistant_name);
   const system = [
-    "You are a concise personal/business assistant running inside the owner's private ME3 Core install.",
+    "You are a concise personal/business assistant running inside the owner's private ME3 installation.",
     `Your assistant display name is ${JSON.stringify(assistantName)}.`,
     "If asked who you are or what your name is, use the assistant display name.",
     `The owner is ${ownerName}.`,
@@ -4114,8 +4141,10 @@ function buildChatMessages(
     orientationPrompt,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
     "When the owner is setting up ME3, testing the assistant, or asking what you can do, acknowledge their goal and explain useful next steps from the available capability/context map. Treat capability examples as context unless the owner clearly asks for one concrete action.",
+    "When the owner asks to configure ME3, use the setup readiness summary first: separate what already looks ready from the most useful missing next steps. Use 'your ME3 installation' in owner-facing setup copy, not 'Core install'.",
+    "For public setup, say 'Public site/profile' and focus on profile basics, published/draft site status, and custom domain. Do not mention me.json, projects, or mission as public profile setup items.",
     "For email drafting, say 'save a draft' instead of 'stage a draft' or 'stage it in the ME3 mailbox'. If the owner asks to save the draft, the tool layer will handle saving it to /email.",
-    "Core can converse with the owner and can use bundled first-party API surfaces for reminders, contacts, mailbox, content, calendar, and site workflows as they are routed by the host.",
+    "This ME3 installation can converse with the owner and can use bundled first-party API surfaces for reminders, contacts, mailbox, content, calendar, and site workflows as they are routed by the host.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -4158,8 +4187,11 @@ function buildCoreChatOrientationPrompt(
     "- Acknowledge the owner's setup/testing goal first.",
     "- Name what is available now using the setup readiness summary and capability map.",
     "- Name what needs setup plainly. Do not pretend unconfigured tools are ready.",
+    "- For configure requests, prefer a compact 'already set up' / 'good next steps' answer over a generic list of every possible setting.",
     "- Offer 2-4 useful test prompts or next actions.",
     "- Ask at most one focused question, and only if it materially helps.",
+    "- In owner-facing wording, say 'your ME3 installation' instead of 'Core install'.",
+    "- For public setup, say 'Public site/profile'. Do not mention me.json, projects, or mission as public profile setup items.",
     "- If Mission statement or Wheel of Life context appears in the ME3 agent context packet, mention it as private context available for planning.",
     "- Avoid internal product nouns such as recipes, event ingress, capability registry, run artifact, or review packet unless the owner asks about internals.",
     setupReadiness.prompt,
@@ -4172,7 +4204,7 @@ function buildCoreChatOrientationFallbackReply(
 ): string {
   const name = owner?.name?.trim() || owner?.username?.trim() || "there";
   return [
-    `Yes, ${name}, ME3 Core chat is connected, and I can help you explore the install.`,
+    `Yes, ${name}, ME3 chat is connected for your ME3 installation, and I can help you explore setup.`,
     "",
     "Available now: I can explain ME3, inspect the current setup state, use owner-scoped context that Core has loaded, and route direct tool requests when the relevant Core surface is ready.",
     "",
@@ -4952,9 +4984,22 @@ async function loadCoreChatSetupReadiness(
   env: CoreAgentChatEnv,
   ownerId: string,
   aiRouteConfigured: boolean,
+  owner: OwnerProfileRow | null,
 ): Promise<CoreChatSetupReadiness> {
-  const [mailbox, hasCalendarSource, hasSoulink, hasLocalDaemon] = await Promise.all([
+  const [
+    mailbox,
+    profileSite,
+    plugins,
+    jobs,
+    hasCalendarSource,
+    hasSoulink,
+    hasTelegram,
+    hasLocalDaemon,
+  ] = await Promise.all([
     loadCoreSetupMailboxReadiness(env, ownerId),
+    loadCoreSetupProfileSiteReadiness(env, ownerId),
+    loadCoreSetupPluginReadiness(env),
+    loadCoreSetupJobsReadiness(env, ownerId),
     hasCoreSetupRow(
       env,
       `SELECT id FROM calendar_sources WHERE user_id = ? AND status = 'active' LIMIT 1`,
@@ -4964,6 +5009,13 @@ async function loadCoreChatSetupReadiness(
       env,
       `SELECT id FROM agent_channel_connections
        WHERE user_id = ? AND channel = 'soulink' AND status = 'active'
+       LIMIT 1`,
+      ownerId,
+    ),
+    hasCoreSetupRow(
+      env,
+      `SELECT id FROM agent_channel_connections
+       WHERE user_id = ? AND channel = 'telegram' AND status = 'active'
        LIMIT 1`,
       ownerId,
     ),
@@ -4987,12 +5039,7 @@ async function loadCoreChatSetupReadiness(
       : hasCalendarSource === false
         ? "no external calendar source is connected yet"
         : "external calendar source state is unknown";
-  const soulinkText =
-    hasSoulink === true
-      ? "connected"
-      : hasSoulink === false
-        ? "needs setup for Soulink chat delivery"
-        : "setup state unknown";
+  const messagingText = describeCoreSetupMessaging(hasSoulink, hasTelegram);
   const localDaemonText =
     hasLocalDaemon === true
       ? "paired"
@@ -5006,12 +5053,145 @@ async function loadCoreChatSetupReadiness(
       aiRouteConfigured
         ? "- AI provider: ready for model-backed chat."
         : "- AI provider: needs setup before live model-backed chat. Add Workers AI, OpenAI, or Anthropic in Account settings.",
+      describeCoreSetupProfileSite(profileSite, owner),
       `- Calendar/reminders: Core native reminders and calendar records are available; ${calendarSourceText}.`,
-      `- Soulink: ${soulinkText}.`,
+      `- Soulink/Telegram: ${messagingText}.`,
       mailboxLine,
+      describeCoreSetupPlugins(plugins),
+      describeCoreSetupJobs(jobs),
+      "- Updates: release/version metadata is available through the Updates flow; check updates before upgrading this installation.",
       `- Local daemon: ${localDaemonText}.`,
     ].join("\n"),
   };
+}
+
+async function loadCoreSetupProfileSiteReadiness(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<DbCoreSetupProfileSiteRow | null> {
+  try {
+    return (
+      (await env.DB.prepare(
+        `SELECT username, custom_domain, custom_domain_status, published_at
+         FROM sites
+         WHERE user_id = ? AND COALESCE(site_type, 'profile') = 'profile'
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+      )
+        .bind(ownerId)
+        .first<DbCoreSetupProfileSiteRow>()) || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function loadCoreSetupPluginReadiness(
+  env: Pick<CoreAgentChatEnv, "DB">,
+): Promise<CoreSetupPluginReadiness | null> {
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT plugin_id, enabled, status
+       FROM plugin_installations
+       ORDER BY plugin_id`,
+    )
+      .bind()
+      .all<DbPluginInstallationRow>();
+    const plugins = rows.results || [];
+    return {
+      total: plugins.length,
+      enabled: plugins.filter((plugin) => plugin.enabled !== 0 && plugin.status === "installed")
+        .length,
+      setupRequired: plugins.filter(
+        (plugin) => plugin.enabled !== 0 && plugin.status === "setup_required",
+      ).length,
+      disabled: plugins.filter((plugin) => plugin.enabled === 0 || plugin.status === "disabled")
+        .length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function loadCoreSetupJobsReadiness(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  ownerId: string,
+): Promise<CoreSetupJobsReadiness | null> {
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT status
+       FROM assistant_jobs
+       WHERE user_id = ? AND archived_at IS NULL
+       LIMIT 100`,
+    )
+      .bind(ownerId)
+      .all<{ status: string | null }>();
+    const jobs = rows.results || [];
+    return {
+      total: jobs.length,
+      active: jobs.filter((job) => job.status === "active").length,
+      needsSetup: jobs.filter((job) => job.status === "needs_setup" || job.status === "failing")
+        .length,
+      paused: jobs.filter((job) => job.status === "paused").length,
+      draft: jobs.filter((job) => job.status === "draft").length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function describeCoreSetupProfileSite(
+  site: DbCoreSetupProfileSiteRow | null,
+  owner: OwnerProfileRow | null,
+): string {
+  const bioText = owner?.bio?.trim()
+    ? "short profile bio is set"
+    : "short profile bio is not set yet";
+  if (!site) {
+    return `- Public site/profile: no profile site found yet; ${bioText}.`;
+  }
+  const username = site.username ? `@${site.username}` : "a profile site";
+  const publishText = site.published_at ? "published" : "saved as a draft";
+  const domainText = site.custom_domain
+    ? site.custom_domain_status === "active"
+      ? `custom domain ${site.custom_domain} is active`
+      : `custom domain ${site.custom_domain} is ${site.custom_domain_status || "pending"}`
+    : "custom domain is not set yet";
+  return `- Public site/profile: ${username} is ${publishText}; ${bioText}; ${domainText}.`;
+}
+
+function describeCoreSetupMessaging(
+  hasSoulink: boolean | null,
+  hasTelegram: boolean | null,
+): string {
+  if (hasSoulink === true && hasTelegram === true) return "Soulink and Telegram are connected";
+  if (hasSoulink === true) return "Soulink is connected; Telegram is not connected yet";
+  if (hasTelegram === true) return "Telegram is connected; Soulink is not connected yet";
+  if (hasSoulink === false && hasTelegram === false) return "neither Soulink nor Telegram is connected yet";
+  return "messaging setup state is unknown";
+}
+
+function describeCoreSetupPlugins(plugins: CoreSetupPluginReadiness | null): string {
+  if (!plugins) return "- Plugins: setup state is unknown.";
+  if (plugins.total === 0) return "- Plugins: no optional plugin installs are recorded yet.";
+  const parts = [
+    `${plugins.enabled} enabled`,
+    plugins.setupRequired ? `${plugins.setupRequired} need setup` : null,
+    plugins.disabled ? `${plugins.disabled} disabled` : null,
+  ].filter(Boolean);
+  return `- Plugins: ${parts.join(", ")}.`;
+}
+
+function describeCoreSetupJobs(jobs: CoreSetupJobsReadiness | null): string {
+  if (!jobs) return "- Jobs: setup state is unknown.";
+  if (jobs.total === 0) return "- Jobs: no scheduled assistant jobs created yet.";
+  const parts = [
+    `${jobs.active} active`,
+    jobs.needsSetup ? `${jobs.needsSetup} need setup or attention` : null,
+    jobs.paused ? `${jobs.paused} paused` : null,
+    jobs.draft ? `${jobs.draft} draft` : null,
+  ].filter(Boolean);
+  return `- Jobs: ${parts.join(", ")}.`;
 }
 
 async function loadCoreSetupMailboxReadiness(

@@ -5,6 +5,8 @@ type FakeDbState = {
   owner: Record<string, unknown> | null;
   recentMessages: Array<Record<string, unknown>>;
   pluginInstallations: Array<Record<string, unknown>>;
+  sites: Array<Record<string, unknown>>;
+  assistantJobs: Array<Record<string, unknown>>;
   contacts: Array<Record<string, unknown>>;
   mailboxAliases: Array<Record<string, unknown>>;
   mailboxMessages: Array<Record<string, unknown>>;
@@ -52,6 +54,8 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     },
     recentMessages: [],
     pluginInstallations: [],
+    sites: [],
+    assistantJobs: [],
     contacts: [],
     mailboxAliases: [],
     mailboxMessages: [],
@@ -83,16 +87,28 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("FROM mailbox_aliases")) {
             return (dbState.mailboxAliases.find((alias) => alias.user_id === values[0]) || null) as T;
           }
+          if (sql.includes("FROM sites")) {
+            return (dbState.sites.find(
+              (site) =>
+                site.user_id === values[0] &&
+                (!site.site_type || site.site_type === "profile"),
+            ) || null) as T;
+          }
           if (sql.includes("FROM calendar_sources")) {
             return (dbState.calendarSources.find(
               (source) => source.user_id === values[0] && source.status === "active",
             ) || null) as T;
           }
           if (sql.includes("FROM agent_channel_connections")) {
+            const requestedChannel = sql.includes("channel = 'telegram'")
+              ? "telegram"
+              : sql.includes("channel = 'soulink'")
+                ? "soulink"
+                : null;
             return (dbState.channelConnections.find(
               (connection) =>
                 connection.user_id === values[0] &&
-                connection.channel === "soulink" &&
+                (!requestedChannel || connection.channel === requestedChannel) &&
                 connection.status === "active",
             ) || null) as T;
           }
@@ -128,6 +144,9 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           }
           if (sql.includes("FROM plugin_installations")) {
             return { results: dbState.pluginInstallations as T[] };
+          }
+          if (sql.includes("FROM assistant_jobs")) {
+            return { results: dbState.assistantJobs as T[] };
           }
           if (sql.includes("FROM contacts")) {
             return { results: dbState.contacts as T[] };
@@ -497,7 +516,7 @@ describe("Core chat native context", () => {
         {
           role: "assistant",
           content:
-            "ME3 Core chat is connected. Add an AI provider in Account settings or bind Workers AI to turn this into a live model response.",
+            "ME3 chat is connected for your ME3 installation. Add an AI provider in Account settings or bind Workers AI to turn this into a live model response.",
         },
       ],
     });
@@ -697,13 +716,27 @@ describe("Core chat native context", () => {
     expect(modelInput.messages[0]?.content).toContain(
       "When the owner is setting up ME3, testing the assistant, or asking what you can do",
     );
+    expect(modelInput.messages[0]?.content).toContain("owner's private ME3 installation");
+    expect(modelInput.messages[0]?.content).toContain("your ME3 installation");
+    expect(modelInput.messages[0]?.content).toContain("Do not mention me.json");
     expect(modelInput.messages[0]?.content).toContain(
       "ME3 first-run/setup orientation mode:",
     );
     expect(modelInput.messages[0]?.content).toContain("ME3 setup readiness summary:");
     expect(modelInput.messages[0]?.content).toContain("AI provider: ready");
-    expect(modelInput.messages[0]?.content).toContain("Soulink: needs setup");
+    expect(modelInput.messages[0]?.content).toContain(
+      "Public site/profile: no profile site found yet",
+    );
+    expect(modelInput.messages[0]?.content).toContain(
+      "Soulink/Telegram: neither Soulink nor Telegram is connected yet",
+    );
     expect(modelInput.messages[0]?.content).toContain("Mailbox: needs setup");
+    expect(modelInput.messages[0]?.content).toContain(
+      "Plugins: no optional plugin installs are recorded yet",
+    );
+    expect(modelInput.messages[0]?.content).toContain(
+      "Jobs: no scheduled assistant jobs created yet",
+    );
     expect(modelInput.messages[0]?.content).toContain("Local daemon: not paired");
     expect(modelInput.messages[0]?.content).toContain(
       "Mission statement:\n- Help builders steer their work with calm, useful systems.",
@@ -714,9 +747,24 @@ describe("Core chat native context", () => {
 
   it("orients first-run setup prompts even before an AI provider is configured", async () => {
     const env = createEnv({
+      sites: [profileSiteRow("site-kieran", "kieran", { published: true })],
+      pluginInstallations: [
+        pluginInstallationRow("me3.calendar", "installed"),
+        pluginInstallationRow("me3.telegram", "setup_required"),
+        pluginInstallationRow("me3.local-executor", "disabled", 0),
+      ],
+      assistantJobs: [
+        assistantJobRow("job-active", "active"),
+        assistantJobRow("job-needs-setup", "needs_setup"),
+        assistantJobRow("job-paused", "paused"),
+        assistantJobRow("job-draft", "draft"),
+      ],
       mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
       calendarSources: [calendarSourceRow("calendar-source")],
-      channelConnections: [soulinkConnectionRow("soulink-connection")],
+      channelConnections: [
+        soulinkConnectionRow("soulink-connection"),
+        telegramConnectionRow("telegram-connection"),
+      ],
       localExecutorPairings: [localExecutorPairingRow("local-pairing")],
     });
 
@@ -733,11 +781,17 @@ describe("Core chat native context", () => {
       reminderAction: null,
       emailAction: null,
     });
-    expect(response.replyText).toContain("ME3 Core chat is connected");
+    expect(response.replyText).toContain("ME3 chat is connected for your ME3 installation");
     expect(response.replyText).toContain("AI provider: needs setup");
+    expect(response.replyText).toContain("Public site/profile: @kieran is published");
     expect(response.replyText).toContain("Calendar/reminders: Core native reminders");
-    expect(response.replyText).toContain("Soulink: connected");
+    expect(response.replyText).toContain("Soulink/Telegram: Soulink and Telegram are connected");
     expect(response.replyText).toContain("Mailbox: active alias configured");
+    expect(response.replyText).toContain("Plugins: 1 enabled, 1 need setup, 1 disabled");
+    expect(response.replyText).toContain(
+      "Jobs: 1 active, 1 need setup or attention, 1 paused, 1 draft",
+    );
+    expect(response.replyText).toContain("Updates: release/version metadata is available");
     expect(response.replyText).toContain("Local daemon: paired");
     expect(response.replyText).toContain("Good test prompts");
     expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
@@ -1370,7 +1424,7 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       capabilityId: "core.agent-chat.conversation",
       toolResultStatus: "not_attempted",
       modelCallStatus: "not_attempted",
-      replyIncludes: ["ME3 Core chat is connected"],
+      replyIncludes: ["ME3 chat is connected for your ME3 installation"],
       contextSummary: "present",
       reminderActionKind: null,
       emailActionKind: null,
@@ -1751,12 +1805,71 @@ function calendarSourceRow(id: string): Record<string, unknown> {
   };
 }
 
+function profileSiteRow(
+  id: string,
+  username: string,
+  options: { published?: boolean; customDomain?: string | null; customDomainStatus?: string | null } = {},
+): Record<string, unknown> {
+  return {
+    id,
+    user_id: "owner",
+    username,
+    site_type: "profile",
+    custom_domain: options.customDomain || null,
+    custom_domain_status: options.customDomainStatus || null,
+    published_at: options.published ? "2026-05-15T09:00:00Z" : null,
+    created_at: "2026-05-15T09:00:00Z",
+    updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function pluginInstallationRow(
+  pluginId: string,
+  status: string,
+  enabled = 1,
+): Record<string, unknown> {
+  return {
+    plugin_id: pluginId,
+    version: "0.1.0",
+    enabled,
+    status,
+    installed_at: "2026-05-15T09:00:00Z",
+    updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function assistantJobRow(id: string, status: string): Record<string, unknown> {
+  return {
+    id,
+    user_id: "owner",
+    name: id,
+    purpose: "Test setup readiness.",
+    status,
+    archived_at: null,
+    created_at: "2026-05-15T09:00:00Z",
+    updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
 function soulinkConnectionRow(id: string): Record<string, unknown> {
   return {
     id,
     user_id: "owner",
     channel: "soulink",
     status: "active",
+    created_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function telegramConnectionRow(id: string): Record<string, unknown> {
+  return {
+    id,
+    user_id: "owner",
+    channel: "telegram",
+    status: "active",
+    telegram_user_id: "123",
+    telegram_chat_id: "456",
+    telegram_username: "owner",
     created_at: "2026-05-15T09:00:00Z",
   };
 }
