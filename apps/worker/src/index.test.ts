@@ -4814,6 +4814,12 @@ describe("ME3 Core Worker auth", () => {
       specialist: "core.sites.publish",
     });
     expect(String(publishPayload.replyText)).toContain("Published");
+    expect(String(publishPayload.replyText)).toContain("I updated your site");
+    expect(String(publishPayload.replyText)).toContain(
+      'Blog title: "Personal AI Assistants in Practice"',
+    );
+    expect(String(publishPayload.replyText)).toContain("Open your site dashboard");
+    expect(String(publishPayload.replyText)).not.toContain("@owner");
     expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeTruthy();
     expect(siteFileText(env, "site-assistant", "src/about.md")).toContain(
       "Model-written about paragraph",
@@ -4895,6 +4901,90 @@ describe("ME3 Core Worker auth", () => {
           file.path.startsWith("src/blog/"),
       ),
     ).toBe(false);
+  });
+
+  it("retries a disabled blog request as a draft after Blog is enabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env);
+
+    const blockedResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText:
+            "Draft and save an outline for a blog post on the benefits of an open source personal ai assistant.",
+        }),
+      }),
+      env,
+    );
+    const blockedPayload = (await blockedResponse.json()) as Record<string, unknown>;
+    const threadId = String(blockedPayload.threadId);
+    const meJsonFile = env.siteFiles.find(
+      (file) => file.site_id === "site-assistant" && file.path === "src/me.json",
+    );
+    expect(meJsonFile).toBeTruthy();
+    if (!meJsonFile) throw new Error("Missing assistant site me.json fixture");
+    const meJson = JSON.parse(new TextDecoder().decode(meJsonFile.content)) as Record<
+      string,
+      unknown
+    >;
+    meJson.blogEnabled = true;
+    meJson.blogTitle = "Blog";
+    const nextContent = new TextEncoder().encode(JSON.stringify(meJson, null, 2));
+    if (meJsonFile) {
+      meJsonFile.content = nextContent;
+      meJsonFile.size = nextContent.byteLength;
+    }
+
+    const retryResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          threadId,
+          messageText: "Ok I enabled it, please try again",
+        }),
+      }),
+      env,
+    );
+    const retryPayload = (await retryResponse.json()) as Record<string, unknown>;
+
+    expect(blockedResponse.status).toBe(200);
+    expect(String(blockedPayload.replyText)).toContain("Blog is not enabled");
+    expect(retryResponse.status).toBe(200);
+    expect(retryPayload).toMatchObject({
+      ok: true,
+      source: "fallback",
+      specialist: "core.sites.update_draft",
+      siteAction: {
+        kind: "draft_created",
+        siteId: "site-assistant",
+        username: "owner",
+        pending: true,
+        published: false,
+      },
+    });
+    expect(String(retryPayload.replyText)).toContain("Draft saved");
+    expect(String(retryPayload.replyText)).toContain("Blog draft title");
+    expect(String(retryPayload.replyText)).toContain("Review it in your site dashboard");
+    expect(String(retryPayload.replyText)).not.toContain("Published");
+    expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeNull();
+    expect(
+      env.siteFiles.some(
+        (file) =>
+          file.site_id === "site-assistant" &&
+          file.path.startsWith("assistant/site-update-drafts/") &&
+          file.path.endsWith(`${threadId}.json`),
+      ),
+    ).toBe(true);
   });
 
   it("keeps save-draft follow-ups in the assistant site update flow", async () => {
