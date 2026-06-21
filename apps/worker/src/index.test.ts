@@ -5864,6 +5864,52 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  it("returns a friendly duplicate contact email error", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.contacts.push({
+      id: "existing-contact",
+      user_id: "owner",
+      name: "Existing Sam",
+      email: "kieranbutler22@gmail.com",
+      phone: null,
+      source: "manual",
+      source_ref: null,
+      relationship: "contact",
+      status: "active",
+      notes: null,
+      tags: "[]",
+      last_interaction_at: null,
+      next_followup_at: null,
+      outreach_status: null,
+      social_handles: "{}",
+      metadata: null,
+      created_at: "2026-05-13T20:00:00Z",
+      updated_at: "2026-05-13T20:00:00Z",
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/contacts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          name: "Sam",
+          email: "KIERANBUTLER22@gmail.com",
+        }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "This email is already saved as a contact.",
+    });
+    expect(env.contacts).toHaveLength(1);
+  });
+
   it("loads account settings for the signed-in owner", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

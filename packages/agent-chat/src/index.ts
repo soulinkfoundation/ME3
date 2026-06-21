@@ -935,41 +935,49 @@ export async function createAgentContact(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
   value: unknown,
-): Promise<AgentContact | { error: string; status: 400 }> {
+): Promise<AgentContact | { error: string; status: 400 | 409 }> {
   const input = parseAgentContactInput(value);
   if (!input.name?.trim()) {
     return { error: "Contact name is required", status: 400 };
   }
+  if (input.email && (await contactEmailExists(env, userId, input.email))) {
+    return duplicateContactEmailError();
+  }
 
   const id = crypto.randomUUID();
   const metadata = normalizeContactMetadata(input);
-  await env.DB.prepare(
-    `INSERT INTO contacts (
-       id, user_id, name, email, phone, source, source_ref, relationship, status,
-       notes, tags, last_interaction_at, next_followup_at, outreach_status,
-       social_handles, metadata
-     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      id,
-      userId,
-      input.name,
-      input.email || null,
-      input.phone || null,
-      input.source || "manual",
-      input.sourceRef || null,
-      input.relationship || "contact",
-      input.status || "active",
-      input.notes || null,
-      JSON.stringify(input.tags || []),
-      input.lastInteractionAt || null,
-      input.nextFollowupAt || null,
-      input.outreachStatus || null,
-      JSON.stringify(input.socialHandles || {}),
-      metadata ? JSON.stringify(metadata) : null,
+  try {
+    await env.DB.prepare(
+      `INSERT INTO contacts (
+         id, user_id, name, email, phone, source, source_ref, relationship, status,
+         notes, tags, last_interaction_at, next_followup_at, outreach_status,
+         social_handles, metadata
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run();
+      .bind(
+        id,
+        userId,
+        input.name,
+        input.email || null,
+        input.phone || null,
+        input.source || "manual",
+        input.sourceRef || null,
+        input.relationship || "contact",
+        input.status || "active",
+        input.notes || null,
+        JSON.stringify(input.tags || []),
+        input.lastInteractionAt || null,
+        input.nextFollowupAt || null,
+        input.outreachStatus || null,
+        JSON.stringify(input.socialHandles || {}),
+        metadata ? JSON.stringify(metadata) : null,
+      )
+      .run();
+  } catch (error) {
+    if (isDuplicateContactEmailError(error)) return duplicateContactEmailError();
+    throw error;
+  }
 
   const contact = await getAgentContact(env, userId, id);
   if (!contact) return { error: "Contact not found", status: 400 };
@@ -980,7 +988,9 @@ export async function upsertAgentContact(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
   value: unknown,
-): Promise<{ contact: AgentContact; created: boolean } | { error: string; status: 400 | 404 }> {
+): Promise<
+  { contact: AgentContact; created: boolean } | { error: string; status: 400 | 404 | 409 }
+> {
   const input = parseAgentContactInput(value);
   if (!input.name?.trim()) {
     return { error: "Contact name is required", status: 400 };
@@ -1050,7 +1060,7 @@ export async function updateAgentContact(
   userId: string,
   contactId: string,
   value: unknown,
-): Promise<AgentContact | { error: string; status: 404 }> {
+): Promise<AgentContact | { error: string; status: 404 | 409 }> {
   const input = parseAgentContactInput(value);
   const existing = await getAgentContactRow(env, userId, contactId);
   if (!existing) return { error: "Contact not found", status: 404 };
@@ -1075,34 +1085,45 @@ export async function updateAgentContact(
       (parseJsonRecord(existing.metadata).closeness as AgentContactCloseness),
   };
   const metadata = normalizeContactMetadata(merged);
+  if (
+    merged.email &&
+    (await contactEmailExists(env, userId, merged.email, contactId))
+  ) {
+    return duplicateContactEmailError();
+  }
 
-  await env.DB.prepare(
-    `UPDATE contacts
-     SET name = ?, email = ?, phone = ?, source = ?, source_ref = ?,
-         relationship = ?, status = ?, notes = ?, tags = ?,
-         last_interaction_at = ?, next_followup_at = ?, outreach_status = ?,
-         social_handles = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE user_id = ? AND id = ?`,
-  )
-    .bind(
-      merged.name,
-      merged.email || null,
-      merged.phone || null,
-      merged.source || "manual",
-      merged.sourceRef || null,
-      merged.relationship || "contact",
-      merged.status || "active",
-      merged.notes || null,
-      JSON.stringify(merged.tags || []),
-      merged.lastInteractionAt || null,
-      merged.nextFollowupAt || null,
-      merged.outreachStatus || null,
-      JSON.stringify(merged.socialHandles || {}),
-      metadata ? JSON.stringify(metadata) : null,
-      userId,
-      contactId,
+  try {
+    await env.DB.prepare(
+      `UPDATE contacts
+       SET name = ?, email = ?, phone = ?, source = ?, source_ref = ?,
+           relationship = ?, status = ?, notes = ?, tags = ?,
+           last_interaction_at = ?, next_followup_at = ?, outreach_status = ?,
+           social_handles = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = ? AND id = ?`,
     )
-    .run();
+      .bind(
+        merged.name,
+        merged.email || null,
+        merged.phone || null,
+        merged.source || "manual",
+        merged.sourceRef || null,
+        merged.relationship || "contact",
+        merged.status || "active",
+        merged.notes || null,
+        JSON.stringify(merged.tags || []),
+        merged.lastInteractionAt || null,
+        merged.nextFollowupAt || null,
+        merged.outreachStatus || null,
+        JSON.stringify(merged.socialHandles || {}),
+        metadata ? JSON.stringify(metadata) : null,
+        userId,
+        contactId,
+      )
+      .run();
+  } catch (error) {
+    if (isDuplicateContactEmailError(error)) return duplicateContactEmailError();
+    throw error;
+  }
 
   const contact = await getAgentContact(env, userId, contactId);
   return contact || { error: "Contact not found", status: 404 };
@@ -3284,6 +3305,31 @@ function normalizeEmail(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const email = value.trim().toLowerCase();
   return email || null;
+}
+
+async function contactEmailExists(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  email: string,
+  exceptContactId?: string,
+): Promise<boolean> {
+  const { contacts } = await listAgentContacts(env, userId);
+  return contacts.some(
+    (contact) =>
+      contact.id !== exceptContactId &&
+      contact.email?.trim().toLowerCase() === email,
+  );
+}
+
+function duplicateContactEmailError() {
+  return { error: "This email is already saved as a contact.", status: 409 as const };
+}
+
+function isDuplicateContactEmailError(error: unknown): boolean {
+  return error instanceof Error &&
+    /UNIQUE constraint failed: contacts\.user_id, contacts\.email|SQLITE_CONSTRAINT_UNIQUE/i.test(
+      error.message,
+    );
 }
 
 function normalizeContactOutreachStatus(value: unknown): AgentContactOutreachStatus {
