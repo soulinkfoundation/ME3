@@ -32,6 +32,7 @@ import {
 export {
   isCoreChatBookingLookupRequest,
   isCoreChatCapabilityExplorationRequest,
+  isCoreChatMailboxDraftRecipientContinuation,
   isCoreChatMailboxDraftSaveRequest,
   isCoreChatReminderCreateRequest,
   isCoreChatReminderListRequest,
@@ -431,6 +432,19 @@ type StorageLike = {
 type CoreChatToolTurnPlan = {
   decision: CoreChatToolPlannerDecision;
   recent: Array<{ role: "user" | "assistant"; content: string }>;
+  pendingMailboxDraftSave: PendingMailboxDraftSave | null;
+};
+
+type PendingMailboxDraftSave = {
+  capabilityId: "core.mailbox.draft";
+  status: "active" | "resolved" | "expired";
+  missingField: "toAddress";
+  threadId: string | null;
+  draftText: string;
+  subject: string | null;
+  textBody: string;
+  createdAt: string;
+  expiresAt: string;
 };
 
 type OwnerProfileRow = {
@@ -743,6 +757,7 @@ const OUTREACH_STATUSES = new Set<Exclude<AgentContactOutreachStatus, null>>([
 ]);
 const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
+const PENDING_MAILBOX_DRAFT_SAVE_TTL_MS = 2 * 60 * 60 * 1000;
 
 export function isAgentSandboxDispatchInput(
   value: unknown,
@@ -1715,8 +1730,8 @@ export async function dispatchAgentSandboxTurn(
   await storage.put("lastSandboxTurnAt", new Date().toISOString());
 
   const owner = await getOwnerProfile(env, input.userId);
-  const toolPlan = await loadCoreChatToolTurnPlan(env, input);
-  const toolResponse = await maybeHandleCoreToolTurn(env, input, owner, toolPlan);
+  const toolPlan = await loadCoreChatToolTurnPlan(env, storage, input);
+  const toolResponse = await maybeHandleCoreToolTurn(env, storage, input, owner, toolPlan);
   if (toolResponse) {
     await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
     if (toolResponse.replyText) {
@@ -1789,6 +1804,9 @@ export async function dispatchAgentSandboxTurn(
     response = await runModelTurn(route, messages, input.turnId);
   }
   response = attachAgentContextToResponse(response, agentContext);
+  if (toolPlan.pendingMailboxDraftSave) {
+    await resolvePendingMailboxDraftSave(storage, input);
+  }
 
   await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
   if (response.replyText) {
@@ -1863,20 +1881,27 @@ function normalizeAgentAttachmentReferences(
 
 async function loadCoreChatToolTurnPlan(
   env: CoreAgentChatEnv,
+  storage: StorageLike,
   input: AgentSandboxDispatchInput,
 ): Promise<CoreChatToolTurnPlan> {
-  const recent = await loadRecentMessages(env, input.userId, input.threadId);
+  const [recent, pendingMailboxDraftSave] = await Promise.all([
+    loadRecentMessages(env, input.userId, input.threadId),
+    loadPendingMailboxDraftSave(storage, input),
+  ]);
   return {
     recent,
+    pendingMailboxDraftSave,
     decision: planCoreChatToolTurn({
       messageText: input.messageText.trim(),
       hasRecentAssistantEmailDraft: Boolean(latestAssistantEmailDraft(recent)),
+      hasPendingMailboxDraftRecipient: Boolean(pendingMailboxDraftSave),
     }),
   };
 }
 
 async function maybeHandleCoreToolTurn(
   env: CoreAgentChatEnv,
+  storage: StorageLike,
   input: AgentSandboxDispatchInput,
   owner: OwnerProfileRow | null,
   toolPlan: CoreChatToolTurnPlan,
@@ -1893,8 +1918,21 @@ async function maybeHandleCoreToolTurn(
   }
 
   if (plannerDecision.capabilityId === "core.mailbox.draft") {
-    const draftPlan = await parseMailboxDraftSaveRequest(env, input.userId, messageText, recent);
+    const draftPlan = await parseMailboxDraftSaveRequest(
+      env,
+      input.userId,
+      messageText,
+      recent,
+      toolPlan.pendingMailboxDraftSave,
+    );
     if ("error" in draftPlan) {
+      if (draftPlan.pendingMailboxDraftSave) {
+        await savePendingMailboxDraftSave(
+          storage,
+          input,
+          draftPlan.pendingMailboxDraftSave,
+        );
+      }
       return toolResponse(input.turnId, "core.mailbox.draft", draftPlan.error, {
         fallbackReason: "Mailbox draft details required",
       });
@@ -1906,6 +1944,7 @@ async function maybeHandleCoreToolTurn(
         fallbackReason: "Mailbox draft could not be saved",
       });
     }
+    await resolvePendingMailboxDraftSave(storage, input);
 
     return toolResponse(
       input.turnId,
@@ -2019,8 +2058,14 @@ async function parseMailboxDraftSaveRequest(
   userId: string,
   messageText: string,
   recent: Array<{ role: "user" | "assistant"; content: string }>,
-): Promise<{ input: AgentMailboxDraftInput } | { error: string }> {
-  const latestAssistantDraft = latestAssistantEmailDraft(recent);
+  pendingMailboxDraftSave?: PendingMailboxDraftSave | null,
+): Promise<
+  | { input: AgentMailboxDraftInput }
+  | { error: string; pendingMailboxDraftSave?: PendingMailboxDraftSave }
+> {
+  const latestAssistantDraft = pendingMailboxDraftSave
+    ? { content: pendingMailboxDraftSave.draftText }
+    : latestAssistantEmailDraft(recent);
   if (!latestAssistantDraft) {
     return {
       error:
@@ -2028,7 +2073,20 @@ async function parseMailboxDraftSaveRequest(
     };
   }
 
-  const parsed = parseDraftText(latestAssistantDraft.content);
+  const parsed = pendingMailboxDraftSave
+    ? {
+        subject: pendingMailboxDraftSave.subject,
+        body: pendingMailboxDraftSave.textBody,
+      }
+    : parseDraftText(latestAssistantDraft.content);
+  const textBody = parsed.body.trim();
+  if (!textBody) {
+    return {
+      error:
+        "I found the request to save a draft, but I could not identify the email body to save.",
+    };
+  }
+
   const toAddress =
     extractEmailAddress(messageText) ||
     extractEmailAddress(latestAssistantDraft.content) ||
@@ -2037,14 +2095,10 @@ async function parseMailboxDraftSaveRequest(
     return {
       error:
         "I can save that as a draft, but I need the recipient email address first.",
-    };
-  }
-
-  const textBody = parsed.body.trim();
-  if (!textBody) {
-    return {
-      error:
-        "I found the request to save a draft, but I could not identify the email body to save.",
+      pendingMailboxDraftSave: buildPendingMailboxDraftSave(
+        latestAssistantDraft.content,
+        parsed,
+      ),
     };
   }
 
@@ -2056,6 +2110,128 @@ async function parseMailboxDraftSaveRequest(
       source: "agent",
     },
   };
+}
+
+function buildPendingMailboxDraftSave(
+  draftText: string,
+  parsed: { subject: string | null; body: string },
+): PendingMailboxDraftSave {
+  const nowMs = Date.now();
+  return {
+    capabilityId: "core.mailbox.draft",
+    status: "active",
+    missingField: "toAddress",
+    threadId: null,
+    draftText: draftText.trim(),
+    subject: parsed.subject,
+    textBody: parsed.body.trim(),
+    createdAt: new Date(nowMs).toISOString(),
+    expiresAt: new Date(nowMs + PENDING_MAILBOX_DRAFT_SAVE_TTL_MS).toISOString(),
+  };
+}
+
+async function loadPendingMailboxDraftSave(
+  storage: StorageLike,
+  input: Pick<AgentSandboxDispatchInput, "userId" | "threadId">,
+): Promise<PendingMailboxDraftSave | null> {
+  try {
+    const key = pendingMailboxDraftSaveStorageKey(input);
+    const pending = normalizePendingMailboxDraftSave(await storage.get(key));
+    if (!pending) return null;
+    if (!isActivePendingMailboxDraftSave(pending)) {
+      await storage.put(key, {
+        ...pending,
+        status: "expired",
+        expiresAt: new Date().toISOString(),
+      });
+      return null;
+    }
+    return pending;
+  } catch {
+    return null;
+  }
+}
+
+async function savePendingMailboxDraftSave(
+  storage: StorageLike,
+  input: Pick<AgentSandboxDispatchInput, "userId" | "threadId">,
+  pending: PendingMailboxDraftSave,
+): Promise<void> {
+  try {
+    const threadId = normalizePendingMailboxDraftThreadId(input.threadId);
+    await storage.put(pendingMailboxDraftSaveStorageKey(input), {
+      ...pending,
+      status: "active",
+      threadId,
+    });
+  } catch {
+    // Pending clarification state should improve follow-up routing, not fail chat.
+  }
+}
+
+async function resolvePendingMailboxDraftSave(
+  storage: StorageLike,
+  input: Pick<AgentSandboxDispatchInput, "userId" | "threadId">,
+): Promise<void> {
+  try {
+    const key = pendingMailboxDraftSaveStorageKey(input);
+    const pending = normalizePendingMailboxDraftSave(await storage.get(key));
+    if (!pending) return;
+    await storage.put(key, {
+      ...pending,
+      status: "resolved",
+      expiresAt: new Date().toISOString(),
+    });
+  } catch {
+    // Draft persistence has already succeeded; stale pending state can expire.
+  }
+}
+
+function pendingMailboxDraftSaveStorageKey(
+  input: Pick<AgentSandboxDispatchInput, "userId" | "threadId">,
+): string {
+  const threadKey = normalizePendingMailboxDraftThreadId(input.threadId) || "__global__";
+  return `agent-chat:pending:core.mailbox.draft:${encodeURIComponent(input.userId)}:${encodeURIComponent(threadKey)}`;
+}
+
+function normalizePendingMailboxDraftThreadId(value: unknown): string | null {
+  return normalizeNullableText(value);
+}
+
+function normalizePendingMailboxDraftSave(value: unknown): PendingMailboxDraftSave | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<PendingMailboxDraftSave>;
+  if (candidate.capabilityId !== "core.mailbox.draft") return null;
+  if (
+    candidate.status !== "active" &&
+    candidate.status !== "resolved" &&
+    candidate.status !== "expired"
+  ) {
+    return null;
+  }
+  if (candidate.status !== "active") return null;
+  if (candidate.missingField !== "toAddress") return null;
+  const draftText = normalizeNullableText(candidate.draftText);
+  const textBody = normalizeNullableText(candidate.textBody);
+  const expiresAt = normalizeNullableText(candidate.expiresAt);
+  const createdAt = normalizeNullableText(candidate.createdAt);
+  if (!draftText || !textBody || !expiresAt || !createdAt) return null;
+  return {
+    capabilityId: "core.mailbox.draft",
+    status: "active",
+    missingField: "toAddress",
+    threadId: normalizePendingMailboxDraftThreadId(candidate.threadId),
+    draftText,
+    subject: normalizeNullableText(candidate.subject),
+    textBody,
+    createdAt,
+    expiresAt,
+  };
+}
+
+function isActivePendingMailboxDraftSave(pending: PendingMailboxDraftSave): boolean {
+  const expiresAtMs = Date.parse(pending.expiresAt);
+  return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
 }
 
 function latestAssistantEmailDraft(

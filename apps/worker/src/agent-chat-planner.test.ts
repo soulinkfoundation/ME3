@@ -12,6 +12,7 @@ type PlannerScenario = {
   name: string;
   messageText: string;
   hasRecentAssistantEmailDraft?: boolean;
+  hasPendingMailboxDraftRecipient?: boolean;
   kind: CoreChatPlannerIntentKind;
   capabilityId: CoreChatCapabilityId;
   sideEffectLevel: CoreChatSideEffectLevel;
@@ -84,6 +85,14 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "write",
   },
   {
+    name: "pending mailbox draft recipient continuation becomes a write action",
+    messageText: "ada@example.com",
+    hasPendingMailboxDraftRecipient: true,
+    kind: "write_action",
+    capabilityId: "core.mailbox.draft",
+    sideEffectLevel: "write",
+  },
+  {
     name: "email composition prompt stays conversational",
     messageText: "Create an email to Ada about the launch.",
     kind: "conversation",
@@ -97,6 +106,7 @@ describe("Core chat tool planner", () => {
     const decision = planCoreChatToolTurn({
       messageText: scenario.messageText,
       hasRecentAssistantEmailDraft: scenario.hasRecentAssistantEmailDraft,
+      hasPendingMailboxDraftRecipient: scenario.hasPendingMailboxDraftRecipient,
     });
 
     expect(decision).toMatchObject({

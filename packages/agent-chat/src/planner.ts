@@ -15,6 +15,7 @@ export type {
 export type CoreChatToolPlannerInput = {
   messageText: string;
   hasRecentAssistantEmailDraft?: boolean;
+  hasPendingMailboxDraftRecipient?: boolean;
 };
 
 export type CoreChatToolPlannerDecision = {
@@ -44,6 +45,18 @@ export function planCoreChatToolTurn(
       0.95,
       "The owner is exploring setup, context, or capabilities rather than asking for one concrete tool action.",
     );
+  }
+
+  if (
+    input.hasPendingMailboxDraftRecipient &&
+    isCoreChatMailboxDraftRecipientContinuation(messageText)
+  ) {
+    return capabilityDecision("core.mailbox.draft", {
+      kind: "write_action",
+      confidence: 0.94,
+      reason:
+        "The owner supplied the missing recipient for a pending mailbox draft save request.",
+    });
   }
 
   if (
@@ -113,6 +126,16 @@ export function isCoreChatMailboxDraftSaveRequest(
   if (!asksToSave) return false;
   if (/\b(draft|mailbox|email|\/email)\b/i.test(messageText)) return true;
   return hasRecentAssistantEmailDraft;
+}
+
+export function isCoreChatMailboxDraftRecipientContinuation(
+  messageText: string,
+): boolean {
+  const trimmed = messageText.trim();
+  if (!trimmed) return false;
+  if (extractPlannerEmailAddress(trimmed)) return true;
+  return /\b(?:to|use|recipient|address|email)\b/i.test(trimmed) &&
+    trimmed.length <= 180;
 }
 
 export function isCoreChatReminderListRequest(messageText: string): boolean {
@@ -206,6 +229,11 @@ function capabilityDecision(
     auditEventKind: capability.auditEventKind,
     reason: input.reason,
   };
+}
+
+function extractPlannerEmailAddress(text: string): string | null {
+  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0]?.trim().toLowerCase() || null;
 }
 
 function getReminderCreateMissingDetails(messageText: string): string[] {

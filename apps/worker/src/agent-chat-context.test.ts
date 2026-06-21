@@ -1248,6 +1248,72 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
   },
 ];
 
+describe("Core chat mailbox draft continuations", () => {
+  it("saves a pending draft when the owner replies with only the missing recipient", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
+
+    const aiRun = vi.fn(async () => ({
+      response: "The model should not handle mailbox draft continuation.",
+    }));
+    const env = createEnv({
+      recentMessages: [
+        {
+          role: "assistant",
+          content:
+            "Subject: Workflow notes\n\nHi Ada,\n\nHere is a concise update on the workflow notes.\n\nThanks,\nKieran",
+        },
+      ],
+      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
+    });
+    const storage = createStorage();
+    const runtimeEnv = {
+      ...env,
+      AI: { run: aiRun },
+      ME3_ASSISTANT_DEBUG_TRACE: "true",
+    };
+
+    const clarify = await dispatchAgentSandboxTurn(
+      runtimeEnv as never,
+      storage,
+      dispatchInput("did you save it?"),
+    );
+
+    expect(clarify).toMatchObject({
+      source: "tool",
+      specialist: "core.mailbox.draft",
+      fallbackReason: "Mailbox draft details required",
+      emailAction: null,
+    });
+    expect(clarify.replyText).toContain("need the recipient email address");
+    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(0);
+
+    const saved = await dispatchAgentSandboxTurn(
+      runtimeEnv as never,
+      storage,
+      dispatchInput("test@samualburns.com"),
+    );
+
+    expect(saved).toMatchObject({
+      source: "tool",
+      specialist: "core.mailbox.draft",
+      fallbackReason: null,
+      emailAction: {
+        kind: "drafted",
+      },
+    });
+    expect(saved.replyText).toContain("saved that email as a draft");
+    expect(aiRun).not.toHaveBeenCalled();
+    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(1);
+    expect(env.state.mailboxMessages[0]).toMatchObject({
+      to_address: "test@samualburns.com",
+      subject: "Workflow notes",
+      text_body: "Hi Ada,\n\nHere is a concise update on the workflow notes.\n\nThanks,\nKieran",
+      created_by: "agent",
+    });
+  });
+});
+
 describe("Core chat golden transcript evals", () => {
   it.each(launchGoldenTranscriptScenarios)("$name", async (scenario) => {
     vi.useFakeTimers();
