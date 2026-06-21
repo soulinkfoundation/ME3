@@ -38,9 +38,69 @@
       content="An assistant for coaches, educators, therapists, and creators who help people every day. Your site, calendar, and email in one place."
     />
     <meta name="twitter:image" content="https://example.com/icons/icon-512.png" />
+    <script>
+      if ("standalone" in navigator && navigator.standalone) {
+        document.documentElement.classList.add("is-ios-standalone");
+      }
+    </script>
+    <style>
+      .app-launch-splash {
+        display: none;
+        min-height: 100vh;
+        min-height: 100dvh;
+        align-items: center;
+        justify-content: center;
+        background: #111;
+      }
+
+      .app-launch-splash img {
+        width: 88px;
+        height: 88px;
+        border-radius: 22px;
+      }
+
+      @media (max-width: 820px) and (display-mode: standalone),
+        (max-width: 820px) and (display-mode: fullscreen) {
+        html,
+        body,
+        #app {
+          min-height: 100%;
+          background: #111;
+        }
+
+        body {
+          margin: 0;
+        }
+
+        .app-launch-splash {
+          display: flex;
+        }
+      }
+
+      @media (max-width: 820px) {
+        html.is-ios-standalone,
+        html.is-ios-standalone body,
+        html.is-ios-standalone #app {
+          min-height: 100%;
+          background: #111;
+        }
+
+        html.is-ios-standalone body {
+          margin: 0;
+        }
+
+        html.is-ios-standalone .app-launch-splash {
+          display: flex;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="app-launch-splash" aria-label="ME3 is launching">
+        <img src="/icons/apple-touch-icon.png" alt="ME3" />
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
