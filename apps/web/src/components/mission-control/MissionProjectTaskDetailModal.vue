@@ -112,7 +112,10 @@ function closeFromBackdrop() {
         aria-labelledby="task-detail-modal-title"
       >
         <div class="mission-modal__header">
-          <h2 id="task-detail-modal-title">
+          <h2
+            id="task-detail-modal-title"
+            :class="{ 'task-detail-modal__title--hidden': !weeklyReview }"
+          >
             {{ weeklyReview ? "Weekly Review" : "Task details" }}
           </h2>
           <Button
@@ -128,9 +131,9 @@ function closeFromBackdrop() {
           </Button>
         </div>
 
-        <div class="task-detail-modal__context">
+        <div v-if="weeklyReview" class="task-detail-modal__context">
           <span>{{ projectName(projects, task.projectId) }}</span>
-          <span v-if="weeklyReview" class="weekly-review-badge">{{
+          <span class="weekly-review-badge">{{
             formatWeeklyReviewRange(weeklyReview)
           }}</span>
           <span v-if="isLocalProject(taskProject)" class="local-project-badge"
@@ -315,6 +318,7 @@ function closeFromBackdrop() {
               class="task-note-title-field__input"
               type="text"
               autocomplete="off"
+              placeholder="Title"
               autofocus
               @input="updateDetailDraft({ title: inputValue($event) })"
             />
@@ -322,9 +326,9 @@ function closeFromBackdrop() {
 
           <div class="task-note-meta">
             <label class="field task-note-meta__field">
-              <span>Project</span>
               <select
                 :value="detailDraft.projectId"
+                aria-label="Project"
                 @change="updateDetailDraft({ projectId: selectValue($event) })"
               >
                 <option
@@ -338,9 +342,9 @@ function closeFromBackdrop() {
             </label>
 
             <label class="field task-note-meta__field">
-              <span>Status</span>
               <select
                 :value="detailDraft.status"
+                aria-label="Status"
                 @change="updateDetailDraft({ status: statusValue($event) })"
               >
                 <option
@@ -355,7 +359,6 @@ function closeFromBackdrop() {
           </div>
 
           <div class="field task-note-body-field">
-            <span>Notes</span>
             <TiptapEditor
               :model-value="detailDraft.description"
               class="task-note-body-field__editor"
@@ -373,7 +376,7 @@ function closeFromBackdrop() {
 
         <div class="mission-modal__actions task-detail-modal__actions">
           <Button
-            color="danger"
+            color="outline"
             shape="soft"
             size="compact"
             type="button"
@@ -468,6 +471,15 @@ function closeFromBackdrop() {
   font-size: 16px;
 }
 
+.task-detail-modal__title--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .mission-modal__actions {
   justify-content: flex-end;
   padding-top: 4px;
@@ -546,13 +558,17 @@ function closeFromBackdrop() {
   line-height: 1.18;
 }
 
+.task-note-title-field__input::placeholder {
+  color: color-mix(in oklab, var(--ui-text-muted) 58%, transparent);
+}
+
 .task-note-title-field__input:focus {
   outline: none;
 }
 
 .task-note-meta {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.42fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   min-width: 0;
 }
@@ -884,7 +900,7 @@ function closeFromBackdrop() {
   }
 
   .task-note-meta {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .task-note-body-field__editor :deep(.editor-content-wrapper) {

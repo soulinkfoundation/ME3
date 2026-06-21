@@ -72,6 +72,11 @@ function inputValue(event: Event): string {
 function taskDescription(task: MissionTask): string {
   return taskDescriptionText(task);
 }
+
+function projectChipStyle(project: MissionProject | null) {
+  const color = project?.color?.trim();
+  return color ? { "--project-chip-color": color } : {};
+}
 </script>
 
 <template>
@@ -129,38 +134,18 @@ function taskDescription(task: MissionTask): string {
             >
               {{ taskDescription(task) }}
             </p>
-            <div class="project-task-card__meta">
+            <div
+              v-if="
+                weeklyReviewMetadata(task) ||
+                isLocalProject(projectForTask(projects, task)) ||
+                task.dueAt ||
+                task.scheduledFor
+              "
+              class="project-task-card__meta"
+            >
               <span v-if="weeklyReviewMetadata(task)" class="weekly-review-badge"
                 >Weekly Review</span
               >
-              <span class="project-task-card__project">
-                <span
-                  v-if="
-                    isProjectIconLogo(projectForTask(projects, task)) ||
-                    projectUiIconName(projectForTask(projects, task)) ||
-                    projectEmojiIcon(projectForTask(projects, task))
-                  "
-                  class="project-task-card__project-visual"
-                  aria-hidden="true"
-                >
-                  <img
-                    v-if="isProjectIconLogo(projectForTask(projects, task))"
-                    :src="projectIconSource(projectForTask(projects, task))"
-                    alt=""
-                  />
-                  <UiIcon
-                    v-else-if="projectUiIconName(projectForTask(projects, task))"
-                    :name="projectUiIconName(projectForTask(projects, task))!"
-                    :size="14"
-                  />
-                  <span v-else class="project-task-card__project-emoji">
-                    {{ projectEmojiIcon(projectForTask(projects, task)) }}
-                  </span>
-                </span>
-                <span class="project-task-card__project-label">
-                  {{ projectName(projects, task.projectId) }}
-                </span>
-              </span>
               <span
                 v-if="isLocalProject(projectForTask(projects, task))"
                 class="local-project-badge"
@@ -193,6 +178,39 @@ function taskDescription(task: MissionTask): string {
                 @toggle-pin="emit('toggle-pin', $event)"
                 @archive-task="emit('archive-task', $event)"
               />
+            </div>
+            <div class="project-task-card__footer">
+              <span
+                class="project-task-card__project"
+                :style="projectChipStyle(projectForTask(projects, task))"
+              >
+                <span
+                  v-if="
+                    isProjectIconLogo(projectForTask(projects, task)) ||
+                    projectUiIconName(projectForTask(projects, task)) ||
+                    projectEmojiIcon(projectForTask(projects, task))
+                  "
+                  class="project-task-card__project-visual"
+                  aria-hidden="true"
+                >
+                  <img
+                    v-if="isProjectIconLogo(projectForTask(projects, task))"
+                    :src="projectIconSource(projectForTask(projects, task))"
+                    alt=""
+                  />
+                  <UiIcon
+                    v-else-if="projectUiIconName(projectForTask(projects, task))"
+                    :name="projectUiIconName(projectForTask(projects, task))!"
+                    :size="14"
+                  />
+                  <span v-else class="project-task-card__project-emoji">
+                    {{ projectEmojiIcon(projectForTask(projects, task)) }}
+                  </span>
+                </span>
+                <span class="project-task-card__project-label">
+                  {{ projectName(projects, task.projectId) }}
+                </span>
+              </span>
             </div>
           </article>
         </div>
@@ -241,38 +259,18 @@ function taskDescription(task: MissionTask): string {
             >
               {{ taskDescription(task) }}
             </p>
-            <div class="project-task-card__meta">
+            <div
+              v-if="
+                weeklyReviewMetadata(task) ||
+                isLocalProject(projectForTask(projects, task)) ||
+                task.dueAt ||
+                task.scheduledFor
+              "
+              class="project-task-card__meta"
+            >
               <span v-if="weeklyReviewMetadata(task)" class="weekly-review-badge"
                 >Weekly Review</span
               >
-              <span class="project-task-card__project">
-                <span
-                  v-if="
-                    isProjectIconLogo(projectForTask(projects, task)) ||
-                    projectUiIconName(projectForTask(projects, task)) ||
-                    projectEmojiIcon(projectForTask(projects, task))
-                  "
-                  class="project-task-card__project-visual"
-                  aria-hidden="true"
-                >
-                  <img
-                    v-if="isProjectIconLogo(projectForTask(projects, task))"
-                    :src="projectIconSource(projectForTask(projects, task))"
-                    alt=""
-                  />
-                  <UiIcon
-                    v-else-if="projectUiIconName(projectForTask(projects, task))"
-                    :name="projectUiIconName(projectForTask(projects, task))!"
-                    :size="14"
-                  />
-                  <span v-else class="project-task-card__project-emoji">
-                    {{ projectEmojiIcon(projectForTask(projects, task)) }}
-                  </span>
-                </span>
-                <span class="project-task-card__project-label">
-                  {{ projectName(projects, task.projectId) }}
-                </span>
-              </span>
               <span
                 v-if="isLocalProject(projectForTask(projects, task))"
                 class="local-project-badge"
@@ -305,6 +303,39 @@ function taskDescription(task: MissionTask): string {
                 @toggle-pin="emit('toggle-pin', $event)"
                 @archive-task="emit('archive-task', $event)"
               />
+            </div>
+            <div class="project-task-card__footer">
+              <span
+                class="project-task-card__project"
+                :style="projectChipStyle(projectForTask(projects, task))"
+              >
+                <span
+                  v-if="
+                    isProjectIconLogo(projectForTask(projects, task)) ||
+                    projectUiIconName(projectForTask(projects, task)) ||
+                    projectEmojiIcon(projectForTask(projects, task))
+                  "
+                  class="project-task-card__project-visual"
+                  aria-hidden="true"
+                >
+                  <img
+                    v-if="isProjectIconLogo(projectForTask(projects, task))"
+                    :src="projectIconSource(projectForTask(projects, task))"
+                    alt=""
+                  />
+                  <UiIcon
+                    v-else-if="projectUiIconName(projectForTask(projects, task))"
+                    :name="projectUiIconName(projectForTask(projects, task))!"
+                    :size="14"
+                  />
+                  <span v-else class="project-task-card__project-emoji">
+                    {{ projectEmojiIcon(projectForTask(projects, task)) }}
+                  </span>
+                </span>
+                <span class="project-task-card__project-label">
+                  {{ projectName(projects, task.projectId) }}
+                </span>
+              </span>
             </div>
           </article>
           <form
@@ -513,10 +544,11 @@ function taskDescription(task: MissionTask): string {
 }
 
 .project-task-card {
+  position: relative;
   display: grid;
   gap: 8px;
   min-width: 0;
-  padding: 10px;
+  padding: 10px 42px 10px 10px;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface);
@@ -576,21 +608,43 @@ function taskDescription(task: MissionTask): string {
   min-width: 0;
 }
 
+.project-task-card__footer {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  margin-right: -32px;
+}
+
 .project-task-card__project {
+  --project-chip-color: var(--ui-accent);
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   min-width: 0;
   gap: 5px;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid
+    color-mix(in oklab, var(--project-chip-color), var(--ui-border) 68%);
+  border-radius: 999px;
+  background: color-mix(
+    in oklab,
+    var(--project-chip-color) 12%,
+    transparent
+  );
+  color: color-mix(in oklab, var(--project-chip-color), var(--ui-text) 20%);
+  font-size: 11px;
   font-weight: 650;
+  line-height: 1.2;
 }
 
 .project-task-card__project-visual {
   display: inline-grid;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
   place-items: center;
-  color: var(--ui-text-muted);
+  color: currentColor;
 }
 
 .project-task-card__project-visual img {
@@ -601,7 +655,7 @@ function taskDescription(task: MissionTask): string {
 }
 
 .project-task-card__project-emoji {
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1;
 }
 
@@ -649,6 +703,9 @@ function taskDescription(task: MissionTask): string {
 }
 
 .project-task-card__actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
