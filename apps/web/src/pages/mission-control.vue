@@ -1356,10 +1356,13 @@ onMounted(() => {
             v-else-if="cardComponentKey(card) === 'ProjectsSummaryCard'"
           >
             <header class="dashboard-card__header">
-              <h2 class="dashboard-card__title">
+              <RouterLink
+                class="dashboard-card__title dashboard-card__title-link"
+                to="/mission-control/projects"
+              >
                 <UiIcon name="FolderDot" :size="16" />
                 <span>Projects</span>
-              </h2>
+              </RouterLink>
             </header>
             <div v-if="!dashboardEditing" class="dashboard-card__actions">
               <Button
@@ -1401,13 +1404,14 @@ onMounted(() => {
                   </RouterLink>
                 </div>
                 <div class="project-summary__stats">
-                  <span
+                  <RouterLink
                     v-for="status in visibleProjectStatuses"
                     :key="status.id"
+                    :to="projectSummaryPath(summary)"
                     :class="{ 'is-empty': summary.counts[status.id] === 0 }"
                   >
                     {{ projectStatusCountLabel(summary, status.id) }}
-                  </span>
+                  </RouterLink>
                 </div>
               </div>
             </div>
@@ -1886,6 +1890,21 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 
+.dashboard-card__title-link {
+  color: var(--ui-text);
+  text-decoration: none;
+}
+
+.dashboard-card__title-link:hover {
+  color: var(--ui-accent);
+}
+
+.dashboard-card__title-link:focus-visible {
+  border-radius: var(--ui-radius-sm);
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 2px;
+}
+
 .dashboard-card__header > span,
 .dashboard-card__header-actions span,
 .dashboard-card p,
@@ -2274,7 +2293,7 @@ onMounted(() => {
   gap: 6px;
 }
 
-.project-summary__stats span {
+.project-summary__stats a {
   display: inline-flex;
   min-height: 22px;
   align-items: center;
@@ -2284,14 +2303,26 @@ onMounted(() => {
   color: var(--ui-text-muted);
   font-size: 11px;
   font-weight: 650;
+  text-decoration: none;
 }
 
-.project-summary__stats span:not(.is-empty) {
+.project-summary__stats a:not(.is-empty) {
   border-color: color-mix(in oklab, var(--ui-accent), transparent 70%);
   color: var(--ui-text);
 }
 
-.project-summary__stats span.is-empty {
+.project-summary__stats a:hover,
+.project-summary__stats a:focus-visible {
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
+}
+
+.project-summary__stats a:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
+  outline-offset: 2px;
+}
+
+.project-summary__stats a.is-empty {
   opacity: 0.56;
 }
 
@@ -2605,6 +2636,11 @@ onMounted(() => {
 
   .dashboard-card--wide {
     grid-column: auto;
+  }
+
+  .dashboard-card__actions {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .wheel-summary__row {
