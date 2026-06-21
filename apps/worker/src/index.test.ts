@@ -2780,7 +2780,7 @@ function siteFileText(
 
 function addAssistantEditableSite(
   env: ReturnType<typeof createEnv>,
-  options: { blogEnabled?: boolean } = {},
+  options: { blogEnabled?: boolean; publishedAt?: string | null } = {},
 ) {
   env.sites.push({
     id: "site-assistant",
@@ -2793,7 +2793,7 @@ function addAssistantEditableSite(
     custom_domain_cf_id: null,
     created_at: "2026-06-05T09:00:00Z",
     updated_at: "2026-06-05T09:00:00Z",
-    published_at: null,
+    published_at: options.publishedAt ?? null,
   });
   addSiteFileText(
     env,
@@ -4823,7 +4823,9 @@ describe("ME3 Core Worker auth", () => {
       draft: true,
     });
     expect(savedDraftProfile.posts?.[0]?.publishedAt).toBeUndefined();
-    expect(siteFileText(env, "site-assistant", "src/about.md")).toBe("# About\n\nOriginal about.");
+    expect(siteFileText(env, "site-assistant", "src/about.md")).toContain(
+      "Model-written about paragraph",
+    );
     expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeNull();
 
     const publishResponse = await app.fetch(
@@ -4892,6 +4894,119 @@ describe("ME3 Core Worker auth", () => {
           file.path.endsWith(`${threadId}.json`),
       ),
     ).toBeUndefined();
+  });
+
+  it("drafts profile bio updates into me.json instead of the about page", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env);
+    env.AI = {
+      run: vi.fn(async () => ({
+        response: JSON.stringify({
+          bio: "I build useful AI systems for everyday creative momentum.",
+        }),
+      })),
+    } as unknown as Ai;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText:
+            'Update my site short bio field to say "I build useful AI systems for everyday creative momentum."',
+        }),
+      }),
+      env,
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+    const profile = JSON.parse(siteFileText(env, "site-assistant", "src/me.json") || "{}") as {
+      bio?: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      specialist: "core.sites.update_draft",
+      siteAction: { kind: "draft_created", pending: true, published: false },
+    });
+    expect(String(payload.replyText)).toContain("Bio: updated the short profile bio");
+    expect(String(payload.replyText)).not.toContain("About page");
+    expect(profile.bio).toBe("I build useful AI systems for everyday creative momentum.");
+    expect(siteFileText(env, "site-assistant", "src/about.md")).toBe("# About\n\nOriginal about.");
+    expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeNull();
+  });
+
+  it("publishes assistant drafts for already-published local sites without Cloud username blocking", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env, {
+      publishedAt: "2026-06-04T10:00:00Z",
+    });
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ available: false }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    env.AI = {
+      run: vi.fn(async () => ({
+        response: JSON.stringify({
+          bio: "Published local site bio.",
+        }),
+      })),
+    } as unknown as Ai;
+
+    const draftResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: 'Update my site short bio field to say "Published local site bio."',
+        }),
+      }),
+      env,
+    );
+    const draftPayload = (await draftResponse.json()) as Record<string, unknown>;
+    const threadId = String(draftPayload.threadId);
+
+    const publishResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          threadId,
+          messageText: "publish it",
+        }),
+      }),
+      env,
+    );
+    const publishPayload = (await publishResponse.json()) as Record<string, unknown>;
+
+    expect(draftResponse.status).toBe(200);
+    expect(publishResponse.status).toBe(200);
+    expect(publishPayload).toMatchObject({
+      ok: true,
+      specialist: "core.sites.publish",
+      siteAction: { kind: "published", published: true },
+    });
+    expect(String(publishPayload.replyText)).not.toContain("username is already taken");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(siteFileText(env, "site-assistant", "public/me.json")).toContain(
+      "Published local site bio.",
+    );
+
+    fetchMock.mockRestore();
   });
 
   it("rejects assistant blog post drafts when the site blog feature is disabled", async () => {

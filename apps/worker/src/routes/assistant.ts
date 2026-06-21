@@ -635,6 +635,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   };
 
   type ParsedAssistantSiteDraftContent = {
+    bio?: string;
     aboutParagraph?: string;
     pages?: AssistantSiteGeneratedPage[];
     postTitle?: string;
@@ -650,6 +651,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   };
 
   type AssistantSiteGeneratedContent = {
+    bio?: string;
     aboutParagraph?: string;
     pages?: AssistantSiteGeneratedPage[];
     postTitle?: string;
@@ -672,6 +674,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     updatedAt: string;
     sourceFiles: Record<string, string>;
     changes: {
+      bio?: string;
       aboutFile?: string;
       aboutParagraph?: string;
       pageFiles?: string[];
@@ -1064,7 +1067,9 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
     if (!draft) return null;
 
-    const cloudUsernameError = await getMe3CloudUsernamePublishBlockReason(env, site.username);
+    const cloudUsernameError = site.published_at
+      ? null
+      : await getMe3CloudUsernamePublishBlockReason(env, site.username);
     if (cloudUsernameError) {
       return {
         specialist: "core.sites.publish",
@@ -1477,7 +1482,19 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           : null,
     };
 
-    const aboutParagraph = generatedContent.aboutParagraph || "";
+    const bio = normalizeAssistantProfileBio(
+      generatedContent.bio ||
+        (assistantRequestMentionsBioField(requestText) ? generatedContent.aboutParagraph || "" : ""),
+    );
+    if (bio) {
+      profile.bio = bio;
+      changes.bio = bio;
+    }
+
+    const aboutParagraph =
+      changes.bio && assistantRequestMentionsBioField(requestText)
+        ? ""
+        : generatedContent.aboutParagraph || "";
     if (aboutParagraph) {
       const aboutPage = upsertAssistantAboutPage(profile);
       const aboutFile = normalizeSiteFileName(aboutPage.file || "about.md") || "about.md";
@@ -1524,7 +1541,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       changes.postDraft = postDraft;
     }
 
-    if (!changes.aboutParagraph && !changes.pageFiles?.length && !changes.postMarkdown) {
+    if (
+      !changes.bio &&
+      !changes.aboutParagraph &&
+      !changes.pageFiles?.length &&
+      !changes.postMarkdown
+    ) {
       const aboutPage = upsertAssistantAboutPage(profile);
       const aboutFile = normalizeSiteFileName(aboutPage.file || "about.md") || "about.md";
       const fallbackParagraph =
@@ -1556,6 +1578,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     parsed: ParsedAssistantSiteDraftContent,
   ): AssistantSiteGeneratedContent {
     return {
+      bio: parsed.bio,
       aboutParagraph: parsed.aboutParagraph,
       pages: parsed.pages,
       postTitle: parsed.postTitle,
@@ -1626,7 +1649,8 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const system = [
       "You write public ME3 profile-site content for the owner.",
       "Return only strict JSON. No markdown fence, no prose outside JSON.",
-      "Schema: {\"aboutParagraph\": string optional, \"pages\": [{\"slug\": string, \"title\": string, \"bodyMarkdown\": string}] optional, \"blogPost\": {\"title\": string, \"bodyMarkdown\": string, \"excerpt\": string optional, \"draft\": boolean optional} optional}.",
+      "Schema: {\"bio\": string optional, \"aboutParagraph\": string optional, \"pages\": [{\"slug\": string, \"title\": string, \"bodyMarkdown\": string}] optional, \"blogPost\": {\"title\": string, \"bodyMarkdown\": string, \"excerpt\": string optional, \"draft\": boolean optional} optional}.",
+      "Use bio for short profile bio/tagline updates. Do not turn short bio requests into about page paragraphs.",
       "Use bodyMarkdown without frontmatter. For pages and posts, include a single H1 followed by useful body copy.",
       "Only include fields that the owner asked to create or update. Keep content specific to the owner's request and current site.",
       "Do not claim the site is published.",
@@ -1655,6 +1679,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   function parseAssistantSiteGeneratedJson(text: string): AssistantSiteGeneratedContent | null {
     const parsed = parseJsonObjectFromModelText(text);
     if (!parsed) return null;
+    const bio = normalizeAssistantProfileBio(normalizeGeneratedString(parsed.bio));
     const aboutParagraph = normalizeGeneratedString(parsed.aboutParagraph);
     const pages = Array.isArray(parsed.pages)
       ? parsed.pages
@@ -1667,8 +1692,9 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const postExcerpt = normalizeGeneratedString(blogPost?.excerpt);
     const postDraft = typeof blogPost?.draft === "boolean" ? blogPost.draft : undefined;
 
-    if (!aboutParagraph && pages.length === 0 && !postBody) return null;
+    if (!bio && !aboutParagraph && pages.length === 0 && !postBody) return null;
     return {
+      bio: bio || undefined,
       aboutParagraph: aboutParagraph || undefined,
       pages: pages.length ? pages : undefined,
       postTitle: postTitle || undefined,
@@ -1723,7 +1749,9 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
   function generateFallbackAssistantSiteContent(requestText: string): AssistantSiteGeneratedContent {
     const content: AssistantSiteGeneratedContent = {};
-    if (assistantRequestMentionsAbout(requestText)) {
+    if (assistantRequestMentionsBioField(requestText)) {
+      content.bio = generateAssistantShortBio(requestText);
+    } else if (assistantRequestMentionsAbout(requestText)) {
       content.aboutParagraph = generateAssistantAboutParagraph(requestText);
     }
     if (assistantRequestMentionsBlogPost(requestText)) {
@@ -1733,7 +1761,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       content.postBody = generateAssistantBlogPostMarkdown(topic, content.postTitle, requestText);
       content.postDraft = assistantRequestAsksForDraftPost(requestText);
     }
-    if (!content.aboutParagraph && !content.postBody) {
+    if (!content.bio && !content.aboutParagraph && !content.postBody) {
       content.aboutParagraph = generateAssistantAboutParagraph(requestText);
     }
     return content;
@@ -2054,6 +2082,18 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     env: Env,
     draft: AssistantSiteUpdateDraft,
   ): Promise<void> {
+    for (const [name, content] of Object.entries(draft.sourceFiles)) {
+      const sourceName = normalizeSiteFileName(name);
+      if (!sourceName || shouldIgnoreSiteSourceFile(sourceName)) continue;
+      await putSiteFile(
+        env,
+        draft.siteId,
+        `src/${sourceName}`,
+        content,
+        getContentType(sourceName),
+      );
+    }
+
     await putSiteFile(
       env,
       draft.siteId,
@@ -2114,6 +2154,9 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     requestUrl: string,
   ): string {
     const parts = ["Draft saved. I updated your site draft."];
+    if (draft.changes.bio) {
+      parts.push("Bio: updated the short profile bio in me.json.");
+    }
     if (draft.changes.aboutFile) {
       parts.push(`About page: added a new paragraph to ${draft.changes.aboutFile}.`);
     }
@@ -2137,6 +2180,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
   function formatAssistantSiteRefinedReply(draft: AssistantSiteUpdateDraft): string {
     const parts = ["I updated your pending site draft."];
+    if (draft.changes.bio) parts.push("Bio: revised the short profile bio.");
     if (draft.changes.aboutFile) parts.push(`About page: revised ${draft.changes.aboutFile}.`);
     if (draft.changes.postTitle && draft.changes.postFile) {
       parts.push(`Blog: revised "${draft.changes.postTitle}" at ${draft.changes.postFile}.`);
@@ -2162,6 +2206,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         ? "Saved. I updated your site with a blog draft."
         : "Published. I updated your site.",
     ];
+    if (draft.changes.bio) parts.push("Bio: updated the short profile bio.");
     if (draft.changes.aboutFile) parts.push(`About page: ${draft.changes.aboutFile}.`);
     if (draft.changes.postTitle) {
       const label = postIsDraft ? "Blog draft title" : "Blog title";
@@ -2220,6 +2265,13 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   ): ParsedAssistantSiteDraftContent | null {
     const normalized = text.replace(/\r\n/g, "\n");
     const parsed: ParsedAssistantSiteDraftContent = {};
+    const bioMatch = normalized.match(
+      /(?:Short\s+Bio|Bio):\s*([\s\S]*?)(?=\n{0,2}\s*(?:About Page|Blog Post|Post|Article):|$)/i,
+    );
+    if (bioMatch?.[1]) {
+      parsed.bio = normalizeAssistantProfileBio(cleanAssistantGeneratedSnippet(bioMatch[1]));
+    }
+
     const aboutMatch = normalized.match(
       /About Page(?:\s+(?:Paragraph|Update))?:\s*([\s\S]*?)(?=\n{0,2}\s*(?:Blog Post|Post|Article):|$)/i,
     );
@@ -2239,7 +2291,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       }
     }
 
-    if (!parsed.aboutParagraph && !parsed.postBody) return null;
+    if (!parsed.bio && !parsed.aboutParagraph && !parsed.postBody) return null;
     return parsed;
   }
 
@@ -2253,7 +2305,29 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   }
 
   function assistantRequestMentionsAbout(requestText: string): boolean {
-    return /\b(about page|about section|about me|bio)\b/i.test(requestText);
+    return /\b(about page|about section|about me)\b/i.test(requestText);
+  }
+
+  function assistantRequestMentionsBioField(requestText: string): boolean {
+    return /\b(short bio|bio field|profile bio|my bio|bio)\b/i.test(requestText) &&
+      !/\b(about page|about section|about me)\b/i.test(requestText);
+  }
+
+  function normalizeAssistantProfileBio(value: string): string {
+    return value
+      .replace(/^#+\s*/gm, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 280);
+  }
+
+  function generateAssistantShortBio(requestText: string): string {
+    const quoted =
+      requestText.match(/\b(?:bio|short bio|bio field)\b[^"'“”]*["'“]([^"'”]+)["'”]/i) ||
+      requestText.match(/\b(?:say|to)\s+["'“]([^"'”]+)["'”]/i);
+    return normalizeAssistantProfileBio(
+      quoted?.[1] || "Personal AI assistant builder focused on practical tools, thoughtful systems, and useful momentum.",
+    );
   }
 
   function assistantRequestMentionsBlogPost(requestText: string): boolean {
