@@ -718,7 +718,6 @@ let voiceRecordingTimer: number | null = null;
 let voiceDiscardRecording = false;
 let assistantAbortController: AbortController | null = null;
 let assistantThreadSearchDebounceId: number | null = null;
-let assistantPlaceholderRotationId: number | null = null;
 
 const defaultDailyBriefingTemplate =
   "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -1183,7 +1182,7 @@ onMounted(() => {
   if (!supportsMediaRecording()) {
     voiceDictationState.value = "unsupported";
   }
-  startAssistantPlaceholderRotation();
+  pickAssistantPlaceholder();
   void loadPage();
   void syncAssistantSettingsFromRoute();
   window.addEventListener("keydown", handleWindowKeydown);
@@ -1193,7 +1192,6 @@ onBeforeUnmount(() => {
   stopVoiceDictation({ discard: true });
   clearAssistantAttachments();
   cancelAssistantThreadSearchDebounce();
-  stopAssistantPlaceholderRotation();
   window.removeEventListener("keydown", handleWindowKeydown);
 });
 
@@ -1309,6 +1307,7 @@ async function startNewAssistantChat(
 ) {
   assistantThreadId.value = null;
   assistantError.value = null;
+  pickAssistantPlaceholder();
   if (options.closeHistory !== false) {
     assistantHistoryDrawerOpen.value = false;
   }
@@ -1368,19 +1367,10 @@ function cancelAssistantThreadSearchDebounce() {
   assistantThreadSearchDebounceId = null;
 }
 
-function startAssistantPlaceholderRotation() {
-  stopAssistantPlaceholderRotation();
-  assistantPlaceholderRotationId = window.setInterval(() => {
-    assistantPlaceholderIndex.value =
-      (assistantPlaceholderIndex.value + 1) %
-      assistantComposerPlaceholders.length;
-  }, 5200);
-}
-
-function stopAssistantPlaceholderRotation() {
-  if (assistantPlaceholderRotationId === null) return;
-  window.clearInterval(assistantPlaceholderRotationId);
-  assistantPlaceholderRotationId = null;
+function pickAssistantPlaceholder() {
+  assistantPlaceholderIndex.value = Math.floor(
+    Math.random() * assistantComposerPlaceholders.length,
+  );
 }
 
 async function archiveAssistantThread(thread: AssistantThread) {
@@ -7023,7 +7013,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: block;
   min-height: 32px;
   overflow: hidden;
-  padding: 0 22px 0 6px;
+  padding: 0 32px 0 6px;
   visibility: hidden;
   white-space: nowrap;
 }
@@ -7037,7 +7027,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-height: 32px;
   border: 0;
   border-radius: 999px;
-  padding: 0 18px 0 6px;
+  padding: 0 30px 0 6px;
   background: transparent;
   color: var(--ui-text-muted);
 }
