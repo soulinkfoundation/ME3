@@ -917,7 +917,7 @@ onMounted(() => {
       <p v-if="error" class="mission-dashboard__message is-error">
         {{ error }}
       </p>
-      <PageLoading v-else-if="loading" label="loading mission control..." />
+      <PageLoading v-else-if="loading" label="Loading mission control..." />
 
       <div v-if="dashboardReady" class="mission-dashboard__grid">
         <article

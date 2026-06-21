@@ -5,6 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import CustomDomain from "../components/CustomDomain.vue";
 import Button from "../components/Button.vue";
+import PageLoading from "../components/PageLoading.vue";
 import PluginList from "../components/PluginList.vue";
 import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
@@ -1710,7 +1711,7 @@ onMounted(async () => {
         </div>
       </header>
 
-      <div v-if="loading" class="status-row">Loading account...</div>
+      <PageLoading v-if="loading" label="Loading account..." />
 
       <template v-else>
         <section class="card accordion-card signin-section primary-section">
@@ -1791,12 +1792,11 @@ onMounted(async () => {
             aria-labelledby="account-trigger-mailbox"
             :hidden="!openSection.mailbox"
           >
-            <div
+            <PageLoading
               v-if="mailboxLoading || emailProviderLoading"
-              class="status-row"
-            >
-              Loading email settings...
-            </div>
+              compact
+              label="Loading email settings..."
+            />
 
             <template v-else-if="mailboxAvailable">
               <div class="email-settings">
@@ -1817,9 +1817,11 @@ onMounted(async () => {
                     </div>
                   </div>
 
-                  <div v-if="sites.loading" class="status-row">
-                    Loading site domain settings...
-                  </div>
+                  <PageLoading
+                    v-if="sites.loading"
+                    compact
+                    label="Loading site domain settings..."
+                  />
                   <template v-else-if="customDomainSite">
                     <CustomDomain
                       embedded
@@ -2093,9 +2095,11 @@ onMounted(async () => {
             aria-labelledby="account-trigger-plugins"
             :hidden="!openSection.plugins"
           >
-            <div v-if="pluginsLoading" class="status-row">
-              Loading plugins...
-            </div>
+            <PageLoading
+              v-if="pluginsLoading"
+              compact
+              label="Loading plugins..."
+            />
             <p v-else-if="pluginsError" class="error">{{ pluginsError }}</p>
 
             <template v-else>
@@ -2355,9 +2359,11 @@ onMounted(async () => {
           >
             <div class="advanced-subsection">
 
-                <div v-if="aiSettingsLoading" class="status-row">
-                  Loading AI provider settings...
-                </div>
+                <PageLoading
+                  v-if="aiSettingsLoading"
+                  compact
+                  label="Loading AI provider settings..."
+                />
 
                 <template v-else>
                   <p v-if="aiSettingsError" class="error">
@@ -2458,9 +2464,11 @@ onMounted(async () => {
                         custom gateway only if you want custom Cloudflare
                         controls later.
                       </p>
-                      <p v-if="aiGatewayLoading" class="status-row">
-                        Loading AI Gateway settings...
-                      </p>
+                      <PageLoading
+                        v-if="aiGatewayLoading"
+                        compact
+                        label="Loading AI Gateway settings..."
+                      />
                       <template v-else>
                         <p
                           v-if="
@@ -2570,9 +2578,11 @@ onMounted(async () => {
           >
             <div class="advanced-subsection">
 
-                <div v-if="commerceLoading" class="status-row">
-                  Loading payment settings...
-                </div>
+                <PageLoading
+                  v-if="commerceLoading"
+                  compact
+                  label="Loading payment settings..."
+                />
 
                 <template v-else>
                   <p class="hint">
@@ -4143,17 +4153,6 @@ h1 {
   justify-content: center;
   width: fit-content;
   text-decoration: none;
-}
-
-.status-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 20px;
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--color-border);
-  color: var(--color-text-muted);
 }
 
 .success {

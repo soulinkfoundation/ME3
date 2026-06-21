@@ -6,6 +6,7 @@ import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import CalendarMiniMonth from "../components/calendar/CalendarMiniMonth.vue";
 import CalendarMonthBoard from "../components/calendar/CalendarMonthBoard.vue";
 import Button from "../components/Button.vue";
+import PageLoading from "../components/PageLoading.vue";
 import UiIcon from "../components/UiIcon.vue";
 import type { UiIconName } from "../utils/icons";
 import BookingAvailabilityEditor, {
@@ -2241,9 +2242,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="initialCalendarLoading" class="cal-loading">
-        Loading calendar…
-      </div>
+      <PageLoading v-if="initialCalendarLoading" label="Loading calendar..." />
       <div v-else-if="showCalendarUnavailable" class="cal-error-banner">
         {{ error }}
       </div>
@@ -3129,9 +3128,11 @@ onBeforeUnmount(() => {
         </div>
 
         <form class="availability-form" @submit.prevent="saveAvailabilitySettings">
-          <div v-if="availabilityLoading" class="cal-loading">
-            Loading availability…
-          </div>
+          <PageLoading
+            v-if="availabilityLoading"
+            compact
+            label="Loading availability..."
+          />
           <BookingAvailabilityEditor
             v-else
             v-model:availability="availabilityDraft"
@@ -3340,7 +3341,6 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.cal-loading,
 .cal-error-banner {
   padding: 20px;
   border: 1px solid var(--color-border);

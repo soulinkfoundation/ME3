@@ -2,15 +2,22 @@
 withDefaults(
   defineProps<{
     label?: string;
+    compact?: boolean;
   }>(),
   {
     label: "Loading...",
+    compact: false,
   },
 );
 </script>
 
 <template>
-  <div class="page-loading" role="status" aria-live="polite">
+  <div
+    class="page-loading"
+    :class="{ 'page-loading--compact': compact }"
+    role="status"
+    aria-live="polite"
+  >
     <span class="page-loading__spinner" aria-hidden="true" />
     <span class="page-loading__label">{{ label }}</span>
   </div>
@@ -23,6 +30,7 @@ withDefaults(
   min-height: 140px;
   box-sizing: border-box;
   align-items: center;
+  align-self: start;
   justify-content: center;
   justify-self: center;
   gap: 10px;
@@ -44,6 +52,13 @@ withDefaults(
 
 .page-loading__label {
   line-height: 1.2;
+}
+
+.page-loading--compact {
+  display: flex;
+  width: 100%;
+  min-height: 64px;
+  padding: 14px;
 }
 
 @media (prefers-reduced-motion: reduce) {

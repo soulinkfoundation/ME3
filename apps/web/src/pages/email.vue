@@ -4,6 +4,7 @@ import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRouter } from "vue-router";
 import Button from "../components/Button.vue";
+import PageLoading from "../components/PageLoading.vue";
 import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
 import { API_BASE, api } from "../api";
@@ -1948,9 +1949,12 @@ onBeforeUnmount(() => {
           :class="{ 'inbox-panel--with-mobile-controls': isEmailTab(activeTab) }"
         >
           <template v-if="activeTab === 'telegram'">
-            <div v-if="telegramLoading" class="state-card panel-pad">
-              Loading Telegram…
-            </div>
+            <PageLoading
+              v-if="telegramLoading"
+              compact
+              class="panel-pad"
+              label="Loading Telegram..."
+            />
             <div
               v-else-if="telegramError"
               class="state-card state-card--error panel-pad"
@@ -2054,13 +2058,12 @@ onBeforeUnmount(() => {
                 }"
                 aria-label="Conversations"
               >
-                <div
+                <PageLoading
                   v-if="loading"
+                  compact
                   class="conversation-loading"
-                  aria-live="polite"
-                >
-                  Loading messages…
-                </div>
+                  label="Loading messages..."
+                />
 
                 <template v-else-if="hasMessagesOnPage">
                   <div class="bulk-mail-toolbar">
@@ -3570,13 +3573,7 @@ onBeforeUnmount(() => {
 
 .conversation-loading {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   min-height: 0;
-  padding: 20px 16px;
-  font-size: 14px;
-  color: var(--color-text-muted);
 }
 
 .conversation-item {
