@@ -1095,7 +1095,7 @@ onMounted(() => {
                 />
               </label>
               <label class="mission-statement-form__field">
-                <span>Main goal</span>
+                <span>Current Goal(s)</span>
                 <textarea
                   v-model="mainGoalDraft"
                   :placeholder="missionStatement?.mainGoalPlaceholder"
@@ -1114,13 +1114,13 @@ onMounted(() => {
               >
                 <h3 class="dashboard-card__title mission-goal-display__title">
                   <UiIcon name="Target" :size="16" />
-                  <span>Main goal</span>
+                  <span>Current Goal(s)</span>
                 </h3>
                 <p>
                   {{
                     mainGoalHasValue
                       ? mainGoalDisplayText()
-                      : "No main goal set yet."
+                      : "No current goals set yet."
                   }}
                 </p>
               </div>

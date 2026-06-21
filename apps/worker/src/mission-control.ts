@@ -1027,7 +1027,8 @@ export async function getMissionDashboard(env: Env, userId: string) {
         missionStatement,
         mainGoal,
         placeholder: DEFAULT_MISSION_STATEMENT,
-        mainGoalPlaceholder: "What's your main goal right now?",
+        mainGoalPlaceholder:
+          "Set your current objectives and goals here for yourself and for your assistant.",
       },
       "mission.wheel-latest-snapshot": {
         snapshot: latestWheelSnapshot,
