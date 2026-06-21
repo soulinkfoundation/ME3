@@ -1764,11 +1764,13 @@ onMounted(() => {
 }
 
 .mission-dashboard__topbar-spacer {
+  grid-column: 1;
   min-width: 0;
 }
 
 .mission-dashboard__topbar-actions {
   display: inline-flex;
+  grid-column: 3;
   justify-self: end;
   align-items: center;
   gap: 6px;
@@ -1776,6 +1778,7 @@ onMounted(() => {
 
 .mission-dashboard__topbar-quicklinks {
   display: flex;
+  grid-column: 2;
   min-width: 0;
   max-width: min(640px, 100%);
   flex-wrap: nowrap;
