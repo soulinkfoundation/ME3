@@ -2622,6 +2622,44 @@ const vibeCss = computed(() => {
   display: block;
 }
 
+.page-body :deep(ul[data-type="taskList"]) {
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 8px;
+}
+
+.page-body :deep(ul[data-type="taskList"] ul[data-type="taskList"]) {
+  margin: 4px 0 4px 20px;
+}
+
+.page-body :deep(li[data-type="taskItem"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-left: 0;
+}
+
+.page-body :deep(li[data-type="taskItem"] > label) {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  user-select: none;
+}
+
+.page-body :deep(li[data-type="taskItem"] > div) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.page-body :deep(li[data-type="taskItem"] p) {
+  margin-bottom: 0;
+}
+
+.page-body :deep(li[data-type="taskItem"] input[type="checkbox"]) {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--ui-accent, var(--color-primary, #007bff));
+}
+
 .page-body :deep(ul),
 .page-body :deep(ol) {
   padding-left: 20px;

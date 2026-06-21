@@ -14,6 +14,8 @@ import Link from "@tiptap/extension-link";
 import Underline from "@tiptap/extension-underline";
 import HorizontalRule from "@tiptap/extension-horizontal-rule";
 import Image from "@tiptap/extension-image";
+import TaskList from "@tiptap/extension-task-list";
+import TaskItem from "@tiptap/extension-task-item";
 import { compressImage, resizeImage } from "@/utils/imageCompression";
 import UiIcon from "./UiIcon.vue";
 import TiptapImageNode from "./TiptapImageNode.vue";
@@ -615,6 +617,17 @@ const editor = useEditor({
     }),
     Underline,
     HorizontalRule,
+    TaskList.configure({
+      HTMLAttributes: {
+        class: "tiptap-task-list",
+      },
+    }),
+    TaskItem.configure({
+      nested: true,
+      HTMLAttributes: {
+        class: "tiptap-task-item",
+      },
+    }),
     Gallery,
     FaqBlock,
     CarouselBlock,
@@ -798,12 +811,18 @@ function toggleOrderedList() {
   editor.value?.chain().focus().toggleOrderedList().run();
 }
 
+function toggleTaskList() {
+  editor.value?.chain().focus().toggleTaskList().run();
+}
+
 function sinkListItem() {
-  editor.value?.chain().focus().sinkListItem("listItem").run();
+  const itemType = editor.value?.isActive("taskItem") ? "taskItem" : "listItem";
+  editor.value?.chain().focus().sinkListItem(itemType).run();
 }
 
 function liftListItem() {
-  editor.value?.chain().focus().liftListItem("listItem").run();
+  const itemType = editor.value?.isActive("taskItem") ? "taskItem" : "listItem";
+  editor.value?.chain().focus().liftListItem(itemType).run();
 }
 
 function syncActiveImages() {
@@ -1169,6 +1188,16 @@ defineExpose({
       <button
         type="button"
         class="toolbar-btn"
+        :class="{ active: editor?.isActive('taskList') }"
+        @click="toggleTaskList"
+        title="Task list"
+        aria-label="Task list"
+      >
+        <UiIcon name="ListTodo" :size="16" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="toolbar-btn"
         @click="liftListItem"
         title="Decrease list indent"
         aria-label="Decrease list indent"
@@ -1486,6 +1515,42 @@ defineExpose({
 
 .editor-content-wrapper :deep(.ProseMirror li > p) {
   margin: 0;
+}
+
+.editor-content-wrapper :deep(.ProseMirror ul[data-type="taskList"]) {
+  list-style: none;
+  padding-left: 0;
+}
+
+.editor-content-wrapper
+  :deep(.ProseMirror ul[data-type="taskList"] ul[data-type="taskList"]) {
+  margin: 0.25em 0 0.25em 1.5em;
+}
+
+.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-left: 0;
+}
+
+.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"] > label) {
+  flex: 0 0 auto;
+  margin-top: 0.15em;
+  user-select: none;
+}
+
+.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"] > div) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.editor-content-wrapper
+  :deep(.ProseMirror li[data-type="taskItem"] input[type="checkbox"]) {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ui-accent, var(--color-primary, #007bff));
+  cursor: pointer;
 }
 
 .editor-content-wrapper :deep(.ProseMirror) img {

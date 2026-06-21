@@ -9,6 +9,7 @@ const mockSetLink = vi.fn(() => ({ run: vi.fn() }));
 const mockUnsetLink = vi.fn(() => ({ run: vi.fn() }));
 const mockToggleBulletList = vi.fn(() => ({ run: vi.fn() }));
 const mockToggleOrderedList = vi.fn(() => ({ run: vi.fn() }));
+const mockToggleTaskList = vi.fn(() => ({ run: vi.fn() }));
 const mockSinkListItem = vi.fn(() => ({ run: vi.fn() }));
 const mockLiftListItem = vi.fn(() => ({ run: vi.fn() }));
 
@@ -36,6 +37,7 @@ const mockEditor = {
       toggleHeading: vi.fn(() => ({ run: vi.fn() })),
       toggleBulletList: mockToggleBulletList,
       toggleOrderedList: mockToggleOrderedList,
+      toggleTaskList: mockToggleTaskList,
       sinkListItem: mockSinkListItem,
       liftListItem: mockLiftListItem,
       toggleBlockquote: vi.fn(() => ({ run: vi.fn() })),
@@ -102,6 +104,14 @@ vi.mock("@tiptap/extension-image", () => ({
   },
 }));
 
+vi.mock("@tiptap/extension-task-list", () => ({
+  default: { configure: vi.fn(() => ({})) },
+}));
+
+vi.mock("@tiptap/extension-task-item", () => ({
+  default: { configure: vi.fn(() => ({})) },
+}));
+
 // Mock image compression utilities
 vi.mock("@/utils/imageCompression", () => ({
   resizeImage: vi
@@ -116,6 +126,8 @@ vi.mock("@/utils/imageCompression", () => ({
 
 import Link from "@tiptap/extension-link";
 import StarterKit from "@tiptap/starter-kit";
+import TaskList from "@tiptap/extension-task-list";
+import TaskItem from "@tiptap/extension-task-item";
 import TiptapEditor from "./TiptapEditor.vue";
 
 const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -155,6 +167,7 @@ describe("TiptapEditor", () => {
     mockUnsetLink.mockClear();
     mockToggleBulletList.mockClear();
     mockToggleOrderedList.mockClear();
+    mockToggleTaskList.mockClear();
     mockSinkListItem.mockClear();
     mockLiftListItem.mockClear();
   });
@@ -214,6 +227,7 @@ describe("TiptapEditor", () => {
     expect(wrapper.find('[title="Heading 3"]').exists()).toBe(true);
     expect(wrapper.find('[title="Bullet list"]').exists()).toBe(true);
     expect(wrapper.find('[title="Numbered list"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Task list"]').exists()).toBe(true);
     expect(wrapper.find('[title="Decrease list indent"]').exists()).toBe(true);
     expect(wrapper.find('[title="Increase list indent"]').exists()).toBe(true);
     expect(wrapper.find('[title="Quote"]').exists()).toBe(true);
@@ -259,6 +273,30 @@ describe("TiptapEditor", () => {
     );
   });
 
+  it("should configure task list support", () => {
+    mount(TiptapEditor, {
+      props: {
+        modelValue: "",
+      },
+    });
+
+    expect(TaskList.configure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        HTMLAttributes: {
+          class: "tiptap-task-list",
+        },
+      }),
+    );
+    expect(TaskItem.configure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nested: true,
+        HTMLAttributes: {
+          class: "tiptap-task-item",
+        },
+      }),
+    );
+  });
+
   it("should preserve editor selection when toolbar receives mouse down", async () => {
     const wrapper = mount(TiptapEditor, {
       props: {
@@ -284,11 +322,13 @@ describe("TiptapEditor", () => {
 
     await wrapper.find('[title="Bullet list"]').trigger("click");
     await wrapper.find('[title="Numbered list"]').trigger("click");
+    await wrapper.find('[title="Task list"]').trigger("click");
     await wrapper.find('[title="Increase list indent"]').trigger("click");
     await wrapper.find('[title="Decrease list indent"]').trigger("click");
 
     expect(mockToggleBulletList).toHaveBeenCalled();
     expect(mockToggleOrderedList).toHaveBeenCalled();
+    expect(mockToggleTaskList).toHaveBeenCalled();
     expect(mockSinkListItem).toHaveBeenCalledWith("listItem");
     expect(mockLiftListItem).toHaveBeenCalledWith("listItem");
   });
