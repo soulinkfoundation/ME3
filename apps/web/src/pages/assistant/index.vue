@@ -1993,6 +1993,7 @@ async function scrollAssistantToBottom() {
   const node = assistantScrollerRef.value;
   if (!node) return;
   node.scrollTop = node.scrollHeight;
+  (node.lastElementChild || node).scrollIntoView({ block: "end" });
 }
 
 function autosizeAssistantComposer() {
