@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CORE_CHAT_CAPABILITIES,
   planCoreChatToolTurn,
+  validateCoreChatCapabilityContracts,
   type CoreChatCapabilityId,
   type CoreChatPlannerIntentKind,
   type CoreChatSideEffectLevel,
@@ -104,5 +106,41 @@ describe("Core chat tool planner", () => {
     });
     expect(decision.confidence).toBeGreaterThan(0);
     expect(decision.reason).toEqual(expect.any(String));
+  });
+
+  it("keeps Core chat capability contracts complete and planner-backed", () => {
+    expect(validateCoreChatCapabilityContracts()).toEqual([]);
+
+    const scenarioCapabilityIds = new Set(
+      plannerScenarios.map((scenario) => scenario.capabilityId),
+    );
+    expect(CORE_CHAT_CAPABILITIES.map((capability) => capability.id)).toEqual(
+      expect.arrayContaining(Array.from(scenarioCapabilityIds)),
+    );
+
+    for (const capability of CORE_CHAT_CAPABILITIES) {
+      expect(capability.ownerFacingLabel).toEqual(expect.any(String));
+      expect(capability.handler.route).toEqual(expect.any(String));
+      expect(capability.auditEventKind).toEqual(expect.any(String));
+      expect(capability.examples.positive.length).toBeGreaterThan(0);
+      expect(capability.examples.negative.length).toBeGreaterThan(0);
+
+      for (const prompt of capability.examples.positive) {
+        const decision = planCoreChatToolTurn({
+          messageText: prompt,
+          hasRecentAssistantEmailDraft: true,
+        });
+        expect(decision.capabilityId, prompt).toBe(capability.id);
+        expect(decision.ownerFacingLabel).toBe(capability.ownerFacingLabel);
+        expect(decision.handlerRoute).toBe(capability.handler.route);
+        expect(decision.auditEventKind).toBe(capability.auditEventKind);
+        expect(decision.requiredSetupChecks).toEqual([...capability.requiresSetup]);
+      }
+
+      for (const prompt of capability.examples.negative) {
+        const decision = planCoreChatToolTurn({ messageText: prompt });
+        expect(decision.capabilityId, prompt).not.toBe(capability.id);
+      }
+    }
   });
 });

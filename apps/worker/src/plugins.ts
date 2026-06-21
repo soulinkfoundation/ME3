@@ -7,6 +7,15 @@ import { LANDING_PAGES_RUNTIME } from "@me3-core/plugin-landing-pages";
 import { LOCAL_EXECUTOR_PLUGIN_ID, LOCAL_EXECUTOR_RUNTIME } from "@me3-core/plugin-local-executor";
 import { MISSION_CONTROL_RUNTIME } from "@me3-core/plugin-mission-control";
 import { SOCIAL_PUBLISHING_RUNTIME } from "./social-publishing";
+import {
+  defineMe3AgentCapabilityContract,
+  ME3_EMPTY_AGENT_CAPABILITY_SCHEMA,
+  validateMe3AgentCapabilityContract,
+  type Me3AgentCapabilityApprovalMode,
+  type Me3AgentCapabilityCategory,
+  type Me3AgentCapabilityContract,
+  type Me3AgentCapabilitySideEffect,
+} from "@me3/knowledge";
 
 export const CORE_PLUGIN_CATALOG_VERSION = "2026-06-11.v1";
 const PUBLIC_BASELINE_MIGRATION_PATH =
@@ -18,6 +27,21 @@ function publicBaselineMigration(id: string, description: string) {
     path: PUBLIC_BASELINE_MIGRATION_PATH,
     destructive: false,
     description,
+  };
+}
+
+function agentTool(
+  input: Omit<CorePluginAgentTool, "auditEventKind" | "examples"> &
+    Partial<Pick<CorePluginAgentTool, "auditEventKind" | "examples">>,
+): CorePluginAgentTool {
+  return {
+    ...input,
+    auditEventKind:
+      input.auditEventKind || `${input.id.replace(/[^a-z0-9]+/gi, "_")}_requested`,
+    examples: input.examples || {
+      positive: [`Use ${input.label.toLowerCase()}.`],
+      negative: ["What can this plugin do?"],
+    },
   };
 }
 
@@ -35,6 +59,18 @@ export type CorePluginSetupRequirement = {
   required: boolean;
   configured: boolean;
   note?: string;
+};
+
+export type CorePluginAgentTool = {
+  id: string;
+  label: string;
+  sideEffect: Me3AgentCapabilitySideEffect;
+  approvalMode: Me3AgentCapabilityApprovalMode;
+  auditEventKind: string;
+  examples: {
+    positive: readonly string[];
+    negative: readonly string[];
+  };
 };
 
 export type CorePluginManifestSummary = {
@@ -72,7 +108,7 @@ export type CorePluginManifestSummary = {
     destinationId: string;
     requiresPluginIds?: string[];
   }[];
-  agentTools: { id: string; label: string; sideEffect: string; approvalMode: string }[];
+  agentTools: CorePluginAgentTool[];
   secrets: { name: string; label: string; required: boolean }[];
   migrations: { id: string; path: string; destructive: boolean; description?: string }[];
   queuesAndCrons: {
@@ -229,18 +265,18 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   agentTools: [
-    {
+    agentTool({
       id: "content.write_preview",
       label: "Preview social content",
       sideEffect: "none",
       approvalMode: "approval_required",
-    },
-    {
+    }),
+    agentTool({
       id: "content.publish",
       label: "Queue approved social content",
       sideEffect: "external_write",
       approvalMode: "approval_required",
-    },
+    }),
   ],
   secrets: [],
   migrations: [
@@ -494,42 +530,42 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   agentTools: [
-    {
+    agentTool({
       id: "mission.task.create",
       label: "Create task",
       sideEffect: "internal_write",
       approvalMode: "approval_required",
-    },
-    {
+    }),
+    agentTool({
       id: "mission.memory.write",
       label: "Write private memory",
       sideEffect: "internal_write",
       approvalMode: "approval_required",
-    },
-    {
+    }),
+    agentTool({
       id: "mission.approval.request",
       label: "Request owner approval",
       sideEffect: "internal_write",
       approvalMode: "none",
-    },
-    {
+    }),
+    agentTool({
       id: "mission.daemon.read",
       label: "Read approved local context through paired daemon",
       sideEffect: "local_read",
       approvalMode: "approval_required",
-    },
-    {
+    }),
+    agentTool({
       id: "mission.daemon.write",
       label: "Write approved local files through paired daemon",
       sideEffect: "local_write",
       approvalMode: "approval_required",
-    },
-    {
+    }),
+    agentTool({
       id: "mission.daemon.shell",
       label: "Run approved local shell command through paired daemon",
       sideEffect: "local_shell",
       approvalMode: "approval_required",
-    },
+    }),
   ],
   secrets: [],
   migrations: [
@@ -629,18 +665,18 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   agentTools: [
-    {
+    agentTool({
       id: "calendar.event.create",
       label: "Create calendar event",
       sideEffect: "internal_write",
       approvalMode: "approval_required",
-    },
-    {
+    }),
+    agentTool({
       id: "calendar.reminder.create",
       label: "Create reminder",
       sideEffect: "internal_write",
       approvalMode: "approval_required",
-    },
+    }),
   ],
   secrets: [],
   migrations: [
@@ -761,18 +797,18 @@ const ACCOUNTS_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   agentTools: [
-    {
+    agentTool({
       id: "accounts.entry.create",
       label: "Create account entry",
       sideEffect: "money_or_account",
       approvalMode: "approval_required",
-    },
-    {
+    }),
+    agentTool({
       id: "accounts.entry.review",
       label: "Mark account entry for review",
       sideEffect: "internal_write",
       approvalMode: "approval_required",
-    },
+    }),
   ],
   secrets: [],
   migrations: [
@@ -845,12 +881,12 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   agentTools: [
-    {
+    agentTool({
       id: "chat.core_reply",
       label: "Core chat reply",
       sideEffect: "none",
       approvalMode: "none",
-    },
+    }),
   ],
   secrets: [
     {
@@ -956,12 +992,12 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   agentTools: [
-    {
+    agentTool({
       id: "landing_pages.generate_draft",
       label: "Generate landing page draft",
       sideEffect: "internal_write",
       approvalMode: "approval_required",
-    },
+    }),
   ],
   secrets: [],
   migrations: [],
@@ -1065,12 +1101,12 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
     },
   ],
   agentTools: [
-    {
+    agentTool({
       id: "local_executor.run",
       label: "Queue a bounded local runner job",
       sideEffect: "local_shell",
       approvalMode: "approval_required",
-    },
+    }),
   ],
   secrets: [],
   migrations: [
@@ -1180,6 +1216,70 @@ export const CORE_PLUGIN_CATALOG: readonly CorePluginManifestSummary[] = [
   LANDING_PAGES_PLUGIN,
   SOCIAL_PUBLISHING_PLUGIN,
 ];
+
+export function listCorePluginAgentToolContracts(
+  plugins: readonly CorePluginManifestSummary[] = CORE_PLUGIN_CATALOG,
+): Me3AgentCapabilityContract[] {
+  return plugins.flatMap((plugin) =>
+    plugin.agentTools.map((tool) => corePluginAgentToolToContract(plugin, tool)),
+  );
+}
+
+export function validateCorePluginAgentToolContracts(
+  plugins: readonly CorePluginManifestSummary[] = CORE_PLUGIN_CATALOG,
+) {
+  return listCorePluginAgentToolContracts(plugins).flatMap((capability) =>
+    validateMe3AgentCapabilityContract(capability),
+  );
+}
+
+function corePluginAgentToolToContract(
+  plugin: CorePluginManifestSummary,
+  tool: CorePluginAgentTool,
+): Me3AgentCapabilityContract {
+  return defineMe3AgentCapabilityContract({
+    id: tool.id,
+    owner: "plugin",
+    pluginId: plugin.id,
+    version: plugin.version,
+    ownerFacingLabel: tool.label,
+    summary: `${plugin.name}: ${tool.label}.`,
+    category: categoryForPlugin(plugin.id),
+    handler: {
+      surface: "plugin_tool",
+      route: tool.id,
+    },
+    sideEffect: tool.sideEffect,
+    approvalMode: tool.approvalMode,
+    requiresSetup: setupRequirementIdsForPluginContract(plugin),
+    inputSchema: ME3_EMPTY_AGENT_CAPABILITY_SCHEMA,
+    outputSchema: ME3_EMPTY_AGENT_CAPABILITY_SCHEMA,
+    auditEventKind: tool.auditEventKind,
+    examples: tool.examples,
+  });
+}
+
+function categoryForPlugin(pluginId: string): Me3AgentCapabilityCategory {
+  if (pluginId === "me3.agent-chat") return "assistant";
+  if (pluginId === "me3.mission-control") return "mission_control";
+  if (pluginId === "me3.calendar") return "calendar";
+  if (pluginId === "me3.social-publishing") return "content";
+  if (pluginId === "me3.accounts") return "accounts";
+  if (pluginId === "me3.landing-pages") return "sites";
+  if (pluginId === "me3.local-executor") return "local";
+  return "provider";
+}
+
+function setupRequirementIdsForPluginContract(
+  plugin: CorePluginManifestSummary,
+): string[] {
+  return [
+    ...plugin.secrets
+      .filter((secret) => secret.required)
+      .map((secret) => `secret:${secret.name}`),
+    ...plugin.migrations.map((migration) => `migration:${migration.id}`),
+  ];
+}
 
 export async function activateCorePlugin(
   env: Env,

@@ -44,6 +44,17 @@ export {
 } from "./planner";
 
 export {
+  CORE_CHAT_CAPABILITIES,
+  CORE_CHAT_CAPABILITY_IDS,
+  getCoreChatCapability,
+  isCoreChatCapabilityApprovalRequired,
+  validateCoreChatCapabilityContracts,
+  type CoreChatApprovalMode,
+  type CoreChatCapabilityContract,
+  type CoreChatCapabilitySideEffect,
+} from "./capabilities";
+
+export {
   createAgentContentItem,
   deleteAgentContentItem,
   getAgentContentStats,
@@ -151,10 +162,13 @@ export type AgentChatTurnTrace = {
   route: {
     path: "tool" | "model" | "fallback";
     capabilityId: string;
+    ownerFacingLabel: string;
+    handlerRoute: string;
     reason: string;
     setupChecks: string[];
     approvalRequired: boolean;
     sideEffectLevel: string;
+    auditEventKind: string;
   };
   selectedModel: {
     providerId: AiProviderId;
@@ -3811,10 +3825,13 @@ function buildAgentTurnTrace(
     route: {
       path: routePath,
       capabilityId: input.plannerDecision.capabilityId,
+      ownerFacingLabel: input.plannerDecision.ownerFacingLabel,
+      handlerRoute: input.plannerDecision.handlerRoute,
       reason: input.plannerDecision.reason,
       setupChecks: input.plannerDecision.requiredSetupChecks,
       approvalRequired: input.plannerDecision.approvalRequired,
       sideEffectLevel: input.plannerDecision.sideEffectLevel,
+      auditEventKind: input.plannerDecision.auditEventKind,
     },
     selectedModel: input.route
       ? {

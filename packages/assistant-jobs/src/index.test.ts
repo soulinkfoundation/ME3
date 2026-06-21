@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { validateMe3AgentCapabilityContract } from "@me3/knowledge";
 import {
+  ASSISTANT_JOB_CAPABILITY_CONTRACTS,
   ASSISTANT_JOB_STARTER_RECIPES,
   attachAssistantJobContextToRunResult,
   createAssistantJobContext,
@@ -12,6 +14,25 @@ import {
 } from "./index";
 
 describe("assistant jobs package", () => {
+  it("projects Assistant Job capabilities into the shared capability contract", () => {
+    expect(
+      ASSISTANT_JOB_CAPABILITY_CONTRACTS.flatMap((capability) =>
+        validateMe3AgentCapabilityContract(capability),
+      ),
+    ).toEqual([]);
+
+    for (const capability of ASSISTANT_JOB_CAPABILITY_CONTRACTS) {
+      expect(capability.handler.surface).toBe("assistant_job");
+      expect(capability.handler.route).toBe(capability.id);
+      expect(capability.auditEventKind).toEqual(expect.any(String));
+      expect(capability.examples.positive.length).toBeGreaterThan(0);
+      expect(capability.examples.negative.length).toBeGreaterThan(0);
+      if (capability.owner === "plugin") {
+        expect(capability.pluginId).toEqual(expect.any(String));
+      }
+    }
+  });
+
   it("validates Core v1 starter recipes", () => {
     const coreRecipes = ASSISTANT_JOB_STARTER_RECIPES.filter(
       (recipe) => recipe.firstVersion === "core_v1",

@@ -1,17 +1,16 @@
-export type CoreChatPlannerIntentKind =
-  | "conversation"
-  | "read_action"
-  | "write_action"
-  | "clarify";
+import {
+  getCoreChatCapability,
+  isCoreChatCapabilityApprovalRequired,
+  type CoreChatCapabilityId,
+  type CoreChatPlannerIntentKind,
+  type CoreChatSideEffectLevel,
+} from "./capabilities";
 
-export type CoreChatCapabilityId =
-  | "core.agent-chat.conversation"
-  | "core.mailbox.draft"
-  | "core.reminders.list"
-  | "core.reminders.create"
-  | "core.bookings.lookup";
-
-export type CoreChatSideEffectLevel = "none" | "read" | "write";
+export type {
+  CoreChatCapabilityId,
+  CoreChatPlannerIntentKind,
+  CoreChatSideEffectLevel,
+} from "./capabilities";
 
 export type CoreChatToolPlannerInput = {
   messageText: string;
@@ -22,9 +21,12 @@ export type CoreChatToolPlannerDecision = {
   kind: CoreChatPlannerIntentKind;
   confidence: number;
   capabilityId: CoreChatCapabilityId;
+  ownerFacingLabel: string;
+  handlerRoute: string;
   requiredSetupChecks: string[];
   sideEffectLevel: CoreChatSideEffectLevel;
   approvalRequired: boolean;
+  auditEventKind: string;
   reason: string;
 };
 
@@ -50,65 +52,46 @@ export function planCoreChatToolTurn(
       Boolean(input.hasRecentAssistantEmailDraft),
     )
   ) {
-    return {
+    return capabilityDecision("core.mailbox.draft", {
       kind: "write_action",
       confidence: input.hasRecentAssistantEmailDraft ? 0.92 : 0.82,
-      capabilityId: "core.mailbox.draft",
-      requiredSetupChecks: ["mailbox"],
-      sideEffectLevel: "write",
-      approvalRequired: false,
       reason:
         "The owner asked to save a draft email. Saving is local draft state and does not send mail.",
-    };
+    });
   }
 
   if (isCoreChatReminderListRequest(messageText)) {
-    return {
+    return capabilityDecision("core.reminders.list", {
       kind: "read_action",
       confidence: 0.93,
-      capabilityId: "core.reminders.list",
-      requiredSetupChecks: ["calendar.reminders"],
-      sideEffectLevel: "read",
-      approvalRequired: false,
       reason: "The owner directly asked to inspect pending or upcoming reminders.",
-    };
+    });
   }
 
   if (isCoreChatReminderCreateRequest(messageText)) {
     const missingDetails = getReminderCreateMissingDetails(messageText);
     if (missingDetails.length > 0) {
-      return {
+      return capabilityDecision("core.reminders.create", {
         kind: "clarify",
         confidence: 0.88,
-        capabilityId: "core.reminders.create",
-        requiredSetupChecks: ["calendar.reminders"],
         sideEffectLevel: "none",
-        approvalRequired: false,
         reason: `The owner asked to create a reminder but did not include ${missingDetails.join(" and ")}.`,
-      };
+      });
     }
 
-    return {
+    return capabilityDecision("core.reminders.create", {
       kind: "write_action",
       confidence: 0.94,
-      capabilityId: "core.reminders.create",
-      requiredSetupChecks: ["calendar.reminders"],
-      sideEffectLevel: "write",
-      approvalRequired: false,
       reason: "The owner directly asked to create a reminder with enough details to attempt it.",
-    };
+    });
   }
 
   if (isCoreChatBookingLookupRequest(messageText)) {
-    return {
+    return capabilityDecision("core.bookings.lookup", {
       kind: "read_action",
       confidence: 0.89,
-      capabilityId: "core.bookings.lookup",
-      requiredSetupChecks: ["booking"],
-      sideEffectLevel: "read",
-      approvalRequired: false,
       reason: "The owner directly asked to inspect upcoming bookings or appointments.",
-    };
+    });
   }
 
   return conversationDecision(
@@ -194,14 +177,34 @@ function conversationDecision(
   confidence: number,
   reason: string,
 ): CoreChatToolPlannerDecision {
-  return {
+  return capabilityDecision("core.agent-chat.conversation", {
     kind: "conversation",
     confidence,
-    capabilityId: "core.agent-chat.conversation",
-    requiredSetupChecks: [],
-    sideEffectLevel: "none",
-    approvalRequired: false,
     reason,
+  });
+}
+
+function capabilityDecision(
+  capabilityId: CoreChatCapabilityId,
+  input: {
+    kind: CoreChatPlannerIntentKind;
+    confidence: number;
+    reason: string;
+    sideEffectLevel?: CoreChatSideEffectLevel;
+  },
+): CoreChatToolPlannerDecision {
+  const capability = getCoreChatCapability(capabilityId);
+  return {
+    kind: input.kind,
+    confidence: input.confidence,
+    capabilityId: capability.id,
+    ownerFacingLabel: capability.ownerFacingLabel,
+    handlerRoute: capability.handler.route,
+    requiredSetupChecks: [...capability.requiresSetup],
+    sideEffectLevel: input.sideEffectLevel ?? capability.chat.sideEffectLevel,
+    approvalRequired: isCoreChatCapabilityApprovalRequired(capability),
+    auditEventKind: capability.auditEventKind,
+    reason: input.reason,
   };
 }
 

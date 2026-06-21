@@ -1,0 +1,222 @@
+import {
+  defineMe3AgentCapabilityContract,
+  ME3_EMPTY_AGENT_CAPABILITY_SCHEMA,
+  validateMe3AgentCapabilityContract,
+  type Me3AgentCapabilityApprovalMode,
+  type Me3AgentCapabilityContract,
+  type Me3AgentCapabilitySideEffect,
+} from "@me3/knowledge";
+
+export type CoreChatPlannerIntentKind =
+  | "conversation"
+  | "read_action"
+  | "write_action"
+  | "clarify";
+
+export type CoreChatSideEffectLevel = "none" | "read" | "write";
+
+export type CoreChatCapabilityContract = Me3AgentCapabilityContract & {
+  handler: {
+    surface: "chat";
+    route: string;
+  };
+  chat: {
+    intentKind: Exclude<CoreChatPlannerIntentKind, "clarify">;
+    sideEffectLevel: CoreChatSideEffectLevel;
+  };
+};
+
+export const CORE_CHAT_CAPABILITIES = [
+  defineCoreChatCapability({
+    id: "core.agent-chat.conversation",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Answer in chat",
+    summary: "Answer setup, capability, context, and planning questions in chat.",
+    category: "assistant",
+    handler: {
+      surface: "chat",
+      route: "model",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: [],
+    auditEventKind: "core_chat_conversation",
+    examples: {
+      positive: [
+        "What tools can you access here?",
+        "I am setting up ME3 for the first time. What can you do?",
+      ],
+      negative: ["Do I have any pending reminders?"],
+    },
+    chat: {
+      intentKind: "conversation",
+      sideEffectLevel: "none",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.mailbox.draft",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Save mailbox draft",
+    summary: "Save an email draft into the Core mailbox without sending it.",
+    category: "email",
+    handler: {
+      surface: "chat",
+      route: "core.mailbox.draft",
+    },
+    sideEffect: "external_draft",
+    approvalMode: "none",
+    requiresSetup: ["mailbox"],
+    inputSchema: {
+      type: "object",
+      required: ["to", "subject", "body"],
+      properties: {
+        to: "Recipient email address.",
+        subject: "Draft email subject.",
+        body: "Plain-text email body.",
+      },
+    },
+    auditEventKind: "core_mailbox_draft_saved",
+    examples: {
+      positive: ["Save that email draft to /email for review."],
+      negative: ["Create an email to Ada about the launch."],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.reminders.list",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "List reminders",
+    summary: "Read pending Core reminders for the owner.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.reminders.list",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["calendar.reminders"],
+    auditEventKind: "core_reminders_listed",
+    examples: {
+      positive: ["Do I have any pending reminders?"],
+      negative: ["I want to test reminders, calendar, and tasks."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.reminders.create",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Create reminder",
+    summary: "Create a Core reminder from a clear owner request.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.reminders.create",
+    },
+    sideEffect: "write_internal_active",
+    approvalMode: "none",
+    requiresSetup: ["calendar.reminders"],
+    inputSchema: {
+      type: "object",
+      required: ["title", "remindAt"],
+      properties: {
+        title: "Reminder title.",
+        remindAt: "ISO timestamp for when to remind the owner.",
+        timezone: "Owner timezone.",
+      },
+    },
+    auditEventKind: "core_reminder_created",
+    examples: {
+      positive: ["Remind me tomorrow at 9 to follow up with Sam."],
+      negative: ["What reminder tools can you use?"],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.bookings.lookup",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Look up bookings",
+    summary: "Read upcoming confirmed booking records for the owner.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.bookings.lookup",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["booking"],
+    auditEventKind: "core_bookings_lookup",
+    examples: {
+      positive: ["Can you check my upcoming bookings this week?"],
+      negative: ["I want to test bookings and calendar features."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+] as const;
+
+export type CoreChatCapabilityId = (typeof CORE_CHAT_CAPABILITIES)[number]["id"];
+
+export const CORE_CHAT_CAPABILITY_IDS = CORE_CHAT_CAPABILITIES.map(
+  (capability) => capability.id,
+) as readonly CoreChatCapabilityId[];
+
+const CORE_CHAT_CAPABILITY_BY_ID = new Map<CoreChatCapabilityId, CoreChatCapabilityContract>(
+  CORE_CHAT_CAPABILITIES.map((capability) => [capability.id, capability]),
+);
+
+export function getCoreChatCapability(
+  capabilityId: CoreChatCapabilityId,
+): CoreChatCapabilityContract {
+  const capability = CORE_CHAT_CAPABILITY_BY_ID.get(capabilityId);
+  if (!capability) {
+    throw new Error(`Unknown Core chat capability: ${capabilityId}`);
+  }
+  return capability;
+}
+
+export function isCoreChatCapabilityApprovalRequired(
+  capability: Pick<CoreChatCapabilityContract, "approvalMode">,
+): boolean {
+  return capability.approvalMode === "review_required" || capability.approvalMode === "approval_required";
+}
+
+export function validateCoreChatCapabilityContracts() {
+  return CORE_CHAT_CAPABILITIES.flatMap((capability) =>
+    validateMe3AgentCapabilityContract(capability),
+  );
+}
+
+function defineCoreChatCapability(
+  input: Omit<CoreChatCapabilityContract, "version" | "inputSchema" | "outputSchema"> & {
+    inputSchema?: CoreChatCapabilityContract["inputSchema"];
+    outputSchema?: CoreChatCapabilityContract["outputSchema"];
+  },
+): CoreChatCapabilityContract {
+  return defineMe3AgentCapabilityContract({
+    version: "0.1.0",
+    inputSchema: ME3_EMPTY_AGENT_CAPABILITY_SCHEMA,
+    outputSchema: ME3_EMPTY_AGENT_CAPABILITY_SCHEMA,
+    ...input,
+  });
+}
+
+export type {
+  Me3AgentCapabilityApprovalMode as CoreChatApprovalMode,
+  Me3AgentCapabilitySideEffect as CoreChatCapabilitySideEffect,
+};

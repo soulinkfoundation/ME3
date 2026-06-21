@@ -3,7 +3,11 @@ import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
 import { generateAiText } from "./ai-providers";
 import { ME3_CORE_VERSION } from "./core-version";
-import { CORE_PLUGIN_CATALOG, type DbPluginInstallation } from "./plugins";
+import {
+  CORE_PLUGIN_CATALOG,
+  validateCorePluginAgentToolContracts,
+  type DbPluginInstallation,
+} from "./plugins";
 import { publishQueuedContentPublication } from "./social-publishing";
 import type {
   DbAiModelDefault,
@@ -7246,6 +7250,7 @@ describe("ME3 Core Worker auth", () => {
 
   it("keeps shared ME3 knowledge aligned with plugin manifest tools", () => {
     expect(validateMe3KnowledgeAgainstPlugins(CORE_PLUGIN_CATALOG)).toEqual([]);
+    expect(validateCorePluginAgentToolContracts(CORE_PLUGIN_CATALOG)).toEqual([]);
   });
 
   it("requires owner auth for plugin catalog access", async () => {

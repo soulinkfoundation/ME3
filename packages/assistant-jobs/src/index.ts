@@ -1,6 +1,10 @@
 import {
   buildMe3AgentContextPrompt,
   createMe3AgentContextManifest,
+  defineMe3AgentCapabilityContract,
+  ME3_AGENT_CAPABILITY_APPROVAL_MODES,
+  ME3_AGENT_CAPABILITY_SIDE_EFFECTS,
+  ME3_EMPTY_AGENT_CAPABILITY_SCHEMA,
   resolveMe3AgentContextPacket,
   type Me3AgentContextBudget,
   type Me3AgentContextCalendarEvent,
@@ -20,58 +24,28 @@ import {
   type Me3AgentContextResolverScope,
   type Me3AgentContextSource,
   type Me3AgentContextTask,
+  type Me3AgentCapabilityApprovalMode,
+  type Me3AgentCapabilityCategory,
+  type Me3AgentCapabilityContract,
+  type Me3AgentCapabilityOwner,
+  type Me3AgentCapabilitySchema,
+  type Me3AgentCapabilitySideEffect,
 } from "@me3/knowledge";
 
 export const ASSISTANT_JOBS_PACKAGE_NAME = "@me3-core/assistant-jobs";
 
-export const ASSISTANT_JOB_APPROVAL_MODES = [
-  "none",
-  "review_required",
-  "approval_required",
-  "forbidden",
-] as const;
+export const ASSISTANT_JOB_APPROVAL_MODES = ME3_AGENT_CAPABILITY_APPROVAL_MODES;
 
-export type AssistantJobApprovalMode =
-  (typeof ASSISTANT_JOB_APPROVAL_MODES)[number];
+export type AssistantJobApprovalMode = Me3AgentCapabilityApprovalMode;
 
-export const ASSISTANT_JOB_SIDE_EFFECTS = [
-  "read_private",
-  "read_external",
-  "write_internal_draft",
-  "write_internal_active",
-  "memory_write",
-  "notify_owner",
-  "external_draft",
-  "external_write",
-  "external_send",
-  "public_publish",
-  "destructive",
-  "money_or_account",
-  "local_read",
-  "local_write",
-  "local_shell",
-  "permission_change",
-] as const;
+export const ASSISTANT_JOB_SIDE_EFFECTS = ME3_AGENT_CAPABILITY_SIDE_EFFECTS;
 
-export type AssistantJobSideEffect =
-  (typeof ASSISTANT_JOB_SIDE_EFFECTS)[number];
+export type AssistantJobSideEffect = Me3AgentCapabilitySideEffect;
 
-export type AssistantCapabilityOwner = "core" | "plugin";
-export type AssistantCapabilityCategory =
-  | "assistant"
-  | "mission_control"
-  | "email"
-  | "calendar"
-  | "messaging"
-  | "memory"
-  | "local"
-  | "provider";
+export type AssistantCapabilityOwner = Me3AgentCapabilityOwner;
+export type AssistantCapabilityCategory = Me3AgentCapabilityCategory;
 
-export type AssistantCapabilitySchema = {
-  type: "object";
-  required?: readonly string[];
-  properties?: Readonly<Record<string, string>>;
-};
+export type AssistantCapabilitySchema = Me3AgentCapabilitySchema;
 
 export type AssistantCapability = {
   id: string;
@@ -341,9 +315,7 @@ export type AssistantJobContextResult = {
   manifest: AssistantJobContextRunManifest;
 };
 
-const EMPTY_SCHEMA = {
-  type: "object",
-} as const satisfies AssistantCapabilitySchema;
+const EMPTY_SCHEMA = ME3_EMPTY_AGENT_CAPABILITY_SCHEMA;
 
 const APPROVAL_MODE_WEIGHT: Record<AssistantJobApprovalMode, number> = {
   none: 0,
@@ -819,6 +791,9 @@ export const ASSISTANT_JOB_CAPABILITY_IDS = ASSISTANT_JOB_CAPABILITIES.map(
   (capability) => capability.id,
 );
 
+export const ASSISTANT_JOB_CAPABILITY_CONTRACTS =
+  ASSISTANT_JOB_CAPABILITIES.map(assistantJobCapabilityToContract);
+
 export function getAssistantJobCapability(
   capabilityId: string,
   capabilities: readonly AssistantCapability[] = ASSISTANT_JOB_CAPABILITIES,
@@ -828,11 +803,51 @@ export function getAssistantJobCapability(
   );
 }
 
+export function assistantJobCapabilityToContract(
+  capability: AssistantCapability,
+): Me3AgentCapabilityContract {
+  return defineMe3AgentCapabilityContract({
+    id: capability.id,
+    owner: capability.owner,
+    pluginId: capability.pluginId,
+    version: capability.version,
+    ownerFacingLabel: capability.label,
+    summary: capability.summary,
+    category: capability.category,
+    handler: {
+      surface: "assistant_job",
+      route: capability.id,
+    },
+    sideEffect: capability.sideEffect,
+    approvalMode: capability.approvalMode,
+    requiresSetup: capability.requiresSetup,
+    inputSchema: capability.inputSchema,
+    outputSchema: capability.outputSchema,
+    auditEventKind: capability.auditEventKind,
+    examples: assistantJobCapabilityExamples(capability),
+  });
+}
+
 export function isApprovalModeAtLeast(
   requested: AssistantJobApprovalMode,
   required: AssistantJobApprovalMode,
 ): boolean {
   return APPROVAL_MODE_WEIGHT[requested] >= APPROVAL_MODE_WEIGHT[required];
+}
+
+function assistantJobCapabilityExamples(
+  capability: AssistantCapability,
+): Me3AgentCapabilityContract["examples"] {
+  return {
+    positive: [
+      `Use ${capability.label.toLowerCase()} as an Assistant Job action.`,
+    ],
+    negative: [
+      capability.approvalMode === "approval_required"
+        ? `Run ${capability.label.toLowerCase()} without owner approval.`
+        : "What can the assistant do?",
+    ],
+  };
 }
 
 const DEFAULT_SCOPE: AssistantJobScope = {

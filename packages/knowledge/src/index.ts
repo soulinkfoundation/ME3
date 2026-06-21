@@ -158,6 +158,182 @@ export type Me3KnowledgeSnapshot = {
   plugins?: readonly Me3KnowledgePluginDerivedSummary[];
 };
 
+export const ME3_AGENT_CAPABILITY_APPROVAL_MODES = [
+  "none",
+  "review_required",
+  "approval_required",
+  "forbidden",
+] as const;
+
+export type Me3AgentCapabilityApprovalMode =
+  (typeof ME3_AGENT_CAPABILITY_APPROVAL_MODES)[number];
+
+export const ME3_AGENT_CAPABILITY_SIDE_EFFECTS = [
+  "none",
+  "read_private",
+  "read_external",
+  "internal_write",
+  "write_internal_draft",
+  "write_internal_active",
+  "memory_write",
+  "notify_owner",
+  "external_draft",
+  "external_write",
+  "external_send",
+  "public_publish",
+  "destructive",
+  "money_or_account",
+  "local_read",
+  "local_write",
+  "local_shell",
+  "permission_change",
+] as const;
+
+export type Me3AgentCapabilitySideEffect =
+  (typeof ME3_AGENT_CAPABILITY_SIDE_EFFECTS)[number];
+
+export type Me3AgentCapabilityOwner = "core" | "plugin";
+
+export type Me3AgentCapabilityCategory =
+  | "assistant"
+  | "mission_control"
+  | "email"
+  | "calendar"
+  | "messaging"
+  | "memory"
+  | "local"
+  | "content"
+  | "sites"
+  | "accounts"
+  | "provider";
+
+export type Me3AgentCapabilitySchema = {
+  type: "object";
+  required?: readonly string[];
+  properties?: Readonly<Record<string, string>>;
+};
+
+export type Me3AgentCapabilityHandler = {
+  surface: "chat" | "assistant_job" | "plugin_tool";
+  route: string;
+};
+
+export type Me3AgentCapabilityExamples = {
+  positive: readonly string[];
+  negative: readonly string[];
+};
+
+export type Me3AgentCapabilityContract = {
+  id: string;
+  owner: Me3AgentCapabilityOwner;
+  pluginId: string | null;
+  version: string;
+  ownerFacingLabel: string;
+  summary: string;
+  category: Me3AgentCapabilityCategory;
+  handler: Me3AgentCapabilityHandler;
+  sideEffect: Me3AgentCapabilitySideEffect;
+  approvalMode: Me3AgentCapabilityApprovalMode;
+  requiresSetup: readonly string[];
+  inputSchema: Me3AgentCapabilitySchema;
+  outputSchema: Me3AgentCapabilitySchema;
+  auditEventKind: string;
+  examples: Me3AgentCapabilityExamples;
+};
+
+export type Me3AgentCapabilityContractIssue = {
+  capabilityId: string;
+  field: keyof Me3AgentCapabilityContract | "examples.positive" | "examples.negative";
+  message: string;
+};
+
+export const ME3_EMPTY_AGENT_CAPABILITY_SCHEMA = {
+  type: "object",
+} as const satisfies Me3AgentCapabilitySchema;
+
+const ME3_AGENT_CAPABILITY_APPROVAL_MODE_WEIGHT: Record<
+  Me3AgentCapabilityApprovalMode,
+  number
+> = {
+  none: 0,
+  review_required: 1,
+  approval_required: 2,
+  forbidden: 3,
+};
+
+export function defineMe3AgentCapabilityContract<
+  T extends Me3AgentCapabilityContract,
+>(capability: T): T {
+  return capability;
+}
+
+export function isMe3AgentCapabilityApprovalModeAtLeast(
+  requested: Me3AgentCapabilityApprovalMode,
+  required: Me3AgentCapabilityApprovalMode,
+): boolean {
+  return (
+    ME3_AGENT_CAPABILITY_APPROVAL_MODE_WEIGHT[requested] >=
+    ME3_AGENT_CAPABILITY_APPROVAL_MODE_WEIGHT[required]
+  );
+}
+
+export function validateMe3AgentCapabilityContract(
+  capability: Me3AgentCapabilityContract,
+): Me3AgentCapabilityContractIssue[] {
+  const issues: Me3AgentCapabilityContractIssue[] = [];
+  const requiredTextFields = [
+    "id",
+    "version",
+    "ownerFacingLabel",
+    "summary",
+    "auditEventKind",
+  ] as const;
+
+  for (const field of requiredTextFields) {
+    if (!capability[field]?.trim()) {
+      issues.push({
+        capabilityId: capability.id || "(missing)",
+        field,
+        message: `${field} is required.`,
+      });
+    }
+  }
+
+  if (capability.owner === "plugin" && !capability.pluginId?.trim()) {
+    issues.push({
+      capabilityId: capability.id || "(missing)",
+      field: "pluginId",
+      message: "Plugin-owned capabilities must name their plugin.",
+    });
+  }
+
+  if (!capability.handler.route.trim()) {
+    issues.push({
+      capabilityId: capability.id || "(missing)",
+      field: "handler",
+      message: "Capabilities must name a handler route.",
+    });
+  }
+
+  if (!capability.examples.positive.length) {
+    issues.push({
+      capabilityId: capability.id || "(missing)",
+      field: "examples.positive",
+      message: "Capabilities must include at least one positive example.",
+    });
+  }
+
+  if (!capability.examples.negative.length) {
+    issues.push({
+      capabilityId: capability.id || "(missing)",
+      field: "examples.negative",
+      message: "Capabilities must include at least one negative example.",
+    });
+  }
+
+  return issues;
+}
+
 export type Me3LlmsDocumentSource = {
   title: string;
   url: string;
