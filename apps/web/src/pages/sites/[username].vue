@@ -161,6 +161,9 @@ onMounted(async () => {
     showAdvancedUpload.value = true;
   }
 
+  if (typeof route.query.edit === "string") {
+    await openWizardStep(route.query.edit);
+  }
 });
 
 onBeforeUnmount(() => {
@@ -202,6 +205,22 @@ async function loadWizardContent(): Promise<void> {
 async function editInWizard() {
   await loadWizardContent();
   router.push("/create");
+}
+
+async function openWizardStep(step: string) {
+  await loadWizardContent();
+  const normalized = normalizeWizardStepQuery(step);
+  if (normalized === "blog") wizard.blogEnabled = true;
+  const stepIndex = wizard.stepNames.findIndex(
+    (name) => normalizeWizardStepQuery(name) === normalized,
+  );
+  if (stepIndex >= 0) wizard.goToStep(stepIndex + 1);
+  router.replace({ path: "/create", query: { step: normalized } });
+}
+
+function normalizeWizardStepQuery(value: string): string {
+  const normalized = value.toLowerCase().trim().replace(/\s+/g, "-");
+  return normalized === "features" ? "additional-features" : normalized;
 }
 
 function openBuilder() {

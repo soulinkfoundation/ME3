@@ -767,7 +767,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               published: false,
               files: assistantSiteDraftChangedFiles(draft),
               postTitle: draft.changes.postTitle || null,
-              url: getAssistantSiteAdminUrl(env, site, requestUrl),
+              url: getAssistantSiteDraftReviewUrl(env, site, draft, requestUrl),
             },
             model: draft.changes.generatedBy?.model || null,
             source: assistantSiteToolSourceFromDraft(draft),
@@ -824,7 +824,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
             published: false,
             files: assistantSiteDraftChangedFiles(pending.draft),
             postTitle: pending.draft.changes.postTitle || null,
-            url: getAssistantSiteAdminUrl(env, pending.site, requestUrl),
+            url: getAssistantSiteDraftReviewUrl(env, pending.site, pending.draft, requestUrl),
           },
         };
       }
@@ -861,7 +861,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               published: false,
               files: assistantSiteDraftChangedFiles(draft),
               postTitle: draft.changes.postTitle || null,
-              url: getAssistantSiteAdminUrl(env, site, requestUrl),
+              url: getAssistantSiteDraftReviewUrl(env, site, draft, requestUrl),
             },
             model: draft.changes.generatedBy?.model || null,
             source: assistantSiteToolSourceFromDraft(draft),
@@ -933,7 +933,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         published: false,
         files: assistantSiteDraftChangedFiles(draft),
         postTitle: draft.changes.postTitle || null,
-        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+        url: getAssistantSiteDraftReviewUrl(env, site, draft, requestUrl),
       },
       model: draft.changes.generatedBy?.model || null,
       source: assistantSiteToolSourceFromDraft(draft),
@@ -1077,12 +1077,13 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           published: false,
           files: assistantSiteDraftChangedFiles(draft),
           postTitle: draft.changes.postTitle || null,
-          url: getAssistantSiteAdminUrl(env, site, requestUrl),
+          url: getAssistantSiteDraftReviewUrl(env, site, draft, requestUrl),
           message: cloudUsernameError,
         },
       };
     }
 
+    draft = assistantSiteDraftForPublish(draft);
     site = await publishAssistantSiteDraft(env, site, draft);
     return {
       specialist: "core.sites.publish",
@@ -1121,7 +1122,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           published: false,
           files: assistantSiteDraftChangedFiles(pending.draft),
           postTitle: pending.draft.changes.postTitle || null,
-          url: getAssistantSiteAdminUrl(env, pending.site, requestUrl),
+          url: getAssistantSiteDraftReviewUrl(env, pending.site, pending.draft, requestUrl),
         },
       };
     }
@@ -1500,6 +1501,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       generatedContent.postBody || assistantRequestMentionsBlogPost(requestText),
     );
     if (shouldCreatePost) {
+      const postDraft = assistantSiteBlogPostShouldStayDraft(requestText);
       const topic = generatedContent.postTopic || extractAssistantBlogTopic(requestText);
       const postTitle = generatedContent.postTitle || assistantBlogTitleFromTopic(topic);
       const postSlug = slugifyAssistantSitePath(postTitle || topic || "personal-ai-assistants");
@@ -1512,15 +1514,14 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         title: postTitle,
         file: postFile,
         excerpt: generatedContent.postExcerpt || markdownExcerpt(postMarkdown),
-        draft: generatedContent.postDraft === true || assistantRequestAsksForDraftPost(requestText),
+        draft: postDraft,
       });
       sourceFiles.set(postFile, postMarkdown);
       changes.postTitle = postTitle;
       changes.postSlug = postSlug;
       changes.postFile = postFile;
       changes.postMarkdown = postMarkdown;
-      changes.postDraft =
-        generatedContent.postDraft === true || assistantRequestAsksForDraftPost(requestText);
+      changes.postDraft = postDraft;
     }
 
     if (!changes.aboutParagraph && !changes.pageFiles?.length && !changes.postMarkdown) {
@@ -1829,7 +1830,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       slug: input.slug,
       title: input.title,
       file: input.file,
-      publishedAt: new Date().toISOString().slice(0, 10),
+      publishedAt: input.draft === true ? undefined : new Date().toISOString().slice(0, 10),
       excerpt: input.excerpt,
       draft: input.draft === true,
       type: "article",
@@ -1971,6 +1972,38 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     return match?.[1]?.trim() || "";
   }
 
+  function assistantSiteDraftForPublish(
+    draft: AssistantSiteUpdateDraft,
+  ): AssistantSiteUpdateDraft {
+    if (!draft.changes.postFile || draft.changes.postDraft !== true) return draft;
+
+    const profile = parseSiteProfile(draft.sourceFiles["me.json"] || "{}", draft.siteUsername);
+    const postFile = normalizeSiteFileName(draft.changes.postFile);
+    const postSlug = draft.changes.postSlug || "";
+    const post = (profile.posts || []).find(
+      (candidate) =>
+        candidate.slug === postSlug ||
+        normalizeSiteFileName(candidate.file || "") === postFile,
+    );
+    if (post) {
+      post.draft = false;
+      post.publishedAt ||= new Date().toISOString().slice(0, 10);
+    }
+
+    return {
+      ...draft,
+      sourceFiles: {
+        ...draft.sourceFiles,
+        "me.json": JSON.stringify(profile, null, 2),
+      },
+      changes: {
+        ...draft.changes,
+        postDraft: false,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   async function publishAssistantSiteDraft(
     env: Env,
     site: DbSite,
@@ -2096,7 +2129,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     } else if (draft.changes.generatedBy?.model) {
       parts.push(`Generated with ${draft.changes.generatedBy.model}.`);
     }
-    const url = getAssistantSiteAdminUrl(env, site, requestUrl);
+    const url = getAssistantSiteDraftReviewUrl(env, site, draft, requestUrl);
     if (url) parts.push(`Review it in your site dashboard: ${url}`);
     parts.push("Reply `publish` to publish it now, or tell me what to change.");
     return parts.join("\n\n");
@@ -2145,10 +2178,31 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     return parts.join("\n\n");
   }
 
-  function getAssistantSiteAdminUrl(env: Env, site: DbSite, requestUrl: string): string | null {
+  function getAssistantSiteDraftReviewUrl(
+    env: Env,
+    site: DbSite,
+    draft: AssistantSiteUpdateDraft,
+    requestUrl: string,
+  ): string | null {
+    return getAssistantSiteAdminUrl(
+      env,
+      site,
+      requestUrl,
+      draft.changes.postTitle ? "blog" : null,
+    );
+  }
+
+  function getAssistantSiteAdminUrl(
+    env: Env,
+    site: DbSite,
+    requestUrl: string,
+    editStep: string | null = null,
+  ): string | null {
     const origin = getCoreWebOrigin(env, requestUrl);
     if (!origin) return null;
-    return new URL(`/sites/${encodeURIComponent(site.username)}`, origin).toString();
+    const url = new URL(`/sites/${encodeURIComponent(site.username)}`, origin);
+    if (editStep) url.searchParams.set("edit", editStep);
+    return url.toString();
   }
 
   function appendAssistantParagraph(markdown: string, paragraph: string): string {
@@ -2209,6 +2263,16 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   function assistantRequestAsksForDraftPost(requestText: string): boolean {
     const text = normalizeAssistantIntentText(requestText);
     return /\b(draft|save as draft|do not publish|don't publish|unpublished)\b/.test(text);
+  }
+
+  function assistantRequestAsksToPublishSiteUpdate(requestText: string): boolean {
+    const text = normalizeAssistantIntentText(requestText);
+    return /\b(publish|make it live|ship it|go live)\b/.test(text);
+  }
+
+  function assistantSiteBlogPostShouldStayDraft(requestText: string): boolean {
+    if (assistantRequestAsksToPublishSiteUpdate(requestText)) return false;
+    return true;
   }
 
   function extractAssistantBlogTopic(requestText: string): string {

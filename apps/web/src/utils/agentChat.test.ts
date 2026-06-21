@@ -68,14 +68,14 @@ describe("agent chat utils", () => {
       resolveAgentSiteActionLink({
         siteAction: {
           kind: "draft_created",
-          url: "http://localhost:4000/sites/test",
+          url: "http://localhost:4000/sites/test?edit=blog",
           postTitle: "Open Source AI",
           pending: true,
           published: false,
         },
       }),
     ).toEqual({
-      href: "http://localhost:4000/sites/test",
+      href: "http://localhost:4000/sites/test?edit=blog",
       label: "Review blog draft",
     });
   });

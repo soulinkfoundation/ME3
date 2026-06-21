@@ -4806,7 +4806,23 @@ describe("ME3 Core Worker auth", () => {
     expect(aiRun).toHaveBeenCalledOnce();
     expect(String(draftPayload.replyText)).toContain("Reply `publish`");
     expect(String(draftPayload.replyText)).toContain("Generated with @cf/qwen/qwen3-30b-a3b-fp8");
+    expect(String((draftPayload.siteAction as Record<string, unknown>).url)).toContain(
+      "/sites/owner?edit=blog",
+    );
     expect(draftFile).toBeTruthy();
+    const savedDraft = JSON.parse(new TextDecoder().decode(draftFile?.content)) as {
+      changes: { postDraft?: boolean };
+      sourceFiles: Record<string, string>;
+    };
+    const savedDraftProfile = JSON.parse(savedDraft.sourceFiles["me.json"]) as {
+      posts?: Array<{ slug?: string; draft?: boolean; publishedAt?: string }>;
+    };
+    expect(savedDraft.changes.postDraft).toBe(true);
+    expect(savedDraftProfile.posts?.[0]).toMatchObject({
+      slug: "personal-ai-assistants-in-practice",
+      draft: true,
+    });
+    expect(savedDraftProfile.posts?.[0]?.publishedAt).toBeUndefined();
     expect(siteFileText(env, "site-assistant", "src/about.md")).toBe("# About\n\nOriginal about.");
     expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeNull();
 
@@ -4840,6 +4856,14 @@ describe("ME3 Core Worker auth", () => {
     expect(String(publishPayload.replyText)).toContain("Open your site dashboard");
     expect(String(publishPayload.replyText)).not.toContain("@owner");
     expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeTruthy();
+    const publishedProfile = JSON.parse(
+      siteFileText(env, "site-assistant", "src/me.json") || "{}",
+    ) as { posts?: Array<{ slug?: string; draft?: boolean; publishedAt?: string }> };
+    const publishedPost = publishedProfile.posts?.find(
+      (post) => post.slug === "personal-ai-assistants-in-practice",
+    );
+    expect(publishedPost).toMatchObject({ draft: false });
+    expect(publishedPost?.publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(siteFileText(env, "site-assistant", "src/about.md")).toContain(
       "Model-written about paragraph",
     );

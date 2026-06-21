@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
-import { computed, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useWizardStore } from "../stores/wizard";
 import { usePublish } from "../composables/usePublish";
 import ProfilePreview from "../components/ProfilePreview.vue";
@@ -32,6 +32,7 @@ definePage({
 });
 
 const wizard = useWizardStore();
+const route = useRoute();
 const router = useRouter();
 const { isPublishing: isQuickPublishing, publish } = usePublish();
 const showIntroScreen = ref(false);
@@ -193,6 +194,23 @@ function handleStepJump(step: number) {
   wizard.goToStep(step);
 }
 
+function applyRouteStep() {
+  const step = typeof route.query.step === "string" ? route.query.step : "";
+  const normalized = normalizeWizardStepQuery(step);
+  if (!normalized) return;
+  showIntroScreen.value = false;
+  if (normalized === "blog") wizard.blogEnabled = true;
+  const stepIndex = wizard.stepNames.findIndex(
+    (name) => normalizeWizardStepQuery(name) === normalized,
+  );
+  if (stepIndex >= 0) wizard.goToStep(stepIndex + 1);
+}
+
+function normalizeWizardStepQuery(value: string): string {
+  const normalized = value.toLowerCase().trim().replace(/\s+/g, "-");
+  return normalized === "features" ? "additional-features" : normalized;
+}
+
 function handleProgressStepClick(stepNumber: number, isVisited: boolean) {
   if (!isVisited) return;
   handleStepJump(stepNumber);
@@ -225,12 +243,15 @@ function clearImportedDraft() {
 
 onMounted(() => {
   showIntroScreen.value = !wizard.lastPublishedAt;
+  applyRouteStep();
 
   // Check for saved progress
   if (wizard.profile.name && wizard.currentStep > 1) {
     // Show continue prompt could go here
   }
 });
+
+watch(() => route.query.step, applyRouteStep);
 </script>
 
 <template>

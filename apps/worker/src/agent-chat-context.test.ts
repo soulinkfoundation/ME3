@@ -1383,6 +1383,41 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
 ];
 
 describe("Core chat mailbox draft continuations", () => {
+  it("resolves quoted draft recipients from saved contacts", async () => {
+    const env = createEnv({
+      recentMessages: [
+        {
+          role: "assistant",
+          content:
+            "Subject: Launch notes\n\nHi Jim,\n\nHere are the launch notes we discussed.\n\nThanks,\nKieran",
+        },
+      ],
+      contacts: [contactRow("contact-jim", "Jim", "jim@example.com", "contact")],
+      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
+    });
+
+    const saved = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("Save that draft to 'Jim'"),
+    );
+
+    expect(saved).toMatchObject({
+      source: "tool",
+      specialist: "core.mailbox.draft",
+      emailAction: { kind: "drafted" },
+    });
+    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(1);
+    expect(env.state.mailboxMessages[0]).toMatchObject({
+      to_address: "jim@example.com",
+      subject: "Launch notes",
+      created_by: "agent",
+    });
+  });
+
   it("saves a pending draft when the owner replies with only the missing recipient", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));

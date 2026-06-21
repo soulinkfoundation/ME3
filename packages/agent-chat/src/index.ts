@@ -2420,24 +2420,51 @@ async function resolveDraftRecipientFromContacts(
   messageText: string,
   draftText: string,
 ): Promise<string | null> {
-  const name =
-    messageText.match(/\bto\s+([A-Z][\p{L}'-]+(?:\s+[A-Z][\p{L}'-]+){0,2})/u)?.[1] ||
-    draftText.match(/\bto\s+([A-Z][\p{L}'-]+(?:\s+[A-Z][\p{L}'-]+){0,2})/u)?.[1] ||
-    null;
-  if (!name) return null;
-  const row = await env.DB.prepare(
-    `SELECT email
-     FROM contacts
-     WHERE user_id = ?
-       AND status != 'archived'
-       AND email IS NOT NULL
-       AND lower(name) = lower(?)
-     ORDER BY updated_at DESC
-     LIMIT 1`,
-  )
-    .bind(userId, name.trim())
-    .first<{ email: string | null }>();
-  return normalizeEmail(row?.email);
+  const name = extractDraftRecipientName(messageText) || extractDraftRecipientName(draftText);
+  const needle = normalizeContactLookupName(name);
+  if (!needle) return null;
+  const { contacts } = await listAgentContacts(env, userId);
+  const match = contacts.find(
+    (contact) =>
+      contact.status !== "archived" &&
+      Boolean(contact.email) &&
+      contactMatchesDraftRecipientName(contact, needle),
+  );
+  return normalizeEmail(match?.email);
+}
+
+function extractDraftRecipientName(text: string): string | null {
+  const match = text.match(/\bto\s+["'“”]?([^"'“”,.!?;\n]+)["'“”]?/iu);
+  const phrase = match?.[1]
+    ?.replace(/\b(?:about|regarding|re|subject|saying|with)\b[\s\S]*$/i, "")
+    .trim();
+  return phrase || null;
+}
+
+function contactMatchesDraftRecipientName(contact: AgentContact, needle: string): boolean {
+  return contactDraftRecipientNames(contact).some((candidate) => {
+    const normalized = normalizeContactLookupName(candidate);
+    if (!normalized) return false;
+    return normalized === needle || normalized.split(" ")[0] === needle;
+  });
+}
+
+function contactDraftRecipientNames(contact: AgentContact): string[] {
+  const metadata = contact.metadata || {};
+  const aliases = Array.isArray(metadata.aliases)
+    ? metadata.aliases.filter((alias): alias is string => typeof alias === "string")
+    : [];
+  return [contact.name, ...aliases, ...contact.tags];
+}
+
+function normalizeContactLookupName(value: unknown): string {
+  return typeof value === "string"
+    ? value
+        .replace(/^["'“”]+|["'“”]+$/g, "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+    : "";
 }
 
 function parseReminderChatRequest(

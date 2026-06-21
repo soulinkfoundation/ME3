@@ -12,6 +12,7 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { ApiError, api, type ApiStreamEvent } from "../../api";
 import Button from "../../components/Button.vue";
 import LandingGrids from "../../components/LandingGrids.vue";
+import PageLoading from "../../components/PageLoading.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import WorkspaceTabs from "../../components/WorkspaceTabs.vue";
 import { useAgentChat } from "../../composables/useAgentChat";
@@ -644,7 +645,7 @@ const assistantSending = ref(false);
 const assistantAwaitingResponse = ref(false);
 const assistantError = ref<string | null>(null);
 const assistantThreadId = ref<string | null>(null);
-const assistantThreadLoading = ref(false);
+const assistantThreadLoading = ref(Boolean(route.query.thread));
 const assistantThreads = ref<AssistantThread[]>([]);
 const assistantThreadsLoading = ref(false);
 const assistantThreadsError = ref("");
@@ -4454,8 +4455,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
           class="assistant-timeline"
           aria-live="polite"
         >
+          <PageLoading
+            v-if="assistantThreadLoading && assistantConsoleMessages.length === 0"
+            label="Loading chat..."
+          />
+
           <div
-            v-if="assistantConsoleMessages.length === 0"
+            v-else-if="assistantConsoleMessages.length === 0"
             class="assistant-empty-state"
           >
             <h2>Message ME3</h2>
@@ -4731,6 +4737,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       v-if="card.primaryAction"
                       class="assistant-action-card__button assistant-action-card__button--primary"
                       :href="card.primaryAction.href"
+                      target="_blank"
+                      rel="noopener noreferrer"
                     >
                       <UiIcon name="ArrowRight" :size="15" aria-hidden="true" />
                       <span>{{ card.primaryAction.label }}</span>
@@ -4740,6 +4748,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       :key="`${card.id}:${action.href}:${action.label}`"
                       class="assistant-action-card__button"
                       :href="action.href"
+                      target="_blank"
+                      rel="noopener noreferrer"
                     >
                       <UiIcon name="ArrowRight" :size="15" aria-hidden="true" />
                       <span>{{ action.label }}</span>
@@ -4756,13 +4766,27 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 "
                 class="assistant-message__actions"
               >
-                <a v-if="message.inboxLink" href="/email">Open messages</a>
-                <a v-if="message.reminderLink" href="/calendar">
+                <a
+                  v-if="message.inboxLink"
+                  href="/email"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open messages
+                </a>
+                <a
+                  v-if="message.reminderLink"
+                  href="/calendar"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   Open calendar
                 </a>
                 <a
                   v-if="message.actionHref && message.actionLabel"
                   :href="message.actionHref"
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
                   {{ message.actionLabel }}
                 </a>
@@ -7312,10 +7336,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-action-card {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 10px 14px;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
-  padding: 14px;
+  padding: 10px 12px;
   background: var(--ui-surface);
   box-shadow: var(--ui-shadow-sm);
 }
@@ -7400,11 +7426,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-action-card__facts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 9px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px 12px;
   margin: 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--ui-border);
+  padding: 0;
+  border: 0;
 }
 
 .assistant-action-card__facts div {
@@ -7435,6 +7461,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  justify-content: flex-end;
 }
 
 .assistant-action-card__button {
@@ -7442,10 +7469,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  min-height: 44px;
+  min-height: 34px;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
-  padding: 0 13px;
+  padding: 0 11px;
   background: var(--ui-surface);
   color: var(--ui-text);
   font-size: 13px;
@@ -7455,6 +7482,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
     border-color 0.14s ease,
     background-color 0.14s ease,
     color 0.14s ease;
+}
+
+@media (max-width: 900px) {
+  .assistant-action-card {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .assistant-action-card__facts {
+    padding-top: 8px;
+    border-top: 1px solid var(--ui-border);
+  }
+
+  .assistant-action-card__actions {
+    justify-content: flex-start;
+  }
 }
 
 .assistant-action-card__button:hover {
