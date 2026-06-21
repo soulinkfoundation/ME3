@@ -10903,6 +10903,55 @@ describe("ME3 Core Worker auth", () => {
     expect(JSON.stringify(body)).not.toContain("Manual Contact");
   });
 
+  it("asks the owner to reconnect when Soulink contact sync rejects the Core token", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.soulinkConnection = {
+      id: "soulink-links-connection",
+      user_id: "owner",
+      channel: "soulink",
+      status: "active",
+      setup_token: "stale-dispatch-token",
+      provider_connection_id: "messaging",
+      provider_user_id: "node-owner",
+      provider_thread_id: "assistant-channel",
+      provider_username: "assistant-owner",
+      provider_metadata_json: JSON.stringify({ ownerNodeId: "node-owner" }),
+      telegram_user_id: null,
+      telegram_chat_id: null,
+      telegram_username: null,
+      telegram_first_name: null,
+      telegram_last_name: null,
+      connected_at: "2026-05-11T10:01:00Z",
+      disconnected_at: null,
+      last_inbound_at: null,
+      last_outbound_at: null,
+      created_at: "2026-05-11T10:00:00Z",
+      updated_at: "2026-05-11T10:00:00Z",
+    };
+
+    const linksMock = vi.fn(async () => Response.json({ error: "Unauthorized" }, { status: 401 }));
+    vi.stubGlobal("fetch", linksMock);
+
+    try {
+      const response = await app.fetch(
+        new Request("http://localhost/api/soulink/contacts/sync", {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: "Connect Soulink before syncing contacts",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("rejects Soulink Links requests for invalid tokens and mismatched owners", async () => {
     const env = createEnv();
     await bootstrap(env);

@@ -680,6 +680,14 @@ async function fetchSoulinkLinks(
   });
   const payload = (await response.json().catch(() => null)) as SoulinkLinksResponse | null;
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      return {
+        ok: false,
+        status: 409,
+        error: "Connect Soulink before syncing contacts",
+      };
+    }
+
     return {
       ok: false,
       status: response.status === 404 ? 501 : 502,
