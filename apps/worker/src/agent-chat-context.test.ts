@@ -6,6 +6,7 @@ type FakeDbState = {
   recentMessages: Array<Record<string, unknown>>;
   pluginInstallations: Array<Record<string, unknown>>;
   contacts: Array<Record<string, unknown>>;
+  mailboxAliases: Array<Record<string, unknown>>;
   mailboxMessages: Array<Record<string, unknown>>;
   projects: Array<Record<string, unknown>>;
   tasks: Array<Record<string, unknown>>;
@@ -42,6 +43,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     recentMessages: [],
     pluginInstallations: [],
     contacts: [],
+    mailboxAliases: [],
     mailboxMessages: [],
     projects: [],
     tasks: [],
@@ -63,6 +65,19 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("FROM ai_model_defaults")) return null;
           if (sql.includes("FROM ai_provider_credentials")) return null;
           if (sql.includes("FROM install_secrets")) return null;
+          if (sql.includes("FROM mailbox_aliases")) {
+            return (dbState.mailboxAliases.find((alias) => alias.user_id === values[0]) || null) as T;
+          }
+          if (sql.includes("FROM mailbox_messages")) {
+            if (sql.includes("WHERE id = ? AND mailbox_id = ?")) {
+              return (dbState.mailboxMessages.find(
+                (message) => message.id === values[0] && message.mailbox_id === values[1],
+              ) || null) as T;
+            }
+            return (dbState.mailboxMessages.find(
+              (message) => message.mailbox_id === values[0],
+            ) || null) as T;
+          }
           return null;
         },
         async all<T>() {
@@ -120,6 +135,39 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               recurrence_rule: values[6],
               status: "pending",
               created_at: new Date().toISOString(),
+            });
+          }
+          if (sql.includes("INSERT INTO mailbox_messages")) {
+            dbState.mailboxMessages.push({
+              id: values[0],
+              mailbox_id: values[1],
+              direction: "outbound",
+              message_kind: "draft",
+              status: "pending_approval",
+              thread_key: values[2],
+              provider_id: null,
+              provider_message_id: null,
+              from_address: values[3],
+              to_address: values[4],
+              subject: values[5],
+              text_body: values[6],
+              html_body: values[7],
+              raw_headers_json: null,
+              raw_message: null,
+              metadata_json: values[8],
+              source_id: values[9],
+              folder: "drafts",
+              read_at: null,
+              agent_summary: null,
+              agent_labels_json: null,
+              forwarded_to: null,
+              error_message: null,
+              created_by: values[10],
+              approved_by_user_id: null,
+              received_at: null,
+              approved_at: null,
+              sent_at: null,
+              created_at: values[11],
             });
           }
           return { meta: { changes: 1 } };
@@ -787,6 +835,418 @@ describe("Core chat native context", () => {
   });
 });
 
+type GoldenTranscriptScenario = {
+  name: string;
+  messageText: string;
+  aiReply?: string;
+  withAi?: boolean;
+  envState?: Partial<FakeDbState>;
+  expected: {
+    source: "workers-ai" | "tool" | "fallback";
+    routePath: "model" | "tool" | "fallback";
+    plannerKind: "conversation" | "read_action" | "write_action" | "clarify";
+    capabilityId:
+      | "core.agent-chat.conversation"
+      | "core.mailbox.draft"
+      | "core.reminders.list"
+      | "core.reminders.create"
+      | "core.bookings.lookup";
+    toolResultStatus: "not_attempted" | "succeeded" | "failed" | "clarified";
+    modelCallStatus: "not_attempted" | "succeeded" | "failed" | "fallback";
+    specialist?: string;
+    replyIncludes?: string[];
+    contextSummary?: "present" | "absent";
+    reminderActionKind?: "created" | "listed" | null;
+    emailActionKind?: "drafted" | null;
+    reminderDelta?: number;
+    mailboxDraftDelta?: number;
+    aiCalled?: boolean;
+    fallbackReason?: string;
+  };
+};
+
+const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
+  {
+    name: "first-run setup and capability exploration gives orientation, not reminders",
+    messageText:
+      "I am setting up ME3 for the first time. I want to explore what you can do, ie profile, calendar reminders/events, mission control, tasks, projects, and what context you have available. Make sense?",
+    aiReply:
+      "Yes. Available now: chat, reminders, contacts, and context summaries. Needs setup: calendar sync and mailbox. Try asking what context I have, listing reminders, or drafting a reply.",
+    withAi: true,
+    envState: {
+      reminders: [
+        reminderRow("reminder-existing", "Ship ME3", "2026-06-07T09:00:00.000Z"),
+      ],
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+      tasks: [taskRow("task-launch", "Prepare launch checklist", "project-launch")],
+    },
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["Available now", "Needs setup", "Try asking"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: true,
+    },
+  },
+  {
+    name: "tool access question stays model-first",
+    messageText: "What tools can you access here?",
+    aiReply:
+      "I can talk through ME3 capabilities and, when you ask directly, use safe tools like reminders, bookings, and mailbox drafts.",
+    withAi: true,
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["ME3 capabilities"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: true,
+    },
+  },
+  {
+    name: "context question stays model-first and includes context evidence",
+    messageText: "What context do you know about me?",
+    aiReply:
+      "I can see your owner profile, timezone, recent assistant history, and relevant ME3 context when it matches your request.",
+    withAi: true,
+    envState: {
+      memory: [
+        memoryRow(
+          "memory-owner-focus",
+          "owner_note",
+          "The owner wants ME3 to feel dependable during setup.",
+          "owner",
+          null,
+        ),
+      ],
+    },
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["owner profile", "timezone"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: true,
+    },
+  },
+  {
+    name: "direct reminder create runs the reminder tool",
+    messageText: "Remind me tomorrow at 9 to follow up with Sam",
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.reminders.create",
+      specialist: "core.reminders.create",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["Done. I set a reminder", "follow up with Sam"],
+      contextSummary: "absent",
+      reminderActionKind: "created",
+      emailActionKind: null,
+      reminderDelta: 1,
+      mailboxDraftDelta: 0,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "direct reminder list runs the reminder lookup tool",
+    messageText: "Do I have any pending reminders?",
+    envState: {
+      reminders: [
+        reminderRow("reminder-existing", "Ship ME3", "2026-06-07T09:00:00.000Z"),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.reminders.list",
+      specialist: "core.reminders.list",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["Ship ME3"],
+      contextSummary: "absent",
+      reminderActionKind: "listed",
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "calendar exploration with reminders mentioned does not list reminders",
+    messageText:
+      "I want to explore calendar events, reminders, and availability, but don't create or list anything yet.",
+    aiReply:
+      "We can explore how calendar events, reminders, and availability fit together without taking action yet.",
+    withAi: true,
+    envState: {
+      reminders: [
+        reminderRow("reminder-existing", "Ship ME3", "2026-06-07T09:00:00.000Z"),
+      ],
+      calendarEvents: [
+        calendarEventRow(
+          "event-planning",
+          "Planning call",
+          "2026-06-02T10:00:00.000Z",
+          "2026-06-02T10:30:00.000Z",
+        ),
+      ],
+    },
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["without taking action"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: true,
+    },
+  },
+  {
+    name: "Mission Control task exploration stays model-first",
+    messageText:
+      "I want to test Mission Control tasks and projects. What would you use there?",
+    aiReply:
+      "For Mission Control I would use projects, tasks, and private memory as context before suggesting next steps.",
+    withAi: true,
+    envState: {
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+      tasks: [taskRow("task-launch", "Prepare launch checklist", "project-launch")],
+    },
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["projects", "tasks"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: true,
+    },
+  },
+  {
+    name: "mailbox draft request writes no mailbox state until save is requested",
+    messageText: "Can you draft a reply to Ada about the workflow notes?",
+    aiReply:
+      "Subject: Workflow notes\n\nHi Ada,\n\nHere is a concise update on the workflow notes.\n\nBest,\nKieran",
+    withAi: true,
+    envState: {
+      contacts: [contactRow("contact-ada", "Ada Lovelace", "ada@example.com", "client")],
+      mailboxMessages: [
+        mailboxRow({
+          id: "message-ada",
+          threadKey: "thread-ada",
+          from: "ada@example.com",
+          subject: "Workflow notes",
+          body: "Ada asked for a crisp workflow update.",
+        }),
+      ],
+    },
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["Subject: Workflow notes"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: true,
+    },
+  },
+  {
+    name: "save latest email draft follow-up creates a mailbox draft only",
+    messageText: "Save that draft to ada@example.com",
+    envState: {
+      recentMessages: [
+        {
+          role: "assistant",
+          content:
+            "Subject: Workflow notes\n\nHi Ada,\n\nHere is a concise update on the workflow notes.\n\nThanks,\nKieran",
+        },
+      ],
+      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.mailbox.draft",
+      specialist: "core.mailbox.draft",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["saved that email as a draft", "It has not been sent"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: "drafted",
+      reminderDelta: 0,
+      mailboxDraftDelta: 1,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "ambiguous reminder create asks for details without creating one",
+    messageText: "Remind me to follow up with Sam",
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "clarify",
+      capabilityId: "core.reminders.create",
+      specialist: "core.reminders.create",
+      toolResultStatus: "clarified",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["Please include a date"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: false,
+      fallbackReason: "Reminder details required",
+    },
+  },
+  {
+    name: "missing AI provider falls back without claiming action",
+    messageText: "Hello, are you working?",
+    expected: {
+      source: "fallback",
+      routePath: "fallback",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["ME3 Core chat is connected"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: false,
+      fallbackReason: "AI provider setup required",
+    },
+  },
+];
+
+describe("Core chat golden transcript evals", () => {
+  it.each(launchGoldenTranscriptScenarios)("$name", async (scenario) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
+
+    const aiRun = vi.fn(async () => ({
+      response: scenario.aiReply || "Model-backed launch eval reply.",
+    }));
+    const env = createEnv(scenario.envState);
+    const initialReminderCount = env.state.reminders.length;
+    const initialMailboxDraftCount = countMailboxDrafts(env.state.mailboxMessages);
+    const runtimeEnv = {
+      ...env,
+      ME3_ASSISTANT_DEBUG_TRACE: "true",
+      ...(scenario.withAi ? { AI: { run: aiRun } } : {}),
+    };
+
+    const response = await dispatchAgentSandboxTurn(
+      runtimeEnv as never,
+      createStorage(),
+      dispatchInput(scenario.messageText),
+    );
+
+    expect(response).toMatchObject({
+      source: scenario.expected.source,
+      specialist: scenario.expected.specialist || expect.any(String),
+      fallbackReason: scenario.expected.fallbackReason ?? null,
+    });
+    expect(response.trace).toMatchObject({
+      planner: {
+        kind: scenario.expected.plannerKind,
+        capabilityId: scenario.expected.capabilityId,
+      },
+      route: {
+        path: scenario.expected.routePath,
+        capabilityId: scenario.expected.capabilityId,
+      },
+      modelCall: {
+        status: scenario.expected.modelCallStatus,
+      },
+      toolResult: {
+        status: scenario.expected.toolResultStatus,
+      },
+    });
+
+    for (const snippet of scenario.expected.replyIncludes || []) {
+      expect(response.replyText).toContain(snippet);
+    }
+
+    if (scenario.expected.contextSummary === "present") {
+      expect(response.contextSummary).toEqual(expect.any(String));
+    } else if (scenario.expected.contextSummary === "absent") {
+      expect(response.contextSummary ?? null).toBeNull();
+    }
+
+    expect(response.reminderAction?.kind ?? null).toBe(
+      scenario.expected.reminderActionKind ?? null,
+    );
+    expect(response.emailAction?.kind ?? null).toBe(
+      scenario.expected.emailActionKind ?? null,
+    );
+    if (response.source !== "tool") {
+      expect(response.reminderAction).toBeNull();
+      expect(response.emailAction).toBeNull();
+      expect(response.replyText).not.toContain("Done. I set a reminder");
+      expect(response.replyText).not.toContain("saved that email as a draft");
+    }
+    expect(env.state.reminders).toHaveLength(
+      initialReminderCount + (scenario.expected.reminderDelta ?? 0),
+    );
+    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(
+      initialMailboxDraftCount + (scenario.expected.mailboxDraftDelta ?? 0),
+    );
+    if (scenario.expected.aiCalled) {
+      expect(aiRun).toHaveBeenCalledOnce();
+    } else {
+      expect(aiRun).not.toHaveBeenCalled();
+    }
+  });
+});
+
 function contactRow(
   id: string,
   name: string,
@@ -815,6 +1275,30 @@ function contactRow(
   };
 }
 
+function mailboxAliasRow(id: string, aliasLocalPart: string): Record<string, unknown> {
+  return {
+    id,
+    user_id: "owner",
+    alias_local_part: aliasLocalPart,
+    forwarding_email: "owner@example.com",
+    forwarding_status: "verified",
+    forwarding_enabled: 1,
+    forwarding_mode: "forward",
+    status: "active",
+    approval_policy: "manual",
+    daily_inbound_limit: 200,
+    daily_outbound_limit: 200,
+    activated_at: "2026-05-15T09:00:00Z",
+    cf_destination_id: null,
+    cf_destination_verified_at: null,
+    cf_rule_id: null,
+    cf_last_synced_at: null,
+    cf_last_error: null,
+    created_at: "2026-05-15T09:00:00Z",
+    updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
 function mailboxRow(input: {
   id: string;
   threadKey: string;
@@ -825,6 +1309,7 @@ function mailboxRow(input: {
 }): Record<string, unknown> {
   return {
     id: input.id,
+    mailbox_id: "mailbox-owner",
     direction: "inbound",
     message_kind: "email",
     status: "received",
@@ -853,6 +1338,44 @@ function mailboxRow(input: {
     sent_at: null,
     created_at: "2026-05-15T11:00:00Z",
   };
+}
+
+function reminderRow(id: string, title: string, remindAt: string): Record<string, unknown> {
+  return {
+    id,
+    user_id: "owner",
+    title,
+    notes: null,
+    remind_at: remindAt,
+    timezone: "Europe/Dublin",
+    recurrence_rule: null,
+    status: "pending",
+    delivered_at: null,
+    dismissed_at: null,
+    created_at: "2026-06-01T09:00:00.000Z",
+  };
+}
+
+function calendarEventRow(
+  id: string,
+  title: string,
+  startsAt: string,
+  endsAt: string,
+): Record<string, unknown> {
+  return {
+    id,
+    title,
+    notes: null,
+    starts_at: startsAt,
+    ends_at: endsAt,
+    timezone: "Europe/Dublin",
+    created_at: "2026-05-15T09:00:00Z",
+    updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function countMailboxDrafts(messages: Array<Record<string, unknown>>): number {
+  return messages.filter((message) => message.message_kind === "draft").length;
 }
 
 function projectRow(id: string, name: string, slug: string): Record<string, unknown> {
