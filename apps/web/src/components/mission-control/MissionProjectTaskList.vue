@@ -10,6 +10,7 @@ import {
   projectEmojiIcon,
   projectForTask,
   projectIconSource,
+  projectName,
   projectTaskComposerProjectLabel,
   projectUiIconName,
   taskDescriptionText,
@@ -31,6 +32,7 @@ defineProps<{
   localExecutorRunnerDetail: string;
   error: string;
   loading: boolean;
+  pinnedTasks: MissionTask[];
   groups: ProjectTaskListGroup[];
   statuses: Array<{ id: ProjectBoardStatus; label: string }>;
   actionId: string;
@@ -87,6 +89,98 @@ function taskDescription(task: MissionTask): string {
 
     <div v-if="loading" class="empty-row">Loading project tasks...</div>
     <template v-else>
+      <section
+        v-if="pinnedTasks.length"
+        class="project-task-group project-task-group--pinned"
+        aria-label="Pinned tasks"
+      >
+        <header class="project-task-group__header">
+          <div class="project-task-group__title-wrap">
+            <span
+              class="project-task-group__visual project-task-group__visual--pinned"
+              aria-hidden="true"
+            >
+              <UiIcon name="Star" :size="15" />
+            </span>
+            <h2>Pinned</h2>
+          </div>
+          <div class="project-task-group__actions">
+            <span>{{ pinnedTasks.length }}</span>
+          </div>
+        </header>
+
+        <article
+          v-for="task in pinnedTasks"
+          :key="task.id"
+          class="project-task-row"
+          :class="{
+            'is-updating': actionId === task.id || localRunId === task.id,
+          }"
+        >
+          <button
+            type="button"
+            class="project-task-row__body"
+            :aria-label="`Open details for ${task.title}`"
+            @click="emit('open-detail', task)"
+          >
+            <span class="project-task-row__title">{{ task.title }}</span>
+            <span
+              v-if="taskDescription(task)"
+              class="project-task-row__description"
+            >
+              {{ taskDescription(task) }}
+            </span>
+            <span class="project-task-row__meta">
+              <span v-if="!selectedProject" class="project-task-row__project">
+                {{ projectName(projects, task.projectId) }}
+              </span>
+              <span
+                v-if="weeklyReviewMetadata(task)"
+                class="weekly-review-badge"
+                >Weekly Review</span
+              >
+              <span v-if="task.dueAt || task.scheduledFor">
+                {{ formatShortDate(task.dueAt || task.scheduledFor) }}
+              </span>
+              <span v-if="weeklyReviewMetadata(task)">
+                {{ weeklyReviewCardLabel(task) }}
+              </span>
+            </span>
+          </button>
+
+          <div class="project-task-row__controls">
+            <label class="project-task-row__done">
+              <input
+                type="checkbox"
+                :checked="task.status === 'done'"
+                :aria-label="`Mark ${task.title} done`"
+                :disabled="actionId === task.id || localRunId === task.id"
+                @change="emit('set-status', task, 'done')"
+              />
+              <span aria-hidden="true">
+                <UiIcon name="Check" :size="13" />
+              </span>
+            </label>
+            <button
+              v-if="isLocalProject(projectForTask(projects, task))"
+              type="button"
+              class="project-task-row__run"
+              :disabled="Boolean(localRunId)"
+              @click="emit('run-task-locally', task)"
+            >
+              <UiIcon name="Play" :size="14" />
+              {{ localRunId === task.id ? "Queuing..." : "Run locally" }}
+            </button>
+            <MissionProjectTaskActionMenu
+              :task="task"
+              :disabled="actionId === task.id || localRunId === task.id"
+              @toggle-pin="emit('toggle-pin', $event)"
+              @archive-task="emit('archive-task', $event)"
+            />
+          </div>
+        </article>
+      </section>
+
       <section
         v-for="group in groups"
         :key="group.id"
@@ -349,6 +443,10 @@ function taskDescription(task: MissionTask): string {
   min-width: 0;
 }
 
+.project-task-group--pinned {
+  margin-bottom: 4px;
+}
+
 .project-task-group__header {
   display: flex;
   align-items: center;
@@ -393,6 +491,10 @@ function taskDescription(task: MissionTask): string {
   height: 100%;
   border-radius: inherit;
   object-fit: cover;
+}
+
+.project-task-group__visual--pinned {
+  color: var(--ui-accent);
 }
 
 .project-task-group__emoji {

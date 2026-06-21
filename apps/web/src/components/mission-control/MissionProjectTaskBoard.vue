@@ -32,6 +32,7 @@ defineProps<{
   localExecutorRunnerDetail: string;
   error: string;
   loading: boolean;
+  pinnedTasks: MissionTask[];
   columns: ProjectBoardColumn[];
   dropStatus: ProjectBoardStatus | "";
   draggedTaskId: string;
@@ -92,6 +93,111 @@ function taskDescription(task: MissionTask): string {
 
     <div v-if="loading" class="empty-row">Loading project tasks...</div>
     <template v-else>
+      <section
+        v-if="pinnedTasks.length"
+        class="project-pinned-board"
+        aria-label="Pinned tasks"
+      >
+        <div class="project-board__column-header">
+          <h2>Pinned</h2>
+          <span>{{ pinnedTasks.length }}</span>
+        </div>
+
+        <div class="project-pinned-board__tasks">
+          <article
+            v-for="task in pinnedTasks"
+            :key="task.id"
+            class="project-task-card"
+            :class="{
+              'is-dragging': draggedTaskId === task.id,
+              'is-updating': actionId === task.id || localRunId === task.id,
+            }"
+            role="button"
+            tabindex="0"
+            draggable="true"
+            :aria-label="`Open details for ${task.title}`"
+            @click="emit('open-detail', task)"
+            @keydown.enter.prevent="emit('open-detail', task)"
+            @keydown.space.prevent="emit('open-detail', task)"
+            @dragstart="emit('task-drag-start', $event, task)"
+            @dragend="emit('task-drag-end')"
+          >
+            <p class="project-task-card__title">{{ task.title }}</p>
+            <p
+              v-if="taskDescription(task)"
+              class="project-task-card__description"
+            >
+              {{ taskDescription(task) }}
+            </p>
+            <div class="project-task-card__meta">
+              <span v-if="weeklyReviewMetadata(task)" class="weekly-review-badge"
+                >Weekly Review</span
+              >
+              <span class="project-task-card__project">
+                <span
+                  v-if="
+                    isProjectIconLogo(projectForTask(projects, task)) ||
+                    projectUiIconName(projectForTask(projects, task)) ||
+                    projectEmojiIcon(projectForTask(projects, task))
+                  "
+                  class="project-task-card__project-visual"
+                  aria-hidden="true"
+                >
+                  <img
+                    v-if="isProjectIconLogo(projectForTask(projects, task))"
+                    :src="projectIconSource(projectForTask(projects, task))"
+                    alt=""
+                  />
+                  <UiIcon
+                    v-else-if="projectUiIconName(projectForTask(projects, task))"
+                    :name="projectUiIconName(projectForTask(projects, task))!"
+                    :size="14"
+                  />
+                  <span v-else class="project-task-card__project-emoji">
+                    {{ projectEmojiIcon(projectForTask(projects, task)) }}
+                  </span>
+                </span>
+                <span class="project-task-card__project-label">
+                  {{ projectName(projects, task.projectId) }}
+                </span>
+              </span>
+              <span
+                v-if="isLocalProject(projectForTask(projects, task))"
+                class="local-project-badge"
+                >Local</span
+              >
+              <span v-if="task.dueAt || task.scheduledFor">
+                {{ formatShortDate(task.dueAt || task.scheduledFor) }}
+              </span>
+            </div>
+            <span
+              v-if="weeklyReviewMetadata(task)"
+              class="project-task-card__review-counts"
+            >
+              {{ weeklyReviewCardLabel(task) }}
+            </span>
+            <div class="project-task-card__actions">
+              <button
+                v-if="isLocalProject(projectForTask(projects, task))"
+                type="button"
+                class="project-task-card__run"
+                :disabled="Boolean(localRunId)"
+                @click.stop="emit('run-task-locally', task)"
+              >
+                <UiIcon name="Play" :size="14" />
+                {{ localRunId === task.id ? "Queuing..." : "Run locally" }}
+              </button>
+              <MissionProjectTaskActionMenu
+                :task="task"
+                :disabled="actionId === task.id || localRunId === task.id"
+                @toggle-pin="emit('toggle-pin', $event)"
+                @archive-task="emit('archive-task', $event)"
+              />
+            </div>
+          </article>
+        </div>
+      </section>
+
       <div class="project-board" aria-label="Project board">
         <section
           v-for="column in columns"
@@ -318,6 +424,18 @@ function taskDescription(task: MissionTask): string {
   gap: 12px;
   min-width: 0;
   overflow-x: auto;
+}
+
+.project-pinned-board {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.project-pinned-board__tasks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
 }
 
 .project-board__column {
@@ -569,6 +687,11 @@ function taskDescription(task: MissionTask): string {
   --task-action-size: 28px;
   --task-action-menu-top: auto;
   --task-action-menu-bottom: calc(100% + 4px);
+}
+
+.project-pinned-board .project-task-action-menu {
+  --task-action-menu-top: calc(100% + 4px);
+  --task-action-menu-bottom: auto;
 }
 
 .project-task-composer {

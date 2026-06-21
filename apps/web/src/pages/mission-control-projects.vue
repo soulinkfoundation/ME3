@@ -18,7 +18,6 @@ import MissionProjectTaskDetailModal from "../components/mission-control/Mission
 import MissionProjectTaskList from "../components/mission-control/MissionProjectTaskList.vue";
 import {
   activeProjectTasks,
-  activeProjectTaskStatuses,
   appendUniqueTasks,
   formatDateTime,
   groupProjectTasks,
@@ -419,6 +418,18 @@ const selectedProjectTasks = computed(() => {
     (task) => task.projectId === projectId && task.status !== "cancelled",
   );
 });
+const activeSelectedProjectTasks = computed(() =>
+  activeProjectTasks(selectedProjectTasks.value),
+);
+const pinnedProjectTasks = computed(() =>
+  activeSelectedProjectTasks.value.filter((task) => task.pinnedAt),
+);
+const regularProjectTasks = computed(() =>
+  activeSelectedProjectTasks.value.filter((task) => !task.pinnedAt),
+);
+const regularProjectBoardTasks = computed(() =>
+  selectedProjectTasks.value.filter((task) => !task.pinnedAt),
+);
 const selectedProjectTaskDetail = computed(() =>
   selectedProjectTaskDetailId.value
     ? projectTasks.value.find(
@@ -458,24 +469,27 @@ const selectedProjectTaskLatestRunSummary = computed(() => {
   return "Local run cancelled.";
 });
 const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
-  projectBoardStatuses
-    .filter((column) =>
-      activeProjectTaskStatuses.includes(column.id as ProjectBoardStatus),
-    )
-    .map((column) => ({
-      ...column,
-      tasks: selectedProjectTasks.value.filter(
-        (task) => task.status === column.id,
-      ),
-    })),
+  projectBoardStatuses.map((column) => ({
+    ...column,
+    tasks: regularProjectBoardTasks.value.filter(
+      (task) => task.status === column.id,
+    ),
+  })),
 );
-const projectTaskListGroups = computed<ProjectTaskListGroup[]>(() =>
-  groupProjectTasks(
+const projectTaskListGroups = computed<ProjectTaskListGroup[]>(() => {
+  if (
+    !selectedProjectDetail.value &&
+    regularProjectTasks.value.length === 0 &&
+    pinnedProjectTasks.value.length > 0
+  ) {
+    return [];
+  }
+  return groupProjectTasks(
     projects.value,
-    activeProjectTasks(selectedProjectTasks.value),
+    regularProjectTasks.value,
     selectedProjectDetail.value,
-  ),
-);
+  );
+});
 const selectedProjectDetailLabel = computed(
   () => selectedProjectDetail.value?.name || "All",
 );
@@ -880,7 +894,10 @@ async function loadProjectTasks(
   projectTasksError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ active: true, projectId: scopeId }),
+      missionTasksUrl({
+        active: projectTaskViewMode.value !== "kanban",
+        projectId: scopeId,
+      }),
     );
     if (selectedProjectTaskScopeId.value !== scopeId) return;
     projectTasks.value = response.tasks || [];
@@ -937,7 +954,11 @@ async function loadMoreProjectTasks() {
   projectTasksError.value = "";
   try {
     const response = await api.get<MissionTasksResponse>(
-      missionTasksUrl({ active: true, projectId, cursor }),
+      missionTasksUrl({
+        active: projectTaskViewMode.value !== "kanban",
+        projectId,
+        cursor,
+      }),
     );
     if (selectedProjectTaskScopeId.value !== projectId) return;
     projectTasks.value = appendUniqueTasks(
@@ -1607,7 +1628,8 @@ async function archiveSelectedProjectTask() {
 function replaceProjectTask(next: MissionTask) {
   if (
     next.archivedAt ||
-    !activeProjectTaskStatuses.includes(next.status as ProjectBoardStatus)
+    next.status === "cancelled" ||
+    (next.status === "done" && projectTaskViewMode.value !== "kanban")
   ) {
     projectTasks.value = projectTasks.value.filter((item) => item.id !== next.id);
     if (selectedProjectTaskDetailId.value === next.id && next.status === "done") {
@@ -1946,7 +1968,11 @@ onBeforeUnmount(() => {
           <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
         </Button>
         <Button
-          v-if="activeSection === 'projects' && !isAccountsRoute"
+          v-if="
+            activeSection === 'projects' &&
+            !isAccountsRoute &&
+            projectTaskViewMode === 'list'
+          "
           color="ghost"
           shape="soft"
           size="compact"
@@ -2080,6 +2106,7 @@ onBeforeUnmount(() => {
           :local-executor-runner-detail="localExecutorRunnerDetail"
           :error="projectTasksError"
           :loading="projectTasksLoading"
+          :pinned-tasks="pinnedProjectTasks"
           :groups="projectTaskListGroups"
           :statuses="projectBoardStatuses"
           :action-id="projectTaskActionId"
@@ -2111,6 +2138,7 @@ onBeforeUnmount(() => {
           :local-executor-runner-detail="localExecutorRunnerDetail"
           :error="projectTasksError"
           :loading="projectTasksLoading"
+          :pinned-tasks="pinnedProjectTasks"
           :columns="projectBoardColumns"
           :drop-status="projectTaskDropStatus"
           :dragged-task-id="draggedProjectTaskId"
