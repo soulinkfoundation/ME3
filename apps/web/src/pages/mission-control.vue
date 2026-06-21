@@ -176,7 +176,6 @@ const dashboardCardRegistry = new Set([
   "DailyBriefingCard",
   "MissionStatementCard",
   "WheelSnapshotCard",
-  "QuickProjectTaskCard",
   "AiUsageCard",
   "ProjectsSummaryCard",
   "AccountsSummaryCard",
@@ -1095,7 +1094,7 @@ onMounted(() => {
                 />
               </label>
               <label class="mission-statement-form__field">
-                <span>Current Goal(s)</span>
+                <span>Goals</span>
                 <textarea
                   v-model="mainGoalDraft"
                   :placeholder="missionStatement?.mainGoalPlaceholder"
@@ -1114,7 +1113,7 @@ onMounted(() => {
               >
                 <h3 class="dashboard-card__title mission-goal-display__title">
                   <UiIcon name="Target" :size="16" />
-                  <span>Current Goal(s)</span>
+                  <span>Goals</span>
                 </h3>
                 <p>
                   {{
@@ -1259,102 +1258,7 @@ onMounted(() => {
               </Button>
             </div>
           </template>
-          <template
-            v-else-if="cardComponentKey(card) === 'QuickProjectTaskCard'"
-          >
-            <header class="dashboard-card__header">
-              <h2 class="dashboard-card__title">
-                <UiIcon name="ListTodo" :size="16" />
-                <span>Quick Task</span>
-              </h2>
-            </header>
-            <form
-              v-if="!dashboardEditing"
-              class="quick-project-task"
-              @submit.prevent="addQuickProjectTask"
-            >
-              <select
-                v-model="quickProjectTaskProjectId"
-                class="quick-project-task__project"
-                aria-label="Project"
-                :disabled="projectsSummaryLoading || quickProjectTaskSaving"
-              >
-                <option
-                  v-for="project in activeDashboardProjects"
-                  :key="project.id"
-                  :value="project.id"
-                >
-                  {{ project.name }}
-                </option>
-              </select>
-              <div class="quick-project-task__row">
-                <input
-                  v-model="quickProjectTaskDraft"
-                  class="quick-project-task__input"
-                  type="text"
-                  placeholder="Task name"
-                  autocomplete="off"
-                  :disabled="
-                    projectsSummaryLoading ||
-                    quickProjectTaskSaving ||
-                    !activeDashboardProjects.length
-                  "
-                  @keydown.esc.prevent="clearQuickProjectTask"
-                />
-                <Button
-                  class="quick-project-task__clear"
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  type="button"
-                  aria-label="Clear task"
-                  title="Clear task"
-                  :disabled="quickProjectTaskSaving || !quickProjectTaskDraft"
-                  @click="clearQuickProjectTask"
-                >
-                  <UiIcon name="X" :size="15" />
-                </Button>
-                <Button
-                  class="quick-project-task__submit"
-                  color="primary"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  type="submit"
-                  aria-label="Add task"
-                  title="Add task"
-                  :disabled="quickProjectTaskCreateDisabled"
-                >
-                  <UiIcon name="Plus" :size="16" />
-                </Button>
-              </div>
-              <p
-                v-if="projectsSummaryLoading"
-                class="quick-project-task__message"
-              >
-                Loading projects...
-              </p>
-              <p
-                v-else-if="quickProjectTaskError || projectsSummaryError"
-                class="quick-project-task__message is-error"
-              >
-                {{ quickProjectTaskError || projectsSummaryError }}
-              </p>
-              <p
-                v-else-if="!activeDashboardProjects.length"
-                class="quick-project-task__message"
-              >
-                Add a project before creating tasks.
-              </p>
-            </form>
-            <div v-else class="dashboard-empty">
-              <p>Adds a task to an active project.</p>
-            </div>
-          </template>
-          <template
-            v-else-if="cardComponentKey(card) === 'ProjectsSummaryCard'"
-          >
+          <template v-else-if="cardComponentKey(card) === 'ProjectsSummaryCard'">
             <header class="dashboard-card__header">
               <RouterLink
                 class="dashboard-card__title dashboard-card__title-link"
@@ -1363,21 +1267,24 @@ onMounted(() => {
                 <UiIcon name="FolderDot" :size="16" />
                 <span>Projects</span>
               </RouterLink>
-            </header>
-            <div v-if="!dashboardEditing" class="dashboard-card__actions">
-              <Button
-                class="dashboard-card__action-button"
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                to="/mission-control/projects"
-                aria-label="Open Projects"
-                title="Open Projects"
+              <div
+                v-if="!dashboardEditing"
+                class="dashboard-card__actions dashboard-card__actions--inline"
               >
-                <UiIcon name="Eye" :size="16" />
-              </Button>
-            </div>
+                <Button
+                  class="dashboard-card__action-button"
+                  color="ghost"
+                  shape="soft"
+                  size="compact"
+                  icon-only
+                  to="/mission-control/projects"
+                  aria-label="Open Projects"
+                  title="Open Projects"
+                >
+                  <UiIcon name="Eye" :size="16" />
+                </Button>
+              </div>
+            </header>
             <div v-if="projectsSummaryLoading" class="dashboard-empty">
               <p>Loading project stats...</p>
             </div>
@@ -1400,18 +1307,18 @@ onMounted(() => {
               >
                 <div class="project-summary__main">
                   <RouterLink :to="projectSummaryPath(summary)">
-                    {{ summary.label }}
+                    {{ summary.label }}:
                   </RouterLink>
-                </div>
-                <div class="project-summary__stats">
-                  <RouterLink
-                    v-for="status in visibleProjectStatuses"
-                    :key="status.id"
-                    :to="projectSummaryPath(summary)"
-                    :class="{ 'is-empty': summary.counts[status.id] === 0 }"
-                  >
-                    {{ projectStatusCountLabel(summary, status.id) }}
-                  </RouterLink>
+                  <div class="project-summary__stats">
+                    <RouterLink
+                      v-for="status in visibleProjectStatuses"
+                      :key="status.id"
+                      :to="projectSummaryPath(summary)"
+                      :class="{ 'is-empty': summary.counts[status.id] === 0 }"
+                    >
+                      {{ projectStatusCountLabel(summary, status.id) }}
+                    </RouterLink>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1426,6 +1333,85 @@ onMounted(() => {
                 Open Projects
               </Button>
             </div>
+            <form
+              v-if="!dashboardEditing"
+              class="quick-project-task quick-project-task--inline"
+              @submit.prevent="addQuickProjectTask"
+            >
+              <select
+                v-model="quickProjectTaskProjectId"
+                class="quick-project-task__project"
+                aria-label="Project"
+                :disabled="projectsSummaryLoading || quickProjectTaskSaving"
+              >
+                <option
+                  v-for="project in activeDashboardProjects"
+                  :key="project.id"
+                  :value="project.id"
+                >
+                  {{ project.name }}
+                </option>
+              </select>
+              <input
+                v-model="quickProjectTaskDraft"
+                class="quick-project-task__input"
+                type="text"
+                placeholder="Task name"
+                autocomplete="off"
+                :disabled="
+                  projectsSummaryLoading ||
+                  quickProjectTaskSaving ||
+                  !activeDashboardProjects.length
+                "
+                @keydown.esc.prevent="clearQuickProjectTask"
+              />
+              <Button
+                class="quick-project-task__clear"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                aria-label="Clear task"
+                title="Clear task"
+                :disabled="quickProjectTaskSaving || !quickProjectTaskDraft"
+                @click="clearQuickProjectTask"
+              >
+                <UiIcon name="X" :size="15" />
+              </Button>
+              <Button
+                class="quick-project-task__submit"
+                color="primary"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="submit"
+                aria-label="Add task"
+                title="Add task"
+                :disabled="quickProjectTaskCreateDisabled"
+              >
+                <UiIcon name="Plus" :size="16" />
+              </Button>
+            </form>
+            <p
+              v-if="
+                !dashboardEditing &&
+                (projectsSummaryLoading ||
+                  quickProjectTaskError ||
+                  projectsSummaryError ||
+                  !activeDashboardProjects.length)
+              "
+              class="quick-project-task__message"
+              :class="{ 'is-error': quickProjectTaskError || projectsSummaryError }"
+            >
+              {{
+                projectsSummaryLoading
+                  ? "Loading projects..."
+                  : quickProjectTaskError ||
+                    projectsSummaryError ||
+                    "Add a project before creating tasks."
+              }}
+            </p>
           </template>
           <template
             v-else-if="cardComponentKey(card) === 'AccountsSummaryCard'"
@@ -2081,12 +2067,17 @@ onMounted(() => {
 }
 
 .mission-goal-display p {
+  padding: 10px;
+  border-radius: 15px;
+  background: var(--ui-surface-muted);
   margin: 0;
   color: var(--ui-text) !important;
   font-size: 14px;
-  font-weight: 650;
-  line-height: 1.45 !important;
-  white-space: pre-wrap;
+  font-weight: 500 !important;
+  line-height: 1.6 !important;
+  text-align: center !important;
+  text-wrap: balance !important;
+  white-space: pre-wrap !important;
 }
 
 .mission-goal-display.is-empty p {
@@ -2118,6 +2109,12 @@ onMounted(() => {
   padding: 8px;
   border-radius: var(--ui-radius-md);
   background: var(--ui-surface-muted);
+}
+
+.quick-project-task--inline {
+  grid-template-columns: minmax(104px, 0.34fr) minmax(0, 1fr) 32px 36px;
+  align-items: center;
+  margin-top: 10px;
 }
 
 .quick-project-task__project,
@@ -2251,6 +2248,9 @@ onMounted(() => {
   display: grid;
   gap: 11px;
   justify-items: start;
+  max-height: 244px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .project-summary__row {
@@ -2270,12 +2270,14 @@ onMounted(() => {
 .project-summary__main {
   display: flex;
   min-width: 0;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
 .project-summary__main a {
+  flex: 0 0 auto;
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   color: var(--ui-text);
@@ -2292,6 +2294,7 @@ onMounted(() => {
 
 .project-summary__stats {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: 6px;
 }
@@ -2648,6 +2651,14 @@ onMounted(() => {
 
   .wheel-summary__row {
     grid-template-columns: 1fr;
+  }
+
+  .quick-project-task--inline {
+    grid-template-columns: minmax(0, 1fr) 32px 36px;
+  }
+
+  .quick-project-task--inline .quick-project-task__project {
+    grid-column: 1 / -1;
   }
 
   .dashboard-modal__row,
