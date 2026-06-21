@@ -52,6 +52,7 @@ export {
   type AgentContentItem,
   type AgentContentStats,
   type AgentContentUpdateInput,
+  type AgentChatTurnTrace,
   type AgentMailbox,
   type AgentMailboxDraftInput,
   type AgentMailboxMessage,

@@ -5,6 +5,7 @@ import {
 import {
   isCoreChatReminderCreateRequest,
   planCoreChatToolTurn,
+  type CoreChatToolPlannerDecision,
 } from "./planner";
 import {
   buildMe3AgentContextPrompt,
@@ -140,7 +141,57 @@ export type AgentSandboxDispatchResponse = {
   } | null;
   contentAction?: null;
   contactsChanged?: boolean;
+  trace?: AgentChatTurnTrace | null;
   error?: string;
+};
+
+export type AgentChatTurnTrace = {
+  turnId: string;
+  planner: CoreChatToolPlannerDecision;
+  route: {
+    path: "tool" | "model" | "fallback";
+    capabilityId: string;
+    reason: string;
+    setupChecks: string[];
+    approvalRequired: boolean;
+    sideEffectLevel: string;
+  };
+  selectedModel: {
+    providerId: AiProviderId;
+    model: string;
+    backupModel: string | null;
+    configured: boolean;
+    responseModel: string | null;
+  } | null;
+  context: {
+    status: "not_attempted" | "loaded" | "failed";
+    packetId: string | null;
+    summary: string | null;
+    sourceCount: number;
+    sources: Array<{
+      id: string;
+      kind: string;
+      label: string | null;
+      visibility: string | null;
+      reason: string | null;
+    }>;
+    error: string | null;
+  };
+  modelCall: {
+    status: "not_attempted" | "succeeded" | "failed" | "fallback";
+    providerId: AiProviderId | null;
+    model: string | null;
+    fallbackReason: string | null;
+    debugError: string | null;
+  };
+  toolResult: {
+    status: "not_attempted" | "succeeded" | "failed" | "clarified";
+    specialist: string | null;
+    source: AgentChatSource;
+  };
+  audit: {
+    auditId: string | null;
+  };
 };
 
 export type AgentReminderInput = {
@@ -315,9 +366,12 @@ type CoreAgentChatEnv = {
   AI?: {
     run(model: string, input: unknown): Promise<unknown>;
   };
+  ENVIRONMENT?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   TOKEN_ENCRYPTION_KEY?: string;
+  ME3_ASSISTANT_DEBUG_TRACE?: string;
+  ME3_ASSISTANT_TRACE?: string;
   ME3_AI_MODEL?: string;
   ME3_AI_DEFAULT_PROVIDER?: string;
   ME3_AI_DEFAULT_MODEL?: string;
@@ -358,6 +412,11 @@ export type AgentSandboxTurnRecord = {
 type StorageLike = {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T = unknown>(key: string, value: T): Promise<void>;
+};
+
+type CoreChatToolTurnPlan = {
+  decision: CoreChatToolPlannerDecision;
+  recent: Array<{ role: "user" | "assistant"; content: string }>;
 };
 
 type OwnerProfileRow = {
@@ -580,9 +639,11 @@ type DbMissionWheelSnapshotRow = {
 };
 
 type CoreChatAgentContextResult = {
-  prompt: string;
-  manifest: Me3AgentContextManifest;
-  summary: string;
+  status: "loaded" | "failed";
+  prompt: string | null;
+  manifest: Me3AgentContextManifest | null;
+  summary: string | null;
+  error: string | null;
 };
 
 type NormalizedMailboxDraftInput = {
@@ -1628,7 +1689,7 @@ export async function dispatchAgentSandboxTurn(
 ): Promise<AgentSandboxDispatchResponse> {
   const resultKey = `agent-chat:sandbox:${input.turnId}`;
   const existing = await storage.get<AgentSandboxDispatchResponse>(resultKey);
-  if (existing) return { ...existing, ok: true };
+  if (existing) return applyAgentTurnTracePolicy(env, { ...existing, ok: true });
 
   await storage.put("userId", input.userId);
   await storage.put("lastSandboxConnectionId", input.connectionId);
@@ -1636,7 +1697,8 @@ export async function dispatchAgentSandboxTurn(
   await storage.put("lastSandboxTurnAt", new Date().toISOString());
 
   const owner = await getOwnerProfile(env, input.userId);
-  const toolResponse = await maybeHandleCoreToolTurn(env, input, owner);
+  const toolPlan = await loadCoreChatToolTurnPlan(env, input);
+  const toolResponse = await maybeHandleCoreToolTurn(env, input, owner, toolPlan);
   if (toolResponse) {
     await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
     if (toolResponse.replyText) {
@@ -1648,8 +1710,17 @@ export async function dispatchAgentSandboxTurn(
         input.threadId,
       );
     }
-    const response = { ...toolResponse, threadId: input.threadId ?? null };
+    let response: AgentSandboxDispatchResponse = {
+      ...toolResponse,
+      threadId: input.threadId ?? null,
+    };
     await touchAssistantThread(env, input.userId, input.threadId);
+    response = attachAgentTurnTrace(env, response, {
+      input,
+      plannerDecision: toolPlan.decision,
+      route: null,
+      context: null,
+    });
     await storage.put(resultKey, response);
     return response;
   }
@@ -1659,7 +1730,7 @@ export async function dispatchAgentSandboxTurn(
     input.messageText,
     input.attachments,
   );
-  const recent = await loadRecentMessages(env, input.userId, input.threadId);
+  const recent = toolPlan.recent;
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
   const agentContext = await loadCoreChatAgentContext(env, {
     ownerId: input.userId,
@@ -1710,6 +1781,12 @@ export async function dispatchAgentSandboxTurn(
   }
   response.threadId = input.threadId ?? null;
   await touchAssistantThread(env, input.userId, input.threadId);
+  response = attachAgentTurnTrace(env, response, {
+    input,
+    plannerDecision: toolPlan.decision,
+    route,
+    context: agentContext,
+  });
 
   await storage.put(resultKey, response);
   return response;
@@ -1763,17 +1840,29 @@ function normalizeAgentAttachmentReferences(
     .filter((attachment) => attachment.status === "ready" && Boolean(attachment.id));
 }
 
+async function loadCoreChatToolTurnPlan(
+  env: CoreAgentChatEnv,
+  input: AgentSandboxDispatchInput,
+): Promise<CoreChatToolTurnPlan> {
+  const recent = await loadRecentMessages(env, input.userId, input.threadId);
+  return {
+    recent,
+    decision: planCoreChatToolTurn({
+      messageText: input.messageText.trim(),
+      hasRecentAssistantEmailDraft: Boolean(latestAssistantEmailDraft(recent)),
+    }),
+  };
+}
+
 async function maybeHandleCoreToolTurn(
   env: CoreAgentChatEnv,
   input: AgentSandboxDispatchInput,
   owner: OwnerProfileRow | null,
+  toolPlan: CoreChatToolTurnPlan,
 ): Promise<AgentSandboxDispatchResponse | null> {
   const messageText = input.messageText.trim();
-  const recent = await loadRecentMessages(env, input.userId, input.threadId);
-  const plannerDecision = planCoreChatToolTurn({
-    messageText,
-    hasRecentAssistantEmailDraft: Boolean(latestAssistantEmailDraft(recent)),
-  });
+  const recent = toolPlan.recent;
+  const plannerDecision = toolPlan.decision;
 
   if (
     plannerDecision.kind === "conversation" ||
@@ -3607,10 +3696,174 @@ function attachAgentContextToResponse(
 ): AgentSandboxDispatchResponse {
   return {
     ...response,
-    contextPacketId: context?.manifest.packetId ?? null,
+    contextPacketId: context?.manifest?.packetId ?? null,
     contextManifest: context?.manifest ?? null,
     contextSummary: context?.summary ?? null,
   };
+}
+
+function attachAgentTurnTrace(
+  env: CoreAgentChatEnv,
+  response: AgentSandboxDispatchResponse,
+  input: {
+    input: AgentSandboxDispatchInput;
+    plannerDecision: CoreChatToolPlannerDecision;
+    route: AiRoute | null;
+    context: CoreChatAgentContextResult | null;
+  },
+): AgentSandboxDispatchResponse {
+  if (!isAgentChatTraceEnabled(env)) return removeAgentTurnTrace(response);
+  return {
+    ...response,
+    trace: buildAgentTurnTrace(response, input),
+  };
+}
+
+function applyAgentTurnTracePolicy(
+  env: CoreAgentChatEnv,
+  response: AgentSandboxDispatchResponse,
+): AgentSandboxDispatchResponse {
+  return isAgentChatTraceEnabled(env) ? response : removeAgentTurnTrace(response);
+}
+
+function removeAgentTurnTrace(
+  response: AgentSandboxDispatchResponse,
+): AgentSandboxDispatchResponse {
+  const { trace: _trace, ...withoutTrace } = response;
+  return withoutTrace;
+}
+
+function buildAgentTurnTrace(
+  response: AgentSandboxDispatchResponse,
+  input: {
+    input: AgentSandboxDispatchInput;
+    plannerDecision: CoreChatToolPlannerDecision;
+    route: AiRoute | null;
+    context: CoreChatAgentContextResult | null;
+  },
+): AgentChatTurnTrace {
+  const routePath = response.source === "tool"
+    ? "tool"
+    : response.source === "fallback"
+      ? "fallback"
+      : "model";
+  return {
+    turnId: input.input.turnId,
+    planner: input.plannerDecision,
+    route: {
+      path: routePath,
+      capabilityId: input.plannerDecision.capabilityId,
+      reason: input.plannerDecision.reason,
+      setupChecks: input.plannerDecision.requiredSetupChecks,
+      approvalRequired: input.plannerDecision.approvalRequired,
+      sideEffectLevel: input.plannerDecision.sideEffectLevel,
+    },
+    selectedModel: input.route
+      ? {
+          providerId: input.route.providerId,
+          model: input.route.model,
+          backupModel: input.route.backupModel,
+          configured: input.route.configured,
+          responseModel: response.model,
+        }
+      : null,
+    context: buildAgentTraceContext(input.context),
+    modelCall: {
+      status: modelCallTraceStatus(response, input.route),
+      providerId: input.route?.providerId ?? null,
+      model: response.model ?? input.route?.model ?? null,
+      fallbackReason: response.fallbackReason ?? null,
+      debugError: response.debugError ?? null,
+    },
+    toolResult: {
+      status: toolResultTraceStatus(response, input.plannerDecision),
+      specialist: response.specialist,
+      source: response.source,
+    },
+    audit: {
+      auditId: response.auditId,
+    },
+  };
+}
+
+function buildAgentTraceContext(
+  context: CoreChatAgentContextResult | null,
+): AgentChatTurnTrace["context"] {
+  if (!context) {
+    return {
+      status: "not_attempted",
+      packetId: null,
+      summary: null,
+      sourceCount: 0,
+      sources: [],
+      error: null,
+    };
+  }
+  if (context.status === "failed") {
+    return {
+      status: "failed",
+      packetId: null,
+      summary: null,
+      sourceCount: 0,
+      sources: [],
+      error: context.error,
+    };
+  }
+
+  const sources = context.manifest?.sources || [];
+  return {
+    status: "loaded",
+    packetId: context.manifest?.packetId ?? null,
+    summary: context.summary,
+    sourceCount: sources.length,
+    sources: sources.slice(0, 12).map((source) => ({
+      id: source.id,
+      kind: source.kind,
+      label: source.label ?? null,
+      visibility: source.visibility ?? null,
+      reason: source.reason ?? null,
+    })),
+    error: null,
+  };
+}
+
+function modelCallTraceStatus(
+  response: AgentSandboxDispatchResponse,
+  route: AiRoute | null,
+): AgentChatTurnTrace["modelCall"]["status"] {
+  if (!route || response.source === "tool") return "not_attempted";
+  if (!route.configured) return "not_attempted";
+  if (
+    response.source === "openai" ||
+    response.source === "anthropic" ||
+    response.source === "workers-ai" ||
+    response.source === "workers-ai-gateway"
+  ) {
+    return "succeeded";
+  }
+  if (response.fallbackReason === "Model request failed") return "failed";
+  return "fallback";
+}
+
+function toolResultTraceStatus(
+  response: AgentSandboxDispatchResponse,
+  plannerDecision: CoreChatToolPlannerDecision,
+): AgentChatTurnTrace["toolResult"]["status"] {
+  if (response.source !== "tool") return "not_attempted";
+  if (plannerDecision.kind === "clarify") return "clarified";
+  return response.fallbackReason ? "failed" : "succeeded";
+}
+
+function isAgentChatTraceEnabled(env: CoreAgentChatEnv): boolean {
+  return (
+    isTruthyEnvFlag(env.ME3_ASSISTANT_DEBUG_TRACE) ||
+    isTruthyEnvFlag(env.ME3_ASSISTANT_TRACE) ||
+    env.ENVIRONMENT === "development"
+  );
+}
+
+function isTruthyEnvFlag(value: unknown): boolean {
+  return typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim());
 }
 
 async function loadCoreChatAgentContext(
@@ -3621,7 +3874,7 @@ async function loadCoreChatAgentContext(
     recent: Array<{ role: "user" | "assistant"; content: string }>;
     messageText: string;
   },
-): Promise<CoreChatAgentContextResult | null> {
+): Promise<CoreChatAgentContextResult> {
   try {
     const activeDate = localDateForTimezone(input.owner?.timezone || null);
     const contacts = await loadCoreContextContacts(env, input.ownerId);
@@ -3685,12 +3938,20 @@ async function loadCoreChatAgentContext(
     const prompt = buildMe3AgentContextPrompt(packet);
     const manifest = createMe3AgentContextManifest(packet, prompt.budget);
     return {
+      status: "loaded",
       prompt: prompt.text,
       manifest,
       summary: summarizeMe3AgentContextManifest(manifest),
+      error: null,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      status: "failed",
+      prompt: null,
+      manifest: null,
+      summary: null,
+      error: error instanceof Error ? error.message : "Agent context lookup failed",
+    };
   }
 }
 

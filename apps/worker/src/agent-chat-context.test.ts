@@ -505,6 +505,129 @@ describe("Core chat native context", () => {
     );
   });
 
+  it("attaches a development trace for model-first turns when enabled", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Here is what I can help with.",
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("What tools can you access here?"),
+    );
+
+    expect(response.trace).toMatchObject({
+      planner: {
+        kind: "conversation",
+        capabilityId: "core.agent-chat.conversation",
+      },
+      route: {
+        path: "model",
+        capabilityId: "core.agent-chat.conversation",
+      },
+      selectedModel: {
+        providerId: "workers-ai",
+        configured: true,
+        responseModel: "@cf/qwen/qwen3-30b-a3b-fp8",
+      },
+      context: {
+        status: "loaded",
+        packetId: "agent-context:owner:chat_reply",
+      },
+      modelCall: {
+        status: "succeeded",
+      },
+      toolResult: {
+        status: "not_attempted",
+      },
+    });
+  });
+
+  it("attaches a development trace for native tool turns when enabled", async () => {
+    const env = createEnv({
+      reminders: [
+        {
+          id: "reminder-existing",
+          user_id: "owner",
+          title: "Ship ME3",
+          notes: null,
+          remind_at: "2026-06-07T09:00:00.000Z",
+          timezone: "Europe/Dublin",
+          recurrence_rule: null,
+          status: "pending",
+          delivered_at: null,
+          dismissed_at: null,
+          created_at: "2026-06-01T09:00:00.000Z",
+        },
+      ],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, ME3_ASSISTANT_DEBUG_TRACE: "true" } as never,
+      createStorage(),
+      dispatchInput("Do I have any pending reminders?"),
+    );
+
+    expect(response.trace).toMatchObject({
+      planner: {
+        kind: "read_action",
+        capabilityId: "core.reminders.list",
+      },
+      route: {
+        path: "tool",
+        capabilityId: "core.reminders.list",
+      },
+      selectedModel: null,
+      context: {
+        status: "not_attempted",
+      },
+      modelCall: {
+        status: "not_attempted",
+      },
+      toolResult: {
+        status: "succeeded",
+        specialist: "core.reminders.list",
+      },
+    });
+  });
+
+  it("shows failed context lookup details in development trace", async () => {
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Plain reply.",
+    }));
+    const env = createEnv({
+      failContextLookup: true,
+      contacts: [contactRow("contact-ada", "Ada Lovelace", "ada@example.com", "client")],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("Help me reply to Ada."),
+    );
+
+    expect(response.contextManifest).toBeNull();
+    expect(response.trace).toMatchObject({
+      context: {
+        status: "failed",
+        packetId: null,
+        error: "mission_private_memory unavailable",
+      },
+      modelCall: {
+        status: "succeeded",
+      },
+    });
+  });
+
   it("still lists reminders for direct reminder list requests", async () => {
     const env = createEnv({
       reminders: [
@@ -626,6 +749,7 @@ describe("Core chat native context", () => {
       source: "fallback",
       fallbackReason: "AI provider setup required",
     });
+    expect(response.trace).toBeUndefined();
     expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
   });
 
