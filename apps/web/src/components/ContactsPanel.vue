@@ -330,7 +330,7 @@ defineExpose({
     <div v-if="!soulinkContactsConnected" class="contacts-sync-note">
       You can sync your Soulink contacts here by connecting to Soulink in
       <router-link to="/account?section=advanced" class="empty-hint-link">
-        Settings -> Advanced
+        Settings
       </router-link>
     </div>
     <div

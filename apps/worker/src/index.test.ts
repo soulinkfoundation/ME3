@@ -10824,6 +10824,20 @@ describe("ME3 Core Worker auth", () => {
       expect(firstResponse.status).toBe(200);
       expect(secondResponse.status).toBe(200);
       expect(provisionMock).toHaveBeenCalledTimes(2);
+      const firstInit = provisionMock.mock.calls[0]?.[1] as RequestInit;
+      const secondInit = provisionMock.mock.calls[1]?.[1] as RequestInit;
+      const firstProvision = JSON.parse(String(firstInit.body)) as {
+        runtime: { dispatchToken: string };
+      };
+      const secondProvision = JSON.parse(String(secondInit.body)) as {
+        runtime: { dispatchToken: string };
+      };
+      expect(secondProvision.runtime.dispatchToken).not.toBe(
+        firstProvision.runtime.dispatchToken,
+      );
+      expect(env.soulinkConnection?.setup_token).toBe(
+        secondProvision.runtime.dispatchToken,
+      );
       expect(
         env.agentEvents.filter(
           (event) =>

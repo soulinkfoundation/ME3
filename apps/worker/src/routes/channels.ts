@@ -287,8 +287,7 @@ export function registerChannelRoutes(app: AppHono, deps: ChannelRouteDeps) {
     const owner = await getOwnerProfile(c.env, ownerId);
     if (!owner) return c.json({ ok: false, error: "Account not found" }, 404);
 
-    const existingConnection = await getSoulinkConnection(c.env, ownerId);
-    const dispatchToken = existingConnection?.setup_token || crypto.randomUUID();
+    const dispatchToken = crypto.randomUUID();
     const callbackUrl = `${getCoreApiOrigin(c.env, c.req.url)}/api/agent/channels/soulink/dispatch`;
     const response = await fetch(`${config.apiOrigin}/api/me3/assistant-channel/provision`, {
       method: "POST",
@@ -941,6 +940,7 @@ async function upsertActiveSoulinkConnection(
      VALUES (?, ?, 'soulink', 'active', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, NULL, NULL)
      ON CONFLICT(user_id, channel) DO UPDATE SET
        status = 'active',
+       setup_token = excluded.setup_token,
        provider_connection_id = excluded.provider_connection_id,
        provider_user_id = excluded.provider_user_id,
        provider_thread_id = excluded.provider_thread_id,
