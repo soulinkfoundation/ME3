@@ -37,6 +37,7 @@ type StoredMessage = {
   content: string;
   threadId?: string | null;
   created_at?: string;
+  metadata_json?: string | null;
 };
 type StoredAiGatewaySettings = {
   user_id: string;
@@ -558,18 +559,22 @@ function createEnv(): Env & {
               if (sql.includes("UPDATE assistant_messages")) {
                 state.messages = state.messages.map((message) =>
                   message.ownerId === values[0] && message.threadId === values[1]
-                    ? { ...message, content: "" }
+                    ? { ...message, content: "", metadata_json: "{}" }
                     : message,
                 );
               }
 
               if (sql.includes("INSERT INTO assistant_messages")) {
+                const hasThreadId = sql.includes("thread_id");
+                const hasMetadata = sql.includes("metadata_json");
+                const metadataIndex = hasThreadId ? 5 : 4;
                 state.messages.push({
                   id: values[0] as string,
                   ownerId: values[1] as string,
                   role: values[2] as string,
                   content: values[3] as string,
-                  threadId: sql.includes("thread_id") ? (values[4] as string | null) : null,
+                  threadId: hasThreadId ? (values[4] as string | null) : null,
+                  metadata_json: hasMetadata ? (values[metadataIndex] as string) : "{}",
                   created_at: "2026-05-11T10:07:00Z",
                 });
               }
@@ -2284,6 +2289,7 @@ function createEnv(): Env & {
                       id: message.id,
                       role: message.role,
                       content: message.content,
+                      metadata_json: message.metadata_json || "{}",
                       created_at: message.created_at || "2026-05-11T10:07:00Z",
                     })) as T[],
                 };
@@ -5330,9 +5336,57 @@ describe("ME3 Core Worker auth", () => {
         id: "message-2",
         ownerId: "owner",
         role: "assistant",
-        content: "Review the open project tasks.",
+        content: "Done. I set a reminder for tomorrow: follow up with Sam.",
         threadId: "thread-1",
         created_at: "2026-05-11T10:07:00Z",
+        metadata_json: JSON.stringify({
+          actionCards: [
+            {
+              id: "reminder:reminder-1",
+              kind: "reminder.created",
+              capabilityId: "core.reminders.create",
+              title: "Reminder created",
+              summary: "follow up with Sam",
+              status: "complete",
+              statusLabel: "Complete",
+              changed: [
+                { label: "Reminder", value: "follow up with Sam" },
+                { label: "When", value: "1 Jun 2026, 09:00" },
+              ],
+              records: [{ kind: "reminder", id: "reminder-1" }],
+              primaryAction: { label: "Open calendar", href: "/calendar" },
+              secondaryActions: [],
+            },
+          ],
+        }),
+      },
+      {
+        id: "message-3",
+        ownerId: "owner",
+        role: "assistant",
+        content: "Done. I saved that email as a draft in `/email` for your review.",
+        threadId: "thread-1",
+        created_at: "2026-05-11T10:08:00Z",
+        metadata_json: JSON.stringify({
+          actionCards: [
+            {
+              id: "mailbox-draft:draft-1",
+              kind: "mailbox.draft_saved",
+              capabilityId: "core.mailbox.draft",
+              title: "Email draft saved",
+              summary: "Saved to mailbox drafts for review. It has not been sent.",
+              status: "pending_approval",
+              statusLabel: "Needs review",
+              changed: [
+                { label: "To", value: "ada@example.com" },
+                { label: "Subject", value: "Launch notes" },
+              ],
+              records: [{ kind: "mailbox_draft", id: "draft-1" }],
+              primaryAction: { label: "Review draft", href: "/email" },
+              secondaryActions: [],
+            },
+          ],
+        }),
       },
     );
 
@@ -5353,7 +5407,31 @@ describe("ME3 Core Worker auth", () => {
       },
       messages: [
         { id: "message-1", role: "user", text: "What should I do next?" },
-        { id: "message-2", role: "assistant", text: "Review the open project tasks." },
+        {
+          id: "message-2",
+          role: "assistant",
+          text: "Done. I set a reminder for tomorrow: follow up with Sam.",
+          actionCards: [
+            {
+              kind: "reminder.created",
+              title: "Reminder created",
+              records: [{ kind: "reminder", id: "reminder-1" }],
+              primaryAction: { label: "Open calendar", href: "/calendar" },
+            },
+          ],
+        },
+        {
+          id: "message-3",
+          role: "assistant",
+          actionCards: [
+            {
+              kind: "mailbox.draft_saved",
+              title: "Email draft saved",
+              records: [{ kind: "mailbox_draft", id: "draft-1" }],
+              primaryAction: { label: "Review draft", href: "/email" },
+            },
+          ],
+        },
       ],
     });
   });

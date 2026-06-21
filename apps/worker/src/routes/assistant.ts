@@ -10,7 +10,10 @@ import {
   type AiTextGenerationResult,
   type AiTextMessage,
 } from "../ai-providers";
-import { createAgentSandboxTurnRecord } from "../agent-chat";
+import {
+  createAgentSandboxTurnRecord,
+  type AgentChatActionCard,
+} from "../agent-chat";
 import {
   dispatchAgentChannelTurn,
   getActiveSoulinkConnectionForThread,
@@ -103,6 +106,7 @@ type AssistantMessageRow = {
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
+  metadata_json?: string | null;
 };
 type SoulinkDispatchBody = {
   ownerSubject?: unknown;
@@ -455,12 +459,26 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   }
 
   function serializeAssistantMessage(row: AssistantMessageRow) {
+    const actionCards = parseAssistantMessageActionCards(row.metadata_json);
     return {
       id: row.id,
       role: row.role,
       text: row.content,
       createdAt: row.created_at,
+      actionCards: actionCards.length ? actionCards : undefined,
     };
+  }
+
+  function parseAssistantMessageActionCards(metadataJson: string | null | undefined) {
+    if (!metadataJson) return [];
+    try {
+      const parsed = JSON.parse(metadataJson) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+      const cards = (parsed as Record<string, unknown>).actionCards;
+      return Array.isArray(cards) ? (cards as AgentChatActionCard[]) : [];
+    } catch {
+      return [];
+    }
   }
 
   function assistantJobBuilderReplyText(action: AssistantJobBuilderAction) {
@@ -2412,7 +2430,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       .run();
     await c.env.DB.prepare(
       `UPDATE assistant_messages
-       SET content = ''
+       SET content = '', metadata_json = '{}'
        WHERE owner_id = ? AND thread_id = ?`,
     )
       .bind(ownerId, threadId)
@@ -2434,7 +2452,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
 
     const rows = await c.env.DB.prepare(
-      `SELECT id, role, content, created_at
+      `SELECT id, role, content, created_at, metadata_json
        FROM assistant_messages
        WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
        ORDER BY created_at ASC`,
@@ -2460,7 +2478,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (!thread) return c.json({ ok: false, error: "Assistant thread not found" }, 404);
 
     const rows = await c.env.DB.prepare(
-      `SELECT id, role, content, created_at
+      `SELECT id, role, content, created_at, metadata_json
        FROM assistant_messages
        WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
        ORDER BY created_at ASC`,

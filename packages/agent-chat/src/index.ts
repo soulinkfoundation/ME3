@@ -1787,6 +1787,7 @@ export async function dispatchAgentSandboxTurn(
         "assistant",
         toolResponse.replyText,
         input.threadId,
+        assistantMessageMetadataForResponse(toolResponse),
       );
     }
     let response: AgentSandboxDispatchResponse = {
@@ -1863,6 +1864,7 @@ export async function dispatchAgentSandboxTurn(
       "assistant",
       response.replyText,
       input.threadId,
+      assistantMessageMetadataForResponse(response),
     );
   }
   response.threadId = input.threadId ?? null;
@@ -5014,17 +5016,39 @@ async function persistAssistantMessage(
   role: "user" | "assistant",
   content: string,
   threadId?: string | null,
+  metadata?: Record<string, unknown> | null,
 ) {
   if (role === "assistant" && isProviderSetupFallbackMessage(content)) return;
 
   try {
     const normalizedThreadId =
       typeof threadId === "string" && threadId.trim() ? threadId.trim() : null;
+    const metadataJson = metadata && Object.keys(metadata).length > 0
+      ? JSON.stringify(metadata)
+      : null;
     if (normalizedThreadId) {
+      if (metadataJson) {
+        await env.DB.prepare(
+          "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+          .bind(crypto.randomUUID(), ownerId, role, content, normalizedThreadId, metadataJson)
+          .run();
+        return;
+      }
+
       await env.DB.prepare(
         "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
       )
         .bind(crypto.randomUUID(), ownerId, role, content, normalizedThreadId)
+        .run();
+      return;
+    }
+
+    if (metadataJson) {
+      await env.DB.prepare(
+        "INSERT INTO assistant_messages (id, owner_id, role, content, metadata_json) VALUES (?, ?, ?, ?, ?)",
+      )
+        .bind(crypto.randomUUID(), ownerId, role, content, metadataJson)
         .run();
       return;
     }
@@ -5037,6 +5061,12 @@ async function persistAssistantMessage(
   } catch {
     // Conversation persistence is useful context, but chat turns should not fail on audit writes.
   }
+}
+
+function assistantMessageMetadataForResponse(
+  response: Pick<AgentSandboxDispatchResponse, "actionCards">,
+): Record<string, unknown> | null {
+  return response.actionCards?.length ? { actionCards: response.actionCards } : null;
 }
 
 async function touchAssistantThread(

@@ -19,7 +19,12 @@ type FakeDbState = {
   wheelSnapshots: Array<Record<string, unknown>>;
   reminders: Array<Record<string, unknown>>;
   bookings: Array<Record<string, unknown>>;
-  persistedMessages: Array<{ ownerId: string; role: string; content: string }>;
+  persistedMessages: Array<{
+    ownerId: string;
+    role: string;
+    content: string;
+    metadata_json?: string | null;
+  }>;
   failContextLookup?: boolean;
 };
 
@@ -152,10 +157,13 @@ function createEnv(state: Partial<FakeDbState> = {}) {
         },
         async run() {
           if (sql.includes("INSERT INTO assistant_messages")) {
+            const hasThreadId = sql.includes("thread_id");
+            const hasMetadata = sql.includes("metadata_json");
             dbState.persistedMessages.push({
               ownerId: values[1] as string,
               role: values[2] as string,
               content: values[3] as string,
+              metadata_json: hasMetadata ? (values[hasThreadId ? 5 : 4] as string) : null,
             });
           }
           if (sql.includes("INSERT INTO user_reminders")) {
@@ -935,6 +943,19 @@ describe("Core chat native context", () => {
       "user",
       "assistant",
     ]);
+    expect(
+      JSON.parse(
+        env.state.persistedMessages.find((message) => message.role === "assistant")
+          ?.metadata_json || "{}",
+      ),
+    ).toMatchObject({
+      actionCards: [
+        {
+          kind: "reminder.created",
+          records: [{ kind: "reminder", id: env.state.reminders[0].id }],
+        },
+      ],
+    });
   });
 
   it("answers upcoming booking questions through the tool layer", async () => {
@@ -1435,6 +1456,20 @@ describe("Core chat mailbox draft continuations", () => {
         primaryAction: { label: "Review draft", href: "/email" },
       }),
     ]);
+    expect(
+      JSON.parse(
+        [...env.state.persistedMessages]
+          .reverse()
+          .find((message) => message.role === "assistant")?.metadata_json || "{}",
+      ),
+    ).toMatchObject({
+      actionCards: [
+        {
+          kind: "mailbox.draft_saved",
+          records: [{ kind: "mailbox_draft", id: env.state.mailboxMessages[0].id }],
+        },
+      ],
+    });
   });
 });
 

@@ -423,6 +423,7 @@ type AssistantThreadMessage = {
   role: "user" | "assistant";
   text: string;
   createdAt: string;
+  actionCards?: AgentChatActionCard[] | null;
 };
 type AssistantThread = {
   id: string;
@@ -1933,6 +1934,7 @@ async function loadAssistantThreadFromRoute() {
         role: message.role,
         text: message.text,
         createdAt: message.createdAt,
+        actionCards: normalizeAgentActionCards(message.actionCards),
       })),
     );
   } catch (err) {
