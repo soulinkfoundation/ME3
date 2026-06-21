@@ -602,6 +602,7 @@ const scheduleInlineEditing = ref(false);
 const inboxWatchRulesDraft = ref<InboxWatchRuleForm[]>([]);
 const inboxWatchRulesNotice = ref("");
 const assistantDraft = ref("");
+const assistantPlaceholderIndex = ref(0);
 const assistantSending = ref(false);
 const assistantAwaitingResponse = ref(false);
 const assistantError = ref<string | null>(null);
@@ -679,6 +680,7 @@ let voiceRecordingTimer: number | null = null;
 let voiceDiscardRecording = false;
 let assistantAbortController: AbortController | null = null;
 let assistantThreadSearchDebounceId: number | null = null;
+let assistantPlaceholderRotationId: number | null = null;
 
 const defaultDailyBriefingTemplate =
   "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
@@ -740,10 +742,14 @@ const starterPrompts: StarterPrompt[] = [
     icon: "💼",
     prompt: jobBuilderStarterPrompt,
   },
-  { label: "Draft an email", icon: "✉️", prompt: "Draft an email" },
-  { label: "Add a reminder", icon: "⏰", prompt: "Add a reminder" },
   { label: "Review my week", icon: "📅", prompt: "Review my week" },
-  { label: "Update my site", icon: "🌐", prompt: "Update my site" },
+];
+const assistantComposerPlaceholders = [
+  "Remind me to call Sarah tomorrow at 9am",
+  "Draft an email to Sam about...",
+  "Draft an outline for a blog post on...",
+  "Review my week and suggest next steps",
+  "Set up a weekly job to review my projects",
 ];
 const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
@@ -1110,11 +1116,18 @@ const voiceDictationStatusText = computed(() => {
 const voiceRecordingElapsedLabel = computed(() =>
   formatRecordingElapsed(voiceRecordingElapsedSeconds.value),
 );
+const assistantInputPlaceholder = computed(
+  () =>
+    assistantComposerPlaceholders[
+      assistantPlaceholderIndex.value % assistantComposerPlaceholders.length
+    ] || "Message ME3...",
+);
 
 onMounted(() => {
   if (!supportsMediaRecording()) {
     voiceDictationState.value = "unsupported";
   }
+  startAssistantPlaceholderRotation();
   void loadPage();
   void syncAssistantSettingsFromRoute();
   window.addEventListener("keydown", handleWindowKeydown);
@@ -1124,6 +1137,7 @@ onBeforeUnmount(() => {
   stopVoiceDictation({ discard: true });
   clearAssistantAttachments();
   cancelAssistantThreadSearchDebounce();
+  stopAssistantPlaceholderRotation();
   window.removeEventListener("keydown", handleWindowKeydown);
 });
 
@@ -1296,6 +1310,21 @@ function cancelAssistantThreadSearchDebounce() {
   if (assistantThreadSearchDebounceId === null) return;
   window.clearTimeout(assistantThreadSearchDebounceId);
   assistantThreadSearchDebounceId = null;
+}
+
+function startAssistantPlaceholderRotation() {
+  stopAssistantPlaceholderRotation();
+  assistantPlaceholderRotationId = window.setInterval(() => {
+    assistantPlaceholderIndex.value =
+      (assistantPlaceholderIndex.value + 1) %
+      assistantComposerPlaceholders.length;
+  }, 5200);
+}
+
+function stopAssistantPlaceholderRotation() {
+  if (assistantPlaceholderRotationId === null) return;
+  window.clearInterval(assistantPlaceholderRotationId);
+  assistantPlaceholderRotationId = null;
 }
 
 async function archiveAssistantThread(thread: AssistantThread) {
@@ -4726,7 +4755,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               v-model="assistantDraft"
               class="assistant-input"
               rows="1"
-              placeholder="Do anything..."
+              :placeholder="assistantInputPlaceholder"
               :disabled="assistantSending"
               @keydown="onAssistantComposerKeydown"
               @input="autosizeAssistantComposer"
@@ -9031,6 +9060,19 @@ button:disabled {
     --assistant-header-clearance: calc(
       var(--app-shell-mobile-nav-height) + 14px
     );
+
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  .assistant-main,
+  .assistant-console,
+  .assistant-composer {
+    max-width: 100%;
+  }
+
+  .assistant-page :is(input, select, textarea) {
+    font-size: max(16px, 1em);
   }
 
   .assistant-page-tools {
