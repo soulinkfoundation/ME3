@@ -13,19 +13,24 @@ When a user asks about something not covered here, say that this guide does not 
 
 ## Document Structure
 
-Use one top-level section per major feature as this file grows. Good future sections are:
+Use one top-level section per major feature. Do not keep empty placeholder sections.
 
-- Install and Updates
-- Owner Auth
-- AI Providers
-- Sites and Domains
-- Email
-- Calendar and Scheduling
-- Assistant Jobs
-- Plugins and Local Capabilities
-- Data, Security, and Recovery
+## Cloudflare Components
 
-Do not keep empty placeholder sections. Add a section when it can answer a real owner task.
+ME3 Core is a Cloudflare Worker app. The web app is built into Worker assets and managed through the Cloudflare Workers & Pages dashboard; it is not a separate Pages project in this repo.
+
+| Component | ME3 use | Docs |
+| --- | --- | --- |
+| Workers | Main runtime, API, static assets, scheduled/queue/email handlers | [Workers](https://developers.cloudflare.com/workers/) |
+| D1 | Owner data, settings, plugin state, jobs, mailbox metadata | [D1](https://developers.cloudflare.com/d1/) |
+| R2 | Site media, mailbox attachments, generated/static artifacts | [R2](https://developers.cloudflare.com/r2/) |
+| Queues | Assistant job events, booking reminders, social publishing work | [Queues](https://developers.cloudflare.com/queues/) |
+| Custom Domains | Public site host and `me3.<domain>` owner/admin host | [Worker Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) |
+| Email Routing | Incoming mailbox mail routed to the Worker email handler | [Email Routing](https://developers.cloudflare.com/email-routing/get-started/enable-email-routing/) |
+| Email Service | Optional Cloudflare outbound email sender binding | [Email Sending](https://developers.cloudflare.com/email-service/get-started/send-emails/) |
+| Workers AI | Default no-key model provider when the `AI` binding exists | [Workers AI](https://developers.cloudflare.com/workers-ai/) |
+| AI Gateway | Usage, token, and cost visibility for model calls | [AI Gateway](https://developers.cloudflare.com/ai-gateway/) |
+| Pages | Related Cloudflare product; useful context for the dashboard, but not the current deploy target | [Pages](https://developers.cloudflare.com/pages/) |
 
 ## Owner Auth
 
@@ -39,26 +44,23 @@ For password setup or password recovery, generate a setup/recovery password and 
 
 The owner then opens the ME3 login page, enters the setup password as the setup code, and chooses their real account password. The Worker hashes the real account password with PBKDF2-SHA256 and stores the hash in D1 at `owner_profile.password_hash`.
 
-### Auth Concepts
+### Concepts
 
 - `SETUP_PASSWORD` is a setup and recovery secret. It authorizes first owner bootstrap, custom password setup, and password reset.
 - The owner account password is separate from `SETUP_PASSWORD`.
 - The owner account password must be at least 8 characters.
 - The owner account password hash is stored in D1, not in Cloudflare environment variables.
-- `JWT_SECRET` and `TOKEN_ENCRYPTION_KEY` can be environment secrets, but Core can also create install secrets in D1 when they are missing. They are not the password auth setup code.
 - Never commit `SETUP_PASSWORD`, `.dev.vars`, `.env`, or real generated secret values to git.
 
-### Configure Password Auth In Production
+### Configure Password Auth
 
-Preferred path for a manual Cloudflare install:
+Preferred production path:
 
 ```bash
 pnpm init:cloudflare
 ```
 
-That script prepares Cloudflare resources, writes the `SETUP_PASSWORD` Worker Secret, prints the generated setup password once, and tells the owner to save it privately.
-
-Manual path:
+Manual production path:
 
 ```bash
 SETUP_PASSWORD="$(openssl rand -hex 16)"
@@ -67,33 +69,15 @@ printf 'Save this setup password privately: %s\n' "$SETUP_PASSWORD"
 unset SETUP_PASSWORD
 ```
 
-Cloudflare Dashboard path:
+Dashboard production path: Cloudflare Dashboard -> Workers & Pages -> ME3 Worker -> Settings -> Variables and Secrets -> add a `Secret` named `SETUP_PASSWORD`.
 
-1. Go to Cloudflare Dashboard -> Workers & Pages.
-2. Open the ME3 Worker.
-3. Go to Settings -> Variables and Secrets.
-4. Add a new variable with type `Secret`.
-5. Set the name to `SETUP_PASSWORD`.
-6. Set the value to a generated setup password such as the output of `openssl rand -hex 16`.
-7. Deploy or save the Worker settings.
-
-Use a Cloudflare Secret, not a plaintext variable in `wrangler.toml`. Cloudflare makes Worker secrets available on the Worker `env` object, but hides the stored value after creation.
-
-### Configure Password Auth Locally
-
-Use the repo helper:
+Local path:
 
 ```bash
 pnpm setup:dev-vars
 ```
 
-This creates `apps/worker/.dev.vars` with generated local values, including `SETUP_PASSWORD`. The file is ignored by git and must stay local.
-
-If editing manually, put local secrets in `apps/worker/.dev.vars` because the worker dev command runs from `apps/worker`:
-
-```dotenv
-SETUP_PASSWORD=replace-with-a-generated-local-setup-password
-```
+This creates ignored local values in `apps/worker/.dev.vars`.
 
 ### Bootstrap The First Owner
 
@@ -130,19 +114,82 @@ unset SETUP_PASSWORD
 
 Rotating `SETUP_PASSWORD` does not change the owner account password. It only changes the secret that authorizes setup and recovery.
 
-### Troubleshooting Password Auth
+### Troubleshooting
 
 - If `/api/config` or `/health` includes `SETUP_PASSWORD` in `setupRequired`, the Worker cannot see `env.SETUP_PASSWORD`.
-- If the login page says to configure `SETUP_PASSWORD`, add the Worker Secret in Cloudflare or add the local value to `apps/worker/.dev.vars`.
-- If bootstrap fails with `Invalid setup password`, use the exact current `SETUP_PASSWORD` value or rotate it.
-- If login fails after bootstrap, use the owner email and the real account password, not the setup password.
-- If password reset reports `Owner account not found`, use the email stored on the owner profile.
+- If bootstrap fails with `Invalid setup password`, use the exact current setup password or rotate `SETUP_PASSWORD`.
+- If login fails after bootstrap, use the owner email and real account password, not the setup password.
 
-Implementation anchors for agents:
+## Account Setup
 
-- Worker auth routes: `apps/worker/src/app.ts`
-- Worker env type: `apps/worker/src/types.ts`
-- Login UI: `apps/web/src/pages/login.vue`
-- Web auth store: `apps/web/src/stores/auth.ts`
-- Local dev secret helper: `scripts/create-dev-vars.mjs`
-- Cloudflare init helper: `scripts/init-cloudflare.mjs`
+Use Account for owner-facing setup. Keep answers short and point owners back to the UI when it can do the work.
+
+### Custom Domain
+
+1. In Cloudflare, add or transfer the domain if needed.
+2. In Workers & Pages, open the ME3 Worker and add Custom Domains for the root domain and `me3.<domain>`.
+3. In ME3 Account -> Domain & mailbox settings -> Custom domain, save the root domain.
+4. After Cloudflare provisions DNS/certificates, visit `https://me3.<domain>` and sign in again.
+
+### Mailbox And Sending
+
+- Receiving mail requires a custom domain and Cloudflare Email Routing.
+- In Cloudflare Email Routing, onboard the domain, open Routing rules, create an address such as `assistant@example.com`, choose `Send to worker`, and select the ME3 Worker.
+- In ME3 Account -> Mailbox, save the same address. Optional forwarding can send a copy to another inbox.
+- Outbound sending can use Cloudflare Email Service, SMTP, Mailgun, or Postmark. SMTP is the stable generic option; Cloudflare Email Service may require a Workers paid plan.
+- Test real sending from `/email`; drafting is not the same as sending.
+
+### App Connections
+
+- ME3.app: links hosted ME3 sign-in and public `me.json` preference back to this Core install. Disconnect is only available when password auth remains available.
+- Soulink: creates a private Soulink chat between the owner and their ME3 assistant. It requires a live public Core URL; local callback URLs cannot connect.
+- Telegram: create a bot with BotFather, save the bot username and token in Account, sync the webhook, then open the setup link or QR code and tap Start in Telegram.
+
+### AI Models And Gateway
+
+- Account -> AI selects the provider and model route for the ME3 agent.
+- Workers AI uses the Cloudflare `AI` binding and does not need an API key.
+- OpenAI and Anthropic keys can be saved in Account; Core encrypts stored provider secrets and never returns them to the browser.
+- AI Gateway usage needs a Cloudflare account ID and API token. ME3 uses gateway ID `default`; Cloudflare can auto-create it, and Mission Control reads Gateway logs for usage and estimated spend.
+
+## Core Plugins
+
+Core plugins are first-party capability packs returned by `/api/plugins` and managed in Account -> Plugins.
+
+| Plugin | Current status | Purpose |
+| --- | --- | --- |
+| ME3 Agent Chat | Bundled, default on | Full assistant chat workspace, voice transcription route, and sandbox replies. |
+| ME3 Mission Control | Bundled, default on | Projects, tasks, approvals, private memory, sources, activity, and review surfaces. |
+| ME3 Journal | Bundled, optional | Private daily writing, notes, drafts, and longer-form capture. |
+| ME3 Accounts | Bundled, optional | Income/expense ledger, categories, CSV import/export, and Stripe-backed context. |
+| ME3 Calendar | Bundled | Events, reminders, bookings, birthdays, imports, and recurring event expansion. |
+| Local Executor | Bundled, optional setup | Pairs a local runner for approved local tasks with policies, run history, and audit. |
+| ME3 Landing Pages | Bundled but coming soon; activation blocked | Landing-page draft generation and rendering package, not a live owner feature unless runtime state proves otherwise. |
+| ME3 Social Publishing | Bundled/catalog depending runtime; setup required | Social drafts, connected accounts, queueing, approval-first publishing, and audit history. |
+
+Plugin boundaries:
+
+- Core owns install, auth, account, public profile, `me.json`, and shared runtime wiring.
+- Plugins own their domain routes, UI slots, permissions, data, tools, and setup state.
+- Hosted-only billing, quotas, managed OAuth bridges, and ME3 Cloud operations stay outside this Core repo.
+
+## Assistant Jobs
+
+Assistant Jobs live in the Assistant workspace. Use the Jobs modal to add starter jobs, pause/resume them, edit schedules, run them manually, duplicate them, or remove them.
+
+Current starter recipes:
+
+| Recipe | State | Purpose |
+| --- | --- | --- |
+| Weekly Review | Ready | Summarizes Mission Control projects, tasks, approvals, and carry-over choices. |
+| Daily Briefing | Ready | Prepares a morning review of tasks, approvals, due items, and optional owner notification. |
+| Inbox Watch | Needs setup | Watches scoped email and creates review packets; provider adapters are still setup-dependent. |
+| Invoice and Receipt Triage | Needs setup | Extracts receipts/invoices from email and proposes Accounts ledger entries. |
+| Booking Reminder | Needs setup | Uses calendar booking events to prepare context and follow-up tasks. |
+
+Job rules for agents:
+
+- Creating a job draft is review-first; saving a confirmed job is an owner action.
+- Review packets and ledger entries can require owner review before becoming final.
+- If a recipe says `needs_setup`, explain the missing setup rather than claiming it will run.
+- Scheduled jobs use owner timezone settings where available; be explicit about dates and times.
