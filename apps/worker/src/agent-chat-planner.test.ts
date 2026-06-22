@@ -121,6 +121,20 @@ const plannerScenarios: PlannerScenario[] = [
     capabilityId: "core.agent-chat.conversation",
     sideEffectLevel: "none",
   },
+  {
+    name: "direct Mission Control task update becomes a write action",
+    messageText: "Mark task follow up with Sam as done.",
+    kind: "write_action",
+    capabilityId: "core.mission.task.update",
+    sideEffectLevel: "write",
+  },
+  {
+    name: "direct Mission Control task archive becomes a write action",
+    messageText: "Delete task follow up with Sam.",
+    kind: "write_action",
+    capabilityId: "core.mission.task.archive",
+    sideEffectLevel: "write",
+  },
 ];
 
 describe("Core chat tool planner", () => {

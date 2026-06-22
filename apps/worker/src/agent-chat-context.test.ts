@@ -158,6 +158,16 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             return { results: dbState.projects as T[] };
           }
           if (sql.includes("FROM mission_tasks")) {
+            if (sql.includes("LEFT JOIN mission_projects")) {
+              return {
+                results: dbState.tasks.map((task) => ({
+                  ...task,
+                  project_name:
+                    dbState.projects.find((project) => project.id === task.project_id)?.name ||
+                    null,
+                })) as T[],
+              };
+            }
             return { results: dbState.tasks as T[] };
           }
           if (sql.includes("FROM user_calendar_events")) {
@@ -251,6 +261,28 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               updated_at: new Date().toISOString(),
               archived_at: null,
             });
+          }
+          if (sql.includes("UPDATE mission_tasks") && sql.includes("SET project_id = ?")) {
+            const task = dbState.tasks.find(
+              (item) => item.id === values[5] && item.user_id === values[6],
+            );
+            if (task) {
+              task.project_id = values[0];
+              task.column_id = values[1];
+              task.title = values[2];
+              task.status = values[3];
+              task.due_at = values[4];
+              task.updated_at = new Date().toISOString();
+            }
+          }
+          if (sql.includes("UPDATE mission_tasks") && sql.includes("archived_at = datetime")) {
+            const task = dbState.tasks.find(
+              (item) => item.id === values[0] && item.user_id === values[1],
+            );
+            if (task) {
+              task.archived_at = new Date().toISOString();
+              task.updated_at = new Date().toISOString();
+            }
           }
           return { meta: { changes: 1 } };
         },
@@ -1179,7 +1211,9 @@ type GoldenTranscriptScenario = {
       | "core.reminders.list"
       | "core.reminders.create"
       | "core.bookings.lookup"
-      | "core.mission.task.create";
+      | "core.mission.task.create"
+      | "core.mission.task.update"
+      | "core.mission.task.archive";
     toolResultStatus: "not_attempted" | "succeeded" | "failed" | "clarified";
     modelCallStatus: "not_attempted" | "succeeded" | "failed" | "fallback";
     specialist?: string;
@@ -1190,6 +1224,8 @@ type GoldenTranscriptScenario = {
     reminderDelta?: number;
     mailboxDraftDelta?: number;
     missionTaskDelta?: number;
+    missionTaskStatus?: string;
+    missionTaskArchived?: boolean;
     aiCalled?: boolean;
     fallbackReason?: string;
   };
@@ -1410,6 +1446,58 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       reminderDelta: 0,
       mailboxDraftDelta: 0,
       missionTaskDelta: 1,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "direct Mission Control task update moves an existing task",
+    messageText: "Mark task Prepare launch checklist as done.",
+    envState: {
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+      tasks: [taskRow("task-launch", "Prepare launch checklist", "project-launch")],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.mission.task.update",
+      specialist: "core.mission.task.update",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["updated", "Prepare launch checklist"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      missionTaskStatus: "done",
+      aiCalled: false,
+    },
+  },
+  {
+    name: "direct Mission Control task delete archives an existing task",
+    messageText: "Delete task Prepare launch checklist.",
+    envState: {
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+      tasks: [taskRow("task-launch", "Prepare launch checklist", "project-launch")],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.mission.task.archive",
+      specialist: "core.mission.task.archive",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["archived", "Prepare launch checklist"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      missionTaskArchived: true,
       aiCalled: false,
     },
   },
@@ -1827,11 +1915,23 @@ describe("Core chat golden transcript evals", () => {
     expect(env.state.tasks).toHaveLength(
       initialMissionTaskCount + (scenario.expected.missionTaskDelta ?? 0),
     );
-    if (scenario.expected.capabilityId === "core.mission.task.create") {
+    if (scenario.expected.missionTaskStatus) {
+      expect(env.state.tasks.at(-1)?.status).toBe(scenario.expected.missionTaskStatus);
+    }
+    if (scenario.expected.missionTaskArchived) {
+      expect(env.state.tasks.at(-1)?.archived_at).toEqual(expect.any(String));
+    }
+    if (scenario.expected.capabilityId.startsWith("core.mission.task.")) {
+      const expectedKind =
+        scenario.expected.capabilityId === "core.mission.task.create"
+          ? "mission.task_created"
+          : scenario.expected.capabilityId === "core.mission.task.update"
+            ? "mission.task_updated"
+            : "mission.task_archived";
       expect(response.actionCards).toEqual([
         expect.objectContaining({
-          kind: "mission.task_created",
-          capabilityId: "core.mission.task.create",
+          kind: expectedKind,
+          capabilityId: scenario.expected.capabilityId,
           records: [{ kind: "mission_task", id: env.state.tasks.at(-1)?.id }],
           primaryAction: { label: "Open Mission Control", href: "/mission-control" },
         }),
@@ -2104,14 +2204,21 @@ function projectRow(id: string, name: string, slug: string): Record<string, unkn
 function taskRow(id: string, title: string, projectId: string): Record<string, unknown> {
   return {
     id,
+    user_id: "owner",
     project_id: projectId,
+    column_id: `${projectId}:in_progress`,
     title,
     description: null,
     status: "in_progress",
+    priority: 3,
     due_at: "2026-05-20",
     scheduled_for: null,
+    source_kind: "manual",
     source_ref: null,
+    metadata_json: null,
+    created_at: "2026-05-15T12:30:00Z",
     updated_at: "2026-05-15T12:30:00Z",
+    archived_at: null,
   };
 }
 

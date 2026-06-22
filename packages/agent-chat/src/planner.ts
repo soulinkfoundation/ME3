@@ -107,6 +107,22 @@ export function planCoreChatToolTurn(
     });
   }
 
+  if (isCoreChatMissionTaskArchiveRequest(messageText)) {
+    return capabilityDecision("core.mission.task.archive", {
+      kind: "write_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to archive or delete a Mission Control task.",
+    });
+  }
+
+  if (isCoreChatMissionTaskUpdateRequest(messageText)) {
+    return capabilityDecision("core.mission.task.update", {
+      kind: "write_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to update, move, or organize a Mission Control task.",
+    });
+  }
+
   if (isCoreChatMissionTaskCreateRequest(messageText)) {
     return capabilityDecision("core.mission.task.create", {
       kind: "write_action",
@@ -225,6 +241,25 @@ export function isCoreChatBookingLookupRequest(messageText: string): boolean {
 export function isCoreChatMissionTaskCreateRequest(messageText: string): boolean {
   if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
   return /\b(?:add|create|make)\s+(?:a\s+)?(?:mission\s+control\s+)?task\b/i.test(
+    messageText,
+  );
+}
+
+export function isCoreChatMissionTaskUpdateRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  return (
+    /\b(?:mark|move|update|rename|reschedule|organize|organise)\s+(?:the\s+)?(?:mission\s+control\s+)?task\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:mark|move|update|rename|reschedule|organize|organise)\s+["“]?[^"”]+["”]?\s+(?:task\s+)?(?:as|to|for|due|by)\b/i.test(
+      messageText,
+    )
+  );
+}
+
+export function isCoreChatMissionTaskArchiveRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  return /\b(?:delete|archive|remove)\s+(?:the\s+)?(?:mission\s+control\s+)?task\b/i.test(
     messageText,
   );
 }

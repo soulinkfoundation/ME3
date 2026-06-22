@@ -204,6 +204,72 @@ export const CORE_CHAT_CAPABILITIES = [
       sideEffectLevel: "write",
     },
   }),
+  defineCoreChatCapability({
+    id: "core.mission.task.update",
+    owner: "core",
+    pluginId: "me3.mission-control",
+    ownerFacingLabel: "Update Mission Control task",
+    summary: "Update, move, rename, or reschedule a Mission Control task.",
+    category: "mission_control",
+    handler: {
+      surface: "chat",
+      route: "core.mission.task.update",
+    },
+    sideEffect: "write_internal_active",
+    approvalMode: "none",
+    requiresSetup: ["mission-control"],
+    inputSchema: {
+      type: "object",
+      required: ["taskId"],
+      properties: {
+        taskId: "Mission Control task ID.",
+        title: "Optional replacement task title.",
+        projectId: "Optional destination project ID.",
+        status: "Optional task status.",
+        dueAt: "Optional YYYY-MM-DD due date.",
+      },
+    },
+    auditEventKind: "mission_task_updated",
+    examples: {
+      positive: ["Mark task follow up with Sam as done."],
+      negative: ["How should I organize my Mission Control tasks?"],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.mission.task.archive",
+    owner: "core",
+    pluginId: "me3.mission-control",
+    ownerFacingLabel: "Archive Mission Control task",
+    summary: "Archive a Mission Control task from a clear owner request.",
+    category: "mission_control",
+    handler: {
+      surface: "chat",
+      route: "core.mission.task.archive",
+    },
+    sideEffect: "write_internal_active",
+    approvalMode: "none",
+    requiresSetup: ["mission-control"],
+    inputSchema: {
+      type: "object",
+      required: ["taskId"],
+      properties: {
+        taskId: "Mission Control task ID.",
+      },
+    },
+    auditEventKind: "mission_task_archived",
+    examples: {
+      positive: ["Delete task follow up with Sam."],
+      negative: ["Can you explain deleted Mission Control tasks?"],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
 ] as const;
 
 export type CoreChatCapabilityId = (typeof CORE_CHAT_CAPABILITIES)[number]["id"];

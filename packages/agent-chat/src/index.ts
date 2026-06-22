@@ -38,7 +38,9 @@ export {
   isCoreChatCapabilityExplorationRequest,
   isCoreChatMailboxDraftRecipientContinuation,
   isCoreChatMailboxDraftSaveRequest,
+  isCoreChatMissionTaskArchiveRequest,
   isCoreChatMissionTaskCreateRequest,
+  isCoreChatMissionTaskUpdateRequest,
   isCoreChatReminderCreateRequest,
   isCoreChatReminderListRequest,
   planCoreChatToolTurn,
@@ -156,7 +158,12 @@ export type AgentChatActionCardRecord = {
 
 export type AgentChatActionCard = {
   id: string;
-  kind: "mailbox.draft_saved" | "reminder.created" | "mission.task_created";
+  kind:
+    | "mailbox.draft_saved"
+    | "reminder.created"
+    | "mission.task_created"
+    | "mission.task_updated"
+    | "mission.task_archived";
   capabilityId: string;
   title: string;
   summary: string | null;
@@ -2151,6 +2158,56 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
+  if (plannerDecision.capabilityId === "core.mission.task.update") {
+    const taskPlan = await parseMissionTaskUpdateChatRequest(env, input.userId, messageText, owner);
+    if ("error" in taskPlan) {
+      return toolResponse(input.turnId, "core.mission.task.update", taskPlan.error, {
+        fallbackReason: "Mission task update details required",
+      });
+    }
+
+    const task = await updateAgentMissionTask(env, input.userId, taskPlan.input);
+    if ("error" in task) {
+      return toolResponse(input.turnId, "core.mission.task.update", task.error, {
+        fallbackReason: "Mission task could not be updated",
+      });
+    }
+
+    return toolResponse(
+      input.turnId,
+      "core.mission.task.update",
+      `Done. I updated "${task.title}" in Mission Control.`,
+      {
+        actionCards: [buildMissionTaskActionCard(task, "updated")],
+      },
+    );
+  }
+
+  if (plannerDecision.capabilityId === "core.mission.task.archive") {
+    const taskPlan = await parseMissionTaskArchiveChatRequest(env, input.userId, messageText);
+    if ("error" in taskPlan) {
+      return toolResponse(input.turnId, "core.mission.task.archive", taskPlan.error, {
+        fallbackReason: "Mission task archive details required",
+      });
+    }
+
+    const task = await archiveAgentMissionTask(env, input.userId, taskPlan.input);
+    if ("error" in task) {
+      return toolResponse(input.turnId, "core.mission.task.archive", task.error, {
+        fallbackReason: "Mission task could not be archived",
+      });
+    }
+
+    return toolResponse(
+      input.turnId,
+      "core.mission.task.archive",
+      `Done. I archived "${task.title}" in Mission Control.`,
+      {
+        actionCards: [buildMissionTaskActionCard(task, "archived")],
+      },
+    );
+  }
+
   if (plannerDecision.capabilityId === "core.bookings.lookup") {
     const bookings = await listUpcomingBookings(env, input.userId);
     const replyText = bookings.length
@@ -2253,11 +2310,35 @@ function buildReminderCreatedActionCard(reminder: AgentReminder): AgentChatActio
 }
 
 function buildMissionTaskCreatedActionCard(task: AgentMissionTask): AgentChatActionCard {
+  return buildMissionTaskActionCard(task, "created");
+}
+
+function buildMissionTaskActionCard(
+  task: AgentMissionTask,
+  action: "created" | "updated" | "archived",
+): AgentChatActionCard {
+  const title =
+    action === "created"
+      ? "Mission Control task created"
+      : action === "updated"
+        ? "Mission Control task updated"
+        : "Mission Control task archived";
+  const capabilityId =
+    action === "created"
+      ? "core.mission.task.create"
+      : action === "updated"
+        ? "core.mission.task.update"
+        : "core.mission.task.archive";
   return {
     id: `mission-task:${task.id}`,
-    kind: "mission.task_created",
-    capabilityId: "core.mission.task.create",
-    title: "Mission Control task created",
+    kind:
+      action === "created"
+        ? "mission.task_created"
+        : action === "updated"
+          ? "mission.task_updated"
+          : "mission.task_archived",
+    capabilityId,
+    title,
     summary: task.title,
     status: "complete",
     statusLabel: "Complete",
@@ -2265,7 +2346,7 @@ function buildMissionTaskCreatedActionCard(task: AgentMissionTask): AgentChatAct
       { label: "Task", value: task.title },
       { label: "Project", value: task.projectName },
       ...(task.dueAt ? [{ label: "Due", value: task.dueAt }] : []),
-      { label: "Status", value: task.status },
+      { label: "Status", value: action === "archived" ? "archived" : task.status },
     ],
     records: [{ kind: "mission_task", id: task.id }],
     primaryAction: { label: "Open Mission Control", href: "/mission-control" },
@@ -2352,6 +2433,182 @@ async function createAgentMissionTask(
   };
 }
 
+async function parseMissionTaskUpdateChatRequest(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageText: string,
+  owner: OwnerProfileRow | null,
+): Promise<
+  | {
+      input: {
+        taskId: string;
+        title: string;
+        projectId: string;
+        projectName: string;
+        status: string;
+        dueAt: string | null;
+      };
+    }
+  | { error: string }
+> {
+  const tasks = await loadAgentMissionTasks(env, userId);
+  const projects = await loadAgentMissionProjects(env, userId);
+  const parsed = parseMissionTaskUpdateText(messageText, owner?.timezone || "UTC");
+  if (!parsed.targetTitle) {
+    return { error: "Please include the task title to update." };
+  }
+
+  const task = findAgentMissionTask(tasks, parsed.targetTitle);
+  if ("error" in task) return task;
+
+  const projectName = parsed.projectName;
+  const project = projectName ? findAgentMissionProject(projects, projectName) : null;
+  if (projectName && !project) {
+    return { error: `I could not find a Mission Control project called "${projectName}".` };
+  }
+
+  const status = parsed.status || task.status || "backlog";
+  return {
+    input: {
+      taskId: task.id,
+      title: parsed.title || task.title,
+      projectId: project?.id || task.projectId,
+      projectName: project?.name || task.projectName,
+      status,
+      dueAt: parsed.dueAt === undefined ? task.dueAt : parsed.dueAt,
+    },
+  };
+}
+
+async function parseMissionTaskArchiveChatRequest(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageText: string,
+): Promise<
+  | { input: { taskId: string; title: string; projectId: string; projectName: string; dueAt: string | null; status: string } }
+  | { error: string }
+> {
+  const targetTitle = normalizeNullableText(
+    messageText
+      .replace(/^(?:please\s+)?/i, "")
+      .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
+      .replace(/^(?:delete|archive|remove)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s*/i, "")
+      .replace(/[.?!]+$/g, ""),
+  );
+  if (!targetTitle) return { error: "Please include the task title to archive." };
+  const task = findAgentMissionTask(await loadAgentMissionTasks(env, userId), targetTitle);
+  if ("error" in task) return task;
+  return {
+    input: {
+      taskId: task.id,
+      title: task.title,
+      projectId: task.projectId,
+      projectName: task.projectName,
+      dueAt: task.dueAt,
+      status: task.status,
+    },
+  };
+}
+
+async function updateAgentMissionTask(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  input: {
+    taskId: string;
+    title: string;
+    projectId: string;
+    projectName: string;
+    status: string;
+    dueAt: string | null;
+  },
+): Promise<AgentMissionTask | { error: string }> {
+  const columnId = `${input.projectId}:${input.status}`;
+
+  try {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO mission_project_columns
+         (id, user_id, project_id, name, status, position)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        columnId,
+        userId,
+        input.projectId,
+        missionTaskStatusLabel(input.status),
+        input.status,
+        missionTaskStatusPosition(input.status),
+      )
+      .run()
+      .catch(() => null);
+
+    await env.DB.prepare(
+      `UPDATE mission_tasks
+       SET project_id = ?, column_id = ?, title = ?, status = ?, due_at = ?,
+           updated_at = datetime('now')
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(
+        input.projectId,
+        columnId,
+        input.title,
+        input.status,
+        input.dueAt,
+        input.taskId,
+        userId,
+      )
+      .run();
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "Mission task could not be updated.",
+    };
+  }
+
+  return {
+    id: input.taskId,
+    title: input.title,
+    projectId: input.projectId,
+    projectName: input.projectName,
+    dueAt: input.dueAt,
+    status: input.status,
+  };
+}
+
+async function archiveAgentMissionTask(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  input: {
+    taskId: string;
+    title: string;
+    projectId: string;
+    projectName: string;
+    dueAt: string | null;
+    status: string;
+  },
+): Promise<AgentMissionTask | { error: string }> {
+  try {
+    await env.DB.prepare(
+      `UPDATE mission_tasks
+       SET archived_at = datetime('now'), updated_at = datetime('now')
+       WHERE id = ? AND user_id = ?`,
+    )
+      .bind(input.taskId, userId)
+      .run();
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "Mission task could not be archived.",
+    };
+  }
+
+  return {
+    id: input.taskId,
+    title: input.title,
+    projectId: input.projectId,
+    projectName: input.projectName,
+    dueAt: input.dueAt,
+    status: input.status,
+  };
+}
+
 async function loadAgentMissionProjects(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
@@ -2367,6 +2624,63 @@ async function loadAgentMissionProjects(
   return rows.results || [];
 }
 
+async function loadAgentMissionTasks(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+): Promise<AgentMissionTask[]> {
+  const rows = await env.DB.prepare(
+    `SELECT t.id, t.title, t.project_id, t.status, t.due_at, t.scheduled_for,
+            p.name AS project_name
+     FROM mission_tasks t
+     LEFT JOIN mission_projects p
+       ON p.id = t.project_id AND p.user_id = t.user_id
+     WHERE t.user_id = ? AND t.archived_at IS NULL
+     ORDER BY t.updated_at DESC, t.id ASC
+     LIMIT 100`,
+  )
+    .bind(userId)
+    .all<{
+      id: string;
+      title: string;
+      project_id: string | null;
+      status: string;
+      due_at: string | null;
+      scheduled_for: string | null;
+      project_name: string | null;
+    }>();
+
+  return (rows.results || []).flatMap((row) => {
+    if (!row.project_id) return [];
+    return [
+      {
+        id: row.id,
+        title: row.title,
+        projectId: row.project_id,
+        projectName: row.project_name || "Mission Control",
+        dueAt: row.due_at || row.scheduled_for || null,
+        status: row.status,
+      },
+    ];
+  });
+}
+
+function findAgentMissionTask(
+  tasks: AgentMissionTask[],
+  title: string,
+): AgentMissionTask | { error: string } {
+  const normalized = normalizeMissionTaskText(title);
+  const exact = tasks.filter((task) => normalizeMissionTaskText(task.title) === normalized);
+  if (exact.length === 1) return exact[0];
+
+  const partial = tasks.filter((task) => normalizeMissionTaskText(task.title).includes(normalized));
+  const matches = exact.length ? exact : partial;
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    return { error: `I found multiple Mission Control tasks matching "${title}". Please use a more specific title.` };
+  }
+  return { error: `I could not find a Mission Control task matching "${title}".` };
+}
+
 function findAgentMissionProject(
   projects: Array<{ id: string; name: string; slug: string }>,
   name: string,
@@ -2379,11 +2693,89 @@ function findAgentMissionProject(
   );
 }
 
+function parseMissionTaskUpdateText(
+  messageText: string,
+  timezone: string,
+): {
+  targetTitle: string | null;
+  title: string | null;
+  projectName: string | null;
+  status: string | null;
+  dueAt: string | null | undefined;
+} {
+  const rename = messageText.match(
+    /^\s*(?:please\s+)?(?:rename|update)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?\s+to\s+["“]?(.+?)["”]?[.?!]*$/i,
+  );
+  if (rename) {
+    return {
+      targetTitle: normalizeNullableText(rename[1]),
+      title: normalizeNullableText(rename[2]),
+      projectName: null,
+      status: null,
+      dueAt: undefined,
+    };
+  }
+
+  const projectName = extractMissionTaskProjectName(messageText);
+  const status = parseMissionTaskStatus(messageText);
+  const hasDue = /\b(?:due|by|today|tomorrow|20\d{2}-\d{2}-\d{2})\b/i.test(messageText);
+  const dueAt = hasDue
+    ? extractMissionTaskDueDate(messageText, timezone)
+    : undefined;
+  let target = messageText
+    .replace(/^(?:please\s+)?/i, "")
+    .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
+    .replace(/^(?:mark|move|update|reschedule|organize|organise)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s*/i, "")
+    .replace(/\b(?:as|to)\s+(?:done|complete|completed|backlog|todo|to do|doing|in progress|review)\b/gi, "")
+    .replace(/\b(?:due|by|to)\s+(?:today|tomorrow|20\d{2}-\d{2}-\d{2})\b/gi, "")
+    .replace(/\b(?:today|tomorrow|20\d{2}-\d{2}-\d{2})\b/gi, "");
+
+  if (projectName) {
+    target = target.replace(
+      new RegExp(
+        `\\b(?:to|in|under|for)\\s+(?:the\\s+)?(?:mission\\s+control\\s+)?project\\s+["“]?${escapeRegExp(projectName)}["”]?`,
+        "i",
+      ),
+      "",
+    );
+  }
+
+  return {
+    targetTitle: normalizeNullableText(target.replace(/[.?!]+$/g, "")),
+    title: null,
+    projectName,
+    status,
+    dueAt,
+  };
+}
+
 function extractMissionTaskProjectName(messageText: string): string | null {
   const match = messageText.match(
     /\b(?:to|in|under|for)\s+(?:the\s+)?(?:mission\s+control\s+)?project\s+["“]?([^"”?.]+?)["”]?(?:\s+(?:to|due|by|today|tomorrow)\b|[.?!]*$)/i,
   );
   return normalizeNullableText(match?.[1]);
+}
+
+function parseMissionTaskStatus(messageText: string): string | null {
+  if (/\b(?:done|complete|completed)\b/i.test(messageText)) return "done";
+  if (/\b(?:doing|in progress)\b/i.test(messageText)) return "in_progress";
+  if (/\breview\b/i.test(messageText)) return "review";
+  if (/\b(?:backlog|todo|to do)\b/i.test(messageText)) return "backlog";
+  return null;
+}
+
+function missionTaskStatusLabel(status: string): string {
+  if (status === "in_progress") return "Doing";
+  if (status === "review") return "Review";
+  if (status === "done") return "Done";
+  return "Backlog";
+}
+
+function missionTaskStatusPosition(status: string): number {
+  if (status === "in_progress") return 1;
+  if (status === "review") return 2;
+  if (status === "done") return 3;
+  return 0;
 }
 
 function extractMissionTaskTitle(
