@@ -815,16 +815,6 @@ function toggleTaskList() {
   editor.value?.chain().focus().toggleTaskList().run();
 }
 
-function sinkListItem() {
-  const itemType = editor.value?.isActive("taskItem") ? "taskItem" : "listItem";
-  editor.value?.chain().focus().sinkListItem(itemType).run();
-}
-
-function liftListItem() {
-  const itemType = editor.value?.isActive("taskItem") ? "taskItem" : "listItem";
-  editor.value?.chain().focus().liftListItem(itemType).run();
-}
-
 function syncActiveImages() {
   const ids = getActiveImageIds(editor.value);
   for (const id of lastActiveImageIds.value) {
@@ -1193,25 +1183,7 @@ defineExpose({
         title="Task list"
         aria-label="Task list"
       >
-        <UiIcon name="ListTodo" :size="16" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        class="toolbar-btn"
-        @click="liftListItem"
-        title="Decrease list indent"
-        aria-label="Decrease list indent"
-      >
-        <UiIcon name="IndentDecrease" :size="16" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        class="toolbar-btn"
-        @click="sinkListItem"
-        title="Increase list indent"
-        aria-label="Increase list indent"
-      >
-        <UiIcon name="IndentIncrease" :size="16" aria-hidden="true" />
+        <UiIcon name="CircleCheckBig" :size="16" aria-hidden="true" />
       </button>
       <span class="toolbar-divider"></span>
       <button
