@@ -1936,12 +1936,16 @@ async function parseCalendarEventBody(c: AppContext): Promise<
   }
 
   const timezone = normalizeCalendarTimeZone(body?.timezone) || "UTC";
+  const recurrenceRuleInput =
+    typeof body?.recurrenceRule === "string"
+      ? body.recurrenceRule.trim().toLowerCase()
+      : body?.recurrenceRule;
   const recurrenceRule = normalizeEventRecurrenceRule(
     body?.recurrenceRule,
     kind,
     startDate,
   );
-  if (body?.recurrenceRule && !recurrenceRule) {
+  if (recurrenceRuleInput && recurrenceRuleInput !== "none" && !recurrenceRule) {
     return { error: "Invalid recurrence value" };
   }
 

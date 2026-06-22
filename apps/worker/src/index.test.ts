@@ -1582,18 +1582,19 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("INSERT INTO user_calendar_events")) {
+                const locationIsInlineNull = sql.includes("NULL");
                 state.userCalendarEvents.push({
                   id: values[0] as string,
                   user_id: values[1] as string,
                   title: values[2] as string,
                   notes: values[3] as string | null,
-                  location: sql.includes("NULL") ? null : (values[4] as string | null),
-                  starts_at: sql.includes("NULL") ? (values[4] as string) : (values[5] as string),
-                  ends_at: sql.includes("NULL") ? (values[5] as string) : (values[6] as string),
-                  timezone: sql.includes("NULL") ? (values[6] as string | null) : (values[7] as string | null),
-                  all_day: 0,
-                  kind: "event",
-                  recurrence_rule: null,
+                  location: locationIsInlineNull ? null : (values[4] as string | null),
+                  starts_at: locationIsInlineNull ? (values[4] as string) : (values[5] as string),
+                  ends_at: locationIsInlineNull ? (values[5] as string) : (values[6] as string),
+                  timezone: locationIsInlineNull ? (values[6] as string | null) : (values[7] as string | null),
+                  all_day: locationIsInlineNull ? 0 : (values[8] as number),
+                  kind: locationIsInlineNull ? "event" : (values[9] as DbUserCalendarEvent["kind"]),
+                  recurrence_rule: locationIsInlineNull ? null : (values[10] as string | null),
                   created_at: "2026-06-05T12:25:00Z",
                 });
               }
@@ -6184,6 +6185,50 @@ describe("ME3 Core Worker auth", () => {
       user_id: "owner",
       title: "Follow up with Sam",
       recurrence_rule: "weekly:wed",
+    });
+  });
+
+  it("creates calendar events when the web form submits no recurrence", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/calendar/events", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          title: "Lads tonight",
+          startDate: "2026-06-22",
+          startTime: "18:00",
+          endDate: "2026-06-23",
+          endTime: "18:00",
+          timezone: "Europe/Dublin",
+          allDay: false,
+          recurrenceRule: "none",
+        }),
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      event: {
+        title: "Lads tonight",
+        timezone: "Europe/Dublin",
+        allDay: false,
+        recurrenceRule: null,
+      },
+    });
+    expect(env.userCalendarEvents).toHaveLength(1);
+    expect(env.userCalendarEvents[0]).toMatchObject({
+      user_id: "owner",
+      title: "Lads tonight",
+      recurrence_rule: null,
     });
   });
 
