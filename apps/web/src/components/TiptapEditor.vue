@@ -1271,25 +1271,27 @@ defineExpose({
       >
         <UiIcon name="Images" :size="16" aria-hidden="true" />
       </button>
-      <span class="toolbar-divider"></span>
-      <button
-        type="button"
-        class="toolbar-btn"
-        :class="{ active: editor?.isActive('faqBlock') }"
-        @click="insertFaqBlock"
-        title="Insert FAQ accordion"
-      >
-        <UiIcon name="HelpCircle" :size="16" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        class="toolbar-btn"
-        :class="{ active: editor?.isActive('carouselBlock') }"
-        @click="insertCarouselBlock"
-        title="Insert card carousel"
-      >
-        <UiIcon name="LayoutGrid" :size="16" aria-hidden="true" />
-      </button>
+      <template v-if="variant !== 'workspace'">
+        <span class="toolbar-divider"></span>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :class="{ active: editor?.isActive('faqBlock') }"
+          @click="insertFaqBlock"
+          title="Insert FAQ accordion"
+        >
+          <UiIcon name="HelpCircle" :size="16" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          :class="{ active: editor?.isActive('carouselBlock') }"
+          @click="insertCarouselBlock"
+          title="Insert card carousel"
+        >
+          <UiIcon name="LayoutGrid" :size="16" aria-hidden="true" />
+        </button>
+      </template>
     </div>
 
     <div v-if="showTitleField" class="editor-title-field">
@@ -1517,40 +1519,55 @@ defineExpose({
   margin: 0;
 }
 
-.editor-content-wrapper :deep(.ProseMirror ul[data-type="taskList"]) {
+.editor-content-wrapper :deep(.ProseMirror ul[data-type="taskList"]),
+.editor-content-wrapper :deep(.ProseMirror ul.tiptap-task-list) {
   list-style: none;
   padding-left: 0;
 }
 
 .editor-content-wrapper
-  :deep(.ProseMirror ul[data-type="taskList"] ul[data-type="taskList"]) {
+  :deep(.ProseMirror ul[data-type="taskList"] ul[data-type="taskList"]),
+.editor-content-wrapper
+  :deep(.ProseMirror ul.tiptap-task-list ul.tiptap-task-list) {
   margin: 0.25em 0 0.25em 1.5em;
 }
 
-.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"]) {
+.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"]),
+.editor-content-wrapper :deep(.ProseMirror li.tiptap-task-item) {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   padding-left: 0;
 }
 
-.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"] > label) {
+.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"] > label),
+.editor-content-wrapper :deep(.ProseMirror li.tiptap-task-item > label) {
   flex: 0 0 auto;
   margin-top: 0.15em;
   user-select: none;
 }
 
-.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"] > div) {
+.editor-content-wrapper :deep(.ProseMirror li[data-type="taskItem"] > div),
+.editor-content-wrapper :deep(.ProseMirror li.tiptap-task-item > div) {
   flex: 1 1 auto;
   min-width: 0;
 }
 
 .editor-content-wrapper
-  :deep(.ProseMirror li[data-type="taskItem"] input[type="checkbox"]) {
+  :deep(.ProseMirror li[data-type="taskItem"] input[type="checkbox"]),
+.editor-content-wrapper
+  :deep(.ProseMirror li.tiptap-task-item input[type="checkbox"]) {
   width: 16px;
   height: 16px;
   accent-color: var(--ui-accent, var(--color-primary, #007bff));
   cursor: pointer;
+}
+
+.editor-content-wrapper :deep(.ProseMirror blockquote) {
+  margin: 1em 0;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--ui-border-strong, var(--color-border, #ddd));
+  color: var(--ui-text-muted, var(--color-text-muted, #5d6368));
 }
 
 .editor-content-wrapper :deep(.ProseMirror) img {
@@ -1763,7 +1780,11 @@ defineExpose({
     overflow-x: auto;
     row-gap: 0;
     -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
+    scrollbar-width: none;
+  }
+
+  .tiptap-editor--workspace .editor-toolbar::-webkit-scrollbar {
+    display: none;
   }
 
   .tiptap-editor--workspace .toolbar-btn,

@@ -236,6 +236,20 @@ describe("TiptapEditor", () => {
     expect(wrapper.find('[title="Embed YouTube video"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert image"]').exists()).toBe(true);
     expect(wrapper.find('[title="Insert gallery"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Insert FAQ accordion"]').exists()).toBe(true);
+    expect(wrapper.find('[title="Insert card carousel"]').exists()).toBe(true);
+  });
+
+  it("should hide site-builder toolbar blocks in workspace variant", () => {
+    const wrapper = mount(TiptapEditor, {
+      props: {
+        modelValue: "",
+        variant: "workspace",
+      },
+    });
+
+    expect(wrapper.find('[title="Insert FAQ accordion"]').exists()).toBe(false);
+    expect(wrapper.find('[title="Insert card carousel"]').exists()).toBe(false);
   });
 
   it("should configure links to open in a new tab", () => {
