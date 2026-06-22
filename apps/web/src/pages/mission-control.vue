@@ -9,6 +9,7 @@ import PageLoading from "../components/PageLoading.vue";
 import {
   activeProjectTaskStatuses,
   missionTasksUrl,
+  projectBoardStatusesForProject,
   projectBoardStatuses,
 } from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
@@ -143,6 +144,7 @@ type MissionTasksResponse = {
 type ProjectDashboardSummary = {
   id: string;
   label: string;
+  project: MissionProject | null;
   total: number;
   counts: Record<ProjectBoardStatus, number>;
 };
@@ -334,15 +336,17 @@ const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
   const summaries = activeProjects.map((project) => ({
     id: project.id,
     label: project.name,
+    project,
     total: 0,
     counts: createCounts(),
-  }));
+  })) satisfies ProjectDashboardSummary[];
   const summaryById = new Map(
     summaries.map((summary) => [summary.id, summary]),
   );
   const personalSummary: ProjectDashboardSummary = {
     id: "personal",
     label: "Personal",
+    project: null,
     total: 0,
     counts: createCounts(),
   };
@@ -358,7 +362,9 @@ const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
     summary.counts[status] += 1;
   }
 
-  const next = summaries.filter((summary) => summary.total > 0);
+  const next: ProjectDashboardSummary[] = summaries.filter(
+    (summary) => summary.total > 0,
+  );
   if (personalSummary.total > 0) next.push(personalSummary);
   return next
     .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
@@ -434,7 +440,9 @@ function projectStatusCountLabel(
 ): string {
   const count = summary.counts[status];
   const label =
-    projectBoardStatuses.find((item) => item.id === status)?.label || status;
+    projectBoardStatusesForProject(summary.project).find(
+      (item) => item.id === status,
+    )?.label || status;
   return `${label} ${count}`;
 }
 
