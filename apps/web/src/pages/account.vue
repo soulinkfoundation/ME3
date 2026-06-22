@@ -369,21 +369,6 @@ const customDomainSite = computed(() =>
   sites.sites.find((site) => site.username === customDomainSiteUsername.value),
 );
 
-const customDomainStatusLabel = computed(() => {
-  const status = customDomainSite.value?.custom_domain_status;
-  if (status === "active") return "Active";
-  if (status === "pending") return "Pending";
-  if (status === "failed") return "Failed";
-  return "Not configured";
-});
-
-const customDomainStatusClass = computed(() => {
-  const status = customDomainSite.value?.custom_domain_status;
-  if (status === "active") return "active";
-  if (status === "failed") return "failed";
-  return "pending_setup";
-});
-
 const timezoneDisplay = computed(() => {
   const value = timezoneInput.value || auth.user?.timezone || "";
   if (!value || !isValidTimeZone(value)) return "UTC";
@@ -397,19 +382,6 @@ const saveDisabled = computed(
     !isValidTimeZone(timezoneInput.value) ||
     timezoneInput.value === savedTimezoneInput.value,
 );
-
-const mailboxStatusLabel = computed(() => {
-  if (!mailbox.value) return "Not configured";
-
-  switch (mailbox.value.status) {
-    case "active":
-      return "Active";
-    case "paused":
-      return "Paused";
-    default:
-      return "Needs activation";
-  }
-});
 
 const mailboxAliasNormalized = computed(() =>
   normalizeMailboxAlias(mailboxAliasInput.value),
@@ -548,22 +520,6 @@ const telegramStatusClass = computed(() => {
   return panel.connection.status;
 });
 
-const pluginSummaryLabel = computed(() => {
-  if (pluginsLoading.value) return "Loading";
-  const activeCount = plugins.value.filter((plugin) => plugin.enabled).length;
-  return `${activeCount} active`;
-});
-
-const pluginSummaryStatusClass = computed(() => {
-  if (plugins.value.some((plugin) => plugin.status === "setup_required")) {
-    return "setup_required";
-  }
-  if (plugins.value.some((plugin) => plugin.status === "installed")) {
-    return "active";
-  }
-  return "available";
-});
-
 const visibleAccountPlugins = computed(() =>
   plugins.value.filter((plugin) => !isPluginComingSoon(plugin)),
 );
@@ -652,25 +608,6 @@ const selectedProviderNeedsKey = computed(
     !selectedAgentProvider.value?.configured,
 );
 
-const aiAgentModelConfigured = computed(() => {
-  const provider = selectedAgentProvider.value;
-  return Boolean(
-    provider?.configured && aiDefaultRouteInput.value.model.trim(),
-  );
-});
-
-const aiSettingsSummaryLabel = computed(() => {
-  if (aiSettingsLoading.value) return "Loading";
-  if (aiAgentModelConfigured.value) {
-    return "Agent model ready";
-  }
-  return "Setup required";
-});
-
-const aiSettingsSummaryStatusClass = computed(() =>
-  aiAgentModelConfigured.value ? "active" : "setup_required",
-);
-
 const aiProviderKeyInputCount = computed(
   () =>
     Object.values(aiProviderKeyInputs.value).filter((value) => value.trim())
@@ -738,16 +675,6 @@ const emailProviderApiTokenCount = computed(
     Object.values(emailProviderInputs.value).filter((value) =>
       value.apiToken.trim(),
     ).length,
-);
-
-const paymentsStatusLabel = computed(() => {
-  if (commerceLoading.value) return "Loading";
-  if (commerceSettings.value?.stripe.configured) return "Ready";
-  return "Setup required";
-});
-
-const paymentsStatusClass = computed(() =>
-  commerceSettings.value?.stripe.configured ? "active" : "setup_required",
 );
 
 const commerceSaveDisabled = computed(
@@ -1796,16 +1723,6 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Domain &amp; mailbox settings</h2>
-              <template v-if="mailboxAvailable">
-                <span class="accordion-status-badges">
-                  <StatusBadge :tone="customDomainStatusClass">
-                    {{ customDomainStatusLabel }}
-                  </StatusBadge>
-                  <StatusBadge :tone="mailbox?.status || 'pending_setup'">
-                    {{ mailboxStatusLabel }}
-                  </StatusBadge>
-                </span>
-              </template>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -2125,9 +2042,6 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Plugins</h2>
-              <StatusBadge :tone="pluginSummaryStatusClass">
-                {{ pluginSummaryLabel }}
-              </StatusBadge>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -2174,7 +2088,7 @@ onMounted(async () => {
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>App Connections</h2>
               <span class="accordion-header-hint">
-                Connect ME3.app, Soulink, and Telegram
+                Connect ME£ to other apps
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -2384,11 +2298,6 @@ onMounted(async () => {
               <h2>AI</h2>
               <span class="accordion-header-hint">
                 Model and gateway settings
-              </span>
-              <span class="accordion-status-badges">
-                <StatusBadge :tone="aiSettingsSummaryStatusClass">
-                  {{ aiSettingsSummaryLabel }}
-                </StatusBadge>
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -2604,11 +2513,6 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Payments</h2>
-              <span class="accordion-status-badges">
-                <StatusBadge :tone="paymentsStatusClass">
-                  {{ paymentsStatusLabel }}
-                </StatusBadge>
-              </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
