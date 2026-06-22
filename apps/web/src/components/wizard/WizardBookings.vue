@@ -11,21 +11,28 @@ import {
   type WizardClassOffer,
   type WizardRetreatOffer,
 } from "../../stores/wizard";
+import { useSitesStore } from "../../stores/sites";
+import { useAuthStore } from "../../stores/auth";
 import BookingOfferDescriptionEditor from "./BookingOfferDescriptionEditor.vue";
 import StripePaymentSetupCallout from "./StripePaymentSetupCallout.vue";
 import BookingAvailabilityEditor, {
   type BookingAvailability,
 } from "../booking/BookingAvailabilityEditor.vue";
 import UiIcon from "../UiIcon.vue";
+import { useAppToast } from "../../composables/useAppToast";
 
 const wizard = useWizardStore();
+const sites = useSitesStore();
+const auth = useAuthStore();
 const { profile } = storeToRefs(wizard);
+const { toastError, toastSuccess, toastFromUnknown } = useAppToast();
 
 const activeBookingType = ref<WizardBookingType | null>(null);
 const activeOfferId = ref<string | null>(null);
 const activeClassOfferId = ref<string | null>(null);
 const activeRetreatOfferId = ref<string | null>(null);
 const showAddTypeMenu = ref(false);
+const isSendingBookingConfirmationTest = ref(false);
 
 const enabledBookingTypes = computed(() => {
   const types: Array<{ type: WizardBookingType; label: string }> = [];
@@ -548,6 +555,71 @@ const timezoneOptions = computed(() => {
   return options;
 });
 
+const bookingConfirmationTestInbox = computed(
+  () => auth.user?.email?.trim() || "",
+);
+
+const bookingConfirmationTestUsername = computed(() => wizard.username.trim());
+
+const bookingConfirmationTestDetails = computed(() => {
+  if (activeBookingType.value === "class" && activeClassOffer.value) {
+    return {
+      title: activeClassOffer.value.title || "Class booking",
+      durationMinutes: activeClassOffer.value.duration || 60,
+      timezone: activeClassOffer.value.timezone || bookingTimezone.value,
+    };
+  }
+  if (activeBookingType.value === "retreat" && activeRetreatOffer.value) {
+    return {
+      title: activeRetreatOffer.value.title || "Retreat booking",
+      durationMinutes: activeRetreatDurationDays.value * 24 * 60,
+      timezone: activeRetreatOffer.value.timezone || bookingTimezone.value,
+    };
+  }
+  return {
+    title: activeOffer.value?.title || "Book a session",
+    durationMinutes: activeOffer.value?.duration || 60,
+    timezone: bookingTimezone.value,
+  };
+});
+
+const canSendBookingConfirmationTest = computed(
+  () =>
+    Boolean(bookingConfirmationTestInbox.value) &&
+    Boolean(bookingConfirmationTestUsername.value) &&
+    hasBookingTypes.value,
+);
+
+async function sendBookingConfirmationTest() {
+  if (isSendingBookingConfirmationTest.value) return;
+
+  const siteUsername = bookingConfirmationTestUsername.value;
+  if (!siteUsername) {
+    toastError("Claim your username before sending a test email.");
+    return;
+  }
+  if (!bookingConfirmationTestInbox.value) {
+    toastError("Sign in to send a test email.");
+    return;
+  }
+
+  isSendingBookingConfirmationTest.value = true;
+  try {
+    const details = bookingConfirmationTestDetails.value;
+    const response = await sites.sendBookingConfirmationTest(siteUsername, {
+      bookingTitle: details.title,
+      durationMinutes: details.durationMinutes,
+      timezone: details.timezone,
+      siteName: profile.value.name || siteUsername,
+    });
+    toastSuccess(`Test email sent to ${response.sentTo}.`);
+  } catch (error) {
+    toastFromUnknown(error, "Failed to send test email");
+  } finally {
+    isSendingBookingConfirmationTest.value = false;
+  }
+}
+
 function selectBookingType(type: WizardBookingType) {
   activeBookingType.value = type;
   showAddTypeMenu.value = false;
@@ -681,6 +753,44 @@ onMounted(() => {
               <UiIcon name="X" :size="14" aria-hidden="true" />
             </button>
           </div>
+        </div>
+
+        <div class="confirmation-email-section">
+          <div>
+            <h3 class="confirmation-email-title">Confirmation email</h3>
+            <p class="confirmation-email-lead">
+              Booking confirmations use your Account email sender. Save and
+              test the sender before taking live bookings.
+            </p>
+          </div>
+          <div class="confirmation-email-actions">
+            <button
+              class="offer-tab-add confirmation-email-test-button"
+              type="button"
+              :disabled="
+                isSendingBookingConfirmationTest ||
+                !canSendBookingConfirmationTest
+              "
+              @click="sendBookingConfirmationTest"
+            >
+              <UiIcon name="Mail" :size="16" aria-hidden="true" />
+              <span>{{
+                isSendingBookingConfirmationTest ? "Sending..." : "Send test"
+              }}</span>
+            </button>
+            <RouterLink class="confirmation-email-settings" to="/account?section=mailbox">
+              Email settings
+            </RouterLink>
+          </div>
+          <p class="confirmation-email-test-note">
+            {{
+              !bookingConfirmationTestInbox
+                ? "Sign in to send a test."
+                : !bookingConfirmationTestUsername
+                  ? "Claim your username first."
+                  : `Sends to ${bookingConfirmationTestInbox}.`
+            }}
+          </p>
         </div>
 
         <div
@@ -1452,6 +1562,58 @@ onMounted(() => {
   border-top: 1px solid var(--color-border);
 }
 
+.confirmation-email-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--ui-border, var(--color-border));
+  background: var(--ui-surface-muted, rgba(0, 0, 0, 0.03));
+}
+
+.confirmation-email-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  color: var(--ui-text, var(--color-text));
+}
+
+.confirmation-email-lead,
+.confirmation-email-test-note {
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.confirmation-email-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.confirmation-email-test-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.confirmation-email-settings {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.confirmation-email-settings:hover {
+  color: var(--ui-text, var(--color-text));
+}
+
+.confirmation-email-test-note {
+  grid-column: 1 / -1;
+}
+
 .offer-editor-card {
   padding: 0 20px;
 }
@@ -1686,6 +1848,14 @@ onMounted(() => {
 }
 
 @media (max-width: 720px) {
+  .confirmation-email-section {
+    grid-template-columns: 1fr;
+  }
+
+  .confirmation-email-actions {
+    justify-content: flex-start;
+  }
+
   .form-row:not(.retreat-schedule-row) {
     grid-template-columns: 1fr;
   }

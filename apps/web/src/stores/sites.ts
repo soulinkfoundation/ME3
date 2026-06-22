@@ -290,6 +290,19 @@ export interface ProductConfirmationTestResponse {
   };
 }
 
+export interface BookingConfirmationTestRequest {
+  bookingTitle: string;
+  siteName?: string;
+  durationMinutes?: number;
+  timezone?: string;
+}
+
+export interface BookingConfirmationTestResponse {
+  ok: boolean;
+  sentTo: string;
+  providerMessageId: string | null;
+}
+
 export const useSitesStore = defineStore("sites", () => {
   const sites = ref<Site[]>([]);
   const loading = ref(false);
@@ -943,6 +956,26 @@ export const useSitesStore = defineStore("sites", () => {
     }
   }
 
+  async function sendBookingConfirmationTest(
+    username: string,
+    payload: BookingConfirmationTestRequest,
+  ): Promise<BookingConfirmationTestResponse> {
+    loading.value = true;
+    error.value = null;
+
+    try {
+      return await api.post<BookingConfirmationTestResponse>(
+        `/sites/${username}/bookings/confirmation-email/test`,
+        payload,
+      );
+    } catch (e: any) {
+      error.value = e.message || "Failed to send test email";
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   // Subscriber management
   async function getSubscriberCount(username: string): Promise<number> {
     try {
@@ -1094,6 +1127,7 @@ export const useSitesStore = defineStore("sites", () => {
     // Site quota
     getSiteQuota,
     sendProductConfirmationTest,
+    sendBookingConfirmationTest,
     // Subscriber management
     getSubscriberCount,
     getSubscribers,

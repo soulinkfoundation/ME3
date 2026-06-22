@@ -1,3 +1,4 @@
+import Stripe from "stripe";
 import { resolveTimeZone } from "../calendar";
 import { scheduleBookingRemindersForBooking } from "../booking-reminders";
 import {
@@ -33,7 +34,12 @@ import {
   type PublicBookingConfirmBody,
 } from "../booking";
 import type { AppHono } from "../http/types";
-import type { DbBooking } from "../types";
+import {
+  bookingDetailsFromBooking,
+  getOwnerContact,
+  sendBookingConfirmationEmails,
+} from "../transactional-emails";
+import type { DbBooking, DbSite, Env } from "../types";
 
 export function registerBookingRoutes(app: AppHono) {
   app.get("/api/book/:username/slots", async (c) => {
@@ -163,6 +169,16 @@ export function registerBookingRoutes(app: AppHono) {
       slot,
     });
 
+    if (booking) {
+      await sendConfirmationEmailsForBooking(c.env, {
+        site,
+        profile,
+        booking,
+        bookingTitle: offer.title,
+        timezone,
+      });
+    }
+
     return c.json({ ok: true, booking: booking ? serializeBooking(booking) : null });
   });
 
@@ -274,6 +290,13 @@ export function registerBookingRoutes(app: AppHono) {
         reminders: bookIntent.reminders,
       }).catch((error) => {
         console.error("Failed to schedule booking reminders:", error);
+      });
+      await sendConfirmationEmailsForBooking(c.env, {
+        site,
+        profile,
+        booking,
+        bookingTitle: offer.title,
+        timezone: resolveTimeZone(offer.availability.timezone),
       });
     }
 
@@ -438,116 +461,222 @@ export function registerBookingRoutes(app: AppHono) {
     const sessionId = normalizeShortText(body?.sessionId, 200);
     if (!sessionId) return c.json({ error: "Missing Stripe Checkout session ID" }, 400);
 
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-    if (session.payment_status !== "paid") {
-      return c.json({ error: "Payment has not completed yet" }, 400);
+    const result = await finalizePaidBookingCheckout(
+      c.env,
+      site,
+      await stripe.checkout.sessions.retrieve(sessionId),
+    );
+    if ("error" in result) return c.json({ error: result.error }, result.status as any);
+    return c.json(result);
+  });
+
+  app.post("/api/stripe/webhook", async (c) => {
+    const webhookSecret = c.env.STRIPE_WEBHOOK_SECRET;
+    const signature = c.req.header("stripe-signature");
+    if (!webhookSecret) return c.json({ error: "Stripe webhook secret is not configured" }, 503);
+    if (!signature) return c.json({ error: "Missing Stripe signature" }, 400);
+
+    let event: Stripe.Event;
+    const rawBody = await c.req.text();
+    try {
+      const stripe = new Stripe("sk_test_me3_webhook_verifier", {
+        apiVersion: "2025-02-24.acacia",
+      });
+      event = await stripe.webhooks.constructEventAsync(rawBody, signature, webhookSecret);
+    } catch {
+      return c.json({ error: "Invalid Stripe webhook signature" }, 400);
     }
 
-    const metadata = session.metadata || {};
-    if (metadata.purchase_kind !== "booking" || metadata.site_id !== site.id) {
-      return c.json({ error: "Checkout session does not match this site" }, 400);
+    if (event.type !== "checkout.session.completed") {
+      return c.json({ received: true });
     }
 
-    const paymentIntentId =
-      typeof session.payment_intent === "string"
-        ? session.payment_intent
-        : session.payment_intent?.id || null;
-    if (!paymentIntentId) return c.json({ error: "Stripe payment intent missing from session" }, 400);
-
-    const existing = await c.env.DB.prepare(
-      `SELECT id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
-              duration_minutes, calendar_event_id, status, notes, created_at, cancelled_at,
-              payment_intent_id, amount_paid, suggested_amount, currency, payment_status,
-              is_free_booking, paid_at
-       FROM bookings
-       WHERE payment_intent_id = ?`,
-    )
-      .bind(paymentIntentId)
-      .first<DbBooking>();
-    if (existing) return c.json({ ok: true, booking: serializeBooking(existing), alreadyCompleted: true });
-
-    const offerId = metadata.offer_id || null;
-    const startsAt = metadata.starts_at || "";
-    const endsAt = metadata.ends_at || "";
-    const durationMinutes = Number(metadata.duration_minutes || 0);
-    const guestName = metadata.guest_name || "";
-    const guestEmail = metadata.guest_email || "";
-    const notes = metadata.notes || "";
-    const holdToken = metadata.hold_token || "";
-
-    if (!offerId || !startsAt || !endsAt || !durationMinutes || !guestName || !guestEmail || !holdToken) {
-      return c.json({ error: "Checkout session is missing booking details" }, 400);
+    const session = event.data.object as Stripe.Checkout.Session;
+    if (session.metadata?.purchase_kind !== "booking") {
+      return c.json({ received: true });
     }
 
-    const hold = await findActiveBookingHoldByToken(c.env, holdToken);
-    if (!hold || hold.site_id !== site.id || hold.offer_id !== offerId || hold.slot_start !== startsAt || hold.slot_end !== endsAt) {
-      return c.json({ error: "Booking hold expired. Payment succeeded, but the booking was not confirmed automatically." }, 409);
+    const site = await getSiteById(c.env, session.metadata.site_id || "");
+    if (!site) return c.json({ received: true, error: "site_not_found" });
+
+    const result = await finalizePaidBookingCheckout(c.env, site, session);
+    if ("error" in result) {
+      console.error("Stripe booking webhook failed:", result.error);
+      return c.json({ received: true, error: result.error });
     }
 
-    const overlap = await findConfirmedBookingOverlap(c.env, {
-      siteId: site.id,
+    return c.json({ received: true, booking: result.booking });
+  });
+}
+
+async function finalizePaidBookingCheckout(
+  env: Env,
+  site: DbSite,
+  session: Stripe.Checkout.Session,
+): Promise<
+  | { ok: true; booking: ReturnType<typeof serializeBooking> | { id: string }; alreadyCompleted?: true }
+  | { error: string; status: number }
+> {
+  if (session.payment_status !== "paid") {
+    return { error: "Payment has not completed yet", status: 400 };
+  }
+
+  const metadata = session.metadata || {};
+  if (metadata.purchase_kind !== "booking" || metadata.site_id !== site.id) {
+    return { error: "Checkout session does not match this site", status: 400 };
+  }
+
+  const paymentIntentId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id || null;
+  if (!paymentIntentId) return { error: "Stripe payment intent missing from session", status: 400 };
+
+  const existing = await env.DB.prepare(bookingSelectSql("WHERE payment_intent_id = ?"))
+    .bind(paymentIntentId)
+    .first<DbBooking>();
+  if (existing) {
+    return { ok: true, booking: serializeBooking(existing), alreadyCompleted: true };
+  }
+
+  const offerId = metadata.offer_id || null;
+  const startsAt = metadata.starts_at || "";
+  const endsAt = metadata.ends_at || "";
+  const durationMinutes = Number(metadata.duration_minutes || 0);
+  const guestName = metadata.guest_name || "";
+  const guestEmail = metadata.guest_email || "";
+  const notes = metadata.notes || "";
+  const holdToken = metadata.hold_token || "";
+
+  if (!offerId || !startsAt || !endsAt || !durationMinutes || !guestName || !guestEmail || !holdToken) {
+    return { error: "Checkout session is missing booking details", status: 400 };
+  }
+
+  const hold = await findActiveBookingHoldByToken(env, holdToken);
+  if (!hold || hold.site_id !== site.id || hold.offer_id !== offerId || hold.slot_start !== startsAt || hold.slot_end !== endsAt) {
+    return {
+      error: "Booking hold expired. Payment succeeded, but the booking was not confirmed automatically.",
+      status: 409,
+    };
+  }
+
+  const overlap = await findConfirmedBookingOverlap(env, {
+    siteId: site.id,
+    offerId,
+    startsAt,
+    endsAt,
+  });
+  if (overlap) {
+    await releaseBookingHold(env, holdToken);
+    return {
+      error: "That time has already been booked. Payment succeeded, but the booking was not confirmed automatically.",
+      status: 409,
+    };
+  }
+
+  const bookingId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO bookings
+     (id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
+      duration_minutes, status, notes, created_at, payment_intent_id, amount_paid,
+      suggested_amount, currency, payment_status, is_free_booking, paid_at)
+     VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
+             ?, ?, ?, ?, 'succeeded', 0, datetime('now'))`,
+  )
+    .bind(
+      bookingId,
+      site.id,
       offerId,
+      guestName,
+      guestEmail,
       startsAt,
       endsAt,
-    });
-    if (overlap) {
-      await releaseBookingHold(c.env, holdToken);
-      return c.json({ error: "That time has already been booked. Payment succeeded, but the booking was not confirmed automatically." }, 409);
-    }
-
-    const bookingId = crypto.randomUUID();
-    await c.env.DB.prepare(
-      `INSERT INTO bookings
-       (id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
-        duration_minutes, status, notes, created_at, payment_intent_id, amount_paid,
-        suggested_amount, currency, payment_status, is_free_booking, paid_at)
-       VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
-               ?, ?, ?, ?, 'succeeded', 0, datetime('now'))`,
+      durationMinutes,
+      notes || null,
+      paymentIntentId,
+      session.amount_total || null,
+      session.amount_subtotal || session.amount_total || null,
+      session.currency || null,
     )
-      .bind(
-        bookingId,
-        site.id,
-        offerId,
-        guestName,
-        guestEmail,
-        startsAt,
-        endsAt,
-        durationMinutes,
-        notes || null,
-        paymentIntentId,
-        session.amount_total || null,
-        session.amount_subtotal || session.amount_total || null,
-        session.currency || null,
-      )
-      .run();
+    .run();
 
-    await confirmBookingHold(c.env, holdToken, bookingId);
+  await confirmBookingHold(env, holdToken, bookingId);
 
-    const booking = await c.env.DB.prepare(
-      `SELECT id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
-              duration_minutes, calendar_event_id, status, notes, created_at, cancelled_at,
-              payment_intent_id, amount_paid, suggested_amount, currency, payment_status,
-              is_free_booking, paid_at
-       FROM bookings
+  const booking = await env.DB.prepare(bookingSelectSql("WHERE id = ?"))
+    .bind(bookingId)
+    .first<DbBooking>();
+  if (!booking) return { ok: true, booking: { id: bookingId } as ReturnType<typeof serializeBooking> };
+
+  const profile = await loadSiteProfileForCommerce(env, site);
+  const bookIntent = profile?.intents?.book as CoreBookIntent | undefined;
+  const offer = bookIntent ? resolveOneToOneBookingOffer(bookIntent, offerId) : null;
+  const timezone = resolveTimeZone(offer?.availability.timezone);
+  scheduleBookingRemindersForBooking(env, {
+    booking,
+    bookingTitle: offer?.title || "Book a session",
+    timezone,
+    reminders: bookIntent?.reminders,
+  }).catch((error) => {
+    console.error("Failed to schedule booking reminders:", error);
+  });
+  await sendConfirmationEmailsForBooking(env, {
+    site,
+    profile,
+    booking,
+    bookingTitle: offer?.title || "Book a session",
+    timezone,
+  });
+
+  return { ok: true, booking: serializeBooking(booking) };
+}
+
+async function sendConfirmationEmailsForBooking(
+  env: Env,
+  input: {
+    site: DbSite;
+    profile: Awaited<ReturnType<typeof loadSiteProfileForCommerce>>;
+    booking: DbBooking;
+    bookingTitle: string;
+    timezone: string;
+  },
+) {
+  const owner = await getOwnerContact(env, input.site.user_id);
+  const result = await sendBookingConfirmationEmails(
+    env,
+    bookingDetailsFromBooking({
+      booking: input.booking,
+      ownerId: input.site.user_id,
+      hostName: input.profile?.name || owner.name || input.site.username,
+      hostEmail: owner.email,
+      bookingTitle: input.bookingTitle,
+      timezone: input.timezone,
+    }),
+  );
+
+  if (result.guest.status === "failed" || result.host.status === "failed") {
+    console.error("Booking confirmation email issue:", result);
+  }
+}
+
+async function getSiteById(env: Env, siteId: string): Promise<DbSite | null> {
+  if (!siteId) return null;
+  return (
+    (await env.DB.prepare(
+      `SELECT id, user_id, username, site_type, template_id, custom_domain,
+              custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
+       FROM sites
        WHERE id = ?`,
     )
-      .bind(bookingId)
-      .first<DbBooking>();
+      .bind(siteId)
+      .first<DbSite>()) || null
+  );
+}
 
-    if (booking) {
-      const profile = await loadSiteProfileForCommerce(c.env, site);
-      const bookIntent = profile?.intents?.book as CoreBookIntent | undefined;
-      const offer = bookIntent ? resolveOneToOneBookingOffer(bookIntent, offerId) : null;
-      scheduleBookingRemindersForBooking(c.env, {
-        booking,
-        bookingTitle: offer?.title || "Book a session",
-        timezone: resolveTimeZone(offer?.availability.timezone),
-        reminders: bookIntent?.reminders,
-      }).catch((error) => {
-        console.error("Failed to schedule booking reminders:", error);
-      });
-    }
-
-    return c.json({ ok: true, booking: booking ? serializeBooking(booking) : { id: bookingId } });
-  });
+function bookingSelectSql(where: string) {
+  return `SELECT id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
+                 duration_minutes, calendar_event_id, status, notes, created_at, cancelled_at,
+                 payment_intent_id, amount_paid, suggested_amount, currency, payment_status,
+                 is_free_booking, paid_at
+          FROM bookings
+          ${where}`;
 }

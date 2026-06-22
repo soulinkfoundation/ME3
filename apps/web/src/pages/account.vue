@@ -310,6 +310,7 @@ const aiGatewayMessage = ref<string | null>(null);
 const aiGatewayError = ref<string | null>(null);
 const emailProviderLoading = ref(false);
 const emailProviderSaving = ref(false);
+const emailProviderTesting = ref(false);
 const emailProviderEncryptionConfigured = ref(false);
 const emailProviders = ref<EmailProviderRecord[]>([]);
 const selectedEmailProviderId = ref<EmailProviderId>("cloudflare-email");
@@ -1075,6 +1076,34 @@ async function saveUnifiedEmailSettings() {
     mailboxSaving.value = false;
     mailboxActivating.value = false;
     emailProviderSaving.value = false;
+  }
+}
+
+async function sendEmailProviderTest() {
+  if (emailProviderTesting.value || !emailAddressIsValid.value) return;
+
+  emailProviderTesting.value = true;
+  mailboxMessage.value = null;
+  mailboxError.value = null;
+  emailProviderError.value = null;
+
+  try {
+    const response = await api.post<{
+      ok: boolean;
+      sentTo: string;
+      providerMessageId: string | null;
+    }>("/email-provider-settings/test", {
+      providerId: selectedEmailProviderId.value,
+      to: emailAddressNormalized.value,
+    });
+    mailboxMessage.value = response.providerMessageId
+      ? `Test email sent to ${response.sentTo}. Provider message ${response.providerMessageId}.`
+      : `Test email accepted for ${response.sentTo}.`;
+    await loadEmailProviderSettings();
+  } catch (e: any) {
+    emailProviderError.value = e.message || "Failed to send test email";
+  } finally {
+    emailProviderTesting.value = false;
   }
 }
 
@@ -2046,6 +2075,25 @@ onMounted(async () => {
                           :placeholder="emailProviderSecretPlaceholder"
                         />
                       </label>
+                    </div>
+                    <div class="email-provider-actions">
+                      <button
+                        class="button secondary"
+                        type="button"
+                        :disabled="
+                          emailProviderTesting ||
+                          emailProviderSaving ||
+                          mailboxSaving ||
+                          !emailAddressIsValid
+                        "
+                        @click="sendEmailProviderTest"
+                      >
+                        {{ emailProviderTesting ? "Sending..." : "Send test email" }}
+                      </button>
+                      <p class="email-provider-test-note">
+                        Save changes first. The test sends to
+                        {{ emailAddressNormalized || "this address" }}.
+                      </p>
                     </div>
                   </div>
                 </details>
@@ -3971,6 +4019,21 @@ h1 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.email-provider-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.email-provider-test-note {
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .plugin-meta-grid {

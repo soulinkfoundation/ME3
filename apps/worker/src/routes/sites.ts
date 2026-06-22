@@ -6,8 +6,18 @@ import {
 } from "@me3-core/plugin-landing-pages";
 import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "../site-generator";
+import {
+  bookingDetailsFromBooking,
+  getOwnerContact,
+  sendGuestBookingConfirmationEmail,
+  sendProductPurchaseConfirmationEmail,
+} from "../transactional-emails";
 import type { AppHono, OwnerRouteDeps } from "../http/types";
-import type { DbSite, DbSubscriber } from "../types";
+import type { DbBooking, DbSite, DbSubscriber } from "../types";
+import {
+  applyPurchaseEmailTokens,
+  productSendsPurchaseConfirmation,
+} from "../../../../shared/product-purchase-confirmation";
 import {
   EMAIL_REGEX,
   USERNAME_REGEX,
@@ -123,6 +133,137 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       },
       can_create: Number(count?.count || 0) < 4,
     });
+  });
+
+  app.post("/api/sites/:username/products/confirmation-email/test", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+
+    const body = await c.req
+      .json<{
+        productSlug?: unknown;
+        productTitle?: unknown;
+        siteName?: unknown;
+        subject?: unknown;
+        message?: unknown;
+      }>()
+      .catch(() => null);
+    if (!body) return c.json({ error: "Invalid request body" }, 400);
+
+    const productSlug = normalizeShortEmailText(body.productSlug, 120) || null;
+    const productTitle = normalizeShortEmailText(body.productTitle, 120);
+    const siteName = normalizeShortEmailText(body.siteName, 120) || site.username;
+    const subject = normalizeShortEmailText(body.subject, 200);
+    const message = normalizeLongEmailText(body.message, 8000);
+    if (!productTitle) return c.json({ error: "Product title is required" }, 400);
+    if (!productSendsPurchaseConfirmation({ enabled: true, subject, message })) {
+      return c.json({ error: "Add both a subject and message before sending a test email" }, 400);
+    }
+
+    const owner = await getOwnerContact(c.env, ownerId);
+    if (!owner.email) return c.json({ error: "Owner email is required for test sends" }, 400);
+
+    const tokenCtx = {
+      buyerName: "Test Buyer",
+      buyerNote: "Looking forward to this.",
+      productTitle,
+      siteName,
+      supportEmail: owner.email,
+    };
+    const result = await sendProductPurchaseConfirmationEmail(c.env, {
+      ownerId,
+      hostName: siteName,
+      hostEmail: owner.email,
+      buyerName: tokenCtx.buyerName,
+      buyerEmail: owner.email,
+      productTitle,
+      subject: applyPurchaseEmailTokens(subject, tokenCtx),
+      messageText: applyPurchaseEmailTokens(message, tokenCtx),
+      test: true,
+    });
+    if (result.status !== "sent") {
+      return c.json({ error: result.error || "Failed to send test email" }, 502);
+    }
+
+    return c.json({
+      ok: true,
+      sentTo: owner.email,
+      providerMessageId: result.providerMessageId,
+      subject: `[Test] ${applyPurchaseEmailTokens(subject, tokenCtx)}`,
+      productSlug,
+      preview: tokenCtx,
+    });
+  });
+
+  app.post("/api/sites/:username/bookings/confirmation-email/test", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+
+    const body = await c.req
+      .json<{
+        bookingTitle?: unknown;
+        siteName?: unknown;
+        durationMinutes?: unknown;
+        timezone?: unknown;
+      }>()
+      .catch(() => null);
+    if (!body) return c.json({ error: "Invalid request body" }, 400);
+
+    const owner = await getOwnerContact(c.env, ownerId);
+    if (!owner.email) return c.json({ error: "Owner email is required for test sends" }, 400);
+
+    const startsAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+    const booking: DbBooking = {
+      id: "test-booking",
+      site_id: site.id,
+      offer_id: "test-offer",
+      booking_type: "one_to_one",
+      guest_name: "Test Guest",
+      guest_email: owner.email,
+      starts_at: startsAt,
+      ends_at: new Date(new Date(startsAt).getTime() + 60 * 60_000).toISOString(),
+      duration_minutes: normalizePositiveInteger(body.durationMinutes, 60),
+      calendar_event_id: null,
+      status: "confirmed",
+      notes: "Looking forward to this.",
+      created_at: startsAt,
+      cancelled_at: null,
+      payment_intent_id: null,
+      amount_paid: null,
+      suggested_amount: null,
+      currency: null,
+      payment_status: "not_required",
+      is_free_booking: 1,
+      paid_at: null,
+    };
+    const result = await sendGuestBookingConfirmationEmail(
+      c.env,
+      bookingDetailsFromBooking({
+        booking,
+        ownerId,
+        hostName:
+          normalizeShortEmailText(body.siteName, 120) ||
+          owner.name ||
+          site.username,
+        hostEmail: owner.email,
+        bookingTitle:
+          normalizeShortEmailText(body.bookingTitle, 120) ||
+          "Book a session",
+        timezone: normalizeShortEmailText(body.timezone, 80) || "UTC",
+        test: true,
+      }),
+    );
+    if (result.status !== "sent") {
+      return c.json({ error: result.error || "Failed to send test email" }, 502);
+    }
+
+    return c.json({ ok: true, sentTo: owner.email, providerMessageId: result.providerMessageId });
   });
 
   app.post("/api/sites/:username/subscribe", async (c) => {
@@ -1064,6 +1205,20 @@ export function registerPublicSiteRoutes(app: AppHono) {
     const canonicalUrl = new URL("/.well-known/security.txt", c.req.url);
     return c.redirect(canonicalUrl.toString(), 301);
   });
+}
+
+function normalizeShortEmailText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function normalizeLongEmailText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number): number {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) return fallback;
+  return Math.round(numberValue);
 }
 
 function buildSecurityTxt(env: { ME3_SECURITY_CONTACT?: string }, requestUrl: string): string {

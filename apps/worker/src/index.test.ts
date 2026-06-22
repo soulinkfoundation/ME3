@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import Stripe from "stripe";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
 import { generateAiText } from "./ai-providers";
@@ -1342,6 +1343,37 @@ function createEnv(): Env & {
                 });
               }
 
+              if (
+                sql.includes("UPDATE booking_holds") &&
+                sql.includes("SET status = 'confirmed'")
+              ) {
+                state.bookingHolds = state.bookingHolds.map((hold) =>
+                  hold.hold_token === values[1] && hold.status === "active"
+                    ? {
+                        ...hold,
+                        status: "confirmed",
+                        booking_id: values[0] as string,
+                        updated_at: "2026-06-05T12:00:00Z",
+                      }
+                    : hold,
+                );
+              }
+
+              if (
+                sql.includes("UPDATE booking_holds") &&
+                sql.includes("SET status = 'released'")
+              ) {
+                state.bookingHolds = state.bookingHolds.map((hold) =>
+                  hold.hold_token === values[0] && hold.status === "active"
+                    ? {
+                        ...hold,
+                        status: "released",
+                        updated_at: "2026-06-05T12:00:00Z",
+                      }
+                    : hold,
+                );
+              }
+
               if (sql.includes("INSERT INTO scheduling_time_types")) {
                 state.schedulingTimeTypes.push({
                   id: values[0] as string,
@@ -2089,7 +2121,11 @@ function createEnv(): Env & {
               if (sql.includes("FROM sites")) {
                 if (values.length === 1) {
                   return (
-                    state.sites.find((site) => site.username === values[0]) ||
+                    state.sites.find((site) =>
+                      sql.includes("WHERE id = ?")
+                        ? site.id === values[0]
+                        : site.username === values[0],
+                    ) ||
                     (values[0] === "owner"
                       ? ({ id: "site-1", user_id: "owner", username: "owner" } as DbSite)
                       : null)
@@ -2871,6 +2907,29 @@ function addBookableSite(
     size: content.byteLength,
     sha256: null,
     updated_at: "2026-05-31T22:00:00Z",
+  });
+}
+
+function addReadyCloudflareEmailProvider(env: ReturnType<typeof createEnv>) {
+  env.emailProviderSettings.push({
+    user_id: "owner",
+    provider_id: "cloudflare-email",
+    is_active: 1,
+    encrypted_secret: null,
+    secret_hint: null,
+    secret_updated_at: null,
+    config_json: JSON.stringify({
+      transport: "binding",
+      fromAddress: "owner@example.com",
+      fromName: "ME3 Owner",
+      sendingDomain: "example.com",
+    }),
+    last_status: "ready",
+    last_status_checked_at: "2026-06-05T12:00:00.000Z",
+    last_test_sent_at: "2026-06-05T12:00:00.000Z",
+    last_test_error: null,
+    created_at: "2026-06-05T12:00:00.000Z",
+    updated_at: "2026-06-05T12:00:00.000Z",
   });
 }
 
@@ -6149,7 +6208,9 @@ describe("ME3 Core Worker auth", () => {
 
   it("creates confirmed free bookings from public generated sites", async () => {
     const env = createEnv();
+    await bootstrap(env);
     addBookableSite(env);
+    addReadyCloudflareEmailProvider(env);
 
     const response = await app.fetch(
       new Request("http://localhost/api/book/owner/free", {
@@ -6184,6 +6245,15 @@ describe("ME3 Core Worker auth", () => {
       guest_email: "guest@example.com",
       payment_status: "not_required",
       is_free_booking: 1,
+    });
+    expect(env.emailSends).toHaveLength(2);
+    expect(env.emailSends[0]).toMatchObject({
+      to: "guest@example.com",
+      subject: "Booking confirmed: Free session",
+    });
+    expect(env.emailSends[1]).toMatchObject({
+      to: "owner@example.com",
+      subject: "New booking: Test Guest",
     });
   });
 
@@ -6503,6 +6573,117 @@ describe("ME3 Core Worker auth", () => {
       checkoutUrl: "/api/book/owner/checkout-session",
     });
     expect(env.bookings).toHaveLength(0);
+  });
+
+  it("finalizes paid booking checkout from a signed Stripe webhook", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+    addReadyCloudflareEmailProvider(env);
+    env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
+    addBookableSite(env, {
+      enabled: true,
+      offers: [
+        {
+          id: "paid-session",
+          title: "Paid Session",
+          duration: 60,
+          pricing: {
+            enabled: true,
+            suggestedAmount: 75,
+            currency: "EUR",
+            minimumAmount: 5,
+          },
+        },
+      ],
+      availability: {
+        timezone: "Europe/Dublin",
+        windows: { tuesday: ["15:00-16:30"] },
+      },
+    });
+    env.bookingHolds.push({
+      id: "hold-paid",
+      site_id: "site-booking",
+      booking_id: null,
+      offer_id: "paid-session",
+      booking_type: "one_to_one",
+      hold_token: "hold-paid-token",
+      slot_start: "2026-06-09T14:15:00.000Z",
+      slot_end: "2026-06-09T15:15:00.000Z",
+      status: "active",
+      expires_at: "2099-01-01T00:00:00.000Z",
+      created_at: "2026-06-05T12:00:00.000Z",
+      updated_at: "2026-06-05T12:00:00.000Z",
+    });
+
+    const stripe = new Stripe("sk_test_webhook_test", {
+      apiVersion: "2025-02-24.acacia",
+    });
+    const payload = JSON.stringify({
+      id: "evt_booking_paid",
+      object: "event",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_booking_paid",
+          object: "checkout.session",
+          payment_status: "paid",
+          payment_intent: "pi_booking_paid",
+          amount_total: 500,
+          amount_subtotal: 500,
+          currency: "eur",
+          metadata: {
+            purchase_kind: "booking",
+            site_id: "site-booking",
+            offer_id: "paid-session",
+            booking_type: "one_to_one",
+            hold_token: "hold-paid-token",
+            guest_name: "Paid Guest",
+            guest_email: "paid@example.com",
+            notes: "Paid webhook booking",
+            starts_at: "2026-06-09T14:15:00.000Z",
+            ends_at: "2026-06-09T15:15:00.000Z",
+            duration_minutes: "60",
+          },
+        },
+      },
+    });
+    const signature = stripe.webhooks.generateTestHeaderString({
+      payload,
+      secret: env.STRIPE_WEBHOOK_SECRET,
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/stripe/webhook", {
+        method: "POST",
+        headers: {
+          "stripe-signature": signature,
+          "Content-Type": "application/json",
+        },
+        body: payload,
+      }),
+      env,
+    );
+    const body = (await response.json()) as { received: boolean };
+
+    expect(response.status).toBe(200);
+    expect(body.received).toBe(true);
+    expect(env.bookings).toHaveLength(1);
+    expect(env.bookings[0]).toMatchObject({
+      offer_id: "paid-session",
+      guest_email: "paid@example.com",
+      payment_intent_id: "pi_booking_paid",
+      payment_status: "succeeded",
+      amount_paid: 500,
+    });
+    expect(env.bookingHolds[0]).toMatchObject({
+      status: "confirmed",
+      booking_id: env.bookings[0].id,
+    });
+    expect(env.emailSends).toHaveLength(2);
+    expect(env.emailSends[0]).toMatchObject({
+      to: "paid@example.com",
+      subject: "Booking confirmed: Paid Session",
+    });
   });
 
   });
@@ -9435,6 +9616,75 @@ describe("ME3 Core Worker auth", () => {
         purpose: "test",
       }),
     ]);
+  });
+
+  it("sends product purchase confirmation test emails through the configured sender", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addBookableSite(env);
+    addReadyCloudflareEmailProvider(env);
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/sites/owner/products/confirmation-email/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          productSlug: "guide",
+          productTitle: "Launch Guide",
+          siteName: "Booking Owner",
+          subject: "Your {{ productTitle }}",
+          message: "Hi {{ buyerName }}, here are the next steps.",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; sentTo: string; subject: string };
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      sentTo: "owner@example.com",
+      subject: "[Test] Your Launch Guide",
+    });
+    expect(env.emailSends[0]).toMatchObject({
+      to: "owner@example.com",
+      subject: "[Test] Your Launch Guide",
+    });
+  });
+
+  it("sends booking confirmation test emails through the configured sender", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addBookableSite(env);
+    addReadyCloudflareEmailProvider(env);
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/sites/owner/bookings/confirmation-email/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          bookingTitle: "Book a Call",
+          siteName: "Booking Owner",
+          durationMinutes: 75,
+          timezone: "Europe/Dublin",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; sentTo: string };
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ ok: true, sentTo: "owner@example.com" });
+    expect(env.emailSends[0]).toMatchObject({
+      to: "owner@example.com",
+      subject: "[Test] Booking confirmed: Book a Call",
+    });
   });
 
   it("approves Cloudflare Email Service drafts without platform-controlled headers", async () => {

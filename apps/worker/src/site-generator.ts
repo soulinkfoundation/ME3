@@ -744,8 +744,8 @@ function generatePaidBookingWidget(input: {
           <button type="button" class="booking-back" data-booking-back>Back</button>
           <button type="submit" class="booking-submit">Confirm Booking</button>
         </div>
-        <p class="booking-status" role="status" aria-live="polite"></p>
       </form>
+      <p class="booking-status" data-booking-status role="status" aria-live="polite"></p>
       <p class="booking-timezone">Slots are shown in ${escapeHtml(config.timezone)}.</p>
     </div>
     <script>${paidBookingWidgetScript()}</script>`;
@@ -758,7 +758,7 @@ function paidBookingWidgetScript(): string {
   if(!root||!root.matches('[data-booking-widget]')) return;
   var config=JSON.parse(root.querySelector('[data-booking-config]').textContent||'{}');
   var form=root.querySelector('.booking-form');
-  var statusEl=root.querySelector('.booking-status');
+  var statusEl=root.querySelector('[data-booking-status]');
   var dateInput=root.querySelector('input[name="localDate"]');
   var dateWrap=root.querySelector('[data-booking-date-wrap]');
   var timeInput=form.elements.localTime;
@@ -773,6 +773,7 @@ function paidBookingWidgetScript(): string {
   var selectedTime='';
   var dayNames=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
   function setStatus(message,isError){statusEl.textContent=message||'';statusEl.classList.toggle('is-error',!!isError);}
+  function showReturnStatus(message,isError){setStatus(message,isError);try{root.scrollIntoView({block:'start'});}catch(_error){}}
   function isValidEmail(value){return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value||'').trim().toLowerCase());}
   function validateForm(){
     var hasInvalidEmail=emailInput&&emailInput.value&&!isValidEmail(emailInput.value);
@@ -932,13 +933,13 @@ function paidBookingWidgetScript(): string {
   });
   var params=new URLSearchParams(window.location.search);
   if(params.get('booking')==='success'&&params.get('session_id')){
-    setStatus('Confirming your booking...');
+    showReturnStatus('Confirming your booking...');
     fetch('/api/book/'+encodeURIComponent(config.username)+'/complete-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:params.get('session_id')})})
       .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Payment succeeded, but booking confirmation failed.');return data;});})
-      .then(function(){setStatus('Payment successful. Your booking is confirmed.');})
-      .catch(function(error){setStatus(error.message,true);});
+      .then(function(){showReturnStatus('Payment successful. Your booking is confirmed. A confirmation email will be sent if this site has email sending configured.');})
+      .catch(function(error){showReturnStatus(error.message,true);});
   } else if(params.get('booking')==='cancelled'){
-    setStatus('Checkout cancelled. No payment was taken.',true);
+    showReturnStatus('Checkout cancelled. No payment was taken.',true);
   }
 })();`;
 }
