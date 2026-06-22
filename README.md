@@ -21,7 +21,7 @@ Ready? Me too... just press the BUTTON!** 🔴👇</strong>
 
 ## 🖥️ What's in ME3
 
-- **🤖 An AI Assistant** you create jobs for to save you time.
+- **🤖 An AI assistant/agent** you control and create jobs for to save you time. Pick any model from Open Source models to Claude.
 - **🚀 Mission Control** to manage your projects/tasks/life.
 - **🌐 A ME3 site/profile**: it's like a digital business card, built for humans and AI agents.
 - **📧 Email** for you or your 🤖, whatever allows you to spend less time on email.
