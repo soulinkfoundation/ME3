@@ -5259,6 +5259,34 @@ describe("ME3 Core Worker auth", () => {
     expect(String(savePayload.replyText)).not.toContain("email");
   });
 
+  it("trims outline-only instructions out of fallback blog titles", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env, { blogEnabled: true });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText:
+            "Update my site, draft a humorous blog post about bees, just the outline will do I will write it myself.",
+        }),
+      }),
+      env,
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+    const replyText = String(payload.replyText);
+
+    expect(response.status).toBe(200);
+    expect(replyText).toContain('Blog draft title: "The Rise of Bees"');
+    expect(replyText).not.toContain("Outline Will Do");
+    expect(replyText).not.toContain("I Will Write It Myself");
+  });
+
   it("lists profile site blog posts from assistant chat", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

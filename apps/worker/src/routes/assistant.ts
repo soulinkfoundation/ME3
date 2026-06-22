@@ -1653,6 +1653,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       "Use bio for short profile bio/tagline updates. Do not turn short bio requests into about page paragraphs.",
       "Use bodyMarkdown without frontmatter. For pages and posts, include a single H1 followed by useful body copy.",
       "Only include fields that the owner asked to create or update. Keep content specific to the owner's request and current site.",
+      "For blog posts, separate the requested topic from workflow instructions such as outline-only, draft-only, or the owner writing it themselves.",
       "Do not claim the site is published.",
     ].join("\n");
     const user = JSON.stringify(
@@ -2353,13 +2354,23 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const quoted =
       requestText.match(/\b(?:blog post|post|article)\s+(?:about|on)\s+["'“]([^"'”]+)["'”]/i) ||
       requestText.match(/\b(?:about|on)\s+["'“]([^"'”]+)["'”]/i);
-    if (quoted?.[1]) return quoted[1].trim();
+    if (quoted?.[1]) return cleanAssistantBlogTopic(quoted[1]);
 
     const unquoted = requestText.match(/\b(?:blog post|post|article)\s+(?:about|on)\s+([^.!?\n]+)(?:[.!?\n]|$)/i);
-    if (unquoted?.[1]) {
-      return unquoted[1].replace(/\b(and|then|also)\b.*$/i, "").trim();
-    }
+    if (unquoted?.[1]) return cleanAssistantBlogTopic(unquoted[1]);
     return "personal AI assistants";
+  }
+
+  function cleanAssistantBlogTopic(value: string): string {
+    const topic = value
+      .replace(/\s+/g, " ")
+      .replace(/[,;:]\s*(?:just|only)\b.*$/i, "")
+      .replace(/\b(?:just|only)\s+(?:the\s+)?(?:outline|structure|draft)\b.*$/i, "")
+      .replace(/\b(?:i(?:'ll| will)|i can)\s+write\b.*$/i, "")
+      .replace(/\b(?:and then|then|also)\b.*$/i, "")
+      .replace(/[,"'“”‘’]+$/g, "")
+      .trim();
+    return topic || "personal AI assistants";
   }
 
   function assistantBlogTitleFromTopic(topic: string): string {

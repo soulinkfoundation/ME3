@@ -507,6 +507,43 @@ describe("Core chat native context", () => {
     );
   });
 
+  it("omits unsupported sampling controls for selected OpenAI reasoning models", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ choices: [{ message: { content: "Selected OpenAI reply." } }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createEnv();
+
+    try {
+      const response = await dispatchAgentSandboxTurn(
+        { ...env, OPENAI_API_KEY: "sk-openai-secret" } as never,
+        createStorage(),
+        {
+          ...dispatchInput("Say hello."),
+          selectedModel: {
+            providerId: "openai",
+            model: "gpt-5.5",
+            optionId: "openai-gpt-5-5",
+          },
+        },
+      );
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+
+      expect(response).toMatchObject({
+        replyText: "Selected OpenAI reply.",
+        model: "gpt-5.5",
+        source: "openai",
+      });
+      expect(body).toMatchObject({
+        model: "gpt-5.5",
+      });
+      expect(body).not.toHaveProperty("temperature");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("does not feed old provider setup fallbacks back into the model", async () => {
     const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
       response: "Yes, I am working through Qwen now.",

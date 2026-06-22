@@ -3819,6 +3819,13 @@ async function runOpenAi(
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
 ): Promise<string> {
   if (!route.apiKey) throw new Error("OpenAI API key is not configured");
+  const body: Record<string, unknown> = {
+    model: route.model,
+    messages,
+  };
+  if (!isOpenAiReasoningModel(route.model)) {
+    body.temperature = 0.4;
+  }
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -3826,11 +3833,7 @@ async function runOpenAi(
       "Content-Type": "application/json",
       Authorization: `Bearer ${route.apiKey}`,
     },
-    body: JSON.stringify({
-      model: route.model,
-      messages,
-      temperature: 0.4,
-    }),
+    body: JSON.stringify(body),
   });
 
   const payload = (await response.json().catch(() => null)) as
@@ -3850,6 +3853,11 @@ async function runOpenAi(
     extractModelText(message?.refusal) ||
     emptyModelReply(route)
   );
+}
+
+function isOpenAiReasoningModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return /^gpt-5(?:[.-]|$)/.test(normalized) || /^o\d(?:[.-]|$)/.test(normalized);
 }
 
 async function runAnthropic(
