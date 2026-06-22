@@ -40,6 +40,7 @@ export {
   isCoreChatMailboxDraftSaveRequest,
   isCoreChatMissionTaskArchiveRequest,
   isCoreChatMissionTaskCreateRequest,
+  isCoreChatMissionTaskListRequest,
   isCoreChatMissionTaskUpdateRequest,
   isCoreChatReminderCreateRequest,
   isCoreChatReminderListRequest,
@@ -2158,6 +2159,18 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
+  if (plannerDecision.capabilityId === "core.mission.task.list") {
+    const taskPlan = await parseMissionTaskListChatRequest(env, input.userId, messageText);
+    if ("error" in taskPlan) {
+      return toolResponse(input.turnId, "core.mission.task.list", taskPlan.error, {
+        fallbackReason: "Mission task list details required",
+      });
+    }
+
+    const replyText = formatMissionTaskListReply(taskPlan.tasks, taskPlan.filterLabel);
+    return toolResponse(input.turnId, "core.mission.task.list", replyText);
+  }
+
   if (plannerDecision.capabilityId === "core.mission.task.update") {
     const taskPlan = await parseMissionTaskUpdateChatRequest(env, input.userId, messageText, owner);
     if ("error" in taskPlan) {
@@ -2430,6 +2443,43 @@ async function createAgentMissionTask(
     projectName: input.projectName,
     dueAt: input.dueAt,
     status,
+  };
+}
+
+async function parseMissionTaskListChatRequest(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageText: string,
+): Promise<
+  | { tasks: AgentMissionTask[]; filterLabel: string }
+  | { error: string }
+> {
+  const [tasks, projects] = await Promise.all([
+    loadAgentMissionTasks(env, userId),
+    loadAgentMissionProjects(env, userId),
+  ]);
+  const projectName = extractMissionTaskProjectName(messageText) ||
+    extractMissionTaskListProjectName(messageText);
+  const project = projectName ? findAgentMissionProject(projects, projectName) : null;
+  if (projectName && !project) {
+    return { error: `I could not find a Mission Control project called "${projectName}".` };
+  }
+
+  const status = parseMissionTaskStatus(messageText);
+  const filtered = tasks.filter((task) => {
+    if (project && task.projectId !== project.id) return false;
+    if (status && task.status !== status) return false;
+    return true;
+  });
+  const parts = [
+    status ? missionTaskStatusLabel(status) : null,
+    "tasks",
+    project ? `for ${project.name}` : null,
+  ].filter(Boolean);
+
+  return {
+    tasks: filtered,
+    filterLabel: parts.join(" "),
   };
 }
 
@@ -2749,11 +2799,34 @@ function parseMissionTaskUpdateText(
   };
 }
 
+function formatMissionTaskListReply(tasks: AgentMissionTask[], filterLabel: string): string {
+  if (!tasks.length) return `I could not find any ${filterLabel}.`;
+  return [
+    `I found ${tasks.length} ${filterLabel}:`,
+    ...tasks.slice(0, 20).map((task, index) => {
+      const due = task.dueAt ? `, due ${task.dueAt}` : "";
+      return `${index + 1}. ${task.title} (${task.projectName}, ${missionTaskStatusLabel(task.status)}${due})`;
+    }),
+    ...(tasks.length > 20 ? [`...and ${tasks.length - 20} more.`] : []),
+  ].join("\n");
+}
+
 function extractMissionTaskProjectName(messageText: string): string | null {
   const match = messageText.match(
     /\b(?:to|in|under|for)\s+(?:the\s+)?(?:mission\s+control\s+)?project\s+["“]?([^"”?.]+?)["”]?(?:\s+(?:to|due|by|today|tomorrow)\b|[.?!]*$)/i,
   );
   return normalizeNullableText(match?.[1]);
+}
+
+function extractMissionTaskListProjectName(messageText: string): string | null {
+  const match = messageText.match(
+    /\b(?:for|in)\s+["“]?([^"”?.]+?)["”]?(?:\s+(?:tasks?|todos?)\b|[.?!]*$)/i,
+  );
+  const value = normalizeNullableText(match?.[1]);
+  if (!value || /^(?:backlog|todo|to do|doing|in progress|review|done|complete|completed)$/i.test(value)) {
+    return null;
+  }
+  return value;
 }
 
 function parseMissionTaskStatus(messageText: string): string | null {

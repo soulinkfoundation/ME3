@@ -160,12 +160,14 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("FROM mission_tasks")) {
             if (sql.includes("LEFT JOIN mission_projects")) {
               return {
-                results: dbState.tasks.map((task) => ({
-                  ...task,
-                  project_name:
-                    dbState.projects.find((project) => project.id === task.project_id)?.name ||
-                    null,
-                })) as T[],
+                results: dbState.tasks
+                  .filter((task) => !task.archived_at)
+                  .map((task) => ({
+                    ...task,
+                    project_name:
+                      dbState.projects.find((project) => project.id === task.project_id)
+                        ?.name || null,
+                  })) as T[],
               };
             }
             return { results: dbState.tasks as T[] };
@@ -1212,6 +1214,7 @@ type GoldenTranscriptScenario = {
       | "core.reminders.create"
       | "core.bookings.lookup"
       | "core.mission.task.create"
+      | "core.mission.task.list"
       | "core.mission.task.update"
       | "core.mission.task.archive";
     toolResultStatus: "not_attempted" | "succeeded" | "failed" | "clarified";
@@ -1447,6 +1450,70 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       mailboxDraftDelta: 0,
       missionTaskDelta: 1,
       aiCalled: false,
+    },
+  },
+  {
+    name: "direct Mission Control task list reads filtered project tasks",
+    messageText: "Show in progress tasks for project ME3 Launch.",
+    envState: {
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+      tasks: [
+        taskRow("task-launch", "Prepare launch checklist", "project-launch"),
+        {
+          ...taskRow("task-backlog", "Review pricing copy", "project-launch"),
+          status: "backlog",
+          column_id: "project-launch:backlog",
+        },
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.mission.task.list",
+      specialist: "core.mission.task.list",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["Prepare launch checklist", "ME3 Launch", "Doing"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "Mission Control task prioritisation stays model-first with context",
+    messageText: "Help me prioritise my Mission Control tasks based on my goals.",
+    aiReply:
+      "Start with Prepare launch checklist because it supports the launch goal, then review lower-priority backlog items.",
+    withAi: true,
+    envState: {
+      missionDashboardSettings: {
+        user_id: "owner",
+        mission_statement: "Launch ME3 with a dependable assistant.",
+        settings_json: JSON.stringify({ mainGoal: "Ship the launch checklist" }),
+      },
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+      tasks: [taskRow("task-launch", "Prepare launch checklist", "project-launch")],
+    },
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["Prepare launch checklist"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      aiCalled: true,
     },
   },
   {
@@ -1921,7 +1988,11 @@ describe("Core chat golden transcript evals", () => {
     if (scenario.expected.missionTaskArchived) {
       expect(env.state.tasks.at(-1)?.archived_at).toEqual(expect.any(String));
     }
-    if (scenario.expected.capabilityId.startsWith("core.mission.task.")) {
+    if (
+      scenario.expected.capabilityId === "core.mission.task.create" ||
+      scenario.expected.capabilityId === "core.mission.task.update" ||
+      scenario.expected.capabilityId === "core.mission.task.archive"
+    ) {
       const expectedKind =
         scenario.expected.capabilityId === "core.mission.task.create"
           ? "mission.task_created"

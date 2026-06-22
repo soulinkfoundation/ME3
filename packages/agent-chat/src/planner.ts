@@ -107,6 +107,14 @@ export function planCoreChatToolTurn(
     });
   }
 
+  if (isCoreChatMissionTaskListRequest(messageText)) {
+    return capabilityDecision("core.mission.task.list", {
+      kind: "read_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to list or inspect Mission Control tasks.",
+    });
+  }
+
   if (isCoreChatMissionTaskArchiveRequest(messageText)) {
     return capabilityDecision("core.mission.task.archive", {
       kind: "write_action",
@@ -242,6 +250,21 @@ export function isCoreChatMissionTaskCreateRequest(messageText: string): boolean
   if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
   return /\b(?:add|create|make)\s+(?:a\s+)?(?:mission\s+control\s+)?task\b/i.test(
     messageText,
+  );
+}
+
+export function isCoreChatMissionTaskListRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (/\b(?:prioriti[sz]e|clean up|cleanup|plan|strategy|strategize)\b/i.test(messageText)) {
+    return false;
+  }
+  return (
+    /\b(?:list|show|check|read|pull up)\s+(?:my\s+|the\s+)?(?:mission\s+control\s+)?(?:(?:backlog|todo|to do|doing|in progress|review|done|complete|completed)\s+)?(?:tasks?|todos?)\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:what(?:'s| is)|which tasks? (?:are|is))\s+(?:in\s+)?(?:backlog|todo|to do|doing|in progress|review|done|complete|completed)\b/i.test(
+      messageText,
+    )
   );
 }
 

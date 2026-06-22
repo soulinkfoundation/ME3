@@ -115,6 +115,20 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "write",
   },
   {
+    name: "direct Mission Control task list becomes a read action",
+    messageText: "Show backlog tasks for project ME3 Launch.",
+    kind: "read_action",
+    capabilityId: "core.mission.task.list",
+    sideEffectLevel: "read",
+  },
+  {
+    name: "Mission Control prioritisation stays conversational",
+    messageText: "Help me prioritise my Mission Control tasks based on my goals.",
+    kind: "conversation",
+    capabilityId: "core.agent-chat.conversation",
+    sideEffectLevel: "none",
+  },
+  {
     name: "Mission Control task exploration still stays conversational",
     messageText: "I want to test Mission Control tasks and projects.",
     kind: "conversation",
