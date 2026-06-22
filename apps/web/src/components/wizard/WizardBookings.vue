@@ -1464,8 +1464,11 @@ onMounted(() => {
             <div>
               <h3 class="confirmation-email-title">Confirmation email</h3>
               <p class="confirmation-email-lead">
-                Booking confirmations use your Account email sender. Save and
-                test the sender before taking live bookings.
+                Booking confirmations use your account email sender,
+                <RouterLink class="confirmation-email-inline-link" to="/account?section=mailbox">
+                  see settings
+                </RouterLink>.
+                Save and test the sender before taking live bookings.
               </p>
             </div>
             <div class="confirmation-email-actions">
@@ -1483,9 +1486,6 @@ onMounted(() => {
                   isSendingBookingConfirmationTest ? "Sending..." : "Send test"
                 }}</span>
               </button>
-              <RouterLink class="confirmation-email-settings" to="/account?section=mailbox">
-                Email settings
-              </RouterLink>
             </div>
           </div>
 
@@ -1495,13 +1495,11 @@ onMounted(() => {
           </label>
 
           <div class="form-group">
-            <label for="booking-confirmation-message">
-              Extra message for the requester
-            </label>
             <textarea
               id="booking-confirmation-message"
               v-model="bookingConfirmationMessage"
               class="confirmation-email-textarea"
+              aria-label="Extra message for the requester"
               rows="5"
               maxlength="8000"
               placeholder="Optional plain text with links. You can use placeholders."
@@ -1679,14 +1677,15 @@ onMounted(() => {
   min-height: 112px;
 }
 
-.confirmation-email-settings {
+.confirmation-email-inline-link {
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 13px;
   font-weight: 600;
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.confirmation-email-settings:hover {
+.confirmation-email-inline-link:hover {
   color: var(--ui-text, var(--color-text));
 }
 
