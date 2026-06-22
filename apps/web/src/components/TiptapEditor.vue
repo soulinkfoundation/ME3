@@ -1598,20 +1598,6 @@ defineExpose({
 }
 
 @media (max-width: 720px) {
-  .tiptap-editor--workspace .editor-toolbar {
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-    overflow-x: auto;
-    row-gap: 0;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-  }
-
-  .tiptap-editor--workspace .toolbar-btn,
-  .tiptap-editor--workspace .toolbar-divider {
-    flex: 0 0 auto;
-  }
-
   .editor-content-wrapper :deep(.tiptap-gallery) {
     column-count: 2;
   }
@@ -1768,6 +1754,22 @@ defineExpose({
   flex-wrap: wrap;
   justify-content: center;
   row-gap: 4px;
+}
+
+@media (max-width: 720px) {
+  .tiptap-editor--workspace .editor-toolbar {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    row-gap: 0;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .tiptap-editor--workspace .toolbar-btn,
+  .tiptap-editor--workspace .toolbar-divider {
+    flex: 0 0 auto;
+  }
 }
 
 .tiptap-editor--workspace .editor-content-wrapper {
