@@ -2515,6 +2515,48 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     return c.json({ threads: (rows.results || []).map(serializeAssistantThread) });
   });
 
+  app.delete("/api/assistant/threads", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    if (c.req.query("status") !== "archived") {
+      return c.json({ ok: false, error: "Archived status is required" }, 400);
+    }
+
+    const countRow = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS count
+       FROM assistant_threads
+       WHERE owner_id = ? AND status = 'archived'`,
+    )
+      .bind(ownerId)
+      .first<{ count: number }>();
+    const deleted = Number(countRow?.count || 0);
+
+    if (deleted > 0) {
+      await c.env.DB.prepare(
+        `UPDATE assistant_messages
+         SET content = '', metadata_json = '{}'
+         WHERE owner_id = ?
+           AND thread_id IN (
+             SELECT id FROM assistant_threads
+             WHERE owner_id = ? AND status = 'archived'
+           )`,
+      )
+        .bind(ownerId, ownerId)
+        .run();
+      await c.env.DB.prepare(
+        `UPDATE assistant_threads
+         SET status = 'deleted', deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP),
+             archived_at = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE owner_id = ? AND status = 'archived'`,
+      )
+        .bind(ownerId)
+        .run();
+    }
+
+    return c.json({ ok: true, deleted });
+  });
+
   app.patch("/api/assistant/threads/:threadId", async (c) => {
     const ownerId = await requireOwner(c);
     if (!ownerId) return unauthorized(c);

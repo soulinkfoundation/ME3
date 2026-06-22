@@ -532,6 +532,21 @@ function createEnv(): Env & {
                         }
                       : thread,
                   );
+                } else if (
+                  sql.includes("status = 'deleted'") &&
+                  sql.includes("status = 'archived'")
+                ) {
+                  state.assistantThreads = state.assistantThreads.map((thread) =>
+                    thread.owner_id === values[0] && thread.status === "archived"
+                      ? {
+                          ...thread,
+                          status: "deleted",
+                          deleted_at: thread.deleted_at || "2026-05-11T10:09:00Z",
+                          archived_at: null,
+                          updated_at: "2026-05-11T10:09:00Z",
+                        }
+                      : thread,
+                  );
                 } else if (sql.includes("status = 'deleted'")) {
                   state.assistantThreads = state.assistantThreads.map((thread) =>
                     thread.id === values[0] && thread.owner_id === values[1]
@@ -558,11 +573,25 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("UPDATE assistant_messages")) {
-                state.messages = state.messages.map((message) =>
-                  message.ownerId === values[0] && message.threadId === values[1]
-                    ? { ...message, content: "", metadata_json: "{}" }
-                    : message,
-                );
+                const ownerId = values[0] as string;
+                const archivedThreadIds = sql.includes("thread_id IN")
+                  ? new Set(
+                      state.assistantThreads
+                        .filter(
+                          (thread) =>
+                            thread.owner_id === ownerId && thread.status === "archived",
+                        )
+                        .map((thread) => thread.id),
+                    )
+                  : null;
+                state.messages = state.messages.map((message) => {
+                  const matches =
+                    message.ownerId === ownerId &&
+                    (archivedThreadIds
+                      ? archivedThreadIds.has(message.threadId || "")
+                      : message.threadId === values[1]);
+                  return matches ? { ...message, content: "", metadata_json: "{}" } : message;
+                });
               }
 
               if (sql.includes("INSERT INTO assistant_messages")) {
@@ -1901,6 +1930,18 @@ function createEnv(): Env & {
                 return {
                   count: state.mailboxMessages.filter(
                     (message) => message.mailbox_id === mailboxId,
+                  ).length,
+                } as T;
+              }
+
+              if (
+                sql.includes("COUNT(*) AS count") &&
+                sql.includes("FROM assistant_threads")
+              ) {
+                return {
+                  count: state.assistantThreads.filter(
+                    (thread) =>
+                      thread.owner_id === values[0] && thread.status === "archived",
                   ).length,
                 } as T;
               }
@@ -5892,6 +5933,108 @@ describe("ME3 Core Worker auth", () => {
     expect(deleteResponse.status).toBe(200);
     expect(env.assistantThreads[0]?.status).toBe("deleted");
     expect(env.messages[0]?.content).toBe("");
+  });
+
+  it("bulk deletes archived assistant threads", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.assistantThreads.push(
+      {
+        id: "thread-active",
+        owner_id: "owner",
+        title: "Keep me",
+        origin_surface: "assistant",
+        project_id: null,
+        status: "active",
+        pinned_at: null,
+        archived_at: null,
+        deleted_at: null,
+        last_message_at: "2026-05-11T10:00:00Z",
+        created_at: "2026-05-11T09:00:00Z",
+        updated_at: "2026-05-11T10:00:00Z",
+      },
+      {
+        id: "thread-archived-1",
+        owner_id: "owner",
+        title: "Archive one",
+        origin_surface: "assistant",
+        project_id: null,
+        status: "archived",
+        pinned_at: null,
+        archived_at: "2026-05-11T11:00:00Z",
+        deleted_at: null,
+        last_message_at: "2026-05-11T08:00:00Z",
+        created_at: "2026-05-11T07:00:00Z",
+        updated_at: "2026-05-11T11:00:00Z",
+      },
+      {
+        id: "thread-archived-2",
+        owner_id: "owner",
+        title: "Archive two",
+        origin_surface: "assistant",
+        project_id: null,
+        status: "archived",
+        pinned_at: null,
+        archived_at: "2026-05-11T12:00:00Z",
+        deleted_at: null,
+        last_message_at: "2026-05-11T09:00:00Z",
+        created_at: "2026-05-11T07:30:00Z",
+        updated_at: "2026-05-11T12:00:00Z",
+      },
+    );
+    env.messages.push(
+      {
+        id: "message-active",
+        ownerId: "owner",
+        role: "user",
+        content: "Keep this.",
+        threadId: "thread-active",
+        created_at: "2026-05-11T10:00:00Z",
+      },
+      {
+        id: "message-archived-1",
+        ownerId: "owner",
+        role: "user",
+        content: "Delete this.",
+        threadId: "thread-archived-1",
+        created_at: "2026-05-11T10:00:00Z",
+      },
+      {
+        id: "message-archived-2",
+        ownerId: "owner",
+        role: "assistant",
+        content: "Delete this too.",
+        threadId: "thread-archived-2",
+        created_at: "2026-05-11T10:01:00Z",
+      },
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/threads?status=archived", {
+        method: "DELETE",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({ ok: true, deleted: 2 });
+    expect(
+      env.assistantThreads.find((thread) => thread.id === "thread-active")?.status,
+    ).toBe("active");
+    expect(
+      env.assistantThreads.filter((thread) => thread.status === "archived"),
+    ).toHaveLength(0);
+    expect(env.messages.find((message) => message.id === "message-active")?.content).toBe(
+      "Keep this.",
+    );
+    expect(env.messages.find((message) => message.id === "message-archived-1")?.content).toBe(
+      "",
+    );
+    expect(env.messages.find((message) => message.id === "message-archived-2")?.content).toBe(
+      "",
+    );
   });
 
   it("rejects unsupported assistant chat model selections", async () => {

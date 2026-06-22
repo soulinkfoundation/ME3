@@ -652,6 +652,7 @@ const assistantThreadsError = ref("");
 const archivedThreadsModalOpen = ref(false);
 const archivedAssistantThreads = ref<AssistantThread[]>([]);
 const archivedAssistantThreadsLoading = ref(false);
+const archivedAssistantThreadsDeleting = ref(false);
 const archivedAssistantThreadsError = ref("");
 const assistantProjects = ref<MissionProject[]>([]);
 const assistantProjectsLoading = ref(false);
@@ -1829,6 +1830,44 @@ async function deleteArchivedAssistantThread(thread: AssistantThread) {
   archivedAssistantThreads.value = archivedAssistantThreads.value.filter(
     (item) => item.id !== thread.id,
   );
+}
+
+async function deleteAllArchivedAssistantThreads() {
+  if (
+    archivedAssistantThreadsLoading.value ||
+    archivedAssistantThreadsDeleting.value ||
+    archivedAssistantThreads.value.length === 0
+  ) {
+    return;
+  }
+  const archivedThreadIds = new Set(
+    archivedAssistantThreads.value.map((thread) => thread.id),
+  );
+  const confirmed = window.confirm(
+    `Delete all archived chats? This removes transcript text from ${archivedAssistantThreads.value.length} archived chats.`,
+  );
+  if (!confirmed) return;
+
+  archivedAssistantThreadsDeleting.value = true;
+  archivedAssistantThreadsError.value = "";
+  try {
+    await api.delete("/assistant/threads?status=archived");
+    archivedAssistantThreads.value = [];
+    if (
+      assistantThreadId.value &&
+      archivedThreadIds.has(assistantThreadId.value)
+    ) {
+      await startNewAssistantChat(null, { closeHistory: false });
+    }
+    toastSuccess("Archived chats deleted");
+  } catch (err) {
+    archivedAssistantThreadsError.value = messageFromUnknown(
+      err,
+      "Archived chats could not be deleted.",
+    );
+  } finally {
+    archivedAssistantThreadsDeleting.value = false;
+  }
 }
 
 async function exportAssistantThread(thread: AssistantThread) {
@@ -5122,17 +5161,36 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <h2 id="archived-chats-title">Archived Chats</h2>
               <p>Download, restore, or delete archived chats.</p>
             </div>
-            <Button
-              color="ghost"
-              shape="soft"
-              size="compact"
-              icon-only
-              type="button"
-              aria-label="Close"
-              @click="closeArchivedThreadsModal"
-            >
-              <UiIcon name="X" :size="20" />
-            </Button>
+            <div class="assistant-modal__header-actions">
+              <Button
+                v-if="
+                  !archivedAssistantThreadsLoading &&
+                  archivedAssistantThreads.length > 0
+                "
+                color="danger"
+                shape="soft"
+                size="compact"
+                type="button"
+                :disabled="archivedAssistantThreadsDeleting"
+                @click="deleteAllArchivedAssistantThreads"
+              >
+                <template #icon>
+                  <UiIcon name="Trash2" :size="15" aria-hidden="true" />
+                </template>
+                {{ archivedAssistantThreadsDeleting ? "Deleting..." : "Delete all" }}
+              </Button>
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                aria-label="Close"
+                @click="closeArchivedThreadsModal"
+              >
+                <UiIcon name="X" :size="20" />
+              </Button>
+            </div>
           </header>
 
           <p
@@ -5157,6 +5215,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <button
                 type="button"
                 class="assistant-archived-thread__main"
+                :disabled="archivedAssistantThreadsDeleting"
                 @click="
                   selectAssistantThread(thread.id);
                   closeArchivedThreadsModal();
@@ -5177,7 +5236,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   type="button"
                   title="Export transcript"
                   aria-label="Export transcript"
-                  :disabled="assistantThreadActionId === thread.id"
+                  :disabled="
+                    archivedAssistantThreadsDeleting ||
+                    assistantThreadActionId === thread.id
+                  "
                   @click="exportAssistantThread(thread)"
                 >
                   <UiIcon name="Download" :size="15" aria-hidden="true" />
@@ -5186,7 +5248,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   type="button"
                   title="Restore chat"
                   aria-label="Restore chat"
-                  :disabled="assistantThreadActionId === thread.id"
+                  :disabled="
+                    archivedAssistantThreadsDeleting ||
+                    assistantThreadActionId === thread.id
+                  "
                   @click="restoreArchivedAssistantThread(thread)"
                 >
                   <UiIcon name="ArchiveRestore" :size="15" aria-hidden="true" />
@@ -5195,7 +5260,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   type="button"
                   title="Delete chat"
                   aria-label="Delete chat"
-                  :disabled="assistantThreadActionId === thread.id"
+                  :disabled="
+                    archivedAssistantThreadsDeleting ||
+                    assistantThreadActionId === thread.id
+                  "
                   @click="deleteArchivedAssistantThread(thread)"
                 >
                   <UiIcon name="Trash2" :size="15" aria-hidden="true" />
@@ -8081,6 +8149,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
   cursor: pointer;
 }
 
+.assistant-archived-thread__main:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .assistant-archived-thread__main span {
   display: grid;
   gap: 2px;
@@ -8128,6 +8201,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-archived-thread__actions button:hover:not(:disabled) {
   background: var(--ui-surface);
   color: var(--ui-text);
+}
+
+.assistant-archived-thread__actions button:disabled {
+  cursor: not-allowed;
 }
 
 .assistant-error {
