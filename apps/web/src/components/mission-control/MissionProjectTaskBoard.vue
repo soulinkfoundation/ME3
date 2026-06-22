@@ -103,12 +103,12 @@ function blurOnEnter(event: KeyboardEvent) {
       {{ error }}
     </p>
 
-    <div v-if="loading" class="empty-row">Loading project tasks...</div>
+    <div v-if="loading" class="empty-row">Loading project items...</div>
     <template v-else>
       <section
         v-if="pinnedTasks.length"
         class="project-pinned-board"
-        aria-label="Pinned tasks"
+        aria-label="Pinned items"
       >
         <div class="project-board__column-header">
           <h2>Pinned</h2>
@@ -376,7 +376,7 @@ function blurOnEnter(event: KeyboardEvent) {
               v-if="!selectedProject"
               :value="taskProjectId"
               class="project-task-composer__project"
-              aria-label="Task project"
+              aria-label="Project"
               @change="emit('update:taskProjectId', inputValue($event))"
               @keydown.esc.prevent="emit('cancel-composer')"
             >
@@ -393,7 +393,7 @@ function blurOnEnter(event: KeyboardEvent) {
               :value="taskDraft"
               class="project-task-composer__input"
               type="text"
-              placeholder="Task name"
+              placeholder="Title"
               autocomplete="off"
               @input="emit('update:taskDraft', inputValue($event))"
               @keydown.esc.prevent="emit('cancel-composer')"
@@ -405,7 +405,7 @@ function blurOnEnter(event: KeyboardEvent) {
                 size="compact"
                 icon-only
                 type="button"
-                aria-label="Cancel task"
+                aria-label="Cancel item"
                 :disabled="saving"
                 @click="emit('cancel-composer')"
               >
@@ -417,7 +417,7 @@ function blurOnEnter(event: KeyboardEvent) {
                 size="compact"
                 icon-only
                 type="submit"
-                aria-label="Add task"
+                aria-label="Add item"
                 :disabled="createDisabled"
               >
                 <UiIcon name="Plus" :size="16" />
@@ -432,7 +432,7 @@ function blurOnEnter(event: KeyboardEvent) {
             @click="emit('open-composer', column)"
           >
             <UiIcon name="Plus" :size="15" />
-            Add task
+            Add
           </button>
         </section>
         <button

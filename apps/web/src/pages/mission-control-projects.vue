@@ -559,7 +559,7 @@ const projectTaskCreateDisabled = computed(
     Boolean(!selectedProjectDetail.value && !projectTaskProjectId.value),
 );
 const projectViewToggleLabel = computed(() =>
-  projectTaskViewMode.value === "kanban" ? "Task list" : "Task board",
+  projectTaskViewMode.value === "kanban" ? "List view" : "Board view",
 );
 const projectViewToggleIcon = computed<UiIconName>(() =>
   projectTaskViewMode.value === "kanban" ? "List" : "SquareKanban",
@@ -1025,7 +1025,7 @@ async function loadCompletedProjectTasks(
     completedProjectTasksNextCursor.value = response.nextCursor || null;
   } catch (e) {
     completedProjectTasksError.value =
-      e instanceof ApiError ? e.message : "Completed tasks could not load";
+      e instanceof ApiError ? e.message : "Completed items could not load";
     completedProjectTasks.value = [];
     completedProjectTasksNextCursor.value = null;
   } finally {
@@ -1065,7 +1065,7 @@ async function loadMoreProjectTasks() {
     projectTasksNextCursor.value = response.nextCursor || null;
   } catch (e) {
     projectTasksError.value =
-      e instanceof ApiError ? e.message : "Could not load more project tasks";
+      e instanceof ApiError ? e.message : "Could not load more project items";
   } finally {
     projectTasksLoadingMore.value = false;
   }
@@ -1089,7 +1089,7 @@ async function loadMoreCompletedProjectTasks() {
     completedProjectTasksNextCursor.value = response.nextCursor || null;
   } catch (e) {
     completedProjectTasksError.value =
-      e instanceof ApiError ? e.message : "Could not load more completed tasks";
+      e instanceof ApiError ? e.message : "Could not load more completed items";
   } finally {
     completedProjectTasksLoadingMore.value = false;
   }
@@ -1509,7 +1509,7 @@ async function addProjectTask(target: ProjectBoardStatus | ProjectBoardColumn) {
     resetProjectTaskComposer();
   } catch (e) {
     projectTasksError.value =
-      e instanceof ApiError ? e.message : "Could not add task";
+      e instanceof ApiError ? e.message : "Could not add item";
   } finally {
     projectTaskSaving.value = false;
   }
@@ -1743,7 +1743,7 @@ async function removeProjectColumn(column: ProjectBoardColumn) {
   const target = projectBoardColumns.value.find((item) => item.id !== column.id);
   if (!target) return;
   const confirmed = window.confirm(
-    `Remove "${column.label}"? Tasks in it will move to "${target.label}".`,
+    `Remove "${column.label}"? Items in it will move to "${target.label}".`,
   );
   if (!confirmed) return;
   projectColumnActionId.value = column.id;
@@ -1834,7 +1834,7 @@ async function archiveProjectTask(task: MissionTask): Promise<boolean> {
     return true;
   } catch (e) {
     projectTasksError.value =
-      e instanceof ApiError ? e.message : "Could not archive task";
+      e instanceof ApiError ? e.message : "Could not archive item";
     return false;
   } finally {
     projectTaskActionId.value = "";
@@ -2363,9 +2363,9 @@ onBeforeUnmount(() => {
         <section v-else-if="projectCompletedOpen" class="completed-tasks-view">
           <header class="completed-tasks-view__header">
             <div>
-              <h2>Completed tasks</h2>
+              <h2>Completed items</h2>
               <p>
-                Done tasks
+                Done items
                 <template v-if="selectedProjectDetail">
                   for {{ selectedProjectDetail.name }}
                 </template>
@@ -2377,8 +2377,8 @@ onBeforeUnmount(() => {
               size="compact"
               icon-only
               type="button"
-              aria-label="Refresh completed tasks"
-              title="Refresh completed tasks"
+              aria-label="Refresh completed items"
+              title="Refresh completed items"
               :disabled="completedProjectTasksLoading"
               @click="loadCompletedProjectTasks"
             >
@@ -2392,16 +2392,16 @@ onBeforeUnmount(() => {
             {{ completedProjectTasksError }}
           </p>
           <div v-if="completedProjectTasksLoading" class="empty-row">
-            Loading completed tasks...
+            Loading completed items...
           </div>
           <div v-else-if="completedProjectTasks.length === 0" class="empty-row">
-            No completed tasks yet.
+            No completed items yet.
           </div>
           <div v-else class="completed-tasks-table-wrap">
             <table class="completed-tasks-table">
               <thead>
                 <tr>
-                  <th>Task</th>
+                  <th>Item</th>
                   <th>Project</th>
                   <th>Completed</th>
                 </tr>

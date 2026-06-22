@@ -87,12 +87,12 @@ function taskDescription(task: MissionTask): string {
       {{ error }}
     </p>
 
-    <div v-if="loading" class="empty-row">Loading project tasks...</div>
+    <div v-if="loading" class="empty-row">Loading project items...</div>
     <template v-else>
       <section
         v-if="pinnedTasks.length"
         class="project-task-group project-task-group--pinned"
-        aria-label="Pinned tasks"
+        aria-label="Pinned items"
       >
         <header class="project-task-group__header">
           <div class="project-task-group__title-wrap">
@@ -185,7 +185,7 @@ function taskDescription(task: MissionTask): string {
         v-for="group in groups"
         :key="group.id"
         class="project-task-group"
-        :aria-label="`${group.label} tasks`"
+        :aria-label="`${group.label} items`"
       >
         <header class="project-task-group__header">
           <div class="project-task-group__title-wrap">
@@ -232,7 +232,7 @@ function taskDescription(task: MissionTask): string {
               @click="emit('open-composer', group.project?.id || '')"
             >
               <UiIcon name="Plus" :size="15" />
-              Add task
+              Add
             </button>
           </div>
         </header>
@@ -246,7 +246,7 @@ function taskDescription(task: MissionTask): string {
             v-if="!selectedProject"
             :value="taskProjectId"
             class="project-task-list-composer__project"
-            aria-label="Task project"
+            aria-label="Project"
             @change="emit('update:taskProjectId', inputValue($event))"
             @keydown.esc.prevent="emit('cancel-composer')"
           >
@@ -263,7 +263,7 @@ function taskDescription(task: MissionTask): string {
             :value="taskDraft"
             class="project-task-list-composer__input"
             type="text"
-            placeholder="Task name"
+            placeholder="Title"
             autocomplete="off"
             @input="emit('update:taskDraft', inputValue($event))"
             @keydown.esc.prevent="emit('cancel-composer')"
@@ -275,7 +275,7 @@ function taskDescription(task: MissionTask): string {
               size="compact"
               icon-only
               type="button"
-              aria-label="Cancel task"
+              aria-label="Cancel item"
               :disabled="saving"
               @click="emit('cancel-composer')"
             >
@@ -287,7 +287,7 @@ function taskDescription(task: MissionTask): string {
               size="compact"
               icon-only
               type="submit"
-              aria-label="Add task"
+              aria-label="Add item"
               :disabled="createDisabled"
             >
               <UiIcon name="Plus" :size="16" />
@@ -296,7 +296,7 @@ function taskDescription(task: MissionTask): string {
         </form>
 
         <div v-if="group.tasks.length === 0" class="empty-row">
-          No active tasks.
+          No items yet.
         </div>
 
         <article

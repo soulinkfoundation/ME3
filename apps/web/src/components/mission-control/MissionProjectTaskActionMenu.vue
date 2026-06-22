@@ -96,8 +96,8 @@ onBeforeUnmount(() => {
       icon-only
       type="button"
       class="project-task-action-menu__button"
-      aria-label="Task actions"
-      title="Task actions"
+      aria-label="Item actions"
+      title="Item actions"
       aria-haspopup="menu"
       :aria-expanded="open ? 'true' : 'false'"
       :disabled="disabled"
@@ -114,7 +114,7 @@ onBeforeUnmount(() => {
         @click="togglePin"
       >
         <UiIcon name="Star" :size="15" aria-hidden="true" />
-        {{ task.pinnedAt ? "Unpin task" : "Pin task" }}
+        {{ task.pinnedAt ? "Unpin item" : "Pin item" }}
       </button>
       <button
         type="button"
@@ -123,7 +123,7 @@ onBeforeUnmount(() => {
         @click="archiveTask"
       >
         <UiIcon name="Trash2" :size="15" aria-hidden="true" />
-        Delete task
+        Delete item
       </button>
     </div>
   </div>

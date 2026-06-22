@@ -116,7 +116,7 @@ function closeFromBackdrop() {
             id="task-detail-modal-title"
             :class="{ 'task-detail-modal__title--hidden': !weeklyReview }"
           >
-            {{ weeklyReview ? "Weekly Review" : "Task details" }}
+            {{ weeklyReview ? "Weekly Review" : "Item details" }}
           </h2>
           <Button
             color="ghost"
@@ -362,7 +362,7 @@ function closeFromBackdrop() {
             <TiptapEditor
               :model-value="detailDraft.description"
               class="task-note-body-field__editor"
-              placeholder="Add detail for the runner or reviewer"
+              placeholder="Add notes"
               @update:model-value="
                 updateDetailDraft({ description: $event })
               "
