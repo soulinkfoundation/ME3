@@ -71,6 +71,7 @@ function selectEmoji(emoji: { i: string }) {
 
 function clearIcon() {
   emit("update:modelValue", "");
+  closePicker();
 }
 
 function togglePicker() {
@@ -99,16 +100,25 @@ function handleOutsidePointerDown(event: PointerEvent) {
   closePicker();
 }
 
+function handleEscapeKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    closePicker();
+  }
+}
+
 watch(showPicker, (isOpen) => {
   if (isOpen) {
     document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+    document.addEventListener("keydown", handleEscapeKeydown, true);
   } else {
     document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+    document.removeEventListener("keydown", handleEscapeKeydown, true);
   }
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+  document.removeEventListener("keydown", handleEscapeKeydown, true);
 });
 
 const filteredIconNames = computed(() => {
@@ -188,7 +198,6 @@ const filteredIconNames = computed(() => {
 
     <!-- Picker dropdown -->
     <div v-if="showPicker" class="picker-dropdown">
-      <div class="picker-backdrop" @click="closePicker" />
       <div class="picker-content">
         <!-- Tabs -->
         <div class="picker-tabs">
@@ -357,12 +366,6 @@ const filteredIconNames = computed(() => {
   left: 0;
   z-index: 100;
   padding-top: 8px;
-}
-
-.picker-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
 }
 
 .picker-content {
