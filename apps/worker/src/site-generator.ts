@@ -774,6 +774,7 @@ function paidBookingWidgetScript(): string {
   var dayNames=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
   function setStatus(message,isError){statusEl.textContent=message||'';statusEl.classList.toggle('is-error',!!isError);}
   function showReturnStatus(message,isError){setStatus(message,isError);try{root.scrollIntoView({block:'start'});}catch(_error){}}
+  function clearBookingParams(){try{var url=new URL(window.location.href);url.searchParams.delete('booking');url.searchParams.delete('session_id');window.history.replaceState({},'',url.pathname+(url.search||'')+url.hash);}catch(_error){}}
   function isValidEmail(value){return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value||'').trim().toLowerCase());}
   function validateForm(){
     var hasInvalidEmail=emailInput&&emailInput.value&&!isValidEmail(emailInput.value);
@@ -922,7 +923,7 @@ function paidBookingWidgetScript(): string {
     if(!selected.pricing||!selected.pricing.enabled){
       fetch('/api/book/'+encodeURIComponent(config.username)+'/free',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
         .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Failed to confirm booking.');return data;});})
-        .then(function(){setStatus('Your booking is confirmed.');})
+        .then(function(){form.reset();dateInput.value='';selectedTime='';timeInput.value='';if(selectedTimeEl)selectedTimeEl.textContent='';setDetailsVisible(false);slotsEl.hidden=true;emptyEl.hidden=true;setStatus('Your booking is confirmed.');})
         .catch(function(error){setStatus(error.message||'Failed to confirm booking.',true);});
       return;
     }
@@ -936,10 +937,11 @@ function paidBookingWidgetScript(): string {
     showReturnStatus('Confirming your booking...');
     fetch('/api/book/'+encodeURIComponent(config.username)+'/complete-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:params.get('session_id')})})
       .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Payment succeeded, but booking confirmation failed.');return data;});})
-      .then(function(){showReturnStatus('Payment successful. Your booking is confirmed. A confirmation email will be sent soon');})
+      .then(function(){showReturnStatus('Payment successful. Your booking is confirmed. A confirmation email will be sent soon');clearBookingParams();})
       .catch(function(error){showReturnStatus(error.message,true);});
   } else if(params.get('booking')==='cancelled'){
     showReturnStatus('Checkout cancelled. No payment was taken.',true);
+    clearBookingParams();
   }
 })();`;
 }

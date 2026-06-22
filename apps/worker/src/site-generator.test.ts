@@ -214,8 +214,13 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("setCustomValidity(hasInvalidEmail?'Enter a valid email address.':'')");
     expect(files["index.html"]).toContain("if(!validateForm()) return;");
     expect(files["index.html"]).toContain("'/free'");
+    expect(files["index.html"]).toContain("form.reset();dateInput.value='';selectedTime='';timeInput.value=''");
+    expect(files["index.html"]).toContain("slotsEl.hidden=true;emptyEl.hidden=true;setStatus('Your booking is confirmed.')");
     expect(files["index.html"]).toContain("Your booking is confirmed.");
     expect(files["index.html"]).toContain("data-booking-status");
+    expect(files["index.html"]).toContain("clearBookingParams()");
+    expect(files["index.html"]).toContain("url.searchParams.delete('booking')");
+    expect(files["index.html"]).toContain("url.searchParams.delete('session_id')");
     expect(files["index.html"]).toContain("showReturnStatus('Confirming your booking...')");
     expect(files["index.html"]).toContain("A confirmation email will be sent soon");
     expect(files["index.html"]).not.toContain("if this site has email sending configured");
