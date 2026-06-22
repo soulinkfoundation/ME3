@@ -64,7 +64,7 @@ type JournalProjectLink = {
   taskTitle: string | null;
 };
 
-type CaptureMode = "task" | "link";
+type CaptureMode = "task" | "link" | "reminder";
 type OrganizeTaskSuggestion = JournalTaskMarkerSuggestion & {
   selected: boolean;
 };
@@ -99,6 +99,9 @@ const captureMode = ref<CaptureMode>("task");
 const captureText = ref("");
 const captureTitle = ref("");
 const captureProjectId = ref("");
+const captureReminderDate = ref("");
+const captureReminderTime = ref("");
+const captureReminderTimezone = ref(browserTimezone());
 const captureSaving = ref(false);
 const captureError = ref("");
 const organizeOpen = ref(false);
@@ -146,6 +149,28 @@ const inlineJournalChipIds = computed(
 const fallbackEntryLinks = computed(() =>
   entryLinks.value.filter((link) => !inlineJournalChipIds.value.has(link.id)),
 );
+const captureHeading = computed(() => {
+  if (captureMode.value === "task") return "Create task";
+  if (captureMode.value === "reminder") return "Create reminder";
+  return "Link to project";
+});
+const captureTextLabel = computed(() => {
+  if (captureMode.value === "task") return "Description";
+  if (captureMode.value === "reminder") return "Notes";
+  return "Note";
+});
+const captureSubmitDisabled = computed(() => {
+  if (captureSaving.value) return true;
+  if (captureMode.value === "reminder") {
+    return (
+      !captureTitle.value.trim() ||
+      !captureReminderDate.value ||
+      !captureReminderTime.value ||
+      !captureReminderTimezone.value.trim()
+    );
+  }
+  return !captureProjectId.value || !captureText.value.trim();
+});
 
 function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -153,6 +178,21 @@ function dateToKey(date: Date): string {
 
 function todayKey(): string {
   return dateToKey(new Date());
+}
+
+function browserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function defaultReminderDate(): string {
+  const today = todayKey();
+  return selectedDate.value >= today ? selectedDate.value : today;
+}
+
+function defaultReminderTime(): string {
+  const date = new Date();
+  date.setHours(date.getHours() + 1, 0, 0, 0);
+  return `${String(date.getHours()).padStart(2, "0")}:00`;
 }
 
 function normalizeLocalDateInput(value: string): string {
@@ -385,19 +425,24 @@ async function openCapture(mode: CaptureMode) {
     error.value = "Highlight journal text first.";
     return;
   }
-  try {
-    await loadProjects();
-  } catch (projectError) {
-    error.value =
-      projectError instanceof Error
-        ? projectError.message
-        : "Could not load projects.";
-    return;
+  if (mode !== "reminder") {
+    try {
+      await loadProjects();
+    } catch (projectError) {
+      error.value =
+        projectError instanceof Error
+          ? projectError.message
+          : "Could not load projects.";
+      return;
+    }
   }
   captureMode.value = mode;
   captureText.value = text;
   captureTitle.value = defaultCaptureTitle(text);
   captureProjectId.value = captureProjectId.value || projects.value[0]?.id || "";
+  captureReminderDate.value = defaultReminderDate();
+  captureReminderTime.value = defaultReminderTime();
+  captureReminderTimezone.value = captureReminderTimezone.value || browserTimezone();
   captureOpen.value = true;
 }
 
@@ -630,10 +675,23 @@ function closeCapture() {
 
 async function submitCapture() {
   const entry = loadedEntry.value;
-  if (!entry || !captureProjectId.value || captureSaving.value) return;
+  if (!entry || captureSubmitDisabled.value) return;
   captureSaving.value = true;
   captureError.value = "";
   try {
+    if (captureMode.value === "reminder") {
+      await api.post("/agent/reminders", {
+        title: captureTitle.value.trim(),
+        date: captureReminderDate.value,
+        time: captureReminderTime.value,
+        timezone: captureReminderTimezone.value.trim(),
+        recurrence: "none",
+        notes: captureText.value.trim() || undefined,
+      });
+      captureOpen.value = false;
+      return;
+    }
+
     const payload = {
       journalEntryId: entry.id,
       projectId: captureProjectId.value,
@@ -1104,7 +1162,19 @@ onBeforeUnmount(() => {
         type="button"
         @click="openCapture('task')"
       >
-        <UiIcon name="ListTodo" :size="16" />
+        <UiIcon name="CircleCheckBig" :size="16" />
+      </Button>
+      <Button
+        color="ghost"
+        shape="soft"
+        size="compact"
+        icon-only
+        aria-label="Create reminder from highlighted text"
+        title="Create reminder"
+        type="button"
+        @click="openCapture('reminder')"
+      >
+        <UiIcon name="AlarmClock" :size="16" />
       </Button>
       <Button
         color="ghost"
@@ -1123,7 +1193,7 @@ onBeforeUnmount(() => {
     <div v-if="captureOpen" class="journal-capture" role="dialog" aria-modal="true">
       <form class="journal-capture__panel" @submit.prevent="submitCapture">
         <header>
-          <h2>{{ captureMode === "task" ? "Create task" : "Link to project" }}</h2>
+          <h2>{{ captureHeading }}</h2>
           <Button
             color="ghost"
             shape="soft"
@@ -1137,11 +1207,25 @@ onBeforeUnmount(() => {
             <UiIcon name="X" :size="16" />
           </Button>
         </header>
-        <label v-if="captureMode === 'task'">
+        <label v-if="captureMode !== 'link'">
           <span>Title</span>
           <input v-model="captureTitle" type="text" maxlength="180" required />
         </label>
-        <label>
+        <div v-if="captureMode === 'reminder'" class="journal-capture__row">
+          <label>
+            <span>Date</span>
+            <input v-model="captureReminderDate" type="date" required />
+          </label>
+          <label>
+            <span>Time</span>
+            <input v-model="captureReminderTime" type="time" required />
+          </label>
+        </div>
+        <label v-if="captureMode === 'reminder'">
+          <span>Timezone</span>
+          <input v-model="captureReminderTimezone" type="text" required />
+        </label>
+        <label v-if="captureMode !== 'reminder'">
           <select v-model="captureProjectId" aria-label="Project" required>
             <option
               v-for="project in projects"
@@ -1153,8 +1237,12 @@ onBeforeUnmount(() => {
           </select>
         </label>
         <label>
-          <span>{{ captureMode === "task" ? "Description" : "Note" }}</span>
-          <textarea v-model="captureText" rows="5" required />
+          <span>{{ captureTextLabel }}</span>
+          <textarea
+            v-model="captureText"
+            rows="5"
+            :required="captureMode !== 'reminder'"
+          />
         </label>
         <p v-if="captureError" class="journal__message is-error">
           {{ captureError }}
@@ -1165,7 +1253,7 @@ onBeforeUnmount(() => {
             shape="soft"
             size="compact"
             type="submit"
-            :disabled="captureSaving || !captureProjectId || !captureText.trim()"
+            :disabled="captureSubmitDisabled"
           >
             {{ captureSaving ? "Saving" : "Confirm" }}
           </Button>
@@ -1693,6 +1781,12 @@ onBeforeUnmount(() => {
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 0.82rem;
   font-weight: 700;
+}
+
+.journal-capture__row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .journal-capture__panel input,

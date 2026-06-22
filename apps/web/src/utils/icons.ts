@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlarmClock,
   Archive,
   ArchiveRestore,
   ArrowLeft,
@@ -21,6 +22,7 @@ import {
   ChevronUp,
   Circle,
   CircleCheck,
+  CircleCheckBig,
   CircleDollarSign,
   ClipboardCheck,
   Copy,
@@ -112,6 +114,7 @@ export const USER_STAR_ICON: IconNode = [
 
 export const UI_ICONS = {
   Activity,
+  AlarmClock,
   Archive,
   ArchiveRestore,
   ArrowLeft,
@@ -133,6 +136,7 @@ export const UI_ICONS = {
   ChevronUp,
   Circle,
   CircleCheck,
+  CircleCheckBig,
   CircleDollarSign,
   ClipboardCheck,
   Copy,
