@@ -14,7 +14,9 @@ import { useWizardStore } from "../stores/wizard";
 import {
   RECOMMENDED_START_PLUGIN_ID_SET,
   RECOMMENDED_START_PLUGIN_IDS,
+  isFixedCorePlugin,
   isPluginComingSoon,
+  isPluginHiddenFromList,
   isPluginEnabled,
   type PluginRecord,
   type PluginsResponse,
@@ -153,7 +155,9 @@ const profileLink = computed(() =>
 const selectedPluginIdList = computed(() =>
   Array.from(selectedPluginIds.value),
 );
-const startPlugins = computed(() => plugins.value);
+const startPlugins = computed(() =>
+  plugins.value.filter((plugin) => !isPluginHiddenFromList(plugin)),
+);
 const pluginBusyIds = computed(() =>
   pluginsSaving.value ? startPlugins.value.map((plugin) => plugin.id) : [],
 );
@@ -429,7 +433,7 @@ async function savePlugins() {
   try {
     const requestedPluginIds = selectedPluginIds.value;
     const pluginsToUpdate = startPlugins.value.filter((plugin) => {
-      if (isPluginComingSoon(plugin)) return false;
+      if (isPluginComingSoon(plugin) || isFixedCorePlugin(plugin)) return false;
       return isPluginEnabled(plugin) !== requestedPluginIds.has(plugin.id);
     });
 

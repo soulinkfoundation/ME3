@@ -76,6 +76,15 @@ const pluginDisplayOrder = [
   "me3.social-publishing",
 ];
 
+const fixedCorePluginIds = new Set<string>([
+  "me3.agent-chat",
+  "me3.mission-control",
+  "me3.calendar",
+  "me3.journal",
+]);
+
+const hiddenPluginListIds = new Set<string>(["me3.journal"]);
+
 const pluginDisplayRank = new Map(
   pluginDisplayOrder.map((pluginId, index) => [pluginId, index]),
 );
@@ -103,6 +112,14 @@ export function isPluginComingSoon(plugin: PluginRecord) {
     plugin.releaseStage === "coming_soon" ||
     plugin.activationAllowed === false
   );
+}
+
+export function isPluginHiddenFromList(plugin: PluginRecord) {
+  return hiddenPluginListIds.has(plugin.id);
+}
+
+export function isFixedCorePlugin(plugin: PluginRecord) {
+  return fixedCorePluginIds.has(plugin.id);
 }
 
 export function canActivatePlugin(plugin: PluginRecord) {

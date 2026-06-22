@@ -592,6 +592,7 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
+  defaultEnabled: true,
   implementationStatus: CALENDAR_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["workspace.calendar"],
   permissions: [
@@ -1134,7 +1135,7 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
-  defaultEnabled: false,
+  defaultEnabled: true,
   implementationStatus: JOURNAL_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["workspace.journal", "journal.entries.manage"],
   permissions: [
@@ -1200,8 +1201,8 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
   ],
   queuesAndCrons: [],
   notes: [
-    "Bundled through @me3-core/plugin-journal as an optional first-party Core package.",
-    "Journal owns private owner-scoped writing entries; Mission Control owns operational project review.",
+    "Bundled through @me3-core/plugin-journal as a first-party Core package.",
+    "Journal owns private owner-scoped writing entries and is surfaced through Mission Control workflows.",
     "Assistant actions from journal text should be added through explicit capabilities in a later pass.",
   ],
 };

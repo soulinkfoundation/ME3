@@ -26,6 +26,7 @@ import {
 } from "../utils/aiModelCatalog";
 import {
   isPluginComingSoon,
+  isPluginHiddenFromList,
   isPluginEnabled,
   type PluginRecord,
   type PluginsResponse,
@@ -521,7 +522,9 @@ const telegramStatusClass = computed(() => {
 });
 
 const visibleAccountPlugins = computed(() =>
-  plugins.value.filter((plugin) => !isPluginComingSoon(plugin)),
+  plugins.value.filter(
+    (plugin) => !isPluginComingSoon(plugin) && !isPluginHiddenFromList(plugin),
+  ),
 );
 
 const pluginBusyIds = computed(() =>
@@ -2088,7 +2091,7 @@ onMounted(async () => {
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>App Connections</h2>
               <span class="accordion-header-hint">
-                Connect ME£ to other apps
+                Connect ME3 to other apps
               </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
@@ -4281,7 +4284,12 @@ h1 {
 
   .email-row,
   .connection-line {
-    align-items: flex-start;
+    align-items: stretch;
+  }
+
+  .connection-line {
+    flex-direction: column;
+    gap: 10px;
   }
 
   .connection-line__end {

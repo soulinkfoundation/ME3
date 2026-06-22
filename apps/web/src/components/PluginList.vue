@@ -3,8 +3,10 @@ import { computed } from "vue";
 import Button from "./Button.vue";
 import {
   isLocalExecutorPlugin,
+  isFixedCorePlugin,
   isPluginComingSoon,
   isPluginEnabled,
+  isPluginHiddenFromList,
   pluginInfoText,
   pluginNavEmoji,
   sortPluginsForDisplay,
@@ -34,7 +36,9 @@ const emit = defineEmits<{
 
 const visiblePlugins = computed(() =>
   sortPluginsForDisplay(
-    props.plugins.filter((plugin) => !isPluginComingSoon(plugin)),
+    props.plugins.filter(
+      (plugin) => !isPluginComingSoon(plugin) && !isPluginHiddenFromList(plugin),
+    ),
   ),
 );
 
@@ -51,8 +55,13 @@ function isPluginBusy(plugin: PluginRecord) {
 }
 
 function isPluginOn(plugin: PluginRecord) {
+  if (isFixedCorePlugin(plugin)) return true;
   const selected = selectedPluginIdSet.value;
   return selected ? selected.has(plugin.id) : isPluginEnabled(plugin);
+}
+
+function isPluginToggleDisabled(plugin: PluginRecord) {
+  return isPluginBusy(plugin) || isFixedCorePlugin(plugin);
 }
 </script>
 
@@ -71,7 +80,13 @@ function isPluginOn(plugin: PluginRecord) {
           <div class="plugin-row__title-line">
             <h3>{{ plugin.name }}</h3>
             <span
-              v-if="recommendedPluginIdSet.has(plugin.id)"
+              v-if="isFixedCorePlugin(plugin)"
+              class="plugin-row__badge"
+            >
+              Core
+            </span>
+            <span
+              v-else-if="recommendedPluginIdSet.has(plugin.id)"
               class="plugin-row__badge"
             >
               Recommended
@@ -92,15 +107,20 @@ function isPluginOn(plugin: PluginRecord) {
           </Button>
           <label
             class="plugin-toggle"
-            :class="{ 'is-busy': isPluginBusy(plugin) }"
+            :class="{
+              'is-busy': isPluginBusy(plugin),
+              'is-locked': isFixedCorePlugin(plugin),
+            }"
           >
             <input
               type="checkbox"
               class="plugin-toggle__input"
               :checked="isPluginOn(plugin)"
-              :disabled="isPluginBusy(plugin)"
+              :disabled="isPluginToggleDisabled(plugin)"
               :aria-label="
-                isPluginOn(plugin)
+                isFixedCorePlugin(plugin)
+                  ? `${plugin.name} is included in ME3 Core`
+                  : isPluginOn(plugin)
                   ? `Disable ${plugin.name}`
                   : `Enable ${plugin.name}`
               "
@@ -210,6 +230,10 @@ function isPluginOn(plugin: PluginRecord) {
 .plugin-toggle.is-busy {
   cursor: wait;
   opacity: 0.72;
+}
+
+.plugin-toggle.is-locked {
+  cursor: default;
 }
 
 .plugin-toggle__input {

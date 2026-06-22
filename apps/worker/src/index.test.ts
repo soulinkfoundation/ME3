@@ -7945,7 +7945,12 @@ describe("ME3 Core Worker auth", () => {
         }),
         expect.objectContaining({
           id: "me3.calendar",
-          status: "available",
+          status: "installed",
+          implementationStatus: "bundled",
+        }),
+        expect.objectContaining({
+          id: "me3.journal",
+          status: "installed",
           implementationStatus: "bundled",
         }),
         expect.objectContaining({
@@ -7976,6 +7981,11 @@ describe("ME3 Core Worker auth", () => {
     const agentChatPlugin = body.plugins.find((plugin) => plugin.id === "me3.agent-chat");
     const calendarPlugin = body.plugins.find((plugin) => plugin.id === "me3.calendar");
     expect(agentChatPlugin).toMatchObject({
+      status: "installed",
+      installed: true,
+      enabled: true,
+    });
+    expect(calendarPlugin).toMatchObject({
       status: "installed",
       installed: true,
       enabled: true,
