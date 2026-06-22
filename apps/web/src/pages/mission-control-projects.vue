@@ -984,7 +984,7 @@ async function loadProjectJournalLinks(projectId = selectedProjectTaskScopeId.va
       return;
     }
 
-    const responses = await Promise.all(
+    const responses = await Promise.allSettled(
       projects.value.map((project) =>
         api.get<{ links: JournalProjectLink[] }>(
           `/mission-control/projects/${encodeURIComponent(project.id)}/journal-links`,
@@ -993,11 +993,17 @@ async function loadProjectJournalLinks(projectId = selectedProjectTaskScopeId.va
     );
     if (selectedProjectTaskScopeId.value !== scopeId) return;
     projectJournalLinks.value = responses
-      .flatMap((response) => response.links || [])
+      .flatMap((response) =>
+        response.status === "fulfilled" ? response.value.links || [] : [],
+      )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch (e) {
     projectJournalLinksError.value =
-      e instanceof ApiError ? e.message : "Project log could not load";
+      e instanceof ApiError && e.status === 404
+        ? ""
+        : e instanceof ApiError
+          ? e.message
+          : "Project journal could not load";
     projectJournalLinks.value = [];
   } finally {
     projectJournalLinksLoading.value = false;
@@ -2304,24 +2310,7 @@ onBeforeUnmount(() => {
           <header class="project-journal-log__header">
             <div>
               <h2>Project journal</h2>
-              <p>
-                Journal entries linked to
-                {{ selectedProjectDetail?.name || "all projects" }}
-              </p>
             </div>
-            <Button
-              color="ghost"
-              shape="soft"
-              size="compact"
-              icon-only
-              type="button"
-              aria-label="Refresh project journal"
-              title="Refresh project journal"
-              :disabled="projectJournalLinksLoading"
-              @click="loadProjectJournalLinks"
-            >
-              <UiIcon name="RefreshCw" :size="16" />
-            </Button>
           </header>
           <p
             v-if="projectJournalLinksError"
@@ -2333,7 +2322,8 @@ onBeforeUnmount(() => {
             Loading project journal...
           </div>
           <div v-else-if="visibleProjectJournalLinksCount === 0" class="empty-row">
-            No project journal entries yet.
+            No project journal entries yet. Link text from notes in your daily
+            journal to a project, and it will appear here.
           </div>
           <template v-else>
             <section
@@ -3301,7 +3291,6 @@ onBeforeUnmount(() => {
 }
 
 .project-journal-log__header h2,
-.project-journal-log__header p,
 .project-journal-log__row-main p {
   margin: 0;
 }
@@ -3323,7 +3312,6 @@ onBeforeUnmount(() => {
   line-height: 1.25;
 }
 
-.project-journal-log__header p,
 .project-journal-log__row-main span,
 .project-journal-log__row-main p {
   color: var(--ui-text-muted);
