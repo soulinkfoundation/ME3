@@ -14,6 +14,7 @@ import Button from "../components/Button.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import TiptapEditor from "../components/TiptapEditor.vue";
 import UiIcon from "../components/UiIcon.vue";
+import { findInlineTextMatch } from "../utils/inlineJournalChips";
 import {
   parseJournalTaskMarkers,
   type JournalTaskMarkerSuggestion,
@@ -67,6 +68,13 @@ type CaptureMode = "task" | "link";
 type OrganizeTaskSuggestion = JournalTaskMarkerSuggestion & {
   selected: boolean;
 };
+type InlineJournalChip = {
+  id: string;
+  label: string;
+  kind: CaptureMode;
+  left: number;
+  top: number;
+};
 
 const route = useRoute();
 const selectedDate = ref(normalizeLocalDateInput(rawDateQuery(route.query.date)) || todayKey());
@@ -98,6 +106,7 @@ const organizeSuggestions = ref<OrganizeTaskSuggestion[]>([]);
 const organizeSaving = ref(false);
 const organizeError = ref("");
 const editorWrap = ref<HTMLElement | null>(null);
+const inlineJournalChips = ref<InlineJournalChip[]>([]);
 const selectionToolbar = ref({
   visible: false,
   text: "",
@@ -108,6 +117,7 @@ const saveState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const hydratingEntry = ref(false);
 let saveTimer: number | null = null;
 let currentLoadToken = 0;
+let inlineChipFrame: number | null = null;
 
 const currentDateIsToday = computed(() => selectedDate.value === todayKey());
 const selectedDateLabel = computed(() =>
@@ -131,6 +141,12 @@ const journalEntryDates = computed(() =>
   nonEmptyArchiveEntries.value.map((entry) => entry.date),
 );
 const captureProjectName = computed(() => projectName(captureProjectId.value));
+const inlineJournalChipIds = computed(
+  () => new Set(inlineJournalChips.value.map((chip) => chip.id)),
+);
+const fallbackEntryLinks = computed(() =>
+  entryLinks.value.filter((link) => !inlineJournalChipIds.value.has(link.id)),
+);
 
 function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -222,6 +238,14 @@ function projectName(projectId: string | null): string {
 
 function defaultCaptureTitle(text: string): string {
   return text.split(/\r?\n/)[0]?.trim().slice(0, 180) || text.slice(0, 180);
+}
+
+function linkChipKind(link: JournalProjectLink): CaptureMode {
+  return link.createdTaskId ? "task" : "link";
+}
+
+function linkChipLabel(link: JournalProjectLink): string {
+  return link.createdTaskId ? "Task" : projectName(link.projectId);
 }
 
 function entryHasContent(entry: Pick<JournalArchiveEntry, "title" | "body" | "preview">): boolean {
@@ -504,6 +528,101 @@ function updateSelectionToolbar() {
   selectionToolbar.value = { visible: true, text, left, top };
 }
 
+function findSourceRange(root: HTMLElement, sourceText: string): Range | null {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return node.textContent?.trim()
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+
+  let current = walker.nextNode();
+  while (current) {
+    const textNode = current as Text;
+    const match = findInlineTextMatch(textNode.data, sourceText);
+    if (match) {
+      const range = document.createRange();
+      range.setStart(textNode, Math.max(match.start, match.end - 1));
+      range.setEnd(textNode, match.end);
+      return range;
+    }
+    current = walker.nextNode();
+  }
+
+  return null;
+}
+
+function updateInlineJournalChips() {
+  const root = editorWrap.value?.querySelector(".ProseMirror");
+  if (!(root instanceof HTMLElement) || entryLinks.value.length === 0) {
+    inlineJournalChips.value = [];
+    return;
+  }
+
+  const contentWrapper = root.closest(".editor-content-wrapper");
+  const scrollHost =
+    contentWrapper instanceof HTMLElement ? contentWrapper : root;
+  const visibleRect = scrollHost.getBoundingClientRect();
+  const chips: InlineJournalChip[] = [];
+
+  for (const link of entryLinks.value) {
+    const sourceText = link.sourceText?.trim();
+    if (!sourceText) continue;
+
+    const range = findSourceRange(root, sourceText);
+    if (!range) continue;
+
+    const rects = Array.from(range.getClientRects()).filter(
+      (rect) => rect.width > 0 && rect.height > 0,
+    );
+    const rect = rects[rects.length - 1] || range.getBoundingClientRect();
+    if (
+      rect.width === 0 ||
+      rect.height === 0 ||
+      rect.bottom < visibleRect.top ||
+      rect.top > visibleRect.bottom ||
+      rect.bottom < 0 ||
+      rect.top > window.innerHeight
+    ) {
+      continue;
+    }
+
+    const label = linkChipLabel(link);
+    const estimatedWidth = Math.min(96, Math.max(38, label.length * 7 + 14));
+    const height = 20;
+    let left = rect.right + 6;
+    let top = rect.top + rect.height / 2 - height / 2;
+
+    if (left + estimatedWidth > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - estimatedWidth - 8);
+      top = rect.bottom + 3;
+    }
+
+    chips.push({
+      id: link.id,
+      label,
+      kind: linkChipKind(link),
+      left: Math.round(left),
+      top: Math.round(
+        Math.min(window.innerHeight - height - 8, Math.max(8, top)),
+      ),
+    });
+  }
+
+  inlineJournalChips.value = chips;
+}
+
+function scheduleInlineJournalChips() {
+  if (inlineChipFrame !== null) {
+    window.cancelAnimationFrame(inlineChipFrame);
+  }
+  inlineChipFrame = window.requestAnimationFrame(() => {
+    inlineChipFrame = null;
+    updateInlineJournalChips();
+  });
+}
+
 function closeCapture() {
   if (captureSaving.value) return;
   captureOpen.value = false;
@@ -682,6 +801,9 @@ function handleWindowKeydown(event: KeyboardEvent) {
 }
 
 watch([title, description], scheduleSave);
+watch([entryLinks, description, projects], scheduleInlineJournalChips, {
+  flush: "post",
+});
 
 onMounted(() => {
   void loadDay(selectedDate.value);
@@ -691,18 +813,25 @@ onMounted(() => {
   window.addEventListener("mouseup", updateSelectionToolbar);
   window.addEventListener("keyup", updateSelectionToolbar);
   window.addEventListener("scroll", updateSelectionToolbar, true);
+  window.addEventListener("scroll", scheduleInlineJournalChips, true);
   window.addEventListener("resize", updateSelectionToolbar);
+  window.addEventListener("resize", scheduleInlineJournalChips);
 });
 
 onBeforeUnmount(() => {
   clearSaveTimer();
+  if (inlineChipFrame !== null) {
+    window.cancelAnimationFrame(inlineChipFrame);
+  }
   window.removeEventListener("click", handleWindowClick);
   window.removeEventListener("keydown", handleWindowKeydown);
   document.removeEventListener("selectionchange", updateSelectionToolbar);
   window.removeEventListener("mouseup", updateSelectionToolbar);
   window.removeEventListener("keyup", updateSelectionToolbar);
   window.removeEventListener("scroll", updateSelectionToolbar, true);
+  window.removeEventListener("scroll", scheduleInlineJournalChips, true);
   window.removeEventListener("resize", updateSelectionToolbar);
+  window.removeEventListener("resize", scheduleInlineJournalChips);
 });
 </script>
 
@@ -916,17 +1045,19 @@ onBeforeUnmount(() => {
           />
         </div>
 
-        <div v-if="entryLinks.length > 0" class="journal__chips" aria-label="Journal captures">
+        <div
+          v-if="fallbackEntryLinks.length > 0"
+          class="journal__chips"
+          aria-label="Journal captures"
+        >
           <span
-            v-for="link in entryLinks"
+            v-for="link in fallbackEntryLinks"
             :key="link.id"
             class="journal__chip"
+            :class="
+              link.createdTaskId ? 'journal__chip--task' : 'journal__chip--link'
+            "
           >
-            <UiIcon
-              :name="link.createdTaskId ? 'ListTodo' : 'Link'"
-              :size="14"
-              aria-hidden="true"
-            />
             {{ link.createdTaskId ? "Task" : projectName(link.projectId) }}
           </span>
         </div>
@@ -937,6 +1068,20 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
+
+    <span
+      v-for="chip in inlineJournalChips"
+      :key="chip.id"
+      class="journal-inline-chip"
+      :class="`journal-inline-chip--${chip.kind}`"
+      :style="{
+        left: `${chip.left}px`,
+        top: `${chip.top}px`,
+      }"
+      aria-hidden="true"
+    >
+      {{ chip.label }}
+    </span>
 
     <div
       v-if="selectionToolbar.visible"
@@ -1438,22 +1583,45 @@ onBeforeUnmount(() => {
 .journal__chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding-top: 10px;
+  gap: 5px;
+  padding-top: 8px;
 }
 
-.journal__chip {
+.journal__chip,
+.journal-inline-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 26px;
+  min-height: 20px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: 999px;
-  padding: 3px 9px;
+  padding: 1px 7px;
   background: var(--ui-surface-muted, var(--color-bg-subtle));
   color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.journal-inline-chip {
+  position: fixed;
+  z-index: 45;
+  pointer-events: none;
+  box-shadow: var(--ui-shadow-sm, 0 6px 14px rgba(15, 23, 42, 0.12));
+}
+
+.journal__chip--task,
+.journal-inline-chip--task {
+  border-color: color-mix(in srgb, var(--ui-accent, #2563eb) 36%, transparent);
+  background: color-mix(in srgb, var(--ui-accent, #2563eb) 11%, var(--ui-surface, #ffffff));
+  color: var(--ui-accent-strong, #1d4ed8);
+}
+
+.journal__chip--link,
+.journal-inline-chip--link {
+  border-color: color-mix(in srgb, var(--ui-success, #15803d) 32%, transparent);
+  background: color-mix(in srgb, var(--ui-success, #15803d) 10%, var(--ui-surface, #ffffff));
+  color: var(--ui-success-strong, #166534);
 }
 
 .journal__message {
