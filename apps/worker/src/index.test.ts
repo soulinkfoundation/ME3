@@ -6279,6 +6279,9 @@ describe("ME3 Core Worker auth", () => {
       to: "guest@example.com",
       subject: "Booking confirmed: Free session",
     });
+    expect(String(env.emailSends[0].text)).toContain("Add to Google Calendar:");
+    expect(String(env.emailSends[0].html)).toContain("Add to Google Calendar");
+    expect(String(env.emailSends[0].html)).toContain("20260609T141500Z%2F20260609T151500Z");
     expect(env.emailSends[1]).toMatchObject({
       to: "owner@example.com",
       subject: "New booking: Test Guest",

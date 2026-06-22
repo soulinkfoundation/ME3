@@ -62,6 +62,7 @@ export async function sendGuestBookingConfirmationEmail(
 ): Promise<TransactionalEmailResult> {
   const startTime = formatBookingTime(details.startsAt, details.timezone);
   const paymentLine = formatPaymentLine(details.amountPaid, details.currency);
+  const calendarUrl = googleCalendarUrl(details);
   const guestMessage = applyBookingEmailTokens(details.guestMessageText || "", {
     guestName: details.guestName,
     guestEmail: details.guestEmail,
@@ -79,6 +80,7 @@ Your booking is confirmed.
 ${details.bookingTitle} with ${details.hostName}
 ${startTime}
 Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` : ""}${details.notes ? `\n\nYour notes:\n${details.notes}` : ""}
+Add to Google Calendar: ${calendarUrl}
 ${guestMessage ? `\n\n${guestMessage}` : ""}
 
 You can reply to this email to contact ${details.hostName}.
@@ -95,6 +97,7 @@ You can reply to this email to contact ${details.hostName}.
     ],
     notesLabel: "Your notes",
     notes: details.notes,
+    calendarUrl,
     message: guestMessage,
     footer: `Reply to this email to contact ${escapeHtml(details.hostName)}.`,
   });
@@ -300,6 +303,7 @@ function bookingEmailHtml(input: {
   rows: Array<[string, string]>;
   notesLabel: string;
   notes?: string | null;
+  calendarUrl?: string | null;
   message?: string | null;
   footer: string;
 }) {
@@ -312,6 +316,9 @@ function bookingEmailHtml(input: {
   const notes = input.notes
     ? `<p style="margin:16px 0 0;padding-top:16px;border-top:1px solid #e0e0e0;color:#666;font-size:14px;"><strong>${escapeHtml(input.notesLabel)}:</strong><br>${renderPlainText(input.notes)}</p>`
     : "";
+  const calendarLink = input.calendarUrl
+    ? `<p style="margin:12px 0 0;color:#666;font-size:14px;"><a href="${escapeHtml(input.calendarUrl)}" style="color:#111;font-weight:700;">Add to Google Calendar</a></p>`
+    : "";
   const message = input.message
     ? `<div style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:18px;margin:0 0 24px;color:#333;font-size:14px;line-height:1.6;">${renderPlainText(input.message)}</div>`
     : "";
@@ -319,10 +326,27 @@ function bookingEmailHtml(input: {
   return emailShell(`
     <h1 style="margin:0 0 8px;font-size:24px;color:#111;">${escapeHtml(input.title)}</h1>
     <p style="margin:0 0 32px;color:#666;font-size:14px;">${escapeHtml(input.subtitle)}</p>
-    <div style="background:#f8f8f8;border-radius:8px;padding:24px;margin:0 0 24px;">${rows}${notes}</div>
+    <div style="background:#f8f8f8;border-radius:8px;padding:24px;margin:0 0 24px;">${rows}${calendarLink}${notes}</div>
     ${message}
     <p style="margin:0;color:#666;font-size:14px;">${input.footer}</p>
   `);
+}
+
+function googleCalendarUrl(details: BookingEmailDetails): string {
+  const start = new Date(details.startsAt);
+  const end = new Date(start.getTime() + details.durationMinutes * 60_000);
+  const dates = `${googleCalendarDate(start)}/${googleCalendarDate(end)}`;
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: `${details.bookingTitle} with ${details.hostName}`,
+    dates,
+    details: `Booking confirmed with ${details.hostName}.${details.hostEmail ? ` Reply to ${details.hostEmail} if you need to make changes.` : ""}`,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+function googleCalendarDate(date: Date): string {
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
 function productEmailHtml(details: ProductPurchaseEmailDetails) {
