@@ -217,6 +217,8 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("Your booking is confirmed.");
     expect(files["index.html"]).toContain("data-booking-status");
     expect(files["index.html"]).toContain("showReturnStatus('Confirming your booking...')");
+    expect(files["index.html"]).toContain("A confirmation email will be sent soon");
+    expect(files["index.html"]).not.toContain("if this site has email sending configured");
     expect(files["index.html"]).not.toContain("Your booking request is ready.");
     expect(files["index.html"]).toContain('"bufferTime":15');
     expect(files["index.html"]).toContain("t+=slotStep");

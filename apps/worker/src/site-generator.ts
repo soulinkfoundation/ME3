@@ -936,7 +936,7 @@ function paidBookingWidgetScript(): string {
     showReturnStatus('Confirming your booking...');
     fetch('/api/book/'+encodeURIComponent(config.username)+'/complete-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:params.get('session_id')})})
       .then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||'Payment succeeded, but booking confirmation failed.');return data;});})
-      .then(function(){showReturnStatus('Payment successful. Your booking is confirmed. A confirmation email will be sent if this site has email sending configured.');})
+      .then(function(){showReturnStatus('Payment successful. Your booking is confirmed. A confirmation email will be sent soon');})
       .catch(function(error){showReturnStatus(error.message,true);});
   } else if(params.get('booking')==='cancelled'){
     showReturnStatus('Checkout cancelled. No payment was taken.',true);
