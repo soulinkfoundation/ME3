@@ -77,6 +77,14 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "read",
   },
   {
+    name: "booking template rewrite stays conversational",
+    messageText:
+      "This is my confirmation email for one of my offerings to set up me3. See can we trim it a little bit: 'Yesss {{ guestName }}! Then join my call room on {{ bookingTime }}. Buy a domain name on GoDaddy.com (or any other provider). Kind regards, Kieran'",
+    kind: "conversation",
+    capabilityId: "core.agent-chat.conversation",
+    sideEffectLevel: "none",
+  },
+  {
     name: "mailbox draft save follow-up becomes a write action",
     messageText: "Save that draft to ada@example.com",
     hasRecentAssistantEmailDraft: true,

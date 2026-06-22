@@ -192,8 +192,26 @@ export function isCoreChatReminderCreateRequest(messageText: string): boolean {
 
 export function isCoreChatBookingLookupRequest(messageText: string): boolean {
   if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
-  return /\b(bookings?|appointments?|calls?|sessions?)\b/i.test(messageText) &&
-    /\b(check|show|list|what|when|any|upcoming|today|week|schedule)\b/i.test(messageText);
+  const text = messageText.replace(/\s+/g, " ").trim();
+  if (!text) return false;
+
+  return (
+    /\b(?:check|show|list|review|pull up)\s+(?:my\s+|the\s+)?(?:upcoming\s+|confirmed\s+|current\s+|next\s+|today'?s?\s+|this\s+week'?s?\s+)?(?:bookings?|appointments?|sessions?|calls?)\b/i.test(
+      text,
+    ) ||
+    /\b(?:what|which|when)\s+(?:bookings?|appointments?|sessions?|calls?)\s+(?:do\s+i\s+have|are\s+(?:upcoming|confirmed|scheduled|today|this\s+week)|(?:are\s+)?next)\b/i.test(
+      text,
+    ) ||
+    /\b(?:do|can)\s+i\s+have\s+any\s+(?:upcoming\s+|confirmed\s+|scheduled\s+|today'?s?\s+|this\s+week'?s?\s+)?(?:bookings?|appointments?|sessions?|calls?)\b/i.test(
+      text,
+    ) ||
+    /\bwhat(?:'s| is)\s+(?:my\s+)?(?:next|upcoming)\s+(?:booking|appointment|session|call)\b/i.test(
+      text,
+    ) ||
+    /\b(?:any|upcoming|confirmed|scheduled|today'?s?|this\s+week'?s?)\s+(?:bookings?|appointments?|sessions?)\??$/i.test(
+      text,
+    )
+  );
 }
 
 function conversationDecision(

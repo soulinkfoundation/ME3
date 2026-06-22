@@ -1401,6 +1401,50 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
+    name: "booking confirmation email rewrite stays model-first",
+    messageText:
+      "This is my confirmation email for one of my offerings to set up me3. See can we trim it a little bit: 'Yesss {{ guestName }}! Let's get you set up with ME3. Buy a domain name on GoDaddy.com (or any other provider). Then join my call room on {{ bookingTime }}. Kind regards, Kieran'",
+    aiReply:
+      "Yesss {{ guestName }}! Let's get you set up with ME3. Please have GitHub, Cloudflare, and a domain ready before our call: {{ bookingTime }}. Kind regards, Kieran",
+    withAi: true,
+    envState: {
+      bookings: [
+        {
+          id: "booking-1",
+          site_id: "site-1",
+          site_username: "kieran",
+          offer_id: "setup",
+          booking_type: "one_to_one",
+          guest_name: "Sarah Test",
+          guest_email: "sarah@example.com",
+          starts_at: "2026-06-02T10:00:00.000Z",
+          ends_at: "2026-06-02T10:30:00.000Z",
+          duration_minutes: 30,
+          status: "confirmed",
+          notes: null,
+          payment_status: "not_required",
+          is_free_booking: 1,
+          created_at: "2026-05-30T10:00:00.000Z",
+        },
+      ],
+    },
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "conversation",
+      capabilityId: "core.agent-chat.conversation",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["Yesss {{ guestName }}", "{{ bookingTime }}"],
+      contextSummary: "present",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      aiCalled: true,
+    },
+  },
+  {
     name: "save latest email draft follow-up creates a mailbox draft only",
     messageText: "Save that draft to ada@example.com",
     envState: {

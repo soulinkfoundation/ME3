@@ -161,7 +161,10 @@ export const CORE_CHAT_CAPABILITIES = [
     auditEventKind: "core_bookings_lookup",
     examples: {
       positive: ["Can you check my upcoming bookings this week?"],
-      negative: ["I want to test bookings and calendar features."],
+      negative: [
+        "I want to test bookings and calendar features.",
+        "Trim this booking confirmation email: join my call room on {{ bookingTime }}.",
+      ],
     },
     chat: {
       intentKind: "read_action",
