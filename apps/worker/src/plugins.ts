@@ -1433,13 +1433,15 @@ function serializePluginRecord(
 ): CorePluginRecord {
   const setupRequirements = getSetupRequirements(env, plugin, installation);
   const activationAllowed = isPluginActivationAllowed(plugin);
+  const alwaysEnabled = plugin.id === JOURNAL_PLUGIN_ID && plugin.defaultEnabled === true;
   const defaultInstalled = !installation && plugin.defaultEnabled === true;
   const installed = Boolean(installation) || defaultInstalled;
   const enabled =
     activationAllowed &&
     installed &&
-    (defaultInstalled || installation?.enabled !== 0) &&
-    installation?.status !== "disabled";
+    (alwaysEnabled ||
+      ((defaultInstalled || installation?.enabled !== 0) &&
+        installation?.status !== "disabled"));
   const setupBlocked = setupRequirements.some(
     (requirement) => requirement.required && !requirement.configured,
   );
@@ -1462,11 +1464,13 @@ function serializePluginRecord(
     statusLabel: statusToLabel(status),
     installed,
     enabled,
-    grantedPermissions: installation
-      ? parseJsonStringArray(installation.granted_permissions_json || null)
-      : defaultInstalled
-        ? plugin.permissions.map((permission) => permission.id)
-        : [],
+    grantedPermissions: alwaysEnabled
+      ? plugin.permissions.map((permission) => permission.id)
+      : installation
+        ? parseJsonStringArray(installation.granted_permissions_json || null)
+        : defaultInstalled
+          ? plugin.permissions.map((permission) => permission.id)
+          : [],
     setupRequirements,
     installedAt: installation?.installed_at || null,
     updatedAt: installation?.updated_at || null,

@@ -8080,6 +8080,44 @@ describe("ME3 Core Worker auth", () => {
     expect(validateCorePluginAgentToolContracts(CORE_PLUGIN_CATALOG)).toEqual([]);
   });
 
+  it("keeps Journal enabled even if an old install row marks it disabled", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.journal/deactivate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    const catalogResponse = await app.fetch(
+      new Request("http://localhost/api/plugins", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const catalog = (await catalogResponse.json()) as {
+      plugins: Array<{ id: string; enabled: boolean; status: string }>;
+    };
+    const journal = catalog.plugins.find((plugin) => plugin.id === "me3.journal");
+
+    expect(journal).toMatchObject({
+      enabled: true,
+      status: "installed",
+    });
+
+    const archiveResponse = await app.fetch(
+      new Request("http://localhost/api/journal/archive", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+
+    expect(archiveResponse.status).toBe(200);
+  });
+
   it("requires owner auth for plugin catalog access", async () => {
     const env = createEnv();
 
