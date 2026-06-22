@@ -163,6 +163,7 @@ type MissionDashboardResponse = {
   settings: {
     kanbanEnabled: boolean;
     mainGoal: string;
+    setupChecklistDismissed: boolean;
   };
   data: {
     "mission.daily-briefing": DailyBriefingCardData;
@@ -216,10 +217,7 @@ const aiUsage = ref<AiUsageCardData | null>(null);
 const aiUsageLoading = ref(false);
 const aiUsageError = ref("");
 const aiUsageModalOpen = ref(false);
-const setupChecklistDismissed = ref(
-  localStorage.getItem("me3:mission-control:setup-checklist-dismissed") ===
-    "true",
-);
+const setupChecklistDismissed = ref(false);
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
@@ -470,9 +468,20 @@ function visibleCardEnabled(cardId: string): boolean {
   return visibleCards.value.some((card) => card.cardId === cardId);
 }
 
-function dismissSetupChecklist() {
+async function dismissSetupChecklist() {
   setupChecklistDismissed.value = true;
   localStorage.setItem("me3:mission-control:setup-checklist-dismissed", "true");
+  try {
+    dashboard.value = await api.patch<MissionDashboardResponse>(
+      "/mission-control/dashboard",
+      {
+        settings: { setupChecklistDismissed: true },
+      },
+    );
+    syncDashboardDrafts();
+  } catch (err) {
+    toastFromUnknown(err, "Setup checklist dismissal could not be saved");
+  }
 }
 
 function syncDashboardDrafts() {
@@ -655,6 +664,10 @@ async function loadDashboard() {
     dashboard.value = await api.get<MissionDashboardResponse>(
       "/mission-control/dashboard",
     );
+    setupChecklistDismissed.value =
+      dashboard.value.settings.setupChecklistDismissed ||
+      localStorage.getItem("me3:mission-control:setup-checklist-dismissed") ===
+        "true";
     missionStatementDraft.value = dashboard.value.missionStatement;
     mainGoalDraft.value = dashboard.value.mainGoal;
     syncDashboardDrafts();
@@ -1140,22 +1153,25 @@ onMounted(() => {
                   Saved
                   {{ formatDashboardDate(wheelSnapshot.snapshot.createdAt) }}
                 </span>
+                <div
+                  v-if="!dashboardEditing"
+                  class="dashboard-card__actions dashboard-card__actions--inline"
+                >
+                  <Button
+                    class="dashboard-card__action-button"
+                    color="ghost"
+                    shape="soft"
+                    size="compact"
+                    icon-only
+                    to="/mission-control/wheel-of-life"
+                    aria-label="Open Wheel of Life"
+                    title="Open Wheel of Life"
+                  >
+                    <UiIcon name="Eye" :size="16" />
+                  </Button>
+                </div>
               </div>
             </header>
-            <div v-if="!dashboardEditing" class="dashboard-card__actions">
-              <Button
-                class="dashboard-card__action-button"
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                to="/mission-control/wheel-of-life"
-                aria-label="Open Wheel of Life"
-                title="Open Wheel of Life"
-              >
-                <UiIcon name="Eye" :size="16" />
-              </Button>
-            </div>
             <div v-if="wheelSnapshot?.snapshot" class="wheel-summary">
               <div
                 v-for="segment in wheelSegments"
@@ -1188,22 +1204,25 @@ onMounted(() => {
                 <span v-if="aiUsage?.fetchedAt">
                   {{ formatDashboardDate(aiUsage.fetchedAt) }}
                 </span>
+                <div
+                  v-if="!dashboardEditing"
+                  class="dashboard-card__actions dashboard-card__actions--inline"
+                >
+                  <Button
+                    class="dashboard-card__action-button"
+                    color="ghost"
+                    shape="soft"
+                    size="compact"
+                    icon-only
+                    aria-label="Open AI usage details"
+                    title="Open AI usage details"
+                    @click="aiUsageModalOpen = true"
+                  >
+                    <UiIcon name="Eye" :size="16" />
+                  </Button>
+                </div>
               </div>
             </header>
-            <div v-if="!dashboardEditing" class="dashboard-card__actions">
-              <Button
-                class="dashboard-card__action-button"
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                aria-label="Open AI usage details"
-                title="Open AI usage details"
-                @click="aiUsageModalOpen = true"
-              >
-                <UiIcon name="Eye" :size="16" />
-              </Button>
-            </div>
             <div v-if="aiUsageLoading" class="dashboard-empty">
               <p>Loading AI usage...</p>
             </div>
@@ -1853,6 +1872,7 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-height: 30px;
 }
 
 .dashboard-card h2,
@@ -1915,37 +1935,17 @@ onMounted(() => {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  padding-right: 36px;
   gap: 8px;
+  margin-left: auto;
 }
 
 .dashboard-card__actions {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  z-index: 2;
   display: inline-flex;
   gap: 4px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
 }
 
 .dashboard-card__actions--inline {
-  position: static;
-  z-index: auto;
   flex: 0 0 auto;
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.dashboard-card:hover .dashboard-card__actions,
-.dashboard-card:focus-within .dashboard-card__actions,
-.dashboard-card__actions:focus-within,
-.dashboard-card__actions.is-active,
-.dashboard-card__action-button.is-saving {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .dashboard-card__action-button {
@@ -2650,11 +2650,6 @@ onMounted(() => {
 
   .dashboard-card--wide {
     grid-column: auto;
-  }
-
-  .dashboard-card__actions {
-    opacity: 1;
-    pointer-events: auto;
   }
 
   .wheel-summary__row {

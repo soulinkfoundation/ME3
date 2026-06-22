@@ -3392,6 +3392,7 @@ function normalizeDashboardSettings(value: Record<string, unknown>) {
   return {
     kanbanEnabled: value.kanbanEnabled === true,
     mainGoal: normalizeMainGoal(value.mainGoal),
+    setupChecklistDismissed: value.setupChecklistDismissed === true,
   };
 }
 

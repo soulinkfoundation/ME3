@@ -110,7 +110,11 @@ describe("Mission Control dashboard settings", () => {
       "journal.today",
       "social.schedule",
     ]);
-    expect(dashboard.settings).toEqual({ kanbanEnabled: false, mainGoal: "" });
+    expect(dashboard.settings).toEqual({
+      kanbanEnabled: false,
+      mainGoal: "",
+      setupChecklistDismissed: false,
+    });
     expect(dashboard.mainGoal).toBe("");
     expect(dashboard.missionStatement).toContain("I am here to help");
     expect(dashboard.data["mission.daily-briefing"]).toMatchObject({
@@ -126,6 +130,7 @@ describe("Mission Control dashboard settings", () => {
       missionStatement: "  Help owners steer the day.  ",
       mainGoal: "  Finish the onboarding polish.  ",
       kanbanEnabled: true,
+      settings: { setupChecklistDismissed: true },
       cards: [
         {
           cardId: "mission.wheel-latest-snapshot",
@@ -165,6 +170,7 @@ describe("Mission Control dashboard settings", () => {
     expect(dashboard.settings).toEqual({
       kanbanEnabled: true,
       mainGoal: "Finish the onboarding polish.",
+      setupChecklistDismissed: true,
     });
     expect(dashboard.cards.find((card) => card.cardId === "unknown.card")).toBeUndefined();
     expect(
