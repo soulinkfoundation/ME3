@@ -749,11 +749,6 @@ const paymentsStatusClass = computed(() =>
   commerceSettings.value?.stripe.configured ? "active" : "setup_required",
 );
 
-const stripeSecretPlaceholder = computed(() => {
-  const hint = commerceSettings.value?.stripe.keyHint;
-  return hint ? `Paste a new key to replace ${hint}` : "sk_test_...";
-});
-
 const commerceSaveDisabled = computed(
   () =>
     commerceSaving.value ||
@@ -2587,7 +2582,8 @@ onMounted(async () => {
                 <template v-else>
                   <p class="hint">
                     Add your Stripe secret key here to accept direct paid
-                    bookings from your ME3 site.
+                    bookings from your ME3 site. Use sk_test_ for testing or
+                    sk_live_ for live payments.
                   </p>
 
                   <p
@@ -2611,7 +2607,10 @@ onMounted(async () => {
                     Stripe key is stored.
                   </p>
 
-                  <label class="field payment-key-field">
+                  <label
+                    v-if="!commerceSettings?.stripe.keyHint"
+                    class="field payment-key-field"
+                  >
                     <span>Stripe secret key</span>
                     <div class="payment-key-row">
                       <input
@@ -2620,7 +2619,7 @@ onMounted(async () => {
                         type="password"
                         autocomplete="off"
                         spellcheck="false"
-                        :placeholder="stripeSecretPlaceholder"
+                        placeholder="sk_test_..."
                         @keydown.enter.prevent="saveCommerceSettings"
                       />
                       <Button
@@ -2633,9 +2632,6 @@ onMounted(async () => {
                         {{ commerceSaving ? "Saving..." : "Save" }}
                       </Button>
                     </div>
-                    <p class="field-hint">
-                      Use a Stripe key that starts with sk_test_ or sk_live_.
-                    </p>
                   </label>
 
                   <Button
