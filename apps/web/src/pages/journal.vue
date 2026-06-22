@@ -140,7 +140,6 @@ const nonEmptyArchiveEntries = computed(() =>
 const journalEntryDates = computed(() =>
   nonEmptyArchiveEntries.value.map((entry) => entry.date),
 );
-const captureProjectName = computed(() => projectName(captureProjectId.value));
 const inlineJournalChipIds = computed(
   () => new Set(inlineJournalChips.value.map((chip) => chip.id)),
 );
@@ -1143,8 +1142,7 @@ onBeforeUnmount(() => {
           <input v-model="captureTitle" type="text" maxlength="180" required />
         </label>
         <label>
-          <span>Project</span>
-          <select v-model="captureProjectId" required>
+          <select v-model="captureProjectId" aria-label="Project" required>
             <option
               v-for="project in projects"
               :key="project.id"
@@ -1155,14 +1153,13 @@ onBeforeUnmount(() => {
           </select>
         </label>
         <label>
-          <span>Source</span>
+          <span>{{ captureMode === "task" ? "Description" : "Note" }}</span>
           <textarea v-model="captureText" rows="5" required />
         </label>
         <p v-if="captureError" class="journal__message is-error">
           {{ captureError }}
         </p>
         <footer>
-          <span>{{ captureProjectName }}</span>
           <Button
             color="accent"
             shape="soft"
@@ -1673,12 +1670,16 @@ onBeforeUnmount(() => {
   box-shadow: var(--ui-shadow-md, 0 18px 42px rgba(15, 23, 42, 0.2));
 }
 
-.journal-capture__panel header,
-.journal-capture__panel footer {
+.journal-capture__panel header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.journal-capture__panel footer {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .journal-capture__panel h2 {
@@ -1709,15 +1710,6 @@ onBeforeUnmount(() => {
 
 .journal-capture__panel textarea {
   resize: vertical;
-}
-
-.journal-capture__panel footer span {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 0.82rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .journal-organize {
