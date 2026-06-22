@@ -646,6 +646,7 @@ const inboxWatchRulesNotice = ref("");
 const assistantDraft = ref("");
 const assistantPlaceholderIndex = ref(0);
 const assistantSending = ref(false);
+const assistantActionCardBusy = ref<string | null>(null);
 const assistantAwaitingResponse = ref(false);
 const assistantError = ref<string | null>(null);
 const assistantThreadId = ref<string | null>(null);
@@ -2585,6 +2586,49 @@ function applyAssistantResultToMessage(
     siteActionLink?.label ||
     (result.contentAction?.kind === "saved" ? "Open content bank" : null);
   message.jobBuilderAction = result.jobBuilderAction || null;
+}
+
+function mailboxDraftIdForActionCard(card: AgentChatActionCard): string | null {
+  if (card.kind !== "mailbox.draft_saved" || card.status !== "pending_approval") {
+    return null;
+  }
+  return card.records.find((record) => record.kind === "mailbox_draft")?.id || null;
+}
+
+function assistantActionCardBusyKey(card: AgentChatActionCard): string | null {
+  const draftId = mailboxDraftIdForActionCard(card);
+  return draftId ? `mailbox-draft-send:${draftId}` : null;
+}
+
+async function sendMailboxDraftFromActionCard(card: AgentChatActionCard) {
+  const draftId = mailboxDraftIdForActionCard(card);
+  if (!draftId || assistantActionCardBusy.value) return;
+
+  const busyKey = `mailbox-draft-send:${draftId}`;
+  assistantActionCardBusy.value = busyKey;
+  assistantError.value = null;
+  try {
+    await api.post(`/mailbox/drafts/${encodeURIComponent(draftId)}/approve`);
+    card.status = "complete";
+    card.statusLabel = "Sent";
+    card.summary = "Sent from mailbox.";
+    const statusField = card.changed.find(
+      (field) => field.label.trim().toLowerCase() === "status",
+    );
+    if (statusField) {
+      statusField.value = "Sent";
+    } else {
+      card.changed.push({ label: "Status", value: "Sent" });
+    }
+    toastSuccess("Email sent.");
+  } catch (err) {
+    assistantError.value = messageFromUnknown(err, "Email could not be sent.");
+    toastFromUnknown(err, "Email could not be sent.");
+  } finally {
+    if (assistantActionCardBusy.value === busyKey) {
+      assistantActionCardBusy.value = null;
+    }
+  }
 }
 
 function assistantTraceRows(trace: AgentChatTurnTrace | null | undefined) {
@@ -4785,13 +4829,36 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   </dl>
                   <div
                     v-if="
-                      card.primaryAction || card.secondaryActions.length > 0
+                      mailboxDraftIdForActionCard(card) ||
+                      card.primaryAction ||
+                      card.secondaryActions.length > 0
                     "
                     class="assistant-action-card__actions"
                   >
+                    <button
+                      v-if="mailboxDraftIdForActionCard(card)"
+                      type="button"
+                      class="assistant-action-card__button assistant-action-card__button--primary"
+                      :disabled="assistantActionCardBusy !== null"
+                      @click="sendMailboxDraftFromActionCard(card)"
+                    >
+                      <UiIcon name="Send" :size="15" aria-hidden="true" />
+                      <span>
+                        {{
+                          assistantActionCardBusy ===
+                          assistantActionCardBusyKey(card)
+                            ? "Sending..."
+                            : "Send"
+                        }}
+                      </span>
+                    </button>
                     <a
                       v-if="card.primaryAction"
-                      class="assistant-action-card__button assistant-action-card__button--primary"
+                      class="assistant-action-card__button"
+                      :class="{
+                        'assistant-action-card__button--primary':
+                          !mailboxDraftIdForActionCard(card),
+                      }"
                       :href="card.primaryAction.href"
                       target="_blank"
                       rel="noopener noreferrer"
@@ -7620,9 +7687,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
   padding: 0 10px;
   background: var(--ui-surface);
   color: var(--ui-text);
+  font: inherit;
   font-size: 12px;
   font-weight: 800;
   text-decoration: none;
+  cursor: pointer;
   transition:
     border-color 0.14s ease,
     background-color 0.14s ease,
@@ -7643,6 +7712,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-action-card__button--primary:hover {
   background: color-mix(in oklab, var(--ui-accent) 88%, var(--ui-text));
   color: var(--ui-accent-contrast);
+}
+
+.assistant-action-card__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .job-builder-card {

@@ -1553,6 +1553,66 @@ describe("Core chat mailbox draft continuations", () => {
     });
   });
 
+  it("saves only the email body from assistant-wrapped drafts", async () => {
+    const env = createEnv({
+      recentMessages: [
+        {
+          role: "assistant",
+          content:
+            "I can draft it, but I can't confirm it's sent from here unless the mailbox tool returns a send result. Outbound email should go through approval first.\n\n" +
+            "Here's the draft:\n\n" +
+            "**To:** kieranbutler22@gmail.com\n" +
+            "**Subject:** Getting ready for your ME3 setup call\n\n" +
+            "Yesss {{ guestName }}!\n\n" +
+            "I'm excited to help you set up your ME3 installation - your personal OS + AI assistant for thriving in the age of AI.\n\n" +
+            "Before we meet, please have these ready:\n\n" +
+            "- Free GitHub account: **GitHub.com**\n" +
+            "- Free Cloudflare account: **Cloudflare.com**\n" +
+            "- A domain name from **GoDaddy.com** or another provider\n" +
+            "- Log in at **https://soulinkfoundation.org** by clicking **Join Waitlist**\n\n" +
+            "We'll meet here on {{ bookingTime }}:\n" +
+            "**https://soulinkfoundation.org/calls/@kieran**\n\n" +
+            "Kind regards,\n" +
+            "Kieran\n\n" +
+            "If you want, I can save a draft for you to review and approve before sending.",
+        },
+      ],
+      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
+    });
+
+    const saved = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("Save that draft"),
+    );
+
+    expect(saved).toMatchObject({
+      source: "tool",
+      specialist: "core.mailbox.draft",
+      emailAction: { kind: "drafted" },
+    });
+    expect(env.state.mailboxMessages[0]).toMatchObject({
+      to_address: "kieranbutler22@gmail.com",
+      subject: "Getting ready for your ME3 setup call",
+      text_body:
+        "Yesss {{ guestName }}!\n\n" +
+        "I'm excited to help you set up your ME3 installation - your personal OS + AI assistant for thriving in the age of AI.\n\n" +
+        "Before we meet, please have these ready:\n\n" +
+        "- Free GitHub account: GitHub.com\n" +
+        "- Free Cloudflare account: Cloudflare.com\n" +
+        "- A domain name from GoDaddy.com or another provider\n" +
+        "- Log in at https://soulinkfoundation.org by clicking Join Waitlist\n\n" +
+        "We'll meet here on {{ bookingTime }}:\n" +
+        "https://soulinkfoundation.org/calls/@kieran\n\n" +
+        "Kind regards,\n" +
+        "Kieran",
+      created_by: "agent",
+    });
+  });
+
   it("saves a pending draft when the owner replies with only the missing recipient", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));

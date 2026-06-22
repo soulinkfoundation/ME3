@@ -2413,31 +2413,45 @@ function looksLikeEmailDraft(text: string): boolean {
 
 function parseDraftText(text: string): { subject: string | null; body: string } {
   const normalized = text.replace(/\r\n/g, "\n").trim();
-  const subjectMatch = normalized.match(/^\s*(?:subject|subject line)\s*:\s*(.+)$/im);
-  const subject = subjectMatch?.[1]?.trim() || null;
+  const subjectMatch = normalized.match(
+    /^\s*(?:\*\*)?\s*(?:subject|subject line)\s*:?\s*(?:\*\*)?\s*(.+)$/im,
+  );
+  const subject = stripSimpleMarkdown(subjectMatch?.[1] || "").trim() || null;
   let body = stripAgentDraftWrapperText(normalized)
     .replace(/^\s*[-–—]{3,}\s*$/gm, "")
-    .replace(/^\s*(?:subject|subject line)\s*:\s*.+$/im, "")
-    .replace(/^\s*(?:to|recipient)\s*:\s*.+$/im, "")
+    .replace(/^\s*(?:\*\*)?\s*(?:subject|subject line)\s*:?\s*(?:\*\*)?\s*.+$/im, "")
+    .replace(/^\s*(?:\*\*)?\s*(?:to|recipient)\s*:?\s*(?:\*\*)?\s*.+$/im, "")
     .trim();
   const savePromptIndex = body.search(
-    /\n\s*(?:[-–—]\s*)?(?:this is a chat draft only|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
+    /\n\s*(?:[-–—]\s*)?(?:this is a chat draft only|if you want|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
   );
   if (savePromptIndex >= 0) body = body.slice(0, savePromptIndex).trim();
-  return { subject, body };
+  return { subject, body: stripSimpleMarkdown(body).trim() };
 }
 
 function stripAgentDraftWrapperText(text: string): string {
   let body = text.replace(/\r\n/g, "\n").trim();
+  const draftMarker = body.match(
+    /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*(?:\n|$)/i,
+  );
+  if (draftMarker?.index !== undefined) {
+    body = body.slice(draftMarker.index + draftMarker[0].length).trim();
+  }
   body = body.replace(
     /^\s*(?:here(?:'|’)s|here is)\s+(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*$/im,
     "",
   );
-  body = body.replace(
-    /\n\s*(?:[-–—]\s*)?(?:please\s+let\s+me\s+know\s+if\s+you(?:'|’)d\s+like\s+(?:me\s+)?to\s+(?:make\s+any\s+changes\s+or\s+if\s+you(?:'|’)d\s+like\s+me\s+to\s+)?save\s+this\s+draft\.?|this is a chat draft only|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
-    "",
+  const closingPromptIndex = body.search(
+    /\n\s*(?:[-–—]\s*)?(?:please\s+let\s+me\s+know\s+if\s+you(?:'|’)d\s+like\s+(?:me\s+)?to\s+(?:make\s+any\s+changes\s+or\s+if\s+you(?:'|’)d\s+like\s+me\s+to\s+)?save\s+this\s+draft\.?|this is a chat draft only|if you want|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
   );
+  if (closingPromptIndex >= 0) body = body.slice(0, closingPromptIndex).trim();
   return body.trim();
+}
+
+function stripSimpleMarkdown(text: string): string {
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1");
 }
 
 function extractEmailAddress(text: string): string | null {
