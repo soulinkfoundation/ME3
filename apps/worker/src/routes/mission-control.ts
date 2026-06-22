@@ -4,11 +4,13 @@ import { LocalExecutorInputError } from "../local-executor";
 import {
   MissionControlInputError,
   approveMissionMemory,
+  archiveMissionProjectColumn,
   archiveMissionTask,
   clearMissionActivity,
   createMissionContextSource,
   createMissionMemory,
   createMissionProject,
+  createMissionProjectColumn,
   createJournalProjectLink,
   createMissionTask,
   createMissionTaskFromJournal,
@@ -190,6 +192,27 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
     }
   });
 
+  app.post("/api/mission-control/projects/:id/columns", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireMissionControlPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      return c.json(
+        await createMissionProjectColumn(
+          c.env,
+          ownerId,
+          c.req.param("id"),
+          await c.req.json().catch(() => ({})),
+        ),
+        201,
+      );
+    } catch (error) {
+      return missionControlErrorResponse(c, error);
+    }
+  });
+
   app.patch("/api/mission-control/projects/:id", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -219,6 +242,27 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
     try {
       return c.json(
         await updateMissionProjectColumn(
+          c.env,
+          ownerId,
+          c.req.param("id"),
+          c.req.param("columnId"),
+          await c.req.json().catch(() => ({})),
+        ),
+      );
+    } catch (error) {
+      return missionControlErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/mission-control/projects/:id/columns/:columnId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireMissionControlPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      return c.json(
+        await archiveMissionProjectColumn(
           c.env,
           ownerId,
           c.req.param("id"),

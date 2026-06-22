@@ -304,6 +304,19 @@ describe("Mission Control task pagination", () => {
       created_at: "2026-06-21T09:00:00Z",
       updated_at: "2026-06-21T09:00:00Z",
     };
+    const columns = [
+      {
+        id: "project-1:backlog",
+        user_id: "owner",
+        project_id: "project-1",
+        name: "Backlog",
+        status: "backlog",
+        position: 0,
+        archived_at: null,
+        created_at: "2026-06-21T09:00:00Z",
+        updated_at: "2026-06-21T09:00:00Z",
+      },
+    ];
     const env = {
       DB: {
         prepare(sql: string) {
@@ -333,6 +346,12 @@ describe("Mission Control task pagination", () => {
                     } as T;
                   }
                   return null as T;
+                },
+                async all<T>() {
+                  if (sql.includes("FROM mission_project_columns")) {
+                    return { results: columns as T[] };
+                  }
+                  return { results: [] as T[] };
                 },
                 async run() {
                   if (sql.includes("INSERT INTO mission_tasks")) {

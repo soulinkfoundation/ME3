@@ -24,6 +24,7 @@ import {
   formatShortDate,
   isLocalProject,
   missionTasksUrl,
+  projectBoardColumnsForProject,
   projectBoardStatusesForProject,
   projectForTask,
   projectName,
@@ -277,11 +278,11 @@ const projectTaskProjectId = ref("");
 const projectTaskSaving = ref(false);
 const projectTaskActionId = ref("");
 const projectTaskLocalRunId = ref("");
-const projectTaskComposerStatus = ref<ProjectBoardStatus | "">("");
+const projectTaskComposerStatus = ref("");
 const projectTaskComposerProjectId = ref<string | null>(null);
 const projectColumnActionId = ref("");
 const draggedProjectTaskId = ref("");
-const projectTaskDropStatus = ref<ProjectBoardStatus | "">("");
+const projectTaskDropStatus = ref("");
 const selectedProjectTaskDetailId = ref("");
 const projectTaskDetailDraft = ref<ProjectTaskDetailDraft>({
   title: "",
@@ -488,10 +489,14 @@ const selectedProjectTaskLatestRunSummary = computed(() => {
   return "Local run cancelled.";
 });
 const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
-  selectedProjectBoardStatuses.value.map((column) => ({
+  projectBoardColumnsForProject(selectedProjectDetail.value).map((column) => ({
     ...column,
     tasks: regularProjectBoardTasks.value.filter(
-      (task) => task.status === column.id,
+      (task) =>
+        selectedProjectDetail.value
+          ? task.columnId === column.columnId ||
+            (!task.columnId && task.status === column.status)
+          : task.status === column.status,
     ),
   })),
 );
@@ -1377,9 +1382,9 @@ function clearTaskRouteQuery() {
   void router.replace({ query });
 }
 
-function openProjectTaskComposer(status: ProjectBoardStatus) {
+function openProjectTaskComposer(column: ProjectBoardColumn) {
   if (projectTaskSaving.value) return;
-  projectTaskComposerStatus.value = status;
+  projectTaskComposerStatus.value = column.id;
   projectTaskComposerProjectId.value = null;
   projectTaskDraft.value = "";
   projectTaskProjectId.value = selectedProjectDetail.value?.id || "";
@@ -1420,11 +1425,16 @@ function cancelProjectTaskComposer() {
   resetProjectTaskComposer();
 }
 
-async function addProjectTask(status: ProjectBoardStatus) {
+async function addProjectTask(target: ProjectBoardStatus | ProjectBoardColumn) {
   const title = projectTaskDraft.value.trim();
   const projectId =
     selectedProjectDetail.value?.id || projectTaskProjectId.value;
   if (!title || !projectId || projectTaskSaving.value) return;
+  const column =
+    typeof target === "string"
+      ? selectedProjectBoardStatuses.value.find((item) => item.id === target)
+      : target;
+  const status = typeof target === "string" ? target : target.status;
   projectTaskSaving.value = true;
   projectTasksError.value = "";
   try {
@@ -1434,6 +1444,7 @@ async function addProjectTask(status: ProjectBoardStatus) {
         title,
         projectId,
         status,
+        columnId: column?.columnId || undefined,
       },
     );
     projectTasks.value = sortProjectTasks([response.task, ...projectTasks.value]);
@@ -1569,14 +1580,19 @@ async function submitSelectedWeeklyReview() {
 async function setProjectTaskStatus(
   task: MissionTask,
   status: MissionTask["status"],
+  columnId?: string,
 ) {
-  if (task.status === status || projectTaskActionId.value) return;
+  if (
+    (task.status === status && (!columnId || task.columnId === columnId)) ||
+    projectTaskActionId.value
+  )
+    return;
   projectTaskActionId.value = task.id;
   projectTasksError.value = "";
   try {
     const response = await api.patch<{ task: MissionTask }>(
       `/mission-control/tasks/${encodeURIComponent(task.id)}`,
-      { status },
+      { status, columnId },
     );
     replaceProjectTask(response.task);
     if (response.task.status === "done") {
@@ -1636,13 +1652,69 @@ async function renameProjectColumn(column: ProjectBoardColumn, name: string) {
   }
 }
 
+async function addProjectColumn() {
+  const project = selectedProjectDetail.value;
+  if (!project || projectColumnActionId.value) return;
+  const name = window.prompt("Column name");
+  if (!name?.trim()) return;
+  projectColumnActionId.value = "new";
+  projectTasksError.value = "";
+  try {
+    const response = await api.post<{
+      column: NonNullable<MissionProject["columns"]>[number];
+    }>(`/mission-control/projects/${encodeURIComponent(project.id)}/columns`, {
+      name: name.trim(),
+    });
+    projects.value = projects.value.map((item) =>
+      item.id === project.id
+        ? { ...item, columns: [...(item.columns || []), response.column] }
+        : item,
+    );
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not add column";
+  } finally {
+    projectColumnActionId.value = "";
+  }
+}
+
+async function removeProjectColumn(column: ProjectBoardColumn) {
+  const project = selectedProjectDetail.value;
+  if (!project || projectColumnActionId.value || projectBoardColumns.value.length < 2)
+    return;
+  const target = projectBoardColumns.value.find((item) => item.id !== column.id);
+  if (!target) return;
+  const confirmed = window.confirm(
+    `Remove "${column.label}"? Tasks in it will move to "${target.label}".`,
+  );
+  if (!confirmed) return;
+  projectColumnActionId.value = column.id;
+  projectTasksError.value = "";
+  try {
+    const response = await api.delete<{
+      columns: NonNullable<MissionProject["columns"]>;
+    }>(
+      `/mission-control/projects/${encodeURIComponent(project.id)}/columns/${encodeURIComponent(column.id)}`,
+    );
+    projects.value = projects.value.map((item) =>
+      item.id === project.id ? { ...item, columns: response.columns } : item,
+    );
+    await loadProjectTasks();
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not remove column";
+  } finally {
+    projectColumnActionId.value = "";
+  }
+}
+
 function startProjectTaskDrag(event: DragEvent, task: MissionTask) {
   if (projectTaskActionId.value || task.status === "cancelled") {
     event.preventDefault();
     return;
   }
   draggedProjectTaskId.value = task.id;
-  projectTaskDropStatus.value = task.status;
+  projectTaskDropStatus.value = task.columnId || task.status;
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", task.id);
@@ -1656,11 +1728,11 @@ function endProjectTaskDrag() {
 
 function handleProjectColumnDragOver(
   event: DragEvent,
-  status: ProjectBoardStatus,
+  columnId: string,
 ) {
   if (!draggedProjectTaskId.value) return;
   event.preventDefault();
-  projectTaskDropStatus.value = status;
+  projectTaskDropStatus.value = columnId;
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = "move";
   }
@@ -1668,16 +1740,16 @@ function handleProjectColumnDragOver(
 
 function handleProjectColumnDragLeave(
   event: DragEvent,
-  status: ProjectBoardStatus,
+  columnId: string,
 ) {
   const currentTarget = event.currentTarget as HTMLElement | null;
   const relatedTarget = event.relatedTarget as Node | null;
   if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget))
     return;
-  if (projectTaskDropStatus.value === status) projectTaskDropStatus.value = "";
+  if (projectTaskDropStatus.value === columnId) projectTaskDropStatus.value = "";
 }
 
-async function dropProjectTask(event: DragEvent, status: ProjectBoardStatus) {
+async function dropProjectTask(event: DragEvent, column: ProjectBoardColumn) {
   event.preventDefault();
   const taskId =
     draggedProjectTaskId.value ||
@@ -1686,7 +1758,7 @@ async function dropProjectTask(event: DragEvent, status: ProjectBoardStatus) {
   endProjectTaskDrag();
   const task = projectTasks.value.find((item) => item.id === taskId);
   if (!task) return;
-  await setProjectTaskStatus(task, status);
+  await setProjectTaskStatus(task, column.status, column.columnId || undefined);
 }
 
 async function archiveProjectTask(task: MissionTask): Promise<boolean> {
@@ -2276,6 +2348,7 @@ onBeforeUnmount(() => {
           :drop-status="projectTaskDropStatus"
           :dragged-task-id="draggedProjectTaskId"
           :action-id="projectTaskActionId"
+          :column-action-id="projectColumnActionId"
           :local-run-id="projectTaskLocalRunId"
           :saving="projectTaskSaving"
           :composer-status="projectTaskComposerStatus"
@@ -2292,6 +2365,8 @@ onBeforeUnmount(() => {
           @run-task-locally="runProjectTaskLocally"
           @toggle-pin="toggleProjectTaskPin"
           @rename-column="renameProjectColumn"
+          @add-column="addProjectColumn"
+          @remove-column="removeProjectColumn"
           @add-task="addProjectTask"
           @open-composer="openProjectTaskComposer"
           @cancel-composer="cancelProjectTaskComposer"

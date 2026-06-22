@@ -21,7 +21,6 @@ import type {
   MissionProject,
   MissionTask,
   ProjectBoardColumn,
-  ProjectBoardStatus,
 } from "./projectWorkspace";
 
 defineProps<{
@@ -34,12 +33,13 @@ defineProps<{
   loading: boolean;
   pinnedTasks: MissionTask[];
   columns: ProjectBoardColumn[];
-  dropStatus: ProjectBoardStatus | "";
+  dropStatus: string;
   draggedTaskId: string;
   actionId: string;
+  columnActionId: string;
   localRunId: string;
   saving: boolean;
-  composerStatus: ProjectBoardStatus | "";
+  composerStatus: string;
   taskDraft: string;
   taskProjectId: string;
   createDisabled: boolean;
@@ -51,9 +51,9 @@ const emit = defineEmits<{
   "update:taskDraft": [value: string];
   "update:taskProjectId": [value: string];
   "load-more": [];
-  "column-drag-over": [event: DragEvent, status: ProjectBoardStatus];
-  "column-drag-leave": [event: DragEvent, status: ProjectBoardStatus];
-  "drop-task": [event: DragEvent, status: ProjectBoardStatus];
+  "column-drag-over": [event: DragEvent, columnId: string];
+  "column-drag-leave": [event: DragEvent, columnId: string];
+  "drop-task": [event: DragEvent, column: ProjectBoardColumn];
   "open-detail": [task: MissionTask];
   "task-drag-start": [event: DragEvent, task: MissionTask];
   "task-drag-end": [];
@@ -61,8 +61,10 @@ const emit = defineEmits<{
   "run-task-locally": [task: MissionTask];
   "toggle-pin": [task: MissionTask];
   "rename-column": [column: ProjectBoardColumn, name: string];
-  "add-task": [status: ProjectBoardStatus];
-  "open-composer": [status: ProjectBoardStatus];
+  "add-column": [];
+  "remove-column": [column: ProjectBoardColumn];
+  "add-task": [column: ProjectBoardColumn];
+  "open-composer": [column: ProjectBoardColumn];
   "cancel-composer": [];
 }>();
 
@@ -232,7 +234,7 @@ function blurOnEnter(event: KeyboardEvent) {
           :aria-label="column.label"
           @dragover="emit('column-drag-over', $event, column.id)"
           @dragleave="emit('column-drag-leave', $event, column.id)"
-          @drop="emit('drop-task', $event, column.id)"
+          @drop="emit('drop-task', $event, column)"
         >
           <div class="project-board__column-header">
             <input
@@ -248,6 +250,17 @@ function blurOnEnter(event: KeyboardEvent) {
             />
             <h2 v-else>{{ column.label }}</h2>
             <span>{{ column.tasks.length }}</span>
+            <button
+              v-if="selectedProject && columns.length > 1"
+              type="button"
+              class="project-board__column-remove"
+              :disabled="saving || columnActionId === column.id"
+              :aria-label="`Remove ${column.label} column`"
+              :title="`Remove ${column.label} column`"
+              @click="emit('remove-column', column)"
+            >
+              <UiIcon name="Trash2" :size="13" />
+            </button>
           </div>
 
           <article
@@ -357,7 +370,7 @@ function blurOnEnter(event: KeyboardEvent) {
           <form
             v-if="composerStatus === column.id"
             class="project-task-composer"
-            @submit.prevent="emit('add-task', column.id)"
+            @submit.prevent="emit('add-task', column)"
           >
             <select
               v-if="!selectedProject"
@@ -416,12 +429,22 @@ function blurOnEnter(event: KeyboardEvent) {
             type="button"
             class="project-column-add"
             :disabled="saving"
-            @click="emit('open-composer', column.id)"
+            @click="emit('open-composer', column)"
           >
             <UiIcon name="Plus" :size="15" />
             Add task
           </button>
         </section>
+        <button
+          v-if="selectedProject"
+          type="button"
+          class="project-board__add-column"
+          :disabled="saving || Boolean(columnActionId)"
+          @click="emit('add-column')"
+        >
+          <UiIcon name="Plus" :size="15" />
+          Add column
+        </button>
       </div>
 
       <button
@@ -467,7 +490,7 @@ function blurOnEnter(event: KeyboardEvent) {
 
 .project-board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
   min-width: 0;
   overflow-x: auto;
@@ -509,6 +532,29 @@ function blurOnEnter(event: KeyboardEvent) {
   gap: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--ui-border);
+}
+
+.project-board__column-remove {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+}
+
+.project-board__column-remove:hover {
+  border-color: var(--ui-border);
+  color: #b91c1c;
+}
+
+.project-board__column-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .project-board__column-header h2 {
@@ -794,6 +840,29 @@ function blurOnEnter(event: KeyboardEvent) {
   padding: 6px;
   border-radius: var(--ui-radius-md);
   background: var(--ui-surface-muted);
+}
+
+.project-board__add-column {
+  display: inline-flex;
+  align-items: center;
+  align-self: start;
+  justify-content: center;
+  gap: 6px;
+  min-width: 180px;
+  min-height: 38px;
+  border: 1px dashed var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.project-board__add-column:hover {
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
 }
 
 .project-task-composer__input,

@@ -118,8 +118,9 @@ export type LocalExecutorStatusResponse = {
 export type ProjectBoardStatus = Exclude<MissionTask["status"], "cancelled">;
 
 export type ProjectBoardColumn = {
-  id: ProjectBoardStatus;
+  id: string;
   columnId: string;
+  status: ProjectBoardStatus;
   label: string;
   tasks: MissionTask[];
 };
@@ -396,6 +397,29 @@ export function projectBoardStatusesForProject(
       ? { id: status.id, columnId: column.id, label: column.name }
       : status;
   });
+}
+
+export function projectBoardColumnsForProject(
+  project: MissionProject | null,
+): Array<Omit<ProjectBoardColumn, "tasks">> {
+  const columns = project?.columns || [];
+  if (!project || !columns.length) {
+    return projectBoardStatuses.map((status) => ({
+      id: status.id,
+      columnId: status.columnId,
+      status: status.id,
+      label: status.label,
+    }));
+  }
+  return [...columns]
+    .filter((column) => !column.archivedAt)
+    .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
+    .map((column) => ({
+      id: column.id,
+      columnId: column.id,
+      status: column.status,
+      label: column.name,
+    }));
 }
 
 export function activeProjectTasks(tasks: MissionTask[]): MissionTask[] {
