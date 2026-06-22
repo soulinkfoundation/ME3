@@ -26,6 +26,10 @@ import {
 import type { AppContext, AppHono } from "../http/types";
 import { getOwnerProfile, normalizeEmail } from "../sites";
 import type { DbMailboxAlias, Env } from "../types";
+import {
+  decodeMimeHeaderValue,
+  parseEmailAddressHeader,
+} from "../../../../shared/email-headers";
 
 const INBOUND_EMAIL_PROVIDER_ID = "cloudflare-email-routing";
 const MAX_INBOUND_EMAIL_BYTES = 1024 * 1024;
@@ -450,8 +454,12 @@ export async function handleInboundEmail(
         threadKey,
         INBOUND_EMAIL_PROVIDER_ID,
         providerMessageId,
-        normalizeEmail(message.from) || normalizeEmailHeaderValue(parsed.headers.from),
-        normalizeEmail(message.to) || normalizeEmailHeaderValue(parsed.headers.to),
+        parseEmailAddressHeader(parsed.headers.from)?.address ||
+          normalizeEmail(message.from) ||
+          normalizeEmailHeaderValue(parsed.headers.from),
+        parseEmailAddressHeader(parsed.headers.to)?.address ||
+          normalizeEmail(message.to) ||
+          normalizeEmailHeaderValue(parsed.headers.to),
         parsed.subject || "(no subject)",
         parsed.textBody || parsed.htmlBody || "",
         parsed.htmlBody,
@@ -563,7 +571,7 @@ function parseInboundEmail(
 
   return {
     headers,
-    subject: normalizeEmailHeaderValue(headers.subject) || "",
+    subject: decodeMimeHeaderValue(normalizeEmailHeaderValue(headers.subject)) || "",
     textBody: parsedBody.textBody,
     htmlBody: parsedBody.htmlBody,
     attachments: parsedBody.attachments,

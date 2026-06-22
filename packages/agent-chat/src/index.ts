@@ -28,6 +28,10 @@ import {
   type Me3AgentContextTask,
   type Me3KnowledgeRuntimeContext,
 } from "@me3/knowledge";
+import {
+  decodeMimeHeaderValue,
+  parseEmailAddressHeader,
+} from "../../../shared/email-headers";
 
 export {
   isCoreChatBookingLookupRequest,
@@ -2925,6 +2929,8 @@ function normalizeFolder(value: unknown): string | null {
 
 function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
   const metadata = parseJsonRecord(row.metadata_json);
+  const headers = parseJsonRecord(row.raw_headers_json);
+  const fromHeader = parseEmailAddressHeader(getHeaderValue(headers, "from"));
   const agentLabels = parseJsonArray(row.agent_labels_json);
   const unsubscribeAction = getMailboxUnsubscribeAction(row);
   const body = getSerializedAgentMailboxMessageBody(row);
@@ -2936,10 +2942,10 @@ function serializeAgentMailboxMessage(row: DbMailboxMessageRow) {
     threadKey: row.thread_key,
     providerId: row.provider_id,
     providerMessageId: row.provider_message_id,
-    fromAddress: row.from_address,
-    fromName: null,
+    fromAddress: fromHeader?.address || row.from_address,
+    fromName: fromHeader?.name || null,
     toAddress: row.to_address,
-    subject: row.subject || "(no subject)",
+    subject: decodeMimeHeaderValue(row.subject || "(no subject)"),
     body,
     htmlBody: row.html_body || null,
     preview: body.slice(0, 280),

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
+import { useRouter } from "vue-router";
 import Button from "../components/Button.vue";
 import ContactsPanel from "../components/ContactsPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
+import WorkspaceTabs from "../components/WorkspaceTabs.vue";
+import type { UiIconName } from "../utils/icons";
 
 definePage({
   meta: {
@@ -17,9 +20,31 @@ definePage({
 
 const contactsPanel = ref<InstanceType<typeof ContactsPanel> | null>(null);
 const contactSearchQuery = ref("");
+const router = useRouter();
+
+const contactMailboxTabs: Array<{
+  id: string;
+  label: string;
+  icon: UiIconName;
+}> = [
+  { id: "inbox", label: "Inbox", icon: "Inbox" },
+  { id: "drafts", label: "Drafts", icon: "FileText" },
+  { id: "sent", label: "Sent", icon: "Send" },
+  { id: "archive", label: "Archive", icon: "Archive" },
+  { id: "trash", label: "Trash", icon: "Trash2" },
+  { id: "contacts", label: "Contacts", icon: "UsersRound" },
+];
 
 function openContactModal() {
   contactsPanel.value?.openContactModal();
+}
+
+function switchContactMailboxTab(tabId: string) {
+  if (tabId === "contacts") return;
+  void router.push({
+    path: "/email",
+    query: tabId === "inbox" ? {} : { tab: tabId },
+  });
 }
 </script>
 
@@ -78,6 +103,15 @@ function openContactModal() {
       </form>
     </Teleport>
 
+    <div class="contacts-mail-tabs">
+      <WorkspaceTabs
+        :tabs="contactMailboxTabs"
+        model-value="contacts"
+        aria-label="Mailbox folders"
+        @change="switchContactMailboxTab"
+      />
+    </div>
+
     <ContactsPanel
       ref="contactsPanel"
       v-model:search-query="contactSearchQuery"
@@ -88,8 +122,26 @@ function openContactModal() {
 
 <style scoped>
 .contacts-page {
+  display: flex;
+  flex-direction: column;
   min-height: 100%;
   background: var(--ui-bg, var(--color-bg));
+}
+
+.contacts-mail-tabs {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--ui-border, var(--color-border));
+  background: var(--ui-bg, var(--color-bg));
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.contacts-mail-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .contacts-mobile-nav {

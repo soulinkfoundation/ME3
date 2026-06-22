@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import Button from "../components/Button.vue";
 import PageLoading from "../components/PageLoading.vue";
 import UiIcon from "../components/UiIcon.vue";
@@ -13,6 +13,7 @@ import { useInboxDraftCount } from "../composables/useInboxDraftCount";
 import { useAuthStore } from "../stores/auth";
 import { useContactsStore, type Contact } from "../stores/contacts";
 import type { UiIconName } from "../utils/icons";
+import { decodeMimeHeaderValue } from "../../../../shared/email-headers";
 
 definePage({
   meta: {
@@ -242,6 +243,7 @@ const {
   useInboxDraftCount();
 const { toastFromUnknown, toastSuccess } = useAppToast();
 const auth = useAuthStore();
+const route = useRoute();
 const router = useRouter();
 const contactsStore = useContactsStore();
 const { contacts } = storeToRefs(contactsStore);
@@ -677,20 +679,28 @@ function isLikelyFollowUpDraft(message: InboxMessage): boolean {
 
 function getCounterpartyAddress(message: InboxMessage): string {
   if (message.direction === "inbound") {
-    return message.fromName || message.fromAddress || "—";
+    return (
+      getDisplayText(message.fromName) || getDisplayText(message.fromAddress) || "—"
+    );
   }
-  return message.toAddress || "—";
+  return getDisplayText(message.toAddress) || "—";
 }
 
 function formatSenderValue(message: InboxMessage): string {
-  if (message.fromName && message.fromAddress) {
-    return `${message.fromName} <${message.fromAddress}>`;
+  const fromName = getDisplayText(message.fromName);
+  const fromAddress = getDisplayText(message.fromAddress);
+  if (fromName && fromAddress) {
+    return `${fromName} <${fromAddress}>`;
   }
-  return message.fromAddress || message.fromName || "—";
+  return fromAddress || fromName || "—";
 }
 
 function formatRecipientValue(message: InboxMessage): string {
-  return message.toAddress || "—";
+  return getDisplayText(message.toAddress) || "—";
+}
+
+function getMessageSubject(message: InboxMessage): string {
+  return getDisplayText(message.subject) || "(no subject)";
 }
 
 function syncSelectedMessages(nextMessages: InboxMessage[]) {
@@ -704,6 +714,16 @@ function syncSelectedMessages(nextMessages: InboxMessage[]) {
   selectedMessageIds.value = new Set(
     [...selectedMessageIds.value].filter((id) => nextIds.has(id)),
   );
+}
+
+function isDesktopMailLayout(): boolean {
+  return window.matchMedia("(min-width: 641px)").matches;
+}
+
+function selectFirstMessageOnDesktop() {
+  if (expandedId.value || !messages.value.length || !isDesktopMailLayout()) return;
+  expandedId.value = messages.value[0].id;
+  mobileThreadOpen.value = false;
 }
 
 function getMessageAttachments(message: InboxMessage): MailboxAttachment[] {
@@ -801,6 +821,7 @@ async function loadMessages() {
     total.value = data.total;
     setFolderCount(tab, data.total);
     syncSelectedMessages(data.messages);
+    selectFirstMessageOnDesktop();
     void markVisibleThreadRead();
   } catch (err) {
     if (
@@ -1016,6 +1037,11 @@ function switchMailFolderTab(tabId: string) {
     return;
   }
   if (emailTabOrder.includes(tabId as EmailTab)) {
+    if (activeTab.value === tabId) return;
+    void router.replace({
+      path: "/email",
+      query: tabId === "inbox" ? {} : { tab: tabId },
+    });
     switchTab(tabId as Tab);
   }
 }
@@ -1266,7 +1292,7 @@ async function unsubscribeFromMessage(message: InboxMessage) {
 
 function getDisplayText(value: string | null | undefined): string {
   if (!value) return "";
-  return repairLikelyMojibake(value);
+  return repairLikelyMojibake(decodeMimeHeaderValue(value));
 }
 
 function getMessagePreview(message: InboxMessage): string {
@@ -1313,7 +1339,7 @@ function openComposeModal(
       composeForm.value = {
         fromAddress: message.fromAddress || defaultFromAddress,
         to: message.toAddress || "",
-        subject: message.subject,
+        subject: getMessageSubject(message),
         textBody: getMessageTextBody(message),
       };
       composeOpen.value = true;
@@ -1344,7 +1370,7 @@ function openComposeModal(
           minute: "2-digit",
           timeZone: auth.user?.timezone || undefined,
         })}`,
-        `Subject: ${message.subject || "(no subject)"}`,
+        `Subject: ${getMessageSubject(message)}`,
         `To: ${formatRecipientValue(message)}`,
         "",
         originalBody,
@@ -1352,9 +1378,9 @@ function openComposeModal(
       composeForm.value = {
         fromAddress: defaultFromAddress,
         to: "",
-        subject: /^fwd:\s*/i.test(message.subject)
-          ? message.subject
-          : `Fwd: ${message.subject || "(no subject)"}`,
+        subject: /^fwd:\s*/i.test(getMessageSubject(message))
+          ? getMessageSubject(message)
+          : `Fwd: ${getMessageSubject(message)}`,
         textBody: forwardedLines.join("\n"),
       };
     } else {
@@ -1369,9 +1395,9 @@ function openComposeModal(
       composeForm.value = {
         fromAddress: replyFromAddress,
         to: replyTo || "",
-        subject: /^(re|fwd):\s*/i.test(message.subject)
-          ? message.subject
-          : `Re: ${message.subject}`,
+        subject: /^(re|fwd):\s*/i.test(getMessageSubject(message))
+          ? getMessageSubject(message)
+          : `Re: ${getMessageSubject(message)}`,
         textBody: "",
       };
     }
@@ -1840,6 +1866,10 @@ function nextPage() {
 }
 
 onMounted(() => {
+  const routeTab = typeof route.query.tab === "string" ? route.query.tab : "";
+  if (emailTabOrder.includes(routeTab as EmailTab)) {
+    activeTab.value = routeTab as EmailTab;
+  }
   void loadChannelHealth();
   void loadMessages();
   void loadInboxDraftCount();
@@ -2157,7 +2187,7 @@ onBeforeUnmount(() => {
                         type="checkbox"
                         :checked="selectedMessageIds.has(message.id)"
                         :disabled="inboxBusy"
-                        :aria-label="`Select ${message.subject || 'message'}`"
+                        :aria-label="`Select ${getMessageSubject(message)}`"
                         @click.stop
                         @keydown.space.stop
                         @change="
@@ -2174,7 +2204,7 @@ onBeforeUnmount(() => {
                       </div>
                       <p class="conversation-item__summary">
                         <span class="conversation-item__subject">
-                          {{ message.subject || "(no subject)" }}
+                          {{ getMessageSubject(message) }}
                         </span>
                         <span class="conversation-item__separator">-</span>
                         <span
@@ -2247,7 +2277,10 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
-                <div v-if="!loading" class="pagination pagination--split">
+                <div
+                  v-if="!loading && totalPages > 1"
+                  class="pagination pagination--split"
+                >
                   <div class="pagination-nav">
                     <Button color="ghost" shape="soft" size="small" icon-only type="button"
                       :disabled="currentPage <= 1"
@@ -2351,7 +2384,7 @@ onBeforeUnmount(() => {
                 </header>
 
                 <div class="thread-heading">
-                  <h2>{{ selectedMessage.subject }}</h2>
+                  <h2>{{ getMessageSubject(selectedMessage) }}</h2>
                   <p>
                     {{ selectedThreadMessages.length }}
                     {{

@@ -9943,12 +9943,13 @@ describe("ME3 Core Worker auth", () => {
       [
         "From: Client <client@example.com>",
         "To: name@example.com",
-        "Subject: Standalone test",
+        "Subject: =?UTF-8?Q?It=E2=80=99s_getting_there_bro?=",
         "Message-ID: <standalone-test@example.com>",
         "Content-Type: text/plain; charset=utf-8",
         "",
         "Hello from Cloudflare Email Routing.",
       ].join("\r\n"),
+      { from: "0100019eee31ac31@bounce.stripe.com" },
     );
     await emailWorker().email(inbound, env);
 
@@ -9962,7 +9963,7 @@ describe("ME3 Core Worker auth", () => {
         provider_message_id: "<standalone-test@example.com>",
         from_address: "client@example.com",
         to_address: "name@example.com",
-        subject: "Standalone test",
+        subject: "It’s getting there bro",
         text_body: "Hello from Cloudflare Email Routing.",
         folder: "inbox",
         created_by: "cloudflare-email-routing",
