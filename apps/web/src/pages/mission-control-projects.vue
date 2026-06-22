@@ -237,7 +237,7 @@ const loading = ref(false);
 const error = ref("");
 const clearingActivity = ref(false);
 const localRunActionId = ref("");
-const selectedProjectDetailId = ref("");
+const selectedProjectDetailId = ref(rawProjectQuery(route.query.project));
 const projectPickerOpen = ref(false);
 const memoryDraft = ref("");
 const memoryActionId = ref("");
@@ -407,7 +407,7 @@ const selectedProjectDetail = computed(
       : null,
 );
 const selectedProjectTaskScopeId = computed(
-  () => selectedProjectDetail.value?.id || "",
+  () => selectedProjectDetail.value?.id || selectedProjectDetailId.value,
 );
 const selectedProjectIsLocal = computed(() =>
   isLocalProject(selectedProjectDetail.value),
@@ -553,7 +553,12 @@ const visibleProjectJournalLinksCount = computed(() =>
   ),
 );
 const selectedProjectDetailLabel = computed(
-  () => selectedProjectDetail.value?.name || "All",
+  () =>
+    selectedProjectDetail.value
+      ? selectedProjectDetail.value.name
+      : selectedProjectDetailId.value
+        ? "Loading..."
+        : "All",
 );
 const projectTaskCreateDisabled = computed(
   () =>
@@ -2105,11 +2110,15 @@ function rawTaskQuery(value: unknown): string {
 
 function syncSelectedProjectFromRoute() {
   const projectId = rawProjectQuery(route.query.project);
-  selectedProjectDetailId.value = projects.value.some(
-    (project) => project.id === projectId,
-  )
-    ? projectId
-    : "";
+  if (!projectId) {
+    selectedProjectDetailId.value = "";
+    return;
+  }
+  selectedProjectDetailId.value =
+    projects.value.length === 0 ||
+    projects.value.some((project) => project.id === projectId)
+      ? projectId
+      : "";
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
