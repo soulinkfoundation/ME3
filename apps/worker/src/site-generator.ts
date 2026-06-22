@@ -840,11 +840,14 @@ function paidBookingWidgetScript(): string {
         button.type='button';
         button.className='booking-slot';
         button.textContent=value+' '+timezoneLabel(dateValue,value);
-        button.addEventListener('click',function(){
-          selectedTime=value;
-          timeInput.value=value;
-          Array.prototype.forEach.call(slotsEl.querySelectorAll('.booking-slot'),function(item){item.classList.toggle('active',item===button);});
-          if(selectedTimeEl)selectedTimeEl.textContent=formatSlotLabel(dateValue,value,duration);
+        button.dataset.timeValue=value;
+        button.addEventListener('click',function(event){
+          var slotButton=event.currentTarget;
+          var slotValue=slotButton&&slotButton.dataset?slotButton.dataset.timeValue:value;
+          selectedTime=slotValue;
+          timeInput.value=slotValue;
+          Array.prototype.forEach.call(slotsEl.querySelectorAll('.booking-slot'),function(item){item.classList.toggle('active',item===slotButton);});
+          if(selectedTimeEl)selectedTimeEl.textContent=formatSlotLabel(dateValue,slotValue,duration);
           setDetailsVisible(true);
         });
         slotsEl.appendChild(button);

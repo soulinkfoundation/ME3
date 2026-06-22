@@ -218,6 +218,9 @@ describe("site generator", () => {
     expect(files["index.html"]).not.toContain("Your booking request is ready.");
     expect(files["index.html"]).toContain('"bufferTime":15');
     expect(files["index.html"]).toContain("t+=slotStep");
+    expect(files["index.html"]).toContain("button.dataset.timeValue=value");
+    expect(files["index.html"]).toContain("var slotButton=event.currentTarget");
+    expect(files["index.html"]).toContain("item.classList.toggle('active',item===slotButton)");
     expect(files["index.html"]).toContain("No available times on this day.");
     expect(files["index.html"]).toContain('<h3 class="section-title">Testimonials</h3>');
     expect(files["index.html"]).toContain('class="testimonials-carousel"');
