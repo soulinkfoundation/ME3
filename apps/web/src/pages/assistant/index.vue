@@ -18,12 +18,14 @@ import WorkspaceTabs from "../../components/WorkspaceTabs.vue";
 import { useAgentChat } from "../../composables/useAgentChat";
 import { useAppToast } from "../../composables/useAppToast";
 import {
+  formatAgentTraceRows,
   formatAgentRuntimeDetail,
   formatAgentRuntimeMetadata,
   normalizeAgentActionCards,
   resolveAgentReplyText,
   resolveAgentSiteActionLink,
   type AgentChatActionCard,
+  type AgentChatTurnTrace,
 } from "../../utils/agentChat";
 import { renderAssistantMarkdown } from "../../utils/assistantMarkdown";
 import {
@@ -399,6 +401,7 @@ type AgentSandboxResponse = {
   contextPacketId?: string | null;
   contextSummary?: string | null;
   contextManifest?: unknown;
+  trace?: AgentChatTurnTrace | null;
   emailAction?: {
     kind: "drafted" | "sent";
     draftId?: string;
@@ -442,6 +445,7 @@ type AssistantThreadMessage = {
   text: string;
   createdAt: string;
   actionCards?: AgentChatActionCard[] | null;
+  trace?: AgentChatTurnTrace | null;
 };
 type AssistantThread = {
   id: string;
@@ -2566,6 +2570,7 @@ function applyAssistantResultToMessage(
     showRuntimeMetadata: import.meta.env.DEV,
   });
   message.detail = formatAgentRuntimeDetail(result);
+  message.trace = result.trace || null;
   message.actionCards = normalizeAgentActionCards(result.actionCards);
   message.inboxLink = result.emailAction?.kind === "drafted";
   message.rolodexLink = result.contactsChanged === true;
@@ -2580,6 +2585,10 @@ function applyAssistantResultToMessage(
     siteActionLink?.label ||
     (result.contentAction?.kind === "saved" ? "Open content bank" : null);
   message.jobBuilderAction = result.jobBuilderAction || null;
+}
+
+function assistantTraceRows(trace: AgentChatTurnTrace | null | undefined) {
+  return formatAgentTraceRows(trace);
 }
 
 type AssistantJobSaveResponse = {
@@ -4533,6 +4542,24 @@ function messageFromUnknown(err: unknown, fallback: string) {
               <p v-if="message.detail" class="assistant-message__detail">
                 {{ message.detail }}
               </p>
+              <details
+                v-if="message.trace && assistantTraceRows(message.trace).length"
+                class="assistant-trace"
+              >
+                <summary class="assistant-trace__summary">
+                  <UiIcon name="Activity" :size="14" aria-hidden="true" />
+                  <span>Turn trace</span>
+                </summary>
+                <dl class="assistant-trace__rows">
+                  <div
+                    v-for="row in assistantTraceRows(message.trace)"
+                    :key="`${message.id || assistantMessageKey(message, index)}:${row.label}`"
+                  >
+                    <dt>{{ row.label }}</dt>
+                    <dd>{{ row.value }}</dd>
+                  </div>
+                </dl>
+              </details>
               <div
                 v-if="message.jobBuilderAction?.kind === 'job_draft'"
                 class="job-builder-card"
@@ -7384,6 +7411,63 @@ function messageFromUnknown(err: unknown, fallback: string) {
   font-size: 12px;
   font-weight: 800;
   text-decoration: none;
+}
+
+.assistant-trace {
+  margin-top: 4px;
+  border-top: 1px solid var(--ui-border);
+  padding-top: 6px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assistant-trace__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  color: var(--ui-text-muted);
+  cursor: pointer;
+  font-weight: 800;
+  list-style: none;
+}
+
+.assistant-trace__summary::-webkit-details-marker {
+  display: none;
+}
+
+.assistant-trace__summary:focus-visible {
+  border-radius: var(--ui-radius-sm);
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+.assistant-trace__rows {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+}
+
+.assistant-trace__rows div {
+  display: grid;
+  grid-template-columns: minmax(70px, max-content) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.assistant-trace__rows dt,
+.assistant-trace__rows dd {
+  margin: 0;
+}
+
+.assistant-trace__rows dt {
+  color: var(--ui-text-muted);
+  font-weight: 800;
+}
+
+.assistant-trace__rows dd {
+  color: var(--ui-text);
+  overflow-wrap: anywhere;
 }
 
 .assistant-action-card-list {

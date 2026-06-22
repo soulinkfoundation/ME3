@@ -17,6 +17,7 @@ export type AgentChatRuntimeResult = {
   contextManifest?: unknown;
   siteAction?: AgentChatSiteAction | null;
   actionCards?: AgentChatActionCard[] | null;
+  trace?: AgentChatTurnTrace | null;
 };
 
 export type AgentChatSiteAction = {
@@ -70,6 +71,67 @@ export type AgentChatActionCard = {
   secondaryActions: AgentChatActionLink[];
 };
 
+export type AgentChatTurnTrace = {
+  turnId?: string;
+  planner?: {
+    kind?: string;
+    confidence?: number;
+    capabilityId?: string;
+    reason?: string;
+  };
+  route?: {
+    path?: string;
+    capabilityId?: string;
+    ownerFacingLabel?: string;
+    handlerRoute?: string;
+    reason?: string;
+    setupChecks?: string[];
+    approvalRequired?: boolean;
+    sideEffectLevel?: string;
+    auditEventKind?: string;
+  };
+  selectedModel?: {
+    providerId?: string;
+    model?: string;
+    backupModel?: string | null;
+    configured?: boolean;
+    responseModel?: string | null;
+  } | null;
+  context?: {
+    status?: string;
+    packetId?: string | null;
+    summary?: string | null;
+    sourceCount?: number;
+    error?: string | null;
+  };
+  modelCall?: {
+    status?: string;
+    providerId?: string | null;
+    model?: string | null;
+    fallbackReason?: string | null;
+    debugError?: string | null;
+    attempts?: Array<{
+      providerId?: string;
+      model?: string;
+      status?: string;
+      error?: string | null;
+    }>;
+  };
+  toolResult?: {
+    status?: string;
+    specialist?: string | null;
+    source?: string | null;
+  };
+  audit?: {
+    auditId?: string | null;
+  };
+};
+
+export type AgentChatTraceRow = {
+  label: string;
+  value: string;
+};
+
 const EMPTY_REPLY_FALLBACK =
   "I couldn't turn that into a useful reply just yet. Please try again.";
 const ACTION_CARD_STATUSES = new Set<AgentChatActionCardStatus>([
@@ -112,6 +174,80 @@ export function formatAgentRuntimeDetail(
   }
 
   return null;
+}
+
+export function formatAgentTraceRows(
+  trace: AgentChatTurnTrace | null | undefined,
+): AgentChatTraceRow[] {
+  if (!trace) return [];
+
+  const attempts = trace.modelCall?.attempts || [];
+  const rows: AgentChatTraceRow[] = [
+    { label: "Turn", value: trace.turnId || "" },
+    {
+      label: "Planner",
+      value: joinTraceParts([
+        trace.planner?.kind,
+        trace.planner?.confidence === undefined
+          ? null
+          : `confidence ${trace.planner.confidence}`,
+        trace.planner?.capabilityId,
+      ]),
+    },
+    {
+      label: "Route",
+      value: joinTraceParts([
+        trace.route?.path,
+        trace.route?.capabilityId,
+        trace.route?.approvalRequired ? "approval required" : null,
+      ]),
+    },
+    {
+      label: "Model",
+      value: joinTraceParts([
+        trace.modelCall?.status,
+        trace.selectedModel?.providerId,
+        trace.modelCall?.model || trace.selectedModel?.model,
+        attempts.length
+          ? `${attempts.length} attempt${attempts.length === 1 ? "" : "s"}`
+          : null,
+      ]),
+    },
+    {
+      label: "Context",
+      value: joinTraceParts([
+        trace.context?.status,
+        trace.context?.sourceCount === undefined
+          ? null
+          : `${trace.context.sourceCount} source${
+              trace.context.sourceCount === 1 ? "" : "s"
+            }`,
+        trace.context?.packetId,
+      ]),
+    },
+    {
+      label: "Tool",
+      value: joinTraceParts([
+        trace.toolResult?.status,
+        trace.toolResult?.specialist,
+      ]),
+    },
+    { label: "Audit", value: trace.audit?.auditId || "" },
+    {
+      label: "Fallback",
+      value: joinTraceParts([
+        trace.modelCall?.fallbackReason,
+        trace.modelCall?.debugError,
+        trace.context?.error,
+      ]),
+    },
+    {
+      label: "Reason",
+      value: trace.route?.reason || trace.planner?.reason || "",
+    },
+  ];
+
+  return rows.filter((row) => row.value.trim().length > 0);
 }
 
 export function resolveAgentReplyText(
@@ -237,6 +373,13 @@ function normalizeActionCardLink(value: unknown): AgentChatActionLink | null {
   const label = normalizedActionCardText(raw.label);
   if (!href || !label || !href.startsWith("/")) return null;
   return { href, label };
+}
+
+function joinTraceParts(values: Array<string | null | undefined>): string {
+  return values
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function actionCardStatusLabel(status: AgentChatActionCardStatus): string {

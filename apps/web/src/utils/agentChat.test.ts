@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatAgentRuntimeDetail,
   formatAgentRuntimeMetadata,
+  formatAgentTraceRows,
   normalizeAgentActionCards,
   resolveAgentReplyText,
   resolveAgentSiteActionLink,
@@ -61,6 +62,58 @@ describe("agent chat utils", () => {
     expect(resolveAgentReplyText("   ")).toBe(
       "I couldn't turn that into a useful reply just yet. Please try again.",
     );
+  });
+
+  it("formats assistant turn trace rows for the development UI", () => {
+    expect(
+      formatAgentTraceRows({
+        turnId: "turn-1",
+        planner: {
+          kind: "write_action",
+          confidence: 0.94,
+          capabilityId: "core.reminders.create",
+        },
+        route: {
+          path: "tool",
+          capabilityId: "core.reminders.create",
+          approvalRequired: false,
+          reason: "direct reminder request",
+        },
+        selectedModel: null,
+        context: {
+          status: "loaded",
+          sourceCount: 2,
+          packetId: "packet-1",
+        },
+        modelCall: {
+          status: "not_attempted",
+          attempts: [],
+        },
+        toolResult: {
+          status: "succeeded",
+          specialist: "core.reminders.create",
+        },
+        audit: {
+          auditId: "audit-1",
+        },
+      }),
+    ).toEqual([
+      { label: "Turn", value: "turn-1" },
+      {
+        label: "Planner",
+        value: "write_action · confidence 0.94 · core.reminders.create",
+      },
+      { label: "Route", value: "tool · core.reminders.create" },
+      { label: "Model", value: "not_attempted" },
+      { label: "Context", value: "loaded · 2 sources · packet-1" },
+      { label: "Tool", value: "succeeded · core.reminders.create" },
+      { label: "Audit", value: "audit-1" },
+      { label: "Reason", value: "direct reminder request" },
+    ]);
+  });
+
+  it("hides assistant turn trace rows when no trace is present", () => {
+    expect(formatAgentTraceRows(null)).toEqual([]);
   });
 
   it("creates review links for assistant site draft actions", () => {
