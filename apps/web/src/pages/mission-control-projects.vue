@@ -282,6 +282,10 @@ const projectTaskLocalRunId = ref("");
 const projectTaskComposerStatus = ref("");
 const projectTaskComposerProjectId = ref<string | null>(null);
 const projectColumnActionId = ref("");
+const projectColumnModalOpen = ref(false);
+const projectColumnDraft = ref("");
+const projectColumnError = ref("");
+const projectColumnInput = ref<HTMLInputElement | null>(null);
 const draggedProjectTaskId = ref("");
 const projectTaskDropStatus = ref("");
 const selectedProjectTaskDetailId = ref("");
@@ -1710,26 +1714,46 @@ async function renameProjectColumn(column: ProjectBoardColumn, name: string) {
   }
 }
 
-async function addProjectColumn() {
+function addProjectColumn() {
   const project = selectedProjectDetail.value;
   if (!project || projectColumnActionId.value) return;
-  const name = window.prompt("Column name");
-  if (!name?.trim()) return;
+  projectColumnDraft.value = "";
+  projectColumnError.value = "";
+  projectColumnModalOpen.value = true;
+  void nextTick(() => projectColumnInput.value?.focus());
+}
+
+function closeProjectColumnModal() {
+  if (projectColumnActionId.value === "new") return;
+  projectColumnModalOpen.value = false;
+  projectColumnError.value = "";
+}
+
+async function submitProjectColumn() {
+  const project = selectedProjectDetail.value;
+  if (!project || projectColumnActionId.value) return;
+  const name = projectColumnDraft.value.trim();
+  if (!name) {
+    projectColumnError.value = "Column name is required";
+    return;
+  }
   projectColumnActionId.value = "new";
-  projectTasksError.value = "";
+  projectColumnError.value = "";
   try {
     const response = await api.post<{
       column: NonNullable<MissionProject["columns"]>[number];
     }>(`/mission-control/projects/${encodeURIComponent(project.id)}/columns`, {
-      name: name.trim(),
+      name,
     });
     projects.value = projects.value.map((item) =>
       item.id === project.id
         ? { ...item, columns: [...(item.columns || []), response.column] }
         : item,
     );
+    projectColumnModalOpen.value = false;
+    projectColumnDraft.value = "";
   } catch (e) {
-    projectTasksError.value =
+    projectColumnError.value =
       e instanceof ApiError ? e.message : "Could not add column";
   } finally {
     projectColumnActionId.value = "";
@@ -2934,6 +2958,81 @@ onBeforeUnmount(() => {
       @close="closeProjectModal"
       @submit="projectModalMode === 'edit' ? saveProject() : addProject()"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="projectColumnModalOpen"
+        class="mission-modal mission-modal--compact"
+        role="presentation"
+        @click.self="closeProjectColumnModal"
+      >
+        <form
+          class="mission-modal__dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="project-column-modal-title"
+          @submit.prevent="submitProjectColumn"
+          @keydown.esc.prevent="closeProjectColumnModal"
+        >
+          <div class="mission-modal__header">
+            <h2 id="project-column-modal-title">Add column</h2>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
+              aria-label="Close"
+              :disabled="projectColumnActionId === 'new'"
+              @click="closeProjectColumnModal"
+            >
+              <UiIcon name="X" :size="18" />
+            </Button>
+          </div>
+
+          <label class="field">
+            <span>Name</span>
+            <input
+              ref="projectColumnInput"
+              v-model="projectColumnDraft"
+              type="text"
+              maxlength="80"
+              autocomplete="off"
+              required
+            />
+          </label>
+
+          <p v-if="projectColumnError" class="mission-modal__error">
+            {{ projectColumnError }}
+          </p>
+
+          <div class="mission-modal__actions">
+            <Button
+              color="outline"
+              shape="soft"
+              size="compact"
+              type="button"
+              :disabled="projectColumnActionId === 'new'"
+              @click="closeProjectColumnModal"
+            >
+              Cancel
+            </Button>
+            <Button
+              color="primary"
+              shape="soft"
+              size="compact"
+              type="submit"
+              :disabled="
+                projectColumnActionId === 'new' ||
+                !projectColumnDraft.trim()
+              "
+            >
+              {{ projectColumnActionId === "new" ? "Adding..." : "Add" }}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </Teleport>
 
     <MissionProjectTaskDetailModal
       v-model:detail-draft="projectTaskDetailDraft"

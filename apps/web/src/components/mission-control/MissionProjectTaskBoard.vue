@@ -440,10 +440,11 @@ function blurOnEnter(event: KeyboardEvent) {
           type="button"
           class="project-board__add-column"
           :disabled="saving || Boolean(columnActionId)"
+          :aria-busy="columnActionId === 'new' ? 'true' : 'false'"
           @click="emit('add-column')"
         >
           <UiIcon name="Plus" :size="15" />
-          Add column
+          {{ columnActionId === "new" ? "Adding..." : "Add column" }}
         </button>
       </div>
 
@@ -455,7 +456,7 @@ function blurOnEnter(event: KeyboardEvent) {
         @click="emit('load-more')"
       >
         <UiIcon name="ChevronDown" :size="15" />
-        {{ loadingMore ? "Loading more tasks..." : "Load more tasks" }}
+        {{ loadingMore ? "Loading more items..." : "Load more items" }}
       </button>
     </template>
   </div>
@@ -490,10 +491,14 @@ function blurOnEnter(event: KeyboardEvent) {
 
 .project-board {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-columns: minmax(180px, 1fr);
+  grid-auto-flow: column;
+  align-items: start;
   gap: 12px;
   min-width: 0;
+  padding-bottom: 6px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .project-pinned-board {
@@ -865,6 +870,16 @@ function blurOnEnter(event: KeyboardEvent) {
   color: var(--ui-accent);
 }
 
+.project-board__add-column:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.project-board__add-column:disabled:hover {
+  border-color: var(--ui-border);
+  color: var(--ui-text-muted);
+}
+
 .project-task-composer__input,
 .project-task-composer__project {
   width: 100%;
@@ -969,12 +984,7 @@ function blurOnEnter(event: KeyboardEvent) {
 
 @media (max-width: 959px) {
   .project-board {
-    grid-template-columns: 1fr;
-    overflow-x: visible;
-  }
-
-  .project-board__column {
-    min-width: 0;
+    grid-auto-columns: minmax(220px, 82vw);
   }
 }
 </style>

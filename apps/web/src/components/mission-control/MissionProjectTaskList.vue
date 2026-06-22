@@ -376,7 +376,7 @@ function taskDescription(task: MissionTask): string {
         @click="emit('load-more')"
       >
         <UiIcon name="ChevronDown" :size="15" />
-        {{ loadingMore ? "Loading more tasks..." : "Load more tasks" }}
+        {{ loadingMore ? "Loading more items..." : "Load more items" }}
       </button>
     </template>
   </div>
