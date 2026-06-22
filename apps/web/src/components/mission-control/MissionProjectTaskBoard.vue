@@ -60,6 +60,7 @@ const emit = defineEmits<{
   "archive-task": [task: MissionTask];
   "run-task-locally": [task: MissionTask];
   "toggle-pin": [task: MissionTask];
+  "rename-column": [column: ProjectBoardColumn, name: string];
   "add-task": [status: ProjectBoardStatus];
   "open-composer": [status: ProjectBoardStatus];
   "cancel-composer": [];
@@ -76,6 +77,10 @@ function taskDescription(task: MissionTask): string {
 function projectChipStyle(project: MissionProject | null) {
   const color = project?.color?.trim();
   return color ? { "--project-chip-color": color } : {};
+}
+
+function blurOnEnter(event: KeyboardEvent) {
+  (event.target as HTMLInputElement).blur();
 }
 </script>
 
@@ -230,7 +235,18 @@ function projectChipStyle(project: MissionProject | null) {
           @drop="emit('drop-task', $event, column.id)"
         >
           <div class="project-board__column-header">
-            <h2>{{ column.label }}</h2>
+            <input
+              v-if="selectedProject"
+              class="project-board__column-name"
+              :value="column.label"
+              :aria-label="`Rename ${column.label} column`"
+              :disabled="saving"
+              @change="
+                emit('rename-column', column, inputValue($event).trim())
+              "
+              @keydown.enter.prevent="blurOnEnter"
+            />
+            <h2 v-else>{{ column.label }}</h2>
             <span>{{ column.tasks.length }}</span>
           </div>
 
@@ -499,6 +515,27 @@ function projectChipStyle(project: MissionProject | null) {
   margin: 0;
   font-size: 13px;
   line-height: 1.25;
+}
+
+.project-board__column-name {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.project-board__column-name:hover,
+.project-board__column-name:focus {
+  border-color: var(--ui-border);
+  background: var(--ui-bg);
+  outline: none;
 }
 
 .project-board__column-header span,

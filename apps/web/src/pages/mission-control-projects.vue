@@ -24,7 +24,7 @@ import {
   formatShortDate,
   isLocalProject,
   missionTasksUrl,
-  projectBoardStatuses,
+  projectBoardStatusesForProject,
   projectForTask,
   projectName,
   sortProjectTasks,
@@ -279,6 +279,7 @@ const projectTaskActionId = ref("");
 const projectTaskLocalRunId = ref("");
 const projectTaskComposerStatus = ref<ProjectBoardStatus | "">("");
 const projectTaskComposerProjectId = ref<string | null>(null);
+const projectColumnActionId = ref("");
 const draggedProjectTaskId = ref("");
 const projectTaskDropStatus = ref<ProjectBoardStatus | "">("");
 const selectedProjectTaskDetailId = ref("");
@@ -487,12 +488,15 @@ const selectedProjectTaskLatestRunSummary = computed(() => {
   return "Local run cancelled.";
 });
 const projectBoardColumns = computed<ProjectBoardColumn[]>(() =>
-  projectBoardStatuses.map((column) => ({
+  selectedProjectBoardStatuses.value.map((column) => ({
     ...column,
     tasks: regularProjectBoardTasks.value.filter(
       (task) => task.status === column.id,
     ),
   })),
+);
+const selectedProjectBoardStatuses = computed(() =>
+  projectBoardStatusesForProject(selectedProjectDetail.value),
 );
 const projectTaskListGroups = computed<ProjectTaskListGroup[]>(() => {
   if (
@@ -1595,6 +1599,43 @@ async function setProjectTaskStatus(
   }
 }
 
+async function renameProjectColumn(column: ProjectBoardColumn, name: string) {
+  const project = selectedProjectDetail.value;
+  if (
+    !project ||
+    !column.columnId ||
+    !name ||
+    name === column.label ||
+    projectColumnActionId.value
+  )
+    return;
+  projectColumnActionId.value = column.columnId;
+  projectTasksError.value = "";
+  try {
+    const response = await api.patch<{
+      column: NonNullable<MissionProject["columns"]>[number];
+    }>(
+      `/mission-control/projects/${encodeURIComponent(project.id)}/columns/${encodeURIComponent(column.columnId)}`,
+      { name },
+    );
+    projects.value = projects.value.map((item) =>
+      item.id === project.id
+        ? {
+            ...item,
+            columns: (item.columns || []).map((existing) =>
+              existing.id === response.column.id ? response.column : existing,
+            ),
+          }
+        : item,
+    );
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not rename column";
+  } finally {
+    projectColumnActionId.value = "";
+  }
+}
+
 function startProjectTaskDrag(event: DragEvent, task: MissionTask) {
   if (projectTaskActionId.value || task.status === "cancelled") {
     event.preventDefault();
@@ -2200,7 +2241,7 @@ onBeforeUnmount(() => {
           :loading="projectTasksLoading"
           :pinned-tasks="pinnedProjectTasks"
           :groups="projectTaskListGroups"
-          :statuses="projectBoardStatuses"
+          :statuses="selectedProjectBoardStatuses"
           :action-id="projectTaskActionId"
           :local-run-id="projectTaskLocalRunId"
           :saving="projectTaskSaving"
@@ -2250,6 +2291,7 @@ onBeforeUnmount(() => {
           @archive-task="archiveProjectTask"
           @run-task-locally="runProjectTaskLocally"
           @toggle-pin="toggleProjectTaskPin"
+          @rename-column="renameProjectColumn"
           @add-task="addProjectTask"
           @open-composer="openProjectTaskComposer"
           @cancel-composer="cancelProjectTaskComposer"
@@ -2779,7 +2821,7 @@ onBeforeUnmount(() => {
       :latest-run="selectedProjectTaskLatestRun"
       :latest-run-summary="selectedProjectTaskLatestRunSummary"
       :weekly-review="selectedProjectTaskWeeklyReview"
-      :board-statuses="projectBoardStatuses"
+      :board-statuses="selectedProjectBoardStatuses"
       :weekly-review-task-actions="weeklyReviewTaskActions"
       :weekly-review-memory-ids="weeklyReviewMemoryIds"
       :weekly-review-reminder-ids="weeklyReviewReminderIds"

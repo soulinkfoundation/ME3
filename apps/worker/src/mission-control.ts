@@ -42,10 +42,23 @@ type MissionProjectRow = {
   updated_at: string;
 };
 
+type MissionProjectColumnRow = {
+  id: string;
+  user_id: string;
+  project_id: string;
+  name: string;
+  status: Exclude<MissionTaskStatus, "cancelled">;
+  position: number;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type MissionTaskRow = {
   id: string;
   user_id: string;
   project_id: string | null;
+  column_id?: string | null;
   title: string;
   description: string | null;
   status: MissionTaskStatus;
@@ -85,6 +98,17 @@ type MissionTaskListOptions = {
   projectId?: unknown;
   cursor?: unknown;
 };
+
+const DEFAULT_PROJECT_COLUMNS: Array<{
+  status: Exclude<MissionTaskStatus, "cancelled">;
+  name: string;
+  position: number;
+}> = [
+  { status: "backlog", name: "Backlog", position: 0 },
+  { status: "in_progress", name: "Doing", position: 1 },
+  { status: "review", name: "Review", position: 2 },
+  { status: "done", name: "Done", position: 3 },
+];
 
 type MissionTaskCursor =
   | {
@@ -477,7 +501,12 @@ export async function listMissionProjects(env: Env, userId: string) {
   )
     .bind(userId)
     .all<MissionProjectRow>();
-  return (rows.results || []).map(serializeProject);
+  return Promise.all(
+    (rows.results || []).map(async (project) => {
+      const columns = await listMissionProjectColumns(env, userId, project.id);
+      return serializeProject(project, columns);
+    }),
+  );
 }
 
 export async function createMissionProject(env: Env, userId: string, input: unknown) {
@@ -550,9 +579,10 @@ export async function createMissionProject(env: Env, userId: string, input: unkn
   } catch {
     throw new MissionControlInputError("A project with that name already exists", 409);
   }
+  await ensureDefaultProjectColumns(env, userId, id);
 
   return {
-    project: serializeProject((await getMissionProject(env, userId, id)) as MissionProjectRow),
+    project: await serializeProjectWithColumns(env, userId, (await getMissionProject(env, userId, id)) as MissionProjectRow),
   };
 }
 
@@ -680,7 +710,36 @@ export async function updateMissionProject(
     .run();
 
   return {
-    project: serializeProject((await getMissionProject(env, userId, projectId)) as MissionProjectRow),
+    project: await serializeProjectWithColumns(env, userId, (await getMissionProject(env, userId, projectId)) as MissionProjectRow),
+  };
+}
+
+export async function updateMissionProjectColumn(
+  env: Env,
+  userId: string,
+  projectId: string,
+  columnId: string,
+  input: unknown,
+) {
+  await ensureProjectExists(env, userId, projectId);
+  const existing = await getMissionProjectColumn(env, userId, projectId, columnId);
+  if (!existing) throw new MissionControlInputError("Project column not found", 404);
+  const body = isRecord(input) ? input : {};
+  const name = normalizeNullableText(body.name);
+  if (!name) throw new MissionControlInputError("Column name is required");
+
+  await env.DB.prepare(
+    `UPDATE mission_project_columns
+     SET name = ?, updated_at = datetime('now')
+     WHERE id = ? AND user_id = ? AND project_id = ?`,
+  )
+    .bind(name, columnId, userId, projectId)
+    .run();
+
+  return {
+    column: serializeProjectColumn(
+      (await getMissionProjectColumn(env, userId, projectId, columnId)) as MissionProjectColumnRow,
+    ),
   };
 }
 
@@ -698,7 +757,7 @@ export async function listMissionTaskPage(
   const order = options.archived ? "archived" : "active";
   const cursor = decodeMissionTaskCursor(options.cursor, order);
   const activeWhere = ACTIVE_TASK_STATUSES.map((item) => `'${item}'`).join(", ");
-  let sql = `SELECT id, user_id, project_id, title, description, status, priority, pinned_at,
+  let sql = `SELECT id, user_id, project_id, column_id, title, description, status, priority, pinned_at,
                     due_at, scheduled_for, source_kind, source_ref, approval_id,
                     metadata_json, created_at, updated_at, archived_at
              FROM mission_tasks
@@ -805,17 +864,24 @@ export async function createMissionTask(env: Env, userId: string, input: unknown
   await ensureProjectExists(env, userId, projectId);
   const priority = normalizePriority(body.priority);
   const status = normalizeMissionTaskStatus(body.status) || "backlog";
+  const columnId = await getMissionProjectColumnIdForStatus(
+    env,
+    userId,
+    projectId,
+    status,
+  );
   const id = crypto.randomUUID();
 
   await env.DB.prepare(
     `INSERT INTO mission_tasks
-       (id, user_id, project_id, title, description, status, priority, pinned_at, due_at, scheduled_for, source_kind)
-     VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END, ?, ?, 'manual')`,
+       (id, user_id, project_id, column_id, title, description, status, priority, pinned_at, due_at, scheduled_for, source_kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END, ?, ?, 'manual')`,
   )
     .bind(
       id,
       userId,
       projectId,
+      columnId,
       title,
       normalizeNullableText(body.description),
       status,
@@ -849,6 +915,12 @@ export async function createMissionTaskFromJournal(
 
   await ensureJournalEntryExists(env, userId, journalEntryId);
   await ensureProjectExists(env, userId, projectId);
+  const columnId = await getMissionProjectColumnIdForStatus(
+    env,
+    userId,
+    projectId,
+    "backlog",
+  );
 
   const taskId = crypto.randomUUID();
   const linkId = crypto.randomUUID();
@@ -861,13 +933,14 @@ export async function createMissionTaskFromJournal(
 
   await env.DB.prepare(
     `INSERT INTO mission_tasks
-       (id, user_id, project_id, title, description, status, priority, source_kind, source_ref, metadata_json)
-     VALUES (?, ?, ?, ?, ?, 'backlog', 3, 'capture', ?, ?)`,
+       (id, user_id, project_id, column_id, title, description, status, priority, source_kind, source_ref, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, 'backlog', 3, 'capture', ?, ?)`,
   )
     .bind(
       taskId,
       userId,
       projectId,
+      columnId,
       title,
       sourceText && sourceText !== title ? sourceText : null,
       journalEntryId,
@@ -930,10 +1003,15 @@ export async function updateMissionTask(
       ? body.projectId.trim()
       : existing.project_id;
   if (projectId) await ensureProjectExists(env, userId, projectId);
+  const status = normalizeMissionTaskStatus(body.status) || existing.status;
+  const columnId =
+    projectId && status !== "cancelled"
+      ? await getMissionProjectColumnIdForStatus(env, userId, projectId, status)
+      : null;
 
   await env.DB.prepare(
     `UPDATE mission_tasks
-     SET project_id = ?, title = ?, description = ?, status = ?, priority = ?,
+     SET project_id = ?, column_id = ?, title = ?, description = ?, status = ?, priority = ?,
          pinned_at = CASE
            WHEN ? THEN CASE WHEN pinned_at IS NULL THEN datetime('now') ELSE pinned_at END
            WHEN ? THEN NULL
@@ -944,11 +1022,12 @@ export async function updateMissionTask(
   )
     .bind(
       projectId,
+      columnId,
       normalizeNullableText(body.title) || existing.title,
       body.description === undefined
         ? existing.description
         : normalizeNullableText(body.description),
-      normalizeMissionTaskStatus(body.status) || existing.status,
+      status,
       normalizePriority(body.priority, existing.priority),
       body.pinned === true ? 1 : 0,
       body.pinned === false ? 1 : 0,
@@ -2074,9 +2153,113 @@ async function getMissionProject(env: Env, userId: string, projectId: string) {
     .first<MissionProjectRow>();
 }
 
+async function serializeProjectWithColumns(
+  env: Env,
+  userId: string,
+  row: MissionProjectRow,
+) {
+  return serializeProject(row, await listMissionProjectColumns(env, userId, row.id));
+}
+
+async function listMissionProjectColumns(
+  env: Env,
+  userId: string,
+  projectId: string,
+) {
+  await ensureDefaultProjectColumns(env, userId, projectId);
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, project_id, name, status, position, archived_at,
+            created_at, updated_at
+     FROM mission_project_columns
+     WHERE user_id = ? AND project_id = ? AND archived_at IS NULL
+     ORDER BY position ASC, id ASC`,
+  )
+    .bind(userId, projectId)
+    .all<MissionProjectColumnRow>()
+    .catch(() => ({ results: [] as MissionProjectColumnRow[] }));
+
+  const columns = rows.results || [];
+  if (columns.length) return columns.map(serializeProjectColumn);
+  return DEFAULT_PROJECT_COLUMNS.map((column) =>
+    serializeProjectColumn({
+      id: `${projectId}:${column.status}`,
+      user_id: userId,
+      project_id: projectId,
+      name: column.name,
+      status: column.status,
+      position: column.position,
+      archived_at: null,
+      created_at: "",
+      updated_at: "",
+    }),
+  );
+}
+
+async function ensureDefaultProjectColumns(
+  env: Env,
+  userId: string,
+  projectId: string,
+) {
+  for (const column of DEFAULT_PROJECT_COLUMNS) {
+    await env.DB.prepare(
+      `INSERT INTO mission_project_columns
+         (id, user_id, project_id, name, status, position)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(project_id, status) DO NOTHING`,
+    )
+      .bind(
+        `${projectId}:${column.status}`,
+        userId,
+        projectId,
+        column.name,
+        column.status,
+        column.position,
+      )
+      .run()
+      .catch(() => null);
+  }
+}
+
+async function getMissionProjectColumn(
+  env: Env,
+  userId: string,
+  projectId: string,
+  columnId: string,
+) {
+  await ensureDefaultProjectColumns(env, userId, projectId);
+  return env.DB.prepare(
+    `SELECT id, user_id, project_id, name, status, position, archived_at,
+            created_at, updated_at
+     FROM mission_project_columns
+     WHERE id = ? AND user_id = ? AND project_id = ? AND archived_at IS NULL`,
+  )
+    .bind(columnId, userId, projectId)
+    .first<MissionProjectColumnRow>();
+}
+
+async function getMissionProjectColumnIdForStatus(
+  env: Env,
+  userId: string,
+  projectId: string,
+  status: MissionTaskStatus,
+) {
+  if (status === "cancelled") return null;
+  await ensureDefaultProjectColumns(env, userId, projectId);
+  const row = await env.DB.prepare(
+    `SELECT id
+     FROM mission_project_columns
+     WHERE user_id = ? AND project_id = ? AND status = ? AND archived_at IS NULL
+     LIMIT 1`,
+  )
+    .bind(userId, projectId, status)
+    .first<{ id: string }>()
+    .catch(() => null);
+  return row?.id || `${projectId}:${status}`;
+}
+
 async function getMissionTask(env: Env, userId: string, taskId: string) {
   return env.DB.prepare(
-    `SELECT id, user_id, project_id, title, description, status, priority, pinned_at,
+    `SELECT id, user_id, project_id, column_id, title, description, status, priority, pinned_at,
             due_at, scheduled_for, source_kind, source_ref, approval_id,
             metadata_json, created_at, updated_at, archived_at
      FROM mission_tasks
@@ -2268,7 +2451,10 @@ async function ensurePersonalProject(env: Env, userId: string) {
   )
     .bind(userId)
     .first<MissionProjectRow>();
-  if (existing) return existing;
+  if (existing) {
+    await ensureDefaultProjectColumns(env, userId, existing.id);
+    return existing;
+  }
 
   await env.DB.prepare(
     `INSERT INTO mission_projects
@@ -2279,7 +2465,7 @@ async function ensurePersonalProject(env: Env, userId: string) {
     .bind(userId === "owner" ? PERSONAL_PROJECT_ID : crypto.randomUUID(), userId)
     .run();
 
-  return (await env.DB.prepare(
+  const created = (await env.DB.prepare(
     `SELECT id, user_id, name, slug, description, status, color, icon, source_kind,
             source_ref, metadata_json, created_at, updated_at
      FROM mission_projects
@@ -2287,11 +2473,14 @@ async function ensurePersonalProject(env: Env, userId: string) {
   )
     .bind(userId)
     .first<MissionProjectRow>()) as MissionProjectRow;
+  await ensureDefaultProjectColumns(env, userId, created.id);
+  return created;
 }
 
 async function ensureProjectExists(env: Env, userId: string, projectId: string) {
   const project = await getMissionProject(env, userId, projectId);
   if (!project) throw new MissionControlInputError("Project not found", 404);
+  await ensureDefaultProjectColumns(env, userId, projectId);
 }
 
 async function ensureBaselineContextSources(env: Env, userId: string) {
@@ -2740,7 +2929,7 @@ function defaultDashboardQuickLink(
   };
 }
 
-function serializeProject(row: MissionProjectRow) {
+function serializeProject(row: MissionProjectRow, columns: ReturnType<typeof serializeProjectColumn>[] = []) {
   return {
     id: row.id,
     userId: row.user_id,
@@ -2753,6 +2942,20 @@ function serializeProject(row: MissionProjectRow) {
     sourceKind: row.source_kind,
     sourceRef: row.source_ref,
     metadata: parseJsonRecord(row.metadata_json),
+    columns,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function serializeProjectColumn(row: MissionProjectColumnRow) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    status: row.status,
+    position: row.position,
+    archivedAt: row.archived_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -2763,6 +2966,7 @@ function serializeTask(row: MissionTaskRow) {
     id: row.id,
     userId: row.user_id,
     projectId: row.project_id,
+    columnId: row.column_id || null,
     title: row.title,
     description: row.description,
     status: row.status,

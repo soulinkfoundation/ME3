@@ -42,6 +42,7 @@ import {
   updateMissionDashboard,
   updateMissionMemory,
   updateMissionProject,
+  updateMissionProjectColumn,
   updateMissionTask,
   updateMissionWheelSettings,
 } from "../mission-control";
@@ -201,6 +202,27 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
           c.env,
           ownerId,
           c.req.param("id"),
+          await c.req.json().catch(() => ({})),
+        ),
+      );
+    } catch (error) {
+      return missionControlErrorResponse(c, error);
+    }
+  });
+
+  app.patch("/api/mission-control/projects/:id/columns/:columnId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireMissionControlPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      return c.json(
+        await updateMissionProjectColumn(
+          c.env,
+          ownerId,
+          c.req.param("id"),
+          c.req.param("columnId"),
           await c.req.json().catch(() => ({})),
         ),
       );

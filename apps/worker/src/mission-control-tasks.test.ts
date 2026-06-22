@@ -10,6 +10,7 @@ type StoredTaskRow = {
   id: string;
   user_id: string;
   project_id: string | null;
+  column_id: string | null;
   title: string;
   description: string | null;
   status: "backlog" | "in_progress" | "review" | "done" | "cancelled";
@@ -36,6 +37,7 @@ function taskRow(
     id,
     user_id: "owner",
     project_id: projectId,
+    column_id: `${projectId}:backlog`,
     title: `Task ${id}`,
     description: null,
     status: "backlog",
@@ -338,6 +340,7 @@ describe("Mission Control task pagination", () => {
                       id,
                       userId,
                       projectId,
+                      columnId,
                       title,
                       description,
                       sourceRef,
@@ -347,6 +350,7 @@ describe("Mission Control task pagination", () => {
                       id,
                       user_id: userId,
                       project_id: projectId,
+                      column_id: columnId,
                       title,
                       description: description || null,
                       status: "backlog",

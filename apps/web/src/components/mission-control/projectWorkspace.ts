@@ -11,6 +11,18 @@ export type MissionProject = {
   sourceKind: "manual" | "daemon_repo" | "beads" | "import";
   sourceRef: string | null;
   metadata: Record<string, unknown>;
+  columns?: MissionProjectColumn[];
+};
+
+export type MissionProjectColumn = {
+  id: string;
+  projectId: string;
+  name: string;
+  status: ProjectBoardStatus;
+  position: number;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type MissionTask = {
@@ -18,6 +30,7 @@ export type MissionTask = {
   title: string;
   description: string | null;
   status: "backlog" | "in_progress" | "review" | "done" | "cancelled";
+  columnId: string | null;
   projectId: string | null;
   dueAt: string | null;
   scheduledFor: string | null;
@@ -106,6 +119,7 @@ export type ProjectBoardStatus = Exclude<MissionTask["status"], "cancelled">;
 
 export type ProjectBoardColumn = {
   id: ProjectBoardStatus;
+  columnId: string;
   label: string;
   tasks: MissionTask[];
 };
@@ -126,12 +140,13 @@ export type ProjectTaskListGroup = {
 
 export const projectBoardStatuses: Array<{
   id: ProjectBoardStatus;
+  columnId: string;
   label: string;
 }> = [
-  { id: "backlog", label: "Backlog" },
-  { id: "in_progress", label: "Doing" },
-  { id: "review", label: "Review" },
-  { id: "done", label: "Done" },
+  { id: "backlog", columnId: "", label: "Backlog" },
+  { id: "in_progress", columnId: "", label: "Doing" },
+  { id: "review", columnId: "", label: "Review" },
+  { id: "done", columnId: "", label: "Done" },
 ];
 
 export const activeProjectTaskStatuses: ProjectBoardStatus[] = [
@@ -368,6 +383,19 @@ export function missionTasksUrl(options: {
 export function projectBoardStatusLabel(status: MissionTask["status"]): string {
   if (status === "in_progress") return "Doing";
   return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+export function projectBoardStatusesForProject(
+  project: MissionProject | null,
+): typeof projectBoardStatuses {
+  const columns = project?.columns || [];
+  if (!columns.length) return projectBoardStatuses;
+  return projectBoardStatuses.map((status) => {
+    const column = columns.find((item) => item.status === status.id);
+    return column
+      ? { id: status.id, columnId: column.id, label: column.name }
+      : status;
+  });
 }
 
 export function activeProjectTasks(tasks: MissionTask[]): MissionTask[] {
