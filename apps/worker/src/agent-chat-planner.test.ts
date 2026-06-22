@@ -107,6 +107,20 @@ const plannerScenarios: PlannerScenario[] = [
     capabilityId: "core.agent-chat.conversation",
     sideEffectLevel: "none",
   },
+  {
+    name: "direct Mission Control task create becomes a write action",
+    messageText: "Add a task to project ME3 Launch to follow up with Sam tomorrow.",
+    kind: "write_action",
+    capabilityId: "core.mission.task.create",
+    sideEffectLevel: "write",
+  },
+  {
+    name: "Mission Control task exploration still stays conversational",
+    messageText: "I want to test Mission Control tasks and projects.",
+    kind: "conversation",
+    capabilityId: "core.agent-chat.conversation",
+    sideEffectLevel: "none",
+  },
 ];
 
 describe("Core chat tool planner", () => {

@@ -231,6 +231,27 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               created_at: values[11],
             });
           }
+          if (sql.includes("INSERT INTO mission_tasks")) {
+            dbState.tasks.push({
+              id: values[0],
+              user_id: values[1],
+              project_id: values[2],
+              column_id: values[3],
+              title: values[4],
+              description: null,
+              status: "backlog",
+              priority: 3,
+              due_at: values[5],
+              scheduled_for: null,
+              source_kind: "agent_chat",
+              source_ref: null,
+              approval_id: null,
+              metadata_json: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              archived_at: null,
+            });
+          }
           return { meta: { changes: 1 } };
         },
       });
@@ -1157,7 +1178,8 @@ type GoldenTranscriptScenario = {
       | "core.mailbox.draft"
       | "core.reminders.list"
       | "core.reminders.create"
-      | "core.bookings.lookup";
+      | "core.bookings.lookup"
+      | "core.mission.task.create";
     toolResultStatus: "not_attempted" | "succeeded" | "failed" | "clarified";
     modelCallStatus: "not_attempted" | "succeeded" | "failed" | "fallback";
     specialist?: string;
@@ -1167,6 +1189,7 @@ type GoldenTranscriptScenario = {
     emailActionKind?: "drafted" | null;
     reminderDelta?: number;
     mailboxDraftDelta?: number;
+    missionTaskDelta?: number;
     aiCalled?: boolean;
     fallbackReason?: string;
   };
@@ -1364,6 +1387,30 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       reminderDelta: 0,
       mailboxDraftDelta: 0,
       aiCalled: true,
+    },
+  },
+  {
+    name: "direct Mission Control task create adds a project task",
+    messageText: "Add a task to project ME3 Launch to follow up with Sam tomorrow.",
+    envState: {
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.mission.task.create",
+      specialist: "core.mission.task.create",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["added", "follow up with Sam", "ME3 Launch"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 1,
+      aiCalled: false,
     },
   },
   {
@@ -1714,6 +1761,7 @@ describe("Core chat golden transcript evals", () => {
     const env = createEnv(scenario.envState);
     const initialReminderCount = env.state.reminders.length;
     const initialMailboxDraftCount = countMailboxDrafts(env.state.mailboxMessages);
+    const initialMissionTaskCount = env.state.tasks.length;
     const runtimeEnv = {
       ...env,
       ME3_ASSISTANT_DEBUG_TRACE: "true",
@@ -1776,6 +1824,19 @@ describe("Core chat golden transcript evals", () => {
     expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(
       initialMailboxDraftCount + (scenario.expected.mailboxDraftDelta ?? 0),
     );
+    expect(env.state.tasks).toHaveLength(
+      initialMissionTaskCount + (scenario.expected.missionTaskDelta ?? 0),
+    );
+    if (scenario.expected.capabilityId === "core.mission.task.create") {
+      expect(response.actionCards).toEqual([
+        expect.objectContaining({
+          kind: "mission.task_created",
+          capabilityId: "core.mission.task.create",
+          records: [{ kind: "mission_task", id: env.state.tasks.at(-1)?.id }],
+          primaryAction: { label: "Open Mission Control", href: "/mission-control" },
+        }),
+      ]);
+    }
     if (scenario.expected.aiCalled) {
       expect(aiRun).toHaveBeenCalledOnce();
     } else {

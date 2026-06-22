@@ -171,6 +171,39 @@ export const CORE_CHAT_CAPABILITIES = [
       sideEffectLevel: "read",
     },
   }),
+  defineCoreChatCapability({
+    id: "core.mission.task.create",
+    owner: "core",
+    pluginId: "me3.mission-control",
+    ownerFacingLabel: "Create Mission Control task",
+    summary: "Create a Mission Control task from a clear owner request.",
+    category: "mission_control",
+    handler: {
+      surface: "chat",
+      route: "core.mission.task.create",
+    },
+    sideEffect: "write_internal_active",
+    approvalMode: "none",
+    requiresSetup: ["mission-control"],
+    inputSchema: {
+      type: "object",
+      required: ["title"],
+      properties: {
+        title: "Task title.",
+        projectId: "Mission Control project ID.",
+        dueAt: "Optional YYYY-MM-DD due date.",
+      },
+    },
+    auditEventKind: "mission_task_created",
+    examples: {
+      positive: ["Add a task to project ME3 Launch to follow up with Sam tomorrow."],
+      negative: ["I want to test Mission Control tasks and projects."],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
 ] as const;
 
 export type CoreChatCapabilityId = (typeof CORE_CHAT_CAPABILITIES)[number]["id"];

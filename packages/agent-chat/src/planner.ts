@@ -107,6 +107,14 @@ export function planCoreChatToolTurn(
     });
   }
 
+  if (isCoreChatMissionTaskCreateRequest(messageText)) {
+    return capabilityDecision("core.mission.task.create", {
+      kind: "write_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to create a Mission Control task.",
+    });
+  }
+
   return conversationDecision(
     0.55,
     "No high-confidence native tool action matched, so the model should answer with context.",
@@ -211,6 +219,13 @@ export function isCoreChatBookingLookupRequest(messageText: string): boolean {
     /\b(?:any|upcoming|confirmed|scheduled|today'?s?|this\s+week'?s?)\s+(?:bookings?|appointments?|sessions?)\??$/i.test(
       text,
     )
+  );
+}
+
+export function isCoreChatMissionTaskCreateRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  return /\b(?:add|create|make)\s+(?:a\s+)?(?:mission\s+control\s+)?task\b/i.test(
+    messageText,
   );
 }
 
