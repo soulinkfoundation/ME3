@@ -258,7 +258,6 @@ const projectTasks = ref<MissionTask[]>([]);
 const projectJournalLinks = ref<JournalProjectLink[]>([]);
 const projectJournalLinksLoading = ref(false);
 const projectJournalLinksError = ref("");
-const projectJournalLinkMenuId = ref("");
 const projectJournalLinkActionId = ref("");
 const projectLogOpen = ref(false);
 const projectActionsMenuOpen = ref(false);
@@ -520,12 +519,15 @@ const projectTaskListGroups = computed<ProjectTaskListGroup[]>(() => {
   );
 });
 const projectJournalLogGroups = computed(() => {
+  const journalOnlyLinks = projectJournalLinks.value.filter(
+    (link) => !link.createdTaskId,
+  );
   if (selectedProjectDetail.value) {
     return [
       {
         id: selectedProjectDetail.value.id,
         label: selectedProjectDetail.value.name,
-        links: projectJournalLinks.value,
+        links: journalOnlyLinks,
       },
     ];
   }
@@ -534,7 +536,7 @@ const projectJournalLogGroups = computed(() => {
     .map((project) => ({
       id: project.id,
       label: project.name,
-      links: projectJournalLinks.value.filter(
+      links: journalOnlyLinks.filter(
         (link) => link.projectId === project.id,
       ),
     }))
@@ -557,16 +559,12 @@ const projectTaskCreateDisabled = computed(
     Boolean(!selectedProjectDetail.value && !projectTaskProjectId.value),
 );
 const projectViewToggleLabel = computed(() =>
-  projectTaskViewMode.value === "kanban"
-    ? "Switch to list view"
-    : "Switch to Kanban board",
+  projectTaskViewMode.value === "kanban" ? "Task list" : "Task board",
 );
 const projectViewToggleIcon = computed<UiIconName>(() =>
   projectTaskViewMode.value === "kanban" ? "List" : "SquareKanban",
 );
-const projectLogToggleLabel = computed(() =>
-  projectLogOpen.value ? "Hide journal log" : "Show journal log",
-);
+const projectLogToggleLabel = computed(() => "Project journal");
 const projectTaskDetailSaveDisabled = computed(
   () =>
     projectTaskDetailSaving.value ||
@@ -1006,15 +1004,6 @@ async function loadProjectJournalLinks(projectId = selectedProjectTaskScopeId.va
   }
 }
 
-function toggleProjectJournalLinkMenu(linkId: string) {
-  projectJournalLinkMenuId.value =
-    projectJournalLinkMenuId.value === linkId ? "" : linkId;
-}
-
-function closeProjectJournalLinkMenu() {
-  projectJournalLinkMenuId.value = "";
-}
-
 async function loadCompletedProjectTasks(
   projectId = selectedProjectTaskScopeId.value,
 ) {
@@ -1291,6 +1280,7 @@ function resetProjectTaskComposer() {
 
 function toggleKanbanView() {
   projectCompletedOpen.value = false;
+  projectLogOpen.value = false;
   const enabled = projectTaskViewMode.value !== "kanban";
   kanbanEnabled.value = enabled;
   window.localStorage.setItem(
@@ -1302,6 +1292,7 @@ function toggleKanbanView() {
 
 function toggleCompletedProjectTasks() {
   projectCompletedOpen.value = !projectCompletedOpen.value;
+  if (projectCompletedOpen.value) projectLogOpen.value = false;
   projectPickerOpen.value = false;
   projectActionsMenuOpen.value = false;
   resetProjectTaskComposer();
@@ -1311,6 +1302,11 @@ function toggleCompletedProjectTasks() {
 
 function toggleProjectLog() {
   projectLogOpen.value = !projectLogOpen.value;
+  if (projectLogOpen.value) {
+    projectCompletedOpen.value = false;
+    resetProjectTaskComposer();
+    closeProjectTaskDetail();
+  }
   projectPickerOpen.value = false;
   projectActionsMenuOpen.value = false;
   if (projectLogOpen.value) void loadProjectJournalLinks();
@@ -1321,6 +1317,7 @@ function setProjectTaskViewMode(mode: "list" | "kanban") {
   if (projectTaskViewMode.value === nextMode) return;
   projectTaskViewMode.value = nextMode;
   projectCompletedOpen.value = false;
+  projectLogOpen.value = false;
   projectActionsMenuOpen.value = false;
   resetProjectTaskComposer();
   closeProjectTaskDetail();
@@ -1840,8 +1837,6 @@ async function archiveProjectTask(task: MissionTask): Promise<boolean> {
 
 async function deleteProjectJournalLink(link: JournalProjectLink) {
   if (projectJournalLinkActionId.value) return;
-  const confirmed = window.confirm("Remove this journal link from the project log?");
-  if (!confirmed) return;
   projectJournalLinkActionId.value = link.id;
   projectJournalLinksError.value = "";
   try {
@@ -1849,7 +1844,6 @@ async function deleteProjectJournalLink(link: JournalProjectLink) {
     projectJournalLinks.value = projectJournalLinks.value.filter(
       (item) => item.id !== link.id,
     );
-    closeProjectJournalLinkMenu();
   } catch (e) {
     projectJournalLinksError.value =
       e instanceof ApiError ? e.message : "Could not remove journal link";
@@ -1983,11 +1977,11 @@ function accountSourceLabel(source: FinancialEntrySource): string {
 }
 
 function journalLinkTitle(link: JournalProjectLink): string {
-  return link.taskTitle || link.entryTitle || "Journal entry";
+  return link.entryTitle || "Journal entry";
 }
 
 function journalLinkSnippet(link: JournalProjectLink): string {
-  return link.sourceText || link.taskTitle || link.entryTitle || "";
+  return link.sourceText || "";
 }
 
 function journalLinkHref(link: JournalProjectLink): string {
@@ -2093,10 +2087,6 @@ function handleWindowKeydown(event: KeyboardEvent) {
     projectActionsMenuOpen.value = false;
     return;
   }
-  if (event.key === "Escape" && projectJournalLinkMenuId.value) {
-    closeProjectJournalLinkMenu();
-    return;
-  }
   if (event.key === "Escape" && projectPickerOpen.value) {
     projectPickerOpen.value = false;
     return;
@@ -2114,7 +2104,6 @@ function handleWindowKeydown(event: KeyboardEvent) {
 function handleWindowClick() {
   projectPickerOpen.value = false;
   projectActionsMenuOpen.value = false;
-  closeProjectJournalLinkMenu();
 }
 
 watch(
@@ -2265,7 +2254,7 @@ onBeforeUnmount(() => {
               @click="toggleCompletedProjectTasks"
             >
               <UiIcon name="Archive" :size="15" />
-              Completed tasks
+              Completed
             </button>
             <button
               type="button"
@@ -2307,7 +2296,81 @@ onBeforeUnmount(() => {
 
     <section v-show="activeSection === 'projects'" class="mission-page">
       <div class="mission-projects-shell">
-        <section v-if="projectCompletedOpen" class="completed-tasks-view">
+        <section
+          v-if="projectLogOpen"
+          class="project-journal-log"
+          aria-label="Project journal"
+        >
+          <header class="project-journal-log__header">
+            <div>
+              <h2>Project journal</h2>
+              <p>
+                Journal entries linked to
+                {{ selectedProjectDetail?.name || "all projects" }}
+              </p>
+            </div>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
+              aria-label="Refresh project journal"
+              title="Refresh project journal"
+              :disabled="projectJournalLinksLoading"
+              @click="loadProjectJournalLinks"
+            >
+              <UiIcon name="RefreshCw" :size="16" />
+            </Button>
+          </header>
+          <p
+            v-if="projectJournalLinksError"
+            class="mission-control__message is-error"
+          >
+            {{ projectJournalLinksError }}
+          </p>
+          <div v-if="projectJournalLinksLoading" class="empty-row">
+            Loading project journal...
+          </div>
+          <div v-else-if="visibleProjectJournalLinksCount === 0" class="empty-row">
+            No project journal entries yet.
+          </div>
+          <template v-else>
+            <section
+              v-for="group in projectJournalLogGroups"
+              :key="group.id"
+              class="project-journal-log__group"
+            >
+              <h3 v-if="!selectedProjectDetail">{{ group.label }}</h3>
+              <article
+                v-for="link in group.links"
+                :key="link.id"
+                class="project-journal-log__row"
+              >
+                <a
+                  class="project-journal-log__row-main"
+                  :href="journalLinkHref(link)"
+                >
+                  <span>{{ formatShortDate(link.entryDate) }}</span>
+                  <strong>{{ journalLinkTitle(link) }}</strong>
+                  <p v-if="journalLinkSnippet(link)">
+                    {{ journalLinkSnippet(link) }}
+                  </p>
+                </a>
+                <button
+                  type="button"
+                  class="project-journal-log__remove"
+                  :disabled="projectJournalLinkActionId === link.id"
+                  @click.stop="deleteProjectJournalLink(link)"
+                >
+                  <UiIcon name="Trash2" :size="14" aria-hidden="true" />
+                  Remove
+                </button>
+              </article>
+            </section>
+          </template>
+        </section>
+        <section v-else-if="projectCompletedOpen" class="completed-tasks-view">
           <header class="completed-tasks-view__header">
             <div>
               <h2>Completed tasks</h2>
@@ -2458,107 +2521,6 @@ onBeforeUnmount(() => {
           @cancel-composer="cancelProjectTaskComposer"
           @load-more="loadMoreProjectTasks"
         />
-        <section
-          v-if="activeSection === 'projects' && projectLogOpen"
-          class="project-journal-log"
-          aria-label="Project journal log"
-        >
-          <header class="project-journal-log__header">
-            <div>
-              <h2>Log</h2>
-              <p>
-                Journal entries linked to
-                {{ selectedProjectDetail?.name || "all projects" }}
-              </p>
-            </div>
-            <Button
-              color="ghost"
-              shape="soft"
-              size="compact"
-              icon-only
-              type="button"
-              aria-label="Refresh project log"
-              title="Refresh project log"
-              :disabled="projectJournalLinksLoading"
-              @click="loadProjectJournalLinks"
-            >
-              <UiIcon name="RefreshCw" :size="16" />
-            </Button>
-          </header>
-          <p
-            v-if="projectJournalLinksError"
-            class="mission-control__message is-error"
-          >
-            {{ projectJournalLinksError }}
-          </p>
-          <div v-if="projectJournalLinksLoading" class="empty-row">
-            Loading journal links...
-          </div>
-          <div v-else-if="visibleProjectJournalLinksCount === 0" class="empty-row">
-            No journal links yet.
-          </div>
-          <template v-else>
-            <section
-              v-for="group in projectJournalLogGroups"
-              :key="group.id"
-              class="project-journal-log__group"
-            >
-              <h3 v-if="!selectedProjectDetail">{{ group.label }}</h3>
-              <article
-                v-for="link in group.links"
-                :key="link.id"
-                class="project-journal-log__row"
-                :class="{ 'is-menu-open': projectJournalLinkMenuId === link.id }"
-              >
-                <a
-                  class="project-journal-log__row-main"
-                  :href="journalLinkHref(link)"
-                >
-                  <span>{{ formatShortDate(link.entryDate) }}</span>
-                  <strong>{{ journalLinkTitle(link) }}</strong>
-                  <p v-if="journalLinkSnippet(link)">
-                    {{ journalLinkSnippet(link) }}
-                  </p>
-                </a>
-                <div class="project-journal-log__actions" @click.stop>
-                  <Button
-                    color="ghost"
-                    shape="soft"
-                    size="compact"
-                    icon-only
-                    type="button"
-                    :aria-label="`Actions for ${journalLinkTitle(link)}`"
-                    aria-haspopup="menu"
-                    :aria-expanded="
-                      projectJournalLinkMenuId === link.id ? 'true' : 'false'
-                    "
-                    title="Journal link actions"
-                    :disabled="projectJournalLinkActionId === link.id"
-                    @click="toggleProjectJournalLinkMenu(link.id)"
-                  >
-                    <UiIcon name="Ellipsis" :size="16" aria-hidden="true" />
-                  </Button>
-                  <div
-                    v-if="projectJournalLinkMenuId === link.id"
-                    class="project-journal-log__menu"
-                    role="menu"
-                  >
-                    <button
-                      type="button"
-                      class="project-journal-log__menu-item is-danger"
-                      role="menuitem"
-                      :disabled="projectJournalLinkActionId === link.id"
-                      @click="deleteProjectJournalLink(link)"
-                    >
-                      <UiIcon name="Trash2" :size="15" aria-hidden="true" />
-                      Remove link
-                    </button>
-                  </div>
-                </div>
-              </article>
-            </section>
-          </template>
-        </section>
       </div>
     </section>
 
@@ -3371,8 +3333,8 @@ onBeforeUnmount(() => {
 .project-journal-log__row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 38px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   border-radius: var(--ui-radius-sm);
   color: var(--ui-text);
 }
@@ -3388,8 +3350,7 @@ onBeforeUnmount(() => {
 }
 
 .project-journal-log__row:hover,
-.project-journal-log__row:focus-within,
-.project-journal-log__row.is-menu-open {
+.project-journal-log__row:focus-within {
   background: var(--ui-surface-muted);
 }
 
@@ -3403,73 +3364,31 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
-.project-journal-log__actions {
-  position: relative;
+.project-journal-log__remove {
   display: flex;
-  justify-content: center;
-  padding-top: 4px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.project-journal-log__row:hover .project-journal-log__actions,
-.project-journal-log__row:focus-within .project-journal-log__actions,
-.project-journal-log__row.is-menu-open .project-journal-log__actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.project-journal-log__menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 4px;
-  z-index: 20;
-  min-width: 148px;
-  box-sizing: border-box;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  padding: 6px;
-  background: var(--ui-surface);
-  box-shadow: var(--ui-shadow-md);
-}
-
-.project-journal-log__menu-item {
-  display: flex;
-  width: 100%;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  margin-right: 4px;
   border: 0;
   border-radius: var(--ui-radius-sm);
-  padding: 8px 10px;
+  padding: 7px 9px;
   background: transparent;
-  color: var(--ui-text);
+  color: #b91c1c;
   font: inherit;
   font-size: 12px;
   font-weight: 700;
-  text-align: left;
   cursor: pointer;
 }
 
-.project-journal-log__menu-item:hover,
-.project-journal-log__menu-item:focus-visible {
+.project-journal-log__remove:hover,
+.project-journal-log__remove:focus-visible {
   background: var(--ui-surface-muted);
   outline: none;
 }
 
-.project-journal-log__menu-item.is-danger {
-  color: #b91c1c;
-}
-
-.project-journal-log__menu-item:disabled {
+.project-journal-log__remove:disabled {
   cursor: default;
   opacity: 0.55;
-}
-
-@media (hover: none) {
-  .project-journal-log__actions {
-    opacity: 1;
-    pointer-events: auto;
-  }
 }
 
 .completed-tasks-view__header {
