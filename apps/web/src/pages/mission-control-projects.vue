@@ -260,6 +260,8 @@ const projectJournalLinksLoading = ref(false);
 const projectJournalLinksError = ref("");
 const projectJournalLinkMenuId = ref("");
 const projectJournalLinkActionId = ref("");
+const projectLogOpen = ref(false);
+const projectActionsMenuOpen = ref(false);
 const projectTasksLoading = ref(false);
 const projectTasksLoadingMore = ref(false);
 const projectTasksError = ref("");
@@ -517,8 +519,32 @@ const projectTaskListGroups = computed<ProjectTaskListGroup[]>(() => {
     selectedProjectDetail.value,
   );
 });
-const visibleProjectJournalLinks = computed(() =>
-  selectedProjectDetail.value ? projectJournalLinks.value : [],
+const projectJournalLogGroups = computed(() => {
+  if (selectedProjectDetail.value) {
+    return [
+      {
+        id: selectedProjectDetail.value.id,
+        label: selectedProjectDetail.value.name,
+        links: projectJournalLinks.value,
+      },
+    ];
+  }
+
+  return projects.value
+    .map((project) => ({
+      id: project.id,
+      label: project.name,
+      links: projectJournalLinks.value.filter(
+        (link) => link.projectId === project.id,
+      ),
+    }))
+    .filter((group) => group.links.length > 0);
+});
+const visibleProjectJournalLinksCount = computed(() =>
+  projectJournalLogGroups.value.reduce(
+    (total, group) => total + group.links.length,
+    0,
+  ),
 );
 const selectedProjectDetailLabel = computed(
   () => selectedProjectDetail.value?.name || "All",
@@ -537,6 +563,9 @@ const projectViewToggleLabel = computed(() =>
 );
 const projectViewToggleIcon = computed<UiIconName>(() =>
   projectTaskViewMode.value === "kanban" ? "List" : "SquareKanban",
+);
+const projectLogToggleLabel = computed(() =>
+  projectLogOpen.value ? "Hide journal log" : "Show journal log",
 );
 const projectTaskDetailSaveDisabled = computed(
   () =>
@@ -944,18 +973,30 @@ async function loadProjectTasks(
 }
 
 async function loadProjectJournalLinks(projectId = selectedProjectTaskScopeId.value) {
-  if (!projectId) {
-    projectJournalLinks.value = [];
-    return;
-  }
+  const scopeId = projectId || "";
   projectJournalLinksLoading.value = true;
   projectJournalLinksError.value = "";
   try {
-    const response = await api.get<{ links: JournalProjectLink[] }>(
-      `/mission-control/projects/${encodeURIComponent(projectId)}/journal-links`,
+    if (scopeId) {
+      const response = await api.get<{ links: JournalProjectLink[] }>(
+        `/mission-control/projects/${encodeURIComponent(scopeId)}/journal-links`,
+      );
+      if (selectedProjectTaskScopeId.value !== scopeId) return;
+      projectJournalLinks.value = response.links || [];
+      return;
+    }
+
+    const responses = await Promise.all(
+      projects.value.map((project) =>
+        api.get<{ links: JournalProjectLink[] }>(
+          `/mission-control/projects/${encodeURIComponent(project.id)}/journal-links`,
+        ),
+      ),
     );
-    if (selectedProjectTaskScopeId.value !== projectId) return;
-    projectJournalLinks.value = response.links || [];
+    if (selectedProjectTaskScopeId.value !== scopeId) return;
+    projectJournalLinks.value = responses
+      .flatMap((response) => response.links || [])
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch (e) {
     projectJournalLinksError.value =
       e instanceof ApiError ? e.message : "Project log could not load";
@@ -1262,9 +1303,17 @@ function toggleKanbanView() {
 function toggleCompletedProjectTasks() {
   projectCompletedOpen.value = !projectCompletedOpen.value;
   projectPickerOpen.value = false;
+  projectActionsMenuOpen.value = false;
   resetProjectTaskComposer();
   closeProjectTaskDetail();
   if (projectCompletedOpen.value) void loadCompletedProjectTasks();
+}
+
+function toggleProjectLog() {
+  projectLogOpen.value = !projectLogOpen.value;
+  projectPickerOpen.value = false;
+  projectActionsMenuOpen.value = false;
+  if (projectLogOpen.value) void loadProjectJournalLinks();
 }
 
 function setProjectTaskViewMode(mode: "list" | "kanban") {
@@ -1272,9 +1321,15 @@ function setProjectTaskViewMode(mode: "list" | "kanban") {
   if (projectTaskViewMode.value === nextMode) return;
   projectTaskViewMode.value = nextMode;
   projectCompletedOpen.value = false;
+  projectActionsMenuOpen.value = false;
   resetProjectTaskComposer();
   closeProjectTaskDetail();
   void loadProjectTasks();
+}
+
+function toggleProjectActionsMenu() {
+  projectActionsMenuOpen.value = !projectActionsMenuOpen.value;
+  projectPickerOpen.value = false;
 }
 
 function resetWeeklyReviewSelection(task: MissionTask | null) {
@@ -2034,6 +2089,10 @@ function syncSelectedProjectFromRoute() {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape" && projectActionsMenuOpen.value) {
+    projectActionsMenuOpen.value = false;
+    return;
+  }
   if (event.key === "Escape" && projectJournalLinkMenuId.value) {
     closeProjectJournalLinkMenu();
     return;
@@ -2054,6 +2113,7 @@ function handleWindowKeydown(event: KeyboardEvent) {
 
 function handleWindowClick() {
   projectPickerOpen.value = false;
+  projectActionsMenuOpen.value = false;
   closeProjectJournalLinkMenu();
 }
 
@@ -2091,7 +2151,7 @@ watch(
 watch(activeSection, (section) => {
   if (section === "projects") {
     void loadProjectTasks();
-    void loadProjectJournalLinks();
+    if (projectLogOpen.value) void loadProjectJournalLinks();
     void loadLocalExecutorStatus();
   }
   if (section === "activity") void loadActivityReview();
@@ -2103,7 +2163,7 @@ watch(selectedProjectDetailId, (next, previous) => {
   if (next === previous) return;
   if (activeSection.value === "projects") {
     void loadProjectTasks(next);
-    void loadProjectJournalLinks(next);
+    if (projectLogOpen.value) void loadProjectJournalLinks(next);
     if (projectCompletedOpen.value) void loadCompletedProjectTasks(next);
   }
 });
@@ -2172,36 +2232,62 @@ onBeforeUnmount(() => {
         >
           <UiIcon :name="mobilePrimarySectionIcon" :size="18" />
         </Button>
-        <Button
-          v-if="
-            activeSection === 'projects' &&
-            !isAccountsRoute &&
-            projectTaskViewMode === 'list'
-          "
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          :active="projectCompletedOpen"
-          :aria-pressed="projectCompletedOpen"
-          aria-label="Completed tasks"
-          title="Completed tasks"
-          @click="toggleCompletedProjectTasks"
-        >
-          <UiIcon name="Archive" :size="18" />
-        </Button>
-        <Button
+        <div
           v-if="activeSection === 'projects' && !isAccountsRoute"
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          :aria-label="projectViewToggleLabel"
-          :title="projectViewToggleLabel"
-          @click="toggleKanbanView"
+          class="mission-control__actions-menu"
+          @click.stop
         >
-          <UiIcon :name="projectViewToggleIcon" :size="18" />
-        </Button>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Project view options"
+            aria-haspopup="menu"
+            :aria-expanded="projectActionsMenuOpen ? 'true' : 'false'"
+            title="Project view options"
+            @click="toggleProjectActionsMenu"
+          >
+            <UiIcon name="Ellipsis" :size="18" />
+          </Button>
+          <div
+            v-if="projectActionsMenuOpen"
+            class="mission-control__actions-popover"
+            role="menu"
+          >
+            <button
+              v-if="projectTaskViewMode === 'list'"
+              type="button"
+              class="mission-control__actions-item"
+              :class="{ 'is-active': projectCompletedOpen }"
+              role="menuitem"
+              @click="toggleCompletedProjectTasks"
+            >
+              <UiIcon name="Archive" :size="15" />
+              Completed tasks
+            </button>
+            <button
+              type="button"
+              class="mission-control__actions-item"
+              role="menuitem"
+              @click="toggleKanbanView"
+            >
+              <UiIcon :name="projectViewToggleIcon" :size="15" />
+              {{ projectViewToggleLabel }}
+            </button>
+            <button
+              type="button"
+              class="mission-control__actions-item"
+              :class="{ 'is-active': projectLogOpen }"
+              role="menuitem"
+              @click="toggleProjectLog"
+            >
+              <UiIcon name="BookOpen" :size="15" />
+              {{ projectLogToggleLabel }}
+            </button>
+          </div>
+        </div>
         <Button
           v-if="!isAccountsRoute"
           color="ghost"
@@ -2373,14 +2459,17 @@ onBeforeUnmount(() => {
           @load-more="loadMoreProjectTasks"
         />
         <section
-          v-if="selectedProjectDetail"
+          v-if="activeSection === 'projects' && projectLogOpen"
           class="project-journal-log"
           aria-label="Project journal log"
         >
           <header class="project-journal-log__header">
             <div>
               <h2>Log</h2>
-              <p>Journal entries linked to {{ selectedProjectDetail.name }}</p>
+              <p>
+                Journal entries linked to
+                {{ selectedProjectDetail?.name || "all projects" }}
+              </p>
             </div>
             <Button
               color="ghost"
@@ -2405,62 +2494,69 @@ onBeforeUnmount(() => {
           <div v-if="projectJournalLinksLoading" class="empty-row">
             Loading journal links...
           </div>
-          <div v-else-if="visibleProjectJournalLinks.length === 0" class="empty-row">
+          <div v-else-if="visibleProjectJournalLinksCount === 0" class="empty-row">
             No journal links yet.
           </div>
           <template v-else>
-            <article
-              v-for="link in visibleProjectJournalLinks"
-              :key="link.id"
-              class="project-journal-log__row"
-              :class="{ 'is-menu-open': projectJournalLinkMenuId === link.id }"
+            <section
+              v-for="group in projectJournalLogGroups"
+              :key="group.id"
+              class="project-journal-log__group"
             >
-              <a
-                class="project-journal-log__row-main"
-                :href="journalLinkHref(link)"
+              <h3 v-if="!selectedProjectDetail">{{ group.label }}</h3>
+              <article
+                v-for="link in group.links"
+                :key="link.id"
+                class="project-journal-log__row"
+                :class="{ 'is-menu-open': projectJournalLinkMenuId === link.id }"
               >
-                <span>{{ formatShortDate(link.entryDate) }}</span>
-                <strong>{{ journalLinkTitle(link) }}</strong>
-                <p v-if="journalLinkSnippet(link)">
-                  {{ journalLinkSnippet(link) }}
-                </p>
-              </a>
-              <div class="project-journal-log__actions" @click.stop>
-                <Button
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  type="button"
-                  :aria-label="`Actions for ${journalLinkTitle(link)}`"
-                  aria-haspopup="menu"
-                  :aria-expanded="
-                    projectJournalLinkMenuId === link.id ? 'true' : 'false'
-                  "
-                  title="Journal link actions"
-                  :disabled="projectJournalLinkActionId === link.id"
-                  @click="toggleProjectJournalLinkMenu(link.id)"
+                <a
+                  class="project-journal-log__row-main"
+                  :href="journalLinkHref(link)"
                 >
-                  <UiIcon name="Ellipsis" :size="16" aria-hidden="true" />
-                </Button>
-                <div
-                  v-if="projectJournalLinkMenuId === link.id"
-                  class="project-journal-log__menu"
-                  role="menu"
-                >
-                  <button
+                  <span>{{ formatShortDate(link.entryDate) }}</span>
+                  <strong>{{ journalLinkTitle(link) }}</strong>
+                  <p v-if="journalLinkSnippet(link)">
+                    {{ journalLinkSnippet(link) }}
+                  </p>
+                </a>
+                <div class="project-journal-log__actions" @click.stop>
+                  <Button
+                    color="ghost"
+                    shape="soft"
+                    size="compact"
+                    icon-only
                     type="button"
-                    class="project-journal-log__menu-item is-danger"
-                    role="menuitem"
+                    :aria-label="`Actions for ${journalLinkTitle(link)}`"
+                    aria-haspopup="menu"
+                    :aria-expanded="
+                      projectJournalLinkMenuId === link.id ? 'true' : 'false'
+                    "
+                    title="Journal link actions"
                     :disabled="projectJournalLinkActionId === link.id"
-                    @click="deleteProjectJournalLink(link)"
+                    @click="toggleProjectJournalLinkMenu(link.id)"
                   >
-                    <UiIcon name="Trash2" :size="15" aria-hidden="true" />
-                    Remove link
-                  </button>
+                    <UiIcon name="Ellipsis" :size="16" aria-hidden="true" />
+                  </Button>
+                  <div
+                    v-if="projectJournalLinkMenuId === link.id"
+                    class="project-journal-log__menu"
+                    role="menu"
+                  >
+                    <button
+                      type="button"
+                      class="project-journal-log__menu-item is-danger"
+                      role="menuitem"
+                      :disabled="projectJournalLinkActionId === link.id"
+                      @click="deleteProjectJournalLink(link)"
+                    >
+                      <UiIcon name="Trash2" :size="15" aria-hidden="true" />
+                      Remove link
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </article>
+              </article>
+            </section>
           </template>
         </section>
       </div>
@@ -3071,6 +3167,55 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
+.mission-control__actions-menu {
+  position: relative;
+}
+
+.mission-control__actions-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 190px;
+  gap: 2px;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-md);
+}
+
+.mission-control__actions-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  padding: 7px 9px;
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mission-control__actions-item:hover,
+.mission-control__actions-item:focus-visible,
+.mission-control__actions-item.is-active {
+  background: var(--ui-surface-muted);
+  outline: none;
+}
+
+.mission-control__actions-item.is-active {
+  color: var(--ui-accent);
+}
+
 .mission-control__project-switcher,
 .mission-control__section-title {
   grid-column: 1;
@@ -3202,6 +3347,18 @@ onBeforeUnmount(() => {
 .project-journal-log__header h2 {
   color: var(--ui-text);
   font-size: 15px;
+}
+
+.project-journal-log__group {
+  display: grid;
+  gap: 2px;
+}
+
+.project-journal-log__group h3 {
+  margin: 8px 0 2px;
+  color: var(--ui-text);
+  font-size: 13px;
+  line-height: 1.25;
 }
 
 .project-journal-log__header p,
