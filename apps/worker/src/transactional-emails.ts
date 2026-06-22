@@ -14,6 +14,7 @@ export type BookingEmailDetails = {
   ownerId: string;
   hostName: string;
   hostEmail?: string | null;
+  siteName?: string | null;
   guestName: string;
   guestEmail: string;
   bookingTitle: string;
@@ -24,6 +25,8 @@ export type BookingEmailDetails = {
   bookingId?: string | null;
   amountPaid?: number | null;
   currency?: string | null;
+  guestMessageText?: string | null;
+  sendHostCopy?: boolean;
   test?: boolean;
 };
 
@@ -44,9 +47,12 @@ export async function sendBookingConfirmationEmails(
   details: BookingEmailDetails,
 ): Promise<{ guest: TransactionalEmailResult; host: TransactionalEmailResult }> {
   const guest = await sendGuestBookingConfirmationEmail(env, details);
-  const host = details.hostEmail
-    ? await sendHostBookingConfirmationEmail(env, details)
-    : { status: "skipped", error: "Host email is not configured" } satisfies TransactionalEmailResult;
+  const host =
+    details.sendHostCopy === false
+      ? ({ status: "skipped", error: "Host copy is disabled" } satisfies TransactionalEmailResult)
+      : details.hostEmail
+        ? await sendHostBookingConfirmationEmail(env, details)
+        : ({ status: "skipped", error: "Host email is not configured" } satisfies TransactionalEmailResult);
   return { guest, host };
 }
 
@@ -56,6 +62,15 @@ export async function sendGuestBookingConfirmationEmail(
 ): Promise<TransactionalEmailResult> {
   const startTime = formatBookingTime(details.startsAt, details.timezone);
   const paymentLine = formatPaymentLine(details.amountPaid, details.currency);
+  const guestMessage = applyBookingEmailTokens(details.guestMessageText || "", {
+    guestName: details.guestName,
+    guestEmail: details.guestEmail,
+    bookingTitle: details.bookingTitle,
+    bookingTime: startTime,
+    siteName: details.siteName || details.hostName,
+    hostName: details.hostName,
+    hostEmail: details.hostEmail || "",
+  }).trim();
   const subject = `${details.test ? "[Test] " : ""}Booking confirmed: ${details.bookingTitle}`;
   const textBody = `Hi ${details.guestName},
 
@@ -64,6 +79,7 @@ Your booking is confirmed.
 ${details.bookingTitle} with ${details.hostName}
 ${startTime}
 Duration: ${details.durationMinutes} minutes${paymentLine ? `\n${paymentLine}` : ""}${details.notes ? `\n\nYour notes:\n${details.notes}` : ""}
+${guestMessage ? `\n\n${guestMessage}` : ""}
 
 You can reply to this email to contact ${details.hostName}.
 
@@ -79,6 +95,7 @@ You can reply to this email to contact ${details.hostName}.
     ],
     notesLabel: "Your notes",
     notes: details.notes,
+    message: guestMessage,
     footer: `Reply to this email to contact ${escapeHtml(details.hostName)}.`,
   });
 
@@ -191,14 +208,18 @@ export function bookingDetailsFromBooking(input: {
   ownerId: string;
   hostName: string;
   hostEmail?: string | null;
+  siteName?: string | null;
   bookingTitle: string;
   timezone: string;
+  guestMessageText?: string | null;
+  sendHostCopy?: boolean;
   test?: boolean;
 }): BookingEmailDetails {
   return {
     ownerId: input.ownerId,
     hostName: input.hostName,
     hostEmail: input.hostEmail || null,
+    siteName: input.siteName || input.hostName,
     guestName: input.booking.guest_name,
     guestEmail: input.booking.guest_email,
     bookingTitle: input.bookingTitle,
@@ -209,6 +230,8 @@ export function bookingDetailsFromBooking(input: {
     bookingId: input.booking.id,
     amountPaid: input.booking.amount_paid,
     currency: input.booking.currency,
+    guestMessageText: input.guestMessageText || null,
+    sendHostCopy: input.sendHostCopy,
     test: input.test,
   };
 }
@@ -277,6 +300,7 @@ function bookingEmailHtml(input: {
   rows: Array<[string, string]>;
   notesLabel: string;
   notes?: string | null;
+  message?: string | null;
   footer: string;
 }) {
   const rows = input.rows
@@ -288,11 +312,15 @@ function bookingEmailHtml(input: {
   const notes = input.notes
     ? `<p style="margin:16px 0 0;padding-top:16px;border-top:1px solid #e0e0e0;color:#666;font-size:14px;"><strong>${escapeHtml(input.notesLabel)}:</strong><br>${renderPlainText(input.notes)}</p>`
     : "";
+  const message = input.message
+    ? `<div style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:18px;margin:0 0 24px;color:#333;font-size:14px;line-height:1.6;">${renderPlainText(input.message)}</div>`
+    : "";
 
   return emailShell(`
     <h1 style="margin:0 0 8px;font-size:24px;color:#111;">${escapeHtml(input.title)}</h1>
     <p style="margin:0 0 32px;color:#666;font-size:14px;">${escapeHtml(input.subtitle)}</p>
     <div style="background:#f8f8f8;border-radius:8px;padding:24px;margin:0 0 24px;">${rows}${notes}</div>
+    ${message}
     <p style="margin:0;color:#666;font-size:14px;">${input.footer}</p>
   `);
 }
@@ -315,6 +343,17 @@ function emailShell(body: string) {
 
 function renderPlainText(text: string) {
   return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
+function applyBookingEmailTokens(
+  template: string,
+  ctx: Record<string, string>,
+): string {
+  let output = template;
+  for (const [key, value] of Object.entries(ctx)) {
+    output = output.replace(new RegExp(`{{\\s*${key}\\s*}}`, "g"), () => value);
+  }
+  return output;
 }
 
 function escapeHtml(text: string) {

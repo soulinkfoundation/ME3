@@ -209,6 +209,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       .json<{
         bookingTitle?: unknown;
         siteName?: unknown;
+        message?: unknown;
         durationMinutes?: unknown;
         timezone?: unknown;
       }>()
@@ -256,6 +257,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
           normalizeShortEmailText(body.bookingTitle, 120) ||
           "Book a session",
         timezone: normalizeShortEmailText(body.timezone, 80) || "UTC",
+        guestMessageText: normalizeLongEmailText(body.message, 8000),
         test: true,
       }),
     );

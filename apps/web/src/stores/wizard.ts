@@ -87,6 +87,11 @@ export interface WizardBookingPricing {
   allowFree: boolean;
 }
 
+export interface WizardBookingConfirmationEmail {
+  message: string;
+  sendHostCopy: boolean;
+}
+
 export interface WizardGiftConfig {
   enabled: boolean;
   title: string;
@@ -185,6 +190,7 @@ export interface WizardBookingConfig {
     reminder24h: boolean;
     reminder2h: boolean;
   };
+  confirmationEmail: WizardBookingConfirmationEmail;
   timezone: string;
   availability: {
     monday: string[];
@@ -418,6 +424,7 @@ type ExtendedMe3IntentBook = Me3IntentBook & {
   bookingTypes?: PublishedBookingType[];
   pricing?: WizardBookingPricing;
   reminders?: Partial<WizardBookingConfig["reminders"]>;
+  confirmationEmail?: Partial<WizardBookingConfirmationEmail>;
 };
 
 const DEFAULT_BLOG_TITLE = "Blog";
@@ -445,6 +452,13 @@ function defaultWizardBookingPricing(): WizardBookingPricing {
     minimumAmount: 5,
     allowFlexiblePricing: true,
     allowFree: false,
+  };
+}
+
+function defaultWizardBookingConfirmationEmail(): WizardBookingConfirmationEmail {
+  return {
+    message: "",
+    sendHostCopy: true,
   };
 }
 
@@ -848,6 +862,10 @@ function normalizeWizardBookingConfig(input: unknown): WizardBookingConfig {
     ? retreatOffers
     : [createDefaultRetreatOffer()];
   const primaryOffer = normalizedOffers[0];
+  const rawConfirmationEmail =
+    record.confirmationEmail && typeof record.confirmationEmail === "object"
+      ? (record.confirmationEmail as Record<string, unknown>)
+      : {};
 
   // Heading title/description are separate from per-offer copy; do not mirror from offers[0].
   const headingTitle =
@@ -898,6 +916,16 @@ function normalizeWizardBookingConfig(input: unknown): WizardBookingConfig {
         typeof (record.reminders as Record<string, unknown>).reminder2h ===
           "boolean"
           ? Boolean((record.reminders as Record<string, unknown>).reminder2h)
+          : true,
+    },
+    confirmationEmail: {
+      message:
+        typeof rawConfirmationEmail.message === "string"
+          ? rawConfirmationEmail.message
+          : "",
+      sendHostCopy:
+        typeof rawConfirmationEmail.sendHostCopy === "boolean"
+          ? rawConfirmationEmail.sendHostCopy
           : true,
     },
     timezone:
@@ -959,6 +987,15 @@ function syncBookingLegacyFields(
     description: booking.description ?? "",
     duration: primaryOffer.duration,
     pricing: primaryOffer.pricing || defaultWizardBookingPricing(),
+    confirmationEmail: {
+      ...defaultWizardBookingConfirmationEmail(),
+      ...(booking.confirmationEmail || {}),
+      message:
+        typeof booking.confirmationEmail?.message === "string"
+          ? booking.confirmationEmail.message
+          : "",
+      sendHostCopy: booking.confirmationEmail?.sendHostCopy !== false,
+    },
   };
 }
 
@@ -3171,6 +3208,16 @@ export const useWizardStore = defineStore("wizard", () => {
           reminders: { ...profile.value.booking.reminders },
           bookingTypes: [],
         };
+        const confirmationMessage =
+          profile.value.booking.confirmationEmail.message.trim();
+        const sendHostCopy =
+          profile.value.booking.confirmationEmail.sendHostCopy !== false;
+        if (confirmationMessage || !sendHostCopy) {
+          book.confirmationEmail = {
+            ...(confirmationMessage ? { message: confirmationMessage } : {}),
+            sendHostCopy,
+          };
+        }
 
         if (oneToOneEnabled) {
           book.duration = primaryOffer.duration;
@@ -4122,6 +4169,7 @@ export const useWizardStore = defineStore("wizard", () => {
           })),
           bufferTime: rawBook.bufferTime,
           reminders: rawBook.reminders,
+          confirmationEmail: rawBook.confirmationEmail,
           timezone:
             rawOneToOneType?.availability?.timezone || rawBook.availability?.timezone,
           availability: {

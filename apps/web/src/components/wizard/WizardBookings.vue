@@ -583,6 +583,33 @@ const bookingConfirmationTestDetails = computed(() => {
   };
 });
 
+const bookingConfirmationMessage = computed({
+  get: () => profile.value.booking.confirmationEmail.message,
+  set: (message: string) =>
+    wizard.setBooking({
+      confirmationEmail: {
+        ...profile.value.booking.confirmationEmail,
+        message,
+      },
+    }),
+});
+
+const bookingConfirmationSendHostCopy = computed({
+  get: () => profile.value.booking.confirmationEmail.sendHostCopy !== false,
+  set: (sendHostCopy: boolean) =>
+    wizard.setBooking({
+      confirmationEmail: {
+        ...profile.value.booking.confirmationEmail,
+        sendHostCopy,
+      },
+    }),
+});
+
+const bookingConfirmationTestTokenPreview = computed(() => ({
+  guestName: "Test Guest",
+  bookingTitle: bookingConfirmationTestDetails.value.title,
+}));
+
 const canSendBookingConfirmationTest = computed(
   () =>
     Boolean(bookingConfirmationTestInbox.value) &&
@@ -611,6 +638,7 @@ async function sendBookingConfirmationTest() {
       durationMinutes: details.durationMinutes,
       timezone: details.timezone,
       siteName: profile.value.name || siteUsername,
+      message: bookingConfirmationMessage.value,
     });
     toastSuccess(`Test email sent to ${response.sentTo}.`);
   } catch (error) {
@@ -753,44 +781,6 @@ onMounted(() => {
               <UiIcon name="X" :size="14" aria-hidden="true" />
             </button>
           </div>
-        </div>
-
-        <div class="confirmation-email-section">
-          <div>
-            <h3 class="confirmation-email-title">Confirmation email</h3>
-            <p class="confirmation-email-lead">
-              Booking confirmations use your Account email sender. Save and
-              test the sender before taking live bookings.
-            </p>
-          </div>
-          <div class="confirmation-email-actions">
-            <button
-              class="offer-tab-add confirmation-email-test-button"
-              type="button"
-              :disabled="
-                isSendingBookingConfirmationTest ||
-                !canSendBookingConfirmationTest
-              "
-              @click="sendBookingConfirmationTest"
-            >
-              <UiIcon name="Mail" :size="16" aria-hidden="true" />
-              <span>{{
-                isSendingBookingConfirmationTest ? "Sending..." : "Send test"
-              }}</span>
-            </button>
-            <RouterLink class="confirmation-email-settings" to="/account?section=mailbox">
-              Email settings
-            </RouterLink>
-          </div>
-          <p class="confirmation-email-test-note">
-            {{
-              !bookingConfirmationTestInbox
-                ? "Sign in to send a test."
-                : !bookingConfirmationTestUsername
-                  ? "Claim your username first."
-                  : `Sends to ${bookingConfirmationTestInbox}.`
-            }}
-          </p>
         </div>
 
         <div
@@ -1469,6 +1459,80 @@ onMounted(() => {
           </div>
         </div>
 
+        <div class="confirmation-email-section">
+          <div class="confirmation-email-header">
+            <div>
+              <h3 class="confirmation-email-title">Confirmation email</h3>
+              <p class="confirmation-email-lead">
+                Booking confirmations use your Account email sender. Save and
+                test the sender before taking live bookings.
+              </p>
+            </div>
+            <div class="confirmation-email-actions">
+              <button
+                class="offer-tab-add confirmation-email-test-button"
+                type="button"
+                :disabled="
+                  isSendingBookingConfirmationTest ||
+                  !canSendBookingConfirmationTest
+                "
+                @click="sendBookingConfirmationTest"
+              >
+                <UiIcon name="Mail" :size="16" aria-hidden="true" />
+                <span>{{
+                  isSendingBookingConfirmationTest ? "Sending..." : "Send test"
+                }}</span>
+              </button>
+              <RouterLink class="confirmation-email-settings" to="/account?section=mailbox">
+                Email settings
+              </RouterLink>
+            </div>
+          </div>
+
+          <label class="checkbox-inline confirmation-email-copy-toggle">
+            <input v-model="bookingConfirmationSendHostCopy" type="checkbox" />
+            <span>Send me a copy of each booking confirmation</span>
+          </label>
+
+          <div class="form-group">
+            <label for="booking-confirmation-message">
+              Extra message for the requester
+            </label>
+            <textarea
+              id="booking-confirmation-message"
+              v-model="bookingConfirmationMessage"
+              class="confirmation-email-textarea"
+              rows="5"
+              maxlength="8000"
+              placeholder="Optional plain text with links. You can use placeholders."
+            ></textarea>
+          </div>
+
+          <p class="confirmation-email-test-note">
+            {{
+              !bookingConfirmationTestInbox
+                ? "Sign in to send a test."
+                : !bookingConfirmationTestUsername
+                  ? "Claim your username first."
+                  : `Sends to ${bookingConfirmationTestInbox}.`
+            }}
+            Test values:
+            <code>{{ bookingConfirmationTestTokenPreview.guestName }}</code
+            >,
+            <code>{{ bookingConfirmationTestTokenPreview.bookingTitle }}</code>
+          </p>
+          <p class="confirmation-email-tokens" v-pre>
+            Placeholders:
+            <code>{{ guestName }}</code
+            >, <code>{{ guestEmail }}</code
+            >, <code>{{ bookingTitle }}</code
+            >, <code>{{ bookingTime }}</code
+            >, <code>{{ siteName }}</code
+            >, <code>{{ hostName }}</code
+            >, <code>{{ hostEmail }}</code>
+          </p>
+        </div>
+
       </template>
     </div>
 
@@ -1563,13 +1627,20 @@ onMounted(() => {
 }
 
 .confirmation-email-section {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
+  margin-top: 18px;
+  padding: 16px 20px 20px;
+  border-top: 1px solid var(--ui-border, var(--color-border));
   background: var(--ui-surface-muted, rgba(0, 0, 0, 0.03));
+}
+
+.confirmation-email-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .confirmation-email-title {
@@ -1579,7 +1650,8 @@ onMounted(() => {
 }
 
 .confirmation-email-lead,
-.confirmation-email-test-note {
+.confirmation-email-test-note,
+.confirmation-email-tokens {
   margin: 0;
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 13px;
@@ -1599,6 +1671,14 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
+.confirmation-email-copy-toggle {
+  width: fit-content;
+}
+
+.confirmation-email-textarea {
+  min-height: 112px;
+}
+
 .confirmation-email-settings {
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 13px;
@@ -1610,8 +1690,13 @@ onMounted(() => {
   color: var(--ui-text, var(--color-text));
 }
 
-.confirmation-email-test-note {
-  grid-column: 1 / -1;
+.confirmation-email-test-note code,
+.confirmation-email-tokens code {
+  padding: 1px 4px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: 4px;
+  background: var(--ui-surface, var(--color-bg));
+  font-size: 11px;
 }
 
 .offer-editor-card {
@@ -1848,8 +1933,8 @@ onMounted(() => {
 }
 
 @media (max-width: 720px) {
-  .confirmation-email-section {
-    grid-template-columns: 1fr;
+  .confirmation-email-header {
+    flex-direction: column;
   }
 
   .confirmation-email-actions {

@@ -6285,6 +6285,57 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  it("adds custom booking confirmation copy and can skip host copies", async () => {
+    const env = createEnv();
+    await bootstrap(env);
+    addBookableSite(env, {
+      enabled: true,
+      offers: [
+        {
+          id: "free-session",
+          title: "Free session",
+          duration: 60,
+          pricing: { enabled: false },
+        },
+      ],
+      availability: {
+        timezone: "Europe/Dublin",
+        windows: { tuesday: ["15:00-16:30"] },
+      },
+      confirmationEmail: {
+        message:
+          "Hi {{ guestName }}, bring your questions for {{ bookingTitle }} at {{ bookingTime }}.",
+        sendHostCopy: false,
+      },
+    });
+    addReadyCloudflareEmailProvider(env);
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/book/owner/free", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offerId: "free-session",
+          localDate: "2026-06-09",
+          localTime: "15:15",
+          guestName: "Test Guest",
+          guestEmail: "guest@example.com",
+        }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(env.emailSends).toHaveLength(1);
+    expect(env.emailSends[0]).toMatchObject({
+      to: "guest@example.com",
+      subject: "Booking confirmed: Free session",
+    });
+    expect(String(env.emailSends[0].text)).toContain(
+      "Hi Test Guest, bring your questions for Free session at",
+    );
+  });
+
   it("rejects invalid and overlapping free public bookings", async () => {
     const env = createEnv();
     addBookableSite(env);

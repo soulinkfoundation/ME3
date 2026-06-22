@@ -58,6 +58,10 @@ export type CoreBookIntent = NonNullable<Me3SiteProfile["intents"]>["book"] & {
     reminder24h?: boolean;
     reminder2h?: boolean;
   };
+  confirmationEmail?: {
+    message?: string;
+    sendHostCopy?: boolean;
+  };
   bookingTypes?: Array<{
     type?: string;
     offers?: CoreBookingOffer[];

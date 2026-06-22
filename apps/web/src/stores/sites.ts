@@ -293,6 +293,7 @@ export interface ProductConfirmationTestResponse {
 export interface BookingConfirmationTestRequest {
   bookingTitle: string;
   siteName?: string;
+  message?: string;
   durationMinutes?: number;
   timezone?: string;
 }

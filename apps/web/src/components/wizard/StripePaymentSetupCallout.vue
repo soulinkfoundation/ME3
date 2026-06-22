@@ -105,6 +105,7 @@ onMounted(() => {
 
 .stripe-payment-callout--compact {
   margin-top: 10px;
+  margin-bottom: 14px;
 }
 
 .stripe-status-row {

@@ -641,15 +641,21 @@ async function sendConfirmationEmailsForBooking(
   },
 ) {
   const owner = await getOwnerContact(env, input.site.user_id);
+  const bookIntent = input.profile?.intents?.book as CoreBookIntent | undefined;
+  const confirmationEmail = bookIntent?.confirmationEmail;
+  const hostName = input.profile?.name || owner.name || input.site.username;
   const result = await sendBookingConfirmationEmails(
     env,
     bookingDetailsFromBooking({
       booking: input.booking,
       ownerId: input.site.user_id,
-      hostName: input.profile?.name || owner.name || input.site.username,
+      hostName,
       hostEmail: owner.email,
+      siteName: hostName,
       bookingTitle: input.bookingTitle,
       timezone: input.timezone,
+      guestMessageText: normalizeLongText(confirmationEmail?.message, 8000),
+      sendHostCopy: confirmationEmail?.sendHostCopy !== false,
     }),
   );
 
