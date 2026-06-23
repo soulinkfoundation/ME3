@@ -560,7 +560,10 @@ type AssistantSkill = {
   updatedAt: string;
 };
 type AssistantSkillsResponse = { skills: AssistantSkill[] };
-type AssistantSkillCreateResponse = { skill: AssistantSkill; skills?: AssistantSkill[] };
+type AssistantSkillCreateResponse = {
+  skill: AssistantSkill;
+  skills?: AssistantSkill[];
+};
 type AssistantActivityViewItem = {
   id: string;
   kind: string;
@@ -1185,7 +1188,9 @@ const installedAssistantSkills = computed(() =>
 );
 
 const canInstallAssistantSkill = computed(
-  () => assistantSkillUrlDraft.value.trim().length > 0 && !assistantSkillActionId.value,
+  () =>
+    assistantSkillUrlDraft.value.trim().length > 0 &&
+    !assistantSkillActionId.value,
 );
 
 const canSendAssistantMessage = computed(
@@ -1573,7 +1578,8 @@ async function loadAssistantSkills() {
   assistantSkillsLoading.value = true;
   assistantSkillsError.value = "";
   try {
-    const response = await api.get<AssistantSkillsResponse>("/assistant/skills");
+    const response =
+      await api.get<AssistantSkillsResponse>("/assistant/skills");
     assistantSkills.value = response.skills || [];
   } catch (err) {
     assistantSkillsError.value =
@@ -1589,16 +1595,23 @@ async function addAssistantSkill() {
   assistantSkillActionId.value = "create";
   assistantSkillsError.value = "";
   try {
-    const response = await api.post<AssistantSkillCreateResponse>("/assistant/skills", {
-      sourceRef,
-    });
-    const createdSkills = response.skills?.length ? response.skills : [response.skill];
+    const response = await api.post<AssistantSkillCreateResponse>(
+      "/assistant/skills",
+      {
+        sourceRef,
+      },
+    );
+    const createdSkills = response.skills?.length
+      ? response.skills
+      : [response.skill];
     const createdIds = new Set(createdSkills.map((skill) => skill.id));
     assistantSkills.value = createdSkills.concat(
       assistantSkills.value.filter((skill) => !createdIds.has(skill.id)),
     );
     assistantSkillUrlDraft.value = "";
-    toastSuccess(createdSkills.length === 1 ? "Skill installed" : "Skills installed");
+    toastSuccess(
+      createdSkills.length === 1 ? "Skill installed" : "Skills installed",
+    );
   } catch (err) {
     assistantSkillsError.value =
       err instanceof ApiError ? err.message : "Skill could not be installed.";
@@ -1612,8 +1625,12 @@ async function removeAssistantSkill(skill: AssistantSkill) {
   assistantSkillActionId.value = skill.id;
   assistantSkillsError.value = "";
   try {
-    await api.delete<{ ok: boolean }>(`/assistant/skills/${encodeURIComponent(skill.id)}`);
-    assistantSkills.value = assistantSkills.value.filter((item) => item.id !== skill.id);
+    await api.delete<{ ok: boolean }>(
+      `/assistant/skills/${encodeURIComponent(skill.id)}`,
+    );
+    assistantSkills.value = assistantSkills.value.filter(
+      (item) => item.id !== skill.id,
+    );
     toastSuccess("Skill removed");
   } catch (err) {
     assistantSkillsError.value =
@@ -1659,11 +1676,12 @@ async function loadAssistantContext() {
   assistantContextLoading.value = true;
   assistantSettingsError.value = "";
   try {
-    const [settingsResponse, memoryResponse, sourceResponse] = await Promise.all([
-      api.get<AssistantSettingsResponse>("/assistant/settings"),
-      api.get<MissionMemoryResponse>("/mission-control/memory"),
-      api.get<MissionSourcesResponse>("/mission-control/context-sources"),
-    ]);
+    const [settingsResponse, memoryResponse, sourceResponse] =
+      await Promise.all([
+        api.get<AssistantSettingsResponse>("/assistant/settings"),
+        api.get<MissionMemoryResponse>("/mission-control/memory"),
+        api.get<MissionSourcesResponse>("/mission-control/context-sources"),
+      ]);
     assistantSettings.value = settingsResponse;
     assistantNameDraft.value = settingsResponse.assistantName || "";
     assistantMemory.value = memoryResponse.memory || [];
@@ -1684,9 +1702,12 @@ async function saveAssistantName() {
   assistantSettingsError.value = "";
   assistantNameNotice.value = "";
   try {
-    const response = await api.put<AssistantSettingsResponse>("/assistant/settings", {
-      assistantName: normalizedAssistantNameDraft.value || null,
-    });
+    const response = await api.put<AssistantSettingsResponse>(
+      "/assistant/settings",
+      {
+        assistantName: normalizedAssistantNameDraft.value || null,
+      },
+    );
     assistantSettings.value = response;
     assistantNameDraft.value = response.assistantName || "";
     assistantNameNotice.value = "Name saved.";
@@ -2626,10 +2647,15 @@ function applyAssistantResultToMessage(
 }
 
 function mailboxDraftIdForActionCard(card: AgentChatActionCard): string | null {
-  if (card.kind !== "mailbox.draft_saved" || card.status !== "pending_approval") {
+  if (
+    card.kind !== "mailbox.draft_saved" ||
+    card.status !== "pending_approval"
+  ) {
     return null;
   }
-  return card.records.find((record) => record.kind === "mailbox_draft")?.id || null;
+  return (
+    card.records.find((record) => record.kind === "mailbox_draft")?.id || null
+  );
 }
 
 function assistantActionCardBusyKey(card: AgentChatActionCard): string | null {
@@ -3718,7 +3744,9 @@ function canCreateRecipe(recipe: AssistantJobRecipe) {
 }
 
 function canRun(job: AssistantJob) {
-  return job.status === "active" && job.recipeId !== bookingReminderSystemRecipeId;
+  return (
+    job.status === "active" && job.recipeId !== bookingReminderSystemRecipeId
+  );
 }
 
 function canToggle(job: AssistantJob) {
@@ -3820,7 +3848,9 @@ async function handleBookingRemindersToggle(
       );
     }
     await loadJobs();
-    toastSuccess(enabled ? "Booking reminders resumed." : "Booking reminders paused.");
+    toastSuccess(
+      enabled ? "Booking reminders resumed." : "Booking reminders paused.",
+    );
   });
 }
 
@@ -4444,7 +4474,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </button>
             <nav
               v-if="
-                group.threads.length && assistantProjectExpanded(group.project.id)
+                group.threads.length &&
+                assistantProjectExpanded(group.project.id)
               "
               :id="`assistant-project-${group.project.id}-chats`"
               class="assistant-history__list assistant-history__list--nested"
@@ -4477,7 +4508,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                     </span>
                   </span>
                 </button>
-                <div class="assistant-history__thread-actions" aria-label="Chat controls">
+                <div
+                  class="assistant-history__thread-actions"
+                  aria-label="Chat controls"
+                >
                   <button
                     type="button"
                     title="Archive chat"
@@ -4547,7 +4581,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   </span>
                 </span>
               </button>
-              <div class="assistant-history__thread-actions" aria-label="Chat controls">
+              <div
+                class="assistant-history__thread-actions"
+                aria-label="Chat controls"
+              >
                 <button
                   type="button"
                   title="Archive chat"
@@ -4614,7 +4651,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
           aria-live="polite"
         >
           <PageLoading
-            v-if="assistantThreadLoading && assistantConsoleMessages.length === 0"
+            v-if="
+              assistantThreadLoading && assistantConsoleMessages.length === 0
+            "
             label="Loading chat..."
           />
 
@@ -4864,7 +4903,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 >
                   <div class="assistant-action-card__header">
                     <div class="assistant-action-card__title">
-                      <span class="assistant-action-card__icon" aria-hidden="true">
+                      <span
+                        class="assistant-action-card__icon"
+                        aria-hidden="true"
+                      >
                         <UiIcon
                           :name="
                             card.kind === 'mailbox.draft_saved'
@@ -5163,7 +5205,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
               aria-live="polite"
               aria-label="Recording voice dictation"
             >
-              <span class="assistant-composer__voice-guide" aria-hidden="true" />
+              <span
+                class="assistant-composer__voice-guide"
+                aria-hidden="true"
+              />
               <span class="assistant-composer__voice-bars" aria-hidden="true">
                 <span
                   v-for="bar in 24"
@@ -5201,7 +5246,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </div>
 
             <div class="assistant-composer__right">
-              <div v-if="voiceDictationState !== 'listening'" class="model-picker">
+              <div
+                v-if="voiceDictationState !== 'listening'"
+                class="model-picker"
+              >
                 <span class="sr-only">Model</span>
                 <span class="model-picker__select-wrap">
                   <span class="model-picker__select-sizer" aria-hidden="true">
@@ -5296,10 +5344,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </Button>
             </div>
           </div>
-          <div
-            v-if="voiceDictationStatusText"
-            class="assistant-composer__meta"
-          >
+          <div v-if="voiceDictationStatusText" class="assistant-composer__meta">
             <span class="assistant-composer__voice-status">
               {{ voiceDictationStatusText }}
             </span>
@@ -5344,7 +5389,11 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 <template #icon>
                   <UiIcon name="Trash2" :size="15" aria-hidden="true" />
                 </template>
-                {{ archivedAssistantThreadsDeleting ? "Deleting..." : "Delete all" }}
+                {{
+                  archivedAssistantThreadsDeleting
+                    ? "Deleting..."
+                    : "Delete all"
+                }}
               </Button>
               <Button
                 color="ghost"
@@ -5834,7 +5883,10 @@ function messageFromUnknown(err: unknown, fallback: string) {
           </header>
 
           <div class="assistant-skills">
-            <form class="assistant-skills__install-form" @submit.prevent="addAssistantSkill">
+            <form
+              class="assistant-skills__install-form"
+              @submit.prevent="addAssistantSkill"
+            >
               <label class="sr-only" for="assistant-skill-url">
                 Skill URL or repository
               </label>
@@ -6460,10 +6512,17 @@ function messageFromUnknown(err: unknown, fallback: string) {
               class="job-result-strip"
             >
               <div class="job-result-strip__copy">
-                <strong>{{ selectedLatestRunSummary || "Latest run recorded." }}</strong>
+                <strong>{{
+                  selectedLatestRunSummary || "Latest run recorded."
+                }}</strong>
                 <span v-if="selectedLatestRun">
                   {{ runStatusLabel(selectedLatestRun.status) }} ·
-                  {{ formatDate(selectedLatestRun.finishedAt || selectedLatestRun.createdAt) }}
+                  {{
+                    formatDate(
+                      selectedLatestRun.finishedAt ||
+                        selectedLatestRun.createdAt,
+                    )
+                  }}
                 </span>
               </div>
               <Button
@@ -7332,7 +7391,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   min-height: 32px;
   border: 0;
   border-radius: 999px;
-  padding: 0 30px 0 6px;
   background: transparent;
   color: var(--ui-text-muted);
 }
@@ -7496,7 +7554,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-message--user .assistant-message__content,
-.assistant-message--user .assistant-message__content :deep(:where(p, strong, em, code, a)),
+.assistant-message--user
+  .assistant-message__content
+  :deep(:where(p, strong, em, code, a)),
 .assistant-message--user .assistant-message__meta,
 .assistant-message--user .assistant-message__detail {
   color: #12231d;
@@ -7509,7 +7569,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text-muted);
 }
 
-.assistant-message__content :deep(:where(p, ul, ol, blockquote, pre, h1, h2, h3)) {
+.assistant-message__content
+  :deep(:where(p, ul, ol, blockquote, pre, h1, h2, h3)) {
   margin: 0;
 }
 
@@ -8566,7 +8627,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   background: var(--ui-surface);
 }
 
-.assistant-settings__tabs :deep(.workspace-tabs__tab--active .workspace-tabs__count) {
+.assistant-settings__tabs
+  :deep(.workspace-tabs__tab--active .workspace-tabs__count) {
   background: var(--ui-surface-muted);
 }
 
@@ -8578,8 +8640,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   max-height: min(620px, calc(100vh - 190px));
   overflow: auto;
   border: 1px solid var(--ui-border);
-  border-radius: 0 var(--ui-radius-sm) var(--ui-radius-sm)
-    var(--ui-radius-sm);
+  border-radius: 0 var(--ui-radius-sm) var(--ui-radius-sm) var(--ui-radius-sm);
   padding: 14px 16px 14px 14px;
   background: var(--ui-surface);
   scrollbar-color: color-mix(in oklab, var(--ui-text-muted) 38%, transparent)
