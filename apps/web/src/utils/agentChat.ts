@@ -72,6 +72,23 @@ export type AgentChatActionCard = {
   secondaryActions: AgentChatActionLink[];
 };
 
+export type AgentChatEmailDraft = {
+  toName: string | null;
+  toAddress: string | null;
+  subject: string;
+  body: string;
+};
+
+export type AgentChatEmailDraftAction = AgentChatEmailDraft & {
+  id: string;
+  to: string;
+  status: "draft" | "saved" | "sent" | "failed";
+  statusLabel: string;
+  savedDraftId: string | null;
+  busy: "save" | "send" | null;
+  error: string | null;
+};
+
 export type AgentChatTurnTrace = {
   turnId?: string;
   planner?: {
@@ -258,6 +275,54 @@ export function resolveAgentReplyText(
   return normalized || EMPTY_REPLY_FALLBACK;
 }
 
+export function inferAgentChatEmailDraft(
+  replyText: string | null | undefined,
+  userText: string | null | undefined = null,
+): AgentChatEmailDraft | null {
+  const normalized = normalizeDraftText(replyText);
+  if (!normalized) return null;
+
+  const prompt = normalizeDraftText(userText);
+  const combined = `${prompt}\n${normalized}`;
+  if (
+    !/\bdraft(?:ing|ed)?\b/i.test(combined) ||
+    !/\b(email|mail|message|reply)\b/i.test(combined)
+  ) {
+    return null;
+  }
+
+  const subject = extractDraftSubject(normalized);
+  let body = stripAgentDraftWrapperText(normalized)
+    .replace(/^\s*[-–—]{3,}\s*$/gm, "")
+    .replace(
+      /^\s*(?:\*\*)?\s*(?:subject|subject line)\s*:?\s*(?:\*\*)?\s*.+$/im,
+      "",
+    )
+    .replace(
+      /^\s*(?:\*\*)?\s*(?:to|recipient)\s*:?\s*(?:\*\*)?\s*.+$/im,
+      "",
+    )
+    .trim();
+  body = stripSimpleDraftMarkdown(body).trim();
+
+  const hasEmailShape =
+    Boolean(subject) ||
+    /^\s*(hi|hello|dear)\b.+,\s*$/im.test(body) ||
+    /\b(best|kind|warm)?\s*regards\b/i.test(body) ||
+    /\bthanks\b/i.test(body);
+  if (!hasEmailShape || body.length < 8) return null;
+
+  return {
+    toName:
+      extractDraftRecipientName(normalized) ||
+      extractDraftRecipientName(prompt) ||
+      extractGreetingName(body),
+    toAddress: extractDraftToAddress(normalized) || extractDraftToAddress(prompt),
+    subject,
+    body,
+  };
+}
+
 export function normalizeAgentActionCards(value: unknown): AgentChatActionCard[] {
   if (!Array.isArray(value)) return [];
 
@@ -403,6 +468,67 @@ function resolveSiteActionLinkFromText(replyText: string | null | undefined): Ag
   }
 
   return { href, label };
+}
+
+function normalizeDraftText(value: string | null | undefined): string {
+  return typeof value === "string" ? value.replace(/\r\n/g, "\n").trim() : "";
+}
+
+function extractDraftSubject(text: string): string {
+  const match = text.match(
+    /^\s*(?:\*\*)?\s*(?:subject|subject line)\s*:?\s*(?:\*\*)?\s*(.+)$/im,
+  );
+  return stripSimpleDraftMarkdown(match?.[1] || "").trim();
+}
+
+function stripAgentDraftWrapperText(text: string): string {
+  let body = normalizeDraftText(text);
+  const draftMarker = body.match(
+    /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:your\s+|the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*(?:\n|$)/i,
+  );
+  if (draftMarker?.index !== undefined) {
+    body = body.slice(draftMarker.index + draftMarker[0].length).trim();
+  }
+  body = body.replace(
+    /^\s*(?:here(?:'|’)s|here is)\s+(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:your\s+|the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*$/im,
+    "",
+  );
+  const closingPromptIndex = body.search(
+    /\n\s*(?:[-–—]\s*)?(?:please\s+let\s+me\s+know\s+if\s+you(?:'|’)d\s+like\s+(?:me\s+)?to\s+(?:make\s+any\s+changes\s+or\s+if\s+you(?:'|’)d\s+like\s+me\s+to\s+)?save\s+this\s+draft\.?|this is a chat draft only|if you want|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
+  );
+  if (closingPromptIndex >= 0) body = body.slice(0, closingPromptIndex).trim();
+  return body.trim();
+}
+
+function stripSimpleDraftMarkdown(text: string): string {
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1");
+}
+
+function extractDraftToAddress(text: string): string | null {
+  const explicitLine = text.match(
+    /^\s*(?:\*\*)?\s*(?:to|recipient)\s*:?\s*(?:\*\*)?\s*(.+)$/im,
+  );
+  return extractEmailAddress(explicitLine?.[1] || text);
+}
+
+function extractEmailAddress(text: string): string | null {
+  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0]?.trim().toLowerCase() || null;
+}
+
+function extractDraftRecipientName(text: string): string | null {
+  const match = text.match(/\bto\s+["'“”]?([^"'“”,.!?;\n]+)["'“”]?/iu);
+  const phrase = match?.[1]
+    ?.replace(/\b(?:about|regarding|re|subject|saying|with)\b[\s\S]*$/i, "")
+    .trim();
+  return phrase || null;
+}
+
+function extractGreetingName(text: string): string | null {
+  const match = text.match(/^\s*(?:hi|hello|dear)\s+([^,\n]+),/im);
+  return match?.[1]?.trim() || null;
 }
 
 function normalizedActionCardText(value: unknown): string | null {

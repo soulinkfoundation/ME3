@@ -3,6 +3,7 @@ import {
   formatAgentRuntimeDetail,
   formatAgentRuntimeMetadata,
   formatAgentTraceRows,
+  inferAgentChatEmailDraft,
   normalizeAgentActionCards,
   resolveAgentMessageActionLink,
   resolveAgentReplyText,
@@ -63,6 +64,42 @@ describe("agent chat utils", () => {
     expect(resolveAgentReplyText("   ")).toBe(
       "I couldn't turn that into a useful reply just yet. Please try again.",
     );
+  });
+
+  it("infers editable email draft details from an assistant reply", () => {
+    expect(
+      inferAgentChatEmailDraft(
+        [
+          "Here's a draft for your email to Sam about ME3:",
+          "",
+          "Subject: Introduction to ME3",
+          "",
+          "Hi Sam,",
+          "",
+          "I wanted to introduce you to ME3.",
+          "",
+          "Best regards,",
+          "Kieran",
+          "",
+          "Please let me know if you'd like me to save this draft.",
+        ].join("\n"),
+        "Draft an email to sam about me3",
+      ),
+    ).toEqual({
+      toName: "Sam",
+      toAddress: null,
+      subject: "Introduction to ME3",
+      body: "Hi Sam,\n\nI wanted to introduce you to ME3.\n\nBest regards,\nKieran",
+    });
+  });
+
+  it("does not infer a draft card for ordinary assistant text", () => {
+    expect(
+      inferAgentChatEmailDraft(
+        "ME3 can help with contacts, reminders, and inbox triage.",
+        "What can ME3 do?",
+      ),
+    ).toBeNull();
   });
 
   it("formats assistant turn trace rows for the development UI", () => {

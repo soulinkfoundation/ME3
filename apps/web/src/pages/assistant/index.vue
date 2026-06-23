@@ -17,13 +17,17 @@ import UiIcon from "../../components/UiIcon.vue";
 import WorkspaceTabs from "../../components/WorkspaceTabs.vue";
 import { useAgentChat } from "../../composables/useAgentChat";
 import { useAppToast } from "../../composables/useAppToast";
+import { useInboxDraftCount } from "../../composables/useInboxDraftCount";
+import { useContactsStore, type Contact } from "../../stores/contacts";
 import {
   formatAgentTraceRows,
   formatAgentRuntimeDetail,
   formatAgentRuntimeMetadata,
+  inferAgentChatEmailDraft,
   normalizeAgentActionCards,
   resolveAgentMessageActionLink,
   resolveAgentReplyText,
+  type AgentChatEmailDraftAction,
   type AgentChatActionCard,
   type AgentChatTurnTrace,
 } from "../../utils/agentChat";
@@ -453,6 +457,14 @@ type AssistantThreadMessage = {
   siteAction?: AgentSandboxResponse["siteAction"];
   trace?: AgentChatTurnTrace | null;
 };
+
+type AssistantMailboxDraftResponse = {
+  draft: {
+    id: string;
+    toAddress: string | null;
+    subject: string;
+  } | null;
+};
 type AssistantThread = {
   id: string;
   title: string;
@@ -626,6 +638,8 @@ type VoiceTranscriptionResponse = {
 
 const { toastSuccess, toastFromUnknown } = useAppToast();
 const agentChat = useAgentChat();
+const contactsStore = useContactsStore();
+const { refreshInboxDraftCount } = useInboxDraftCount();
 const route = useRoute();
 const router = useRouter();
 
@@ -656,6 +670,7 @@ const assistantDraft = ref("");
 const assistantPlaceholderIndex = ref(0);
 const assistantSending = ref(false);
 const assistantActionCardBusy = ref<string | null>(null);
+const assistantContactsLoaded = ref(false);
 const assistantAwaitingResponse = ref(false);
 const assistantError = ref<string | null>(null);
 const assistantThreadId = ref<string | null>(null);
@@ -761,7 +776,6 @@ const bookingReminderSystemRuns =
 const bookingReminderSystemDescription =
   "Sends booking reminders via email (and messaging app if configured) to you and your guest 24 hours and 2 hours before a confirmed site booking.";
 
-const suggestedRecipeIds = new Set(suggestedRecipeOrder);
 const scheduleCadenceOptions: Array<{
   label: string;
   value: AssistantScheduleCadence;
@@ -852,10 +866,6 @@ const configureJobRows = computed((): ConfigureJobRow[] => {
       rows.push({ kind: "job", job });
       usedJobIds.add(job.id);
       continue;
-    }
-    const recipe = recipes.value.find((item) => item.id === recipeId);
-    if (recipe && suggestedRecipeIds.has(recipe.id)) {
-      rows.push({ kind: "recipe", recipe });
     }
   }
 
@@ -2046,23 +2056,47 @@ async function loadAssistantThreadFromRoute() {
         ];
       }
     }
-    agentChat.replaceMessages(
-      response.messages.map((message) => {
-        const actionLink = resolveAgentMessageActionLink({
-          siteAction: message.siteAction || null,
-          replyText: message.text,
-        });
-        return {
-          id: message.id,
-          role: message.role,
-          text: message.text,
-          createdAt: message.createdAt,
-          actionCards: normalizeAgentActionCards(message.actionCards),
-          actionHref: actionLink?.href || null,
-          actionLabel: actionLink?.label || null,
-        };
-      }),
-    );
+    let previousUserText = "";
+    const mappedMessages = response.messages.map((message) => {
+      const actionLink = resolveAgentMessageActionLink({
+        siteAction: message.siteAction || null,
+        replyText: message.text,
+      });
+      const mappedMessage: {
+        id: string;
+        role: "user" | "assistant";
+        text: string;
+        createdAt: string;
+        actionCards: AgentChatActionCard[];
+        emailDraftAction: AgentChatEmailDraftAction | null;
+        actionHref: string | null;
+        actionLabel: string | null;
+      } = {
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        createdAt: message.createdAt,
+        actionCards: normalizeAgentActionCards(message.actionCards),
+        emailDraftAction: null,
+        actionHref: actionLink?.href || null,
+        actionLabel: actionLink?.label || null,
+      };
+      if (message.role === "assistant") {
+        mappedMessage.emailDraftAction = createAgentChatEmailDraftAction(
+          message,
+          previousUserText,
+        );
+      } else {
+        previousUserText = message.text;
+      }
+      return mappedMessage;
+    });
+    agentChat.replaceMessages(mappedMessages);
+    mappedMessages.forEach((message) => {
+      if (message.emailDraftAction) {
+        void hydrateAssistantEmailDraftRecipient(message.emailDraftAction);
+      }
+    });
   } catch (err) {
     if (assistantThreadId.value !== threadId) return;
     assistantError.value = messageFromUnknown(
@@ -2629,6 +2663,13 @@ function applyAssistantResultToMessage(
   message.detail = formatAgentRuntimeDetail(result);
   message.trace = result.trace || null;
   message.actionCards = normalizeAgentActionCards(result.actionCards);
+  message.emailDraftAction = createAgentChatEmailDraftAction(
+    message,
+    previousUserTextForAssistantMessage(message),
+  );
+  if (message.emailDraftAction) {
+    void hydrateAssistantEmailDraftRecipient(message.emailDraftAction);
+  }
   message.inboxLink = result.emailAction?.kind === "drafted";
   message.rolodexLink = result.contactsChanged === true;
   message.reminderLink =
@@ -2642,6 +2683,212 @@ function applyAssistantResultToMessage(
     siteActionLink?.label ||
     (result.contentAction?.kind === "saved" ? "Open content bank" : null);
   message.jobBuilderAction = result.jobBuilderAction || null;
+}
+
+function createAgentChatEmailDraftAction(
+  message: {
+    id?: string;
+    role?: string;
+    text: string;
+    actionCards?: AgentChatActionCard[] | null;
+  },
+  previousUserText: string,
+): AgentChatEmailDraftAction | null {
+  if (message.role && message.role !== "assistant") return null;
+  if (message.actionCards?.length) return null;
+  const draft = inferAgentChatEmailDraft(message.text, previousUserText);
+  if (!draft) return null;
+  const to = draft.toAddress || "";
+  return {
+    ...draft,
+    id: `email-draft:${message.id || draft.subject || draft.body.slice(0, 24)}`,
+    to,
+    status: "draft",
+    statusLabel: isValidEmailAddress(to)
+      ? "Ready"
+      : draft.toName
+        ? `Needs ${draft.toName}'s email`
+        : "Needs recipient",
+    savedDraftId: null,
+    busy: null,
+    error: null,
+  };
+}
+
+function previousUserTextForAssistantMessage(
+  message: (typeof chatMessages.value)[number],
+) {
+  const index = assistantMessageIndex(message);
+  if (index < 0) return "";
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const previous = chatMessages.value[cursor];
+    if (previous?.role === "user") return previous.text;
+  }
+  return "";
+}
+
+async function hydrateAssistantEmailDraftRecipient(
+  action: AgentChatEmailDraftAction,
+) {
+  if (action.to.trim() || !action.toName) return;
+
+  const existingMatch = findAssistantEmailDraftContact(action.toName);
+  if (existingMatch?.email) {
+    action.to = existingMatch.email;
+    action.statusLabel = "Ready";
+    return;
+  }
+
+  if (assistantContactsLoaded.value) return;
+  assistantContactsLoaded.value = true;
+  await contactsStore.fetchContacts();
+  if (action.to.trim()) return;
+
+  const loadedMatch = findAssistantEmailDraftContact(action.toName);
+  if (loadedMatch?.email) {
+    action.to = loadedMatch.email;
+    action.statusLabel = "Ready";
+  }
+}
+
+function findAssistantEmailDraftContact(name: string): Contact | null {
+  const needle = normalizeAssistantDraftRecipientName(name);
+  if (!needle) return null;
+  return (
+    contactsStore.contacts.find(
+      (contact) =>
+        contact.status !== "archived" &&
+        Boolean(contact.email) &&
+        assistantDraftContactNames(contact).some((candidate) => {
+          const normalized = normalizeAssistantDraftRecipientName(candidate);
+          return (
+            normalized === needle ||
+            normalized.split(" ")[0] === needle ||
+            needle.split(" ")[0] === normalized
+          );
+        }),
+    ) || null
+  );
+}
+
+function assistantDraftContactNames(contact: Contact): string[] {
+  const aliases = Array.isArray(contact.metadata?.aliases)
+    ? contact.metadata.aliases.filter(
+        (alias): alias is string => typeof alias === "string",
+      )
+    : [];
+  return [contact.name, ...aliases, ...contact.tags];
+}
+
+function normalizeAssistantDraftRecipientName(value: unknown) {
+  return typeof value === "string"
+    ? value
+        .replace(/^["'“”]+|["'“”]+$/g, "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+    : "";
+}
+
+function isValidEmailAddress(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function canSubmitAssistantEmailDraft(action: AgentChatEmailDraftAction) {
+  return (
+    !action.busy &&
+    isValidEmailAddress(action.to) &&
+    action.subject.trim().length > 0 &&
+    action.body.trim().length > 0
+  );
+}
+
+function assistantEmailDraftHint(action: AgentChatEmailDraftAction) {
+  if (action.error) return action.error;
+  if (!action.to.trim()) {
+    return action.toName
+      ? `Add ${action.toName}'s email before saving.`
+      : "Add a recipient email before saving.";
+  }
+  if (!isValidEmailAddress(action.to)) return "Use a valid recipient email.";
+  if (!action.subject.trim()) return "Add a subject before saving.";
+  if (!action.body.trim()) return "Add an email body before saving.";
+  return "";
+}
+
+function touchAgentChatEmailDraftAction(action: AgentChatEmailDraftAction) {
+  if (action.busy) return;
+  action.error = null;
+  action.status = "draft";
+  action.statusLabel = isValidEmailAddress(action.to)
+    ? action.savedDraftId
+      ? "Unsaved edits"
+      : "Ready"
+    : action.toName
+      ? `Needs ${action.toName}'s email`
+      : "Needs recipient";
+}
+
+async function saveAgentChatEmailDraftAction(
+  action: AgentChatEmailDraftAction,
+  sendNow: boolean,
+) {
+  if (action.busy) return;
+  if (!canSubmitAssistantEmailDraft(action)) {
+    action.error = assistantEmailDraftHint(action);
+    action.status = "failed";
+    action.statusLabel = "Needs attention";
+    return;
+  }
+
+  action.busy = sendNow ? "send" : "save";
+  action.error = null;
+  assistantError.value = null;
+
+  try {
+    const payload = {
+      to: action.to.trim(),
+      subject: action.subject.trim(),
+      textBody: action.body.trim(),
+      source: "agent",
+    };
+    const response = action.savedDraftId
+      ? await api.put<AssistantMailboxDraftResponse>(
+          `/mailbox/drafts/${encodeURIComponent(action.savedDraftId)}`,
+          payload,
+        )
+      : await api.post<AssistantMailboxDraftResponse>(
+          "/mailbox/drafts",
+          payload,
+        );
+    const draftId = response.draft?.id || action.savedDraftId;
+    if (!draftId) throw new Error("Draft was not saved.");
+
+    action.savedDraftId = draftId;
+    action.to = response.draft?.toAddress || action.to;
+    action.subject = response.draft?.subject || action.subject;
+
+    if (sendNow) {
+      await api.post(`/mailbox/drafts/${encodeURIComponent(draftId)}/approve`);
+      action.status = "sent";
+      action.statusLabel = "Sent";
+      toastSuccess("Email sent.");
+    } else {
+      action.status = "saved";
+      action.statusLabel = "Saved draft";
+      toastSuccess("Draft saved.");
+    }
+    await refreshInboxDraftCount();
+  } catch (err) {
+    const fallback = sendNow ? "Email could not be sent." : "Draft could not be saved.";
+    action.status = "failed";
+    action.statusLabel = "Needs attention";
+    action.error = messageFromUnknown(err, fallback);
+    assistantError.value = action.error;
+    toastFromUnknown(err, fallback);
+  } finally {
+    action.busy = null;
+  }
 }
 
 function mailboxDraftIdForActionCard(card: AgentChatActionCard): string | null {
@@ -4993,9 +5240,142 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   </div>
                 </article>
               </div>
+              <article
+                v-if="message.emailDraftAction"
+                class="assistant-email-draft-card"
+                :class="`assistant-email-draft-card--${message.emailDraftAction.status}`"
+              >
+                <header class="assistant-email-draft-card__header">
+                  <span class="assistant-email-draft-card__icon" aria-hidden="true">
+                    <UiIcon name="Mail" :size="16" />
+                  </span>
+                  <div class="assistant-email-draft-card__title">
+                    <h3>Email draft</h3>
+                    <p>{{ message.emailDraftAction.statusLabel }}</p>
+                  </div>
+                </header>
+                <div class="assistant-email-draft-card__fields">
+                  <label class="assistant-email-draft-card__field">
+                    <span>To</span>
+                    <input
+                      v-model.trim="message.emailDraftAction.to"
+                      type="email"
+                      autocomplete="email"
+                      :placeholder="
+                        message.emailDraftAction.toName
+                          ? `${message.emailDraftAction.toName}'s email`
+                          : 'recipient@example.com'
+                      "
+                      :disabled="message.emailDraftAction.busy !== null"
+                      @input="
+                        touchAgentChatEmailDraftAction(
+                          message.emailDraftAction,
+                        )
+                      "
+                    />
+                  </label>
+                  <label class="assistant-email-draft-card__field">
+                    <span>Subject</span>
+                    <input
+                      v-model="message.emailDraftAction.subject"
+                      type="text"
+                      :disabled="message.emailDraftAction.busy !== null"
+                      @input="
+                        touchAgentChatEmailDraftAction(
+                          message.emailDraftAction,
+                        )
+                      "
+                    />
+                  </label>
+                  <label
+                    class="assistant-email-draft-card__field assistant-email-draft-card__field--body"
+                  >
+                    <span>Message</span>
+                    <textarea
+                      v-model="message.emailDraftAction.body"
+                      rows="8"
+                      :disabled="message.emailDraftAction.busy !== null"
+                      @input="
+                        touchAgentChatEmailDraftAction(
+                          message.emailDraftAction,
+                        )
+                      "
+                    ></textarea>
+                  </label>
+                </div>
+                <p
+                  v-if="assistantEmailDraftHint(message.emailDraftAction)"
+                  class="assistant-email-draft-card__hint"
+                  :role="message.emailDraftAction.error ? 'alert' : undefined"
+                >
+                  {{ assistantEmailDraftHint(message.emailDraftAction) }}
+                </p>
+                <div class="assistant-email-draft-card__actions">
+                  <Button
+                    color="outline"
+                    size="compact"
+                    shape="soft"
+                    :disabled="
+                      !canSubmitAssistantEmailDraft(
+                        message.emailDraftAction,
+                      )
+                    "
+                    @click="
+                      saveAgentChatEmailDraftAction(
+                        message.emailDraftAction,
+                        false,
+                      )
+                    "
+                  >
+                    <template #icon>
+                      <UiIcon name="Save" :size="14" aria-hidden="true" />
+                    </template>
+                    {{
+                      message.emailDraftAction.busy === "save"
+                        ? "Saving..."
+                        : "Save draft"
+                    }}
+                  </Button>
+                  <Button
+                    color="primary"
+                    size="compact"
+                    shape="soft"
+                    :disabled="
+                      !canSubmitAssistantEmailDraft(
+                        message.emailDraftAction,
+                      )
+                    "
+                    @click="
+                      saveAgentChatEmailDraftAction(
+                        message.emailDraftAction,
+                        true,
+                      )
+                    "
+                  >
+                    <template #icon>
+                      <UiIcon name="Send" :size="14" aria-hidden="true" />
+                    </template>
+                    {{
+                      message.emailDraftAction.busy === "send"
+                        ? "Sending..."
+                        : "Send"
+                    }}
+                  </Button>
+                  <a
+                    v-if="message.emailDraftAction.savedDraftId"
+                    class="assistant-email-draft-card__link"
+                    href="/email"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open mailbox
+                  </a>
+                </div>
+              </article>
               <div
                 v-if="
                   !message.actionCards?.length &&
+                  !message.emailDraftAction &&
                   (message.inboxLink ||
                     message.reminderLink ||
                     (message.actionHref && message.actionLabel))
@@ -7909,6 +8289,159 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .assistant-action-card__button:disabled {
   cursor: not-allowed;
   opacity: 0.65;
+}
+
+.assistant-email-draft-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: 14px;
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.assistant-email-draft-card__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.assistant-email-draft-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+}
+
+.assistant-email-draft-card__title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.assistant-email-draft-card__title h3,
+.assistant-email-draft-card__title p,
+.assistant-email-draft-card__hint {
+  margin: 0;
+}
+
+.assistant-email-draft-card__title h3 {
+  color: var(--ui-text);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.assistant-email-draft-card__title p {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.assistant-email-draft-card--saved .assistant-email-draft-card__title p,
+.assistant-email-draft-card--sent .assistant-email-draft-card__title p {
+  color: var(--ui-accent);
+}
+
+.assistant-email-draft-card--failed .assistant-email-draft-card__title p,
+.assistant-email-draft-card__hint {
+  color: color-mix(in oklab, #a32323 82%, var(--ui-text));
+}
+
+.assistant-email-draft-card__fields {
+  display: grid;
+  gap: 10px;
+}
+
+.assistant-email-draft-card__field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.assistant-email-draft-card__field > span {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.assistant-email-draft-card__field input,
+.assistant-email-draft-card__field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 10px 11px;
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.assistant-email-draft-card__field input {
+  min-height: 44px;
+}
+
+.assistant-email-draft-card__field textarea {
+  min-height: 170px;
+  resize: vertical;
+}
+
+.assistant-email-draft-card__field input:focus,
+.assistant-email-draft-card__field textarea:focus {
+  border-color: var(--ui-accent);
+  outline: none;
+  box-shadow: 0 0 0 3px
+    color-mix(in oklab, var(--ui-accent) 18%, transparent);
+}
+
+.assistant-email-draft-card__field input:disabled,
+.assistant-email-draft-card__field textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.assistant-email-draft-card__hint {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.assistant-email-draft-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-email-draft-card__actions :deep(.me3-btn) {
+  min-height: 44px;
+}
+
+.assistant-email-draft-card__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--ui-accent);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.assistant-email-draft-card__link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .job-builder-card {
