@@ -354,9 +354,7 @@ watch(navDrawerOpen, (isOpen) => {
 
 .app-side-nav-mobile-bar__button {
   pointer-events: auto;
-  border: 1px solid var(--ui-border, var(--color-border));
   background: var(--ui-surface, #ffffff);
-  box-shadow: var(--ui-shadow-sm, var(--shadow-soft));
 }
 
 .app-side-nav-control:hover,
