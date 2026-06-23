@@ -20,12 +20,14 @@ const props = withDefaults(
     selectedPluginIds?: readonly string[];
     recommendedPluginIds?: readonly string[];
     showLocalExecutorConfig?: boolean;
+    showComingSoon?: boolean;
   }>(),
   {
     busyPluginIds: () => [],
     selectedPluginIds: undefined,
     recommendedPluginIds: () => [],
     showLocalExecutorConfig: false,
+    showComingSoon: false,
   },
 );
 
@@ -37,7 +39,9 @@ const emit = defineEmits<{
 const visiblePlugins = computed(() =>
   sortPluginsForDisplay(
     props.plugins.filter(
-      (plugin) => !isPluginComingSoon(plugin) && !isPluginHiddenFromList(plugin),
+      (plugin) =>
+        (props.showComingSoon || !isPluginComingSoon(plugin)) &&
+        !isPluginHiddenFromList(plugin),
     ),
   ),
 );
@@ -56,12 +60,17 @@ function isPluginBusy(plugin: PluginRecord) {
 
 function isPluginOn(plugin: PluginRecord) {
   if (isFixedCorePlugin(plugin)) return true;
+  if (isPluginComingSoon(plugin)) return false;
   const selected = selectedPluginIdSet.value;
   return selected ? selected.has(plugin.id) : isPluginEnabled(plugin);
 }
 
 function isPluginToggleDisabled(plugin: PluginRecord) {
-  return isPluginBusy(plugin) || isFixedCorePlugin(plugin);
+  return (
+    isPluginBusy(plugin) ||
+    isFixedCorePlugin(plugin) ||
+    isPluginComingSoon(plugin)
+  );
 }
 </script>
 
@@ -80,7 +89,13 @@ function isPluginToggleDisabled(plugin: PluginRecord) {
           <div class="plugin-row__title-line">
             <h3>{{ plugin.name }}</h3>
             <span
-              v-if="isFixedCorePlugin(plugin)"
+              v-if="isPluginComingSoon(plugin)"
+              class="plugin-row__badge plugin-row__badge--muted"
+            >
+              Coming soon
+            </span>
+            <span
+              v-else-if="isFixedCorePlugin(plugin)"
               class="plugin-row__badge"
             >
               Core
@@ -109,7 +124,8 @@ function isPluginToggleDisabled(plugin: PluginRecord) {
             class="plugin-toggle"
             :class="{
               'is-busy': isPluginBusy(plugin),
-              'is-locked': isFixedCorePlugin(plugin),
+              'is-locked':
+                isFixedCorePlugin(plugin) || isPluginComingSoon(plugin),
             }"
           >
             <input
@@ -118,7 +134,9 @@ function isPluginToggleDisabled(plugin: PluginRecord) {
               :checked="isPluginOn(plugin)"
               :disabled="isPluginToggleDisabled(plugin)"
               :aria-label="
-                isFixedCorePlugin(plugin)
+                isPluginComingSoon(plugin)
+                  ? `${plugin.name} is coming soon`
+                  : isFixedCorePlugin(plugin)
                   ? `${plugin.name} is included in ME3 Core`
                   : isPluginOn(plugin)
                   ? `Disable ${plugin.name}`
@@ -217,6 +235,11 @@ function isPluginToggleDisabled(plugin: PluginRecord) {
   font-size: 11px;
   font-weight: 800;
   line-height: 1;
+}
+
+.plugin-row__badge--muted {
+  background: var(--ui-surface-muted, var(--color-bg-soft));
+  color: var(--ui-text-muted, var(--color-text-muted));
 }
 
 .plugin-toggle {

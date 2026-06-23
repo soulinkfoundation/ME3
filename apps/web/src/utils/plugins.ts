@@ -84,6 +84,7 @@ const fixedCorePluginIds = new Set<string>([
 ]);
 
 const hiddenPluginListIds = new Set<string>(["me3.journal"]);
+const comingSoonPluginListIds = new Set<string>(["me3.social-publishing"]);
 
 const pluginDisplayRank = new Map(
   pluginDisplayOrder.map((pluginId, index) => [pluginId, index]),
@@ -108,6 +109,7 @@ export function pluginInfoText(plugin: PluginRecord) {
 
 export function isPluginComingSoon(plugin: PluginRecord) {
   return (
+    comingSoonPluginListIds.has(plugin.id) ||
     plugin.status === "coming_soon" ||
     plugin.releaseStage === "coming_soon" ||
     plugin.activationAllowed === false

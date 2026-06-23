@@ -504,7 +504,9 @@ const telegramStatusClass = computed(() => {
 
 const visibleAccountPlugins = computed(() =>
   plugins.value.filter(
-    (plugin) => !isPluginComingSoon(plugin) && !isPluginHiddenFromList(plugin),
+    (plugin) =>
+      !isPluginHiddenFromList(plugin) &&
+      (!isPluginComingSoon(plugin) || plugin.id === "me3.social-publishing"),
   ),
 );
 
@@ -1987,6 +1989,7 @@ onMounted(async () => {
                 :plugins="visibleAccountPlugins"
                 :busy-plugin-ids="pluginBusyIds"
                 :show-local-executor-config="true"
+                :show-coming-soon="true"
                 @toggle="togglePlugin"
                 @configure-local-executor="openLocalExecutorSetup"
               />
