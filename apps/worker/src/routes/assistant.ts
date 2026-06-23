@@ -1127,7 +1127,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         published: true,
         files: assistantSiteDraftChangedFiles(draft),
         postTitle: draft.changes.postTitle || null,
-        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+        url: getAssistantSiteAdminUrl(
+          env,
+          site,
+          requestUrl,
+          draft.changes.postTitle ? "blog" : null,
+        ),
       },
     };
   }
@@ -1226,7 +1231,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         pending: false,
         published: Boolean(site.published_at),
         files: [],
-        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+        url: getAssistantSiteAdminUrl(env, site, requestUrl, "blog"),
       },
       source: "tool",
       model: null,
@@ -1262,7 +1267,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         published: false,
         files: assistantSiteDraftChangedFiles(nextDraft),
         postTitle: nextDraft.changes.postTitle || null,
-        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+        url: getAssistantSiteDraftReviewUrl(env, site, nextDraft, requestUrl),
       },
       model: nextDraft.changes.generatedBy?.model || null,
       source: assistantSiteToolSourceFromDraft(nextDraft),
@@ -1377,7 +1382,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         pending: false,
         published: false,
         files: [],
-        url: getAssistantSiteAdminUrl(env, site, requestUrl),
+        url: getAssistantSiteAdminUrl(
+          env,
+          site,
+          requestUrl,
+          feature === "blog" ? "additional-features" : null,
+        ),
         message:
           feature === "blog"
             ? "Blog is not enabled for this profile site."
@@ -2239,7 +2249,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       const label = postIsDraft ? "Blog draft title" : "Blog title";
       parts.push(`${label}: "${draft.changes.postTitle}".`);
     }
-    const url = getAssistantSiteAdminUrl(env, site, requestUrl);
+    const url = getAssistantSiteAdminUrl(
+      env,
+      site,
+      requestUrl,
+      draft.changes.postTitle ? "blog" : null,
+    );
     if (url) {
       parts.push(
         postIsDraft

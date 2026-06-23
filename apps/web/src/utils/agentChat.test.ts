@@ -159,8 +159,41 @@ describe("agent chat utils", () => {
         },
       }),
     ).toEqual({
-      href: "http://localhost:4000/sites/test",
+      href: "http://localhost:4000/sites/test?edit=blog",
       label: "Open site dashboard",
+    });
+  });
+
+  it("points assistant blog-list actions at the blog wizard step", () => {
+    expect(
+      resolveAgentSiteActionLink({
+        siteAction: {
+          kind: "listed_blog_posts",
+          url: "http://localhost:4000/sites/test",
+          pending: false,
+          published: true,
+        },
+      }),
+    ).toEqual({
+      href: "http://localhost:4000/sites/test?edit=blog",
+      label: "Open site dashboard",
+    });
+  });
+
+  it("points blog feature setup actions at Additional Features", () => {
+    expect(
+      resolveAgentSiteActionLink({
+        siteAction: {
+          kind: "unsupported_feature",
+          url: "http://localhost:4000/sites/test",
+          pending: false,
+          published: false,
+          message: "Blog is not enabled for this profile site.",
+        },
+      }),
+    ).toEqual({
+      href: "http://localhost:4000/sites/test?edit=additional-features",
+      label: "Open site settings",
     });
   });
 

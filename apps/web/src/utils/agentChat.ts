@@ -33,6 +33,7 @@ export type AgentChatSiteAction = {
   postTitle?: string | null;
   pending?: boolean;
   published?: boolean;
+  message?: string | null;
 };
 
 export type AgentChatActionLink = {
@@ -306,37 +307,64 @@ export function resolveAgentSiteActionLink(
   switch (action.kind) {
     case "draft_created":
       return {
-        href: action.url,
+        href: siteActionHref(action, action.postTitle ? "blog" : null),
         label: action.postTitle ? "Review blog draft" : "Review site draft",
       };
     case "draft_refined":
       return {
-        href: action.url,
+        href: siteActionHref(action, action.postTitle ? "blog" : null),
         label: "Review pending draft",
       };
     case "published":
       return {
-        href: action.url,
+        href: siteActionHref(action, action.postTitle ? "blog" : null),
         label: action.postTitle && action.pending ? "Review blog draft" : "Open site dashboard",
       };
     case "approval_status":
       return {
-        href: action.url,
+        href: siteActionHref(
+          action,
+          action.pending && action.postTitle ? "blog" : null,
+        ),
         label: action.pending ? "Review pending draft" : "Open site dashboard",
       };
     case "unsupported_feature":
       return {
-        href: action.url,
+        href: siteActionHref(
+          action,
+          action.message && /blog/i.test(action.message)
+            ? "additional-features"
+            : null,
+        ),
         label: "Open site settings",
       };
     case "listed_blog_posts":
       return {
-        href: action.url,
+        href: siteActionHref(action, "blog"),
         label: "Open site dashboard",
       };
     case "missing_site":
     default:
       return null;
+  }
+}
+
+function siteActionHref(
+  action: AgentChatSiteAction,
+  editStep: string | null,
+): string {
+  return editStep ? withSiteEditStep(action.url || "", editStep) : action.url || "";
+}
+
+function withSiteEditStep(href: string, editStep: string): string {
+  try {
+    const isRelative = href.startsWith("/");
+    const url = new URL(href, "http://me3.local");
+    if (!url.pathname.startsWith("/sites/")) return href;
+    url.searchParams.set("edit", editStep);
+    return isRelative ? `${url.pathname}${url.search}${url.hash}` : url.toString();
+  } catch {
+    return href;
   }
 }
 

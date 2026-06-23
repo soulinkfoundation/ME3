@@ -4971,6 +4971,10 @@ describe("ME3 Core Worker auth", () => {
       'Blog title: "Personal AI Assistants in Practice"',
     );
     expect(String(publishPayload.replyText)).toContain("Open your site dashboard");
+    expect(String(publishPayload.replyText)).toContain("/sites/owner?edit=blog");
+    expect(String((publishPayload.siteAction as Record<string, unknown>).url)).toContain(
+      "/sites/owner?edit=blog",
+    );
     expect(String(publishPayload.replyText)).not.toContain("@owner");
     expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeTruthy();
     const publishedProfile = JSON.parse(
@@ -5158,6 +5162,9 @@ describe("ME3 Core Worker auth", () => {
         files: [],
       },
     });
+    expect(String((payload.siteAction as Record<string, unknown>).url)).toContain(
+      "/sites/owner?edit=additional-features",
+    );
     expect(String(payload.replyText)).toContain("Blog is not enabled");
     expect(String(payload.replyText)).toContain("Additional features");
     expect(
@@ -5397,6 +5404,9 @@ describe("ME3 Core Worker auth", () => {
         username: "owner",
       },
     });
+    expect(String((payload.siteAction as Record<string, unknown>).url)).toContain(
+      "/sites/owner?edit=blog",
+    );
     expect(String(payload.replyText)).toContain("Published Note");
     expect(String(payload.replyText)).toContain("published, 2026-06-01");
     expect(String(payload.replyText)).toContain("Draft Note");
