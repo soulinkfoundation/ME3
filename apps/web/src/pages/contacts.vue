@@ -88,18 +88,6 @@ function switchContactMailboxTab(tabId: string) {
           </template>
           Add contact
         </Button>
-        <Button
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          class="contacts-mobile-nav__icon-btn"
-          to="/email"
-          aria-label="Return to email"
-          title="Return to email"
-        >
-          <UiIcon name="X" :size="18" aria-hidden="true" />
-        </Button>
       </form>
     </Teleport>
 
@@ -130,14 +118,17 @@ function switchContactMailboxTab(tabId: string) {
 
 .contacts-mail-tabs {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   width: 100%;
   padding: 4px 8px 0;
   border-bottom: 1px solid var(--ui-border, var(--color-border));
   background: var(--ui-bg, var(--color-bg));
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 8px;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
 
 .contacts-mail-tabs::-webkit-scrollbar {
@@ -146,7 +137,7 @@ function switchContactMailboxTab(tabId: string) {
 
 .contacts-mobile-nav {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px auto 36px;
+  grid-template-columns: minmax(0, 1fr) 36px auto;
   gap: 10px;
   width: 100%;
   align-items: center;
