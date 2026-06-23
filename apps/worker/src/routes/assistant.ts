@@ -459,25 +459,39 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   }
 
   function serializeAssistantMessage(row: AssistantMessageRow) {
-    const actionCards = parseAssistantMessageActionCards(row.metadata_json);
+    const metadata = parseAssistantMessageMetadata(row.metadata_json);
     return {
       id: row.id,
       role: row.role,
       text: row.content,
       createdAt: row.created_at,
-      actionCards: actionCards.length ? actionCards : undefined,
+      actionCards: metadata.actionCards.length ? metadata.actionCards : undefined,
+      siteAction: metadata.siteAction || undefined,
     };
   }
 
-  function parseAssistantMessageActionCards(metadataJson: string | null | undefined) {
-    if (!metadataJson) return [];
+  function parseAssistantMessageMetadata(metadataJson: string | null | undefined): {
+    actionCards: AgentChatActionCard[];
+    siteAction: AssistantSiteToolAction["siteAction"] | null;
+  } {
+    if (!metadataJson) return { actionCards: [], siteAction: null };
     try {
       const parsed = JSON.parse(metadataJson) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
-      const cards = (parsed as Record<string, unknown>).actionCards;
-      return Array.isArray(cards) ? (cards as AgentChatActionCard[]) : [];
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { actionCards: [], siteAction: null };
+      }
+      const metadata = parsed as Record<string, unknown>;
+      const cards = metadata.actionCards;
+      const siteAction = metadata.siteAction;
+      return {
+        actionCards: Array.isArray(cards) ? (cards as AgentChatActionCard[]) : [],
+        siteAction:
+          siteAction && typeof siteAction === "object" && !Array.isArray(siteAction)
+            ? (siteAction as AssistantSiteToolAction["siteAction"])
+            : null,
+      };
     } catch {
-      return [];
+      return { actionCards: [], siteAction: null };
     }
   }
 
@@ -503,6 +517,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     threadId: string,
     userText: string,
     assistantText: string,
+    assistantMetadata: Record<string, unknown> = {},
   ) {
     try {
       await env.DB.batch([
@@ -511,9 +526,16 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         )
           .bind(crypto.randomUUID(), ownerId, "user", userText, threadId),
         env.DB.prepare(
-          "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
+          "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
         )
-          .bind(crypto.randomUUID(), ownerId, "assistant", assistantText, threadId),
+          .bind(
+            crypto.randomUUID(),
+            ownerId,
+            "assistant",
+            assistantText,
+            threadId,
+            JSON.stringify(assistantMetadata),
+          ),
       ]);
     } catch {
       // Conversation persistence is useful context, but chat turns should not fail on audit writes.
@@ -2763,7 +2785,14 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       selectedModel,
     );
     if (siteAction) {
-      await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, siteAction.replyText);
+      await persistAssistantTurnMessages(
+        c.env,
+        ownerId,
+        thread.id,
+        messageText,
+        siteAction.replyText,
+        { siteAction: siteAction.siteAction },
+      );
       await touchAssistantThread(c.env, ownerId, thread.id);
       return c.json(buildAssistantSiteToolPayload(thread.id, siteAction));
     }
@@ -2946,6 +2975,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               thread.id,
               messageText,
               siteAction.replyText,
+              { siteAction: siteAction.siteAction },
             );
             await touchAssistantThread(c.env, ownerId, thread.id);
             for (const chunk of splitAssistantStreamText(siteAction.replyText)) {

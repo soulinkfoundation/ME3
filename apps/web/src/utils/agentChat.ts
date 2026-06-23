@@ -340,6 +340,43 @@ export function resolveAgentSiteActionLink(
   }
 }
 
+export function resolveAgentMessageActionLink(
+  result: Pick<AgentChatRuntimeResult, "replyText" | "siteAction">,
+): AgentChatActionLink | null {
+  return resolveAgentSiteActionLink(result) || resolveSiteActionLinkFromText(result.replyText);
+}
+
+function resolveSiteActionLinkFromText(replyText: string | null | undefined): AgentChatActionLink | null {
+  const text = replyText?.trim();
+  if (!text) return null;
+
+  const href = text
+    .match(/https?:\/\/[^\s)]+/g)
+    ?.map((url) => url.replace(/[.,]+$/, ""))
+    .find((url) => {
+      try {
+        return new URL(url).pathname.startsWith("/sites/");
+      } catch {
+        return false;
+      }
+    });
+  if (!href) return null;
+
+  let label = "Open site dashboard";
+  try {
+    const url = new URL(href);
+    if (url.searchParams.get("edit") === "blog" || /blog draft title/i.test(text)) {
+      label = "Review blog draft";
+    } else if (/draft/i.test(text)) {
+      label = "Review site draft";
+    }
+  } catch {
+    return null;
+  }
+
+  return { href, label };
+}
+
 function normalizedActionCardText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }

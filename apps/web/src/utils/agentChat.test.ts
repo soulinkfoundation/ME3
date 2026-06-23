@@ -4,6 +4,7 @@ import {
   formatAgentRuntimeMetadata,
   formatAgentTraceRows,
   normalizeAgentActionCards,
+  resolveAgentMessageActionLink,
   resolveAgentReplyText,
   resolveAgentSiteActionLink,
 } from "./agentChat";
@@ -126,6 +127,19 @@ describe("agent chat utils", () => {
           pending: true,
           published: false,
         },
+      }),
+    ).toEqual({
+      href: "http://localhost:4000/sites/test?edit=blog",
+      label: "Review blog draft",
+    });
+  });
+
+  it("recovers review links from persisted assistant site draft text", () => {
+    expect(
+      resolveAgentMessageActionLink({
+        siteAction: null,
+        replyText:
+          'Draft saved.\n\nBlog draft title: "Cats".\n\nReview it in your site dashboard: http://localhost:4000/sites/test?edit=blog',
       }),
     ).toEqual({
       href: "http://localhost:4000/sites/test?edit=blog",

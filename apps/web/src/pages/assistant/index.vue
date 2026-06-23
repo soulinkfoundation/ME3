@@ -22,8 +22,8 @@ import {
   formatAgentRuntimeDetail,
   formatAgentRuntimeMetadata,
   normalizeAgentActionCards,
+  resolveAgentMessageActionLink,
   resolveAgentReplyText,
-  resolveAgentSiteActionLink,
   type AgentChatActionCard,
   type AgentChatTurnTrace,
 } from "../../utils/agentChat";
@@ -450,6 +450,7 @@ type AssistantThreadMessage = {
   text: string;
   createdAt: string;
   actionCards?: AgentChatActionCard[] | null;
+  siteAction?: AgentSandboxResponse["siteAction"];
   trace?: AgentChatTurnTrace | null;
 };
 type AssistantThread = {
@@ -2005,13 +2006,21 @@ async function loadAssistantThreadFromRoute() {
       }
     }
     agentChat.replaceMessages(
-      response.messages.map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-        createdAt: message.createdAt,
-        actionCards: normalizeAgentActionCards(message.actionCards),
-      })),
+      response.messages.map((message) => {
+        const actionLink = resolveAgentMessageActionLink({
+          siteAction: message.siteAction || null,
+          replyText: message.text,
+        });
+        return {
+          id: message.id,
+          role: message.role,
+          text: message.text,
+          createdAt: message.createdAt,
+          actionCards: normalizeAgentActionCards(message.actionCards),
+          actionHref: actionLink?.href || null,
+          actionLabel: actionLink?.label || null,
+        };
+      }),
     );
   } catch (err) {
     if (assistantThreadId.value !== threadId) return;
@@ -2584,7 +2593,7 @@ function applyAssistantResultToMessage(
   message.reminderLink =
     result.reminderAction?.kind === "created" ||
     result.reminderAction?.kind === "updated";
-  const siteActionLink = resolveAgentSiteActionLink(result);
+  const siteActionLink = resolveAgentMessageActionLink(result);
   message.actionHref =
     siteActionLink?.href ||
     (result.contentAction?.kind === "saved" ? "/assistant" : null);

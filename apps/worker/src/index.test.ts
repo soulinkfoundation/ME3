@@ -4910,6 +4910,20 @@ describe("ME3 Core Worker auth", () => {
     expect(String((draftPayload.siteAction as Record<string, unknown>).url)).toContain(
       "/sites/owner?edit=blog",
     );
+    const persistedAssistantMessage = env.messages.find(
+      (message) =>
+        message.threadId === threadId &&
+        message.role === "assistant" &&
+        message.content.includes("Draft saved"),
+    );
+    const persistedMetadata = JSON.parse(
+      persistedAssistantMessage?.metadata_json || "{}",
+    ) as Record<string, any>;
+    expect(persistedMetadata.siteAction).toMatchObject({
+      kind: "draft_created",
+      postTitle: "Personal AI Assistants in Practice",
+      url: expect.stringContaining("/sites/owner?edit=blog"),
+    });
     expect(draftFile).toBeTruthy();
     const savedDraft = JSON.parse(new TextDecoder().decode(draftFile?.content)) as {
       changes: { postDraft?: boolean };
@@ -5669,6 +5683,26 @@ describe("ME3 Core Worker auth", () => {
           ],
         }),
       },
+      {
+        id: "message-4",
+        ownerId: "owner",
+        role: "assistant",
+        content: "Draft saved. I updated your site draft.",
+        threadId: "thread-1",
+        created_at: "2026-05-11T10:09:00Z",
+        metadata_json: JSON.stringify({
+          siteAction: {
+            kind: "draft_created",
+            siteId: "site-1",
+            username: "test",
+            pending: true,
+            published: false,
+            files: ["blog/cats.md"],
+            postTitle: "Cats",
+            url: "http://localhost:4000/sites/test?edit=blog",
+          },
+        }),
+      },
     );
 
     const response = await app.fetch(
@@ -5712,6 +5746,15 @@ describe("ME3 Core Worker auth", () => {
               primaryAction: { label: "Review draft", href: "/email" },
             },
           ],
+        },
+        {
+          id: "message-4",
+          role: "assistant",
+          siteAction: {
+            kind: "draft_created",
+            postTitle: "Cats",
+            url: "http://localhost:4000/sites/test?edit=blog",
+          },
         },
       ],
     });
