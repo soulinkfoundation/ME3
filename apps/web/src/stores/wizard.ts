@@ -336,6 +336,59 @@ export interface WizardProduct {
   confirmationEmail?: WizardProductConfirmationEmail;
 }
 
+export type WizardStepId =
+  | "basics"
+  | "avatar"
+  | "banner"
+  | "links"
+  | "call-to-action"
+  | "pages"
+  | "additional-features"
+  | "newsletter"
+  | "bookings"
+  | "blog"
+  | "offerings"
+  | "testimonials"
+  | "publish";
+
+export interface WizardStepDefinition {
+  id: WizardStepId;
+  name: string;
+}
+
+const WIZARD_STEP_IDS: readonly WizardStepId[] = [
+  "basics",
+  "avatar",
+  "banner",
+  "links",
+  "call-to-action",
+  "pages",
+  "additional-features",
+  "newsletter",
+  "bookings",
+  "blog",
+  "offerings",
+  "testimonials",
+  "publish",
+];
+
+const WIZARD_STEP_ID_SET: ReadonlySet<string> = new Set(WIZARD_STEP_IDS);
+const WIZARD_STEP_ID_ALIASES: Partial<Record<string, WizardStepId>> = {
+  feature: "additional-features",
+  features: "additional-features",
+  shop: "offerings",
+  store: "offerings",
+  offering: "offerings",
+  cta: "call-to-action",
+};
+
+export function normalizeWizardStepId(value: string): WizardStepId | null {
+  const normalized = value.toLowerCase().trim().replace(/\s+/g, "-");
+  if (!normalized) return null;
+  if (WIZARD_STEP_ID_SET.has(normalized)) return normalized as WizardStepId;
+  return WIZARD_STEP_ID_ALIASES[normalized] ?? null;
+}
+
 function normalizeProductPriceCents(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return 0;
@@ -1272,33 +1325,43 @@ export const useWizardStore = defineStore("wizard", () => {
   const lastSiteEditAt = ref<string>(new Date().toISOString());
   const draftSourceUrl = ref<string | null>(null);
 
-  // Step names for display
-  const stepNames = computed(() => {
-    const steps = [
-      "Basics",
-      "Avatar",
-      "Banner",
-      "Links",
-      "Call-to-action",
-      "Pages",
-      "Additional Features",
+  const steps = computed<WizardStepDefinition[]>(() => {
+    const visibleSteps: WizardStepDefinition[] = [
+      { id: "basics", name: "Basics" },
+      { id: "avatar", name: "Avatar" },
+      { id: "banner", name: "Banner" },
+      { id: "links", name: "Links" },
+      { id: "call-to-action", name: "Call-to-action" },
+      { id: "pages", name: "Pages" },
+      { id: "additional-features", name: "Additional Features" },
     ];
 
     // Add conditional steps in order: Newsletter, Bookings, Blog, Offerings, Testimonials
-    if (newsletterEnabled.value) steps.push("Newsletter");
-    if (bookingsEnabled.value) steps.push("Bookings");
-    if (blogEnabled.value) steps.push("Blog");
-    steps.push("Offerings");
-    if (testimonialsEnabled.value) steps.push("Testimonials");
+    if (newsletterEnabled.value) {
+      visibleSteps.push({ id: "newsletter", name: "Newsletter" });
+    }
+    if (bookingsEnabled.value) {
+      visibleSteps.push({ id: "bookings", name: "Bookings" });
+    }
+    if (blogEnabled.value) visibleSteps.push({ id: "blog", name: "Blog" });
+    visibleSteps.push({ id: "offerings", name: "Offerings" });
+    if (testimonialsEnabled.value) {
+      visibleSteps.push({ id: "testimonials", name: "Testimonials" });
+    }
 
-    steps.push("Publish");
-    return steps;
+    visibleSteps.push({ id: "publish", name: "Publish" });
+    return visibleSteps;
   });
 
+  // Step names for display
+  const stepNames = computed(() => steps.value.map((step) => step.name));
+  const stepIds = computed(() => steps.value.map((step) => step.id));
   const totalSteps = computed(() => stepNames.value.length);
-  const currentStepName = computed(
-    () => stepNames.value[currentStep.value - 1],
+  const currentStepDefinition = computed(
+    () => steps.value[currentStep.value - 1],
   );
+  const currentStepId = computed(() => currentStepDefinition.value?.id ?? null);
+  const currentStepName = computed(() => currentStepDefinition.value?.name ?? "");
 
   // Check if site needs publishing
   const needsPublish = computed(() => {
@@ -1431,7 +1494,29 @@ export const useWizardStore = defineStore("wizard", () => {
         furthestStep.value = currentStep.value;
       }
       saveToStorage();
+      return true;
     }
+    return false;
+  }
+
+  function enableStep(stepId: WizardStepId) {
+    if (stepId === "newsletter") newsletterEnabled.value = true;
+    if (stepId === "bookings") bookingsEnabled.value = true;
+    if (stepId === "blog") blogEnabled.value = true;
+    if (stepId === "testimonials") testimonialsEnabled.value = true;
+  }
+
+  function goToStepId(
+    value: string,
+    options: { enableOptional?: boolean } = {},
+  ) {
+    const stepId = normalizeWizardStepId(value);
+    if (!stepId) return false;
+    if (options.enableOptional) enableStep(stepId);
+
+    const stepIndex = steps.value.findIndex((step) => step.id === stepId);
+    if (stepIndex < 0) return false;
+    return goToStep(stepIndex + 1);
   }
 
   // Update profile
@@ -4433,7 +4518,10 @@ export const useWizardStore = defineStore("wizard", () => {
     testimonialsPath,
 
     // Computed
+    steps,
+    stepIds,
     stepNames,
+    currentStepId,
     currentStepName,
     canProceed,
     needsPublish,
@@ -4442,6 +4530,8 @@ export const useWizardStore = defineStore("wizard", () => {
     nextStep,
     prevStep,
     goToStep,
+    goToStepId,
+    normalizeWizardStepId,
     updateProfile,
     setFooter,
     setNewsletter,

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useWizardStore } from "../stores/wizard";
+import { useWizardStore, type WizardStepId } from "../stores/wizard";
 import { usePublish } from "../composables/usePublish";
 import ProfilePreview from "../components/ProfilePreview.vue";
 
@@ -37,6 +37,22 @@ const router = useRouter();
 const { isPublishing: isQuickPublishing, publish } = usePublish();
 const showIntroScreen = ref(false);
 
+const stepComponentById = {
+  basics: WizardBasics,
+  avatar: WizardAvatar,
+  banner: WizardBanner,
+  links: WizardLinks,
+  "call-to-action": WizardCallToAction,
+  pages: WizardPages,
+  "additional-features": WizardAdditionalFeatures,
+  newsletter: WizardNewsletter,
+  bookings: WizardBookings,
+  blog: WizardBlog,
+  offerings: WizardShop,
+  testimonials: WizardTestimonials,
+  publish: WizardPublish,
+} satisfies Record<WizardStepId, Component>;
+
 // Reference to the current component instance
 const currentComponentRef = ref<
   | InstanceType<typeof WizardPages>
@@ -46,32 +62,9 @@ const currentComponentRef = ref<
   | null
 >(null);
 
-// Step components map
-const stepComponents = computed(() => {
-  const base = [
-    WizardBasics,
-    WizardAvatar,
-    WizardBanner,
-    WizardLinks,
-    WizardCallToAction,
-    WizardPages,
-    WizardAdditionalFeatures,
-  ];
-
-  // Add conditional steps in order: Newsletter, Bookings, Blog, Offerings, Testimonials
-  if (wizard.newsletterEnabled) {
-    base.push(WizardNewsletter);
-  }
-  if (wizard.bookingsEnabled) {
-    base.push(WizardBookings);
-  }
-  if (wizard.blogEnabled) base.push(WizardBlog);
-  base.push(WizardShop);
-  if (wizard.testimonialsEnabled) base.push(WizardTestimonials);
-
-  base.push(WizardPublish);
-  return base;
-});
+const stepComponents = computed(() =>
+  wizard.steps.map((step) => stepComponentById[step.id]),
+);
 
 const currentComponent = computed(
   () => stepComponents.value[wizard.currentStep - 1],
@@ -196,19 +189,19 @@ function handleStepJump(step: number) {
 
 function applyRouteStep() {
   const step = typeof route.query.step === "string" ? route.query.step : "";
-  const normalized = normalizeWizardStepQuery(step);
-  if (!normalized) return;
+  if (!step) return;
+  const navigated = wizard.goToStepId(step, { enableOptional: true });
+  if (!navigated) return;
   showIntroScreen.value = false;
-  if (normalized === "blog") wizard.blogEnabled = true;
-  const stepIndex = wizard.stepNames.findIndex(
-    (name) => normalizeWizardStepQuery(name) === normalized,
-  );
-  if (stepIndex >= 0) wizard.goToStep(stepIndex + 1);
 }
 
-function normalizeWizardStepQuery(value: string): string {
-  const normalized = value.toLowerCase().trim().replace(/\s+/g, "-");
-  return normalized === "features" ? "additional-features" : normalized;
+function syncRouteStep() {
+  if (typeof route.query.step !== "string") return;
+  if (!wizard.currentStepId || route.query.step === wizard.currentStepId) return;
+  router.replace({
+    path: route.path,
+    query: { ...route.query, step: wizard.currentStepId },
+  });
 }
 
 function handleProgressStepClick(stepNumber: number, isVisited: boolean) {
@@ -252,6 +245,7 @@ onMounted(() => {
 });
 
 watch(() => route.query.step, applyRouteStep);
+watch(() => wizard.currentStepId, syncRouteStep);
 </script>
 
 <template>

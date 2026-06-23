@@ -196,6 +196,51 @@ describe("wizard store", () => {
       expect(store.currentStep).toBe(3);
       expect(store.furthestStep).toBe(4);
     });
+
+    it("should go to a specific step id", () => {
+      const store = useWizardStore();
+
+      expect(store.goToStepId("pages")).toBe(true);
+
+      expect(store.currentStepName).toBe("Pages");
+      expect(store.currentStepId).toBe("pages");
+      expect(store.furthestStep).toBe(store.currentStep);
+    });
+
+    it("should normalize direct step aliases", () => {
+      const store = useWizardStore();
+
+      expect(store.normalizeWizardStepId("Additional Features")).toBe(
+        "additional-features",
+      );
+      expect(store.normalizeWizardStepId("features")).toBe(
+        "additional-features",
+      );
+      expect(store.normalizeWizardStepId("Shop")).toBe("offerings");
+      expect(store.normalizeWizardStepId("cta")).toBe("call-to-action");
+      expect(store.normalizeWizardStepId("missing")).toBeNull();
+    });
+
+    it("should enable optional steps when navigating directly", () => {
+      const store = useWizardStore();
+
+      expect(store.goToStepId("newsletter")).toBe(false);
+
+      for (const stepId of [
+        "newsletter",
+        "bookings",
+        "blog",
+        "testimonials",
+      ] as const) {
+        expect(store.goToStepId(stepId, { enableOptional: true })).toBe(true);
+        expect(store.currentStepId).toBe(stepId);
+      }
+
+      expect(store.newsletterEnabled).toBe(true);
+      expect(store.bookingsEnabled).toBe(true);
+      expect(store.blogEnabled).toBe(true);
+      expect(store.testimonialsEnabled).toBe(true);
+    });
   });
 
   describe("profile updates", () => {

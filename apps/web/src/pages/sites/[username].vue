@@ -209,18 +209,9 @@ async function editInWizard() {
 
 async function openWizardStep(step: string) {
   await loadWizardContent();
-  const normalized = normalizeWizardStepQuery(step);
-  if (normalized === "blog") wizard.blogEnabled = true;
-  const stepIndex = wizard.stepNames.findIndex(
-    (name) => normalizeWizardStepQuery(name) === normalized,
-  );
-  if (stepIndex >= 0) wizard.goToStep(stepIndex + 1);
-  router.replace({ path: "/create", query: { step: normalized } });
-}
-
-function normalizeWizardStepQuery(value: string): string {
-  const normalized = value.toLowerCase().trim().replace(/\s+/g, "-");
-  return normalized === "features" ? "additional-features" : normalized;
+  const stepId = wizard.normalizeWizardStepId(step);
+  if (stepId) wizard.goToStepId(stepId, { enableOptional: true });
+  router.replace({ path: "/create", query: stepId ? { step: stepId } : {} });
 }
 
 function openBuilder() {
@@ -236,12 +227,8 @@ function landingTemplateLabel(templateId: string | null | undefined): string {
 
 async function writePost() {
   await loadWizardContent();
-  wizard.blogEnabled = true;
-  const blogStepIndex = wizard.stepNames.indexOf("Blog") + 1;
-  if (blogStepIndex > 0) {
-    wizard.goToStep(blogStepIndex);
-  }
-  router.push("/create");
+  wizard.goToStepId("blog", { enableOptional: true });
+  router.push({ path: "/create", query: { step: "blog" } });
 }
 
 // Advanced upload functions
