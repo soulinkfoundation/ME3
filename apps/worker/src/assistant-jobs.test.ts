@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveAssistantJob,
+  createAssistantCustomJob,
   createAssistantJobBuilderAction,
   createAssistantJob,
   dispatchDueScheduledAssistantJobs,
@@ -16,6 +17,7 @@ import {
   recordAssistantJobIngressEvent,
   runAssistantJobNow,
   setAssistantJobPaused,
+  previewAssistantCustomJobDraft,
   updateAssistantJob,
   updateAssistantJobIngressEvent,
 } from "./assistant-jobs";
@@ -217,6 +219,58 @@ describe("assistant jobs persistence", () => {
     await archiveAssistantJob(env, "owner", created.job.id);
     const afterArchive = await listAssistantJobs(env, "owner");
     expect(afterArchive.jobs.map((job) => job.id)).not.toContain(created.job.id);
+  });
+
+  it("previews, saves, and runs custom Mission Control jobs", async () => {
+    const env = createAssistantJobsEnv({
+      projects: [projectRow("project-client", "Client Work")],
+      tasks: [taskRow("task-client", "Send client update", "project-client")],
+    });
+
+    const selection = {
+      name: "Client check",
+      purpose: "Review client work and create a follow-up task.",
+      trigger: { id: "weekly", dayOfWeek: 1, localTime: "09:30" },
+      sourceIds: ["mission_tasks"],
+      outputIds: ["mission_task"],
+      projectId: "project-client",
+    };
+    const preview = await previewAssistantCustomJobDraft(env, "owner", { selection });
+    if (preview.kind !== "job_draft") throw new Error("Expected custom job draft");
+
+    expect(preview.draft.recipeId).toBeNull();
+    expect(preview.draft.actions.map((action) => action.capabilityId)).toEqual([
+      "mission.task.read",
+      "mission.review_packet.create",
+      "mission.task.create",
+    ]);
+    expect(preview.validation.status).toBe("valid");
+    expect(preview.explanation.reads).toContain("Reads scoped Mission Control tasks.");
+
+    const created = await createAssistantCustomJob(env, "owner", {
+      selection,
+      status: "active",
+    });
+
+    expect(created.job).toMatchObject({
+      recipeId: null,
+      name: "Client check",
+      status: "active",
+      projectId: "project-client",
+    });
+    expect(created.job.triggerSummary).toBe("Weekly on Monday at 09:30");
+
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+    expect(run.execution).toBe("succeeded");
+    expect(run.actionResults.map((result) => result.capabilityId)).toEqual([
+      "mission.task.read",
+      "mission.review_packet.create",
+      "mission.task.create",
+    ]);
+    expect(env.__state.missionAgentRuns[0]).toMatchObject({
+      project_id: "project-client",
+      status: "succeeded",
+    });
   });
 
   it("loads Weekly Review detail from mission task metadata", async () => {

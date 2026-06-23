@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { validateMe3AgentCapabilityContract } from "@me3/knowledge";
 import {
+  ASSISTANT_JOB_COMPOSER_CATALOG,
+  ASSISTANT_JOB_COMPOSER_RUNNER_CAPABILITY_IDS,
   ASSISTANT_JOB_CAPABILITY_CONTRACTS,
   ASSISTANT_JOB_STARTER_RECIPES,
   attachAssistantJobContextToRunResult,
   createAssistantJobContext,
+  createAssistantJobDraftFromComposerSelection,
   createAssistantJobDraftFromRecipe,
   getAssistantJobStarterRecipe,
   matchInboxWatchMessage,
@@ -72,6 +75,88 @@ describe("assistant jobs package", () => {
     expect(validation.status).toBe("needs_setup");
     expect(validation.errors.map((error) => error.code)).toContain("setup_missing");
     expect(validation.permissionSummary.setupRequirements).toContain("email");
+  });
+
+  it("offers only runner-backed Mission Control pieces to the custom composer", () => {
+    expect(ASSISTANT_JOB_COMPOSER_CATALOG.triggers.map((piece) => piece.id)).toEqual([
+      "manual",
+      "daily",
+      "weekly",
+    ]);
+    expect(ASSISTANT_JOB_COMPOSER_CATALOG.sources.map((piece) => piece.id)).toEqual([
+      "mission_projects",
+      "mission_tasks",
+      "mission_approvals",
+    ]);
+    expect(ASSISTANT_JOB_COMPOSER_CATALOG.outputs.map((piece) => piece.id)).toEqual([
+      "mission_result",
+      "mission_task",
+      "mission_activity",
+    ]);
+    expect(JSON.stringify(ASSISTANT_JOB_COMPOSER_CATALOG)).not.toContain("email.");
+    expect(JSON.stringify(ASSISTANT_JOB_COMPOSER_CATALOG)).not.toContain("calendar.");
+    expect(JSON.stringify(ASSISTANT_JOB_COMPOSER_CATALOG)).not.toContain("local_executor");
+  });
+
+  it("builds a custom Mission Control draft from composer selections", () => {
+    const draft = createAssistantJobDraftFromComposerSelection({
+      name: "Client check",
+      purpose: "Review my client tasks and approvals.",
+      trigger: { id: "weekly", dayOfWeek: 1, localTime: "09:30" },
+      sourceIds: ["mission_tasks", "mission_approvals"],
+      outputIds: ["mission_task"],
+      projectId: "project-client",
+    });
+
+    expect(draft.recipeId).toBeNull();
+    expect(draft.projectId).toBe("project-client");
+    expect(draft.trigger).toMatchObject({
+      kind: "schedule",
+      cadence: "weekly",
+      dayOfWeek: 1,
+      localTime: "09:30",
+    });
+    expect(draft.actions.map((action) => action.capabilityId)).toEqual([
+      "mission.task.read",
+      "mission.approval.read",
+      "mission.review_packet.create",
+      "mission.task.create",
+    ]);
+
+    const validation = validateAssistantJobDraft(draft);
+    expect(validation.status).toBe("valid");
+    expect(validation.permissionSummary.reads).toContain("Reads scoped Mission Control tasks.");
+    expect(validation.permissionSummary.writes).toContain("Creates a Mission Control result.");
+  });
+
+  it("rejects registered capabilities outside the custom composer runner allowlist", () => {
+    const draft = createAssistantJobDraftFromComposerSelection({
+      purpose: "Check calendar items.",
+    });
+    const validation = validateAssistantJobDraft(
+      {
+        ...draft,
+        actions: [
+          ...draft.actions,
+          {
+            id: "read-calendar",
+            capabilityId: "calendar.event.read",
+            label: "Read calendar",
+            inputs: {},
+            approvalMode: "none",
+            onFailure: "stop",
+            idempotencyScope: "run",
+          },
+        ],
+      },
+      {
+        readySetupRequirements: ["calendar"],
+        customRunnerSupportedCapabilityIds: ASSISTANT_JOB_COMPOSER_RUNNER_CAPABILITY_IDS,
+      },
+    );
+
+    expect(validation.status).toBe("invalid");
+    expect(validation.errors.map((error) => error.code)).toContain("unsupported_combination");
   });
 
   it("normalizes and matches multiple Inbox Watch rules", () => {

@@ -318,6 +318,41 @@ type AssistantJobBuilderSentenceSegment = {
   strong?: boolean;
 };
 
+type AssistantJobComposerTriggerId = "manual" | "daily" | "weekly";
+type AssistantJobComposerSourceId =
+  | "mission_projects"
+  | "mission_tasks"
+  | "mission_approvals";
+type AssistantJobComposerOutputId =
+  | "mission_result"
+  | "mission_task"
+  | "mission_activity";
+type AssistantJobComposerPiece<T extends string> = {
+  id: T;
+  label: string;
+  summary: string;
+  defaultSelected: boolean;
+  requiresSetup: string[];
+};
+type AssistantJobComposerCatalog = {
+  triggers: AssistantJobComposerPiece<AssistantJobComposerTriggerId>[];
+  sources: AssistantJobComposerPiece<AssistantJobComposerSourceId>[];
+  outputs: AssistantJobComposerPiece<AssistantJobComposerOutputId>[];
+};
+type AssistantJobComposerResponse = {
+  catalog: AssistantJobComposerCatalog;
+};
+type CustomJobForm = {
+  name: string;
+  purpose: string;
+  triggerId: AssistantJobComposerTriggerId;
+  localTime: string;
+  dayOfWeek: number;
+  sourceIds: AssistantJobComposerSourceId[];
+  outputIds: AssistantJobComposerOutputId[];
+  projectId: string;
+};
+
 type InboxWatchTiming =
   | "immediate"
   | "daily_digest"
@@ -650,11 +685,18 @@ const selectedJobId = ref<string | null>(null);
 const selectedDetail = ref<AssistantJobDetail | null>(null);
 const loadingJobs = ref(false);
 const loadingRecipes = ref(false);
+const loadingJobComposer = ref(false);
 const loadingDetail = ref(false);
 const pageError = ref("");
 const configureJobsModalOpen = ref(false);
-const recipeIngredientsModalOpen = ref(false);
+const customJobComposerOpen = ref(false);
 const detailModalOpen = ref(false);
+const jobComposerCatalog = ref<AssistantJobComposerCatalog | null>(null);
+const customJobForm = ref<CustomJobForm>(defaultCustomJobForm());
+const customJobDraftAction = ref<
+  Extract<AssistantJobBuilderAction, { kind: "job_draft" }> | null
+>(null);
+const customJobNotice = ref("");
 const busyKeys = ref(new Set<string>());
 const dailyBriefingTemplateDraft = ref("");
 const dailyBriefingTemplateNotice = ref("");
@@ -794,8 +836,6 @@ const weekdayOptions = [
   { label: "Saturday", value: 6 },
 ];
 const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
-const jobBuilderStarterPrompt =
-  "/job Every friday, review my projects and outstanding tasks";
 const configureStarterPrompt =
   "Help me configure my ME3 installation. First check what is already set up across my public site/profile, email mailbox, Soulink or Telegram, assistant/AI, jobs, plugins, and updates. Then suggest the missing or most useful next step. If I'm not sure, walk me through the basics.";
 type StarterPrompt = {
@@ -809,11 +849,6 @@ const starterPrompts: StarterPrompt[] = [
     icon: "⚙️",
     prompt: configureStarterPrompt,
   },
-  {
-    label: "Set up a job",
-    icon: "💼",
-    prompt: jobBuilderStarterPrompt,
-  },
   { label: "Review my week", icon: "📅", prompt: "Review my week" },
 ];
 const assistantComposerPlaceholders = [
@@ -821,7 +856,6 @@ const assistantComposerPlaceholders = [
   "Draft an email to Sam about...",
   "Draft an outline for a blog post on...",
   "Review my week and suggest next steps",
-  "Set up a weekly job to review my projects",
 ];
 const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
@@ -884,6 +918,23 @@ const selectedJob = computed(
     selectedDetail.value?.job ||
     null,
 );
+
+const customJobProjectOptions = computed(() =>
+  assistantProjects.value.filter((project) => project.status !== "archived"),
+);
+
+const customJobCanReview = computed(
+  () =>
+    customJobForm.value.purpose.trim().length > 0 &&
+    customJobForm.value.sourceIds.length > 0 &&
+    customJobForm.value.outputIds.includes("mission_result"),
+);
+
+const customJobSelectedProject = computed(() => {
+  const projectId = customJobForm.value.projectId;
+  if (!projectId) return null;
+  return customJobProjectOptions.value.find((project) => project.id === projectId) || null;
+});
 
 const selectedJobIsDailyBriefing = computed(
   () => selectedDetail.value?.job.recipeId === "daily-briefing",
@@ -2140,9 +2191,128 @@ function useStarterPrompt(prompt: string) {
   });
 }
 
-function startAssistantJobBuilder() {
-  closeConfigureJobsModal();
-  useStarterPrompt(jobBuilderStarterPrompt);
+function defaultCustomJobForm(): CustomJobForm {
+  return {
+    name: "",
+    purpose: "",
+    triggerId: "manual",
+    localTime: "08:00",
+    dayOfWeek: 5,
+    sourceIds: ["mission_projects", "mission_tasks", "mission_approvals"],
+    outputIds: ["mission_result"],
+    projectId: "",
+  };
+}
+
+async function openCustomJobComposer() {
+  customJobComposerOpen.value = true;
+  customJobNotice.value = "";
+  customJobDraftAction.value = null;
+  if (!jobComposerCatalog.value) await loadJobComposerCatalog();
+}
+
+function closeCustomJobComposer() {
+  customJobComposerOpen.value = false;
+  customJobNotice.value = "";
+  customJobDraftAction.value = null;
+}
+
+function resetCustomJobComposer() {
+  customJobForm.value = defaultCustomJobForm();
+  customJobDraftAction.value = null;
+  customJobNotice.value = "";
+}
+
+async function loadJobComposerCatalog() {
+  loadingJobComposer.value = true;
+  try {
+    const response = await api.get<AssistantJobComposerResponse>(
+      "/assistant/jobs/composer",
+    );
+    jobComposerCatalog.value = response.catalog;
+  } catch (err) {
+    customJobNotice.value = messageFromUnknown(
+      err,
+      "Custom job pieces could not load.",
+    );
+  } finally {
+    loadingJobComposer.value = false;
+  }
+}
+
+async function reviewCustomJobDraft() {
+  if (!customJobCanReview.value || isBusy("custom-job:preview")) return;
+  await withBusy("custom-job:preview", async () => {
+    const response = await api.post<AssistantJobBuilderAction>(
+      "/assistant/jobs/custom-draft",
+      { selection: customJobSelectionPayload() },
+    );
+    if (response.kind === "job_draft") {
+      customJobDraftAction.value = response;
+      customJobNotice.value = "";
+    } else {
+      customJobDraftAction.value = null;
+      customJobNotice.value = response.summary;
+    }
+  });
+}
+
+async function saveCustomJob(activate: boolean) {
+  if (!customJobCanReview.value) return;
+  const key = activate ? "custom-job:activate" : "custom-job:save";
+  await withBusy(key, async () => {
+    const response = await api.post<AssistantJobSaveResponse>(
+      "/assistant/jobs/custom",
+      {
+        selection: customJobSelectionPayload(),
+        status: activate ? "active" : "draft",
+      },
+    );
+    await loadJobs();
+    toastSuccess(
+      response.job.status === "active"
+        ? "Custom job saved and started."
+        : "Custom job saved.",
+    );
+    closeCustomJobComposer();
+    resetCustomJobComposer();
+  });
+}
+
+function customJobSelectionPayload() {
+  return {
+    name: customJobForm.value.name,
+    purpose: customJobForm.value.purpose,
+    trigger: {
+      id: customJobForm.value.triggerId,
+      localTime: customJobForm.value.localTime,
+      dayOfWeek: customJobForm.value.dayOfWeek,
+    },
+    sourceIds: customJobForm.value.sourceIds,
+    outputIds: customJobForm.value.outputIds,
+    projectId: customJobForm.value.projectId || null,
+  };
+}
+
+function customJobToggleSource(id: AssistantJobComposerSourceId, checked: boolean) {
+  const next = new Set(customJobForm.value.sourceIds);
+  if (checked) next.add(id);
+  else next.delete(id);
+  customJobForm.value.sourceIds = Array.from(next);
+  customJobDraftAction.value = null;
+}
+
+function customJobToggleOutput(id: AssistantJobComposerOutputId, checked: boolean) {
+  const next = new Set(customJobForm.value.outputIds);
+  if (checked || id === "mission_result") next.add(id);
+  else next.delete(id);
+  customJobForm.value.outputIds = Array.from(next);
+  customJobDraftAction.value = null;
+}
+
+function touchCustomJobDraft() {
+  customJobDraftAction.value = null;
+  customJobNotice.value = "";
 }
 
 function openAssistantAttachmentPicker() {
@@ -3152,50 +3322,6 @@ function assistantJobBuilderToolPhrase(draft: AssistantJobDraft) {
   return formatHumanList(assistantJobBuilderToolNames(draft));
 }
 
-function recipeIngredientNames(recipe: AssistantJobRecipe) {
-  const required = recipe.requiredCapabilityIds.map((capabilityId) =>
-    assistantRecipeIngredientName(capabilityId),
-  );
-  const optional = recipe.optionalCapabilityIds.map((capabilityId) =>
-    assistantRecipeIngredientName(capabilityId),
-  );
-  return { required, optional };
-}
-
-function assistantRecipeIngredientName(capabilityId: string) {
-  const labels: Record<string, string> = {
-    "mission.project.read": "Mission Control Projects",
-    "mission.task.read": "Mission Control Tasks",
-    "mission.approval.read": "Mission Control Approvals",
-    "mission.review_packet.create": "Mission Control Reviews",
-    "mission.activity.create": "Mission Control Activity",
-    "mission.task.create": "Mission Control Task Creation",
-    "message.owner.notify": "Owner Notifications",
-    "email.message.read": "Email Messages",
-    "email.thread.summarize": "Email Thread Summaries",
-    "email.reply.draft": "Email Reply Drafts",
-    "email.message.send": "Email Delivery",
-    "accounts.entry.create": "Accounts Entries",
-    "calendar.event.read": "Calendar Events",
-  };
-  if (labels[capabilityId]) return labels[capabilityId];
-  return capabilityId
-    .split(".")
-    .filter(Boolean)
-    .map(
-      (part) => part.charAt(0).toUpperCase() + part.slice(1).replace(/_/g, " "),
-    )
-    .join(" ");
-}
-
-function openRecipeIngredientsModal() {
-  recipeIngredientsModalOpen.value = true;
-}
-
-function closeRecipeIngredientsModal() {
-  recipeIngredientsModalOpen.value = false;
-}
-
 function assistantJobBuilderSentenceSegments(
   action: Extract<AssistantJobBuilderAction, { kind: "job_draft" }>,
 ): AssistantJobBuilderSentenceSegment[] {
@@ -3624,7 +3750,7 @@ async function openJob(jobId: string) {
   selectedJobId.value = jobId;
   detailModalOpen.value = true;
   configureJobsModalOpen.value = false;
-  closeRecipeIngredientsModal();
+  closeCustomJobComposer();
   loadingDetail.value = true;
   try {
     selectedDetail.value = await api.get<AssistantJobDetail>(
@@ -3883,7 +4009,7 @@ function closeConfigureJobsModal() {
   if (detailModalOpen.value) {
     closeDetailModal();
   }
-  closeRecipeIngredientsModal();
+  closeCustomJobComposer();
   configureJobsModalOpen.value = false;
 }
 
@@ -6360,20 +6486,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <div class="assistant-modal__header-actions">
               <button
                 type="button"
-                class="assistant-modal-icon-action"
-                title="Recipe ingredients"
-                aria-label="Recipe ingredients"
-                @click="openRecipeIngredientsModal"
-              >
-                <UiIcon name="Info" :size="16" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
                 class="assistant-modal-action"
-                @click="startAssistantJobBuilder"
+                :aria-expanded="customJobComposerOpen"
+                @click="
+                  customJobComposerOpen
+                    ? closeCustomJobComposer()
+                    : openCustomJobComposer()
+                "
               >
                 <UiIcon name="Plus" :size="15" aria-hidden="true" />
-                <span>Set up a job</span>
+                <span>New custom job</span>
               </button>
               <Button
                 color="ghost"
@@ -6389,10 +6511,271 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </div>
           </header>
 
+          <section
+            v-if="customJobComposerOpen"
+            class="custom-job-builder"
+            aria-labelledby="custom-job-builder-title"
+          >
+            <header class="custom-job-builder__header">
+              <div>
+                <h3 id="custom-job-builder-title">New custom job</h3>
+                <p>Mission Control jobs only for now.</p>
+              </div>
+              <button
+                type="button"
+                class="assistant-modal-icon-action"
+                title="Reset"
+                aria-label="Reset custom job"
+                @click="resetCustomJobComposer"
+              >
+                <UiIcon name="RefreshCw" :size="15" aria-hidden="true" />
+              </button>
+            </header>
+
+            <div v-if="loadingJobComposer" class="empty-row">
+              Loading custom job pieces...
+            </div>
+
+            <div v-else class="custom-job-builder__body">
+              <label class="custom-job-field custom-job-field--wide">
+                <span>What should ME3 keep doing?</span>
+                <textarea
+                  v-model="customJobForm.purpose"
+                  rows="3"
+                  placeholder="Review my client work and tell me what needs attention."
+                  @input="touchCustomJobDraft"
+                />
+              </label>
+
+              <label class="custom-job-field">
+                <span>Name</span>
+                <input
+                  v-model="customJobForm.name"
+                  type="text"
+                  placeholder="Client work check"
+                  @input="touchCustomJobDraft"
+                />
+              </label>
+
+              <label class="custom-job-field">
+                <span>Project</span>
+                <select
+                  v-model="customJobForm.projectId"
+                  @change="touchCustomJobDraft"
+                >
+                  <option value="">All Mission Control</option>
+                  <option
+                    v-for="project in customJobProjectOptions"
+                    :key="project.id"
+                    :value="project.id"
+                  >
+                    {{ project.name }}
+                  </option>
+                </select>
+              </label>
+
+              <section class="custom-job-section" aria-labelledby="custom-job-runs">
+                <h4 id="custom-job-runs">Runs</h4>
+                <div class="custom-job-choice-grid">
+                  <label
+                    v-for="piece in jobComposerCatalog?.triggers || []"
+                    :key="piece.id"
+                    class="custom-job-choice"
+                    :class="{
+                      'custom-job-choice--selected':
+                        customJobForm.triggerId === piece.id,
+                    }"
+                  >
+                    <input
+                      v-model="customJobForm.triggerId"
+                      type="radio"
+                      name="custom-job-trigger"
+                      :value="piece.id"
+                      @change="touchCustomJobDraft"
+                    />
+                    <span>
+                      <strong>{{ piece.label }}</strong>
+                      <small>{{ piece.summary }}</small>
+                    </span>
+                  </label>
+                </div>
+                <div
+                  v-if="customJobForm.triggerId !== 'manual'"
+                  class="custom-job-schedule-row"
+                >
+                  <label class="custom-job-field">
+                    <span>Time</span>
+                    <input
+                      v-model="customJobForm.localTime"
+                      type="time"
+                      @input="touchCustomJobDraft"
+                    />
+                  </label>
+                  <label
+                    v-if="customJobForm.triggerId === 'weekly'"
+                    class="custom-job-field"
+                  >
+                    <span>Day</span>
+                    <select
+                      v-model.number="customJobForm.dayOfWeek"
+                      @change="touchCustomJobDraft"
+                    >
+                      <option
+                        v-for="day in weekdayOptions"
+                        :key="day.value"
+                        :value="day.value"
+                      >
+                        {{ day.label }}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+              </section>
+
+              <section class="custom-job-section" aria-labelledby="custom-job-reads">
+                <h4 id="custom-job-reads">Reads</h4>
+                <div class="custom-job-checks">
+                  <label
+                    v-for="piece in jobComposerCatalog?.sources || []"
+                    :key="piece.id"
+                    class="checkbox-pill"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="customJobForm.sourceIds.includes(piece.id)"
+                      @change="
+                        customJobToggleSource(
+                          piece.id,
+                          ($event.target as HTMLInputElement).checked,
+                        )
+                      "
+                    />
+                    <span>{{ piece.label }}</span>
+                  </label>
+                </div>
+              </section>
+
+              <section class="custom-job-section" aria-labelledby="custom-job-creates">
+                <h4 id="custom-job-creates">Creates</h4>
+                <div class="custom-job-checks">
+                  <label
+                    v-for="piece in jobComposerCatalog?.outputs || []"
+                    :key="piece.id"
+                    class="checkbox-pill"
+                    :class="{ 'checkbox-pill--locked': piece.id === 'mission_result' }"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="customJobForm.outputIds.includes(piece.id)"
+                      :disabled="piece.id === 'mission_result'"
+                      @change="
+                        customJobToggleOutput(
+                          piece.id,
+                          ($event.target as HTMLInputElement).checked,
+                        )
+                      "
+                    />
+                    <span>{{ piece.label }}</span>
+                  </label>
+                </div>
+              </section>
+
+              <section
+                v-if="customJobDraftAction"
+                class="custom-job-review"
+                aria-live="polite"
+              >
+                <div class="custom-job-review__header">
+                  <strong>{{ customJobDraftAction.draft.name }}</strong>
+                  <span
+                    class="job-builder-card__status"
+                    :class="`job-builder-card__status--${customJobDraftAction.validation.status}`"
+                  >
+                    {{ assistantJobStatusLabel(customJobDraftAction.validation.status) }}
+                  </span>
+                </div>
+                <p>
+                  Runs {{ assistantJobBuilderWhenPhrase(customJobDraftAction.draft) }}
+                  and lands in
+                  {{
+                    customJobSelectedProject
+                      ? customJobSelectedProject.name
+                      : "Mission Control"
+                  }}.
+                </p>
+                <p v-if="customJobDraftAction.explanation.reads.length">
+                  Reads:
+                  {{ formatHumanList(customJobDraftAction.explanation.reads) }}.
+                </p>
+                <p v-if="customJobDraftAction.explanation.writes.length">
+                  Creates:
+                  {{ formatHumanList(customJobDraftAction.explanation.writes) }}.
+                </p>
+                <p>
+                  Asks before: ME3 makes a result for review and will not send
+                  anything outside ME3.
+                </p>
+                <p
+                  v-for="warning in customJobDraftAction.explanation.setupWarnings"
+                  :key="warning"
+                  class="custom-job-review__warning"
+                >
+                  {{ warning }}
+                </p>
+              </section>
+
+              <p v-if="customJobNotice" class="inline-notice" role="alert">
+                {{ customJobNotice }}
+              </p>
+
+              <div class="custom-job-builder__actions">
+                <Button
+                  color="outline"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="
+                    !customJobCanReview || isBusy('custom-job:preview')
+                  "
+                  @click="reviewCustomJobDraft"
+                >
+                  Review job
+                </Button>
+                <Button
+                  v-if="customJobDraftAction?.availableActions.includes('save')"
+                  color="outline"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="isBusy('custom-job:save')"
+                  @click="saveCustomJob(false)"
+                >
+                  Save draft
+                </Button>
+                <Button
+                  v-if="
+                    customJobDraftAction?.availableActions.includes(
+                      'save_and_activate',
+                    )
+                  "
+                  color="primary"
+                  shape="soft"
+                  size="compact"
+                  type="button"
+                  :disabled="isBusy('custom-job:activate')"
+                  @click="saveCustomJob(true)"
+                >
+                  Save and start
+                </Button>
+              </div>
+            </div>
+          </section>
+
           <div v-if="loadingJobs || loadingRecipes" class="empty-row">
             Loading jobs...
           </div>
-          <div v-else class="job-list" role="list">
+          <div v-else class="job-list" role="list" aria-label="Starter jobs and saved jobs">
+            <div class="job-list__heading">Starter jobs and saved jobs</div>
             <template
               v-for="row in configureJobRows"
               :key="
@@ -6600,99 +6983,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </div>
               </article>
             </template>
-          </div>
-        </section>
-      </div>
-    </Teleport>
-
-    <Teleport to="body">
-      <div
-        v-if="recipeIngredientsModalOpen"
-        class="assistant-modal assistant-modal--stacked"
-        @click.self="closeRecipeIngredientsModal"
-      >
-        <section
-          class="assistant-modal__dialog assistant-modal__dialog--wide"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="recipe-ingredients-title"
-        >
-          <header class="assistant-modal__header">
-            <div class="assistant-modal__header-copy">
-              <h2 id="recipe-ingredients-title">Recipe ingredients</h2>
-              <p>ME3 features currently available to starter recipes.</p>
-            </div>
-            <Button
-              color="ghost"
-              shape="soft"
-              size="compact"
-              icon-only
-              type="button"
-              aria-label="Close"
-              @click="closeRecipeIngredientsModal"
-            >
-              <UiIcon name="X" :size="20" />
-            </Button>
-          </header>
-
-          <div v-if="loadingRecipes" class="empty-row">Loading recipes...</div>
-          <div v-else class="recipe-ingredient-list" role="list">
-            <article
-              v-for="recipe in recipes"
-              :key="recipe.id"
-              class="recipe-ingredient-row"
-              role="listitem"
-            >
-              <div class="recipe-ingredient-row__header">
-                <span class="job-row__emoji" aria-hidden="true">
-                  {{ recipeNavEmoji(recipe.id) }}
-                </span>
-                <div>
-                  <h3>{{ recipe.name }}</h3>
-                  <p>{{ cleanPlainText(recipe.outcome) }}</p>
-                </div>
-                <span
-                  class="status-badge"
-                  :class="`status-badge--${recipe.state}`"
-                >
-                  {{
-                    recipe.state === "needs_setup"
-                      ? "Needs setup"
-                      : recipe.state === "coming_later"
-                        ? "Later"
-                        : "Ready"
-                  }}
-                </span>
-              </div>
-              <div class="recipe-ingredient-row__groups">
-                <div>
-                  <strong>Required</strong>
-                  <div class="recipe-ingredient-row__chips">
-                    <span
-                      v-for="ingredient in recipeIngredientNames(recipe)
-                        .required"
-                      :key="`${recipe.id}:required:${ingredient}`"
-                      class="recipe-ingredient-chip"
-                    >
-                      {{ ingredient }}
-                    </span>
-                  </div>
-                </div>
-                <div v-if="recipeIngredientNames(recipe).optional.length">
-                  <strong>Optional</strong>
-                  <div class="recipe-ingredient-row__chips">
-                    <span
-                      v-for="ingredient in recipeIngredientNames(recipe)
-                        .optional"
-                      :key="`${recipe.id}:optional:${ingredient}`"
-                      class="recipe-ingredient-chip recipe-ingredient-chip--optional"
-                    >
-                      {{ ingredient }}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </article>
           </div>
         </section>
       </div>
@@ -10327,82 +10617,196 @@ button:disabled {
   color: var(--ui-text);
 }
 
-.recipe-ingredient-list {
+.custom-job-builder {
   display: grid;
+  gap: 14px;
+  border-block: 1px solid var(--ui-border);
+  padding: 14px 0;
+}
+
+.custom-job-builder__header,
+.custom-job-builder__actions,
+.custom-job-review__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
 }
 
-.recipe-ingredient-row {
-  display: grid;
-  gap: 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  padding: 12px;
-  background: var(--ui-surface);
-}
-
-.recipe-ingredient-row__header {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
-}
-
-.recipe-ingredient-row__header h3,
-.recipe-ingredient-row__header p {
+.custom-job-builder__header h3,
+.custom-job-builder__header p,
+.custom-job-section h4,
+.custom-job-review p {
   margin: 0;
 }
 
-.recipe-ingredient-row__header h3 {
+.custom-job-builder__header h3 {
+  color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.custom-job-builder__header p,
+.custom-job-review p {
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.custom-job-builder__body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.custom-job-field,
+.custom-job-section,
+.custom-job-review {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.custom-job-field--wide,
+.custom-job-section,
+.custom-job-review,
+.custom-job-builder__actions,
+.custom-job-builder__body > .inline-notice {
+  grid-column: 1 / -1;
+}
+
+.custom-job-field > span,
+.custom-job-section h4 {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.custom-job-field input,
+.custom-job-field select,
+.custom-job-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.custom-job-field input,
+.custom-job-field select {
+  min-height: 40px;
+  padding: 0 10px;
+}
+
+.custom-job-field textarea {
+  min-height: 86px;
+  resize: vertical;
+  padding: 9px 10px;
+  line-height: 1.4;
+}
+
+.custom-job-field input:focus-visible,
+.custom-job-field select:focus-visible,
+.custom-job-field textarea:focus-visible {
+  border-color: var(--ui-accent);
+  outline: 2px solid color-mix(in oklab, var(--ui-accent) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.custom-job-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.custom-job-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 9px;
+  background: var(--ui-surface);
+  cursor: pointer;
+}
+
+.custom-job-choice--selected {
+  border-color: color-mix(in oklab, var(--ui-accent) 42%, var(--ui-border));
+  background: var(--ui-accent-soft);
+}
+
+.custom-job-choice input {
+  margin-top: 2px;
+}
+
+.custom-job-choice span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.custom-job-choice strong {
+  color: var(--ui-text);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.custom-job-choice small {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.custom-job-schedule-row {
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 180px);
+  gap: 10px;
+}
+
+.custom-job-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.checkbox-pill--locked {
+  cursor: default;
+  opacity: 0.86;
+}
+
+.custom-job-review {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 12px;
+  background: var(--ui-surface-muted);
+}
+
+.custom-job-review__header strong {
+  color: var(--ui-text);
   font-size: 14px;
   line-height: 1.25;
 }
 
-.recipe-ingredient-row__header p {
-  margin-top: 2px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  line-height: 1.35;
+.custom-job-review__warning {
+  color: color-mix(in oklab, #9a6400 78%, var(--ui-text)) !important;
 }
 
-.recipe-ingredient-row__groups {
-  display: grid;
-  gap: 10px;
-}
-
-.recipe-ingredient-row__groups strong {
-  display: block;
-  margin-bottom: 6px;
-  color: var(--ui-text-muted);
-  font-size: 11px;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.recipe-ingredient-row__chips {
-  display: flex;
+.custom-job-builder__actions {
   flex-wrap: wrap;
-  gap: 6px;
+  justify-content: flex-start;
 }
 
-.recipe-ingredient-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 26px;
-  border: 1px solid color-mix(in oklab, var(--ui-accent) 34%, var(--ui-border));
-  border-radius: 999px;
-  padding: 0 9px;
-  background: var(--ui-accent-soft);
-  color: var(--ui-accent-strong);
+.job-list__heading {
+  margin: 0 0 2px;
+  color: var(--ui-text-muted);
   font-size: 12px;
   font-weight: 800;
-  line-height: 1;
-}
-
-.recipe-ingredient-chip--optional {
-  border-color: var(--ui-border);
-  background: var(--ui-surface-muted);
-  color: var(--ui-text-muted);
+  line-height: 1.2;
 }
 
 .modal-close {
@@ -10482,6 +10886,12 @@ button:disabled {
     width: auto;
     justify-content: flex-end;
     padding-top: 0;
+  }
+
+  .custom-job-builder__body,
+  .custom-job-choice-grid,
+  .custom-job-schedule-row {
+    grid-template-columns: 1fr;
   }
 
   .detail-facts__meta {

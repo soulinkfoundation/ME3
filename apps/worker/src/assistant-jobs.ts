@@ -1,9 +1,12 @@
 import {
+  ASSISTANT_JOB_COMPOSER_CATALOG,
+  ASSISTANT_JOB_COMPOSER_RUNNER_CAPABILITY_IDS,
   ASSISTANT_JOB_CAPABILITIES,
   ASSISTANT_JOB_STARTER_RECIPES,
   DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE,
   attachAssistantJobContextToRunResult,
   createAssistantJobContext,
+  createAssistantJobDraftFromComposerSelection,
   createAssistantJobDraftFromRecipe,
   getAssistantJobCapability,
   getAssistantJobStarterRecipe,
@@ -18,6 +21,7 @@ import {
   type AssistantJobDraftValidation,
   type AssistantJobStarterRecipe,
   type AssistantJobContextResult,
+  type AssistantJobComposerSelection,
   type InboxWatchRuleConfig,
 } from "@me3-core/assistant-jobs";
 import type {
@@ -402,6 +406,7 @@ type CreateAssistantJobBody = {
   purpose?: unknown;
   status?: unknown;
   projectId?: unknown;
+  customRunnerSupportedCapabilityIds?: readonly string[];
 };
 
 type UpdateAssistantJobBody = {
@@ -465,6 +470,43 @@ export type AssistantJobBuilderAction =
       availableActions: [];
     };
 
+export function listAssistantJobComposerCatalog() {
+  return { catalog: ASSISTANT_JOB_COMPOSER_CATALOG };
+}
+
+export async function previewAssistantCustomJobDraft(
+  env: Env,
+  userId: string,
+  body: unknown,
+): Promise<AssistantJobBuilderAction> {
+  const draft = createAssistantJobDraftFromComposerSelection(
+    assistantJobComposerSelectionFromBody(body),
+  );
+  const validation = await validateAssistantJobDraftForUser(env, userId, draft, {
+    customRunnerSupportedCapabilityIds: ASSISTANT_JOB_COMPOSER_RUNNER_CAPABILITY_IDS,
+  });
+  return assistantJobDraftBuilderAction(
+    draft,
+    validation,
+    "This custom job uses the Mission Control pieces available today.",
+  );
+}
+
+export async function createAssistantCustomJob(
+  env: Env,
+  userId: string,
+  body: unknown,
+) {
+  const record = isRecord(body) ? body : {};
+  return createAssistantJob(env, userId, {
+    draft: createAssistantJobDraftFromComposerSelection(
+      assistantJobComposerSelectionFromBody(record),
+    ),
+    status: record.status,
+    customRunnerSupportedCapabilityIds: ASSISTANT_JOB_COMPOSER_RUNNER_CAPABILITY_IDS,
+  });
+}
+
 export async function createAssistantJobBuilderAction(
   env: Env,
   userId: string,
@@ -494,28 +536,46 @@ export async function createAssistantJobBuilderAction(
 
   const draft = createAssistantJobDraftFromRecipe(recipe);
   const validation = await validateAssistantJobDraftForUser(env, userId, draft);
-  const setupWarnings = createAssistantJobBuilderSetupWarnings(validation);
-  const availableActions: Array<"save" | "save_and_activate"> =
-    validation.status === "invalid"
-      ? []
-      : validation.status === "valid"
-        ? ["save", "save_and_activate"]
-        : ["save"];
+  return assistantJobDraftBuilderAction(
+    draft,
+    validation,
+    `I matched this to the ${recipe.name} starter job.`,
+  );
+}
 
+function assistantJobDraftBuilderAction(
+  draft: AssistantJobDraft,
+  validation: AssistantJobDraftValidation,
+  summary: string,
+): AssistantJobBuilderAction {
   return {
     kind: "job_draft",
     draftId: crypto.randomUUID(),
     draft,
     explanation: {
-      summary: `I matched this to the ${recipe.name} starter job.`,
+      summary,
       reads: validation.permissionSummary.reads,
       writes: validation.permissionSummary.writes,
       approvalRequired: validation.permissionSummary.approvalRequired,
-      setupWarnings,
+      setupWarnings: createAssistantJobBuilderSetupWarnings(validation),
     },
     validation,
-    availableActions,
+    availableActions: assistantJobBuilderAvailableActions(validation),
   };
+}
+
+function assistantJobBuilderAvailableActions(
+  validation: AssistantJobDraftValidation,
+): Array<"save" | "save_and_activate"> {
+  if (validation.status === "invalid") return [];
+  return validation.status === "valid" ? ["save", "save_and_activate"] : ["save"];
+}
+
+function assistantJobComposerSelectionFromBody(
+  body: unknown,
+): AssistantJobComposerSelection {
+  const record = isRecord(body) ? body : {};
+  return isRecord(record.selection) ? record.selection : record;
 }
 
 function parseAssistantJobBuilderRequest(messageText: string) {
@@ -662,9 +722,13 @@ async function validateAssistantJobDraftForUser(
   env: Env,
   userId: string,
   draft: AssistantJobDraft,
+  options: {
+    customRunnerSupportedCapabilityIds?: readonly string[];
+  } = {},
 ) {
   return validateAssistantJobDraft(draft, {
     readySetupRequirements: await getAssistantJobReadySetupRequirements(env, userId),
+    customRunnerSupportedCapabilityIds: options.customRunnerSupportedCapabilityIds,
   });
 }
 
@@ -1236,7 +1300,9 @@ export async function createAssistantJob(env: Env, userId: string, body: CreateA
     }
   }
   const draftForStorage = await withComputedScheduleNextRunAt(env, userId, draft);
-  const validation = await validateAssistantJobDraftForUser(env, userId, draftForStorage);
+  const validation = await validateAssistantJobDraftForUser(env, userId, draftForStorage, {
+    customRunnerSupportedCapabilityIds: body.customRunnerSupportedCapabilityIds,
+  });
   const requestedStatus = normalizeJobStatus(body.status);
   const status = resolveInitialStatus(validation, requestedStatus);
   const jobId = crypto.randomUUID();
