@@ -760,8 +760,6 @@ const bookingReminderSystemRuns =
   "24 hours and 2 hours before a confirmed site booking";
 const bookingReminderSystemDescription =
   "Sends booking reminders via email (and messaging app if configured) to you and your guest 24 hours and 2 hours before a confirmed site booking.";
-const bookingReminderSystemChannels =
-  "Email by default; Telegram/Soulink if connected";
 
 const suggestedRecipeIds = new Set(suggestedRecipeOrder);
 const scheduleCadenceOptions: Array<{
@@ -6130,10 +6128,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       >
                         {{ bookingRemindersSystemStatus(row) }}
                       </span>
-                    </span>
-                    <span class="job-row__meta">
-                      Runs: {{ bookingReminderSystemRuns }} ·
-                      {{ bookingReminderSystemChannels }}
                     </span>
                     <span class="job-row__meta">
                       {{ bookingReminderSystemDescription }}
