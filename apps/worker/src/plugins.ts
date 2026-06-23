@@ -515,7 +515,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
       id: "mission.ai-usage",
       label: "AI Usage",
       componentKey: "AiUsageCard",
-      defaultEnabled: false,
+      defaultEnabled: true,
       defaultSize: "medium",
       dataEndpoint: "/api/mission-control/dashboard/cards/mission.ai-usage",
     },

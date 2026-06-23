@@ -96,6 +96,7 @@ describe("Mission Control dashboard settings", () => {
       "mission.mission-statement",
       "mission.wheel-latest-snapshot",
       "mission.quick-task-add",
+      "mission.ai-usage",
     ]);
     expect(dashboard.availableCards.map((card) => card.id)).toEqual(
       expect.arrayContaining([
@@ -244,7 +245,7 @@ describe("Mission Control dashboard settings", () => {
       dashboardSettings: {
         cards_json: JSON.stringify([
           {
-            cardId: "journal.latest-entry",
+            cardId: "social.queue-summary",
             enabled: true,
             size: "medium",
             sortOrder: 0,
@@ -252,12 +253,12 @@ describe("Mission Control dashboard settings", () => {
         ]),
         quick_links_json: JSON.stringify([
           {
-            id: "journal.today",
-            label: "Journal",
-            icon: "BookOpen",
+            id: "social.schedule",
+            label: "Social",
+            icon: "Send",
             enabled: true,
             sortOrder: 0,
-            destinationId: "journal.today",
+            destinationId: "social.schedule",
           },
         ]),
       },
@@ -266,11 +267,11 @@ describe("Mission Control dashboard settings", () => {
     const dashboard = await getMissionDashboard(env, "owner");
 
     expect(dashboard.availableCards.map((card) => card.id)).not.toContain(
-      "journal.latest-entry",
+      "social.queue-summary",
     );
-    expect(dashboard.cards.find((card) => card.cardId === "journal.latest-entry"))
+    expect(dashboard.cards.find((card) => card.cardId === "social.queue-summary"))
       .toMatchObject({ enabled: true, available: false });
-    expect(dashboard.quickLinks.find((link) => link.id === "journal.today"))
+    expect(dashboard.quickLinks.find((link) => link.id === "social.schedule"))
       .toMatchObject({ enabled: true, available: false });
   });
 
