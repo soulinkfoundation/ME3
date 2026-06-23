@@ -150,7 +150,7 @@ Use Account for owner-facing setup. Keep answers short and point owners back to 
 - Account -> AI selects the provider and model route for the ME3 agent.
 - Workers AI uses the Cloudflare `AI` binding and does not need an API key.
 - OpenAI and Anthropic keys can be saved in Account; Core encrypts stored provider secrets and never returns them to the browser.
-- AI Gateway usage is backend-only setup. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as Worker secrets; ME3 uses gateway ID `default` unless `CLOUDFLARE_AI_GATEWAY_ID` is set.
+- AI Gateway usage is backend-only setup. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as Worker secrets; ME3 uses Cloudflare's `default` gateway.
 - For new installs, pass the values to setup without committing them:
 
 ```bash

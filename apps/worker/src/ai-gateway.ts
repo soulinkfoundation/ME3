@@ -120,19 +120,14 @@ export async function getAiGatewaySettings(
 ): Promise<AiGatewaySettingsResponse> {
   const row = await getAiGatewaySettingsRow(env, userId);
   const accountId = row?.account_id || env.CLOUDFLARE_ACCOUNT_ID || "";
-  const explicitGatewayId = resolveAiGatewayId(
-    row?.gateway_id,
-    env.CLOUDFLARE_AI_GATEWAY_ID,
-    env.ME3_AI_GATEWAY_ID,
-  );
-  const gatewayId = explicitGatewayId || DEFAULT_AI_GATEWAY_ID;
+  const gatewayId = row?.gateway_id?.trim() || DEFAULT_AI_GATEWAY_ID;
   const hasStoredToken = Boolean(row?.encrypted_api_token);
   const hasEnvToken = Boolean(env.CLOUDFLARE_API_TOKEN);
   const configured = Boolean(accountId && gatewayId && (hasStoredToken || hasEnvToken));
   const source =
     row && (row.account_id || row.gateway_id || hasStoredToken)
       ? "stored"
-      : accountId || explicitGatewayId || hasEnvToken
+      : accountId || hasEnvToken
         ? "environment"
         : "not_configured";
 
@@ -239,9 +234,7 @@ export async function getAiGatewayRuntimeConfig(
 ): Promise<AiGatewayRuntimeConfig> {
   const row = await getAiGatewaySettingsRow(env, userId);
   const accountId = row?.account_id || env.CLOUDFLARE_ACCOUNT_ID || null;
-  const gatewayId =
-    resolveAiGatewayId(row?.gateway_id, env.CLOUDFLARE_AI_GATEWAY_ID, env.ME3_AI_GATEWAY_ID) ||
-    (accountId ? DEFAULT_AI_GATEWAY_ID : null);
+  const gatewayId = row?.gateway_id?.trim() || (accountId ? DEFAULT_AI_GATEWAY_ID : null);
   const storedToken = row?.encrypted_api_token
     ? await decryptSecretSafely(env, row.encrypted_api_token)
     : null;
@@ -478,13 +471,6 @@ function createEmptyUsageSummary(startsAt: Date, endsAt: Date): AiGatewayUsageSu
 function normalizeOptionalText(value: unknown, maxLength: number): string {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, maxLength);
-}
-
-function resolveAiGatewayId(...values: Array<string | null | undefined>): string | null {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
 }
 
 function normalizeNumber(value: unknown): number {
