@@ -361,7 +361,15 @@ const aiUsageTopModels = computed(() =>
   (aiUsage.value?.models || []).slice(0, 6),
 );
 const aiUsageDetailsAvailable = computed(
-  () => Boolean(aiUsage.value) && !aiUsage.value?.setupRequired,
+  () =>
+    Boolean(aiUsage.value) &&
+    !aiUsage.value?.setupRequired &&
+    !aiUsage.value?.error,
+);
+const aiUsagePeriodLabel = computed(() =>
+  aiUsageDetailsAvailable.value && aiUsage.value
+    ? formatAiUsagePeriod(aiUsage.value.period)
+    : "",
 );
 
 function cardLabel(card: DashboardCardInstance): string {
@@ -599,6 +607,22 @@ function formatDashboardDate(value: string | null | undefined): string {
   }).format(parsed);
 }
 
+function formatAiUsagePeriod(period: AiUsageCardData["period"]): string {
+  const startsAt = new Date(period.startsAt);
+  const endsAt = new Date(period.endsAt);
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    return "";
+  }
+  const includeYear = startsAt.getFullYear() !== new Date().getFullYear();
+  const options: Intl.DateTimeFormatOptions = {
+    month: "long",
+    day: "numeric",
+  };
+  if (includeYear) options.year = "numeric";
+  const formatter = new Intl.DateTimeFormat(undefined, options);
+  return `${formatter.format(startsAt)} - ${formatter.format(endsAt)}`;
+}
+
 function formatCurrency(value: number | null | undefined): string {
   const amount =
     typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -665,7 +689,9 @@ async function loadAiUsage() {
     aiUsage.value = await api.get<AiUsageCardData>(
       "/mission-control/dashboard/cards/mission.ai-usage",
     );
-    if (aiUsage.value.setupRequired) aiUsageModalOpen.value = false;
+    if (aiUsage.value.setupRequired || aiUsage.value.error) {
+      aiUsageModalOpen.value = false;
+    }
   } catch (err) {
     aiUsageError.value =
       err instanceof Error ? err.message : "AI usage could not load.";
@@ -1142,8 +1168,8 @@ onMounted(() => {
                 <span>AI Usage</span>
               </h2>
               <div class="dashboard-card__header-actions">
-                <span v-if="aiUsage?.fetchedAt">
-                  {{ formatDashboardDate(aiUsage.fetchedAt) }}
+                <span v-if="aiUsagePeriodLabel">
+                  {{ aiUsagePeriodLabel }}
                 </span>
                 <div
                   v-if="!dashboardEditing && aiUsageDetailsAvailable"
@@ -1185,6 +1211,17 @@ onMounted(() => {
                 usage here.
               </p>
             </div>
+            <div v-else-if="aiUsage?.error" class="dashboard-empty">
+              <p>{{ aiUsage.error }}</p>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                @click="loadAiUsage"
+              >
+                Retry
+              </Button>
+            </div>
             <div v-else-if="aiUsage" class="ai-usage-summary">
               <div class="ai-usage-summary__total">
                 <strong>{{ formatCurrency(aiUsage.totalCost) }}</strong>
@@ -1206,9 +1243,6 @@ onMounted(() => {
                   <span>{{ formatCurrency(model.cost) }}</span>
                 </div>
               </div>
-              <p v-else class="dashboard-card__body">
-                No AI Gateway usage has landed this month.
-              </p>
             </div>
             <div v-else class="dashboard-empty">
               <p>AI usage is ready to load.</p>
@@ -1469,9 +1503,6 @@ onMounted(() => {
                 <span>{{ formatCurrency(model.cost) }}</span>
               </div>
             </div>
-            <p v-else class="dashboard-modal__empty">
-              No AI Gateway usage has landed this month.
-            </p>
           </div>
           <p v-else class="dashboard-modal__empty">
             AI usage has not loaded yet.
