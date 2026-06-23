@@ -7234,7 +7234,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
   margin-top: auto;
   padding: 8px 0 0;
   border-top: 1px solid var(--ui-border);
-  background: var(--ui-page);
+  background: var(--ui-surface-muted);
 }
 
 .assistant-history__archive-button,
