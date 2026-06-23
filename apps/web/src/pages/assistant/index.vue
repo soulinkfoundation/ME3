@@ -6413,7 +6413,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
             Loading jobs...
           </div>
           <div v-else class="job-list" role="list" aria-label="Starter jobs and saved jobs">
-            <div class="job-list__heading">Starter jobs and saved jobs</div>
             <template
               v-for="row in configureJobRows"
               :key="
@@ -10253,14 +10252,6 @@ button:disabled {
   border-color: color-mix(in oklab, var(--ui-accent) 42%, var(--ui-border));
   background: var(--ui-surface-muted);
   color: var(--ui-text);
-}
-
-.job-list__heading {
-  margin: 0 0 2px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1.2;
 }
 
 .modal-close {
