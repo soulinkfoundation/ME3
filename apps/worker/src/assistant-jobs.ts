@@ -40,6 +40,7 @@ import {
   isLocalExecutorSetupReady,
 } from "./local-executor";
 import { normalizeTimeZone } from "./calendar";
+import { isCorePluginEnabled } from "./plugins";
 
 export class AssistantJobsInputError extends Error {
   constructor(
@@ -600,6 +601,7 @@ function formatAssistantJobSetupRequirement(requirement: string) {
     email: "Connect email before activation.",
     calendar: "Enable calendar setup before activation.",
     local_executor: "Connect the local executor before activation.",
+    accounts: "Enable ME3 Accounts before activation.",
   };
   return labels[requirement] || "Additional setup is required before activation.";
 }
@@ -626,16 +628,18 @@ export async function listAssistantJobRecipes(env: Env, userId: string) {
 
 async function getAssistantJobReadySetupRequirements(env: Env, userId: string) {
   const ready = new Set<string>();
-  const [ownerConnection, emailReady, calendarReady, localExecutorReady] = await Promise.all([
+  const [ownerConnection, emailReady, calendarReady, localExecutorReady, accountsReady] = await Promise.all([
     getActiveOwnerNotificationConnection(env, userId),
     isEmailSetupReady(env, userId),
     isCalendarSetupReady(env),
     isLocalExecutorSetupReady(env, userId),
+    isAccountsSetupReady(env),
   ]);
   if (ownerConnection) ready.add("owner_notifications");
   if (emailReady) ready.add("email");
   if (calendarReady) ready.add("calendar");
   if (localExecutorReady) ready.add("local_executor");
+  if (accountsReady) ready.add("accounts");
   return Array.from(ready);
 }
 
@@ -667,6 +671,10 @@ async function isCalendarSetupReady(env: Env) {
   } catch {
     return false;
   }
+}
+
+async function isAccountsSetupReady(env: Env) {
+  return isCorePluginEnabled(env, "me3.accounts").catch(() => false);
 }
 
 async function validateAssistantJobDraftForUser(
@@ -1078,7 +1086,7 @@ async function reconcileAssistantJobReadiness(
   userId: string,
   row: AssistantJobRow,
 ): Promise<AssistantJobRow> {
-  if (row.status !== "needs_setup" || row.recipe_id !== "daily-briefing" || !row.current_version_id) {
+  if ((row.status !== "active" && row.status !== "needs_setup") || !row.current_version_id) {
     return row;
   }
 
@@ -1103,15 +1111,21 @@ async function reconcileAssistantJobReadiness(
     },
   });
   const validation = await validateAssistantJobDraftForUser(env, userId, draft);
-  if (validation.status !== "valid") return row;
+  const nextStatus =
+    validation.status === "valid"
+      ? "active"
+      : validation.status === "needs_setup"
+        ? "needs_setup"
+        : row.status;
+  if (nextStatus === row.status) return row;
 
   const setupState = { validationStatus: validation.status, errors: validation.errors };
   await env.DB.prepare(
     `UPDATE assistant_jobs
-     SET status = 'active', setup_state_json = ?, updated_at = ?
-     WHERE id = ? AND user_id = ? AND status = 'needs_setup'`,
+     SET status = ?, setup_state_json = ?, updated_at = ?
+     WHERE id = ? AND user_id = ? AND status = ?`,
   )
-    .bind(stringifyJson(setupState), new Date().toISOString(), row.id, userId)
+    .bind(nextStatus, stringifyJson(setupState), new Date().toISOString(), row.id, userId, row.status)
     .run();
 
   return (await getAssistantJobRow(env, userId, row.id)) || row;

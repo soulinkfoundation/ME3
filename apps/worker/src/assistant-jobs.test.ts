@@ -557,6 +557,7 @@ describe("assistant jobs persistence", () => {
   it("triages invoice emails into Accounts ledger entries", async () => {
     const env = createAssistantJobsEnv({
       mailbox: activeMailboxRow(),
+      pluginInstallations: [accountsPluginInstallationRow()],
       mailboxMessages: [
         mailboxMessageRow({
           id: "invoice-message-1",
@@ -612,6 +613,51 @@ describe("assistant jobs persistence", () => {
     expect(env.__state.pluginActivities[0]?.summary).toContain(
       "found 1 likely invoices or receipts",
     );
+  });
+
+  it("blocks invoice triage until Accounts is enabled", async () => {
+    const env = createAssistantJobsEnv({
+      mailbox: activeMailboxRow(),
+    });
+
+    const recipes = await listAssistantJobRecipes(env, "owner");
+    expect(
+      recipes.recipes.find((recipe) => recipe.id === "invoice-receipt-triage")?.state,
+    ).toBe("needs_setup");
+
+    const created = await createAssistantJob(env, "owner", {
+      recipeId: "invoice-receipt-triage",
+    });
+    expect(created.job.status).toBe("needs_setup");
+    expect(created.validation.errors).toContainEqual(
+      expect.objectContaining({
+        code: "setup_missing",
+        capabilityId: "accounts.entry.create",
+        message: "Missing setup requirement: accounts.",
+      }),
+    );
+
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+    expect(run.run.status).toBe("blocked");
+    expect(env.__state.financialEntries).toHaveLength(0);
+  });
+
+  it("marks active invoice triage jobs as needing setup when Accounts is disabled", async () => {
+    const env = createAssistantJobsEnv({
+      mailbox: activeMailboxRow(),
+      pluginInstallations: [accountsPluginInstallationRow()],
+    });
+    const created = await createAssistantJob(env, "owner", {
+      recipeId: "invoice-receipt-triage",
+    });
+    expect(created.job.status).toBe("active");
+
+    env.__state.pluginInstallations = [];
+
+    const listed = await listAssistantJobs(env, "owner");
+    expect(
+      listed.jobs.find((job) => job.id === created.job.id)?.status,
+    ).toBe("needs_setup");
   });
 
   it("treats Booking Reminders as a ready site-booking system toggle", async () => {
@@ -1346,6 +1392,14 @@ function calendarPluginInstallationRow(): PluginInstallationRow {
   };
 }
 
+function accountsPluginInstallationRow(): PluginInstallationRow {
+  return {
+    plugin_id: "me3.accounts",
+    enabled: 1,
+    status: "installed",
+  };
+}
+
 function projectRow(id: string, name: string) {
   return {
     id,
@@ -1817,8 +1871,17 @@ class FakeStatement {
     }
 
     if (sql.includes("SET status = ?")) {
-      const job = this.findJob(values[1], values[2]);
-      if (job) job.status = values[0] as string;
+      const hasSetupState = sql.includes("setup_state_json");
+      const job = hasSetupState
+        ? this.findJob(values[3], values[4])
+        : this.findJob(values[1], values[2]);
+      if (job && (!hasSetupState || job.status === values[5])) {
+        job.status = values[0] as string;
+        if (hasSetupState) {
+          job.setup_state_json = values[1] as string;
+          job.updated_at = values[2] as string;
+        }
+      }
       return { success: true };
     }
 

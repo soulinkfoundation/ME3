@@ -594,7 +594,7 @@ export const ASSISTANT_JOB_CAPABILITIES = [
     approvalMode: "review_required",
     eventSafe: true,
     manualRunSafe: true,
-    requiresSetup: [],
+    requiresSetup: ["accounts"],
     userFacingReadSummary: "Reads extracted invoice and receipt details.",
     userFacingWriteSummary: "Creates Accounts ledger entries for review.",
     auditEventKind: "accounts_entry_created",
