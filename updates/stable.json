@@ -2,15 +2,23 @@
   "schemaVersion": 1,
   "channel": "stable",
   "latest": {
-    "version": "0.1.58",
-    "tag": "v0.1.58",
-    "releasedAt": "2026-06-23T09:45:07Z",
-    "releaseNotesUrl": "https://github.com/soulinkfoundation/ME3/releases/tag/v0.1.58",
+    "version": "0.1.59",
+    "tag": "v0.1.59",
+    "releasedAt": "2026-06-23T10:37:41Z",
+    "releaseNotesUrl": "https://github.com/soulinkfoundation/ME3/releases/tag/v0.1.59",
     "migrationRequired": false,
     "breaking": false,
     "minimumSupportedVersion": "0.1.0"
   },
   "releases": [
+    {
+      "version": "0.1.59",
+      "tag": "v0.1.59",
+      "releasedAt": "2026-06-23T10:37:41Z",
+      "releaseNotesUrl": "https://github.com/soulinkfoundation/ME3/releases/tag/v0.1.59",
+      "migrationRequired": false,
+      "breaking": false
+    },
     {
       "version": "0.1.58",
       "tag": "v0.1.58",
