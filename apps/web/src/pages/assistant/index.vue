@@ -746,9 +746,9 @@ const dailyBriefingVariables = [
 const suggestedRecipeOrder = [
   "daily-briefing",
   "weekly-review",
-  "booking-reminder",
   "email-triage",
   "invoice-receipt-triage",
+  "booking-reminder",
 ];
 
 const bookingReminderSystemRecipeId = "booking-reminder";
