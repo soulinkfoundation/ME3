@@ -12,6 +12,20 @@ const D1_PLACEHOLDER = "replace-with-generated-d1-id";
 
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
+const aiGatewayAccountId =
+  (
+    args.cloudflareAccountId ||
+    process.env.ME3_AI_GATEWAY_CLOUDFLARE_ACCOUNT_ID ||
+    process.env.CLOUDFLARE_ACCOUNT_ID ||
+    ""
+  ).trim();
+const aiGatewayApiToken =
+  (
+    args.cloudflareApiToken ||
+    process.env.ME3_AI_GATEWAY_CLOUDFLARE_API_TOKEN ||
+    process.env.CLOUDFLARE_API_TOKEN ||
+    ""
+  ).trim();
 
 if (!existsSync(configPath)) {
   fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
@@ -108,6 +122,7 @@ if (!args.skipSecrets) {
   const setupPassword = args.setupPassword || randomBytes(16).toString("hex");
 
   putSecret("SETUP_PASSWORD", setupPassword);
+  putAiGatewaySecrets();
 
   console.log("");
   console.log("Remote standalone setup password secret is set.");
@@ -127,6 +142,8 @@ function parseArgs(values) {
     config: "",
     dbId: "",
     dbName: "",
+    cloudflareAccountId: "",
+    cloudflareApiToken: "",
     skipR2: false,
     skipQueues: false,
     skipSecrets: false,
@@ -170,6 +187,16 @@ function parseArgs(values) {
       index += 1;
     } else if (value.startsWith("--db-id=")) {
       parsed.dbId = value.slice("--db-id=".length);
+    } else if (value === "--cloudflare-account-id") {
+      parsed.cloudflareAccountId = values[index + 1] || "";
+      index += 1;
+    } else if (value.startsWith("--cloudflare-account-id=")) {
+      parsed.cloudflareAccountId = value.slice("--cloudflare-account-id=".length);
+    } else if (value === "--cloudflare-api-token") {
+      parsed.cloudflareApiToken = values[index + 1] || "";
+      index += 1;
+    } else if (value.startsWith("--cloudflare-api-token=")) {
+      parsed.cloudflareApiToken = value.slice("--cloudflare-api-token=".length);
     } else if (value === "--help" || value === "-h") {
       printHelp();
       process.exit(0);
@@ -228,6 +255,10 @@ Options:
   --db-id <uuid>           Existing D1 database id
   --bucket <name>          R2 bucket name
   --setup-password <value> SETUP_PASSWORD secret value
+  --cloudflare-account-id <id>
+                           Set CLOUDFLARE_ACCOUNT_ID for AI Gateway usage
+  --cloudflare-api-token <token>
+                           Set CLOUDFLARE_API_TOKEN for AI Gateway usage
   --skip-r2                Do not create or configure SITE_ASSETS
   --skip-queues            Do not create queues from wrangler.toml
   --skip-secrets           Do not write Worker secrets
@@ -273,6 +304,26 @@ function putSecret(name, value) {
       `Could not put the ${name} Worker secret. ` +
       `You can set it later with \`pnpm exec wrangler secret put ${name} --config ${configPath}\`.`,
   });
+}
+
+function putAiGatewaySecrets() {
+  if (!aiGatewayAccountId && !aiGatewayApiToken) {
+    console.log(
+      "Skipped AI Gateway secrets; set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN later to enable usage reporting.",
+    );
+    return;
+  }
+
+  if (!aiGatewayAccountId || !aiGatewayApiToken) {
+    console.warn(
+      "Skipped AI Gateway secrets; both CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required.",
+    );
+    return;
+  }
+
+  putSecret("CLOUDFLARE_ACCOUNT_ID", aiGatewayAccountId);
+  putSecret("CLOUDFLARE_API_TOKEN", aiGatewayApiToken);
+  console.log("AI Gateway Worker secrets are set.");
 }
 
 function getD1Config(value) {

@@ -150,7 +150,21 @@ Use Account for owner-facing setup. Keep answers short and point owners back to 
 - Account -> AI selects the provider and model route for the ME3 agent.
 - Workers AI uses the Cloudflare `AI` binding and does not need an API key.
 - OpenAI and Anthropic keys can be saved in Account; Core encrypts stored provider secrets and never returns them to the browser.
-- AI Gateway usage needs a Cloudflare account ID and API token. ME3 uses gateway ID `default`; Cloudflare can auto-create it, and Mission Control reads Gateway logs for usage and estimated spend.
+- AI Gateway usage is backend-only setup. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as Worker secrets; ME3 uses gateway ID `default` unless `CLOUDFLARE_AI_GATEWAY_ID` is set.
+- For new installs, pass the values to setup without committing them:
+
+```bash
+ME3_AI_GATEWAY_CLOUDFLARE_ACCOUNT_ID="your-account-id" \
+ME3_AI_GATEWAY_CLOUDFLARE_API_TOKEN="your-token" \
+pnpm init:cloudflare
+```
+
+- For existing installs, set or rotate them manually:
+
+```bash
+printf '%s\n' "your-account-id" | pnpm exec wrangler secret put CLOUDFLARE_ACCOUNT_ID --config wrangler.toml
+pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --config wrangler.toml
+```
 
 ## Core Plugins
 

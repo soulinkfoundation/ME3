@@ -162,18 +162,6 @@ type AiSettingsResponse = {
   defaults: Record<AiRouteId, AiRouteRecord>;
 };
 
-type AiGatewaySettingsResponse = {
-  encryptionConfigured: boolean;
-  configured: boolean;
-  accountId: string;
-  gatewayId: string;
-  apiTokenHint: string | null;
-  apiTokenUpdatedAt: string | null;
-  routeWorkersAi: boolean;
-  routeExternalProviders: boolean;
-  source: "environment" | "stored" | "not_configured";
-};
-
 type AiRouteInputs = Record<AiRouteId, { providerId: string; model: string }>;
 
 type EmailProviderId = "cloudflare-email" | "smtp" | "mailgun" | "postmark";
@@ -302,13 +290,6 @@ const aiProviderKeyInputs = ref<Record<string, string>>({});
 const aiRouteInputs = ref<AiRouteInputs>(createEmptyAiRouteInputs());
 const aiSettingsMessage = ref<string | null>(null);
 const aiSettingsError = ref<string | null>(null);
-const aiGatewayLoading = ref(false);
-const aiGatewaySaving = ref(false);
-const aiGatewaySettings = ref<AiGatewaySettingsResponse | null>(null);
-const aiGatewayAccountIdInput = ref("");
-const aiGatewayTokenInput = ref("");
-const aiGatewayMessage = ref<string | null>(null);
-const aiGatewayError = ref<string | null>(null);
 const emailProviderLoading = ref(false);
 const emailProviderSaving = ref(false);
 const emailProviderTesting = ref(false);
@@ -631,18 +612,6 @@ const aiSettingsSaveDisabled = computed(
     (selectedProviderNeedsKey.value &&
       !selectedProviderKeyInput.value.trim()) ||
     (aiProviderKeyInputCount.value > 0 && !aiEncryptionConfigured.value),
-);
-
-const aiGatewaySaveDisabled = computed(
-  () =>
-    aiGatewaySaving.value ||
-    aiGatewayLoading.value ||
-    !aiGatewayAccountIdInput.value.trim() ||
-    (!aiGatewayTokenInput.value.trim() &&
-      !Boolean(aiGatewaySettings.value?.apiTokenHint)) ||
-    (!aiGatewaySettings.value?.apiTokenHint &&
-      Boolean(aiGatewayTokenInput.value.trim()) &&
-      !aiGatewaySettings.value?.encryptionConfigured),
 );
 
 const activeEmailProvider = computed(
@@ -1247,12 +1216,6 @@ function syncAiSettings(response: AiSettingsResponse) {
   aiRouteInputs.value = nextRouteInputs;
 }
 
-function syncAiGatewaySettings(response: AiGatewaySettingsResponse) {
-  aiGatewaySettings.value = response;
-  aiGatewayAccountIdInput.value = response.accountId || "";
-  aiGatewayTokenInput.value = "";
-}
-
 async function loadAiSettings() {
   aiSettingsLoading.value = true;
   aiSettingsError.value = null;
@@ -1264,22 +1227,6 @@ async function loadAiSettings() {
     aiSettingsError.value = e.message || "Failed to load AI provider settings";
   } finally {
     aiSettingsLoading.value = false;
-  }
-}
-
-async function loadAiGatewaySettings() {
-  aiGatewayLoading.value = true;
-  aiGatewayError.value = null;
-
-  try {
-    const response = await api.get<AiGatewaySettingsResponse>(
-      "/ai-gateway-settings",
-    );
-    syncAiGatewaySettings(response);
-  } catch (e: any) {
-    aiGatewayError.value = e.message || "Failed to load AI Gateway settings";
-  } finally {
-    aiGatewayLoading.value = false;
   }
 }
 
@@ -1314,33 +1261,6 @@ async function saveAiSettings() {
     aiSettingsError.value = e.message || "Failed to save AI provider settings";
   } finally {
     aiSettingsSaving.value = false;
-  }
-}
-
-async function saveAiGatewaySettings() {
-  if (aiGatewaySaveDisabled.value) return;
-
-  aiGatewaySaving.value = true;
-  aiGatewayMessage.value = null;
-  aiGatewayError.value = null;
-
-  try {
-    const response = await api.put<AiGatewaySettingsResponse>(
-      "/ai-gateway-settings",
-      {
-        accountId: aiGatewayAccountIdInput.value,
-        gatewayId: "default",
-        apiToken: aiGatewayTokenInput.value,
-        routeWorkersAi: true,
-        routeExternalProviders: true,
-      },
-    );
-    syncAiGatewaySettings(response);
-    aiGatewayMessage.value = "AI Gateway settings saved.";
-  } catch (e: any) {
-    aiGatewayError.value = e.message || "Failed to save AI Gateway settings";
-  } finally {
-    aiGatewaySaving.value = false;
   }
 }
 
@@ -1558,7 +1478,6 @@ onMounted(async () => {
   void sites.fetchSites();
   void loadMailbox();
   void loadAiSettings();
-  void loadAiGatewaySettings();
   void loadEmailProviderSettings();
   void loadPlugins();
   void loadAppConnections();
@@ -2409,96 +2328,8 @@ onMounted(async () => {
                     />
                   </label>
 
-                  <details class="email-disclosure">
-                    <summary>AI Gateway usage</summary>
-                    <div class="email-disclosure-body">
-                      <p class="hint">
-                        Connect Cloudflare AI Gateway to show model token usage
-                        and estimated spend in Mission Control. ME3 uses
-                        Cloudflare's default gateway automatically; create a
-                        custom gateway only if you want custom Cloudflare
-                        controls later.
-                      </p>
-                      <PageLoading
-                        v-if="aiGatewayLoading"
-                        compact
-                        label="Loading AI Gateway settings..."
-                      />
-                      <template v-else>
-                        <p
-                          v-if="
-                            aiGatewaySettings &&
-                            !aiGatewaySettings.encryptionConfigured
-                          "
-                          class="error"
-                        >
-                          Install encryption is required before Cloudflare API
-                          tokens can be saved.
-                        </p>
-                        <div class="ai-gateway-grid">
-                          <label class="field">
-                            <span>Cloudflare account ID</span>
-                            <input
-                              v-model="aiGatewayAccountIdInput"
-                              class="input"
-                              type="text"
-                              autocomplete="off"
-                              spellcheck="false"
-                            />
-                          </label>
-                        </div>
-                        <label class="field">
-                          <span>Cloudflare API token</span>
-                          <input
-                            v-model="aiGatewayTokenInput"
-                            class="input"
-                            type="password"
-                            autocomplete="off"
-                            spellcheck="false"
-                            :placeholder="
-                              aiGatewaySettings?.apiTokenHint
-                                ? `Stored token ${aiGatewaySettings.apiTokenHint}`
-                                : 'Paste API token'
-                            "
-                          />
-                        </label>
-                        <div class="account-inline-actions">
-                          <Button
-                            color="secondary"
-                            size="compact"
-                            type="button"
-                            :disabled="aiGatewaySaveDisabled"
-                            @click="saveAiGatewaySettings"
-                          >
-                            {{ aiGatewaySaving ? "Saving..." : "Save Gateway" }}
-                          </Button>
-                          <StatusBadge
-                            v-if="aiGatewaySettings"
-                            :tone="
-                              aiGatewaySettings.configured
-                                ? 'active'
-                                : 'pending_setup'
-                            "
-                          >
-                            {{
-                              aiGatewaySettings.configured
-                                ? 'Connected'
-                                : 'Setup needed'
-                            }}
-                          </StatusBadge>
-                        </div>
-                        <p v-if="aiGatewayMessage" class="success">
-                          {{ aiGatewayMessage }}
-                        </p>
-                      </template>
-                    </div>
-                  </details>
-
                   <p v-if="aiSettingsMessage" class="success">
                     {{ aiSettingsMessage }}
-                  </p>
-                  <p v-if="aiGatewayError" class="error">
-                    {{ aiGatewayError }}
                   </p>
                 </template>
             </div>
@@ -3370,12 +3201,6 @@ h1 {
 
 .ai-model-key-field {
   gap: 6px;
-}
-
-.ai-gateway-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
 }
 
 .account-inline-actions {
@@ -4326,10 +4151,6 @@ h1 {
 
   .ai-model-row__field {
     flex-basis: 100%;
-  }
-
-  .ai-gateway-grid {
-    grid-template-columns: 1fr;
   }
 
   .plugin-meta-grid,
