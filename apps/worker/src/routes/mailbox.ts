@@ -2,6 +2,7 @@ import {
   activateAgentMailbox,
   createAgentMailboxDraft,
   getAgentMailboxDraftForApproval,
+  getAgentMailboxMessage,
   getAgentMailboxOutboundHeaders,
   getAgentMailboxOverview,
   listAgentMailboxMessages,
@@ -106,6 +107,15 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
       query: c.req.query("q") || "",
       unread: c.req.query("unread") || "",
     }));
+  });
+
+  app.get("/api/mailbox/messages/:messageId", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const result = await getAgentMailboxMessage(c.env, ownerId, c.req.param("messageId"));
+    if ("error" in result) return c.json({ error: result.error }, result.status as any);
+    return c.json(result);
   });
 
   app.get("/api/mailbox/messages/:messageId/attachments/:attachmentIndex", async (c) => {

@@ -10725,6 +10725,66 @@ describe("ME3 Core Worker auth", () => {
     expect(env.mailboxMessages).toEqual([]);
   });
 
+  it("loads a mailbox draft by id for assistant draft cards", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/mailbox", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          aliasLocalPart: "owner",
+          forwardingEnabled: false,
+        }),
+      }),
+      env,
+    );
+
+    const draftResponse = await app.fetch(
+      new Request("http://localhost/api/mailbox/drafts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          to: "client@example.com",
+          subject: "Hello",
+          textBody: "Short draft body",
+          source: "agent",
+        }),
+      }),
+      env,
+    );
+    const draftBody = (await draftResponse.json()) as {
+      draft: { id: string };
+    };
+
+    const readResponse = await app.fetch(
+      new Request(
+        `http://localhost/api/mailbox/messages/${draftBody.draft.id}`,
+        {
+          headers: { Cookie: session },
+        },
+      ),
+      env,
+    );
+    const readBody = (await readResponse.json()) as {
+      message: { id: string; toAddress: string; subject: string; body: string };
+    };
+
+    expect(readResponse.status).toBe(200);
+    expect(readBody.message).toMatchObject({
+      id: draftBody.draft.id,
+      toAddress: "client@example.com",
+      subject: "Hello",
+      body: "Short draft body",
+    });
+  });
+
   it("approves mailbox drafts through the active Postmark provider", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

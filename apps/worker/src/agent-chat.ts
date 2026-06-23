@@ -16,6 +16,7 @@ export {
   dispatchAgentSandboxTurn,
   getAgentContentStats,
   getAgentMailboxDraftForApproval,
+  getAgentMailboxMessage,
   getAgentMailboxOutboundHeaders,
   getAgentMailboxOverview,
   getCoreChatCapability,

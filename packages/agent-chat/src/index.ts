@@ -1447,6 +1447,20 @@ export async function listAgentMailboxMessages(
   };
 }
 
+export async function getAgentMailboxMessage(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageId: string,
+): Promise<{ message: AgentMailboxMessage } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const message = await getAgentMailboxMessageById(env, mailbox.id, messageId);
+  if (!message) return { error: "Message not found", status: 404 };
+
+  return { message: serializeAgentMailboxMessage(message) };
+}
+
 export async function createAgentMailboxDraft(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,

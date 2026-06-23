@@ -498,6 +498,7 @@ type AssistantMailboxDraftResponse = {
     id: string;
     toAddress: string | null;
     subject: string;
+    body: string;
   } | null;
 };
 type AssistantThread = {
@@ -712,6 +713,7 @@ const assistantDraft = ref("");
 const assistantPlaceholderIndex = ref(0);
 const assistantSending = ref(false);
 const assistantActionCardBusy = ref<string | null>(null);
+const assistantDraftHydrationIds = new Set<string>();
 const assistantContactsLoaded = ref(false);
 const assistantAwaitingResponse = ref(false);
 const assistantError = ref<string | null>(null);
@@ -2084,6 +2086,16 @@ function assistantMessageDisplayText(message: {
     : message.text;
 }
 
+function visibleAssistantActionCards(message: {
+  actionCards?: AgentChatActionCard[] | null;
+  emailDraftAction?: AgentChatEmailDraftAction | null;
+}) {
+  const cards = message.actionCards || [];
+  return message.emailDraftAction
+    ? cards.filter((card) => card.kind !== "mailbox.draft_saved")
+    : cards;
+}
+
 function threadTitle(thread: AssistantThread) {
   return thread.title?.trim() || "New chat";
 }
@@ -2152,10 +2164,8 @@ async function loadAssistantThreadFromRoute() {
       return mappedMessage;
     });
     agentChat.replaceMessages(mappedMessages);
-    mappedMessages.forEach((message) => {
-      if (message.emailDraftAction) {
-        void hydrateAssistantEmailDraftRecipient(message.emailDraftAction);
-      }
+    chatMessages.value.forEach((message) => {
+      hydrateAssistantEmailDraftMessage(message);
     });
   } catch (err) {
     if (assistantThreadId.value !== threadId) return;
@@ -2846,9 +2856,7 @@ function applyAssistantResultToMessage(
     message,
     previousUserTextForAssistantMessage(message),
   );
-  if (message.emailDraftAction) {
-    void hydrateAssistantEmailDraftRecipient(message.emailDraftAction);
-  }
+  hydrateAssistantEmailDraftMessage(message);
   message.inboxLink = result.emailAction?.kind === "drafted";
   message.rolodexLink = result.contactsChanged === true;
   message.reminderLink =
@@ -2892,6 +2900,84 @@ function createAgentChatEmailDraftAction(
     busy: null,
     error: null,
   };
+}
+
+function createSavedAgentChatEmailDraftAction(
+  message: { id?: string; text: string },
+  draft: NonNullable<AssistantMailboxDraftResponse["draft"]>,
+): AgentChatEmailDraftAction {
+  const to = draft.toAddress || "";
+  return {
+    id: `email-draft:${message.id || draft.id}`,
+    toName: null,
+    toAddress: draft.toAddress || null,
+    subject: draft.subject || "",
+    body: draft.body || "",
+    displayText: message.text,
+    to,
+    status: "saved",
+    statusLabel: "Saved draft",
+    savedDraftId: draft.id,
+    busy: null,
+    error: null,
+  };
+}
+
+function hydrateAssistantEmailDraftMessage(message: {
+  id?: string;
+  text: string;
+  emailDraftAction?: AgentChatEmailDraftAction | null;
+  actionCards?: AgentChatActionCard[] | null;
+}) {
+  if (message.emailDraftAction) {
+    void hydrateAssistantEmailDraftRecipient(message.emailDraftAction);
+    return;
+  }
+  const draftId = assistantMailboxDraftIdForMessage(message);
+  if (draftId) void hydrateAssistantSavedEmailDraft(message, draftId);
+}
+
+function assistantMailboxDraftIdForMessage(message: {
+  actionCards?: AgentChatActionCard[] | null;
+}) {
+  for (const card of message.actionCards || []) {
+    const draftId = mailboxDraftIdForActionCard(card);
+    if (draftId) return draftId;
+  }
+  return null;
+}
+
+async function hydrateAssistantSavedEmailDraft(
+  message: {
+    id?: string;
+    text: string;
+    emailDraftAction?: AgentChatEmailDraftAction | null;
+  },
+  draftId: string,
+) {
+  if (message.emailDraftAction || assistantDraftHydrationIds.has(draftId)) return;
+  assistantDraftHydrationIds.add(draftId);
+  try {
+    const draft = await loadAssistantMailboxDraft(draftId);
+    if (!draft || message.emailDraftAction) return;
+    message.emailDraftAction = createSavedAgentChatEmailDraftAction(
+      message,
+      draft,
+    );
+  } catch {
+    // Keep the existing action card if the mailbox draft cannot be loaded.
+  } finally {
+    assistantDraftHydrationIds.delete(draftId);
+  }
+}
+
+async function loadAssistantMailboxDraft(draftId: string) {
+  const data = await api.get<{
+    message: NonNullable<AssistantMailboxDraftResponse["draft"]>;
+  }>(
+    `/mailbox/messages/${encodeURIComponent(draftId)}`,
+  );
+  return data.message || null;
 }
 
 function previousUserTextForAssistantMessage(
@@ -3046,6 +3132,7 @@ async function saveAgentChatEmailDraftAction(
     action.savedDraftId = draftId;
     action.to = response.draft?.toAddress || action.to;
     action.subject = response.draft?.subject || action.subject;
+    action.body = response.draft?.body || action.body;
 
     if (sendNow) {
       await api.post(`/mailbox/drafts/${encodeURIComponent(draftId)}/approve`);
@@ -5272,12 +5359,12 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 </div>
               </div>
               <div
-                v-if="message.actionCards?.length"
+                v-if="visibleAssistantActionCards(message).length"
                 class="assistant-action-card-list"
                 aria-label="Assistant actions"
               >
                 <article
-                  v-for="card in message.actionCards"
+                  v-for="card in visibleAssistantActionCards(message)"
                   :key="card.id"
                   class="assistant-action-card"
                   :class="`assistant-action-card--${card.status}`"
