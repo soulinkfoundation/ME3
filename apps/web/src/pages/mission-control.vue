@@ -1546,7 +1546,6 @@ onMounted(() => {
           >
             <div>
               <strong>{{ cardLabel(card) }}</strong>
-              <span>{{ card.pluginId }}</span>
             </div>
             <Button
               color="accent"
