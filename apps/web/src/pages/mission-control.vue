@@ -376,6 +376,9 @@ const visibleProjectStatuses = computed(() =>
 const aiUsageTopModels = computed(() =>
   (aiUsage.value?.models || []).slice(0, 6),
 );
+const aiUsageDetailsAvailable = computed(
+  () => Boolean(aiUsage.value) && !aiUsage.value?.setupRequired,
+);
 
 function cardLabel(card: DashboardCardInstance): string {
   const contribution = dashboard.value?.availableCards.find(
@@ -698,6 +701,7 @@ async function loadAiUsage() {
     aiUsage.value = await api.get<AiUsageCardData>(
       "/mission-control/dashboard/cards/mission.ai-usage",
     );
+    if (aiUsage.value.setupRequired) aiUsageModalOpen.value = false;
   } catch (err) {
     aiUsageError.value =
       err instanceof Error ? err.message : "AI usage could not load.";
@@ -1213,7 +1217,7 @@ onMounted(() => {
                   {{ formatDashboardDate(aiUsage.fetchedAt) }}
                 </span>
                 <div
-                  v-if="!dashboardEditing"
+                  v-if="!dashboardEditing && aiUsageDetailsAvailable"
                   class="dashboard-card__actions dashboard-card__actions--inline"
                 >
                   <Button
@@ -1246,10 +1250,11 @@ onMounted(() => {
               </Button>
             </div>
             <div v-else-if="aiUsage?.setupRequired" class="dashboard-empty">
-              <p>Connect AI Gateway to show model spend here.</p>
-              <Button color="outline" shape="soft" size="compact" to="/account">
-                Open Settings
-              </Button>
+              <p>
+                Add <code>CLOUDFLARE_ACCOUNT_ID</code> and
+                <code>CLOUDFLARE_API_TOKEN</code> Worker secrets to show AI
+                usage here.
+              </p>
             </div>
             <div v-else-if="aiUsage" class="ai-usage-summary">
               <div class="ai-usage-summary__total">
@@ -1569,7 +1574,7 @@ onMounted(() => {
           </Button>
         </header>
         <div class="dashboard-modal__body">
-          <div v-if="aiUsage" class="ai-usage-detail">
+          <div v-if="aiUsageDetailsAvailable && aiUsage" class="ai-usage-detail">
             <div class="ai-usage-detail__metrics">
               <div>
                 <span>Spend</span>
