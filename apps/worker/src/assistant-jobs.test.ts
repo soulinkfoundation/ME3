@@ -219,6 +219,36 @@ describe("assistant jobs persistence", () => {
     expect(afterArchive.jobs.map((job) => job.id)).not.toContain(created.job.id);
   });
 
+  it("loads Weekly Review detail from mission task metadata", async () => {
+    const env = createAssistantJobsEnv();
+    const created = await createAssistantJob(env, "owner", { recipeId: "weekly-review" });
+    env.__state.tasks.push({
+      id: "weekly-review-task:owner:detail",
+      user_id: "owner",
+      project_id: "project-1",
+      title: "Weekly Review: 2026-06-15 to 2026-06-21",
+      status: "review",
+      source_ref: "weekly-review:2026-06-15:2026-06-21",
+      metadata_json: JSON.stringify({
+        kind: "weekly_review",
+        assistantJobId: created.job.id,
+      }),
+      updated_at: "2026-06-21T11:13:00.000Z",
+      archived_at: null,
+    });
+
+    const detail = await getAssistantJob(env, "owner", created.job.id);
+
+    expect(detail.job.name).toBe("Weekly Review");
+    expect(detail.latestReviewTask).toMatchObject({
+      id: "weekly-review-task:owner:detail",
+      projectId: "project-1",
+      title: "Weekly Review: 2026-06-15 to 2026-06-21",
+      status: "review",
+      sourceRef: "weekly-review:2026-06-15:2026-06-21",
+    });
+  });
+
   it("creates blocked run records for setup-gated jobs", async () => {
     const env = createAssistantJobsEnv();
 
@@ -1892,7 +1922,10 @@ class FakeStatement {
       ) as T | null;
     }
     if (sql.includes("FROM mission_tasks")) {
-      const metadataNeedle = String(values[1] || "").replaceAll("%", "");
+      if (sql.includes("SELECT id, project_id, title, status, source_ref, updated_at")) {
+        expect(sql).not.toMatch(/\b(LIKE|GLOB)\b/);
+      }
+      const metadataNeedle = String(values[1] || "");
       return (
         this.state.tasks
           .filter(

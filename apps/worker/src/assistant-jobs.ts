@@ -1037,7 +1037,7 @@ async function getLatestWeeklyReviewTaskSummary(env: Env, userId: string, jobId:
      FROM mission_tasks
      WHERE user_id = ?
        AND archived_at IS NULL
-       AND source_ref LIKE 'weekly-review:%'
+       AND instr(COALESCE(source_ref, ''), 'weekly-review:') = 1
        AND instr(metadata_json, ?) > 0
      ORDER BY updated_at DESC
      LIMIT 1`,
