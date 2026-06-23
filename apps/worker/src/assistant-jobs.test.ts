@@ -282,6 +282,49 @@ describe("assistant jobs persistence", () => {
       "Connect email before activation.",
     );
 
+    const readyInbox = await createAssistantJobBuilderAction(
+      createAssistantJobsEnv({ mailbox: activeMailboxRow() }),
+      "owner",
+      "/job watch my inbox for client emails",
+    );
+
+    expect(readyInbox?.kind).toBe("job_draft");
+    if (readyInbox?.kind !== "job_draft") {
+      expect.fail("Expected a ready inbox job draft action");
+    }
+    expect(readyInbox.draft.recipeId).toBe("email-triage");
+    expect(readyInbox.validation.status).toBe("valid");
+    expect(readyInbox.availableActions).toEqual(["save", "save_and_activate"]);
+    expect(readyInbox.explanation.setupWarnings).not.toContain(
+      "Connect email before activation.",
+    );
+
+    const booking = await createAssistantJobBuilderAction(
+      createAssistantJobsEnv({
+        pluginInstallations: [calendarPluginInstallationRow()],
+      }),
+      "owner",
+      "/job remind me before bookings",
+    );
+
+    expect(booking?.kind).toBe("job_draft");
+    if (booking?.kind !== "job_draft") {
+      expect.fail("Expected a booking job draft action");
+    }
+    expect(booking.draft.recipeId).toBe("booking-reminder");
+    expect(booking.validation.status).toBe("valid");
+
+    const unsupported = await createAssistantJobBuilderAction(
+      weeklyEnv,
+      "owner",
+      "/job monitor Hacker News for AI news",
+    );
+
+    expect(unsupported).toMatchObject({
+      kind: "job_unsupported",
+      availableActions: [],
+    });
+
     await expect(
       createAssistantJobBuilderAction(weeklyEnv, "owner", "review my week"),
     ).resolves.toBeNull();
@@ -1847,6 +1890,21 @@ class FakeStatement {
             category.entry_type === "expense" &&
             category.name.toLowerCase() === name,
         ) || null
+      ) as T | null;
+    }
+    if (sql.includes("FROM mission_tasks")) {
+      const metadataNeedle = String(values[1] || "").replaceAll("%", "");
+      return (
+        this.state.tasks
+          .filter(
+            (task) =>
+              task.user_id === values[0] &&
+              task.archived_at == null &&
+              String(task.source_ref || "").startsWith("weekly-review:") &&
+              String(task.metadata_json || "").includes(metadataNeedle),
+          )
+          .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0] ||
+        null
       ) as T | null;
     }
     if (sql.includes("FROM agent_channel_events")) {

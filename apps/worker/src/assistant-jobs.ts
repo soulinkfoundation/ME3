@@ -458,6 +458,11 @@ export type AssistantJobBuilderAction =
       summary: string;
       status: AssistantJobStatus;
       availableActions: Array<"activate" | "run_now" | "open_job">;
+    }
+  | {
+      kind: "job_unsupported";
+      summary: string;
+      availableActions: [];
     };
 
 export async function createAssistantJobBuilderAction(
@@ -469,7 +474,14 @@ export async function createAssistantJobBuilderAction(
   if (request === null) return null;
 
   const recipe = selectAssistantJobBuilderRecipe(request);
-  if (!recipe) return null;
+  if (!recipe) {
+    return {
+      kind: "job_unsupported",
+      summary:
+        "I can set up starter jobs for Daily Briefing, Weekly Review, Inbox Watch, Invoice and Receipt Triage, or Booking Reminder. I cannot create that custom job yet.",
+      availableActions: [],
+    };
+  }
 
   const draft = createAssistantJobDraftFromRecipe(recipe);
   const validation = await validateAssistantJobDraftForUser(env, userId, draft);
@@ -511,6 +523,18 @@ function selectAssistantJobBuilderRecipe(request: string) {
       keywords: ["invoice", "receipt", "receipts", "expense", "expenses", "accounts"],
     },
     {
+      recipeId: "booking-reminder",
+      keywords: [
+        "booking",
+        "bookings",
+        "meeting",
+        "meetings",
+        "calendar",
+        "event",
+        "events",
+      ],
+    },
+    {
       recipeId: "email-triage",
       keywords: ["inbox", "email", "emails", "message", "messages", "reply"],
     },
@@ -524,10 +548,9 @@ function selectAssistantJobBuilderRecipe(request: string) {
     },
   ];
 
-  const matched =
-    candidates.find((candidate) =>
-      candidate.keywords.some((keyword) => normalized.includes(keyword)),
-    ) || candidates.find((candidate) => candidate.recipeId === "weekly-review");
+  const matched = candidates.find((candidate) =>
+    candidate.keywords.some((keyword) => normalized.includes(keyword)),
+  );
 
   return matched ? getAssistantJobStarterRecipe(matched.recipeId) : null;
 }
@@ -536,11 +559,13 @@ function createAssistantJobBuilderSetupWarnings(
   validation: AssistantJobDraftValidation,
 ) {
   const warnings = new Set<string>();
-  for (const requirement of validation.permissionSummary.setupRequirements) {
-    warnings.add(formatAssistantJobSetupRequirement(requirement));
-  }
   for (const error of validation.errors) {
-    if (error.code === "setup_missing") continue;
+    if (error.code === "setup_missing") {
+      warnings.add(
+        formatAssistantJobSetupRequirement(setupRequirementFromValidationError(error)),
+      );
+      continue;
+    }
     if (error.code === "skill_missing") {
       warnings.add("A recommended skill is not available yet.");
       continue;
@@ -548,6 +573,13 @@ function createAssistantJobBuilderSetupWarnings(
     if (error.blocking) warnings.add("This draft needs adjustment before it can run.");
   }
   return Array.from(warnings);
+}
+
+function setupRequirementFromValidationError(error: { message?: string }) {
+  return (
+    error.message?.match(/^Missing setup requirement:\s*([^.\s]+)\.?$/i)?.[1] ||
+    ""
+  );
 }
 
 function formatAssistantJobSetupRequirement(requirement: string) {

@@ -485,8 +485,11 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (action.kind === "job_saved") {
       return action.summary;
     }
+    if (action.kind === "job_unsupported") {
+      return action.summary;
+    }
 
-    const setupText = action.explanation.setupWarnings.length
+    const setupText = action.validation.status === "needs_setup"
       ? " It needs setup before it can activate."
       : action.validation.status === "valid"
         ? " You can save and activate it when ready."

@@ -299,6 +299,11 @@ type AssistantJobBuilderAction =
       summary: string;
       status: AssistantJobStatus;
       availableActions: Array<"activate" | "run_now" | "open_job">;
+    }
+  | {
+      kind: "job_unsupported";
+      summary: string;
+      availableActions: [];
     };
 type AssistantJobSavedBuilderAction = Extract<
   AssistantJobBuilderAction,
@@ -740,6 +745,7 @@ const dailyBriefingVariables = [
 const suggestedRecipeOrder = [
   "daily-briefing",
   "weekly-review",
+  "booking-reminder",
   "email-triage",
   "invoice-receipt-triage",
 ];
@@ -2642,9 +2648,11 @@ type AssistantJobSaveResponse = {
 };
 
 function jobBuilderBusyKey(action: AssistantJobBuilderAction, intent: string) {
-  return action.kind === "job_draft"
-    ? `job-builder:${intent}:${action.draftId}`
-    : `job-builder:${intent}:${action.jobId}`;
+  if (action.kind === "job_draft")
+    return `job-builder:${intent}:${action.draftId}`;
+  if (action.kind === "job_saved")
+    return `job-builder:${intent}:${action.jobId}`;
+  return `job-builder:${intent}:unsupported`;
 }
 
 function jobBuilderActionBusy(
@@ -3312,6 +3320,8 @@ async function loadRecipes() {
 async function openJob(jobId: string) {
   selectedJobId.value = jobId;
   detailModalOpen.value = true;
+  configureJobsModalOpen.value = false;
+  closeRecipeIngredientsModal();
   loadingDetail.value = true;
   try {
     selectedDetail.value = await api.get<AssistantJobDetail>(
