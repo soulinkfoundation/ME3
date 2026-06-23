@@ -230,7 +230,7 @@ const JOB_DESCRIPTIONS: Record<string, string> = {
   weekly_review:
     "A digest of the past 7 days — bookings completed, emails handled, site activity, and notable events. Delivered weekly at your chosen time.",
   booking_reminders:
-    "Sends automated reminders 24 hours and 2 hours before each upcoming booking via email and Soulink (when connected).",
+    "Sends booking reminders to you and your guest 24 hours and 2 hours before confirmed site bookings. Email is the default; Telegram/Soulink owner reminders are added when connected.",
   invoice_triage:
     "Scans inbound mailbox messages for invoice and receipt emails, then files likely expenses into Accounts. Lower-confidence matches are marked for review.",
   relationship_scan:
@@ -258,7 +258,7 @@ function formatHour(hour: number): string {
 }
 
 const JOB_SCHEDULES_STATIC: Record<string, string> = {
-  booking_reminders: "Event-driven (triggered when a booking is created)",
+  booking_reminders: "24 hours and 2 hours before a confirmed site booking",
   invoice_triage: "Every 6 hours",
   relationship_scan: "Weekly by default",
   client_discovery: "Weekly by default",
@@ -267,7 +267,7 @@ const JOB_SCHEDULES_STATIC: Record<string, string> = {
 const JOB_CHANNELS: Record<string, string> = {
   daily_briefing: "Soulink, Email",
   weekly_review: "Soulink, Email",
-  booking_reminders: "Email, Soulink",
+  booking_reminders: "Email; Telegram/Soulink if connected",
   invoice_triage: "Accounts ledger",
   relationship_scan: "Relationship Builder",
   client_discovery: "Contacts (Prospects)",

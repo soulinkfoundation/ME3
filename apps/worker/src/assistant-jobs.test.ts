@@ -201,11 +201,17 @@ describe("assistant jobs persistence", () => {
     );
     expect(JSON.parse(env.__state.tasks[0]?.metadata_json as string)).toMatchObject({
       kind: "weekly_review",
+      assistantJobId: created.job.id,
       weeklyReview: {
         assistantJobRunId: run.run.id,
         missionAgentRunId: `assistant-job-run:${run.run.id}`,
         submittedAt: null,
       },
+    });
+    const detailWithReview = await getAssistantJob(env, "owner", created.job.id);
+    expect(detailWithReview.latestReviewTask).toMatchObject({
+      id: expect.stringContaining("weekly-review-task:owner:"),
+      sourceRef: expect.stringContaining("weekly-review:"),
     });
 
     await archiveAssistantJob(env, "owner", created.job.id);
@@ -300,19 +306,17 @@ describe("assistant jobs persistence", () => {
     );
 
     const booking = await createAssistantJobBuilderAction(
-      createAssistantJobsEnv({
-        pluginInstallations: [calendarPluginInstallationRow()],
-      }),
+      createAssistantJobsEnv(),
       "owner",
       "/job remind me before bookings",
     );
 
-    expect(booking?.kind).toBe("job_draft");
-    if (booking?.kind !== "job_draft") {
-      expect.fail("Expected a booking job draft action");
+    expect(booking?.kind).toBe("job_unsupported");
+    if (booking?.kind !== "job_unsupported") {
+      expect.fail("Expected booking reminder system copy");
     }
-    expect(booking.draft.recipeId).toBe("booking-reminder");
-    expect(booking.validation.status).toBe("valid");
+    expect(booking.availableActions).toEqual([]);
+    expect(booking.summary).toContain("Booking Reminders are already on");
 
     const unsupported = await createAssistantJobBuilderAction(
       weeklyEnv,
@@ -580,15 +584,8 @@ describe("assistant jobs persistence", () => {
     );
   });
 
-  it("uses calendar plugin readiness for calendar-backed starter jobs", async () => {
-    const missingEnv = createAssistantJobsEnv();
-    const missing = await createAssistantJob(missingEnv, "owner", { recipeId: "booking-reminder" });
-    expect(missing.job.status).toBe("needs_setup");
-    expect(missing.validation.status).toBe("needs_setup");
-
-    const readyEnv = createAssistantJobsEnv({
-      pluginInstallations: [calendarPluginInstallationRow()],
-    });
+  it("treats Booking Reminders as a ready site-booking system toggle", async () => {
+    const readyEnv = createAssistantJobsEnv();
     const readyRecipes = await listAssistantJobRecipes(readyEnv, "owner");
     expect(readyRecipes.recipes.find((recipe) => recipe.id === "booking-reminder")?.state).toBe(
       "ready",
@@ -597,6 +594,8 @@ describe("assistant jobs persistence", () => {
     const created = await createAssistantJob(readyEnv, "owner", { recipeId: "booking-reminder" });
     expect(created.job.status).toBe("active");
     expect(created.validation.status).toBe("valid");
+    expect(created.job.name).toBe("Booking Reminders");
+    expect(created.job.triggerSummary).toBe("When site.booking.confirmed happens");
   });
 
   it("sends daily briefing notifications through the connected owner channel", async () => {

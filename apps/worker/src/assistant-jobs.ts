@@ -473,12 +473,21 @@ export async function createAssistantJobBuilderAction(
   const request = parseAssistantJobBuilderRequest(messageText);
   if (request === null) return null;
 
+  if (isBookingReminderBuilderRequest(request)) {
+    return {
+      kind: "job_unsupported",
+      summary:
+        "Booking Reminders are already on for confirmed site bookings. They send email reminders to you and your guest 24 hours and 2 hours before a booking; Telegram/Soulink owner reminders are added when connected. Use Jobs to pause or resume them.",
+      availableActions: [],
+    };
+  }
+
   const recipe = selectAssistantJobBuilderRecipe(request);
   if (!recipe) {
     return {
       kind: "job_unsupported",
       summary:
-        "I can set up starter jobs for Daily Briefing, Weekly Review, Inbox Watch, Invoice and Receipt Triage, or Booking Reminder. I cannot create that custom job yet.",
+        "I can set up starter jobs for Daily Briefing, Weekly Review, Inbox Watch, or Invoice and Receipt Triage. I cannot create that custom job yet.",
       availableActions: [],
     };
   }
@@ -515,24 +524,16 @@ function parseAssistantJobBuilderRequest(messageText: string) {
   return trimmed.replace(/^\/job\b/i, "").trim();
 }
 
+function isBookingReminderBuilderRequest(request: string) {
+  return /\b(bookings?|meeting reminders?|site bookings?)\b/i.test(request);
+}
+
 function selectAssistantJobBuilderRecipe(request: string) {
   const normalized = request.toLowerCase();
   const candidates = [
     {
       recipeId: "invoice-receipt-triage",
       keywords: ["invoice", "receipt", "receipts", "expense", "expenses", "accounts"],
-    },
-    {
-      recipeId: "booking-reminder",
-      keywords: [
-        "booking",
-        "bookings",
-        "meeting",
-        "meetings",
-        "calendar",
-        "event",
-        "events",
-      ],
     },
     {
       recipeId: "email-triage",
@@ -1037,11 +1038,11 @@ async function getLatestWeeklyReviewTaskSummary(env: Env, userId: string, jobId:
      WHERE user_id = ?
        AND archived_at IS NULL
        AND source_ref LIKE 'weekly-review:%'
-       AND metadata_json LIKE ?
+       AND instr(metadata_json, ?) > 0
      ORDER BY updated_at DESC
      LIMIT 1`,
   )
-    .bind(userId, `%"assistantJobId":"${jobId}"%`)
+    .bind(userId, `"assistantJobId":"${jobId}"`)
     .first<{
       id: string;
       project_id: string | null;

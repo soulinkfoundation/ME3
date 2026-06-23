@@ -751,6 +751,15 @@ const suggestedRecipeOrder = [
   "invoice-receipt-triage",
 ];
 
+const bookingReminderSystemRecipeId = "booking-reminder";
+const bookingReminderSystemName = "Booking Reminders";
+const bookingReminderSystemRuns =
+  "24 hours and 2 hours before a confirmed site booking";
+const bookingReminderSystemDescription =
+  "Send booking reminders to you and your guest before bookings made on your site.";
+const bookingReminderSystemChannels =
+  "Email by default; Telegram/Soulink if connected";
+
 const suggestedRecipeIds = new Set(suggestedRecipeOrder);
 const scheduleCadenceOptions: Array<{
   label: string;
@@ -817,13 +826,28 @@ const sortedJobs = computed(() =>
 
 type ConfigureJobRow =
   | { kind: "job"; job: AssistantJob }
-  | { kind: "recipe"; recipe: AssistantJobRecipe };
+  | { kind: "recipe"; recipe: AssistantJobRecipe }
+  | {
+      kind: "booking-reminders";
+      job: AssistantJob | null;
+    };
+type BookingRemindersRow = Extract<
+  ConfigureJobRow,
+  { kind: "booking-reminders" }
+>;
 
 const configureJobRows = computed((): ConfigureJobRow[] => {
   const rows: ConfigureJobRow[] = [];
   const usedJobIds = new Set<string>();
 
   for (const recipeId of suggestedRecipeOrder) {
+    if (recipeId === bookingReminderSystemRecipeId) {
+      const job = jobs.value.find((item) => item.recipeId === recipeId) || null;
+      rows.push({ kind: "booking-reminders", job });
+      if (job) usedJobIds.add(job.id);
+      continue;
+    }
+
     const job = jobs.value.find((item) => item.recipeId === recipeId);
     if (job) {
       rows.push({ kind: "job", job });
@@ -2881,6 +2905,7 @@ function assistantRecipeIngredientName(capabilityId: string) {
     "email.message.read": "Email Messages",
     "email.thread.summarize": "Email Thread Summaries",
     "email.reply.draft": "Email Reply Drafts",
+    "email.message.send": "Email Delivery",
     "accounts.entry.create": "Accounts Entries",
     "calendar.event.read": "Calendar Events",
   };
@@ -3695,7 +3720,7 @@ function canCreateRecipe(recipe: AssistantJobRecipe) {
 }
 
 function canRun(job: AssistantJob) {
-  return job.status === "active";
+  return job.status === "active" && job.recipeId !== bookingReminderSystemRecipeId;
 }
 
 function canToggle(job: AssistantJob) {
@@ -3767,6 +3792,38 @@ async function handleRecipeToggle(
 
 function isRecipeToggleBusy(recipe: AssistantJobRecipe) {
   return isBusy(`recipe:${recipe.id}`);
+}
+
+function bookingRemindersSystemEnabled(row: BookingRemindersRow) {
+  return row.job?.status !== "paused";
+}
+
+function bookingRemindersSystemStatus(row: BookingRemindersRow) {
+  return bookingRemindersSystemEnabled(row) ? "Active" : "Paused";
+}
+
+async function handleBookingRemindersToggle(
+  row: BookingRemindersRow,
+  enabled: boolean,
+) {
+  if (enabled === bookingRemindersSystemEnabled(row)) return;
+
+  await withBusy("booking-reminders", async () => {
+    if (!row.job) {
+      await api.post("/assistant/jobs", {
+        recipeId: bookingReminderSystemRecipeId,
+        status: "paused",
+      });
+    } else {
+      await api.post(
+        `/assistant/jobs/${encodeURIComponent(row.job.id)}/${
+          enabled ? "resume" : "pause"
+        }`,
+      );
+    }
+    await loadJobs();
+    toastSuccess(enabled ? "Booking reminders resumed." : "Booking reminders paused.");
+  });
 }
 
 function formatDate(value: string | null) {
@@ -3965,6 +4022,8 @@ function formatTrigger(summary: string) {
     return value.replace(/^Monthly/i, "Every month");
   if (value.includes("email.message.received"))
     return "When matching email arrives";
+  if (value.includes("site.booking.confirmed"))
+    return bookingReminderSystemRuns;
   if (value.includes("calendar.event.upcoming"))
     return "Before matching calendar events";
   if (value.includes("review_packet.created"))
@@ -5911,7 +5970,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
           <div v-else class="job-list" role="list">
             <template
               v-for="row in configureJobRows"
-              :key="row.kind === 'job' ? row.job.id : row.recipe.id"
+              :key="
+                row.kind === 'job'
+                  ? row.job.id
+                  : row.kind === 'booking-reminders'
+                    ? 'booking-reminders'
+                    : row.recipe.id
+              "
             >
               <article
                 v-if="row.kind === 'job'"
@@ -5990,6 +6055,70 @@ function messageFromUnknown(err: unknown, fallback: string) {
                   >
                     <UiIcon name="Pencil" :size="16" />
                   </Button>
+                </div>
+              </article>
+
+              <article
+                v-else-if="row.kind === 'booking-reminders'"
+                role="listitem"
+                class="job-row"
+                :class="{
+                  'job-row--muted': !bookingRemindersSystemEnabled(row),
+                }"
+              >
+                <span class="job-row__emoji" aria-hidden="true">
+                  {{ recipeNavEmoji(bookingReminderSystemRecipeId) }}
+                </span>
+                <div class="job-row__main">
+                  <span class="job-row__copy">
+                    <span class="job-row__title-line">
+                      <strong>{{ bookingReminderSystemName }}</strong>
+                      <span
+                        class="status-badge"
+                        :class="
+                          bookingRemindersSystemEnabled(row)
+                            ? 'status-badge--active'
+                            : 'status-badge--paused'
+                        "
+                      >
+                        {{ bookingRemindersSystemStatus(row) }}
+                      </span>
+                    </span>
+                    <span class="job-row__meta">
+                      Runs: {{ bookingReminderSystemRuns }} ·
+                      {{ bookingReminderSystemChannels }}
+                    </span>
+                    <span class="job-row__meta">
+                      {{ bookingReminderSystemDescription }}
+                    </span>
+                  </span>
+                </div>
+
+                <div class="job-row__actions">
+                  <label
+                    class="job-toggle"
+                    :class="{ 'is-busy': isBusy('booking-reminders') }"
+                    @click.stop
+                  >
+                    <input
+                      type="checkbox"
+                      class="job-toggle__input"
+                      :checked="bookingRemindersSystemEnabled(row)"
+                      :disabled="isBusy('booking-reminders')"
+                      :aria-label="
+                        bookingRemindersSystemEnabled(row)
+                          ? `Pause ${bookingReminderSystemName}`
+                          : `Enable ${bookingReminderSystemName}`
+                      "
+                      @change="
+                        handleBookingRemindersToggle(
+                          row,
+                          ($event.target as HTMLInputElement).checked,
+                        )
+                      "
+                    />
+                    <span class="job-toggle__track" aria-hidden="true" />
+                  </label>
                 </div>
               </article>
 

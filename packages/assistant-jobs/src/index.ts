@@ -1166,51 +1166,29 @@ export const ASSISTANT_JOB_STARTER_RECIPES = [
   },
   {
     id: "booking-reminder",
-    name: "Booking Reminder",
+    name: "Booking Reminders",
     outcome:
-      "Prepare context before a meeting or booking and create follow-up tasks after.",
+      "Send booking reminders to you and your guest before bookings made on your site.",
     firstVersion: "later_provider_adapter",
-    state: "needs_setup",
-    requiredCapabilityIds: [
-      "calendar.event.read",
-      "mission.review_packet.create",
-      "mission.task.create",
-    ],
-    optionalCapabilityIds: ["email.thread.summarize", "message.owner.notify"],
+    state: "ready",
+    requiredCapabilityIds: ["email.message.send"],
+    optionalCapabilityIds: ["message.owner.notify"],
     recommendedSkillIds: [],
     requiredSkillIds: [],
     defaultDraft: draft({
-      name: "Booking Reminder",
-      purpose: "Prepare meeting or booking context in Mission Control.",
+      name: "Booking Reminders",
+      purpose:
+        "Send booking reminders to you and your guest before bookings made on your site.",
       recipeId: "booking-reminder",
       trigger: {
         kind: "event",
         source: "plugin",
-        sourceId: "me3.calendar",
-        eventType: "calendar.event.upcoming",
+        sourceId: "me3.booking",
+        eventType: "site.booking.confirmed",
         filters: [],
       },
       destination: missionDestination("review_packet"),
-      actions: [
-        action(
-          "read-calendar",
-          "calendar.event.read",
-          "Read scoped calendar events",
-          "none",
-        ),
-        action(
-          "create-review-packet",
-          "mission.review_packet.create",
-          "Create booking reminder packet",
-          "review_required",
-        ),
-        action(
-          "create-task",
-          "mission.task.create",
-          "Create follow-up tasks",
-          "none",
-        ),
-      ],
+      actions: [],
     }),
   },
 ] as const satisfies readonly AssistantJobStarterRecipe[];
