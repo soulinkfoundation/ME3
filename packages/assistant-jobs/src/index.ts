@@ -252,8 +252,7 @@ export type AssistantJobValidationErrorCode =
   | "forbidden_action"
   | "invalid_trigger"
   | "invalid_destination"
-  | "invalid_input"
-  | "unsupported_combination";
+  | "invalid_input";
 
 export type AssistantJobValidationError = {
   code: AssistantJobValidationErrorCode;
@@ -274,46 +273,6 @@ export type AssistantJobDraftValidationOptions = {
   enabledCapabilityIds?: readonly string[];
   readySetupRequirements?: readonly string[];
   availableSkillIds?: readonly string[];
-  customRunnerSupportedCapabilityIds?: readonly string[];
-};
-
-export type AssistantJobComposerTriggerId = "manual" | "daily" | "weekly";
-export type AssistantJobComposerSourceId =
-  | "mission_projects"
-  | "mission_tasks"
-  | "mission_approvals";
-export type AssistantJobComposerOutputId =
-  | "mission_result"
-  | "mission_task"
-  | "mission_activity";
-
-export type AssistantJobComposerPiece = {
-  id: string;
-  label: string;
-  summary: string;
-  defaultSelected: boolean;
-  requiresSetup: readonly string[];
-};
-
-export type AssistantJobComposerCatalog = {
-  triggers: readonly (AssistantJobComposerPiece & {
-    id: AssistantJobComposerTriggerId;
-  })[];
-  sources: readonly (AssistantJobComposerPiece & {
-    id: AssistantJobComposerSourceId;
-  })[];
-  outputs: readonly (AssistantJobComposerPiece & {
-    id: AssistantJobComposerOutputId;
-  })[];
-};
-
-export type AssistantJobComposerSelection = {
-  name?: unknown;
-  purpose?: unknown;
-  trigger?: unknown;
-  sourceIds?: unknown;
-  outputIds?: unknown;
-  projectId?: unknown;
 };
 
 export type AssistantJobContextScope = Me3AgentContextResolverScope;
@@ -963,253 +922,6 @@ function draft(input: {
   };
 }
 
-type AssistantJobComposerActionPiece = {
-  label: string;
-  summary: string;
-  defaultSelected: boolean;
-  actionId: string;
-  actionLabel: string;
-  capabilityId: string;
-  approvalMode: AssistantJobApprovalMode;
-  inputs?: Readonly<Record<string, unknown>>;
-};
-
-const COMPOSER_TRIGGER_CATALOG = [
-  {
-    id: "manual",
-    label: "Only when I run it",
-    summary: "No schedule. You start it from Jobs.",
-    defaultSelected: true,
-    requiresSetup: [],
-  },
-  {
-    id: "daily",
-    label: "Every day",
-    summary: "Runs once a day at the time you choose.",
-    defaultSelected: false,
-    requiresSetup: [],
-  },
-  {
-    id: "weekly",
-    label: "Every week",
-    summary: "Runs once a week on the day and time you choose.",
-    defaultSelected: false,
-    requiresSetup: [],
-  },
-] as const satisfies AssistantJobComposerCatalog["triggers"];
-
-const COMPOSER_SOURCE_ACTIONS = {
-  mission_projects: {
-    label: "Projects",
-    summary: "Looks at active Mission Control projects.",
-    defaultSelected: true,
-    actionId: "read-projects",
-    actionLabel: "Read projects",
-    capabilityId: "mission.project.read",
-    approvalMode: "none",
-  },
-  mission_tasks: {
-    label: "Tasks",
-    summary: "Looks at Mission Control tasks.",
-    defaultSelected: true,
-    actionId: "read-tasks",
-    actionLabel: "Read tasks",
-    capabilityId: "mission.task.read",
-    approvalMode: "none",
-  },
-  mission_approvals: {
-    label: "Approvals",
-    summary: "Looks at pending Mission Control approvals.",
-    defaultSelected: true,
-    actionId: "read-approvals",
-    actionLabel: "Read approvals",
-    capabilityId: "mission.approval.read",
-    approvalMode: "none",
-  },
-} as const satisfies Record<
-  AssistantJobComposerSourceId,
-  AssistantJobComposerActionPiece
->;
-
-const COMPOSER_OUTPUT_ACTIONS = {
-  mission_result: {
-    label: "Result",
-    summary: "Creates a Mission Control result for review.",
-    defaultSelected: true,
-    actionId: "create-review-packet",
-    actionLabel: "Create result",
-    capabilityId: "mission.review_packet.create",
-    approvalMode: "review_required",
-  },
-  mission_task: {
-    label: "Task",
-    summary: "Creates a Mission Control task.",
-    defaultSelected: false,
-    actionId: "create-task",
-    actionLabel: "Create task",
-    capabilityId: "mission.task.create",
-    approvalMode: "none",
-    inputs: {
-      title: "Review custom job result",
-      description: "Created by a custom Assistant Job.",
-    },
-  },
-  mission_activity: {
-    label: "Activity note",
-    summary: "Adds a Mission Control activity note.",
-    defaultSelected: false,
-    actionId: "create-activity",
-    actionLabel: "Record activity",
-    capabilityId: "mission.activity.create",
-    approvalMode: "none",
-  },
-} as const satisfies Record<
-  AssistantJobComposerOutputId,
-  AssistantJobComposerActionPiece
->;
-
-export const ASSISTANT_JOB_COMPOSER_RUNNER_CAPABILITY_IDS = [
-  ...Object.values(COMPOSER_SOURCE_ACTIONS).map((piece) => piece.capabilityId),
-  ...Object.values(COMPOSER_OUTPUT_ACTIONS).map((piece) => piece.capabilityId),
-] as const;
-
-export const ASSISTANT_JOB_COMPOSER_CATALOG: AssistantJobComposerCatalog = {
-  triggers: COMPOSER_TRIGGER_CATALOG,
-  sources: composerCatalogEntries(COMPOSER_SOURCE_ACTIONS),
-  outputs: composerCatalogEntries(COMPOSER_OUTPUT_ACTIONS),
-};
-
-export function createAssistantJobDraftFromComposerSelection(
-  input: AssistantJobComposerSelection = {},
-): AssistantJobDraft {
-  const projectId = normalizeComposerNullableText(input.projectId);
-  const sourceIds = normalizeComposerIds(
-    input.sourceIds,
-    COMPOSER_SOURCE_ACTIONS,
-    ["mission_projects", "mission_tasks", "mission_approvals"],
-  );
-  const outputIds = normalizeComposerIds(input.outputIds, COMPOSER_OUTPUT_ACTIONS, [
-    "mission_result",
-  ]);
-  if (!outputIds.includes("mission_result")) outputIds.unshift("mission_result");
-
-  return {
-    name: normalizeComposerText(input.name) || "Mission Control check",
-    purpose:
-      normalizeComposerText(input.purpose) ||
-      "Review Mission Control and create a result.",
-    recipeId: null,
-    trigger: composerTrigger(input.trigger),
-    scope: {
-      ...DEFAULT_SCOPE,
-      projectId,
-    },
-    rules: [],
-    actions: [
-      ...sourceIds.map((id) => composerAction(COMPOSER_SOURCE_ACTIONS[id])),
-      ...outputIds.map((id) => composerAction(COMPOSER_OUTPUT_ACTIONS[id])),
-    ],
-    approvalPolicy: DEFAULT_APPROVAL_POLICY,
-    destination: {
-      ...missionDestination("review_packet"),
-      projectId,
-    },
-    projectId,
-    recommendedSkillIds: [],
-    requiredSkillIds: [],
-  };
-}
-
-function composerCatalogEntries<T extends string>(
-  pieces: Record<T, AssistantJobComposerActionPiece>,
-): (AssistantJobComposerPiece & { id: T })[] {
-  return (Object.keys(pieces) as T[]).map((id) => {
-    const piece = pieces[id];
-    return {
-      id,
-      label: piece.label,
-      summary: piece.summary,
-      defaultSelected: piece.defaultSelected,
-      requiresSetup: getAssistantJobCapability(piece.capabilityId)?.requiresSetup ?? [],
-    };
-  });
-}
-
-function composerAction(piece: AssistantJobComposerActionPiece) {
-  return action(
-    piece.actionId,
-    piece.capabilityId,
-    piece.actionLabel,
-    piece.approvalMode,
-    piece.inputs,
-  );
-}
-
-function composerTrigger(value: unknown): AssistantJobTrigger {
-  const raw = isRecord(value) ? value : {};
-  const id = normalizeComposerChoice(
-    normalizeComposerText(raw.id) || normalizeComposerText(raw.kind),
-    ["manual", "daily", "weekly"],
-    "manual",
-  );
-
-  if (id === "manual") return { kind: "manual" };
-
-  return {
-    kind: "schedule",
-    timezone: "owner",
-    cadence: id,
-    rrule: null,
-    localTime: normalizeComposerTime(raw.localTime, id === "daily" ? "08:00" : "15:00"),
-    dayOfWeek: id === "weekly" ? normalizeComposerDay(raw.dayOfWeek) : null,
-    nextRunAt: null,
-  };
-}
-
-function normalizeComposerIds<T extends string>(
-  value: unknown,
-  allowed: Record<T, unknown>,
-  fallback: T[],
-): T[] {
-  const selected = Array.isArray(value) ? value : fallback;
-  const ids = selected.filter((item): item is T =>
-    typeof item === "string" &&
-    Object.prototype.hasOwnProperty.call(allowed, item),
-  );
-  return ids.length > 0 ? Array.from(new Set(ids)) : [...fallback];
-}
-
-function normalizeComposerChoice<T extends string>(
-  value: string | null,
-  allowed: readonly T[],
-  fallback: T,
-): T {
-  return allowed.includes(value as T) ? (value as T) : fallback;
-}
-
-function normalizeComposerTime(value: unknown, fallback: string) {
-  if (typeof value !== "string") return fallback;
-  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return fallback;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return fallback;
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-}
-
-function normalizeComposerDay(value: unknown) {
-  const day = typeof value === "number" ? value : Number(value);
-  return Number.isInteger(day) && day >= 0 && day <= 6 ? day : 5;
-}
-
-function normalizeComposerText(value: unknown) {
-  return typeof value === "string" ? value.trim().replace(/\s+/g, " ") || null : null;
-}
-
-function normalizeComposerNullableText(value: unknown) {
-  return normalizeComposerText(value);
-}
-
 const DEFAULT_INBOX_WATCH_RULE: InboxWatchRuleConfig = {
   id: "any-inbox-message",
   label: "Any inbox email",
@@ -1798,9 +1510,6 @@ export function validateAssistantJobDraft(
   const availableSkillIds = options.availableSkillIds
     ? new Set(options.availableSkillIds)
     : null;
-  const customRunnerSupportedCapabilityIds = options.customRunnerSupportedCapabilityIds
-    ? new Set(options.customRunnerSupportedCapabilityIds)
-    : null;
   const errors: AssistantJobValidationError[] = [];
 
   if (!isValidTrigger(draft.trigger)) {
@@ -1846,20 +1555,6 @@ export function validateAssistantJobDraft(
       errors.push({
         code: "plugin_disabled",
         message: `Capability is not enabled: ${capability.id}.`,
-        blocking: true,
-        actionId: action.id,
-        capabilityId: capability.id,
-      });
-    }
-
-    if (
-      draft.recipeId === null &&
-      customRunnerSupportedCapabilityIds &&
-      !customRunnerSupportedCapabilityIds.has(capability.id)
-    ) {
-      errors.push({
-        code: "unsupported_combination",
-        message: `That custom job piece is not supported yet: ${capability.label}.`,
         blocking: true,
         actionId: action.id,
         capabilityId: capability.id,

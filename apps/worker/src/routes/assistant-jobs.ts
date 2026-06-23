@@ -1,15 +1,12 @@
 import {
   AssistantJobsInputError,
   archiveAssistantJob,
-  createAssistantCustomJob,
   createAssistantJob,
   duplicateAssistantJob,
   getAssistantJob,
-  listAssistantJobComposerCatalog,
   listAssistantJobIngressEvents,
   listAssistantJobRecipes,
   listAssistantJobs,
-  previewAssistantCustomJobDraft,
   recordAssistantJobIngressEvent,
   runAssistantJobNow,
   setAssistantJobPaused,
@@ -96,47 +93,6 @@ export function registerAssistantJobsRoutes(app: AppHono, deps: OwnerRouteDeps) 
 
     try {
       return c.json(await listAssistantJobs(c.env, ownerId, c.req.query("status")));
-    } catch (error) {
-      return assistantJobsErrorResponse(c, error);
-    }
-  });
-
-  app.get("/api/assistant/jobs/composer", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-    return c.json(listAssistantJobComposerCatalog());
-  });
-
-  app.post("/api/assistant/jobs/custom-draft", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-
-    try {
-      return c.json(
-        await previewAssistantCustomJobDraft(
-          c.env,
-          ownerId,
-          await c.req.json().catch(() => ({})),
-        ),
-      );
-    } catch (error) {
-      return assistantJobsErrorResponse(c, error);
-    }
-  });
-
-  app.post("/api/assistant/jobs/custom", async (c) => {
-    const ownerId = await deps.requireOwner(c);
-    if (!ownerId) return deps.unauthorized(c);
-
-    try {
-      return c.json(
-        await createAssistantCustomJob(
-          c.env,
-          ownerId,
-          await c.req.json().catch(() => ({})),
-        ),
-        201,
-      );
     } catch (error) {
       return assistantJobsErrorResponse(c, error);
     }
