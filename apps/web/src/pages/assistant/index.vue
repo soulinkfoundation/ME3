@@ -787,14 +787,12 @@ type StarterPrompt = {
   label: string;
   icon: string;
   prompt: string;
-  tone?: "configure";
 };
 const starterPrompts: StarterPrompt[] = [
   {
     label: "Configure",
     icon: "⚙️",
     prompt: configureStarterPrompt,
-    tone: "configure",
   },
   {
     label: "Set up a job",
@@ -4631,9 +4629,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 :key="prompt.label"
                 type="button"
                 class="starter-prompt"
-                :class="{
-                  'starter-prompt--configure': prompt.tone === 'configure',
-                }"
                 @click="useStarterPrompt(prompt.prompt)"
               >
                 <span class="starter-prompt__icon" aria-hidden="true">
@@ -7456,12 +7451,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
 .starter-prompt:hover {
   border-color: color-mix(in oklab, var(--ui-accent) 40%, var(--ui-border));
   background: var(--ui-surface-muted);
-  color: var(--ui-text);
-}
-
-.starter-prompt--configure {
-  border-color: color-mix(in oklab, var(--ui-accent) 62%, var(--ui-border));
-  background: color-mix(in oklab, var(--ui-accent-soft) 70%, var(--ui-surface));
   color: var(--ui-text);
 }
 
