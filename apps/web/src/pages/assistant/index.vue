@@ -9862,6 +9862,10 @@ button:disabled {
     font-size: max(16px, 1em);
   }
 
+  .assistant-page .model-picker__select-sizer {
+    font-size: max(16px, 1em);
+  }
+
   .assistant-page-tools {
     display: none;
   }
