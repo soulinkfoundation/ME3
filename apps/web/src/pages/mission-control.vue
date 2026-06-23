@@ -211,10 +211,6 @@ const dashboardProjects = ref<MissionProject[]>([]);
 const dashboardProjectTasks = ref<MissionTask[]>([]);
 const projectsSummaryLoading = ref(false);
 const projectsSummaryError = ref("");
-const quickProjectTaskDraft = ref("");
-const quickProjectTaskProjectId = ref("");
-const quickProjectTaskSaving = ref(false);
-const quickProjectTaskError = ref("");
 const aiUsage = ref<AiUsageCardData | null>(null);
 const aiUsageLoading = ref(false);
 const aiUsageError = ref("");
@@ -303,18 +299,6 @@ const activeDashboardProjectTasks = computed(() =>
   dashboardProjectTasks.value.filter((task) =>
     activeProjectTaskStatuses.includes(task.status as ProjectBoardStatus),
   ),
-);
-const activeDashboardProjects = computed(() =>
-  dashboardProjects.value.filter((project) => project.status === "active"),
-);
-const quickProjectTaskCreateDisabled = computed(
-  () =>
-    quickProjectTaskSaving.value ||
-    !quickProjectTaskDraft.value.trim() ||
-    !(
-      quickProjectTaskProjectId.value ||
-      activeDashboardProjects.value[0]?.id
-    ),
 );
 const setupProfilePath = computed(() => {
   const profileSite = sites.sites.find(
@@ -453,26 +437,6 @@ function projectSummaryPath(summary: ProjectDashboardSummary): string {
   return summary.id === "personal"
     ? "/mission-control/projects"
     : `/mission-control/projects?project=${encodeURIComponent(summary.id)}`;
-}
-
-function syncQuickProjectTaskProjectDefault() {
-  const projects = activeDashboardProjects.value;
-  if (!projects.length) {
-    quickProjectTaskProjectId.value = "";
-    return;
-  }
-  if (
-    !quickProjectTaskProjectId.value ||
-    !projects.some((project) => project.id === quickProjectTaskProjectId.value)
-  ) {
-    quickProjectTaskProjectId.value = projects[0]?.id || "";
-  }
-}
-
-function clearQuickProjectTask() {
-  if (quickProjectTaskSaving.value) return;
-  quickProjectTaskDraft.value = "";
-  quickProjectTaskError.value = "";
 }
 
 function visibleCardEnabled(cardId: string): boolean {
@@ -730,48 +694,13 @@ async function loadProjectsSummary() {
     }
     dashboardProjects.value = projectsResponse.projects || [];
     dashboardProjectTasks.value = tasks;
-    syncQuickProjectTaskProjectDefault();
   } catch (err) {
     projectsSummaryError.value =
       err instanceof Error ? err.message : "Project stats could not load.";
     dashboardProjects.value = [];
     dashboardProjectTasks.value = [];
-    quickProjectTaskProjectId.value = "";
   } finally {
     projectsSummaryLoading.value = false;
-  }
-}
-
-async function addQuickProjectTask() {
-  const title = quickProjectTaskDraft.value.trim();
-  const projectId =
-    quickProjectTaskProjectId.value || activeDashboardProjects.value[0]?.id || "";
-  if (!title || !projectId || quickProjectTaskSaving.value) return;
-  quickProjectTaskSaving.value = true;
-  quickProjectTaskError.value = "";
-  try {
-    const response = await api.post<{ task: MissionTask }>(
-      "/mission-control/tasks",
-      {
-        title,
-        projectId,
-        status: "backlog",
-      },
-    );
-    dashboardProjectTasks.value = [
-      response.task,
-      ...dashboardProjectTasks.value.filter(
-        (task) => task.id !== response.task.id,
-      ),
-    ];
-    quickProjectTaskDraft.value = "";
-    toastSuccess("Task added");
-  } catch (err) {
-    quickProjectTaskError.value =
-      err instanceof Error ? err.message : "Could not add task.";
-    toastFromUnknown(err, "Could not add task");
-  } finally {
-    quickProjectTaskSaving.value = false;
   }
 }
 
@@ -1368,85 +1297,6 @@ onMounted(() => {
                 Open Projects
               </Button>
             </div>
-            <form
-              v-if="!dashboardEditing"
-              class="quick-project-task quick-project-task--inline"
-              @submit.prevent="addQuickProjectTask"
-            >
-              <select
-                v-model="quickProjectTaskProjectId"
-                class="quick-project-task__project"
-                aria-label="Project"
-                :disabled="projectsSummaryLoading || quickProjectTaskSaving"
-              >
-                <option
-                  v-for="project in activeDashboardProjects"
-                  :key="project.id"
-                  :value="project.id"
-                >
-                  {{ project.name }}
-                </option>
-              </select>
-              <input
-                v-model="quickProjectTaskDraft"
-                class="quick-project-task__input"
-                type="text"
-                placeholder="Task name"
-                autocomplete="off"
-                :disabled="
-                  projectsSummaryLoading ||
-                  quickProjectTaskSaving ||
-                  !activeDashboardProjects.length
-                "
-                @keydown.esc.prevent="clearQuickProjectTask"
-              />
-              <Button
-                class="quick-project-task__clear"
-                color="ghost"
-                shape="soft"
-                size="compact"
-                icon-only
-                type="button"
-                aria-label="Clear task"
-                title="Clear task"
-                :disabled="quickProjectTaskSaving || !quickProjectTaskDraft"
-                @click="clearQuickProjectTask"
-              >
-                <UiIcon name="X" :size="15" />
-              </Button>
-              <Button
-                class="quick-project-task__submit"
-                color="primary"
-                shape="soft"
-                size="compact"
-                icon-only
-                type="submit"
-                aria-label="Add task"
-                title="Add task"
-                :disabled="quickProjectTaskCreateDisabled"
-              >
-                <UiIcon name="Plus" :size="16" />
-              </Button>
-            </form>
-            <p
-              v-if="
-                !dashboardEditing &&
-                (projectsSummaryLoading ||
-                  quickProjectTaskError ||
-                  projectsSummaryError ||
-                  !activeDashboardProjects.length)
-              "
-              class="quick-project-task__message"
-              :class="{ 'is-error': quickProjectTaskError || projectsSummaryError }"
-            >
-              {{
-                projectsSummaryLoading
-                  ? "Loading projects..."
-                  : quickProjectTaskError ||
-                    projectsSummaryError ||
-                    "Add a project before creating tasks."
-              }}
-            </p>
           </template>
           <template
             v-else-if="cardComponentKey(card) === 'AccountsSummaryCard'"
@@ -2124,83 +1974,6 @@ onMounted(() => {
   width: 100%;
 }
 
-.quick-project-task {
-  display: grid;
-  gap: 8px;
-  padding: 8px;
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-surface-muted);
-}
-
-.quick-project-task--inline {
-  grid-template-columns: minmax(104px, 0.34fr) minmax(0, 1fr) 32px 36px;
-  align-items: center;
-  margin-top: 10px;
-}
-
-.quick-project-task__project,
-.quick-project-task__input {
-  width: 100%;
-  min-width: 0;
-  min-height: 36px;
-  box-sizing: border-box;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.quick-project-task__project {
-  padding: 0 24px 0 2px;
-  font-weight: 650;
-}
-
-.quick-project-task__row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px 36px;
-  align-items: center;
-  gap: 5px;
-}
-
-.quick-project-task__input {
-  padding: 0 2px;
-}
-
-.quick-project-task__input::placeholder {
-  color: var(--ui-text-muted);
-}
-
-.quick-project-task__project:focus,
-.quick-project-task__input:focus {
-  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 72%);
-  outline-offset: 1px;
-}
-
-.quick-project-task__clear,
-.quick-project-task__submit {
-  width: 32px;
-  min-width: 32px;
-  min-height: 32px;
-}
-
-.quick-project-task__submit {
-  width: 36px;
-  min-width: 36px;
-  min-height: 36px;
-}
-
-.quick-project-task__message {
-  color: var(--ui-text-muted);
-  font-size: 12px !important;
-  line-height: 1.4 !important;
-}
-
-.quick-project-task__message.is-error {
-  color: #b91c1c;
-}
-
 .ai-usage-summary {
   display: grid;
   gap: 12px;
@@ -2667,14 +2440,6 @@ onMounted(() => {
 
   .wheel-summary__row {
     grid-template-columns: 1fr;
-  }
-
-  .quick-project-task--inline {
-    grid-template-columns: minmax(0, 1fr) 32px 36px;
-  }
-
-  .quick-project-task--inline .quick-project-task__project {
-    grid-column: 1 / -1;
   }
 
   .dashboard-modal__row,
