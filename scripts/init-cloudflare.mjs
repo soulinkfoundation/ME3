@@ -132,7 +132,7 @@ if (!args.skipSecrets) {
 
 console.log("");
 console.log("Next:");
-console.log("  pnpm deploy");
+console.log("  pnpm deploy:cloudflare");
 console.log("  pnpm exec wrangler deployments status --config wrangler.toml");
 
 function parseArgs(values) {

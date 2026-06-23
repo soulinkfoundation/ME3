@@ -17,7 +17,7 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const coreMetadata = existsSync("me3-core.json")
   ? JSON.parse(readFileSync("me3-core.json", "utf8"))
   : {};
-const deployScript = packageJson.scripts?.deploy || "";
+const deployScript = packageJson.scripts?.["deploy:cloudflare"] || "";
 const deployPreparesResources = /deploy:prepare/.test(deployScript);
 
 check(
@@ -49,7 +49,7 @@ const d1DatabaseId = getTomlString(d1Block, "database_id");
 check(
   "D1 DB binding exists or deploy script prepares it",
   Boolean(d1Block) || deployPreparesResources,
-  'Expected [[d1_databases]] with binding = "DB", or pnpm deploy to run deploy:prepare.',
+  'Expected [[d1_databases]] with binding = "DB", or pnpm deploy:cloudflare to run deploy:prepare.',
 );
 if (d1Block) {
   check("D1 database name is set", Boolean(d1DatabaseName), "Expected D1 database_name.");
@@ -71,7 +71,7 @@ const r2Block = getTomlArrayBlock(config, "r2_buckets", "SITE_ASSETS");
 check(
   "R2 SITE_ASSETS binding exists or deploy script prepares it",
   Boolean(r2Block) || deployPreparesResources,
-  'Expected [[r2_buckets]] with binding = "SITE_ASSETS", or pnpm deploy to run deploy:prepare.',
+  'Expected [[r2_buckets]] with binding = "SITE_ASSETS", or pnpm deploy:cloudflare to run deploy:prepare.',
 );
 if (r2Block) {
   check("R2 bucket name is set", Boolean(getTomlString(r2Block, "bucket_name")), "Expected R2 bucket_name.");
@@ -100,15 +100,25 @@ check(
 );
 
 check(
+  "Reserved pnpm deploy command is unused",
+  !packageJson.scripts?.deploy,
+  "Use deploy:cloudflare because pnpm deploy is a pnpm built-in command.",
+);
+check(
+  "Cloudflare deploy script is available",
+  Boolean(deployScript),
+  "Expected package.json scripts.deploy:cloudflare.",
+);
+check(
   "Deploy script prepares Cloudflare resources before migrations",
   /deploy:prepare/.test(deployScript) &&
     deployScript.indexOf("deploy:prepare") < deployScript.indexOf("db:migrations:apply"),
-  "Expected pnpm deploy to run deploy:prepare before db:migrations:apply.",
+  "Expected pnpm deploy:cloudflare to run deploy:prepare before db:migrations:apply.",
 );
 check(
   "Deploy script applies migrations before deploy",
   /db:migrations:apply/.test(deployScript),
-  "Expected pnpm deploy to run db:migrations:apply.",
+  "Expected pnpm deploy:cloudflare to run db:migrations:apply.",
 );
 check(
   "Update checker script is available",

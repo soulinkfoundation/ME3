@@ -23,8 +23,8 @@
     "build": "pnpm generate:llms && pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
-    "deploy": "pnpm deploy:prepare && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
-    "deploy:d1-only": "pnpm deploy:prepare -- --skip-r2 && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
+    "deploy:cloudflare": "pnpm deploy:prepare && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
+    "deploy:cloudflare:d1-only": "pnpm deploy:prepare -- --skip-r2 && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
   },
   "cloudflare": {
     "bindings": {

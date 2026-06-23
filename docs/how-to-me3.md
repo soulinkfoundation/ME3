@@ -124,6 +124,12 @@ Rotating `SETUP_PASSWORD` does not change the owner account password. It only ch
 
 Use Account for owner-facing setup. Keep answers short and point owners back to the UI when it can do the work.
 
+### Deploy Core
+
+Use `pnpm deploy:cloudflare` for manual Cloudflare deploys. It prepares D1/R2 bindings, builds the app, applies D1 migrations, and runs `wrangler deploy`.
+
+Do not use `pnpm deploy`; `deploy` is a pnpm built-in command and can skip ME3's deploy preparation.
+
 ### Custom Domain
 
 1. In Cloudflare, add or transfer the domain if needed.
