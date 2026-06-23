@@ -31,6 +31,41 @@ describe("voice dictation", () => {
     });
   });
 
+  it("routes Cloudflare Whisper through AI Gateway when configured", async () => {
+    const run = vi.fn().mockResolvedValue({
+      text: "Gateway transcript.",
+      word_count: 2,
+      language: "en",
+    });
+    const env = {
+      AI: { run },
+      CLOUDFLARE_ACCOUNT_ID: "cf-account",
+      CLOUDFLARE_API_TOKEN: "cf-token",
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            first: async () => null,
+          }),
+        }),
+      },
+    } as unknown as Env;
+
+    const result = await transcribeVoiceDictation(env, new Blob(["audio"], { type: "audio/webm" }), {
+      ownerId: "owner",
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      "@cf/openai/whisper-large-v3-turbo",
+      expect.objectContaining({ audio: expect.any(String) }),
+      {
+        gateway: {
+          id: "default",
+        },
+      },
+    );
+    expect(result.text).toBe("Gateway transcript.");
+  });
+
   it("reports setup required when Workers AI is unavailable", async () => {
     await expect(
       transcribeVoiceDictation({} as Env, new Blob(["audio"], { type: "audio/webm" })),

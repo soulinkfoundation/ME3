@@ -562,6 +562,35 @@ describe("Core chat native context", () => {
     );
   });
 
+  it("routes Workers AI chat through AI Gateway when configured", async () => {
+    const aiRun = vi.fn(async () => ({
+      response: "Gateway model reply.",
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        CLOUDFLARE_ACCOUNT_ID: "cf-account",
+        CLOUDFLARE_API_TOKEN: "cf-token",
+      } as never,
+      createStorage(),
+      dispatchInput("Use gateway accounting."),
+    );
+
+    expect(response.replyText).toBe("Gateway model reply.");
+    expect(aiRun).toHaveBeenCalledWith(
+      "@cf/qwen/qwen3-30b-a3b-fp8",
+      expect.any(Object),
+      {
+        gateway: {
+          id: "default",
+        },
+      },
+    );
+  });
+
   it("omits unsupported sampling controls for selected OpenAI reasoning models", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Response.json({ choices: [{ message: { content: "Selected OpenAI reply." } }] }),
@@ -594,6 +623,86 @@ describe("Core chat native context", () => {
         model: "gpt-5.5",
       });
       expect(body).not.toHaveProperty("temperature");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("routes selected OpenAI chat through AI Gateway when configured", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ choices: [{ message: { content: "Gateway OpenAI reply." } }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createEnv();
+
+    try {
+      const response = await dispatchAgentSandboxTurn(
+        {
+          ...env,
+          OPENAI_API_KEY: "sk-openai-secret",
+          CLOUDFLARE_ACCOUNT_ID: "cf-account",
+          CLOUDFLARE_API_TOKEN: "cf-token",
+        } as never,
+        createStorage(),
+        {
+          ...dispatchInput("Say hello."),
+          selectedModel: {
+            providerId: "openai",
+            model: "gpt-4.1-mini",
+            optionId: "openai-gpt-4-1-mini",
+          },
+        },
+      );
+      const [input, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
+
+      expect(response.replyText).toBe("Gateway OpenAI reply.");
+      expect(String(input)).toBe(
+        "https://gateway.ai.cloudflare.com/v1/cf-account/default/openai/chat/completions",
+      );
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer sk-openai-secret",
+        "cf-aig-authorization": "Bearer cf-token",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("routes selected Anthropic chat through AI Gateway when configured", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ content: [{ type: "text", text: "Gateway Anthropic reply." }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createEnv();
+
+    try {
+      const response = await dispatchAgentSandboxTurn(
+        {
+          ...env,
+          ANTHROPIC_API_KEY: "sk-ant-secret",
+          CLOUDFLARE_ACCOUNT_ID: "cf-account",
+          CLOUDFLARE_API_TOKEN: "cf-token",
+        } as never,
+        createStorage(),
+        {
+          ...dispatchInput("Say hello."),
+          selectedModel: {
+            providerId: "anthropic",
+            model: "claude-3-5-haiku-latest",
+            optionId: "anthropic-haiku",
+          },
+        },
+      );
+      const [input, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
+
+      expect(response.replyText).toBe("Gateway Anthropic reply.");
+      expect(String(input)).toBe(
+        "https://gateway.ai.cloudflare.com/v1/cf-account/default/anthropic/v1/messages",
+      );
+      expect(init.headers).toMatchObject({
+        "x-api-key": "sk-ant-secret",
+        "cf-aig-authorization": "Bearer cf-token",
+      });
     } finally {
       vi.unstubAllGlobals();
     }

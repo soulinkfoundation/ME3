@@ -214,6 +214,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     try {
       const result = await transcribeVoiceDictation(c.env, audio, {
         language: typeof language === "string" && language.trim() ? language.trim() : null,
+        ownerId,
       });
       return c.json({ ok: true, ...result });
     } catch (error) {

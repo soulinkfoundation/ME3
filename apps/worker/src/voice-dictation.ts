@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { getAiGatewayRuntimeConfig } from "./ai-gateway";
 
 export type VoiceTranscriptionProviderId =
   | "cloudflare-whisper"
@@ -37,7 +38,7 @@ export class VoiceDictationInputError extends Error {
 export async function transcribeVoiceDictation(
   env: Env,
   audio: Blob,
-  options: { language?: string | null } = {},
+  options: { language?: string | null; ownerId?: string | null } = {},
 ): Promise<VoiceTranscriptionResult> {
   if (!(audio instanceof Blob)) {
     throw new VoiceDictationInputError("Audio file is required");
@@ -77,7 +78,7 @@ function normalizeProviderId(value: unknown): VoiceTranscriptionProviderId {
 async function transcribeWithCloudflareWhisper(
   env: Env,
   audio: Blob,
-  options: { language?: string | null },
+  options: { language?: string | null; ownerId?: string | null },
 ): Promise<VoiceTranscriptionResult> {
   if (!env.AI) {
     throw new VoiceDictationInputError("Cloudflare Workers AI is not configured", 503);
@@ -93,7 +94,20 @@ async function transcribeWithCloudflareWhisper(
           ...(options.language ? { language: options.language } : {}),
         };
 
-  const response = (await env.AI.run(model, input)) as CloudflareWhisperResponse;
+  const aiGateway = options.ownerId
+    ? await getAiGatewayRuntimeConfig(env, options.ownerId).catch(() => null)
+    : null;
+  const requestOptions =
+    aiGateway?.routeWorkersAi && aiGateway.gatewayId
+      ? {
+          gateway: {
+            id: aiGateway.gatewayId,
+          },
+        }
+      : undefined;
+  const response = (requestOptions
+    ? await env.AI.run(model, input, requestOptions)
+    : await env.AI.run(model, input)) as CloudflareWhisperResponse;
   const text = normalizeTranscriptText(response.text);
   if (!text) {
     throw new VoiceDictationInputError("Transcription returned no text", 502);

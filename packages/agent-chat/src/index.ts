@@ -438,11 +438,13 @@ export type AgentMailboxDraftFailureInput = {
 type CoreAgentChatEnv = {
   DB: D1Like;
   AI?: {
-    run(model: string, input: unknown): Promise<unknown>;
+    run(model: string, input: unknown, options?: unknown): Promise<unknown>;
   };
   ENVIRONMENT?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
   TOKEN_ENCRYPTION_KEY?: string;
   ME3_ASSISTANT_DEBUG_TRACE?: string;
   ME3_ASSISTANT_TRACE?: string;
@@ -520,6 +522,12 @@ type OwnerProfileRow = {
 type AiCredentialRow = {
   provider_id: string;
   encrypted_api_key: string | null;
+};
+
+type AiGatewaySettingsRow = {
+  account_id: string | null;
+  gateway_id: string | null;
+  encrypted_api_token: string | null;
 };
 
 type AiDefaultRow = {
@@ -806,13 +814,23 @@ type AiRoute = {
   backupModel: string | null;
   apiKey: string | null;
   ai: CoreAgentChatEnv["AI"] | null;
+  aiGateway: AiGatewayRuntimeConfig | null;
   configured: boolean;
+};
+
+type AiGatewayRuntimeConfig = {
+  accountId: string | null;
+  gatewayId: string | null;
+  apiToken: string | null;
+  routeWorkersAi: boolean;
+  routeExternalProviders: boolean;
 };
 
 const DEFAULT_WORKERS_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
 const DEFAULT_WORKERS_AI_BACKUP_MODEL = "@cf/zai-org/glm-4.7-flash";
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest";
+const DEFAULT_AI_GATEWAY_ID = "default";
 const INSTALL_ENCRYPTION_KEY_NAME = "TOKEN_ENCRYPTION_KEY";
 const CHAT_CONTEXT_PROMPT_BUDGET_CHARS = 3500;
 const DEFAULT_MISSION_STATEMENT_TEMPLATE_MARKER = "[who/what]";
@@ -4537,11 +4555,15 @@ async function runOpenAi(
     body.temperature = 0.4;
   }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const gatewayUrl = externalProviderGatewayUrl(route, "openai", "chat/completions");
+  const response = await fetch(gatewayUrl || "https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${route.apiKey}`,
+      ...(gatewayUrl && route.aiGateway?.apiToken
+        ? { "cf-aig-authorization": `Bearer ${route.aiGateway.apiToken}` }
+        : {}),
     },
     body: JSON.stringify(body),
   });
@@ -4581,12 +4603,16 @@ async function runAnthropic(
     .filter((message) => message.role !== "system")
     .map((message) => ({ role: message.role, content: message.content }));
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const gatewayUrl = externalProviderGatewayUrl(route, "anthropic", "v1/messages");
+  const response = await fetch(gatewayUrl || "https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": route.apiKey,
       "anthropic-version": "2023-06-01",
+      ...(gatewayUrl && route.aiGateway?.apiToken
+        ? { "cf-aig-authorization": `Bearer ${route.aiGateway.apiToken}` }
+        : {}),
     },
     body: JSON.stringify({
       model: route.model,
@@ -4615,8 +4641,37 @@ async function runWorkersAi(
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
 ): Promise<string> {
   if (!route.ai) throw new Error("Workers AI binding is not configured");
-  const result = await route.ai.run(route.model, { messages });
+  const requestOptions =
+    route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
+      ? {
+          gateway: {
+            id: route.aiGateway.gatewayId,
+          },
+        }
+      : undefined;
+  const result = requestOptions
+    ? await route.ai.run(route.model, { messages }, requestOptions)
+    : await route.ai.run(route.model, { messages });
   return extractModelText(result) || emptyModelReply(route);
+}
+
+function externalProviderGatewayUrl(
+  route: AiRoute,
+  provider: "openai" | "anthropic",
+  path: string,
+): string | null {
+  const gateway = route.aiGateway;
+  if (
+    !gateway?.routeExternalProviders ||
+    !gateway.accountId ||
+    !gateway.gatewayId ||
+    !gateway.apiToken
+  ) {
+    return null;
+  }
+  return `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(
+    gateway.accountId,
+  )}/${encodeURIComponent(gateway.gatewayId)}/${provider}/${path}`;
 }
 
 function extractModelText(value: unknown): string {
@@ -4683,6 +4738,7 @@ async function resolveAiRoute(
       : providerId === "anthropic"
         ? env.ANTHROPIC_API_KEY || (await getStoredApiKey(env, ownerId, providerId))
         : null;
+  const aiGateway = await getAiGatewayRuntimeConfig(env, ownerId).catch(() => null);
 
   return {
     providerId,
@@ -4690,9 +4746,61 @@ async function resolveAiRoute(
     backupModel,
     apiKey,
     ai: env.AI || null,
+    aiGateway,
     configured:
       providerId === "workers-ai" ? Boolean(env.AI && model) : Boolean(apiKey && model),
   };
+}
+
+async function getAiGatewayRuntimeConfig(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+): Promise<AiGatewayRuntimeConfig> {
+  const row = await getAiGatewaySettingsRow(env, ownerId);
+  const accountId = row?.account_id || env.CLOUDFLARE_ACCOUNT_ID || null;
+  const gatewayId = row?.gateway_id?.trim() || (accountId ? DEFAULT_AI_GATEWAY_ID : null);
+  const storedToken = row?.encrypted_api_token
+    ? await decryptSecretSafely(env, row.encrypted_api_token)
+    : null;
+  const apiToken = storedToken || env.CLOUDFLARE_API_TOKEN || null;
+
+  return {
+    accountId,
+    gatewayId,
+    apiToken,
+    routeWorkersAi: Boolean(accountId && gatewayId && apiToken),
+    routeExternalProviders: Boolean(accountId && gatewayId && apiToken),
+  };
+}
+
+async function getAiGatewaySettingsRow(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+): Promise<AiGatewaySettingsRow | null> {
+  try {
+    return env.DB.prepare(
+      `SELECT account_id, gateway_id, encrypted_api_token
+       FROM ai_gateway_settings
+       WHERE user_id = ?
+       LIMIT 1`,
+    )
+      .bind(ownerId)
+      .first<AiGatewaySettingsRow>();
+  } catch {
+    return null;
+  }
+}
+
+async function decryptSecretSafely(
+  env: CoreAgentChatEnv,
+  encrypted: string,
+): Promise<string | null> {
+  try {
+    const installKey = await getInstallEncryptionKey(env);
+    return installKey ? decryptProviderSecret(encrypted, installKey) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function getStoredChatDefault(
