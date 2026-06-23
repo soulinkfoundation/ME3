@@ -2075,6 +2075,15 @@ function formatAssistantMessageTime(value: string | null | undefined) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+function assistantMessageDisplayText(message: {
+  text: string;
+  emailDraftAction?: AgentChatEmailDraftAction | null;
+}) {
+  return message.emailDraftAction
+    ? message.emailDraftAction.displayText
+    : message.text;
+}
+
 function threadTitle(thread: AssistantThread) {
   return thread.title?.trim() || "New chat";
 }
@@ -5060,8 +5069,9 @@ function messageFromUnknown(err: unknown, fallback: string) {
           >
             <div class="assistant-message__bubble">
               <div
+                v-if="assistantMessageDisplayText(message)"
                 class="assistant-message__content"
-                v-html="renderAssistantMarkdown(message.text)"
+                v-html="renderAssistantMarkdown(assistantMessageDisplayText(message))"
               ></div>
               <p v-if="message.meta" class="assistant-message__meta">
                 {{ message.meta }}

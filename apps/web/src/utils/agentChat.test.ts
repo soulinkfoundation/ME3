@@ -70,8 +70,9 @@ describe("agent chat utils", () => {
     expect(
       inferAgentChatEmailDraft(
         [
-          "Here's a draft for your email to Sam about ME3:",
+          "Here's a draft for the email to Sam:",
           "",
+          "---",
           "Subject: Introduction to ME3",
           "",
           "Hi Sam,",
@@ -81,6 +82,7 @@ describe("agent chat utils", () => {
           "Best regards,",
           "Kieran",
           "",
+          "---",
           "Please let me know if you'd like me to save this draft.",
         ].join("\n"),
         "Draft an email to sam about me3",
@@ -90,6 +92,7 @@ describe("agent chat utils", () => {
       toAddress: null,
       subject: "Introduction to ME3",
       body: "Hi Sam,\n\nI wanted to introduce you to ME3.\n\nBest regards,\nKieran",
+      displayText: "Please let me know if you'd like me to save this draft.",
     });
   });
 

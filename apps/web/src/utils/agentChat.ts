@@ -77,6 +77,7 @@ export type AgentChatEmailDraft = {
   toAddress: string | null;
   subject: string;
   body: string;
+  displayText: string;
 };
 
 export type AgentChatEmailDraftAction = AgentChatEmailDraft & {
@@ -320,6 +321,7 @@ export function inferAgentChatEmailDraft(
     toAddress: extractDraftToAddress(normalized) || extractDraftToAddress(prompt),
     subject,
     body,
+    displayText: extractDraftDisplayText(normalized),
   };
 }
 
@@ -493,11 +495,25 @@ function stripAgentDraftWrapperText(text: string): string {
     /^\s*(?:here(?:'|’)s|here is)\s+(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:your\s+|the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*$/im,
     "",
   );
-  const closingPromptIndex = body.search(
-    /\n\s*(?:[-–—]\s*)?(?:please\s+let\s+me\s+know\s+if\s+you(?:'|’)d\s+like\s+(?:me\s+)?to\s+(?:make\s+any\s+changes\s+or\s+if\s+you(?:'|’)d\s+like\s+me\s+to\s+)?save\s+this\s+draft\.?|this is a chat draft only|if you want|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
-  );
+  const closingPromptIndex = body.search(draftClosingPromptPattern());
   if (closingPromptIndex >= 0) body = body.slice(0, closingPromptIndex).trim();
   return body.trim();
+}
+
+function extractDraftDisplayText(text: string): string {
+  const normalized = normalizeDraftText(text);
+  const match = normalized.match(draftClosingPromptPattern());
+  if (match?.index === undefined) return "";
+  return stripSimpleDraftMarkdown(
+    normalized
+      .slice(match.index)
+      .replace(/^\s*[-–—]{3,}\s*$/gm, "")
+      .trim(),
+  ).trim();
+}
+
+function draftClosingPromptPattern() {
+  return /\n\s*(?:[-–—]\s*)?(?:please\s+let\s+me\s+know\s+if\s+you(?:'|’)d\s+like\s+(?:me\s+)?to\s+(?:make\s+any\s+changes\s+or\s+if\s+you(?:'|’)d\s+like\s+me\s+to\s+)?save\s+this\s+draft\.?|this is a chat draft only|if you want|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i;
 }
 
 function stripSimpleDraftMarkdown(text: string): string {
@@ -519,9 +535,10 @@ function extractEmailAddress(text: string): string | null {
 }
 
 function extractDraftRecipientName(text: string): string | null {
-  const match = text.match(/\bto\s+["'“”]?([^"'“”,.!?;\n]+)["'“”]?/iu);
+  const match = text.match(/\bto\s+["'“”]?([^"'“”,.!?:;\n]+)["'“”]?/iu);
   const phrase = match?.[1]
     ?.replace(/\b(?:about|regarding|re|subject|saying|with)\b[\s\S]*$/i, "")
+    .replace(/[:：]+$/u, "")
     .trim();
   return phrase || null;
 }
