@@ -168,6 +168,19 @@ router.beforeEach(async (to, _from, next) => {
     ? to.query.section[0]
     : to.query.section;
   if (
+    (to.path === "/mission-control" || to.path === "/mission-control/") &&
+    missionSection === "projects"
+  ) {
+    const { section: _section, ...query } = to.query;
+    next({
+      path: "/mission-control",
+      query,
+      hash: to.hash,
+      replace: true,
+    });
+    return;
+  }
+  if (
     (to.path === "/mission-control" ||
       to.path === "/mission-control/" ||
       to.path === "/mission-control/projects" ||

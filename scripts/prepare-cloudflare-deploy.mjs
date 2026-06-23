@@ -48,18 +48,21 @@ console.log(
 
 if (args.skipR2) {
   config = removeR2Binding(config);
-  console.log("Skipped SITE_ASSETS; site media will use D1 storage until R2 is configured.");
+  console.log("Skipped storage; email attachments and assistant image uploads will be unavailable.");
 } else {
   const r2Ready = args.skipCreate || ensureR2Bucket(bucketName);
   if (!r2Ready) {
-    config = removeR2Binding(config);
-    console.warn(
-      "Continuing without SITE_ASSETS; site media will use D1 storage until R2 is configured.",
+    fail(
+      [
+        `Could not create or reuse Cloudflare storage bucket "${bucketName}".`,
+        "Activate Cloudflare storage first: https://dash.cloudflare.com/?to=/:account/r2/plans",
+        "Then rerun `pnpm deploy:cloudflare`.",
+        "To deploy without file/email attachment storage, use `pnpm deploy:cloudflare:d1-only`.",
+      ].join("\n"),
     );
-  } else {
-    config = upsertR2Binding(config, bucketName);
-    console.log(`Configured SITE_ASSETS -> ${bucketName}`);
   }
+  config = upsertR2Binding(config, bucketName);
+  console.log(`Configured SITE_ASSETS -> ${bucketName}`);
 }
 
 if (config !== originalConfig) {
@@ -117,14 +120,14 @@ function printHelp() {
 
 Creates or reuses the Cloudflare resources ME3 needs for deploy, then writes
 their bindings into wrangler.toml. Resource names are derived from the Worker
-project name so Deploy to Cloudflare can keep the setup form small. If R2
-is not available yet, deploy continues with D1 media storage.
+project name so Deploy to Cloudflare can keep the setup form small. Storage
+must be active for email attachments, assistant image uploads, and larger media.
 
 Options:
   --config <path>   Wrangler config path (default: wrangler.toml)
   --db-name <name>  D1 database name
   --bucket <name>   R2 bucket name
-  --skip-r2         Remove SITE_ASSETS and use D1 media storage
+  --skip-r2         Remove storage and deploy without file/email attachments
   --skip-create     Update config only; do not call Cloudflare APIs
   --help, -h        Show this help
 `);
@@ -180,10 +183,6 @@ function ensureR2Bucket(bucketName) {
 
   if (result.ok) return true;
 
-  console.warn(`Could not create or reuse R2 bucket "${bucketName}".`);
-  console.warn(
-    "Enable R2 in Cloudflare later, then run `pnpm storage:r2:provision` and redeploy to upgrade media storage.",
-  );
   return false;
 }
 

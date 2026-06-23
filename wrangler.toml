@@ -13,6 +13,11 @@ new_sqlite_classes = ["Me3UserAgent"]
 [ai]
 binding = "AI"
 
+# ME3 file and attachment storage.
+[[r2_buckets]]
+binding = "SITE_ASSETS"
+bucket_name = "my-me3-site-assets"
+
 # Cloudflare Email Service sender binding. Account -> Email stores the sender
 # address; this deploy-time binding lets the Worker call env.EMAIL.send().
 [[send_email]]

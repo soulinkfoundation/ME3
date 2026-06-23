@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../api";
 import Button from "../components/Button.vue";
@@ -189,8 +188,6 @@ const dashboardCardRegistry = new Set([
 ]);
 
 const { toastFromUnknown, toastSuccess } = useAppToast();
-const route = useRoute();
-const router = useRouter();
 const sites = useSitesStore();
 const dashboard = ref<MissionDashboardResponse | null>(null);
 const loading = ref(true);
@@ -647,15 +644,6 @@ function formatTokenCount(value: number | null | undefined): string {
   return `${formatCompactNumber(value)} tokens`;
 }
 
-function cleanLegacySectionQuery() {
-  const rawSection = Array.isArray(route.query.section)
-    ? route.query.section[0]
-    : route.query.section;
-  if (rawSection !== "projects") return;
-  const { section: _section, ...query } = route.query;
-  void router.replace({ path: "/mission-control", query });
-}
-
 async function loadDashboard() {
   loading.value = true;
   error.value = "";
@@ -786,7 +774,6 @@ async function saveDashboardLayout() {
 }
 
 onMounted(() => {
-  cleanLegacySectionQuery();
   void sites.fetchSites();
   void loadDashboard();
   void loadProjectsSummary();

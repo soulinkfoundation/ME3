@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm db:migrate:local && wrangler dev --config wrangler.core.example.toml --port 8787",
+    "dev": "pnpm db:migrate:local && wrangler dev --config wrangler.core.example.toml --port 8787 --local",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
