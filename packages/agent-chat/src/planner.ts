@@ -259,13 +259,18 @@ export function isCoreChatMissionTaskListRequest(messageText: string): boolean {
     return false;
   }
   return (
-    /\b(?:list|show|check|read|pull up)\s+(?:my\s+|the\s+)?(?:mission\s+control\s+)?(?:(?:backlog|todo|to do|doing|in progress|review|done|complete|completed)\s+)?(?:tasks?|todos?)\b/i.test(
+    isCoreChatWeeklyReviewRequest(messageText) ||
+    /\b(?:list|show|check|read|pull up)\s+(?:my\s+|the\s+)?(?:mission\s+control\s+)?(?:(?:backlog|todo|to do|doing|in progress|review|done|complete|completed)\s+)?(?:project\s+)?(?:tasks?|todos?)\b/i.test(
       messageText,
     ) ||
     /\b(?:what(?:'s| is)|which tasks? (?:are|is))\s+(?:in\s+)?(?:backlog|todo|to do|doing|in progress|review|done|complete|completed)\b/i.test(
       messageText,
     )
   );
+}
+
+export function isCoreChatWeeklyReviewRequest(messageText: string): boolean {
+  return /\b(?:review|summari[sz]e)\s+(?:my|this|the)\s+week\b/i.test(messageText);
 }
 
 export function isCoreChatMissionTaskUpdateRequest(messageText: string): boolean {

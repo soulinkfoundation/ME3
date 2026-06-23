@@ -122,6 +122,20 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "read",
   },
   {
+    name: "generic project task list becomes a read action",
+    messageText: "Can you list my project tasks?",
+    kind: "read_action",
+    capabilityId: "core.mission.task.list",
+    sideEffectLevel: "read",
+  },
+  {
+    name: "week review becomes a Mission Control read action",
+    messageText: "Review my week",
+    kind: "read_action",
+    capabilityId: "core.mission.task.list",
+    sideEffectLevel: "read",
+  },
+  {
     name: "Mission Control prioritisation stays conversational",
     messageText: "Help me prioritise my Mission Control tasks based on my goals.",
     kind: "conversation",

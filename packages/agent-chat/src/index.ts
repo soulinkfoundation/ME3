@@ -4,6 +4,7 @@ import {
 } from "@me3-core/plugin-calendar";
 import {
   isCoreChatReminderCreateRequest,
+  isCoreChatWeeklyReviewRequest,
   planCoreChatToolTurn,
   type CoreChatToolPlannerDecision,
 } from "./planner";
@@ -44,6 +45,7 @@ export {
   isCoreChatMissionTaskUpdateRequest,
   isCoreChatReminderCreateRequest,
   isCoreChatReminderListRequest,
+  isCoreChatWeeklyReviewRequest,
   planCoreChatToolTurn,
   type CoreChatCapabilityId,
   type CoreChatPlannerIntentKind,
@@ -2819,13 +2821,30 @@ function parseMissionTaskUpdateText(
 
 function formatMissionTaskListReply(tasks: AgentMissionTask[], filterLabel: string): string {
   if (!tasks.length) return `I could not find any ${filterLabel}.`;
+  const completedTasks = tasks.filter((task) => task.status === "done");
+  const openTasks = tasks.filter((task) => task.status !== "done");
+  const lines = [`I found ${tasks.length} ${filterLabel}:`];
+  if (openTasks.length > 0) {
+    lines.push(
+      "",
+      "Open tasks:",
+      ...openTasks.slice(0, 20).map((task, index) => {
+        const due = task.dueAt ? `, due ${task.dueAt}` : "";
+        return `${index + 1}. ${task.title} (${task.projectName}, ${missionTaskStatusLabel(task.status)}${due})`;
+      }),
+    );
+  }
+  if (completedTasks.length > 0) {
+    lines.push(
+      "",
+      "Completed tasks:",
+      ...completedTasks.slice(0, 20).map((task, index) => `${index + 1}. ${task.title}`),
+    );
+  }
+  const shown = Math.min(openTasks.length, 20) + Math.min(completedTasks.length, 20);
   return [
-    `I found ${tasks.length} ${filterLabel}:`,
-    ...tasks.slice(0, 20).map((task, index) => {
-      const due = task.dueAt ? `, due ${task.dueAt}` : "";
-      return `${index + 1}. ${task.title} (${task.projectName}, ${missionTaskStatusLabel(task.status)}${due})`;
-    }),
-    ...(tasks.length > 20 ? [`...and ${tasks.length - 20} more.`] : []),
+    ...lines,
+    ...(tasks.length > shown ? [`...and ${tasks.length - shown} more.`] : []),
   ].join("\n");
 }
 
@@ -2850,7 +2869,7 @@ function extractMissionTaskListProjectName(messageText: string): string | null {
 function parseMissionTaskStatus(messageText: string): string | null {
   if (/\b(?:done|complete|completed)\b/i.test(messageText)) return "done";
   if (/\b(?:doing|in progress)\b/i.test(messageText)) return "in_progress";
-  if (/\breview\b/i.test(messageText)) return "review";
+  if (/\breview\b/i.test(messageText) && !isCoreChatWeeklyReviewRequest(messageText)) return "review";
   if (/\b(?:backlog|todo|to do)\b/i.test(messageText)) return "backlog";
   return null;
 }

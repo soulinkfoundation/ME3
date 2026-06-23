@@ -1594,6 +1594,51 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
+    name: "week review lists open tasks across projects and completed tasks separately",
+    messageText: "Review my week",
+    envState: {
+      projects: [
+        projectRow("project-launch", "ME3 Launch", "me3-launch"),
+        projectRow("project-sales", "Sales Site", "sales-site"),
+      ],
+      tasks: [
+        taskRow("task-launch", "Prepare launch checklist", "project-launch"),
+        {
+          ...taskRow("task-sales", "Follow up sales page", "project-sales"),
+          status: "backlog",
+          column_id: "project-sales:backlog",
+        },
+        {
+          ...taskRow("task-done", "Publish launch note", "project-launch"),
+          status: "done",
+          column_id: "project-launch:done",
+        },
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.mission.task.list",
+      specialist: "core.mission.task.list",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: [
+        "Open tasks:",
+        "Prepare launch checklist (ME3 Launch, Doing",
+        "Follow up sales page (Sales Site, Backlog",
+        "Completed tasks:\n1. Publish launch note",
+      ],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      aiCalled: false,
+    },
+  },
+  {
     name: "Mission Control task prioritisation stays model-first with context",
     messageText: "Help me prioritise my Mission Control tasks based on my goals.",
     aiReply:
