@@ -667,7 +667,6 @@ const scheduleInlineEditing = ref(false);
 const inboxWatchRulesDraft = ref<InboxWatchRuleForm[]>([]);
 const inboxWatchRulesNotice = ref("");
 const assistantDraft = ref("");
-const assistantPlaceholderIndex = ref(0);
 const assistantSending = ref(false);
 const assistantActionCardBusy = ref<string | null>(null);
 const assistantDraftHydrationIds = new Set<string>();
@@ -808,13 +807,10 @@ const starterPrompts: StarterPrompt[] = [
     icon: "⚙️",
     prompt: configureStarterPrompt,
   },
-  { label: "Review my week", icon: "📅", prompt: "Review my week" },
-];
-const assistantComposerPlaceholders = [
-  "Remind me to call Sarah tomorrow at 9am",
-  "Draft an email to Sam about...",
-  "Draft an outline for a blog post on...",
-  "Review my week and suggest next steps",
+  { label: "Draft email", icon: "✉️", prompt: "Draft email" },
+  { label: "Draft blog post", icon: "📝", prompt: "Draft blog post" },
+  { label: "Add reminder", icon: "⏰", prompt: "Add reminder" },
+  { label: "Status update", icon: "🚀", prompt: "Review my week" },
 ];
 const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
@@ -1212,18 +1208,10 @@ const voiceDictationStatusText = computed(() => {
 const voiceRecordingElapsedLabel = computed(() =>
   formatRecordingElapsed(voiceRecordingElapsedSeconds.value),
 );
-const assistantInputPlaceholder = computed(
-  () =>
-    assistantComposerPlaceholders[
-      assistantPlaceholderIndex.value % assistantComposerPlaceholders.length
-    ] || "Message ME3...",
-);
-
 onMounted(() => {
   if (!supportsMediaRecording()) {
     voiceDictationState.value = "unsupported";
   }
-  pickAssistantPlaceholder();
   void loadPage();
   void syncAssistantSettingsFromRoute();
   window.addEventListener("keydown", handleWindowKeydown);
@@ -1348,7 +1336,6 @@ async function startNewAssistantChat(
 ) {
   assistantThreadId.value = null;
   assistantError.value = null;
-  pickAssistantPlaceholder();
   if (options.closeHistory !== false) {
     assistantHistoryDrawerOpen.value = false;
   }
@@ -1406,12 +1393,6 @@ function cancelAssistantThreadSearchDebounce() {
   if (assistantThreadSearchDebounceId === null) return;
   window.clearTimeout(assistantThreadSearchDebounceId);
   assistantThreadSearchDebounceId = null;
-}
-
-function pickAssistantPlaceholder() {
-  assistantPlaceholderIndex.value = Math.floor(
-    Math.random() * assistantComposerPlaceholders.length,
-  );
 }
 
 async function archiveAssistantThread(thread: AssistantThread) {
@@ -5592,7 +5573,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               v-model="assistantDraft"
               class="assistant-input"
               rows="1"
-              :placeholder="assistantInputPlaceholder"
+              placeholder="Ask me3 anything..."
               :disabled="assistantSending"
               @keydown="onAssistantComposerKeydown"
               @input="autosizeAssistantComposer"
