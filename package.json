@@ -23,11 +23,15 @@
     "build": "pnpm generate:llms && pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:migrations:apply": "wrangler d1 migrations apply DB --remote --config wrangler.toml",
+    "deploy": "pnpm deploy:prepare && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
     "deploy:cloudflare": "pnpm deploy:prepare && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml",
     "deploy:cloudflare:d1-only": "pnpm deploy:prepare -- --skip-r2 && pnpm build && pnpm db:migrations:apply && wrangler deploy --config wrangler.toml"
   },
   "cloudflare": {
     "bindings": {
+      "DB": {
+        "description": "ME3 private app database. Cloudflare provisions this automatically."
+      },
       "ME3_USER_AGENT": {
         "description": "Durable Object state for ME3's owner agent runtime. Cloudflare provisions this automatically."
       },

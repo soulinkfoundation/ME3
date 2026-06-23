@@ -17,8 +17,10 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const coreMetadata = existsSync("me3-core.json")
   ? JSON.parse(readFileSync("me3-core.json", "utf8"))
   : {};
+const deployButtonScript = packageJson.scripts?.deploy || "";
 const deployScript = packageJson.scripts?.["deploy:cloudflare"] || "";
 const deployPreparesResources = /deploy:prepare/.test(deployScript);
+const deployButtonPreparesResources = /deploy:prepare/.test(deployButtonScript);
 
 check(
   "Core version metadata exists",
@@ -100,9 +102,11 @@ check(
 );
 
 check(
-  "Reserved pnpm deploy command is unused",
-  !packageJson.scripts?.deploy,
-  "Use deploy:cloudflare because pnpm deploy is a pnpm built-in command.",
+  "Deploy button script prepares Cloudflare resources",
+  deployButtonPreparesResources &&
+    /db:migrations:apply/.test(deployButtonScript) &&
+    /wrangler deploy/.test(deployButtonScript),
+  "Expected package.json scripts.deploy for the Cloudflare deploy form to prepare resources, apply migrations, and deploy. Manual use should still prefer pnpm deploy:cloudflare.",
 );
 check(
   "Cloudflare deploy script is available",
