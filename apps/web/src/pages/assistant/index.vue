@@ -756,7 +756,7 @@ const bookingReminderSystemName = "Booking Reminders";
 const bookingReminderSystemRuns =
   "24 hours and 2 hours before a confirmed site booking";
 const bookingReminderSystemDescription =
-  "Send booking reminders to you and your guest before bookings made on your site.";
+  "Sends booking reminders via email (and messaging app if configured) to you and your guest 24 hours and 2 hours before a confirmed site booking.";
 const bookingReminderSystemChannels =
   "Email by default; Telegram/Soulink if connected";
 
