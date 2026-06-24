@@ -354,6 +354,16 @@ type CalendarEventContextRow = {
   updated_at: string | null;
 };
 
+type DailyBriefingBookingRow = {
+  id: string;
+  guest_name: string;
+  starts_at: string;
+  ends_at: string;
+  timezone: string | null;
+  created_at: string;
+  updated_at: string | null;
+};
+
 type AssistantMessageContextRow = {
   id?: string | null;
   role: "user" | "assistant" | "system";
@@ -3742,18 +3752,20 @@ async function buildDailyBriefingRenderContext(
   const dateKey = dateKeyInTimezone(now, timezone);
   const dateLabel = formatFriendlyDate(dateKey, timezone);
   const { start, end } = utcWindowForLocalDate(dateKey, timezone);
-  const [events, reminders, tasks] = await Promise.all([
+  const [events, bookings, reminders, tasks] = await Promise.all([
     loadDailyBriefingEvents(env, userId, start, end),
+    loadDailyBriefingBookings(env, userId, start, end, timezone),
     loadDailyBriefingReminders(env, userId, start, end),
     loadDailyBriefingTasks(env, userId),
   ]);
+  const calendarEvents = [...events, ...bookings].sort((a, b) => a.starts_at.localeCompare(b.starts_at));
 
   return {
     ownerName: owner?.name || owner?.username || "there",
     dateKey,
     dateLabel,
-    calendarSummary: formatDailyCalendarSummary(events, dateLabel),
-    calendarEvents: formatDailyCalendarEvents(events, timezone),
+    calendarSummary: formatDailyCalendarSummary(calendarEvents, dateLabel),
+    calendarEvents: formatDailyCalendarEvents(calendarEvents, timezone),
     calendarReminders: formatDailyReminders(reminders, timezone),
     missionTasks: formatDailyTasks(tasks, dateKey),
   };
@@ -3796,6 +3808,40 @@ async function loadDailyBriefingEvents(
     .all<CalendarEventContextRow>()
     .catch(() => ({ results: [] as CalendarEventContextRow[] }));
   return (rows.results || []).filter((event) => event.starts_at < end && event.ends_at > start);
+}
+
+async function loadDailyBriefingBookings(
+  env: Env,
+  userId: string,
+  start: string,
+  end: string,
+  timezone: string,
+) {
+  const rows = await env.DB.prepare(
+    `SELECT b.id, b.guest_name, b.starts_at, b.ends_at, b.created_at, b.cancelled_at AS updated_at
+     FROM bookings b
+     JOIN sites s ON b.site_id = s.id
+     WHERE s.user_id = ? AND b.status = 'confirmed'
+       AND b.starts_at < ? AND b.ends_at > ?
+     ORDER BY b.starts_at ASC
+     LIMIT 12`,
+  )
+    .bind(userId, end, start)
+    .all<DailyBriefingBookingRow>()
+    .catch(() => ({ results: [] as DailyBriefingBookingRow[] }));
+
+  return (rows.results || [])
+    .filter((booking) => booking.starts_at < end && booking.ends_at > start)
+    .map((booking): CalendarEventContextRow => ({
+      id: `booking:${booking.id}`,
+      title: `Booking with ${booking.guest_name}`,
+      notes: null,
+      starts_at: booking.starts_at,
+      ends_at: booking.ends_at,
+      timezone,
+      created_at: booking.created_at,
+      updated_at: booking.updated_at,
+    }));
 }
 
 async function loadDailyBriefingReminders(

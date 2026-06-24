@@ -4494,8 +4494,8 @@ function renderDailyBriefingPreview(template: string) {
   const values: Record<string, string> = {
     "owner.name": "Kieran Butler",
     "today.date": "Monday 1 June",
-    "calendar.summary": "Your calendar is clear for Monday 1 June.",
-    "calendar.events": "",
+    "calendar.summary": "You have 1 calendar event for Monday 1 June.",
+    "calendar.events": "Calendar:\n- 10:00 Booking with Ada Lovelace",
     "calendar.reminders":
       "Reminders: 1 due today.\n- 10:00 Follow up with Bilbo Baggins",
     "mission.tasks":

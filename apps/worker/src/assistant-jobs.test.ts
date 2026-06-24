@@ -106,6 +106,7 @@ type AssistantJobsDbState = {
   tasks: Record<string, unknown>[];
   memory: Record<string, unknown>[];
   calendarEvents: Record<string, unknown>[];
+  bookings: Record<string, unknown>[];
   reminders: ReminderRow[];
   recentMessages: Record<string, unknown>[];
   failMemoryLookup?: boolean;
@@ -124,6 +125,7 @@ type AssistantJobsDbState = {
 
 describe("assistant jobs persistence", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -772,6 +774,8 @@ describe("assistant jobs persistence", () => {
   });
 
   it("customizes the daily briefing notification template", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-24T07:00:00.000Z"));
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ ok: true, messageId: "stream-message-1" }), {
         status: 200,
@@ -781,11 +785,23 @@ describe("assistant jobs persistence", () => {
     vi.stubGlobal("fetch", fetchMock);
     const env = createAssistantJobsEnv({
       channelConnections: [soulinkConnectionRow()],
+      bookings: [
+        {
+          id: "booking-1",
+          user_id: "owner",
+          site_id: "site-1",
+          guest_name: "Ada Lovelace",
+          starts_at: "2026-06-24T10:00:00.000Z",
+          ends_at: "2026-06-24T10:30:00.000Z",
+          created_at: "2026-06-23T12:00:00.000Z",
+          status: "confirmed",
+        },
+      ],
     });
 
     const created = await createAssistantJob(env, "owner", { recipeId: "daily-briefing" });
     const updated = await updateAssistantJob(env, "owner", created.job.id, {
-      dailyBriefingMessageTemplate: "Morning {{owner.name}}. {{calendar.summary}}",
+      dailyBriefingMessageTemplate: "Morning {{owner.name}}. {{calendar.summary}}\n{{calendar.events}}",
     });
     const detail = await getAssistantJob(env, "owner", updated.job.id);
 
@@ -794,7 +810,9 @@ describe("assistant jobs persistence", () => {
     await runAssistantJobNow(env, "owner", updated.job.id);
 
     const notifyRequest = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1];
-    expect(JSON.parse(notifyRequest?.body as string).messageText).toContain("Morning Kieran.");
+    const messageText = JSON.parse(notifyRequest?.body as string).messageText;
+    expect(messageText).toContain("Morning Kieran.");
+    expect(messageText).toContain("Booking with Ada Lovelace");
   });
 
   it("updates scheduled job cadence and next run metadata", async () => {
@@ -1296,6 +1314,7 @@ function createAssistantJobsEnv(options: AssistantJobsEnvOptions = {}): Assistan
     tasks: [],
     memory: [],
     calendarEvents: [],
+    bookings: [],
     reminders: [],
     recentMessages: [],
     events: [],
@@ -2081,6 +2100,13 @@ class FakeStatement {
     if (sql.includes("FROM user_calendar_events")) {
       return {
         results: this.state.calendarEvents.filter((event) => event.user_id === values[0]) as T[],
+      };
+    }
+    if (sql.includes("FROM bookings b")) {
+      return {
+        results: this.state.bookings.filter(
+          (booking) => booking.user_id === values[0] && booking.status === "confirmed",
+        ) as T[],
       };
     }
     if (sql.includes("FROM user_reminders")) {
