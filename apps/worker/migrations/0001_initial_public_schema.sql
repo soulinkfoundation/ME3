@@ -65,6 +65,23 @@ CREATE TABLE ai_gateway_settings (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
 );
+CREATE TABLE ai_usage_events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT 'owner',
+  source TEXT NOT NULL DEFAULT 'local' CHECK (source IN ('local', 'gateway')),
+  kind TEXT NOT NULL CHECK (kind IN ('text', 'image')),
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 1,
+  successful_request_count INTEGER NOT NULL DEFAULT 1,
+  failed_request_count INTEGER NOT NULL DEFAULT 0,
+  tokens_in INTEGER NOT NULL DEFAULT 0,
+  tokens_out INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_usd REAL NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
+);
 CREATE TABLE ai_model_defaults (
   user_id TEXT NOT NULL,
   use_case TEXT NOT NULL CHECK (use_case IN ('default', 'chat', 'reasoning', 'extraction', 'image_generation')),
@@ -1295,6 +1312,10 @@ CREATE INDEX idx_agent_channel_events_connection_created
   ON agent_channel_events(connection_id, created_at DESC);
 CREATE INDEX idx_agent_channel_events_provider_event
   ON agent_channel_events(connection_id, provider_event_id);
+CREATE INDEX idx_ai_usage_events_user_created
+  ON ai_usage_events(user_id, created_at DESC);
+CREATE INDEX idx_ai_usage_events_user_kind_created
+  ON ai_usage_events(user_id, kind, created_at DESC);
 CREATE INDEX idx_assistant_attachments_owner_created
   ON assistant_attachments(owner_id, created_at DESC);
 CREATE INDEX idx_assistant_attachments_thread_created

@@ -262,6 +262,15 @@ type PendingAssistantMessageAssetLink = {
   metadata: Record<string, unknown>;
 };
 
+type WorkersAiImageUsageEstimate = {
+  width: number;
+  height: number;
+  outputTiles: number;
+  costUsd: number;
+  neurons: number;
+  pricing: string;
+};
+
 export type AgentChatModelAttemptTrace = {
   providerId: AiProviderId;
   model: string;
@@ -916,6 +925,8 @@ const DEFAULT_WORKERS_AI_BACKUP_MODEL = "@cf/zai-org/glm-4.7-flash";
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest";
 const DEFAULT_AI_GATEWAY_ID = "default";
+const DEFAULT_IMAGE_GENERATION_WIDTH = 1024;
+const DEFAULT_IMAGE_GENERATION_HEIGHT = 1024;
 const INSTALL_ENCRYPTION_KEY_NAME = "TOKEN_ENCRYPTION_KEY";
 const CHAT_CONTEXT_PROMPT_BUDGET_CHARS = 3500;
 const DEFAULT_MISSION_STATEMENT_TEMPLATE_MARKER = "[who/what]";
@@ -2472,6 +2483,16 @@ async function runAssistantImageGeneration(
     throw error;
   }
 
+  await recordAssistantImageUsage(env, {
+    ownerId: input.ownerId,
+    providerId: input.route.providerId,
+    model: input.route.model,
+    width: DEFAULT_IMAGE_GENERATION_WIDTH,
+    height: DEFAULT_IMAGE_GENERATION_HEIGHT,
+    turnId: input.turnId,
+    attachmentId,
+  }).catch(() => undefined);
+
   const asset: AgentChatGeneratedImageAsset = {
     id: attachmentId,
     attachmentId,
@@ -2505,8 +2526,8 @@ async function runWorkersAiImageGeneration(
 ): Promise<{ bytes: Uint8Array; mimeType: string; revisedPrompt: string | null }> {
   const form = new FormData();
   form.append("prompt", prompt);
-  form.append("width", "1024");
-  form.append("height", "1024");
+  form.append("width", String(DEFAULT_IMAGE_GENERATION_WIDTH));
+  form.append("height", String(DEFAULT_IMAGE_GENERATION_HEIGHT));
   const formResponse = new Response(form);
   const body = formResponse.body;
   const contentType = formResponse.headers.get("content-type");
@@ -2523,6 +2544,93 @@ async function runWorkersAiImageGeneration(
     },
   );
   return normalizeWorkersAiImageResult(result);
+}
+
+async function recordAssistantImageUsage(
+  env: CoreAgentChatEnv,
+  input: {
+    ownerId: string;
+    providerId: AiProviderId;
+    model: string;
+    width: number;
+    height: number;
+    turnId: string;
+    attachmentId: string;
+  },
+): Promise<void> {
+  const estimate = estimateWorkersAiImageUsage(input.model, {
+    width: input.width,
+    height: input.height,
+  });
+  await env.DB.prepare(
+    `INSERT INTO ai_usage_events (
+       id, user_id, source, kind, provider, model, request_count,
+       successful_request_count, failed_request_count, tokens_in, tokens_out,
+       estimated_cost_usd, metadata_json, created_at
+     )
+     VALUES (?, ?, 'local', 'image', ?, ?, 1, 1, 0, 0, 0, ?, ?, ?)`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      input.ownerId,
+      input.providerId,
+      input.model,
+      estimate.costUsd,
+      JSON.stringify({
+        estimated: true,
+        pricing: estimate.pricing,
+        width: estimate.width,
+        height: estimate.height,
+        outputTiles: estimate.outputTiles,
+        neurons: estimate.neurons,
+        turnId: input.turnId,
+        attachmentId: input.attachmentId,
+      }),
+      new Date().toISOString(),
+    )
+    .run();
+}
+
+function estimateWorkersAiImageUsage(
+  model: string,
+  input: { width: number; height: number },
+): WorkersAiImageUsageEstimate {
+  const width = Math.max(1, Math.trunc(input.width));
+  const height = Math.max(1, Math.trunc(input.height));
+  const outputTiles = Math.max(1, Math.ceil(width / 512) * Math.ceil(height / 512));
+  const normalizedModel = model.trim().toLowerCase();
+
+  if (normalizedModel === "@cf/black-forest-labs/flux-2-klein-4b") {
+    return {
+      width,
+      height,
+      outputTiles,
+      costUsd: outputTiles * 0.000287,
+      neurons: outputTiles * 26.05,
+      pricing: "workers-ai-flux-2-klein-4b-output-tiles",
+    };
+  }
+
+  if (normalizedModel === "@cf/black-forest-labs/flux-2-dev") {
+    const assumedSteps = 25;
+    return {
+      width,
+      height,
+      outputTiles,
+      costUsd: outputTiles * assumedSteps * 0.00041,
+      neurons: outputTiles * assumedSteps * 37.5,
+      pricing: "workers-ai-flux-2-dev-output-tiles-assumed-25-steps",
+    };
+  }
+
+  return {
+    width,
+    height,
+    outputTiles,
+    costUsd: 0,
+    neurons: 0,
+    pricing: "unknown-workers-ai-image-model",
+  };
 }
 
 async function normalizeWorkersAiImageResult(

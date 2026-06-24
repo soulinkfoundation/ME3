@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Stripe from "stripe";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
+import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL } from "@me3-core/plugin-agent-chat";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
 import { generateAiText } from "./ai-providers";
 import { ME3_CORE_VERSION } from "./core-version";
@@ -9496,7 +9497,7 @@ describe("ME3 Core Worker auth", () => {
         expect.objectContaining({
           id: "image_generation",
           providerId: "workers-ai",
-          model: "@cf/black-forest-labs/flux-2-dev",
+          model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
         }),
       ]),
     );

@@ -26,7 +26,7 @@ type AiModelCapabilityRecord = {
 };
 
 export const DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL =
-  "@cf/black-forest-labs/flux-2-dev";
+  "@cf/black-forest-labs/flux-2-klein-4b";
 
 const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
   {

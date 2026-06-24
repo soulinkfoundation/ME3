@@ -28,6 +28,20 @@ type CloudflareAiGatewayLog = {
   cost?: number | null;
 };
 
+type LocalAiUsageEventRow = {
+  id?: string;
+  provider?: string | null;
+  model?: string | null;
+  kind?: string | null;
+  request_count?: number | string | null;
+  successful_request_count?: number | string | null;
+  failed_request_count?: number | string | null;
+  tokens_in?: number | string | null;
+  tokens_out?: number | string | null;
+  estimated_cost_usd?: number | string | null;
+  created_at?: string | null;
+};
+
 type CloudflareListLogsResponse = {
   success?: boolean;
   errors?: Array<{ message?: string }>;
@@ -257,9 +271,25 @@ export async function getAiGatewayUsageSummary(
   const startsAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const endsAt = now;
   const empty = createEmptyUsageSummary(startsAt, endsAt);
+  const usage = createUsageAccumulator();
+  const localTruncated = await addLocalAiUsageEvents(
+    env,
+    userId,
+    startsAt,
+    endsAt,
+    usage,
+  );
   const config = await getAiGatewayRuntimeConfig(env, userId);
 
   if (!config.accountId || !config.gatewayId || !config.apiToken) {
+    if (usage.totalRequests > 0) {
+      return buildUsageSummary(empty, usage, {
+        configured: false,
+        setupRequired: false,
+        fetchedAt: new Date().toISOString(),
+        truncated: localTruncated,
+      });
+    }
     return {
       ...empty,
       configured: false,
@@ -268,15 +298,7 @@ export async function getAiGatewayUsageSummary(
     };
   }
 
-  const models = new Map<string, AiGatewayUsageSummary["models"][number]>();
-  const recent: AiGatewayUsageSummary["recent"] = [];
-  let totalRequests = 0;
-  let successfulRequests = 0;
-  let failedRequests = 0;
-  let tokensIn = 0;
-  let tokensOut = 0;
-  let totalCost = 0;
-  let truncated = false;
+  let gatewayTruncated = false;
 
   try {
     for (let page = 1; page <= 10; page += 1) {
@@ -296,55 +318,27 @@ export async function getAiGatewayUsageSummary(
       for (const log of logs) {
         const createdAt = log.created_at || "";
         if (createdAt && new Date(createdAt).getTime() < startsAt.getTime()) {
-          truncated = false;
+          gatewayTruncated = false;
           continue;
         }
         const provider = normalizeProviderLabel(log.provider);
         const model = normalizeModelLabel(log.model);
-        const key = `${provider}\n${model}`;
         const inTokens = normalizeNumber(log.tokens_in);
         const outTokens = normalizeNumber(log.tokens_out);
         const cost = normalizeNumber(log.cost);
         const success = log.success !== false;
-        let row = models.get(key);
-        if (!row) {
-          row = {
-            provider,
-            model,
-            requests: 0,
-            successfulRequests: 0,
-            failedRequests: 0,
-            tokensIn: 0,
-            tokensOut: 0,
-            totalTokens: 0,
-            cost: 0,
-          };
-          models.set(key, row);
-        }
-        row.requests += 1;
-        row.successfulRequests += success ? 1 : 0;
-        row.failedRequests += success ? 0 : 1;
-        row.tokensIn += inTokens;
-        row.tokensOut += outTokens;
-        row.totalTokens += inTokens + outTokens;
-        row.cost += cost;
-        totalRequests += 1;
-        successfulRequests += success ? 1 : 0;
-        failedRequests += success ? 0 : 1;
-        tokensIn += inTokens;
-        tokensOut += outTokens;
-        totalCost += cost;
-        if (recent.length < 8) {
-          recent.push({
-            id: log.id || `${createdAt}-${recent.length}`,
-            createdAt,
-            provider,
-            model,
-            success,
-            totalTokens: inTokens + outTokens,
-            cost,
-          });
-        }
+        addUsageEvent(usage, {
+          id: log.id || `${createdAt || "gateway"}-${usage.recent.length}`,
+          createdAt,
+          provider,
+          model,
+          requests: 1,
+          successfulRequests: success ? 1 : 0,
+          failedRequests: success ? 0 : 1,
+          tokensIn: inTokens,
+          tokensOut: outTokens,
+          cost,
+        });
       }
       const info = payload.result_info;
       const perPage = info?.per_page || 50;
@@ -352,9 +346,17 @@ export async function getAiGatewayUsageSummary(
       const hasMore =
         logs.length === perPage && (!totalCount || page * perPage < totalCount);
       if (!hasMore) break;
-      truncated = page === 10;
+      gatewayTruncated = page === 10;
     }
   } catch (error) {
+    if (usage.totalRequests > 0) {
+      return buildUsageSummary(empty, usage, {
+        configured: true,
+        setupRequired: false,
+        fetchedAt: new Date().toISOString(),
+        truncated: localTruncated,
+      });
+    }
     return {
       ...empty,
       configured: true,
@@ -364,25 +366,185 @@ export async function getAiGatewayUsageSummary(
     };
   }
 
-  return {
+  return buildUsageSummary(empty, usage, {
     configured: true,
     setupRequired: false,
+    fetchedAt: new Date().toISOString(),
+    truncated: localTruncated || gatewayTruncated,
+  });
+}
+
+type UsageAccumulator = {
+  models: Map<string, AiGatewayUsageSummary["models"][number]>;
+  recent: AiGatewayUsageSummary["recent"];
+  totalCost: number;
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  tokensIn: number;
+  tokensOut: number;
+};
+
+type UsageEventInput = {
+  id: string;
+  createdAt: string;
+  provider: string;
+  model: string;
+  requests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+};
+
+function createUsageAccumulator(): UsageAccumulator {
+  return {
+    models: new Map(),
+    recent: [],
+    totalCost: 0,
+    totalRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+  };
+}
+
+async function addLocalAiUsageEvents(
+  env: Env,
+  userId: string,
+  startsAt: Date,
+  endsAt: Date,
+  usage: UsageAccumulator,
+): Promise<boolean> {
+  try {
+    const rows =
+      (
+        await env.DB.prepare(
+          `SELECT id, provider, model, kind, request_count,
+                  successful_request_count, failed_request_count, tokens_in,
+                  tokens_out, estimated_cost_usd, created_at
+           FROM ai_usage_events
+           WHERE user_id = ? AND created_at >= ? AND created_at <= ?
+           ORDER BY created_at DESC
+           LIMIT 200`,
+        )
+          .bind(userId, startsAt.toISOString(), endsAt.toISOString())
+          .all<LocalAiUsageEventRow>()
+      ).results || [];
+
+    for (const row of rows) {
+      const requests = Math.max(1, Math.round(normalizeNumber(row.request_count)));
+      let successfulRequests = Math.max(
+        0,
+        Math.round(normalizeNumber(row.successful_request_count)),
+      );
+      let failedRequests = Math.max(
+        0,
+        Math.round(normalizeNumber(row.failed_request_count)),
+      );
+      if (successfulRequests + failedRequests === 0) {
+        successfulRequests = requests;
+      }
+      successfulRequests = Math.min(requests, successfulRequests);
+      failedRequests = Math.min(requests - successfulRequests, failedRequests);
+      addUsageEvent(usage, {
+        id: row.id || `local-${usage.recent.length}`,
+        createdAt: normalizeDbDateTime(row.created_at || null) || "",
+        provider: normalizeProviderLabel(row.provider),
+        model: normalizeModelLabel(row.model),
+        requests,
+        successfulRequests,
+        failedRequests,
+        tokensIn: normalizeNumber(row.tokens_in),
+        tokensOut: normalizeNumber(row.tokens_out),
+        cost: normalizeNumber(row.estimated_cost_usd),
+      });
+    }
+
+    return rows.length === 200;
+  } catch {
+    return false;
+  }
+}
+
+function addUsageEvent(usage: UsageAccumulator, event: UsageEventInput): void {
+  const key = `${event.provider}\n${event.model}`;
+  let row = usage.models.get(key);
+  if (!row) {
+    row = {
+      provider: event.provider,
+      model: event.model,
+      requests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+      totalTokens: 0,
+      cost: 0,
+    };
+    usage.models.set(key, row);
+  }
+  row.requests += event.requests;
+  row.successfulRequests += event.successfulRequests;
+  row.failedRequests += event.failedRequests;
+  row.tokensIn += event.tokensIn;
+  row.tokensOut += event.tokensOut;
+  row.totalTokens += event.tokensIn + event.tokensOut;
+  row.cost += event.cost;
+
+  usage.totalRequests += event.requests;
+  usage.successfulRequests += event.successfulRequests;
+  usage.failedRequests += event.failedRequests;
+  usage.tokensIn += event.tokensIn;
+  usage.tokensOut += event.tokensOut;
+  usage.totalCost += event.cost;
+  usage.recent.push({
+    id: event.id,
+    createdAt: event.createdAt,
+    provider: event.provider,
+    model: event.model,
+    success: event.failedRequests === 0,
+    totalTokens: event.tokensIn + event.tokensOut,
+    cost: event.cost,
+  });
+}
+
+function buildUsageSummary(
+  empty: AiGatewayUsageSummary,
+  usage: UsageAccumulator,
+  options: {
+    configured: boolean;
+    setupRequired: boolean;
+    fetchedAt: string;
+    truncated: boolean;
+  },
+): AiGatewayUsageSummary {
+  return {
+    configured: options.configured,
+    setupRequired: options.setupRequired,
     period: empty.period,
     currency: "usd",
-    totalCost,
-    totalRequests,
-    successfulRequests,
-    failedRequests,
-    tokensIn,
-    tokensOut,
-    totalTokens: tokensIn + tokensOut,
-    models: Array.from(models.values())
+    totalCost: usage.totalCost,
+    totalRequests: usage.totalRequests,
+    successfulRequests: usage.successfulRequests,
+    failedRequests: usage.failedRequests,
+    tokensIn: usage.tokensIn,
+    tokensOut: usage.tokensOut,
+    totalTokens: usage.tokensIn + usage.tokensOut,
+    models: Array.from(usage.models.values())
       .sort((a, b) => b.cost - a.cost || b.totalTokens - a.totalTokens)
       .slice(0, 12),
-    recent,
-    fetchedAt: new Date().toISOString(),
+    recent: usage.recent
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      )
+      .slice(0, 8),
+    fetchedAt: options.fetchedAt,
     estimated: true,
-    truncated,
+    truncated: options.truncated,
     error: null,
   };
 }
@@ -474,7 +636,12 @@ function normalizeOptionalText(value: unknown, maxLength: number): string {
 }
 
 function normalizeNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 function normalizeProviderLabel(value: unknown): string {

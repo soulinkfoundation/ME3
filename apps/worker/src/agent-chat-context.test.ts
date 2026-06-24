@@ -29,6 +29,7 @@ type FakeDbState = {
   aiDefaults: Array<Record<string, unknown>>;
   assistantAttachments: Array<Record<string, unknown>>;
   assistantMessageAssets: Array<Record<string, unknown>>;
+  aiUsageEvents: Array<Record<string, unknown>>;
   persistedMessages: Array<{
     id: string;
     ownerId: string;
@@ -128,6 +129,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     aiDefaults: [],
     assistantAttachments: [],
     assistantMessageAssets: [],
+    aiUsageEvents: [],
     persistedMessages: [],
     ...state,
   };
@@ -285,6 +287,17 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               role: values[5],
               display_order: values[6],
               metadata_json: values[7],
+            });
+          }
+          if (sql.includes("INSERT INTO ai_usage_events")) {
+            dbState.aiUsageEvents.push({
+              id: values[0],
+              user_id: values[1],
+              provider: values[2],
+              model: values[3],
+              estimated_cost_usd: values[4],
+              metadata_json: values[5],
+              created_at: values[6],
             });
           }
           if (sql.includes("INSERT INTO user_reminders")) {
@@ -765,6 +778,20 @@ describe("Core chat native context", () => {
     });
     expect(env.state.assistantAttachments).toHaveLength(1);
     expect(env.state.assistantMessageAssets).toHaveLength(1);
+    expect(env.state.aiUsageEvents).toHaveLength(1);
+    expect(env.state.aiUsageEvents[0]).toMatchObject({
+      user_id: "owner",
+      provider: "workers-ai",
+      model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+    });
+    expect(Number(env.state.aiUsageEvents[0].estimated_cost_usd)).toBeCloseTo(
+      0.001148,
+    );
+    expect(JSON.parse(String(env.state.aiUsageEvents[0].metadata_json))).toMatchObject({
+      estimated: true,
+      outputTiles: 4,
+      pricing: "workers-ai-flux-2-klein-4b-output-tiles",
+    });
     expect(r2.objects.size).toBe(1);
     const assistantMessage = env.state.persistedMessages.find(
       (message) => message.role === "assistant",
