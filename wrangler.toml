@@ -24,7 +24,7 @@ bucket_name = "my-me3-site-assets"
 name = "EMAIL"
 
 [triggers]
-crons = ["* * * * *"]
+crons = ["*/15 * * * *"]
 
 [assets]
 directory = "apps/web/dist"
