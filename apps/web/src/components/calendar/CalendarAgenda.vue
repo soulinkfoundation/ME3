@@ -4,6 +4,7 @@ import type {
   CalendarAgendaEvent,
   CalendarRangeMode,
 } from "./calendarAgenda";
+import UiIcon from "../UiIcon.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -373,7 +374,15 @@ watch(
                 <div class="calendar-item-body">
                   <div class="calendar-item-title">
                     <span>{{ event.title }}</span>
-                    <span class="calendar-kind">{{ event.sourceLabel }}</span>
+                    <span
+                      v-if="event.sourceLabel === 'Reminder'"
+                      class="calendar-kind calendar-kind--icon"
+                    >
+                      <UiIcon name="Bell" :size="14" title="Reminder" />
+                    </span>
+                    <span v-else class="calendar-kind">
+                      {{ event.sourceLabel.toLowerCase() }}
+                    </span>
                   </div>
                 </div>
               </button>
@@ -679,9 +688,13 @@ watch(
 .calendar-kind {
   flex-shrink: 0;
   font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--color-text-muted);
+}
+
+.calendar-kind--icon {
+  display: inline-flex;
+  align-items: center;
 }
 
 .calendar-detail h4 {
