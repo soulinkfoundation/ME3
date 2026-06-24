@@ -424,12 +424,6 @@ const customDomainSite = computed(() =>
   sites.sites.find((site) => site.username === customDomainSiteUsername.value),
 );
 
-const timezoneDisplay = computed(() => {
-  const value = timezoneInput.value || auth.user?.timezone || "";
-  if (!value || !isValidTimeZone(value)) return "UTC";
-  return getTimeZoneDisplayLabel(value);
-});
-
 const saveDisabled = computed(
   () =>
     saving.value ||
@@ -2277,9 +2271,6 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>App Connections</h2>
-              <span class="accordion-header-hint">
-                Connect ME3 to other apps
-              </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -2619,9 +2610,6 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>AI</h2>
-              <span class="accordion-header-hint">
-                Model and gateway settings
-              </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -2884,9 +2872,6 @@ onMounted(async () => {
           >
             <span class="accordion-title-wrap accordion-title-flex">
               <h2>Timezone</h2>
-              <span class="accordion-header-hint">
-                {{ timezoneDisplay }}
-              </span>
             </span>
             <span class="accordion-chevron" aria-hidden="true">▼</span>
           </button>
@@ -4140,7 +4125,7 @@ h1 {
 }
 
 .connection-line--telegram .connection-line__end {
-  display: block;
+  display: inline-flex;
   padding-top: 0;
 }
 
@@ -4624,6 +4609,12 @@ h1 {
 
   .connection-line__header {
     align-items: flex-start;
+  }
+
+  .connection-line--telegram:not(.connection-line--telegram-connected)
+    .connection-line__header {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .connection-line--telegram-connected {
