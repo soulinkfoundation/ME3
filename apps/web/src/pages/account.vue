@@ -2753,11 +2753,6 @@ onMounted(async () => {
                       <label for="stripe-secret-key-input">
                         Stripe secret key
                       </label>
-                      <p class="field-hint payment-key-field__hint">
-                        Add your Stripe secret key here to accept direct paid
-                        bookings from your ME3 site. Use sk_test_ for testing
-                        or sk_live_ for live payments.
-                      </p>
                       <div class="password-field payment-key-row">
                         <input
                           id="stripe-secret-key-input"
@@ -2766,7 +2761,7 @@ onMounted(async () => {
                           :type="showStripeSecret ? 'text' : 'password'"
                           autocomplete="off"
                           spellcheck="false"
-                          placeholder="sk_test_..."
+                          placeholder="sk_live_... or sk_test_..."
                           @keydown.enter.prevent="saveCommerceSettings"
                         />
                         <button
@@ -4145,12 +4140,6 @@ h1 {
 
 .payment-key-field {
   margin-top: 0;
-}
-
-.payment-key-field__hint {
-  margin: -2px 0 0;
-  font-size: 13px;
-  line-height: 1.35;
 }
 
 .payment-key-row {
