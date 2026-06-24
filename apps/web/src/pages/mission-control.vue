@@ -783,7 +783,11 @@ onMounted(() => {
 <template>
   <main class="mission-dashboard">
     <header class="mission-dashboard__topbar">
-      <div class="mission-dashboard__topbar-spacer" aria-hidden="true" />
+      <div class="mission-dashboard__topbar-spacer">
+        <h1 class="app-page-title mission-dashboard__title">
+          Mission Control
+        </h1>
+      </div>
       <div
         v-if="dashboardReady && (visibleQuickLinks.length || dashboardEditing)"
         class="mission-dashboard__topbar-quicklinks"
@@ -1652,8 +1656,16 @@ onMounted(() => {
 }
 
 .mission-dashboard__topbar-spacer {
+  display: flex;
   grid-column: 1;
   min-width: 0;
+  padding-left: var(--app-shell-mobile-nav-leading-padding);
+}
+
+.mission-dashboard__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mission-dashboard__topbar-actions {
@@ -2408,6 +2420,10 @@ onMounted(() => {
   .mission-dashboard__topbar {
     grid-template-columns: minmax(0, 1fr) auto auto;
     padding-left: var(--app-shell-mobile-nav-leading-padding);
+  }
+
+  .mission-dashboard__topbar-spacer {
+    padding-left: 0;
   }
 
   .mission-dashboard__topbar-quicklinks {

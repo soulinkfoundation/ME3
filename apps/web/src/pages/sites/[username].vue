@@ -716,9 +716,10 @@ Note: Opening index.html directly (file://) won't work due to browser security.
     <main class="main">
       <!-- Site Header -->
       <div class="site-header">
+        <h1 class="app-page-title">Your Site</h1>
         <div class="site-info">
           <div class="site-info-main">
-            <h1 class="site-title">
+            <div class="site-title">
               <a
                 v-if="site?.published_at"
                 :href="siteUrl"
@@ -737,7 +738,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
               >
                 <span class="site-title-text">{{ siteUrlLabel }}</span>
               </span>
-            </h1>
+            </div>
             <div class="site-badges">
               <span v-if="site?.published_at" class="status published"
                 >Published</span
@@ -1065,6 +1066,8 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 }
 
 .site-header {
+  display: grid;
+  gap: 8px;
   margin-bottom: 32px;
 }
 
@@ -1104,6 +1107,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   justify-content: space-between;
   gap: 16px;
   width: 100%;
+  min-width: 0;
 }
 
 .site-info-main {
@@ -1137,7 +1141,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   min-width: 0;
 }
 
-.site-info h1 a {
+.site-title a {
   color: inherit;
   text-decoration: none;
 }
@@ -1163,7 +1167,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   opacity: 1;
 }
 
-.site-info h1 a:hover {
+.site-title a:hover {
   text-decoration: underline;
 }
 
@@ -1207,6 +1211,10 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 }
 
 @media (max-width: 959px) {
+  .site-header > .app-page-title {
+    padding-left: 24px;
+  }
+
   .site-info-main {
     padding-left: 24px;
   }

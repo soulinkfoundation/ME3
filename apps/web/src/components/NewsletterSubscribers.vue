@@ -396,9 +396,14 @@ async function handleImportFile(event: Event) {
 <style scoped>
 .section-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
+}
+
+.section-header > div:first-child {
+  min-width: 0;
 }
 
 .newsletter-subscribers h2 {
@@ -421,7 +426,13 @@ async function handleImportFile(event: Event) {
 
 .subscriber-actions {
   display: flex;
+  max-width: 100%;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.subscriber-actions .button {
+  white-space: nowrap;
 }
 
 .button {
@@ -583,6 +594,12 @@ async function handleImportFile(event: Event) {
   font-weight: 400;
   padding: 6px 12px;
   line-height: 1;
+}
+
+@media (max-width: 420px) {
+  .subscriber-actions {
+    width: 100%;
+  }
 }
 
 /* Modal */
