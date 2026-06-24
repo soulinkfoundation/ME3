@@ -324,7 +324,6 @@ const accountsImporting = ref(false);
 const accountsSyncing = ref(false);
 const accountsModalOpen = ref(false);
 const accountsError = ref("");
-const accountsMessage = ref("");
 const accountsTotal = ref(0);
 const accountsOffset = ref(0);
 const accountsSearch = ref("");
@@ -832,7 +831,6 @@ async function saveAccountEntry() {
   }
   accountsSaving.value = true;
   accountsError.value = "";
-  accountsMessage.value = "";
   try {
     await api.post("/accounts/entries", {
       entryType: accountsType.value,
@@ -847,8 +845,8 @@ async function saveAccountEntry() {
     accountsForm.value = emptyAccountsForm(accountsType.value);
     accountsModalOpen.value = false;
     accountsOffset.value = 0;
-    accountsMessage.value = "Entry added.";
     await loadAccounts();
+    toastSuccess("Entry added.");
   } catch (e) {
     accountsError.value =
       e instanceof ApiError ? e.message : "Could not add account entry";
@@ -870,11 +868,10 @@ function closeAccountsModal() {
 
 async function deleteAccountEntry(entry: FinancialEntry) {
   accountsError.value = "";
-  accountsMessage.value = "";
   try {
     await api.delete(`/accounts/entries/${encodeURIComponent(entry.id)}`);
-    accountsMessage.value = "Entry deleted.";
     await loadAccounts();
+    toastSuccess("Entry deleted.");
   } catch (e) {
     accountsError.value =
       e instanceof ApiError ? e.message : "Could not delete account entry";
@@ -912,7 +909,6 @@ async function importAccountsCsv(event: Event) {
   if (!file) return;
   accountsImporting.value = true;
   accountsError.value = "";
-  accountsMessage.value = "";
   try {
     const form = new FormData();
     form.append("entryType", accountsType.value);
@@ -922,9 +918,11 @@ async function importAccountsCsv(event: Event) {
       skipped: number;
       total: number;
     }>("/accounts/import", form);
-    accountsMessage.value = `Imported ${response.imported} of ${response.total}; skipped ${response.skipped}.`;
     accountsOffset.value = 0;
     await loadAccounts();
+    toastSuccess(
+      `Imported ${response.imported} of ${response.total}; skipped ${response.skipped}.`,
+    );
   } catch (e) {
     accountsError.value =
       e instanceof ApiError ? e.message : "Could not import CSV";
@@ -948,7 +946,6 @@ function exportAccountsCsv() {
 async function syncAccountsStripe() {
   accountsSyncing.value = true;
   accountsError.value = "";
-  accountsMessage.value = "";
   try {
     const response = await api.post<{
       chargesImported: number;
@@ -956,9 +953,11 @@ async function syncAccountsStripe() {
       chargesProcessed: number;
     }>("/accounts/stripe/sync", {});
     accountsType.value = "income";
-    accountsMessage.value = `Stripe sync processed ${response.chargesProcessed}; added ${response.chargesImported}, updated ${response.chargesUpdated}.`;
     accountsOffset.value = 0;
     await loadAccounts();
+    toastSuccess(
+      `Stripe sync processed ${response.chargesProcessed}; added ${response.chargesImported}, updated ${response.chargesUpdated}.`,
+    );
   } catch (e) {
     accountsError.value =
       e instanceof ApiError ? e.message : "Could not sync Stripe charges";
@@ -2775,9 +2774,6 @@ onBeforeUnmount(() => {
 
         <p v-if="accountsError" class="mission-control__message is-error">
           {{ accountsError }}
-        </p>
-        <p v-else-if="accountsMessage" class="mission-control__message">
-          {{ accountsMessage }}
         </p>
 
         <div class="accounts-table" aria-label="Payment log">
