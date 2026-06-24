@@ -360,21 +360,11 @@ function closeFromBackdrop() {
 
           <div class="task-note-meta">
             <label class="field task-note-meta__field">
-              <span>Due</span>
-              <input
-                :value="detailDraft.dueAt"
-                type="date"
-                aria-label="Due date"
-                @input="updateDetailDraft({ dueAt: inputValue($event) })"
-              />
-            </label>
-
-            <label class="field task-note-meta__field">
-              <span>Scheduled</span>
+              <span>Date</span>
               <input
                 :value="detailDraft.scheduledFor"
                 type="date"
-                aria-label="Scheduled date"
+                aria-label="Date"
                 @input="
                   updateDetailDraft({ scheduledFor: inputValue($event) })
                 "

@@ -130,7 +130,6 @@ export type ProjectTaskDetailDraft = {
   description: string;
   status: ProjectBoardStatus;
   projectId: string;
-  dueAt: string;
   scheduledFor: string;
 };
 
