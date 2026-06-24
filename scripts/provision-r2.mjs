@@ -3,6 +3,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import {
+  getPreferredSiteAssetsBucketName,
+  upsertSiteAssetsBinding,
+} from "./wrangler-toml.mjs";
 
 const DEFAULT_BUCKET = "me3-site-assets";
 const DEFAULT_CONFIG = "wrangler.toml";
@@ -16,7 +20,7 @@ if (!existsSync(configPath)) {
 }
 
 const before = readFileSync(configPath, "utf8");
-const existingBucketName = getExistingR2BucketName(before);
+const existingBucketName = getPreferredSiteAssetsBucketName(before, DEFAULT_BUCKET);
 const bucketName =
   args.bucket ||
   process.env.ME3_R2_BUCKET_NAME ||
@@ -33,7 +37,10 @@ if (!args.skipCreate) {
   runWrangler(["r2", "bucket", "create", bucketName]);
 }
 
-const after = ensureR2Binding(before, bucketName);
+const after = upsertSiteAssetsBinding(before, bucketName, {
+  comment: "# Optional large-site media storage.",
+  insertBeforeHeaders: ["[assets]"],
+});
 
 if (after === before) {
   console.log(`${configPath} already binds ${BINDING} to ${bucketName}.`);
@@ -125,52 +132,6 @@ function isAlreadyOwnedBucketError(value) {
 
 function stripAnsi(value) {
   return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-function ensureR2Binding(config, bucketName) {
-  const activeBlockPattern =
-    /\n\[\[r2_buckets\]\]\n(?:[^\n]*\n)*?binding\s*=\s*"SITE_ASSETS"(?:\n[^\[]*)?/;
-
-  if (activeBlockPattern.test(config)) {
-    return config.replace(activeBlockPattern, (block) => {
-      if (/bucket_name\s*=/.test(block)) {
-        return block.replace(
-          /bucket_name\s*=\s*"[^"]*"/,
-          `bucket_name = "${bucketName}"`,
-        );
-      }
-      return `${block.trimEnd()}\nbucket_name = "${bucketName}"\n`;
-    });
-  }
-
-  const commentedExamplePattern =
-    /# Optional large-site media storage\.[\s\S]*?# bucket_name = "me3-site-assets"\n?/;
-  const activeBlock = [
-    "# Optional large-site media storage.",
-    "[[r2_buckets]]",
-    `binding = "${BINDING}"`,
-    `bucket_name = "${bucketName}"`,
-    "",
-  ].join("\n");
-
-  if (commentedExamplePattern.test(config)) {
-    return config.replace(commentedExamplePattern, activeBlock);
-  }
-
-  const assetsIndex = config.indexOf("\n[assets]");
-  if (assetsIndex !== -1) {
-    return `${config.slice(0, assetsIndex)}\n${activeBlock}${config.slice(assetsIndex)}`;
-  }
-
-  return `${config.trimEnd()}\n\n${activeBlock}`;
-}
-
-function getExistingR2BucketName(config) {
-  const blockMatch = config.match(
-    /\n\[\[r2_buckets\]\]\n(?:(?!\n\[)[\s\S])*?binding\s*=\s*"SITE_ASSETS"(?:(?!\n\[)[\s\S])*/,
-  );
-  if (!blockMatch) return "";
-  return blockMatch[0].match(/bucket_name\s*=\s*"([^"]+)"/)?.[1] || "";
 }
 
 function isValidBucketName(value) {

@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  escapeRegExp,
+  getPreferredSiteAssetsBucketName,
+  getTomlArrayBlock,
+  getTomlString,
+  removeSiteAssetsBinding,
+  setTomlString,
+  upsertSiteAssetsBinding,
+} from "./wrangler-toml.mjs";
 
 const DEFAULT_CONFIG = "wrangler.toml";
 const D1_PLACEHOLDER = "replace-with-generated-d1-id";
@@ -17,7 +26,7 @@ let config = originalConfig;
 const workerName = getTopLevelTomlString(config, "name") || "my-me3";
 const resourcePrefix = normalizeResourcePrefix(workerName);
 const d1Block = getTomlArrayBlock(config, "d1_databases", "DB");
-const r2Block = getTomlArrayBlock(config, "r2_buckets", "SITE_ASSETS");
+const defaultBucketName = buildResourceName(resourcePrefix, "site-assets");
 const dbName =
   args.dbName ||
   getTomlString(d1Block, "database_name") ||
@@ -25,8 +34,8 @@ const dbName =
 const bucketName =
   args.bucket ||
   process.env.ME3_R2_BUCKET_NAME ||
-  getTomlString(r2Block, "bucket_name") ||
-  buildResourceName(resourcePrefix, "site-assets");
+  getPreferredSiteAssetsBucketName(config, defaultBucketName) ||
+  defaultBucketName;
 let databaseId = getTomlString(d1Block, "database_id");
 
 if (!isValidResourceName(dbName)) {
@@ -47,7 +56,7 @@ console.log(
 );
 
 if (args.skipR2) {
-  config = removeR2Binding(config);
+  config = removeSiteAssetsBinding(config);
   console.log("Skipped storage; email attachments and assistant image uploads will be unavailable.");
 } else {
   const r2Ready = args.skipCreate || ensureR2Bucket(bucketName);
@@ -62,7 +71,7 @@ if (args.skipR2) {
       ].join("\n"),
     );
   }
-  config = upsertR2Binding(config, bucketName);
+  config = upsertSiteAssetsBinding(config, bucketName);
   console.log(`Configured SITE_ASSETS -> ${bucketName}`);
 }
 
@@ -235,48 +244,6 @@ function upsertD1Binding(value, databaseName, databaseId) {
   );
 }
 
-function upsertR2Binding(value, bucketName) {
-  const block = getTomlArrayBlock(value, "r2_buckets", "SITE_ASSETS");
-  if (block) {
-    return value.replace(block, () => setTomlString(block, "bucket_name", bucketName));
-  }
-
-  return insertTomlBlock(
-    value,
-    [
-      "",
-      "# Core file storage for site media and future plugin-owned files.",
-      "[[r2_buckets]]",
-      'binding = "SITE_ASSETS"',
-      `bucket_name = "${bucketName}"`,
-      "",
-    ].join("\n"),
-    ["[triggers]", "[assets]"],
-  );
-}
-
-function removeR2Binding(value) {
-  const block = getTomlArrayBlock(value, "r2_buckets", "SITE_ASSETS");
-  if (!block) return removeOrphanedR2Comment(value);
-
-  const coreComment = "\n# Core file storage for site media and future plugin-owned files.";
-  const blockStart = value.indexOf(block);
-  const commentStart =
-    blockStart >= coreComment.length &&
-    value.slice(blockStart - coreComment.length, blockStart) === coreComment
-      ? blockStart - coreComment.length
-      : blockStart;
-
-  return removeOrphanedR2Comment(
-    `${value.slice(0, commentStart)}${value.slice(blockStart + block.length)}`,
-  );
-}
-
-function removeOrphanedR2Comment(value) {
-  if (getTomlArrayBlock(value, "r2_buckets", "SITE_ASSETS")) return value;
-  return value.replace(/\n# Core file storage for site media and future plugin-owned files\.\n/g, "\n");
-}
-
 function insertTomlBlock(value, block, beforeHeaders) {
   for (const header of beforeHeaders) {
     const index = value.indexOf(`\n${header}`);
@@ -285,28 +252,8 @@ function insertTomlBlock(value, block, beforeHeaders) {
   return `${value.trimEnd()}${block}\n`;
 }
 
-function getTomlArrayBlock(value, blockName, bindingValue) {
-  const blockPattern = new RegExp(
-    `\\n\\[\\[${escapeRegExp(blockName)}\\]\\][\\s\\S]*?(?=\\n\\[|$)`,
-    "g",
-  );
-  const blocks = value.match(blockPattern) || [];
-  return blocks.find((block) => getTomlString(block, "binding") === bindingValue) || "";
-}
-
 function getTopLevelTomlString(value, key) {
   return value.match(new RegExp(`^${escapeRegExp(key)}\\s*=\\s*"([^"]+)"`, "m"))?.[1] || "";
-}
-
-function getTomlString(block, key) {
-  if (!block) return "";
-  return block.match(new RegExp(`${escapeRegExp(key)}\\s*=\\s*"([^"]+)"`))?.[1] || "";
-}
-
-function setTomlString(block, key, value) {
-  const pattern = new RegExp(`${escapeRegExp(key)}\\s*=\\s*"[^"]*"`);
-  if (pattern.test(block)) return block.replace(pattern, `${key} = "${value}"`);
-  return `${block.trimEnd()}\n${key} = "${value}"\n`;
 }
 
 function parseDatabaseId(text) {
@@ -335,10 +282,6 @@ function buildResourceName(prefix, suffix) {
 
 function isValidResourceName(value) {
   return /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(value);
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function fail(message) {

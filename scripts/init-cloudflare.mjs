@@ -4,6 +4,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
+import {
+  getPreferredSiteAssetsBucketName,
+  upsertSiteAssetsBinding,
+} from "./wrangler-toml.mjs";
 
 const DEFAULT_CONFIG = "wrangler.toml";
 const DEFAULT_DB_NAME = "me3-core-db";
@@ -35,7 +39,7 @@ const originalConfig = readFileSync(configPath, "utf8");
 let config = originalConfig;
 const db = getD1Config(config);
 const dbName = args.dbName || db.databaseName || DEFAULT_DB_NAME;
-const bucketName = args.bucket || getR2BucketName(config) || DEFAULT_BUCKET;
+const bucketName = args.bucket || getPreferredSiteAssetsBucketName(config, DEFAULT_BUCKET) || DEFAULT_BUCKET;
 
 if (!isValidResourceName(dbName)) {
   fail(`Invalid D1 database name "${dbName}". Use lowercase letters, numbers, and hyphens.`);
@@ -88,7 +92,7 @@ if (!args.skipR2) {
     allowAlreadyExists: true,
     failureMessage: "Could not create the R2 bucket.",
   });
-  config = setR2BucketName(config, bucketName);
+  config = upsertSiteAssetsBinding(config, bucketName);
   console.log(`Configured SITE_ASSETS -> ${bucketName}`);
 }
 
@@ -350,37 +354,6 @@ function setD1Config(value, databaseName, databaseId) {
     next = setTomlString(next, "database_id", databaseId);
     return next;
   });
-}
-
-function getR2BucketName(value) {
-  const block = value.match(
-    /\n\[\[r2_buckets\]\]\n(?:(?!\n\[)[\s\S])*?binding\s*=\s*"SITE_ASSETS"(?:(?!\n\[)[\s\S])*/,
-  )?.[0];
-  return block?.match(/bucket_name\s*=\s*"([^"]+)"/)?.[1] || "";
-}
-
-function setR2BucketName(value, bucketName) {
-  const blockPattern =
-    /\n\[\[r2_buckets\]\]\n(?:(?!\n\[)[\s\S])*?binding\s*=\s*"SITE_ASSETS"(?:(?!\n\[)[\s\S])*/;
-
-  if (blockPattern.test(value)) {
-    return value.replace(blockPattern, (block) => setTomlString(block, "bucket_name", bucketName));
-  }
-
-  const activeBlock = [
-    "",
-    "# Core file storage for site media and future plugin-owned files.",
-    "[[r2_buckets]]",
-    'binding = "SITE_ASSETS"',
-    `bucket_name = "${bucketName}"`,
-  ].join("\n");
-  const assetsIndex = value.indexOf("\n[assets]");
-
-  if (assetsIndex !== -1) {
-    return `${value.slice(0, assetsIndex)}${activeBlock}\n${value.slice(assetsIndex)}`;
-  }
-
-  return `${value.trimEnd()}${activeBlock}\n`;
 }
 
 function ensureEmailSendBinding(value) {
