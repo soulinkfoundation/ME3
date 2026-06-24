@@ -34,6 +34,9 @@ bucket_name = "my-me3-site-assets"
 [[send_email]]
 name = "EMAIL"
 
+[vars]
+ME3_SECURITY_CONTACT = "mailto:admin@soulinkfoundation.org"
+
 [triggers]
 crons = ["*/15 * * * *"]
 
