@@ -55,7 +55,8 @@ if (args.skipR2) {
     fail(
       [
         `Could not create or reuse Cloudflare storage bucket "${bucketName}".`,
-        "Activate Cloudflare storage first: https://dash.cloudflare.com/?to=/:account/r2/plans",
+        "R2 storage needs to be activated to proceed.",
+        "Activate R2 storage: https://dash.cloudflare.com/?to=/:account/r2/plans",
         "Then rerun `pnpm deploy:cloudflare`.",
         "To deploy without file/email attachment storage, use `pnpm deploy:cloudflare:d1-only`.",
       ].join("\n"),

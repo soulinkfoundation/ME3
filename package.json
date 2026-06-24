@@ -36,7 +36,7 @@
         "description": "Durable Object state for ME3's owner agent runtime. Cloudflare provisions this automatically."
       },
       "SITE_ASSETS": {
-        "description": "ME3 file and attachment storage. Activate Cloudflare storage before deploying: [open storage activation](https://dash.cloudflare.com/?to=/:account/r2/plans). Required for email attachments, assistant image uploads, and larger site media."
+        "description": "R2 storage needs to be activated to proceed. [Activate R2 storage](https://dash.cloudflare.com/?to=/:account/r2/plans)."
       },
       "AI": {
         "description": "Workers AI binding used by ME3's default assistant and voice features. You can add other model providers inside ME3 later."
