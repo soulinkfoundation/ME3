@@ -11,6 +11,7 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { useRoute, useRouter } from "vue-router";
 import { API_BASE, ApiError, api } from "../api";
 import Button from "../components/Button.vue";
+import PageLoading from "../components/PageLoading.vue";
 import MissionProjectModal from "../components/mission-control/MissionProjectModal.vue";
 import MissionProjectPicker from "../components/mission-control/MissionProjectPicker.vue";
 import MissionProjectTaskBoard from "../components/mission-control/MissionProjectTaskBoard.vue";
@@ -323,6 +324,8 @@ const accountsSaving = ref(false);
 const accountsImporting = ref(false);
 const accountsSyncing = ref(false);
 const accountsModalOpen = ref(false);
+const accountsActionsOpen = ref(false);
+const accountsFiltersOpen = ref(false);
 const accountsError = ref("");
 const accountsTotal = ref(0);
 const accountsOffset = ref(0);
@@ -607,6 +610,14 @@ const accountsHasNext = computed(
 const accountsEntryCountLabel = computed(() =>
   accountsTotal.value === 1 ? "1 entry" : `${accountsTotal.value} entries`,
 );
+const accountsActiveFilterCount = computed(
+  () =>
+    [
+      accountsSearch.value.trim(),
+      accountsStatusFilter.value,
+      accountsSourceFilter.value,
+    ].filter(Boolean).length,
+);
 const accountCategoryOptions = computed(() =>
   accountsCategories.value.filter(
     (category) => category.entryType === accountsType.value,
@@ -856,6 +867,7 @@ async function saveAccountEntry() {
 }
 
 function openAccountsModal() {
+  accountsActionsOpen.value = false;
   accountsForm.value = emptyAccountsForm(accountsType.value);
   accountsError.value = "";
   accountsModalOpen.value = true;
@@ -864,6 +876,11 @@ function openAccountsModal() {
 function closeAccountsModal() {
   if (accountsSaving.value) return;
   accountsModalOpen.value = false;
+}
+
+function openAccountsFilters() {
+  accountsActionsOpen.value = false;
+  accountsFiltersOpen.value = true;
 }
 
 async function deleteAccountEntry(entry: FinancialEntry) {
@@ -888,7 +905,15 @@ function setAccountsType(type: FinancialEntryType) {
 
 function applyAccountsFilters() {
   accountsOffset.value = 0;
+  accountsFiltersOpen.value = false;
   void loadAccounts();
+}
+
+function clearAccountsFilters() {
+  accountsSearch.value = "";
+  accountsStatusFilter.value = "";
+  accountsSourceFilter.value = "";
+  applyAccountsFilters();
 }
 
 function pageAccounts(delta: number) {
@@ -900,6 +925,7 @@ function pageAccounts(delta: number) {
 }
 
 function chooseAccountsImportFile() {
+  accountsActionsOpen.value = false;
   accountsImportInput.value?.click();
 }
 
@@ -933,6 +959,7 @@ async function importAccountsCsv(event: Event) {
 }
 
 function exportAccountsCsv() {
+  accountsActionsOpen.value = false;
   const query = new URLSearchParams({ entryType: accountsType.value });
   if (accountsSearch.value.trim())
     query.set("search", accountsSearch.value.trim());
@@ -944,6 +971,7 @@ function exportAccountsCsv() {
 }
 
 async function syncAccountsStripe() {
+  accountsActionsOpen.value = false;
   accountsSyncing.value = true;
   accountsError.value = "";
   try {
@@ -2611,79 +2639,116 @@ onBeforeUnmount(() => {
           >
             <button
               type="button"
-              class="mission-control__section-tab"
+              class="accounts-mode-tab"
               :class="{ 'is-active': accountsType === 'expense' }"
+              role="tab"
+              :aria-selected="accountsType === 'expense' ? 'true' : 'false'"
               @click="setAccountsType('expense')"
             >
-              Expenses
+              <UiIcon name="HandCoins" :size="17" />
+              <span>Expenses</span>
             </button>
             <button
               type="button"
-              class="mission-control__section-tab"
+              class="accounts-mode-tab"
               :class="{ 'is-active': accountsType === 'income' }"
+              role="tab"
+              :aria-selected="accountsType === 'income' ? 'true' : 'false'"
               @click="setAccountsType('income')"
             >
-              Income
+              <UiIcon name="Landmark" :size="17" />
+              <span>Income</span>
             </button>
           </div>
           <div class="accounts-toolbar__actions">
             <Button
-              class="accounts-action-button"
-              color="outline"
+              class="accounts-icon-button"
+              color="ghost"
               shape="soft"
               size="compact"
+              icon-only
               type="button"
-              :title="accountsImporting ? 'Importing CSV' : 'Import CSV'"
-              @click="chooseAccountsImportFile"
+              title="Search accounts"
+              aria-label="Search accounts"
+              @click="openAccountsFilters"
             >
-              <template #icon>
-                <UiIcon name="Upload" :size="13" />
-              </template>
-              {{ accountsImporting ? "Importing..." : "Import CSV" }}
+              <UiIcon name="Search" :size="18" />
+              <span
+                v-if="accountsActiveFilterCount"
+                class="accounts-filter-count"
+              >
+                {{ accountsActiveFilterCount }}
+              </span>
             </Button>
             <Button
-              class="accounts-action-button"
-              color="outline"
+              class="accounts-icon-button"
+              color="ghost"
               shape="soft"
               size="compact"
-              type="button"
-              title="Export CSV"
-              @click="exportAccountsCsv"
-            >
-              <template #icon>
-                <UiIcon name="Download" :size="13" />
-              </template>
-              Export CSV
-            </Button>
-            <Button
-              class="accounts-action-button"
-              color="primary"
-              shape="soft"
-              size="compact"
-              type="button"
-              :title="accountsSyncing ? 'Syncing Stripe' : 'Sync Stripe'"
-              :disabled="accountsSyncing || !accountsStripeConfigured"
-              @click="syncAccountsStripe"
-            >
-              <template #icon>
-                <UiIcon name="RefreshCw" :size="13" />
-              </template>
-              {{ accountsSyncing ? "Syncing..." : "Sync Stripe" }}
-            </Button>
-            <Button
-              class="accounts-action-button"
-              color="primary"
-              shape="soft"
-              size="compact"
+              icon-only
               type="button"
               title="Add entry"
+              aria-label="Add entry"
               @click="openAccountsModal"
             >
-              <template #icon>
-                <UiIcon name="Plus" :size="13" />
-              </template>
-              Add entry
+              <UiIcon name="Plus" :size="18" />
             </Button>
+            <div
+              class="accounts-actions-menu"
+              @click.stop
+            >
+              <Button
+                class="accounts-icon-button"
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                title="Account actions"
+                aria-label="Account actions"
+                aria-haspopup="menu"
+                :aria-expanded="accountsActionsOpen ? 'true' : 'false'"
+                @click="accountsActionsOpen = !accountsActionsOpen"
+              >
+                <UiIcon name="Ellipsis" :size="18" />
+              </Button>
+              <div
+                v-if="accountsActionsOpen"
+                class="accounts-actions-menu__popover"
+                role="menu"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  :disabled="accountsSyncing || !accountsStripeConfigured"
+                  @click="syncAccountsStripe"
+                >
+                  <UiIcon name="RefreshCw" :size="15" />
+                  <span>{{
+                    accountsSyncing ? "Syncing Stripe" : "Sync Stripe"
+                  }}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  :disabled="accountsImporting"
+                  @click="chooseAccountsImportFile"
+                >
+                  <UiIcon name="Upload" :size="15" />
+                  <span>{{
+                    accountsImporting ? "Importing CSV" : "Import CSV"
+                  }}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  @click="exportAccountsCsv"
+                >
+                  <UiIcon name="Download" :size="15" />
+                  <span>Export CSV</span>
+                </button>
+              </div>
+            </div>
             <input
               ref="accountsImportInput"
               type="file"
@@ -2694,7 +2759,13 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="accounts-summary">
+        <PageLoading
+          v-if="accountsLoading && !accountsStats"
+          compact
+          label="Loading accounts..."
+        />
+
+        <div v-else class="accounts-summary">
           <div>
             <span>This month</span>
             <strong>{{
@@ -2715,61 +2786,6 @@ onBeforeUnmount(() => {
               )
             }}</strong>
           </div>
-          <div>
-            <span>Stripe</span>
-            <strong>{{
-              accountsStripeConfigured
-                ? accountsStripeStatus || "Configured"
-                : "Not configured"
-            }}</strong>
-          </div>
-        </div>
-
-        <div class="accounts-filters">
-          <input
-            v-model="accountsSearch"
-            type="search"
-            placeholder="Search accounts"
-            aria-label="Search accounts"
-            @keydown.enter.prevent="applyAccountsFilters"
-          />
-          <select
-            v-model="accountsStatusFilter"
-            aria-label="Filter by status"
-            @change="applyAccountsFilters"
-          >
-            <option value="">Any status</option>
-            <option value="pending">Pending</option>
-            <option value="paid">Paid</option>
-            <option value="overdue">Overdue</option>
-            <option value="needs_review">Needs review</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
-          <select
-            v-model="accountsSourceFilter"
-            aria-label="Filter by source"
-            @change="applyAccountsFilters"
-          >
-            <option value="">Any source</option>
-            <option value="manual">Manual</option>
-            <option value="csv_import">CSV import</option>
-            <option value="stripe">Stripe</option>
-            <option value="email_triage">Email triage</option>
-          </select>
-          <Button
-            class="accounts-search-submit"
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            title="Search"
-            @click="applyAccountsFilters"
-          >
-            <template #icon>
-              <UiIcon name="Search" :size="15" />
-            </template>
-            Search
-          </Button>
         </div>
 
         <p v-if="accountsError" class="mission-control__message is-error">
@@ -2786,8 +2802,8 @@ onBeforeUnmount(() => {
             <span>Source</span>
             <span></span>
           </div>
-          <div v-if="accountsLoading" class="empty-row">
-            Loading accounts...
+          <div v-if="accountsLoading" class="accounts-table__loading">
+            <PageLoading compact label="Loading accounts..." />
           </div>
           <div v-else-if="accountsEntries.length === 0" class="empty-row">
             No {{ accountsType }} entries yet.
@@ -3142,6 +3158,96 @@ onBeforeUnmount(() => {
       @toggle-weekly-review-memory="toggleWeeklyReviewMemory"
       @toggle-weekly-review-reminder="toggleWeeklyReviewReminder"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="accountsFiltersOpen"
+        class="mission-modal"
+        role="presentation"
+        @click.self="accountsFiltersOpen = false"
+      >
+        <form
+          class="mission-modal__dialog accounts-filter-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="accounts-filter-title"
+          @submit.prevent="applyAccountsFilters"
+        >
+          <div class="mission-modal__header">
+            <h2 id="accounts-filter-title">Search accounts</h2>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
+              aria-label="Close filters"
+              @click="accountsFiltersOpen = false"
+            >
+              <UiIcon name="X" :size="18" />
+            </Button>
+          </div>
+
+          <div class="accounts-filters accounts-filters--modal">
+            <label class="field">
+              <span>Search</span>
+              <input
+                v-model="accountsSearch"
+                type="search"
+                placeholder="Search accounts"
+                aria-label="Search accounts"
+              />
+            </label>
+            <label class="field">
+              <span>Status</span>
+              <select
+                v-model="accountsStatusFilter"
+                aria-label="Filter by status"
+              >
+                <option value="">Any status</option>
+                <option value="pending">Pending</option>
+                <option value="paid">Paid</option>
+                <option value="overdue">Overdue</option>
+                <option value="needs_review">Needs review</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Source</span>
+              <select
+                v-model="accountsSourceFilter"
+                aria-label="Filter by source"
+              >
+                <option value="">Any source</option>
+                <option value="manual">Manual</option>
+                <option value="csv_import">CSV import</option>
+                <option value="stripe">Stripe</option>
+                <option value="email_triage">Email triage</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="mission-modal__actions">
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              type="button"
+              :disabled="!accountsActiveFilterCount"
+              @click="clearAccountsFilters"
+            >
+              Clear
+            </Button>
+            <Button color="primary" shape="soft" size="compact" type="submit">
+              <template #icon>
+                <UiIcon name="Search" :size="15" />
+              </template>
+              Search
+            </Button>
+          </div>
+        </form>
+      </div>
+    </Teleport>
 
     <Teleport to="body">
       <div
@@ -3854,7 +3960,6 @@ onBeforeUnmount(() => {
 
 .accounts-toolbar,
 .accounts-toolbar__actions,
-.accounts-filters,
 .accounts-pagination {
   display: flex;
   flex-wrap: wrap;
@@ -3862,19 +3967,142 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.accounts-toolbar,
-.accounts-pagination {
-  justify-content: space-between;
+.accounts-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  justify-content: normal;
 }
 
 .accounts-tabs {
   display: flex;
-  gap: 6px;
+  grid-column: 2;
+  min-width: 0;
+  flex-wrap: nowrap;
+  justify-self: center;
+  gap: 8px;
 }
 
 .accounts-toolbar__actions {
+  position: relative;
+  grid-column: 3;
+  justify-self: end;
   gap: 6px;
   flex-wrap: nowrap;
+}
+
+.accounts-pagination {
+  justify-content: space-between;
+}
+
+.accounts-mode-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 17px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: var(--ui-surface);
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 1px 2px color-mix(in oklab, #000, transparent 92%);
+}
+
+.accounts-mode-tab:hover,
+.accounts-mode-tab.is-active {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.accounts-mode-tab:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 65%);
+  outline-offset: 2px;
+}
+
+.accounts-icon-button {
+  position: relative;
+}
+
+.accounts-toolbar__actions :deep(.accounts-icon-button.me3-btn) {
+  background: var(--ui-surface);
+  border-color: transparent;
+  color: var(--ui-text-muted);
+}
+
+.accounts-toolbar__actions :deep(.accounts-icon-button.me3-btn:hover),
+.accounts-toolbar__actions :deep(.accounts-icon-button.me3-btn:focus-visible),
+.accounts-toolbar__actions :deep(.accounts-icon-button.me3-btn--active) {
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+}
+
+.accounts-filter-count {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  min-width: 14px;
+  height: 14px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--ui-accent);
+  color: var(--ui-accent-contrast);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.accounts-actions-menu {
+  position: relative;
+}
+
+.accounts-actions-menu__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 176px;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  box-shadow: 0 16px 36px color-mix(in oklab, #000, transparent 84%);
+}
+
+.accounts-actions-menu__popover button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.accounts-actions-menu__popover button:hover:not(:disabled),
+.accounts-actions-menu__popover button:focus-visible {
+  background: var(--ui-surface-muted);
+  outline: none;
+}
+
+.accounts-actions-menu__popover button:disabled {
+  color: var(--ui-text-muted);
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .accounts-pagination .me3-btn {
@@ -3885,20 +4113,16 @@ onBeforeUnmount(() => {
 
 .accounts-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(120px, 1fr));
-  gap: 1px;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 18px;
   overflow: hidden;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-md);
-  background: var(--ui-border);
 }
 
 .accounts-summary div {
   display: grid;
   gap: 4px;
   min-width: 0;
-  padding: 12px;
-  background: var(--ui-surface);
+  padding: 2px 0 8px;
 }
 
 .accounts-summary span,
@@ -3915,33 +4139,18 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.accounts-filters {
+.accounts-filter-modal {
+  width: min(520px, 100%);
+}
+
+.accounts-filters--modal {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(136px, 0.45fr) minmax(
-      136px,
-      0.45fr
-    ) auto;
-  gap: 8px;
-  min-width: 0;
+  gap: 12px;
 }
 
-.accounts-filters input,
-.accounts-filters select {
-  min-width: 0;
-  min-height: 38px;
-  padding: 0 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-bg);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.accounts-filters input:focus,
-.accounts-filters select:focus {
-  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
-  outline-offset: 1px;
+.accounts-table__loading {
+  min-width: 820px;
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .accounts-table {
@@ -4139,50 +4348,17 @@ onBeforeUnmount(() => {
   }
 
   .accounts-summary {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
   }
 
   .accounts-summary div {
-    padding: 10px 8px;
+    padding: 0 0 8px;
   }
 
   .accounts-summary strong {
     overflow-wrap: anywhere;
     white-space: normal;
-  }
-
-  .accounts-filters {
-    grid-template-columns:
-      minmax(130px, 1fr) minmax(112px, 0.7fr) minmax(112px, 0.7fr)
-      var(--workspace-topbar-control-size);
-    gap: 6px;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-
-  .accounts-filters input,
-  .accounts-filters select {
-    font-size: 12px;
-  }
-
-  .accounts-action-button,
-  .accounts-search-submit {
-    width: var(--workspace-topbar-control-size);
-    min-width: var(--workspace-topbar-control-size);
-    padding: 0;
-  }
-
-  .accounts-toolbar__actions :deep(.me3-btn__label),
-  .accounts-search-submit :deep(.me3-btn__label) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
   }
 
   .accounts-modal__grid {
@@ -4204,16 +4380,46 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 480px) {
-  .accounts-filters {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 0.78fr) minmax(0, 0.78fr)
-      var(--workspace-topbar-control-size);
+@media (max-width: 640px) {
+  .accounts-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .accounts-filters input,
-  .accounts-filters select {
-    padding: 0 6px;
-    font-size: 11px;
+  .accounts-tabs {
+    grid-column: 1;
+    justify-self: start;
+  }
+
+  .accounts-toolbar__actions {
+    grid-column: 2;
+  }
+
+  .accounts-mode-tab {
+    min-height: 38px;
+    padding: 0 13px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 480px) {
+  .accounts-toolbar {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .accounts-tabs,
+  .accounts-toolbar__actions {
+    grid-column: 1;
+    justify-self: center;
+  }
+
+  .accounts-mode-tab {
+    padding: 0 12px;
+  }
+
+  .accounts-actions-menu__popover {
+    right: 50%;
+    transform: translateX(50%);
   }
 }
 </style>
