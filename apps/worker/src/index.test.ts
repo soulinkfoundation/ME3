@@ -3333,7 +3333,6 @@ describe("ME3 Core Worker auth", () => {
     const env = createEnv();
     addBookableSite(env);
     env.ME3_SITE_USERNAME = "owner";
-    env.ME3_SECURITY_CONTACT = "mailto:security@example.com";
 
     const response = await app.fetch(
       new Request("https://kieranbutler.com/.well-known/security.txt"),
@@ -3343,7 +3342,7 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/plain");
-    expect(body).toContain("Contact: mailto:security@example.com");
+    expect(body).toContain("Contact: https://kieranbutler.com/account");
     expect(body).toContain("Canonical: https://kieranbutler.com/.well-known/security.txt");
     expect(body).not.toContain("<!doctype html>");
   });

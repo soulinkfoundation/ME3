@@ -20,7 +20,6 @@ export interface Env {
   ME3_CLOUD_API_ORIGIN?: string;
   ME3_SOCIAL_OAUTH_ORIGIN?: string;
   ME3_LOCATION_SEARCH_ORIGIN?: string;
-  ME3_SECURITY_CONTACT?: string;
 
   JWT_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;

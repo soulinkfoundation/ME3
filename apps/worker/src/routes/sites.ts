@@ -1198,7 +1198,7 @@ export function registerPublicSiteRoutes(app: AppHono) {
   });
 
   app.get("/.well-known/security.txt", (c) => {
-    return c.text(buildSecurityTxt(c.env, c.req.url), 200, {
+    return c.text(buildSecurityTxt(c.req.url), 200, {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "public, max-age=3600",
     });
@@ -1224,12 +1224,12 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
   return Math.round(numberValue);
 }
 
-function buildSecurityTxt(env: { ME3_SECURITY_CONTACT?: string }, requestUrl: string): string {
+function buildSecurityTxt(requestUrl: string): string {
   const url = new URL(requestUrl);
   const canonical = new URL("/.well-known/security.txt", url);
   canonical.protocol = "https:";
   const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
-  const contact = normalizeSecurityContact(env.ME3_SECURITY_CONTACT) || new URL("/account", canonical).toString();
+  const contact = new URL("/account", canonical).toString();
 
   return [
     `Contact: ${contact}`,
@@ -1238,18 +1238,4 @@ function buildSecurityTxt(env: { ME3_SECURITY_CONTACT?: string }, requestUrl: st
     `Canonical: ${canonical.toString()}`,
     "",
   ].join("\n");
-}
-
-function normalizeSecurityContact(value: string | undefined): string | null {
-  const contact = value?.trim();
-  if (!contact) return null;
-
-  try {
-    const url = new URL(contact);
-    if (url.protocol === "https:" || url.protocol === "mailto:") return url.toString();
-  } catch {
-    return null;
-  }
-
-  return null;
 }
