@@ -227,6 +227,7 @@ type StoredCommerceSettings = {
   encrypted_stripe_secret_key: string | null;
   stripe_key_hint: string | null;
   stripe_key_updated_at: string | null;
+  default_currency: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -982,6 +983,7 @@ function createEnv(): Env & {
                   encrypted_stripe_secret_key: values[1] as string | null,
                   stripe_key_hint: values[2] as string | null,
                   stripe_key_updated_at: values[3] as string | null,
+                  default_currency: values[4] as string | null,
                   created_at: existing?.created_at || "2026-05-29T10:00:00Z",
                   updated_at: "2026-05-29T10:05:00Z",
                 };
@@ -6491,6 +6493,15 @@ describe("ME3 Core Worker auth", () => {
     const session = cookieHeader(await bootstrap(env));
     env.TOKEN_ENCRYPTION_KEY = undefined;
 
+    await app.fetch(
+      new Request("http://localhost/api/account", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({ timezone: "Europe/Dublin" }),
+      }),
+      env,
+    );
+
     const beforeResponse = await app.fetch(
       new Request("http://localhost/api/commerce/status", {
         headers: { Cookie: session },
@@ -6499,11 +6510,13 @@ describe("ME3 Core Worker auth", () => {
     );
     const beforeBody = (await beforeResponse.json()) as {
       encryptionConfigured: boolean;
+      defaultCurrency: string;
       stripe: { configured: boolean; source: string; keyHint: string | null };
     };
 
     expect(beforeResponse.status).toBe(200);
     expect(beforeBody.encryptionConfigured).toBe(false);
+    expect(beforeBody.defaultCurrency).toBe("EUR");
     expect(beforeBody.stripe).toMatchObject({
       configured: false,
       source: "not_configured",
@@ -6515,17 +6528,20 @@ describe("ME3 Core Worker auth", () => {
         method: "PUT",
         headers: { "Content-Type": "application/json", Cookie: session },
         body: JSON.stringify({
+          defaultCurrency: "GBP",
           stripeSecretKey: ["sk", "test", "accountsettings1234"].join("_"),
         }),
       }),
       env,
     );
     const saveBody = (await saveResponse.json()) as {
+      defaultCurrency: string;
       stripe: { configured: boolean; source: string; keyHint: string | null };
     };
 
     expect(saveResponse.status).toBe(200);
     expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
+    expect(saveBody.defaultCurrency).toBe("GBP");
     expect(saveBody.stripe).toMatchObject({
       configured: true,
       source: "stored",
@@ -6541,10 +6557,12 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const clearBody = (await clearResponse.json()) as {
+      defaultCurrency: string;
       stripe: { configured: boolean; source: string; keyHint: string | null };
     };
 
     expect(clearResponse.status).toBe(200);
+    expect(clearBody.defaultCurrency).toBe("GBP");
     expect(clearBody.stripe).toMatchObject({
       configured: false,
       source: "not_configured",

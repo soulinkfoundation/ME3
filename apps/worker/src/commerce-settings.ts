@@ -9,12 +9,14 @@ type CommerceSettingsRow = {
   encrypted_stripe_secret_key: string | null;
   stripe_key_hint: string | null;
   stripe_key_updated_at: string | null;
+  default_currency: string | null;
   created_at: string;
   updated_at: string;
 };
 
 export type CommerceSettingsResponse = {
   encryptionConfigured: boolean;
+  defaultCurrency: string;
   stripe: {
     configured: boolean;
     source: "environment" | "stored" | "not_configured";
@@ -34,6 +36,9 @@ export class CommerceSettingsInputError extends Error {
   }
 }
 
+const DEFAULT_COMMERCE_CURRENCY = "USD";
+const DEFAULT_CURRENCY_REGEX = /^[A-Z]{3}$/;
+
 export async function getCommerceSettings(
   env: Env,
   ownerId: string,
@@ -45,6 +50,7 @@ export async function getCommerceSettings(
 
   return {
     encryptionConfigured: await hasInstallEncryptionKey(env),
+    defaultCurrency: await resolveDefaultCurrency(env, ownerId, row),
     stripe: {
       configured: hasEnvKey || hasStoredKey,
       source: hasEnvKey ? "environment" : hasStoredKey ? "stored" : "not_configured",
@@ -63,16 +69,33 @@ export async function updateCommerceSettings(
   input: unknown,
 ): Promise<CommerceSettingsResponse> {
   const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+  const existingRow = await getCommerceSettingsRow(env, ownerId);
   const stripeSecretKey = normalizeSecret(body.stripeSecretKey);
   const clearStripeSecretKey = body.clearStripeSecretKey === true;
+  const hasDefaultCurrencyInput = Object.prototype.hasOwnProperty.call(body, "defaultCurrency");
+  const defaultCurrencyInput = hasDefaultCurrencyInput
+    ? normalizeDefaultCurrency(body.defaultCurrency)
+    : null;
 
-  if (!stripeSecretKey && !clearStripeSecretKey) {
+  if (hasDefaultCurrencyInput && !defaultCurrencyInput) {
+    throw new CommerceSettingsInputError("Use a three-letter default currency code.");
+  }
+
+  if (!stripeSecretKey && !clearStripeSecretKey && !hasDefaultCurrencyInput) {
     return getCommerceSettings(env, ownerId);
   }
 
-  let encryptedStripeSecretKey: string | null = null;
-  let stripeKeyHint: string | null = null;
-  let stripeKeyUpdatedAt: string | null = null;
+  let encryptedStripeSecretKey = existingRow?.encrypted_stripe_secret_key || null;
+  let stripeKeyHint = existingRow?.stripe_key_hint || null;
+  let stripeKeyUpdatedAt = existingRow?.stripe_key_updated_at || null;
+  const defaultCurrency =
+    defaultCurrencyInput || await resolveDefaultCurrency(env, ownerId, existingRow);
+
+  if (clearStripeSecretKey) {
+    encryptedStripeSecretKey = null;
+    stripeKeyHint = null;
+    stripeKeyUpdatedAt = null;
+  }
 
   if (stripeSecretKey) {
     validateStripeSecretKey(stripeSecretKey);
@@ -85,19 +108,28 @@ export async function updateCommerceSettings(
   await env.DB.prepare(
     `INSERT INTO commerce_settings (
        user_id, encrypted_stripe_secret_key, stripe_key_hint,
-       stripe_key_updated_at, created_at, updated_at
+       stripe_key_updated_at, default_currency, created_at, updated_at
      )
-     VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+     VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
      ON CONFLICT(user_id) DO UPDATE SET
        encrypted_stripe_secret_key = excluded.encrypted_stripe_secret_key,
        stripe_key_hint = excluded.stripe_key_hint,
        stripe_key_updated_at = excluded.stripe_key_updated_at,
+       default_currency = excluded.default_currency,
        updated_at = datetime('now')`,
   )
-    .bind(ownerId, encryptedStripeSecretKey, stripeKeyHint, stripeKeyUpdatedAt)
+    .bind(ownerId, encryptedStripeSecretKey, stripeKeyHint, stripeKeyUpdatedAt, defaultCurrency)
     .run();
 
   return getCommerceSettings(env, ownerId);
+}
+
+export async function getDefaultCommerceCurrency(
+  env: Env,
+  ownerId: string,
+): Promise<string> {
+  const row = await getCommerceSettingsRow(env, ownerId);
+  return resolveDefaultCurrency(env, ownerId, row);
 }
 
 export async function getStripeSecretKey(
@@ -122,7 +154,7 @@ async function getCommerceSettingsRow(
     return (
       (await env.DB.prepare(
         `SELECT user_id, encrypted_stripe_secret_key, stripe_key_hint,
-                stripe_key_updated_at, created_at, updated_at
+                stripe_key_updated_at, default_currency, created_at, updated_at
          FROM commerce_settings
          WHERE user_id = ?`,
       )
@@ -133,6 +165,62 @@ async function getCommerceSettingsRow(
     if (isMissingCommerceSettingsTableError(error)) return null;
     throw error;
   }
+}
+
+function normalizeDefaultCurrency(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const currency = value.trim().toUpperCase();
+  return DEFAULT_CURRENCY_REGEX.test(currency) ? currency : null;
+}
+
+async function resolveDefaultCurrency(
+  env: Env,
+  ownerId: string,
+  row: CommerceSettingsRow | null,
+): Promise<string> {
+  return (
+    normalizeDefaultCurrency(row?.default_currency) ||
+    inferDefaultCurrencyFromTimezone(await getOwnerTimezone(env, ownerId)) ||
+    DEFAULT_COMMERCE_CURRENCY
+  );
+}
+
+async function getOwnerTimezone(env: Env, ownerId: string): Promise<string | null> {
+  try {
+    const owner = await env.DB.prepare("SELECT timezone FROM owner_profile WHERE id = ?")
+      .bind(ownerId)
+      .first<{ timezone: string | null }>();
+    return typeof owner?.timezone === "string" ? owner.timezone : null;
+  } catch (error) {
+    if (isMissingOwnerProfileTableError(error)) return null;
+    throw error;
+  }
+}
+
+function inferDefaultCurrencyFromTimezone(timezone: string | null): string | null {
+  if (!timezone) return null;
+  if (timezone === "Europe/London") return "GBP";
+  if (timezone === "Europe/Zurich") return "CHF";
+  if (timezone.startsWith("Europe/")) return "EUR";
+  if (timezone.startsWith("Australia/")) return "AUD";
+  if (timezone === "Pacific/Auckland") return "NZD";
+  if (timezone === "Asia/Singapore") return "SGD";
+  if (timezone === "Asia/Hong_Kong") return "HKD";
+  if (timezone === "Asia/Tokyo") return "JPY";
+  if (timezone === "Asia/Kolkata" || timezone === "Asia/Calcutta") return "INR";
+  if (timezone === "Asia/Karachi") return "PKR";
+  if (
+    timezone === "America/Toronto" ||
+    timezone === "America/Vancouver" ||
+    timezone === "America/Edmonton" ||
+    timezone === "America/Winnipeg" ||
+    timezone === "America/Halifax" ||
+    timezone === "America/St_Johns"
+  ) {
+    return "CAD";
+  }
+  if (timezone.startsWith("America/")) return "USD";
+  return null;
 }
 
 function normalizeSecret(value: unknown): string {
@@ -212,6 +300,14 @@ function isMissingCommerceSettingsTableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     message.includes("commerce_settings") &&
+    /no such table|does not exist/i.test(message)
+  );
+}
+
+function isMissingOwnerProfileTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("owner_profile") &&
     /no such table|does not exist/i.test(message)
   );
 }

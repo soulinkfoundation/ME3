@@ -157,6 +157,7 @@ type AccountsStats = {
   lastMonthCents: number;
   thisMonthTotals?: AccountsMoneyTotal[];
   lastMonthTotals?: AccountsMoneyTotal[];
+  defaultCurrency?: string;
   topCategoryName: string | null;
   topCategoryTotalCents: number;
   entriesCount: number;
@@ -332,6 +333,7 @@ const accountsSourceFilter = ref("");
 const accountsStripeConfigured = ref(false);
 const accountsStripeStatus = ref("");
 const accountsStripeLastSyncedAt = ref<string | null>(null);
+const accountsDefaultCurrency = ref("USD");
 const accountsImportInput = ref<HTMLInputElement | null>(null);
 const accountsForm = ref<AccountsEntryForm>(emptyAccountsForm("expense"));
 
@@ -803,6 +805,11 @@ async function loadAccounts() {
     accountsTotal.value = entriesResponse.total || 0;
     accountsCategories.value = categoriesResponse.categories || [];
     accountsStats.value = statsResponse.stats || null;
+    accountsDefaultCurrency.value =
+      normalizeAccountsCurrency(statsResponse.stats?.defaultCurrency) || "USD";
+    if (!accountsForm.value.currency.trim()) {
+      accountsForm.value.currency = accountsDefaultCurrency.value;
+    }
     accountsStripeConfigured.value = stripeResponse.connected;
     accountsStripeStatus.value = stripeResponse.status;
     accountsStripeLastSyncedAt.value = stripeResponse.lastSyncedAt;
@@ -1999,10 +2006,16 @@ function emptyAccountsForm(type: FinancialEntryType): AccountsEntryForm {
     description: "",
     categoryId: "",
     amount: "",
-    currency: "USD",
+    currency: accountsDefaultCurrency.value,
     status: type === "income" ? "paid" : "pending",
     notes: "",
   };
+}
+
+function normalizeAccountsCurrency(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const currency = value.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : null;
 }
 
 function normalizeAccountsAmountInput(value: unknown): string {

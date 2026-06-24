@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { getStripeSecretKey } from "./commerce-settings";
+import { getDefaultCommerceCurrency, getStripeSecretKey } from "./commerce-settings";
 import type { Env } from "./types";
 import { decodeMimeHeaderValue } from "../../../shared/email-headers";
 
@@ -501,7 +501,13 @@ export async function getFinancialStats(env: Env, userId: string, entryTypeValue
   if (!entryType) throw new AccountsInputError("entryType is required");
   const thisMonth = getMonthWindow(0);
   const lastMonth = getMonthWindow(-1);
-  const [thisMonthTotalsResult, lastMonthTotalsResult, topCategoryResult, countResult] =
+  const [
+    thisMonthTotalsResult,
+    lastMonthTotalsResult,
+    topCategoryResult,
+    countResult,
+    defaultCurrency,
+  ] =
     await Promise.all([
       env.DB.prepare(
         `SELECT UPPER(currency) AS currency, COALESCE(SUM(amount_cents), 0) AS total
@@ -538,6 +544,7 @@ export async function getFinancialStats(env: Env, userId: string, entryTypeValue
       )
         .bind(userId, entryType)
         .first<{ count: number }>(),
+      getDefaultCommerceCurrency(env, userId),
     ]);
   const thisMonthTotals = serializeCurrencyTotals(thisMonthTotalsResult.results);
   const lastMonthTotals = serializeCurrencyTotals(lastMonthTotalsResult.results);
@@ -548,6 +555,7 @@ export async function getFinancialStats(env: Env, userId: string, entryTypeValue
       lastMonthCents: sumCurrencyTotals(lastMonthTotals),
       thisMonthTotals,
       lastMonthTotals,
+      defaultCurrency,
       topCategoryName: topCategoryResult?.category_name || null,
       topCategoryTotalCents: topCategoryResult?.total || 0,
       entriesCount: countResult?.count || 0,

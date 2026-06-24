@@ -285,6 +285,7 @@ type CoreGithubActionResponse = {
 
 type CommerceSettingsResponse = {
   encryptionConfigured: boolean;
+  defaultCurrency: string;
   stripe: {
     configured: boolean;
     source: "environment" | "stored" | "not_configured";
@@ -363,8 +364,25 @@ const commerceLoading = ref(false);
 const commerceSaving = ref(false);
 const commerceSettings = ref<CommerceSettingsResponse | null>(null);
 const stripeSecretInput = ref("");
+const defaultCurrencyInput = ref("USD");
+const savedDefaultCurrencyInput = ref("USD");
 const commerceMessage = ref<string | null>(null);
 const commerceError = ref<string | null>(null);
+
+const commerceCurrencyOptions = [
+  { value: "EUR", label: "EUR - Euro" },
+  { value: "GBP", label: "GBP - Pound sterling" },
+  { value: "USD", label: "USD - US dollar" },
+  { value: "CAD", label: "CAD - Canadian dollar" },
+  { value: "AUD", label: "AUD - Australian dollar" },
+  { value: "NZD", label: "NZD - New Zealand dollar" },
+  { value: "CHF", label: "CHF - Swiss franc" },
+  { value: "SGD", label: "SGD - Singapore dollar" },
+  { value: "HKD", label: "HKD - Hong Kong dollar" },
+  { value: "JPY", label: "JPY - Japanese yen" },
+  { value: "INR", label: "INR - Indian rupee" },
+  { value: "PKR", label: "PKR - Pakistani rupee" },
+];
 
 const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
   null,
@@ -708,7 +726,8 @@ const commerceSaveDisabled = computed(
   () =>
     commerceSaving.value ||
     commerceLoading.value ||
-    !stripeSecretInput.value.trim(),
+    (!stripeSecretInput.value.trim() &&
+      defaultCurrencyInput.value === savedDefaultCurrencyInput.value),
 );
 
 const commerceClearDisabled = computed(
@@ -1449,6 +1468,9 @@ async function loadEmailProviderSettings() {
 
 function syncCommerceSettings(response: CommerceSettingsResponse) {
   commerceSettings.value = response;
+  defaultCurrencyInput.value =
+    normalizeCommerceCurrency(response.defaultCurrency) || "USD";
+  savedDefaultCurrencyInput.value = defaultCurrencyInput.value;
   stripeSecretInput.value = "";
 }
 
@@ -1473,16 +1495,18 @@ async function saveCommerceSettings() {
   commerceSaving.value = true;
   commerceMessage.value = null;
   commerceError.value = null;
+  const hasStripeSecret = Boolean(stripeSecretInput.value.trim());
 
   try {
-    const response = await api.put<CommerceSettingsResponse>(
-      "/commerce/settings",
-      {
-        stripeSecretKey: stripeSecretInput.value.trim(),
-      },
-    );
+    const payload: { defaultCurrency: string; stripeSecretKey?: string } = {
+      defaultCurrency: defaultCurrencyInput.value,
+    };
+    if (hasStripeSecret) payload.stripeSecretKey = stripeSecretInput.value.trim();
+    const response = await api.put<CommerceSettingsResponse>("/commerce/settings", payload);
     syncCommerceSettings(response);
-    commerceMessage.value = "Stripe key saved.";
+    commerceMessage.value = hasStripeSecret
+      ? "Payment settings saved."
+      : "Default currency saved.";
   } catch (e: any) {
     commerceError.value = e.message || "Failed to save payment settings";
   } finally {
@@ -1509,6 +1533,14 @@ async function clearCommerceStripeKey() {
   } finally {
     commerceSaving.value = false;
   }
+}
+
+function normalizeCommerceCurrency(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const currency = value.trim().toUpperCase();
+  return commerceCurrencyOptions.some((option) => option.value === currency)
+    ? currency
+    : null;
 }
 
 async function loadAppConnections() {
@@ -2702,6 +2734,34 @@ onMounted(async () => {
                     sk_live_ for live payments.
                   </p>
 
+                  <div class="commerce-settings-row">
+                    <label class="field commerce-settings-row__field">
+                      <span>Default currency</span>
+                      <select
+                        v-model="defaultCurrencyInput"
+                        class="input"
+                      >
+                        <option
+                          v-for="option in commerceCurrencyOptions"
+                          :key="option.value"
+                          :value="option.value"
+                        >
+                          {{ option.label }}
+                        </option>
+                      </select>
+                    </label>
+
+                    <Button
+                      color="primary"
+                      size="compact"
+                      type="button"
+                      :disabled="commerceSaveDisabled"
+                      @click="saveCommerceSettings"
+                    >
+                      {{ commerceSaving ? "Saving..." : "Save" }}
+                    </Button>
+                  </div>
+
                   <p
                     v-if="
                       commerceSettings?.stripe.source === 'environment' &&
@@ -2738,15 +2798,6 @@ onMounted(async () => {
                         placeholder="sk_test_..."
                         @keydown.enter.prevent="saveCommerceSettings"
                       />
-                      <Button
-                        color="primary"
-                        size="compact"
-                        type="button"
-                        :disabled="commerceSaveDisabled"
-                        @click="saveCommerceSettings"
-                      >
-                        {{ commerceSaving ? "Saving..." : "Save" }}
-                      </Button>
                     </div>
                   </label>
 
@@ -4064,6 +4115,18 @@ h1 {
   margin-bottom: 8px;
 }
 
+.commerce-settings-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.commerce-settings-row__field {
+  flex: 1;
+  min-width: 0;
+}
+
 .payment-key-field {
   margin-top: 0;
 }
@@ -4478,10 +4541,12 @@ h1 {
   }
 
   .timezone-row,
+  .commerce-settings-row,
   .payment-key-row {
     align-items: stretch;
   }
 
+  .commerce-settings-row,
   .payment-key-row {
     flex-direction: column;
   }

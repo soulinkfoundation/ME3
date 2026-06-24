@@ -43,6 +43,7 @@ import { normalizeTimeZone } from "./calendar";
 import { isCorePluginEnabled } from "./plugins";
 import { decodeMimeHeaderValue } from "../../../shared/email-headers";
 import { ensureDefaultCategories, getOrCreateCategoryByName } from "./accounts";
+import { getDefaultCommerceCurrency } from "./commerce-settings";
 
 export class AssistantJobsInputError extends Error {
   constructor(
@@ -4197,6 +4198,7 @@ async function buildInvoiceReceiptTriageResult(
 ): Promise<InvoiceTriageResult> {
   if (!options.dryRun) await ensureDefaultCategories(env, userId, ["expense", "income"]);
   const messages = await loadAssistantJobMailboxMessages(env, userId, 50);
+  const defaultCurrency = await getDefaultCommerceCurrency(env, userId);
   const entries: InvoiceExtraction[] = [];
   let candidates = 0;
   let skipped = 0;
@@ -4210,7 +4212,7 @@ async function buildInvoiceReceiptTriageResult(
       continue;
     }
     candidates += 1;
-    const extraction = extractInvoiceFromMessage(message, score);
+    const extraction = extractInvoiceFromMessage(message, score, defaultCurrency);
     if (!extraction) {
       skipped += 1;
       continue;
@@ -4294,11 +4296,12 @@ function scoreInvoiceMessage(message: MailboxMessageRow) {
 function extractInvoiceFromMessage(
   message: MailboxMessageRow,
   score: number,
+  defaultCurrency: string,
 ): InvoiceExtraction | null {
   const subject = normalizeOptionalText(decodedMessageSubject(message)) || "Invoice";
   const body = normalizeWhitespace(message.text_body || "");
   const combined = `${subject}\n${body}`;
-  const amount = parseInvoiceAmount(combined);
+  const amount = parseInvoiceAmount(combined, defaultCurrency);
   if (!amount) return null;
   const confidence = score >= 7 ? "high" : score >= 5 ? "medium" : "low";
   const status = confidence === "high" && looksPaid(combined) ? "paid" : "needs_review";
@@ -4341,7 +4344,7 @@ function inferInvoiceEntryType(
   return "expense";
 }
 
-function parseInvoiceAmount(text: string) {
+function parseInvoiceAmount(text: string, defaultCurrency: string) {
   const amountMatch = text.match(INVOICE_AMOUNT_PATTERN);
   if (amountMatch) {
     const symbol = amountMatch[1];
@@ -4352,7 +4355,7 @@ function parseInvoiceAmount(text: string) {
     if (Number.isFinite(parsed) && parsed > 0) {
       return {
         amountCents: Math.round(parsed * 100),
-        currency: currencyFromSymbol(symbol) || normalizeInvoiceCurrency(code) || "USD",
+        currency: currencyFromSymbol(symbol) || normalizeInvoiceCurrency(code) || defaultCurrency,
       };
     }
   }
@@ -4360,7 +4363,7 @@ function parseInvoiceAmount(text: string) {
   if (labelledMatch?.[1]) {
     const parsed = Number.parseFloat(labelledMatch[1].replace(/,/g, ""));
     if (Number.isFinite(parsed) && parsed > 0) {
-      return { amountCents: Math.round(parsed * 100), currency: "USD" };
+      return { amountCents: Math.round(parsed * 100), currency: defaultCurrency };
     }
   }
   return null;

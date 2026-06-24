@@ -651,6 +651,33 @@ describe("assistant jobs persistence", () => {
     });
   });
 
+  it("uses the owner's default currency when invoice emails omit one", async () => {
+    const env = createAssistantJobsEnv({
+      mailbox: activeMailboxRow(),
+      pluginInstallations: [accountsPluginInstallationRow()],
+      mailboxMessages: [
+        mailboxMessageRow({
+          id: "uncoded-currency-message",
+          thread_key: "thread-uncoded-currency",
+          from_address: "billing@example.com",
+          subject: "Receipt for hosting",
+          text_body: "Thank you for your payment. Receipt total 12.34 paid.",
+          received_at: "2026-06-22T10:00:00Z",
+        }),
+      ],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "invoice-receipt-triage" });
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+
+    expect(run.run.status).toBe("succeeded");
+    expect(env.__state.financialEntries[0]).toMatchObject({
+      description: "Receipt for hosting",
+      amount_cents: 1234,
+      currency: "EUR",
+    });
+  });
+
   it("blocks invoice triage until Accounts is enabled", async () => {
     const env = createAssistantJobsEnv({
       mailbox: activeMailboxRow(),
@@ -1972,6 +1999,9 @@ class FakeStatement {
     const values = this.values;
     if (sql.includes("FROM owner_profile")) {
       return (this.state.owner?.id === values[0] ? this.state.owner : null) as T | null;
+    }
+    if (sql.includes("FROM commerce_settings")) {
+      return null as T | null;
     }
     if (sql.includes("FROM assistant_job_ingress_events") && sql.includes("idempotency_key")) {
       return (

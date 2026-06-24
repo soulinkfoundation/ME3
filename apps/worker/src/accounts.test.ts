@@ -34,6 +34,7 @@ describe("accounts stats", () => {
       { currency: "EUR", amountCents: 500 },
       { currency: "USD", amountCents: 500 },
     ]);
+    expect(result.stats.defaultCurrency).toBe("USD");
   });
 });
 
