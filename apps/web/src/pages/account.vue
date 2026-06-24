@@ -765,6 +765,20 @@ const me3InstallIdLabel = computed(() => {
 
 const coreGithubConnection = computed(() => coreGithubStatus.value?.github || null);
 
+const coreGithubNeedsMe3Reconnect = computed(
+  () =>
+    Boolean(coreGithubStatus.value?.me3AppConnected) &&
+    !coreGithubConnection.value?.connected &&
+    coreGithubStatus.value?.unavailableReason?.startsWith("Reconnect ME3.app"),
+);
+
+const coreGithubConnectLabel = computed(() => {
+  if (coreGithubNeedsMe3Reconnect.value) {
+    return appConnectionsSaving.value ? "Opening..." : "Reconnect";
+  }
+  return coreGithubSaving.value === "connect" ? "Opening..." : "Connect";
+});
+
 const coreGithubStatusLabel = computed(() => {
   if (coreGithubLoading.value) return "Loading";
   if (!coreGithubStatus.value?.me3AppConnected) return "Needs ME3.app";
@@ -1637,6 +1651,11 @@ async function loadCoreGithubManifest(manifestUrl: string) {
 async function connectCoreGithubUpdater() {
   if (coreGithubSaving.value) return;
 
+  if (coreGithubNeedsMe3Reconnect.value) {
+    await connectMe3App();
+    return;
+  }
+
   coreGithubSaving.value = "connect";
   coreGithubMessage.value = null;
   coreGithubError.value = null;
@@ -2447,16 +2466,13 @@ onMounted(async () => {
                         type="button"
                         :disabled="
                           Boolean(coreGithubSaving) ||
+                          appConnectionsSaving ||
                           coreGithubLoading ||
                           !coreGithubStatus?.me3AppConnected
                         "
                         @click="connectCoreGithubUpdater"
                       >
-                        {{
-                          coreGithubSaving === "connect"
-                            ? "Opening..."
-                            : "Connect"
-                        }}
+                        {{ coreGithubConnectLabel }}
                       </Button>
                     </div>
                   </div>
