@@ -2596,33 +2596,61 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div class="accounts-toolbar__actions">
-            <Button color="outline" shape="soft" size="compact"
+            <Button
+              class="accounts-action-button"
+              color="outline"
+              shape="soft"
+              size="compact"
               type="button"
+              :title="accountsImporting ? 'Importing CSV' : 'Import CSV'"
               @click="chooseAccountsImportFile"
             >
-              <UiIcon name="Upload" :size="13" />
+              <template #icon>
+                <UiIcon name="Upload" :size="13" />
+              </template>
               {{ accountsImporting ? "Importing..." : "Import CSV" }}
             </Button>
-            <Button color="outline" shape="soft" size="compact"
+            <Button
+              class="accounts-action-button"
+              color="outline"
+              shape="soft"
+              size="compact"
               type="button"
+              title="Export CSV"
               @click="exportAccountsCsv"
             >
-              <UiIcon name="Download" :size="13" />
+              <template #icon>
+                <UiIcon name="Download" :size="13" />
+              </template>
               Export CSV
             </Button>
-            <Button color="primary" shape="soft" size="compact"
+            <Button
+              class="accounts-action-button"
+              color="primary"
+              shape="soft"
+              size="compact"
               type="button"
+              :title="accountsSyncing ? 'Syncing Stripe' : 'Sync Stripe'"
               :disabled="accountsSyncing || !accountsStripeConfigured"
               @click="syncAccountsStripe"
             >
-              <UiIcon name="RefreshCw" :size="13" />
+              <template #icon>
+                <UiIcon name="RefreshCw" :size="13" />
+              </template>
               {{ accountsSyncing ? "Syncing..." : "Sync Stripe" }}
             </Button>
-            <Button color="primary" shape="soft" size="compact"
+            <Button
+              class="accounts-action-button"
+              color="primary"
+              shape="soft"
+              size="compact"
               type="button"
+              title="Add entry"
               @click="openAccountsModal"
             >
-              <UiIcon name="Plus" :size="13" />
+              <template #icon>
+                <UiIcon name="Plus" :size="13" />
+              </template>
               Add entry
             </Button>
             <input
@@ -2695,10 +2723,18 @@ onBeforeUnmount(() => {
             <option value="stripe">Stripe</option>
             <option value="email_triage">Email triage</option>
           </select>
-          <Button color="outline" shape="soft" size="compact"
+          <Button
+            class="accounts-search-submit"
+            color="outline"
+            shape="soft"
+            size="compact"
             type="button"
+            title="Search"
             @click="applyAccountsFilters"
           >
+            <template #icon>
+              <UiIcon name="Search" :size="15" />
+            </template>
             Search
           </Button>
         </div>
@@ -3808,17 +3844,7 @@ onBeforeUnmount(() => {
 
 .accounts-toolbar__actions {
   gap: 6px;
-}
-
-.accounts-toolbar__actions .me3-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 3px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.2;
+  flex-wrap: nowrap;
 }
 
 .accounts-pagination .me3-btn {
@@ -4059,8 +4085,8 @@ onBeforeUnmount(() => {
   }
 
   .mission-control--accounts-route {
-    padding: var(--workspace-topbar-padding-block)
-      max(16px, calc(var(--app-shell-mobile-nav-leading-padding) + 12px)) 32px;
+    padding: var(--workspace-topbar-padding-block) 16px 32px
+      max(16px, calc(var(--app-shell-mobile-nav-leading-padding) + 12px));
   }
 
   .mission-control__topbar {
@@ -4083,11 +4109,50 @@ onBeforeUnmount(() => {
   }
 
   .accounts-summary {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .accounts-summary div {
+    padding: 10px 8px;
+  }
+
+  .accounts-summary strong {
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .accounts-filters {
-    grid-template-columns: 1fr;
+    grid-template-columns:
+      minmax(130px, 1fr) minmax(112px, 0.7fr) minmax(112px, 0.7fr)
+      var(--workspace-topbar-control-size);
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .accounts-filters input,
+  .accounts-filters select {
+    font-size: 12px;
+  }
+
+  .accounts-action-button,
+  .accounts-search-submit {
+    width: var(--workspace-topbar-control-size);
+    min-width: var(--workspace-topbar-control-size);
+    padding: 0;
+  }
+
+  .accounts-toolbar__actions :deep(.me3-btn__label),
+  .accounts-search-submit :deep(.me3-btn__label) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .accounts-modal__grid {
@@ -4106,6 +4171,19 @@ onBeforeUnmount(() => {
 
   .mission-modal {
     padding: 14px;
+  }
+}
+
+@media (max-width: 480px) {
+  .accounts-filters {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.78fr) minmax(0, 0.78fr)
+      var(--workspace-topbar-control-size);
+  }
+
+  .accounts-filters input,
+  .accounts-filters select {
+    padding: 0 6px;
+    font-size: 11px;
   }
 }
 </style>
