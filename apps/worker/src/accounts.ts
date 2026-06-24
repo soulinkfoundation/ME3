@@ -1,10 +1,11 @@
 import Stripe from "stripe";
 import { getStripeSecretKey } from "./commerce-settings";
 import type { Env } from "./types";
+import { decodeMimeHeaderValue } from "../../../shared/email-headers";
 
 export const ACCOUNTS_PLUGIN_ID = "me3.accounts";
 
-type EntryType = "income" | "expense";
+export type EntryType = "income" | "expense";
 type EntryStatus = "pending" | "paid" | "overdue" | "cancelled" | "needs_review";
 type EntrySource = "manual" | "email_triage" | "stripe" | "csv_import";
 
@@ -36,6 +37,11 @@ type FinancialEntryRow = {
   stripe_charge_id: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type CurrencyTotalRow = {
+  currency: string | null;
+  total: number;
 };
 
 export class AccountsInputError extends Error {
@@ -495,49 +501,71 @@ export async function getFinancialStats(env: Env, userId: string, entryTypeValue
   if (!entryType) throw new AccountsInputError("entryType is required");
   const thisMonth = getMonthWindow(0);
   const lastMonth = getMonthWindow(-1);
-  const [thisMonthResult, lastMonthResult, topCategoryResult, countResult] = await Promise.all([
-    env.DB.prepare(
-      `SELECT COALESCE(SUM(amount_cents), 0) AS total
-       FROM financial_entries
-       WHERE user_id = ? AND entry_type = ? AND date >= ? AND date < ? AND status != 'cancelled'`,
-    )
-      .bind(userId, entryType, thisMonth.start, thisMonth.end)
-      .first<{ total: number }>(),
-    env.DB.prepare(
-      `SELECT COALESCE(SUM(amount_cents), 0) AS total
-       FROM financial_entries
-       WHERE user_id = ? AND entry_type = ? AND date >= ? AND date < ? AND status != 'cancelled'`,
-    )
-      .bind(userId, entryType, lastMonth.start, lastMonth.end)
-      .first<{ total: number }>(),
-    env.DB.prepare(
-      `SELECT COALESCE(fc.name, 'Uncategorized') AS category_name,
-              COALESCE(SUM(e.amount_cents), 0) AS total
-       FROM financial_entries e
-       LEFT JOIN financial_categories fc ON fc.id = e.category_id
-       WHERE e.user_id = ? AND e.entry_type = ? AND e.date >= ? AND e.date < ? AND e.status != 'cancelled'
-       GROUP BY COALESCE(fc.name, 'Uncategorized')
-       ORDER BY total DESC, category_name ASC
-       LIMIT 1`,
-    )
-      .bind(userId, entryType, thisMonth.start, thisMonth.end)
-      .first<{ category_name: string; total: number }>(),
-    env.DB.prepare(
-      `SELECT COUNT(*) AS count FROM financial_entries WHERE user_id = ? AND entry_type = ?`,
-    )
-      .bind(userId, entryType)
-      .first<{ count: number }>(),
-  ]);
+  const [thisMonthTotalsResult, lastMonthTotalsResult, topCategoryResult, countResult] =
+    await Promise.all([
+      env.DB.prepare(
+        `SELECT UPPER(currency) AS currency, COALESCE(SUM(amount_cents), 0) AS total
+         FROM financial_entries
+         WHERE user_id = ? AND entry_type = ? AND date >= ? AND date < ? AND status != 'cancelled'
+         GROUP BY UPPER(currency)
+         ORDER BY currency ASC`,
+      )
+        .bind(userId, entryType, thisMonth.start, thisMonth.end)
+        .all<CurrencyTotalRow>(),
+      env.DB.prepare(
+        `SELECT UPPER(currency) AS currency, COALESCE(SUM(amount_cents), 0) AS total
+         FROM financial_entries
+         WHERE user_id = ? AND entry_type = ? AND date >= ? AND date < ? AND status != 'cancelled'
+         GROUP BY UPPER(currency)
+         ORDER BY currency ASC`,
+      )
+        .bind(userId, entryType, lastMonth.start, lastMonth.end)
+        .all<CurrencyTotalRow>(),
+      env.DB.prepare(
+        `SELECT COALESCE(fc.name, 'Uncategorized') AS category_name,
+                COALESCE(SUM(e.amount_cents), 0) AS total
+         FROM financial_entries e
+         LEFT JOIN financial_categories fc ON fc.id = e.category_id
+         WHERE e.user_id = ? AND e.entry_type = ? AND e.date >= ? AND e.date < ? AND e.status != 'cancelled'
+         GROUP BY COALESCE(fc.name, 'Uncategorized')
+         ORDER BY total DESC, category_name ASC
+         LIMIT 1`,
+      )
+        .bind(userId, entryType, thisMonth.start, thisMonth.end)
+        .first<{ category_name: string; total: number }>(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM financial_entries WHERE user_id = ? AND entry_type = ?`,
+      )
+        .bind(userId, entryType)
+        .first<{ count: number }>(),
+    ]);
+  const thisMonthTotals = serializeCurrencyTotals(thisMonthTotalsResult.results);
+  const lastMonthTotals = serializeCurrencyTotals(lastMonthTotalsResult.results);
 
   return {
     stats: {
-      thisMonthCents: thisMonthResult?.total || 0,
-      lastMonthCents: lastMonthResult?.total || 0,
+      thisMonthCents: sumCurrencyTotals(thisMonthTotals),
+      lastMonthCents: sumCurrencyTotals(lastMonthTotals),
+      thisMonthTotals,
+      lastMonthTotals,
       topCategoryName: topCategoryResult?.category_name || null,
       topCategoryTotalCents: topCategoryResult?.total || 0,
       entriesCount: countResult?.count || 0,
     },
   };
+}
+
+function serializeCurrencyTotals(rows: CurrencyTotalRow[] | undefined) {
+  return (rows || [])
+    .map((row) => ({
+      currency: parseCurrency(row.currency) || "USD",
+      amountCents: Number(row.total) || 0,
+    }))
+    .filter((row) => row.amountCents > 0);
+}
+
+function sumCurrencyTotals(totals: Array<{ amountCents: number }>) {
+  return totals.reduce((sum, row) => sum + row.amountCents, 0);
 }
 
 export async function getAccountsStripeStatus(env: Env, userId: string) {
@@ -783,7 +811,7 @@ function buildEntryFiltersSql(filters: {
   return { whereClause: `WHERE ${conditions.join(" AND ")}`, params };
 }
 
-async function ensureDefaultCategories(env: Env, userId: string, entryTypes: EntryType[]) {
+export async function ensureDefaultCategories(env: Env, userId: string, entryTypes: EntryType[]) {
   const statements = entryTypes.flatMap((entryType) =>
     DEFAULT_CATEGORIES[entryType].map((name, index) =>
       env.DB.prepare(
@@ -823,7 +851,7 @@ async function getEntryForUser(env: Env, userId: string, entryId: string) {
   );
 }
 
-async function getOrCreateCategoryByName(
+export async function getOrCreateCategoryByName(
   env: Env,
   userId: string,
   entryType: EntryType,
@@ -874,7 +902,7 @@ function serializeEntry(entry: FinancialEntryRow) {
     userId: entry.user_id,
     entryType: entry.entry_type,
     date: entry.date,
-    description: entry.description,
+    description: decodeMimeHeaderValue(entry.description),
     categoryId: entry.category_id,
     categoryName: entry.category_name || null,
     amountCents: entry.amount_cents,

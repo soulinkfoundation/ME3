@@ -41,6 +41,8 @@ import {
 } from "./local-executor";
 import { normalizeTimeZone } from "./calendar";
 import { isCorePluginEnabled } from "./plugins";
+import { decodeMimeHeaderValue } from "../../../shared/email-headers";
+import { ensureDefaultCategories, getOrCreateCategoryByName } from "./accounts";
 
 export class AssistantJobsInputError extends Error {
   constructor(
@@ -232,6 +234,7 @@ type EmailTriageResult = {
 
 type InvoiceExtraction = {
   messageId: string;
+  entryType: "income" | "expense";
   description: string;
   amountCents: number;
   currency: string;
@@ -249,11 +252,6 @@ type InvoiceTriageResult = {
   reviewed: number;
   skipped: number;
   entries: InvoiceExtraction[];
-};
-
-type FinancialCategoryRow = {
-  id: string;
-  name: string;
 };
 
 type PluginInstallationSetupRow = {
@@ -4188,17 +4186,6 @@ const INVOICE_AMOUNT_PATTERN =
   /([$€£¥])\s?(\d[\d,]*(?:\.\d{1,2})?)|(?:\b(USD|EUR|GBP|CAD|AUD|NZD|JPY|CHF|SEK|NOK|DKK|SGD|HKD)\b)\s?(\d[\d,]*(?:\.\d{1,2})?)/i;
 const INVOICE_LABELLED_AMOUNT_PATTERN =
   /(?:total|amount\s*due|balance\s*due|grand\s*total|subtotal|net\s*amount|invoice\s*total)[:\s]*[$€£¥]?\s?(\d[\d,]*(?:\.\d{1,2})?)/i;
-const INVOICE_DEFAULT_CATEGORIES = [
-  "Software",
-  "Hosting",
-  "Contractor",
-  "Marketing",
-  "Office",
-  "Travel",
-  "Professional Services",
-  "Other",
-];
-
 function isInvoiceReceiptTriageJob(job: AssistantJobRow, draft: AssistantJobDraft) {
   return job.recipe_id === "invoice-receipt-triage" || draft.recipeId === "invoice-receipt-triage";
 }
@@ -4208,7 +4195,7 @@ async function buildInvoiceReceiptTriageResult(
   userId: string,
   options: { dryRun: boolean },
 ): Promise<InvoiceTriageResult> {
-  if (!options.dryRun) await ensureInvoiceExpenseCategories(env, userId);
+  if (!options.dryRun) await ensureDefaultCategories(env, userId, ["expense", "income"]);
   const messages = await loadAssistantJobMailboxMessages(env, userId, 50);
   const entries: InvoiceExtraction[] = [];
   let candidates = 0;
@@ -4252,35 +4239,32 @@ async function buildInvoiceReceiptTriageResult(
   };
 }
 
-async function ensureInvoiceExpenseCategories(env: Env, userId: string) {
-  const statements = INVOICE_DEFAULT_CATEGORIES.map((name, index) =>
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO financial_categories
-         (id, user_id, name, entry_type, sort_order)
-       VALUES (?, ?, ?, 'expense', ?)`,
-    ).bind(crypto.randomUUID(), userId, name, index),
-  );
-  if (statements.length > 0) await env.DB.batch(statements);
-}
-
 async function insertInvoiceFinancialEntry(
   env: Env,
   userId: string,
   extraction: InvoiceExtraction,
 ) {
-  const categoryId = await getInvoiceCategoryId(env, userId, extraction.categoryHint);
+  const category = extraction.categoryHint
+    ? await getOrCreateCategoryByName(
+        env,
+        userId,
+        extraction.entryType,
+        extraction.categoryHint,
+      )
+    : null;
   const result = await env.DB.prepare(
     `INSERT OR IGNORE INTO financial_entries
        (id, user_id, entry_type, date, description, category_id, amount_cents,
         currency, status, source, notes, source_ref, source_email_id)
-     VALUES (?, ?, 'expense', ?, ?, ?, ?, ?, ?, 'email_triage', ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'email_triage', ?, ?, ?)`,
   )
     .bind(
       crypto.randomUUID(),
       userId,
+      extraction.entryType,
       extraction.date,
       extraction.description,
-      categoryId,
+      category?.id || null,
       extraction.amountCents,
       extraction.currency,
       extraction.status,
@@ -4292,21 +4276,8 @@ async function insertInvoiceFinancialEntry(
   return (result.meta?.changes || 0) > 0;
 }
 
-async function getInvoiceCategoryId(env: Env, userId: string, categoryName: string | null) {
-  if (!categoryName) return null;
-  const row = await env.DB.prepare(
-    `SELECT id, name
-     FROM financial_categories
-     WHERE user_id = ? AND entry_type = 'expense' AND name = ? COLLATE NOCASE
-     LIMIT 1`,
-  )
-    .bind(userId, categoryName)
-    .first<FinancialCategoryRow>();
-  return row?.id || null;
-}
-
 function scoreInvoiceMessage(message: MailboxMessageRow) {
-  const subject = (message.subject || "").toLowerCase();
+  const subject = decodedMessageSubject(message).toLowerCase();
   const from = (message.from_address || "").toLowerCase();
   const body = (message.text_body || "").toLowerCase();
   let score = 0;
@@ -4324,7 +4295,7 @@ function extractInvoiceFromMessage(
   message: MailboxMessageRow,
   score: number,
 ): InvoiceExtraction | null {
-  const subject = normalizeOptionalText(message.subject) || "Invoice";
+  const subject = normalizeOptionalText(decodedMessageSubject(message)) || "Invoice";
   const body = normalizeWhitespace(message.text_body || "");
   const combined = `${subject}\n${body}`;
   const amount = parseInvoiceAmount(combined);
@@ -4333,6 +4304,7 @@ function extractInvoiceFromMessage(
   const status = confidence === "high" && looksPaid(combined) ? "paid" : "needs_review";
   return {
     messageId: message.id,
+    entryType: inferInvoiceEntryType(message, subject, body),
     description: subject,
     amountCents: amount.amountCents,
     currency: amount.currency,
@@ -4344,6 +4316,29 @@ function extractInvoiceFromMessage(
     confidence,
     sourceRef: `email:${message.id}`,
   };
+}
+
+function decodedMessageSubject(message: MailboxMessageRow) {
+  return decodeMimeHeaderValue(message.subject || "");
+}
+
+function inferInvoiceEntryType(
+  message: MailboxMessageRow,
+  subject: string,
+  body: string,
+): "income" | "expense" {
+  const from = (message.from_address || "").toLowerCase();
+  const text = `${subject}\n${body}`.toLowerCase();
+  if (
+    /\b(stripe|paypal|wise)\b/.test(from) &&
+    (/\bpayment\s+of\b/.test(text) ||
+      /\bpayment\s+received\b/.test(text) ||
+      /\bsuccessful\s+payment\b/.test(text) ||
+      /\byou\s+received\b/.test(text))
+  ) {
+    return "income";
+  }
+  return "expense";
 }
 
 function parseInvoiceAmount(text: string) {
@@ -4390,11 +4385,12 @@ function looksPaid(text: string) {
     lower.includes("paid") ||
     lower.includes("payment received") ||
     lower.includes("payment confirmation") ||
+    lower.includes("successful payment") ||
     lower.includes("thank you for your payment");
 }
 
 function inferInvoiceCategory(message: MailboxMessageRow) {
-  const text = `${message.subject || ""}\n${message.from_address || ""}\n${message.text_body || ""}`.toLowerCase();
+  const text = `${decodedMessageSubject(message)}\n${message.from_address || ""}\n${message.text_body || ""}`.toLowerCase();
   if (/\b(hosting|cloudflare|vercel|netlify|aws|google cloud|render)\b/.test(text)) return "Hosting";
   if (/\b(software|subscription|saas|github|notion|linear|figma|openai)\b/.test(text)) return "Software";
   if (/\b(contractor|freelance|consultant)\b/.test(text)) return "Contractor";

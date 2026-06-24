@@ -147,9 +147,16 @@ type FinancialEntry = {
   notes: string | null;
 };
 
+type AccountsMoneyTotal = {
+  currency: string;
+  amountCents: number;
+};
+
 type AccountsStats = {
   thisMonthCents: number;
   lastMonthCents: number;
+  thisMonthTotals?: AccountsMoneyTotal[];
+  lastMonthTotals?: AccountsMoneyTotal[];
   topCategoryName: string | null;
   topCategoryTotalCents: number;
   entriesCount: number;
@@ -2033,6 +2040,18 @@ function formatMoney(cents: number, currency: string): string {
   }).format((cents || 0) / 100);
 }
 
+function formatMoneyTotals(
+  totals: AccountsMoneyTotal[] | undefined,
+  fallbackCents: number,
+  fallbackCurrency: string,
+): string {
+  const visibleTotals = (totals || []).filter((item) => item.amountCents > 0);
+  if (visibleTotals.length === 0) return formatMoney(fallbackCents, fallbackCurrency);
+  return visibleTotals
+    .map((item) => formatMoney(item.amountCents, item.currency))
+    .join(" + ");
+}
+
 function memoryKindLabel(kind: string): string {
   return kind
     .split("_")
@@ -2667,7 +2686,8 @@ onBeforeUnmount(() => {
           <div>
             <span>This month</span>
             <strong>{{
-              formatMoney(
+              formatMoneyTotals(
+                accountsStats?.thisMonthTotals,
                 accountsStats?.thisMonthCents || 0,
                 accountsForm.currency,
               )
@@ -2676,7 +2696,8 @@ onBeforeUnmount(() => {
           <div>
             <span>Last month</span>
             <strong>{{
-              formatMoney(
+              formatMoneyTotals(
+                accountsStats?.lastMonthTotals,
                 accountsStats?.lastMonthCents || 0,
                 accountsForm.currency,
               )

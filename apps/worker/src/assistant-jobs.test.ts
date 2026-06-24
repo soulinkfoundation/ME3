@@ -617,6 +617,40 @@ describe("assistant jobs persistence", () => {
     );
   });
 
+  it("decodes Stripe payment subjects and files them as income", async () => {
+    const env = createAssistantJobsEnv({
+      mailbox: activeMailboxRow(),
+      pluginInstallations: [accountsPluginInstallationRow()],
+      mailboxMessages: [
+        mailboxMessageRow({
+          id: "stripe-income-message",
+          thread_key: "thread-stripe-income",
+          from_address: "Stripe <payments@stripe.com>",
+          subject: "=?UTF-8?Q?Payment_of_=E2=82=AC5.00_for_Kieran.Earth?=",
+          text_body: "You received a successful payment of €5.00.",
+          received_at: "2026-06-22T10:00:00Z",
+        }),
+      ],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "invoice-receipt-triage" });
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+
+    expect(run.run.status).toBe("succeeded");
+    expect(env.__state.financialEntries).toHaveLength(1);
+    expect(env.__state.financialEntries[0]).toMatchObject({
+      entry_type: "income",
+      description: "Payment of €5.00 for Kieran.Earth",
+      category_id: expect.any(String),
+      amount_cents: 500,
+      currency: "EUR",
+      status: "paid",
+      source: "email_triage",
+      source_ref: "email:stripe-income-message",
+      source_email_id: "stripe-income-message",
+    });
+  });
+
   it("blocks invoice triage until Accounts is enabled", async () => {
     const env = createAssistantJobsEnv({
       mailbox: activeMailboxRow(),
@@ -1687,15 +1721,15 @@ class FakeStatement {
         (category) =>
           category.user_id === values[1] &&
           category.name === values[2] &&
-          category.entry_type === "expense",
+          category.entry_type === values[3],
       );
       if (!exists) {
         this.state.financialCategories.push({
           id: values[0] as string,
           user_id: values[1] as string,
           name: values[2] as string,
-          entry_type: "expense",
-          sort_order: values[3] as number,
+          entry_type: values[3] as string,
+          sort_order: values[4] as number,
         });
       }
       return { success: true, meta: { changes: exists ? 0 : 1 } };
@@ -1703,23 +1737,23 @@ class FakeStatement {
 
     if (sql.includes("INSERT OR IGNORE INTO financial_entries")) {
       const exists = this.state.financialEntries.some(
-        (entry) => entry.user_id === values[1] && entry.source_ref === values[9],
+        (entry) => entry.user_id === values[1] && entry.source_ref === values[10],
       );
       if (!exists) {
         this.state.financialEntries.push({
           id: values[0] as string,
           user_id: values[1] as string,
-          entry_type: "expense",
-          date: values[2] as string,
-          description: values[3] as string,
-          category_id: values[4] as string | null,
-          amount_cents: values[5] as number,
-          currency: values[6] as string,
-          status: values[7] as string,
+          entry_type: values[2] as string,
+          date: values[3] as string,
+          description: values[4] as string,
+          category_id: values[5] as string | null,
+          amount_cents: values[6] as number,
+          currency: values[7] as string,
+          status: values[8] as string,
           source: "email_triage",
-          notes: values[8] as string,
-          source_ref: values[9] as string,
-          source_email_id: values[10] as string,
+          notes: values[9] as string,
+          source_ref: values[10] as string,
+          source_email_id: values[11] as string,
         });
       }
       return { success: true, meta: { changes: exists ? 0 : 1 } };
@@ -1993,12 +2027,13 @@ class FakeStatement {
       ) as T | null;
     }
     if (sql.includes("FROM financial_categories")) {
-      const name = String(values[1] || "").toLowerCase();
+      const entryType = String(values[1] || "");
+      const name = String(values[2] || "").toLowerCase();
       return (
         this.state.financialCategories.find(
           (category) =>
             category.user_id === values[0] &&
-            category.entry_type === "expense" &&
+            category.entry_type === entryType &&
             category.name.toLowerCase() === name,
         ) || null
       ) as T | null;
