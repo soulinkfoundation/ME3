@@ -2688,6 +2688,8 @@ onBeforeUnmount(() => {
               class="accounts-mode-tab"
               :class="{ 'is-active': accountsType === 'expense' }"
               role="tab"
+              aria-label="Expenses"
+              title="Expenses"
               :aria-selected="accountsType === 'expense' ? 'true' : 'false'"
               @click="setAccountsType('expense')"
             >
@@ -2699,6 +2701,8 @@ onBeforeUnmount(() => {
               class="accounts-mode-tab"
               :class="{ 'is-active': accountsType === 'income' }"
               role="tab"
+              aria-label="Income"
+              title="Income"
               :aria-selected="accountsType === 'income' ? 'true' : 'false'"
               @click="setAccountsType('income')"
             >
@@ -4498,26 +4502,31 @@ onBeforeUnmount(() => {
   }
 
   .accounts-mode-tab {
+    width: 34px;
     min-height: 34px;
-    padding: 0 10px;
+    padding: 0;
     font-size: 13px;
+  }
+
+  .accounts-mode-tab > span {
+    display: none;
   }
 }
 
 @media (max-width: 480px) {
   .accounts-toolbar {
-    grid-template-columns: 1fr;
-    gap: 10px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
   }
 
-  .accounts-tabs,
-  .accounts-toolbar__actions {
+  .accounts-tabs {
     grid-column: 1;
-    justify-self: center;
+    justify-self: start;
   }
 
-  .accounts-mode-tab {
-    padding: 0 12px;
+  .accounts-toolbar__actions {
+    grid-column: 2;
+    justify-self: end;
   }
 
   .accounts-actions-menu__popover {
