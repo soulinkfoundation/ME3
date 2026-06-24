@@ -4332,10 +4332,21 @@ function formatDestination(detail: AssistantJobDetail | null) {
   return "Mission Control results";
 }
 
-function setupMessageForJob(job: AssistantJob) {
+function setupErrorForJob(job: AssistantJob) {
   const error = job.setupState?.errors?.find((entry) => entry.message)?.message;
+  return error ? cleanPlainText(error) : "";
+}
+
+function isAccountsSetupMissing(job: AssistantJob) {
+  return /^Missing setup requirement:\s*accounts\.?$/i.test(
+    setupErrorForJob(job),
+  );
+}
+
+function setupMessageForJob(job: AssistantJob) {
+  const error = setupErrorForJob(job);
   if (!error) return "Setup is needed before this job can run.";
-  return cleanPlainText(error)
+  return error
     .replace(
       /^Missing setup requirement:\s*email\.?$/i,
       "Email setup is needed.",
@@ -6653,7 +6664,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
             </header>
 
             <div v-if="selectedJob.status === 'needs_setup'" class="notice">
-              {{ setupMessageForJob(selectedJob) }}
+              <template v-if="isAccountsSetupMissing(selectedJob)">
+                Missing setup requirement: Accounts plugin needs to be activated
+                <RouterLink to="/accounts">here</RouterLink>.
+              </template>
+              <template v-else>
+                {{ setupMessageForJob(selectedJob) }}
+              </template>
             </div>
 
             <dl class="detail-facts">
@@ -9749,6 +9766,11 @@ button:disabled {
   color: var(--ui-text);
   font-size: 14px;
   line-height: 1.45;
+}
+
+.notice a {
+  color: var(--ui-accent-strong);
+  font-weight: 700;
 }
 
 .notice--error {

@@ -59,6 +59,7 @@ export const RECOMMENDED_START_PLUGIN_IDS = [
   "me3.agent-chat",
   "me3.mission-control",
   "me3.calendar",
+  "me3.accounts",
 ] as const;
 
 export const RECOMMENDED_START_PLUGIN_ID_SET = new Set<string>(
