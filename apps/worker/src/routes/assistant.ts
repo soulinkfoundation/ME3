@@ -109,6 +109,14 @@ type AssistantMessageRow = {
   created_at: string;
   metadata_json?: string | null;
 };
+type AssistantAttachmentContentRow = {
+  id: string;
+  filename: string;
+  mime_type: string;
+  kind: "text" | "image";
+  status: "ready" | "error" | "deleted";
+  storage_key: string | null;
+};
 type SoulinkDispatchBody = {
   ownerSubject?: unknown;
   ownerNodeId?: unknown;
@@ -168,6 +176,17 @@ function sanitizeAttachmentFilename(value: string, fallback: string): string {
     .trim()
     .slice(0, 180);
   return sanitized || fallback;
+}
+
+function sanitizeContentDispositionFilename(value: string): string {
+  return sanitizeAttachmentFilename(value, "assistant-image.png").replace(/"/g, "");
+}
+
+function normalizeAssistantAttachmentId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 160) return null;
+  return trimmed;
 }
 
 export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) {
@@ -376,6 +395,49 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
 
     return c.json({ ok: true, attachments: uploaded }, 201);
+  });
+
+  app.get("/api/assistant/attachments/:attachmentId/content", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const attachmentId = normalizeAssistantAttachmentId(c.req.param("attachmentId"));
+    if (!attachmentId) return c.json({ ok: false, error: "Attachment id is required" }, 400);
+
+    const row = await c.env.DB.prepare(
+      `SELECT id, filename, mime_type, kind, status, storage_key
+       FROM assistant_attachments
+       WHERE id = ? AND owner_id = ?
+       LIMIT 1`,
+    )
+      .bind(attachmentId, ownerId)
+      .first<AssistantAttachmentContentRow>();
+    if (
+      !row ||
+      row.kind !== "image" ||
+      row.status !== "ready" ||
+      !row.storage_key
+    ) {
+      return c.json({ ok: false, error: "Assistant image not found" }, 404);
+    }
+    if (!c.env.SITE_ASSETS) {
+      return c.json({ ok: false, error: "Assistant image storage is not configured" }, 503);
+    }
+
+    const object = await c.env.SITE_ASSETS.get(row.storage_key);
+    if (!object) return c.json({ ok: false, error: "Assistant image not found" }, 404);
+
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set("Content-Type", headers.get("Content-Type") || row.mime_type);
+    headers.set("Cache-Control", "private, max-age=300");
+    headers.set(
+      "Content-Disposition",
+      `inline; filename="${sanitizeContentDispositionFilename(row.filename)}"`,
+    );
+    headers.set("X-Content-Type-Options", "nosniff");
+
+    return new Response(object.body, { headers });
   });
 
   app.get("/api/assistant/settings", async (c) => {

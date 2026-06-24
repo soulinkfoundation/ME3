@@ -252,6 +252,16 @@ export type AgentChatImageAction = {
   }>;
 };
 
+type AgentChatGeneratedImageAsset = AgentChatImageAction["assets"][number];
+
+type PendingAssistantMessageAssetLink = {
+  id: string;
+  attachmentId: string;
+  role: "generated_output" | "input_reference";
+  displayOrder: number;
+  metadata: Record<string, unknown>;
+};
+
 export type AgentChatModelAttemptTrace = {
   providerId: AiProviderId;
   model: string;
@@ -493,6 +503,7 @@ type CoreAgentChatEnv = {
   AI?: {
     run(model: string, input: unknown, options?: unknown): Promise<unknown>;
   };
+  SITE_ASSETS?: R2Like;
   ENVIRONMENT?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
@@ -522,6 +533,25 @@ type D1Like = {
     };
     first<T = unknown>(): Promise<T | null>;
   };
+};
+
+type R2Like = {
+  get(key: string): Promise<R2ObjectLike | null>;
+  put(
+    key: string,
+    value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob | null,
+    options?: {
+      httpMetadata?: { contentType?: string };
+      customMetadata?: Record<string, string>;
+    },
+  ): Promise<unknown>;
+  delete(key: string | string[]): Promise<void>;
+};
+
+type R2ObjectLike = {
+  size: number;
+  httpMetadata?: { contentType?: string };
+  arrayBuffer(): Promise<ArrayBuffer>;
 };
 
 type AgentSandboxConnection = {
@@ -1969,7 +1999,7 @@ export async function dispatchAgentSandboxTurn(
   if (imageTurn) {
     await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
     if (imageTurn.response.replyText) {
-      await persistAssistantMessage(
+      const assistantMessageId = await persistAssistantMessage(
         env,
         input.userId,
         "assistant",
@@ -1977,6 +2007,14 @@ export async function dispatchAgentSandboxTurn(
         input.threadId,
         assistantMessageMetadataForResponse(imageTurn.response),
       );
+      if (assistantMessageId && imageTurn.messageAssetLinks?.length) {
+        await persistAssistantMessageAssetLinks(env, {
+          ownerId: input.userId,
+          threadId: input.threadId ?? null,
+          messageId: assistantMessageId,
+          links: imageTurn.messageAssetLinks,
+        });
+      }
     }
     let response: AgentSandboxDispatchResponse = {
       ...imageTurn.response,
@@ -2124,6 +2162,7 @@ function normalizeAgentAttachmentReferences(
 type AssistantImageTurnResult = {
   response: AgentSandboxDispatchResponse;
   route: AiRoute | null;
+  messageAssetLinks?: PendingAssistantMessageAssetLink[];
 };
 
 async function maybeHandleAssistantImageTurn(
@@ -2216,17 +2255,77 @@ async function maybeHandleAssistantImageTurn(
     };
   }
 
-  return {
-    route,
-    response: blockedImageResponse({
+  if (!env.SITE_ASSETS) {
+    return {
+      route,
+      response: failedImageResponse({
+        turnId: input.turnId,
+        prompt,
+        reason: "image_generation_storage_unavailable",
+        replyText:
+          "Image generation needs the SITE_ASSETS R2 binding so generated files can be saved. Add storage before trying again.",
+        route,
+      }),
+    };
+  }
+
+  try {
+    const generated = await runAssistantImageGeneration(env, {
+      ownerId: input.userId,
+      threadId: input.threadId ?? null,
       turnId: input.turnId,
       prompt,
-      kind: "blocked",
-      reason: "image_generation_adapter_pending",
-      replyText: `Image generation is routed to ${route.providerId} (${route.model}), but ME3 Core does not generate image files yet. The next slice adds the image adapter and asset storage.`,
       route,
-    }),
-  };
+    });
+    const replyText = [
+      "Generated an image and saved it to this conversation.",
+      `I used the hidden image-generation route: ${route.providerId} (${route.model}).`,
+    ].join(" ");
+    return {
+      route,
+      messageAssetLinks: generated.messageAssetLinks,
+      response: {
+        ok: true,
+        auditId: null,
+        turnId: input.turnId,
+        specialist: "core.agent-chat.image-generation",
+        replyText,
+        model: route.model,
+        source: route.providerId,
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        actionCards: null,
+        imageAction: {
+          kind: "generated",
+          status: "complete",
+          prompt,
+          revisedPrompt: generated.revisedPrompt,
+          providerId: route.providerId,
+          model: route.model,
+          reason: null,
+          assets: generated.assets,
+        },
+        contentAction: null,
+        contactsChanged: false,
+      },
+    };
+  } catch (error) {
+    return {
+      route,
+      response: failedImageResponse({
+        turnId: input.turnId,
+        prompt,
+        reason: "image_generation_failed",
+        replyText:
+          "I tried to generate the image, but the image provider or asset storage failed before I could save it.",
+        route,
+        debugError: modelErrorMessage(error),
+      }),
+    };
+  }
+
 }
 
 function blockedImageResponse(input: {
@@ -2263,6 +2362,270 @@ function blockedImageResponse(input: {
     contentAction: null,
     contactsChanged: false,
   };
+}
+
+function failedImageResponse(input: {
+  turnId: string;
+  prompt: string;
+  reason: string;
+  replyText: string;
+  route: AiRoute | null;
+  debugError?: string | null;
+}): AgentSandboxDispatchResponse {
+  return {
+    ok: true,
+    auditId: null,
+    turnId: input.turnId,
+    specialist: "core.agent-chat.image-generation",
+    replyText: input.replyText,
+    model: input.route?.model ?? null,
+    source: "fallback",
+    fallbackReason: "Image generation failed",
+    debugError: input.debugError || input.reason,
+    emailAction: null,
+    reminderAction: null,
+    actionCards: null,
+    imageAction: {
+      kind: "generated",
+      status: "failed",
+      prompt: input.prompt,
+      revisedPrompt: null,
+      providerId: input.route?.providerId ?? null,
+      model: input.route?.model ?? null,
+      reason: input.reason,
+      assets: [],
+    },
+    contentAction: null,
+    contactsChanged: false,
+  };
+}
+
+async function runAssistantImageGeneration(
+  env: CoreAgentChatEnv,
+  input: {
+    ownerId: string;
+    threadId: string | null;
+    turnId: string;
+    prompt: string;
+    route: AiRoute;
+  },
+): Promise<{
+  revisedPrompt: string | null;
+  assets: AgentChatGeneratedImageAsset[];
+  messageAssetLinks: PendingAssistantMessageAssetLink[];
+}> {
+  if (input.route.providerId !== "workers-ai") {
+    throw new Error(`${input.route.providerId} image generation is not supported yet.`);
+  }
+  if (!input.route.ai) throw new Error("Workers AI binding is not configured.");
+  if (!env.SITE_ASSETS) throw new Error("SITE_ASSETS R2 binding is not configured.");
+
+  const { bytes, mimeType, revisedPrompt } = await runWorkersAiImageGeneration(
+    input.route,
+    input.prompt,
+  );
+  const attachmentId = crypto.randomUUID();
+  const extension = extensionForMimeType(mimeType);
+  const filename = `generated-image-${attachmentId}.${extension}`;
+  const storageKey = [
+    "assistant",
+    input.ownerId,
+    "generated",
+    new Date().toISOString().slice(0, 10),
+    filename,
+  ].join("/");
+  const metadata = {
+    source: "assistant-image-generation",
+    providerId: input.route.providerId,
+    model: input.route.model,
+    revisedPrompt,
+    turnId: input.turnId,
+  };
+
+  await env.SITE_ASSETS.put(storageKey, bytes, {
+    httpMetadata: { contentType: mimeType },
+    customMetadata: {
+      ownerId: input.ownerId,
+      threadId: input.threadId || "",
+      attachmentId,
+      source: "assistant-image-generation",
+    },
+  });
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO assistant_attachments
+         (id, owner_id, thread_id, filename, mime_type, size, kind, status,
+          storage_key, extracted_text, text_truncated, metadata_json)
+       VALUES (?, ?, ?, ?, ?, ?, 'image', 'ready', ?, NULL, 0, ?)`,
+    )
+      .bind(
+        attachmentId,
+        input.ownerId,
+        input.threadId,
+        filename,
+        mimeType,
+        bytes.byteLength,
+        storageKey,
+        JSON.stringify(metadata),
+      )
+      .run();
+  } catch (error) {
+    await env.SITE_ASSETS.delete(storageKey).catch(() => undefined);
+    throw error;
+  }
+
+  const asset: AgentChatGeneratedImageAsset = {
+    id: attachmentId,
+    attachmentId,
+    name: filename,
+    mimeType,
+    size: bytes.byteLength,
+    width: null,
+    height: null,
+    url: `/api/assistant/attachments/${encodeURIComponent(attachmentId)}/content`,
+    storageKey,
+  };
+
+  return {
+    revisedPrompt,
+    assets: [asset],
+    messageAssetLinks: [
+      {
+        id: crypto.randomUUID(),
+        attachmentId,
+        role: "generated_output",
+        displayOrder: 0,
+        metadata,
+      },
+    ],
+  };
+}
+
+async function runWorkersAiImageGeneration(
+  route: AiRoute,
+  prompt: string,
+): Promise<{ bytes: Uint8Array; mimeType: string; revisedPrompt: string | null }> {
+  const form = new FormData();
+  form.append("prompt", prompt);
+  form.append("width", "1024");
+  form.append("height", "1024");
+  const formResponse = new Response(form);
+  const body = formResponse.body;
+  const contentType = formResponse.headers.get("content-type");
+  if (!body || !contentType) {
+    throw new Error("Could not prepare Workers AI image request.");
+  }
+  const options =
+    route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
+      ? {
+          gateway: {
+            id: route.aiGateway.gatewayId,
+          },
+        }
+      : undefined;
+  const result = await route.ai!.run(
+    route.model,
+    {
+      multipart: {
+        body,
+        contentType,
+      },
+    },
+    options,
+  );
+  return normalizeWorkersAiImageResult(result);
+}
+
+async function normalizeWorkersAiImageResult(
+  result: unknown,
+): Promise<{ bytes: Uint8Array; mimeType: string; revisedPrompt: string | null }> {
+  if (result instanceof Response) {
+    const bytes = new Uint8Array(await result.arrayBuffer());
+    return {
+      bytes,
+      mimeType: inferImageMimeType(bytes, result.headers.get("content-type")),
+      revisedPrompt: null,
+    };
+  }
+
+  if (result instanceof ArrayBuffer) {
+    const bytes = new Uint8Array(result);
+    return { bytes, mimeType: inferImageMimeType(bytes, null), revisedPrompt: null };
+  }
+
+  if (ArrayBuffer.isView(result)) {
+    const bytes = new Uint8Array(
+      result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength),
+    );
+    return { bytes, mimeType: inferImageMimeType(bytes, null), revisedPrompt: null };
+  }
+
+  if (result && typeof result === "object") {
+    const record = result as Record<string, unknown>;
+    const imageBase64 =
+      normalizeNullableText(record.image) ||
+      normalizeNullableText(record.data) ||
+      normalizeNullableText(record.result);
+    if (imageBase64) {
+      const bytes = decodeBase64Image(imageBase64);
+      return {
+        bytes,
+        mimeType: inferImageMimeType(bytes, normalizeNullableText(record.mimeType)),
+        revisedPrompt:
+          normalizeNullableText(record.revised_prompt) ||
+          normalizeNullableText(record.revisedPrompt),
+      };
+    }
+  }
+
+  throw new Error("Workers AI image response did not include image bytes.");
+}
+
+function decodeBase64Image(value: string): Uint8Array {
+  const normalized = value.includes(",") ? value.split(",").pop() || "" : value;
+  const binary = atob(normalized.replace(/\s/g, ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  if (bytes.byteLength === 0) {
+    throw new Error("Workers AI returned an empty image.");
+  }
+  return bytes;
+}
+
+function inferImageMimeType(bytes: Uint8Array, fallback: string | null): string {
+  const normalizedFallback = fallback?.split(";")[0]?.trim().toLowerCase() || "";
+  if (normalizedFallback.startsWith("image/")) return normalizedFallback;
+  if (
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "image/png";
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
+  if (
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return "image/png";
+}
+
+function extensionForMimeType(mimeType: string): "png" | "jpg" | "webp" {
+  if (mimeType === "image/jpeg" || mimeType === "image/jpg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  return "png";
 }
 
 async function loadCoreChatToolTurnPlan(
@@ -6499,10 +6862,11 @@ async function persistAssistantMessage(
   content: string,
   threadId?: string | null,
   metadata?: Record<string, unknown> | null,
-) {
-  if (role === "assistant" && isProviderSetupFallbackMessage(content)) return;
+): Promise<string | null> {
+  if (role === "assistant" && isProviderSetupFallbackMessage(content)) return null;
 
   try {
+    const id = crypto.randomUUID();
     const normalizedThreadId =
       typeof threadId === "string" && threadId.trim() ? threadId.trim() : null;
     const metadataJson = metadata && Object.keys(metadata).length > 0
@@ -6513,35 +6877,70 @@ async function persistAssistantMessage(
         await env.DB.prepare(
           "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
         )
-          .bind(crypto.randomUUID(), ownerId, role, content, normalizedThreadId, metadataJson)
+          .bind(id, ownerId, role, content, normalizedThreadId, metadataJson)
           .run();
-        return;
+        return id;
       }
 
       await env.DB.prepare(
         "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
       )
-        .bind(crypto.randomUUID(), ownerId, role, content, normalizedThreadId)
+        .bind(id, ownerId, role, content, normalizedThreadId)
         .run();
-      return;
+      return id;
     }
 
     if (metadataJson) {
       await env.DB.prepare(
         "INSERT INTO assistant_messages (id, owner_id, role, content, metadata_json) VALUES (?, ?, ?, ?, ?)",
       )
-        .bind(crypto.randomUUID(), ownerId, role, content, metadataJson)
+        .bind(id, ownerId, role, content, metadataJson)
         .run();
-      return;
+      return id;
     }
 
     await env.DB.prepare(
       "INSERT INTO assistant_messages (id, owner_id, role, content) VALUES (?, ?, ?, ?)",
     )
-      .bind(crypto.randomUUID(), ownerId, role, content)
+      .bind(id, ownerId, role, content)
       .run();
+    return id;
   } catch {
     // Conversation persistence is useful context, but chat turns should not fail on audit writes.
+    return null;
+  }
+}
+
+async function persistAssistantMessageAssetLinks(
+  env: CoreAgentChatEnv,
+  input: {
+    ownerId: string;
+    threadId: string | null;
+    messageId: string;
+    links: PendingAssistantMessageAssetLink[];
+  },
+) {
+  try {
+    for (const link of input.links) {
+      await env.DB.prepare(
+        `INSERT INTO assistant_message_assets
+           (id, owner_id, thread_id, message_id, attachment_id, role, display_order, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+        .bind(
+          link.id,
+          input.ownerId,
+          input.threadId,
+          input.messageId,
+          link.attachmentId,
+          link.role,
+          link.displayOrder,
+          JSON.stringify(link.metadata),
+        )
+        .run();
+    }
+  } catch {
+    // The assistant message metadata still carries generated assets for refresh.
   }
 }
 

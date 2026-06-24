@@ -27,7 +27,10 @@ type FakeDbState = {
   reminders: Array<Record<string, unknown>>;
   bookings: Array<Record<string, unknown>>;
   aiDefaults: Array<Record<string, unknown>>;
+  assistantAttachments: Array<Record<string, unknown>>;
+  assistantMessageAssets: Array<Record<string, unknown>>;
   persistedMessages: Array<{
+    id: string;
     ownerId: string;
     role: string;
     content: string;
@@ -44,6 +47,52 @@ function createStorage() {
     },
     async put<T = unknown>(key: string, value: T): Promise<void> {
       values.set(key, value);
+    },
+  };
+}
+
+function createR2Bucket() {
+  const objects = new Map<string, { bytes: Uint8Array; contentType: string | null }>();
+  return {
+    objects,
+    bucket: {
+      async get(key: string) {
+        const object = objects.get(key);
+        if (!object) return null;
+        return {
+          size: object.bytes.byteLength,
+          httpMetadata: { contentType: object.contentType || undefined },
+          async arrayBuffer() {
+            return object.bytes.buffer.slice(
+              object.bytes.byteOffset,
+              object.bytes.byteOffset + object.bytes.byteLength,
+            );
+          },
+        };
+      },
+      async put(
+        key: string,
+        value: ArrayBuffer | ArrayBufferView | string | null,
+        options?: { httpMetadata?: { contentType?: string } },
+      ) {
+        const bytes =
+          typeof value === "string"
+            ? new TextEncoder().encode(value)
+            : value instanceof ArrayBuffer
+              ? new Uint8Array(value)
+              : ArrayBuffer.isView(value)
+                ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+                : new Uint8Array();
+        objects.set(key, {
+          bytes,
+          contentType: options?.httpMetadata?.contentType || null,
+        });
+      },
+      async delete(key: string | string[]) {
+        for (const item of Array.isArray(key) ? key : [key]) {
+          objects.delete(item);
+        }
+      },
     },
   };
 }
@@ -77,6 +126,8 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     reminders: [],
     bookings: [],
     aiDefaults: [],
+    assistantAttachments: [],
+    assistantMessageAssets: [],
     persistedMessages: [],
     ...state,
   };
@@ -205,10 +256,35 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             const hasThreadId = sql.includes("thread_id");
             const hasMetadata = sql.includes("metadata_json");
             dbState.persistedMessages.push({
+              id: values[0] as string,
               ownerId: values[1] as string,
               role: values[2] as string,
               content: values[3] as string,
               metadata_json: hasMetadata ? (values[hasThreadId ? 5 : 4] as string) : null,
+            });
+          }
+          if (sql.includes("INSERT INTO assistant_attachments")) {
+            dbState.assistantAttachments.push({
+              id: values[0],
+              owner_id: values[1],
+              thread_id: values[2],
+              filename: values[3],
+              mime_type: values[4],
+              size: values[5],
+              storage_key: values[6],
+              metadata_json: values[7],
+            });
+          }
+          if (sql.includes("INSERT INTO assistant_message_assets")) {
+            dbState.assistantMessageAssets.push({
+              id: values[0],
+              owner_id: values[1],
+              thread_id: values[2],
+              message_id: values[3],
+              attachment_id: values[4],
+              role: values[5],
+              display_order: values[6],
+              metadata_json: values[7],
             });
           }
           if (sql.includes("INSERT INTO user_reminders")) {
@@ -605,7 +681,7 @@ describe("Core chat native context", () => {
     });
   });
 
-  it("routes image generation away from a selected text model when Workers AI is available", async () => {
+  it("blocks image generation before provider work when storage is missing", async () => {
     const aiRun = vi.fn(async () => ({
       response: "Text model should not answer image requests.",
     }));
@@ -625,13 +701,73 @@ describe("Core chat native context", () => {
     );
 
     expect(aiRun).not.toHaveBeenCalled();
-    expect(response.replyText).toContain("Image generation is routed to workers-ai");
+    expect(response.replyText).toContain("SITE_ASSETS R2 binding");
     expect(response.imageAction).toMatchObject({
-      kind: "blocked",
-      status: "blocked",
+      kind: "generated",
+      status: "failed",
       providerId: "workers-ai",
       model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
-      reason: "image_generation_adapter_pending",
+      reason: "image_generation_storage_unavailable",
+    });
+  });
+
+  it("routes image generation through Workers AI and stores the generated asset", async () => {
+    const tinyPngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzvKswAAAABJRU5ErkJggg==";
+    const aiRun = vi.fn(async () => ({
+      image: tinyPngBase64,
+      revisedPrompt: "A quiet writing desk at sunrise.",
+    }));
+    const env = createEnv();
+    const r2 = createR2Bucket();
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun }, SITE_ASSETS: r2.bucket } as never,
+      createStorage(),
+      {
+        ...dispatchInput("Generate an image of a quiet writing desk."),
+        threadId: "thread-1",
+        selectedModel: {
+          providerId: "workers-ai",
+          model: "@cf/qwen/qwen3-30b-a3b-fp8",
+          optionId: "workers-qwen3-30b",
+        },
+      },
+    );
+
+    expect(aiRun).toHaveBeenCalledOnce();
+    expect(aiRun).toHaveBeenCalledWith(
+      DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+      expect.objectContaining({
+        multipart: expect.objectContaining({
+          contentType: expect.stringContaining("multipart/form-data"),
+        }),
+      }),
+      undefined,
+    );
+    expect(response.replyText).toContain("Generated an image");
+    expect(response.imageAction).toMatchObject({
+      kind: "generated",
+      status: "complete",
+      providerId: "workers-ai",
+      model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+    });
+    expect(response.imageAction?.assets).toHaveLength(1);
+    expect(response.imageAction?.assets[0]).toMatchObject({
+      mimeType: "image/png",
+      url: expect.stringContaining("/api/assistant/attachments/"),
+    });
+    expect(env.state.assistantAttachments).toHaveLength(1);
+    expect(env.state.assistantMessageAssets).toHaveLength(1);
+    expect(r2.objects.size).toBe(1);
+    const assistantMessage = env.state.persistedMessages.find(
+      (message) => message.role === "assistant",
+    );
+    expect(JSON.parse(assistantMessage?.metadata_json || "{}")).toMatchObject({
+      imageAction: {
+        status: "complete",
+        assets: [expect.objectContaining({ mimeType: "image/png" })],
+      },
     });
   });
 

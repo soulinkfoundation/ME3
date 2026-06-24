@@ -5003,6 +5003,52 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 class="assistant-message__content"
                 v-html="renderAssistantMarkdown(assistantMessageDisplayText(message))"
               ></div>
+              <div
+                v-if="message.imageAction?.assets?.length"
+                class="assistant-image-assets"
+              >
+                <figure
+                  v-for="asset in message.imageAction.assets"
+                  :key="asset.attachmentId || asset.id"
+                  class="assistant-image-asset"
+                >
+                  <a
+                    class="assistant-image-asset__preview"
+                    :href="asset.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <img
+                      :src="asset.url"
+                      :alt="asset.name || 'Generated assistant image'"
+                      loading="lazy"
+                    />
+                  </a>
+                  <figcaption class="assistant-image-asset__caption">
+                    <span>{{ asset.name || "Generated image" }}</span>
+                    <span>{{ formatFileSize(asset.size) }}</span>
+                  </figcaption>
+                  <div class="assistant-image-asset__actions">
+                    <a
+                      :href="asset.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open
+                    </a>
+                    <a :href="asset.url" :download="asset.name || 'generated-image'">
+                      Download
+                    </a>
+                  </div>
+                </figure>
+                <details
+                  v-if="message.imageAction.revisedPrompt"
+                  class="assistant-image-assets__details"
+                >
+                  <summary>Revised prompt</summary>
+                  <p>{{ message.imageAction.revisedPrompt }}</p>
+                </details>
+              </div>
               <p v-if="message.meta" class="assistant-message__meta">
                 {{ message.meta }}
               </p>
@@ -7992,6 +8038,74 @@ function messageFromUnknown(err: unknown, fallback: string) {
   height: 1px;
   border: 0;
   background: var(--ui-border);
+}
+
+.assistant-image-assets {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.assistant-image-asset {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.assistant-image-asset__preview {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-surface-muted);
+}
+
+.assistant-image-asset__preview img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.assistant-image-asset__caption,
+.assistant-image-asset__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assistant-image-asset__caption span:first-child {
+  color: var(--ui-text);
+  font-weight: 700;
+}
+
+.assistant-image-asset__actions a {
+  color: var(--ui-accent);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.assistant-image-asset__actions a:hover {
+  text-decoration: underline;
+}
+
+.assistant-image-assets__details {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assistant-image-assets__details summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.assistant-image-assets__details p {
+  margin: 6px 0 0;
 }
 
 .assistant-message__meta,
