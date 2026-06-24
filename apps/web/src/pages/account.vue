@@ -756,14 +756,6 @@ const me3ConnectionDescription = computed(() => {
   return "Use ME3.app to claim and sign in to this Core install.";
 });
 
-const me3InstallIdLabel = computed(() => {
-  const installId = me3Connection.value?.installId;
-  if (!installId) return null;
-  return installId.length > 18
-    ? `${installId.slice(0, 10)}...${installId.slice(-8)}`
-    : installId;
-});
-
 const coreGithubConnection = computed(() => coreGithubStatus.value?.github || null);
 
 const coreGithubNeedsMe3Reconnect = computed(
@@ -818,7 +810,7 @@ const coreGithubRunUrl = computed(
 
 const coreGithubDescription = computed(() => {
   if (!coreGithubStatus.value?.me3AppConnected) {
-    return "Connect ME3.app before enabling phone-friendly Core updates.";
+    return "Update me3 core.";
   }
   if (coreGithubConnection.value?.connected) {
     return coreGithubUpdateAvailable.value
@@ -2321,17 +2313,10 @@ onMounted(async () => {
                         {{ me3ConnectionDescription }}
                       </p>
                       <div
-                        v-if="me3Connection"
+                        v-if="me3Connection?.connected"
                         class="connection-line__details"
                       >
-                        <span
-                          v-if="me3InstallIdLabel"
-                          :title="me3Connection.installId || undefined"
-                        >
-                          Core {{ me3InstallIdLabel }}
-                        </span>
                         <a
-                          v-if="me3Connection.connected"
                           :href="me3Connection.meJsonUrl"
                           target="_blank"
                           rel="noopener"
@@ -4122,6 +4107,19 @@ h1 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.connection-line--telegram:not(.connection-line--telegram-connected)
+  .connection-line__header {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.connection-line--telegram:not(.connection-line--telegram-connected)
+  .connection-line__header
+  .connection-line__copy {
+  flex: 0 0 100%;
 }
 
 .connection-line__meta {
