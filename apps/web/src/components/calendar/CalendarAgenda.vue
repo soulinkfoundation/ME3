@@ -375,9 +375,6 @@ watch(
                     <span>{{ event.title }}</span>
                     <span class="calendar-kind">{{ event.sourceLabel }}</span>
                   </div>
-                  <div class="calendar-item-meta">
-                    {{ event.siteLabel }} · {{ event.summary }}
-                  </div>
                 </div>
               </button>
               <p v-if="group.items.length === 0" class="calendar-day-empty">
@@ -622,9 +619,11 @@ watch(
 
 .calendar-item {
   display: flex;
+  align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 12px;
+  min-height: 44px;
+  padding: 10px 12px;
   border: 0;
   border-radius: 8px;
   background: var(--color-bg-subtle);
@@ -651,7 +650,7 @@ watch(
 }
 
 .calendar-item-time {
-  flex: 0 0 92px;
+  flex: 0 0 64px;
   color: var(--color-text-muted);
   font-size: 12px;
   font-weight: 700;
@@ -664,9 +663,17 @@ watch(
 
 .calendar-item-title {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   font-weight: 600;
+}
+
+.calendar-item-title > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .calendar-kind {
@@ -675,13 +682,6 @@ watch(
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-muted);
-}
-
-.calendar-item-meta {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--color-text-muted);
-  overflow-wrap: anywhere;
 }
 
 .calendar-detail h4 {
@@ -778,11 +778,6 @@ watch(
 }
 
 @media (max-width: 960px) {
-  .calendar-item {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
   .calendar-grid {
     grid-template-columns: 1fr;
   }
@@ -823,6 +818,7 @@ watch(
 
   .calendar-item-time {
     flex-basis: auto;
+    min-width: 44px;
   }
 }
 </style>
