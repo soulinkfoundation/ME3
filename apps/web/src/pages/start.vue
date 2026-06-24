@@ -709,7 +709,7 @@ onBeforeUnmount(clearUsernameCheck);
               v-model="assistantName"
               type="text"
               :maxlength="ASSISTANT_NAME_MAX_LENGTH"
-              placeholder="007"
+              placeholder="ME3"
               autocomplete="off"
               :disabled="assistantNameLoading || assistantNameSaving"
               required
