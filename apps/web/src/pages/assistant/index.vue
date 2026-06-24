@@ -1007,6 +1007,21 @@ const selectedModelSetup = computed(() =>
   setupStateForModel(selectedModel.value),
 );
 
+const showConfigureStarterPrompt = computed(() => {
+  if (loadingJobs.value || loadingRecipes.value) return true;
+  if (pageError.value || aiSettingsError.value || assistantSettingsError.value)
+    return true;
+  if (!selectedModelSetup.value.configured) return true;
+  if (jobs.value.some((job) => job.status === "needs_setup")) return true;
+  return recipes.value.some((recipe) => recipe.state === "needs_setup");
+});
+
+const visibleStarterPrompts = computed(() =>
+  showConfigureStarterPrompt.value
+    ? starterPrompts
+    : starterPrompts.filter((prompt) => prompt.label !== "Configure"),
+);
+
 const selectedModelTitle = computed(() => {
   const model = selectedModel.value;
   if (!model) return "Model";
@@ -4943,7 +4958,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <h2>Message ME3</h2>
             <div class="starter-prompt-list" aria-label="Starter prompts">
               <button
-                v-for="prompt in starterPrompts"
+                v-for="prompt in visibleStarterPrompts"
                 :key="prompt.label"
                 type="button"
                 class="starter-prompt"
