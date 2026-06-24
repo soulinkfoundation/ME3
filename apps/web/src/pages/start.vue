@@ -1353,8 +1353,7 @@ onBeforeUnmount(clearUsernameCheck);
 }
 
 .plugins-panel-wrap,
-.messaging-option,
-.phone-video-panel {
+.messaging-option {
   padding: 18px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-md, 10px);
@@ -1416,8 +1415,8 @@ onBeforeUnmount(clearUsernameCheck);
 .phone-video {
   width: min(100%, 360px);
   max-height: 70vh;
-  border-radius: var(--ui-radius-md, 10px);
-  background: #000;
+  border: 0;
+  background: transparent;
 }
 
 .wheel-start-panel {
