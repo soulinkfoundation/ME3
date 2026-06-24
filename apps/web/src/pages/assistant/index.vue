@@ -796,6 +796,12 @@ const weekdayOptions = [
 const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const configureStarterPrompt =
   "Help me configure my ME3 installation. First check what is already set up across my public site/profile, email mailbox, Soulink or Telegram, assistant/AI, jobs, plugins, and updates. Then suggest the missing or most useful next step. If I'm not sure, walk me through the basics.";
+const assistantPlaceholders = [
+  "Ask me3 anything...",
+  "Set a reminder tomorrow at 9am to...",
+  "Draft a blog post about...",
+  "Draft an email to tell Sarah about...",
+];
 type StarterPrompt = {
   label: string;
   icon: string;
@@ -807,11 +813,13 @@ const starterPrompts: StarterPrompt[] = [
     icon: "⚙️",
     prompt: configureStarterPrompt,
   },
-  { label: "Draft email", icon: "✉️", prompt: "Draft email" },
-  { label: "Draft blog post", icon: "📝", prompt: "Draft blog post" },
-  { label: "Add reminder", icon: "⏰", prompt: "Add reminder" },
   { label: "Status update", icon: "🚀", prompt: "Review my week" },
 ];
+const assistantPlaceholder =
+  assistantPlaceholders[
+    Math.floor(Math.random() * assistantPlaceholders.length)
+  ] ||
+  assistantPlaceholders[0];
 const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
 const assistantTextAttachmentMaxBytes = 1_000_000;
@@ -2122,13 +2130,11 @@ function autosizeAssistantComposer() {
   el.style.overflowY = scroll > COMPOSER_MAX_HEIGHT_PX ? "auto" : "hidden";
 }
 
-function useStarterPrompt(prompt: string) {
+async function useStarterPrompt(prompt: string) {
   assistantDraft.value = prompt;
   assistantError.value = null;
-  void nextTick(() => {
-    autosizeAssistantComposer();
-    assistantComposerRef.value?.focus();
-  });
+  autosizeAssistantComposer();
+  await sendAssistantMessage();
 }
 
 function openAssistantAttachmentPicker() {
@@ -5584,7 +5590,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               v-model="assistantDraft"
               class="assistant-input"
               rows="1"
-              placeholder="Ask me3 anything..."
+              :placeholder="assistantPlaceholder"
               :disabled="assistantSending"
               @keydown="onAssistantComposerKeydown"
               @input="autosizeAssistantComposer"
