@@ -5,6 +5,7 @@ import type {
   CalendarRangeMode,
 } from "./calendarAgenda";
 import UiIcon from "../UiIcon.vue";
+import type { UiIconName } from "../../utils/icons";
 
 const props = withDefaults(
   defineProps<{
@@ -57,6 +58,13 @@ type CalendarDayGroup = {
   weekdayLabel: string;
   label: string;
   items: CalendarAgendaEvent[];
+};
+
+const CALENDAR_KIND_ICONS: Record<string, UiIconName> = {
+  Booking: "UserStar",
+  Birthday: "Gift",
+  Event: "CalendarClock",
+  Reminder: "AlarmClock",
 };
 
 const selectedEventId = ref("");
@@ -157,6 +165,10 @@ function formatTimeRange(start: string, end: string, allDay = false) {
   if (allDay) return "All day";
   if (start === end) return formatTime(start);
   return `${formatTime(start)} – ${formatTime(end)}`;
+}
+
+function kindIcon(sourceLabel: string): UiIconName | null {
+  return CALENDAR_KIND_ICONS[sourceLabel] || null;
 }
 
 function dateFromDayKey(dayKey: string): Date | null {
@@ -375,10 +387,14 @@ watch(
                   <div class="calendar-item-title">
                     <span>{{ event.title }}</span>
                     <span
-                      v-if="event.sourceLabel === 'Reminder'"
+                      v-if="kindIcon(event.sourceLabel)"
                       class="calendar-kind calendar-kind--icon"
                     >
-                      <UiIcon name="Bell" :size="14" title="Reminder" />
+                      <UiIcon
+                        :name="kindIcon(event.sourceLabel) || 'CalendarClock'"
+                        :size="14"
+                        :title="event.sourceLabel"
+                      />
                     </span>
                     <span v-else class="calendar-kind">
                       {{ event.sourceLabel.toLowerCase() }}
