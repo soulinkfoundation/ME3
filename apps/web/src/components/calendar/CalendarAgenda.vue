@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type {
   CalendarAgendaEvent,
   CalendarRangeMode,
@@ -18,6 +18,7 @@ const props = withDefaults(
     startDayKey?: string | null;
     endDayKey?: string | null;
     focusDayKey?: string | null;
+    todayDayKey?: string | null;
     preferSelectEventId?: string | null;
     cancellingBookingId?: string | null;
     /** Sidebar-style layout: detail panel only (feed hidden). */
@@ -34,6 +35,7 @@ const props = withDefaults(
     startDayKey: null,
     endDayKey: null,
     focusDayKey: null,
+    todayDayKey: null,
     preferSelectEventId: null,
     cancellingBookingId: null,
     variant: "default",
@@ -57,8 +59,10 @@ type CalendarDayGroup = {
 };
 
 const selectedEventId = ref("");
+const surfaceEl = ref<HTMLElement | null>(null);
 const resolvedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const timeZoneOptions = resolvedTimeZone ? { timeZone: resolvedTimeZone } : {};
+let autoScrolledToToday = false;
 
 const sortedEvents = computed(() =>
   [...props.events].sort(
@@ -218,10 +222,34 @@ watch(
   },
   { immediate: true },
 );
+
+watch(
+  [dayGroups, () => props.loading, () => props.error, () => props.todayDayKey],
+  async ([groups, loading, error, todayDayKey]) => {
+    if (
+      autoScrolledToToday ||
+      loading ||
+      error ||
+      props.variant !== "default" ||
+      props.focusDayKey ||
+      !todayDayKey ||
+      !groups.some((group) => group.key === todayDayKey)
+    ) {
+      return;
+    }
+    await nextTick();
+    surfaceEl.value
+      ?.querySelector<HTMLElement>(`[data-calendar-day="${todayDayKey}"]`)
+      ?.scrollIntoView({ block: "start" });
+    autoScrolledToToday = true;
+  },
+  { immediate: true, flush: "post" },
+);
 </script>
 
 <template>
   <section
+    ref="surfaceEl"
     class="calendar-surface"
     :class="{ 'calendar-surface--detail-only': variant === 'detail-only' }"
   >
@@ -312,7 +340,16 @@ watch(
     >
       <div class="calendar-feed">
         <div class="calendar-days">
-          <section v-for="group in dayGroups" :key="group.key" class="calendar-day">
+          <section
+            v-for="group in dayGroups"
+            :key="group.key"
+            class="calendar-day"
+            :class="{
+              'is-empty': group.items.length === 0,
+              'is-today': group.key === todayDayKey,
+            }"
+            :data-calendar-day="group.key"
+          >
             <div class="calendar-day-head">
               <div class="calendar-date-rail">
                 <span>{{ group.weekdayLabel }}</span>
@@ -534,10 +571,21 @@ watch(
   min-height: 0;
   padding: 12px 0;
   border-bottom: 1px solid var(--color-border);
+  scroll-margin-top: 12px;
 }
 
 .calendar-day:has(.calendar-day-empty) {
   align-items: center;
+}
+
+.calendar-day.is-today .calendar-date-rail strong {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--ui-accent-soft, var(--color-bg-subtle));
+  color: var(--ui-accent-strong, var(--color-text));
 }
 
 .calendar-day-head {
@@ -753,6 +801,12 @@ watch(
     grid-template-columns: 50px minmax(0, 1fr);
     gap: 8px;
     padding: 10px 0;
+  }
+
+  .calendar-day.is-empty {
+    grid-template-columns: 44px minmax(0, 1fr);
+    min-height: 42px;
+    padding: 6px 0;
   }
 
   .calendar-date-rail span {
