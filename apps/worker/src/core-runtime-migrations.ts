@@ -18,6 +18,16 @@ const MIGRATION_TABLE = "core_runtime_migrations";
 
 const runtimeMigrations: RuntimeMigration[] = [
   {
+    id: "0002_mission_task_pins",
+    checksum: "2026-06-24-mission-task-pins-v1",
+    apply: applyMissionTaskPinsMigration,
+  },
+  {
+    id: "0009_commerce_default_currency",
+    checksum: "2026-06-24-commerce-default-currency-v1",
+    apply: applyCommerceDefaultCurrencyMigration,
+  },
+  {
     id: "0010_ai_usage_events",
     checksum: "2026-06-24-ai-usage-events-v1",
     apply: applyAiUsageEventsMigration,
@@ -112,6 +122,36 @@ async function runMigration(db: D1Database, migration: RuntimeMigration): Promis
     .run();
 }
 
+async function applyMissionTaskPinsMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "mission_tasks"))) {
+    throw new Error("Cannot apply 0002_mission_task_pins: mission_tasks is missing");
+  }
+
+  if (!(await columnExists(db, "mission_tasks", "pinned_at"))) {
+    try {
+      await db.prepare("ALTER TABLE mission_tasks ADD COLUMN pinned_at TEXT").run();
+    } catch (error) {
+      if (!(await columnExists(db, "mission_tasks", "pinned_at"))) throw error;
+    }
+  }
+}
+
+async function applyCommerceDefaultCurrencyMigration(db: D1Database): Promise<void> {
+  if (!(await tableExists(db, "commerce_settings"))) {
+    throw new Error("Cannot apply 0009_commerce_default_currency: commerce_settings is missing");
+  }
+
+  if (!(await columnExists(db, "commerce_settings", "default_currency"))) {
+    try {
+      await db
+        .prepare("ALTER TABLE commerce_settings ADD COLUMN default_currency TEXT NOT NULL DEFAULT 'USD'")
+        .run();
+    } catch (error) {
+      if (!(await columnExists(db, "commerce_settings", "default_currency"))) throw error;
+    }
+  }
+}
+
 async function applyAiUsageEventsMigration(db: D1Database): Promise<void> {
   await db
     .prepare(
@@ -183,7 +223,7 @@ async function tableExists(db: D1Database, tableName: string): Promise<boolean> 
 
 async function columnExists(
   db: D1Database,
-  tableName: "financial_entries",
+  tableName: string,
   columnName: string,
 ): Promise<boolean> {
   const result = await db.prepare(`PRAGMA table_info(${tableName})`).all<SqliteNameRow>();

@@ -16,8 +16,16 @@ describe("Core runtime migrations", () => {
     await ensureCoreRuntimeMigrations({ DB: db as unknown as D1Database } as Env);
 
     expect(db.tables.has("core_runtime_migrations")).toBe(true);
+    expect(db.columns.get("mission_tasks")?.has("pinned_at")).toBe(true);
+    expect(db.columns.get("commerce_settings")?.has("default_currency")).toBe(true);
     expect(db.tables.has("ai_usage_events")).toBe(true);
     expect(db.columns.get("financial_entries")?.has("project_id")).toBe(true);
+    expect(db.migrations.get("0002_mission_task_pins")).toBe(
+      "2026-06-24-mission-task-pins-v1",
+    );
+    expect(db.migrations.get("0009_commerce_default_currency")).toBe(
+      "2026-06-24-commerce-default-currency-v1",
+    );
     expect(db.migrations.get("0010_ai_usage_events")).toBe(
       "2026-06-24-ai-usage-events-v1",
     );
@@ -28,6 +36,8 @@ describe("Core runtime migrations", () => {
 
   it("records already-applied schema without repeating destructive operations", async () => {
     const db = new RuntimeMigrationDb({
+      hasMissionTaskPinnedAt: true,
+      hasCommerceDefaultCurrency: true,
       hasAiUsageEvents: true,
       hasFinancialEntryProjectId: true,
     });
@@ -68,6 +78,8 @@ describe("Core runtime migrations", () => {
 });
 
 type RuntimeMigrationDbOptions = {
+  hasMissionTaskPinnedAt?: boolean;
+  hasCommerceDefaultCurrency?: boolean;
   hasAiUsageEvents?: boolean;
   hasFinancialEntryProjectId?: boolean;
   addFinancialProjectColumnBeforeAlterError?: boolean;
@@ -75,8 +87,15 @@ type RuntimeMigrationDbOptions = {
 };
 
 class RuntimeMigrationDb {
-  readonly tables = new Set(["financial_entries", "owner_profile", "mission_projects"]);
+  readonly tables = new Set([
+    "commerce_settings",
+    "financial_entries",
+    "mission_tasks",
+    "owner_profile",
+    "mission_projects",
+  ]);
   readonly columns = new Map<string, Set<string>>([
+    ["commerce_settings", new Set(["user_id", "encrypted_stripe_secret_key"])],
     [
       "financial_entries",
       new Set([
@@ -89,6 +108,7 @@ class RuntimeMigrationDb {
         "amount_cents",
       ]),
     ],
+    ["mission_tasks", new Set(["id", "user_id", "title", "status", "priority"])],
   ]);
   readonly migrations = new Map<string, string>();
   readonly statements: string[] = [];
@@ -96,6 +116,12 @@ class RuntimeMigrationDb {
   failFinancialProjectAlterOnce: boolean;
 
   constructor(options: RuntimeMigrationDbOptions = {}) {
+    if (options.hasMissionTaskPinnedAt) {
+      this.columns.get("mission_tasks")?.add("pinned_at");
+    }
+    if (options.hasCommerceDefaultCurrency) {
+      this.columns.get("commerce_settings")?.add("default_currency");
+    }
     if (options.hasAiUsageEvents) this.tables.add("ai_usage_events");
     if (options.hasFinancialEntryProjectId) {
       this.columns.get("financial_entries")?.add("project_id");
@@ -138,10 +164,9 @@ class RuntimeMigrationStatement {
   }
 
   async all<T>() {
-    if (this.sql.includes("PRAGMA table_info(financial_entries)")) {
-      const columns = [...(this.db.columns.get("financial_entries") || [])].map((name) => ({
-        name,
-      }));
+    const tableName = this.sql.match(/PRAGMA table_info\(([^)]+)\)/)?.[1];
+    if (tableName) {
+      const columns = [...(this.db.columns.get(tableName) || [])].map((name) => ({ name }));
       return { results: columns as T[] };
     }
     return { results: [] as T[] };
@@ -155,6 +180,20 @@ class RuntimeMigrationStatement {
     }
     if (this.sql.includes("CREATE TABLE IF NOT EXISTS ai_usage_events")) {
       this.db.tables.add("ai_usage_events");
+      return { success: true };
+    }
+    if (this.sql.includes("ALTER TABLE mission_tasks")) {
+      const columns = this.db.columns.get("mission_tasks");
+      if (columns?.has("pinned_at")) throw new Error("duplicate column name: pinned_at");
+      columns?.add("pinned_at");
+      return { success: true };
+    }
+    if (this.sql.includes("ALTER TABLE commerce_settings")) {
+      const columns = this.db.columns.get("commerce_settings");
+      if (columns?.has("default_currency")) {
+        throw new Error("duplicate column name: default_currency");
+      }
+      columns?.add("default_currency");
       return { success: true };
     }
     if (this.sql.includes("ALTER TABLE financial_entries")) {

@@ -1,4 +1,4 @@
-CREATE TABLE ai_usage_events (
+CREATE TABLE IF NOT EXISTS ai_usage_events (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT 'owner',
   source TEXT NOT NULL DEFAULT 'local' CHECK (source IN ('local', 'gateway')),
@@ -16,7 +16,7 @@ CREATE TABLE ai_usage_events (
   FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_ai_usage_events_user_created
+CREATE INDEX IF NOT EXISTS idx_ai_usage_events_user_created
   ON ai_usage_events(user_id, created_at DESC);
-CREATE INDEX idx_ai_usage_events_user_kind_created
+CREATE INDEX IF NOT EXISTS idx_ai_usage_events_user_kind_created
   ON ai_usage_events(user_id, kind, created_at DESC);
