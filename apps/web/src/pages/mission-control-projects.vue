@@ -235,7 +235,7 @@ const PROJECTS_KANBAN_ENABLED_STORAGE_KEY = "me3:mission-control:kanban-enabled"
 const activeSection = ref<MissionSection>(
   isAccountsRoute.value ? "accounts" : normalizeSection(route.query.section),
 );
-const accountsEnabled = ref(false);
+const accountsEnabled = ref<boolean | null>(null);
 const projects = ref<MissionProject[]>([]);
 const pendingApprovals = ref<MissionApproval[]>([]);
 const recentRuns = ref<MissionRun[]>([]);
@@ -2651,7 +2651,9 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-show="activeSection === 'accounts'" class="mission-page">
-      <div v-if="!accountsEnabled" class="simple-sheet">
+      <PageLoading v-if="accountsEnabled === null" label="Loading accounts..." />
+
+      <div v-else-if="!accountsEnabled" class="simple-sheet">
         <div class="simple-sheet__header">
           <div>
             <h1>Accounts</h1>
