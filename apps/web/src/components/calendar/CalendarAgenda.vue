@@ -601,7 +601,6 @@ watch(
 }
 
 .calendar-day.is-today {
-  margin: 0 -8px;
   padding-inline: 8px;
   border-radius: 8px;
   background: color-mix(
@@ -842,6 +841,10 @@ watch(
     grid-template-columns: 44px minmax(0, 1fr);
     min-height: 42px;
     padding: 6px 0;
+  }
+
+  .calendar-day.is-today {
+    padding-inline: 8px;
   }
 
   .calendar-date-rail span {
