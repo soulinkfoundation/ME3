@@ -242,6 +242,47 @@ type AppConnectionsResponse = {
   };
 };
 
+type CoreGithubStatusResponse = {
+  ok: boolean;
+  core: {
+    version: string;
+    releaseChannel: string;
+    updateManifestUrl: string;
+    releaseNotesUrl: string;
+  };
+  me3AppConnected: boolean;
+  github: {
+    connected: boolean;
+    accountLogin: string | null;
+    repositoryOwner: string | null;
+    repositoryName: string | null;
+    repositoryUrl: string | null;
+    lastUpdateRunId: string | null;
+    lastUpdateRunUrl: string | null;
+  };
+  unavailableReason: string | null;
+};
+
+type CoreUpdateManifest = {
+  latest?: {
+    version?: string;
+  };
+};
+
+type CoreGithubActionResponse = {
+  ok?: boolean;
+  url?: string;
+  runUrl?: string;
+  run_url?: string;
+  htmlUrl?: string;
+  html_url?: string;
+  lastUpdateRunUrl?: string;
+  last_update_run_url?: string;
+  github?: {
+    lastUpdateRunUrl?: string | null;
+  };
+};
+
 type CommerceSettingsResponse = {
   encryptionConfigured: boolean;
   stripe: {
@@ -311,6 +352,13 @@ const appConnectionsLoading = ref(false);
 const appConnectionsSaving = ref(false);
 const me3Connection = ref<AppConnectionsResponse["me3"] | null>(null);
 const appConnectionsError = ref<string | null>(null);
+const coreGithubLoading = ref(false);
+const coreGithubSaving = ref<"connect" | "update" | "disconnect" | null>(null);
+const coreGithubStatus = ref<CoreGithubStatusResponse | null>(null);
+const coreGithubLatestVersion = ref<string | null>(null);
+const coreGithubLastRunUrl = ref<string | null>(null);
+const coreGithubMessage = ref<string | null>(null);
+const coreGithubError = ref<string | null>(null);
 const commerceLoading = ref(false);
 const commerceSaving = ref(false);
 const commerceSettings = ref<CommerceSettingsResponse | null>(null);
@@ -693,6 +741,59 @@ const me3InstallIdLabel = computed(() => {
   return installId.length > 18
     ? `${installId.slice(0, 10)}...${installId.slice(-8)}`
     : installId;
+});
+
+const coreGithubConnection = computed(() => coreGithubStatus.value?.github || null);
+
+const coreGithubStatusLabel = computed(() => {
+  if (coreGithubLoading.value) return "Loading";
+  if (!coreGithubStatus.value?.me3AppConnected) return "Needs ME3.app";
+  if (coreGithubConnection.value?.connected) return "Connected";
+  return "Not connected";
+});
+
+const coreGithubStatusClass = computed(() => {
+  if (!coreGithubStatus.value?.me3AppConnected) return "pending_setup";
+  return coreGithubConnection.value?.connected ? "active" : "pending_setup";
+});
+
+const coreGithubInstalledVersion = computed(
+  () => coreGithubStatus.value?.core.version || "",
+);
+
+const coreGithubUpdateAvailable = computed(
+  () =>
+    Boolean(coreGithubLatestVersion.value) &&
+    Boolean(coreGithubInstalledVersion.value) &&
+    coreGithubLatestVersion.value !== coreGithubInstalledVersion.value,
+);
+
+const coreGithubRepositoryLabel = computed(() => {
+  const connection = coreGithubConnection.value;
+  if (!connection?.repositoryOwner || !connection.repositoryName) return "";
+  return `${connection.repositoryOwner}/${connection.repositoryName}`;
+});
+
+const coreGithubRunUrl = computed(
+  () =>
+    coreGithubLastRunUrl.value ||
+    coreGithubConnection.value?.lastUpdateRunUrl ||
+    null,
+);
+
+const coreGithubDescription = computed(() => {
+  if (!coreGithubStatus.value?.me3AppConnected) {
+    return "Connect ME3.app before enabling phone-friendly Core updates.";
+  }
+  if (coreGithubConnection.value?.connected) {
+    return coreGithubUpdateAvailable.value
+      ? "A newer stable Core release is available."
+      : "GitHub updates are ready for this Core repository.";
+  }
+  if (coreGithubStatus.value.unavailableReason) {
+    return coreGithubStatus.value.unavailableReason;
+  }
+  return "Install the ME3 Updater GitHub App on this Core repository.";
 });
 
 const themeOptions: Array<{
@@ -1466,6 +1567,118 @@ async function disconnectMe3App() {
   }
 }
 
+async function loadCoreGithubUpdater() {
+  coreGithubLoading.value = true;
+  coreGithubError.value = null;
+
+  try {
+    const status = await api.get<CoreGithubStatusResponse>(
+      "/core/github/status",
+    );
+    coreGithubStatus.value = status;
+    if (status.github.lastUpdateRunUrl) {
+      coreGithubLastRunUrl.value = status.github.lastUpdateRunUrl;
+    }
+    await loadCoreGithubManifest(status.core.updateManifestUrl);
+  } catch (e: any) {
+    coreGithubError.value = e.message || "Failed to load Core updater";
+  } finally {
+    coreGithubLoading.value = false;
+  }
+}
+
+async function loadCoreGithubManifest(manifestUrl: string) {
+  coreGithubLatestVersion.value = null;
+  if (!manifestUrl) return;
+
+  try {
+    const response = await fetch(manifestUrl);
+    if (!response.ok) return;
+    const manifest = (await response.json()) as CoreUpdateManifest;
+    coreGithubLatestVersion.value = manifest.latest?.version || null;
+  } catch {
+    coreGithubLatestVersion.value = null;
+  }
+}
+
+async function connectCoreGithubUpdater() {
+  if (coreGithubSaving.value) return;
+
+  coreGithubSaving.value = "connect";
+  coreGithubMessage.value = null;
+  coreGithubError.value = null;
+
+  try {
+    const response = await api.post<CoreGithubActionResponse>(
+      "/core/github/install/start",
+      { redirect: "/account?section=connections" },
+    );
+    if (response.url) {
+      window.location.href = response.url;
+      return;
+    }
+    coreGithubError.value = "GitHub install is not ready yet.";
+  } catch (e: any) {
+    coreGithubError.value = e.message || "Failed to start GitHub install";
+  } finally {
+    coreGithubSaving.value = null;
+  }
+}
+
+async function updateCoreFromGithub() {
+  if (coreGithubSaving.value) return;
+
+  coreGithubSaving.value = "update";
+  coreGithubMessage.value = null;
+  coreGithubError.value = null;
+
+  try {
+    const response = await api.post<CoreGithubActionResponse>(
+      "/core/github/update",
+    );
+    coreGithubLastRunUrl.value = readCoreGithubActionUrl(response);
+    coreGithubMessage.value = "Core update started.";
+    await loadCoreGithubUpdater();
+  } catch (e: any) {
+    coreGithubError.value = e.message || "Failed to start Core update";
+  } finally {
+    coreGithubSaving.value = null;
+  }
+}
+
+async function disconnectCoreGithubUpdater() {
+  if (coreGithubSaving.value) return;
+
+  coreGithubSaving.value = "disconnect";
+  coreGithubMessage.value = null;
+  coreGithubError.value = null;
+
+  try {
+    await api.post<CoreGithubActionResponse>("/core/github/disconnect");
+    coreGithubLastRunUrl.value = null;
+    coreGithubMessage.value = "GitHub updater disconnected.";
+    await loadCoreGithubUpdater();
+  } catch (e: any) {
+    coreGithubError.value = e.message || "Failed to disconnect GitHub updater";
+  } finally {
+    coreGithubSaving.value = null;
+  }
+}
+
+function readCoreGithubActionUrl(response: CoreGithubActionResponse) {
+  return (
+    response.runUrl ||
+    response.run_url ||
+    response.htmlUrl ||
+    response.html_url ||
+    response.lastUpdateRunUrl ||
+    response.last_update_run_url ||
+    response.github?.lastUpdateRunUrl ||
+    response.url ||
+    null
+  );
+}
+
 async function logout() {
   await auth.logout();
   router.push("/");
@@ -1489,6 +1702,7 @@ onMounted(async () => {
   void loadEmailProviderSettings();
   void loadPlugins();
   void loadAppConnections();
+  void loadCoreGithubUpdater();
   void loadCommerceSettings();
   if (
     route.query.section === "connections" ||
@@ -2103,6 +2317,113 @@ onMounted(async () => {
                         @click="connectMe3App"
                       >
                         {{ appConnectionsSaving ? "Opening..." : "Connect" }}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div
+                    class="connection-line"
+                    :class="{
+                      'connection-line--connected':
+                        coreGithubConnection?.connected,
+                    }"
+                  >
+                    <div class="connection-line__copy">
+                      <span class="connection-line__title"
+                        >ME3 Core Updates</span
+                      >
+                      <p class="connection-line__description">
+                        {{ coreGithubDescription }}
+                      </p>
+                      <div class="connection-line__details">
+                        <span v-if="coreGithubInstalledVersion">
+                          Installed v{{ coreGithubInstalledVersion }}
+                        </span>
+                        <span v-if="coreGithubLatestVersion">
+                          Latest v{{ coreGithubLatestVersion }}
+                        </span>
+                        <span v-if="coreGithubUpdateAvailable">
+                          Update available
+                        </span>
+                        <a
+                          v-if="
+                            coreGithubConnection?.repositoryUrl &&
+                            coreGithubRepositoryLabel
+                          "
+                          :href="coreGithubConnection.repositoryUrl"
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          {{ coreGithubRepositoryLabel }}
+                        </a>
+                        <a
+                          v-if="coreGithubRunUrl"
+                          :href="coreGithubRunUrl"
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          Latest run
+                        </a>
+                      </div>
+                      <p
+                        v-if="coreGithubMessage"
+                        class="connection-line__message"
+                      >
+                        {{ coreGithubMessage }}
+                      </p>
+                      <p v-if="coreGithubError" class="connection-line__error">
+                        {{ coreGithubError }}
+                      </p>
+                    </div>
+                    <div class="connection-line__end">
+                      <StatusBadge :tone="coreGithubStatusClass">
+                        {{ coreGithubStatusLabel }}
+                      </StatusBadge>
+                      <Button
+                        v-if="coreGithubConnection?.connected"
+                        color="primary"
+                        size="compact"
+                        type="button"
+                        :disabled="Boolean(coreGithubSaving)"
+                        @click="updateCoreFromGithub"
+                      >
+                        {{
+                          coreGithubSaving === "update"
+                            ? "Starting..."
+                            : "Update"
+                        }}
+                      </Button>
+                      <Button
+                        v-if="coreGithubConnection?.connected"
+                        color="outline"
+                        size="compact"
+                        type="button"
+                        :disabled="Boolean(coreGithubSaving)"
+                        @click="disconnectCoreGithubUpdater"
+                      >
+                        {{
+                          coreGithubSaving === "disconnect"
+                            ? "Disconnecting..."
+                            : "Disconnect"
+                        }}
+                      </Button>
+                      <Button
+                        v-else
+                        color="primary"
+                        size="compact"
+                        type="button"
+                        :disabled="
+                          Boolean(coreGithubSaving) ||
+                          coreGithubLoading ||
+                          !coreGithubStatus?.me3AppConnected
+                        "
+                        @click="connectCoreGithubUpdater"
+                      >
+                        {{
+                          coreGithubSaving === "connect"
+                            ? "Opening..."
+                            : "Connect"
+                        }}
                       </Button>
                     </div>
                   </div>
@@ -3647,6 +3968,21 @@ h1 {
   line-height: 1.4;
 }
 
+.connection-line__message,
+.connection-line__error {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.connection-line__message {
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.connection-line__error {
+  color: var(--ui-danger, #b42318);
+}
+
 .connection-line__details {
   display: flex;
   flex-wrap: wrap;
@@ -3681,6 +4017,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
   padding-top: 2px;

@@ -3099,6 +3099,7 @@ async function createSignedMe3ClaimToken(input: {
   name?: string | null;
   handle?: string | null;
   installId?: string;
+  coreUpdateToken?: string;
 }): Promise<{ token: string; publicJwk: JsonWebKey & { kid?: string; alg?: string; use?: string } }> {
   const keyPair = await crypto.subtle.generateKey(
     {
@@ -3127,6 +3128,7 @@ async function createSignedMe3ClaimToken(input: {
     aud: "me3-core-install-claim",
     email: input.email,
     install_id: input.installId || "core_11111111-1111-4111-8111-111111111111",
+    core_update_token: input.coreUpdateToken || "core-update-token-123",
     core_origin: input.coreOrigin,
     callback_url: input.callbackUrl,
     state: input.state,
@@ -3766,6 +3768,7 @@ describe("ME3 Core Worker auth", () => {
       password_hash: null,
     });
     expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBe("user123");
+    expect(env.installSecrets.get("ME3_CLOUD_CORE_TOKEN")).toBe("core-update-token-123");
     expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
     expect(env.me3ClaimStates).toHaveLength(0);
 
@@ -4048,6 +4051,7 @@ describe("ME3 Core Worker auth", () => {
     expect(callbackResponse.headers.get("location")).toBe("/account?section=connections");
     expect(env.owner?.password_hash).toBe(passwordHash);
     expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBe("user123");
+    expect(env.installSecrets.get("ME3_CLOUD_CORE_TOKEN")).toBe("core-update-token-123");
     expect(config).toMatchObject({
       ownerPasswordAuthConfigured: true,
       ownerMe3AuthConfigured: true,
@@ -4061,10 +4065,12 @@ describe("ME3 Core Worker auth", () => {
     env.ME3_CLOUD_ORIGIN = "https://me3.example";
     const session = cookieHeader(await bootstrap(env));
     env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    env.installSecrets.set("ME3_CLOUD_CORE_TOKEN", "core-update-token-123");
     env.installSecrets.set(
       "ME3_CORE_INSTALL_ID",
       "core_11111111-1111-4111-8111-111111111111",
     );
+    env.installSecrets.set("ME3_CLOUD_CORE_TOKEN", "core-update-token-123");
 
     const response = await app.fetch(
       new Request("http://localhost/api/account/app-connections", {
@@ -4098,6 +4104,87 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  it("reports GitHub updater setup needs ME3.app before calling Cloud", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/core/github/status", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as {
+      me3AppConnected: boolean;
+      github: { connected: boolean };
+      unavailableReason: string | null;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.me3AppConnected).toBe(false);
+    expect(body.github.connected).toBe(false);
+    expect(body.unavailableReason).toBe("Connect ME3.app first.");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fetchMock.mockRestore();
+  });
+
+  it("proxies GitHub updater install start to the ME3 Cloud broker", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    const session = cookieHeader(await bootstrap(env));
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    env.installSecrets.set(
+      "ME3_CORE_INSTALL_ID",
+      "core_11111111-1111-4111-8111-111111111111",
+    );
+    env.installSecrets.set("ME3_CLOUD_CORE_TOKEN", "core-update-token-123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          url: "https://github.com/apps/me3-updater/installations/new",
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const response = await app.fetch(
+      new Request("https://core.example/api/core/github/install/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ redirect: "/account?section=connections" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; url: string };
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = new Headers((init as RequestInit).headers);
+    const requestBody = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.url).toBe("https://github.com/apps/me3-updater/installations/new");
+    expect(url).toBe("https://api.me3.example/api/github/install/start");
+    expect(headers.get("X-ME3-Core-Owner-ID")).toBe("user123");
+    expect(headers.get("X-ME3-Core-Install-ID")).toBe(
+      "core_11111111-1111-4111-8111-111111111111",
+    );
+    expect(headers.get("X-ME3-Core-Update-Token")).toBe("core-update-token-123");
+    expect(requestBody).toMatchObject({
+      coreInstallId: "core_11111111-1111-4111-8111-111111111111",
+      coreOwnerId: "user123",
+      coreOrigin: "http://localhost:4000",
+      coreApiOrigin: "http://localhost:8787",
+      redirect: "/account?section=connections",
+    });
+
+    fetchMock.mockRestore();
+  });
+
   it("disconnects ME3 app auth only when password login remains available", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
@@ -4113,6 +4200,7 @@ describe("ME3 Core Worker auth", () => {
 
     expect(response.status).toBe(200);
     expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBeUndefined();
+    expect(env.installSecrets.get("ME3_CLOUD_CORE_TOKEN")).toBeUndefined();
   });
 
   it("does not check ME3 Cloud username conflicts before the install is linked", async () => {

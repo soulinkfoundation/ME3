@@ -100,6 +100,7 @@ import { registerChannelRoutes } from "./routes/channels";
 import { registerAssistantJobsRoutes } from "./routes/assistant-jobs";
 import { registerAssistantSkillsRoutes } from "./routes/assistant-skills";
 import { registerContactsRoutes } from "./routes/contacts";
+import { registerCoreGithubUpdaterRoutes } from "./routes/core-github-updater";
 import { registerJournalRoutes } from "./routes/journal";
 import { registerLocalExecutorRoutes } from "./routes/local-executor";
 import {
@@ -243,6 +244,7 @@ type Me3ClaimTokenPayload = {
   display_name?: unknown;
   handle?: unknown;
   install_id?: unknown;
+  core_update_token?: unknown;
   core_origin?: unknown;
   callback_url?: unknown;
   state?: unknown;
@@ -297,6 +299,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256";
 const PASSWORD_HASH_ITERATIONS = 100_000;
 const ME3_CLOUD_OWNER_SECRET_NAME = "ME3_CLOUD_OWNER_ID";
+const ME3_CLOUD_CORE_TOKEN_SECRET_NAME = "ME3_CLOUD_CORE_TOKEN";
 const ME3_CORE_INSTALL_ID_SECRET_NAME = "ME3_CORE_INSTALL_ID";
 const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])$/;
 const ME3_CORE_INSTALL_ID_REGEX =
@@ -1544,6 +1547,8 @@ registerCalendarSourceRoutes(app, { requireOwner, unauthorized });
 
 registerContactsRoutes(app, { requireOwner, unauthorized });
 
+registerCoreGithubUpdaterRoutes(app, { requireOwner, unauthorized });
+
 registerPublicSiteRoutes(app);
 
 app.notFound(async (c) => {
@@ -2237,6 +2242,13 @@ async function upsertMe3ClaimedOwner(
     .run();
 
   await setStoredMe3CloudOwnerId(env, String(payload.sub));
+  if (typeof payload.core_update_token === "string" && payload.core_update_token.trim()) {
+    await setStoredInstallSecret(
+      env,
+      ME3_CLOUD_CORE_TOKEN_SECRET_NAME,
+      payload.core_update_token.trim(),
+    );
+  }
 }
 
 async function getStoredMe3CloudOwnerId(env: Env): Promise<string | null> {
@@ -2272,6 +2284,9 @@ async function setStoredInstallSecret(
 async function deleteStoredMe3CloudOwnerId(env: Env): Promise<void> {
   await env.DB.prepare("DELETE FROM install_secrets WHERE name = ?")
     .bind(ME3_CLOUD_OWNER_SECRET_NAME)
+    .run();
+  await env.DB.prepare("DELETE FROM install_secrets WHERE name = ?")
+    .bind(ME3_CLOUD_CORE_TOKEN_SECRET_NAME)
     .run();
 }
 
