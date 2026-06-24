@@ -123,6 +123,12 @@ type AssistantJobsDbState = {
   queueMessages: unknown[];
 };
 
+const hiddenAssistantJobRecipeIds = ["local-coding-task", "email-triage"];
+
+function hiddenRecipeIdsFromBindValues(values: unknown[]) {
+  return hiddenAssistantJobRecipeIds.filter((recipeId) => values.includes(recipeId));
+}
+
 describe("assistant jobs persistence", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -263,18 +269,14 @@ describe("assistant jobs persistence", () => {
     expect(run.validation.status).toBe("needs_setup");
   });
 
-  it("uses mailbox readiness for email-backed starter jobs", async () => {
+  it("keeps hidden email-backed starter jobs off recipe lists", async () => {
     const missingEnv = createAssistantJobsEnv();
     const missingRecipes = await listAssistantJobRecipes(missingEnv, "owner");
-    expect(missingRecipes.recipes.find((recipe) => recipe.id === "email-triage")?.state).toBe(
-      "needs_setup",
-    );
+    expect(missingRecipes.recipes.map((recipe) => recipe.id)).not.toContain("email-triage");
 
     const readyEnv = createAssistantJobsEnv({ mailbox: activeMailboxRow() });
     const readyRecipes = await listAssistantJobRecipes(readyEnv, "owner");
-    expect(readyRecipes.recipes.find((recipe) => recipe.id === "email-triage")?.state).toBe(
-      "ready",
-    );
+    expect(readyRecipes.recipes.map((recipe) => recipe.id)).not.toContain("email-triage");
 
     const created = await createAssistantJob(readyEnv, "owner", { recipeId: "email-triage" });
     expect(created.job.status).toBe("active");
@@ -310,33 +312,10 @@ describe("assistant jobs persistence", () => {
       "/job watch my inbox for client emails",
     );
 
-    expect(inbox?.kind).toBe("job_draft");
-    if (inbox?.kind !== "job_draft") {
-      expect.fail("Expected an inbox job draft action");
-    }
-    expect(inbox.draft.recipeId).toBe("email-triage");
-    expect(inbox.validation.status).toBe("needs_setup");
-    expect(inbox.availableActions).toEqual(["save"]);
-    expect(inbox.explanation.setupWarnings).toContain(
-      "Connect email before activation.",
-    );
-
-    const readyInbox = await createAssistantJobBuilderAction(
-      createAssistantJobsEnv({ mailbox: activeMailboxRow() }),
-      "owner",
-      "/job watch my inbox for client emails",
-    );
-
-    expect(readyInbox?.kind).toBe("job_draft");
-    if (readyInbox?.kind !== "job_draft") {
-      expect.fail("Expected a ready inbox job draft action");
-    }
-    expect(readyInbox.draft.recipeId).toBe("email-triage");
-    expect(readyInbox.validation.status).toBe("valid");
-    expect(readyInbox.availableActions).toEqual(["save", "save_and_activate"]);
-    expect(readyInbox.explanation.setupWarnings).not.toContain(
-      "Connect email before activation.",
-    );
+    expect(inbox).toMatchObject({
+      kind: "job_unsupported",
+      availableActions: [],
+    });
 
     const booking = await createAssistantJobBuilderAction(
       createAssistantJobsEnv(),
@@ -367,10 +346,11 @@ describe("assistant jobs persistence", () => {
     ).resolves.toBeNull();
   });
 
-  it("does not expose a Local Executor starter job from Assistant Jobs", async () => {
+  it("does not expose hidden starter jobs from Assistant Jobs", async () => {
     const missingEnv = createAssistantJobsEnv();
     const missingRecipes = await listAssistantJobRecipes(missingEnv, "owner");
     expect(missingRecipes.recipes.map((recipe) => recipe.id)).not.toContain("local-coding-task");
+    expect(missingRecipes.recipes.map((recipe) => recipe.id)).not.toContain("email-triage");
 
     const activeEnv = createAssistantJobsEnv({
       pluginInstallations: [
@@ -402,11 +382,35 @@ describe("assistant jobs persistence", () => {
       updated_at: "2026-06-02T12:00:00.000Z",
       archived_at: null,
     });
+    activeEnv.__state.jobs.push({
+      id: "paused-inbox-watch-job",
+      user_id: "owner",
+      recipe_id: "email-triage",
+      name: "Inbox Watch",
+      purpose: "Hidden inbox starter.",
+      status: "active",
+      current_version_id: null,
+      project_id: null,
+      destination_json: "{}",
+      trigger_summary: "Every day",
+      next_run_at: null,
+      last_run_at: null,
+      last_run_status: null,
+      failure_count: 0,
+      setup_state_json: "{}",
+      created_by: "owner",
+      created_at: "2026-06-02T12:00:00.000Z",
+      updated_at: "2026-06-02T12:00:00.000Z",
+      archived_at: null,
+    });
     const activeRecipes = await listAssistantJobRecipes(activeEnv, "owner");
     expect(activeRecipes.recipes.map((recipe) => recipe.id)).not.toContain("local-coding-task");
+    expect(activeRecipes.recipes.map((recipe) => recipe.id)).not.toContain("email-triage");
     const activeJobs = await listAssistantJobs(activeEnv, "owner");
     expect(activeJobs.jobs.map((job) => job.recipeId)).not.toContain("local-coding-task");
+    expect(activeJobs.jobs.map((job) => job.recipeId)).not.toContain("email-triage");
     expect(activeJobs.jobs.map((job) => job.name)).not.toContain("Run a coding task");
+    expect(activeJobs.jobs.map((job) => job.name)).not.toContain("Inbox Watch");
   });
 
   it("triages mailbox messages into a useful Mission Control result", async () => {
@@ -961,6 +965,22 @@ describe("assistant jobs persistence", () => {
 
     expect((processed as { execution?: string }).execution).toBe("succeeded");
     expect(env.__state.runs[0]?.status).toBe("succeeded");
+  });
+
+  it("does not dispatch hidden Inbox Watch schedules", async () => {
+    const env = createAssistantJobsEnv({ mailbox: activeMailboxRow() });
+    const created = await createAssistantJob(env, "owner", { recipeId: "email-triage" });
+    const jobRow = env.__state.jobs.find((job) => job.id === created.job.id);
+    expect(jobRow).toBeTruthy();
+    jobRow!.next_run_at = "2026-06-02T07:00:00.000Z";
+
+    const dispatched = await dispatchDueScheduledAssistantJobs(
+      env,
+      new Date("2026-06-02T07:05:00.000Z"),
+    );
+
+    expect(dispatched.jobCount).toBe(0);
+    expect(env.__state.runs).toHaveLength(0);
   });
 
   it("records assistant job ingress events idempotently", async () => {
@@ -2205,15 +2225,17 @@ class FakeStatement {
       };
     }
     if (sql.includes("FROM assistant_jobs") && sql.includes("next_run_at <= ?")) {
-      const hidesLegacyLocalCoding = sql.includes("COALESCE(recipe_id");
-      const checkedAt = values[hidesLegacyLocalCoding ? 1 : 0] as string;
-      const limit = values[hidesLegacyLocalCoding ? 2 : 1] as number;
+      const hiddenRecipeIds = sql.includes("COALESCE(recipe_id")
+        ? hiddenRecipeIdsFromBindValues(values)
+        : [];
+      const checkedAt = values[hiddenRecipeIds.length] as string;
+      const limit = values[hiddenRecipeIds.length + 1] as number;
       return {
         results: this.state.jobs
           .filter(
             (job) =>
               job.status === "active" &&
-              (!hidesLegacyLocalCoding || job.recipe_id !== "local-coding-task") &&
+              !hiddenRecipeIds.includes(String(job.recipe_id || "")) &&
               job.current_version_id &&
               job.next_run_at &&
               (job.next_run_at as string) <= checkedAt,
@@ -2225,14 +2247,16 @@ class FakeStatement {
       };
     }
     if (sql.includes("FROM assistant_jobs j")) {
-      const hidesLegacyLocalCoding = sql.includes("COALESCE(j.recipe_id");
+      const hiddenRecipeIds = sql.includes("COALESCE(j.recipe_id")
+        ? hiddenRecipeIdsFromBindValues(values)
+        : [];
       return {
         results: this.state.jobs
           .filter(
             (job) =>
               job.user_id === values[0] &&
               job.status === "active" &&
-              (!hidesLegacyLocalCoding || job.recipe_id !== "local-coding-task"),
+              !hiddenRecipeIds.includes(String(job.recipe_id || "")),
           )
           .flatMap((job) => {
             const version = this.state.versions.find(
@@ -2278,24 +2302,28 @@ class FakeStatement {
       };
     }
     if (sql.includes("FROM assistant_jobs") && sql.includes("status = ?")) {
-      const hidesLegacyLocalCoding = sql.includes("COALESCE(recipe_id");
+      const hiddenRecipeIds = sql.includes("COALESCE(recipe_id")
+        ? hiddenRecipeIdsFromBindValues(values)
+        : [];
       return {
         results: this.state.jobs.filter(
           (job) =>
             job.user_id === values[0] &&
             job.status === values[1] &&
-            (!hidesLegacyLocalCoding || job.recipe_id !== "local-coding-task"),
+            !hiddenRecipeIds.includes(String(job.recipe_id || "")),
         ) as T[],
       };
     }
     if (sql.includes("FROM assistant_jobs")) {
-      const hidesLegacyLocalCoding = sql.includes("COALESCE(recipe_id");
+      const hiddenRecipeIds = sql.includes("COALESCE(recipe_id")
+        ? hiddenRecipeIdsFromBindValues(values)
+        : [];
       return {
         results: this.state.jobs.filter(
           (job) =>
             job.user_id === values[0] &&
             job.status !== "archived" &&
-            (!hidesLegacyLocalCoding || job.recipe_id !== "local-coding-task"),
+            !hiddenRecipeIds.includes(String(job.recipe_id || "")),
         ) as T[],
       };
     }

@@ -136,7 +136,18 @@ type AssistantJobRunRow = {
 };
 
 const DEFAULT_SCHEDULE_DISPATCH_LIMIT = 50;
-const HIDDEN_ASSISTANT_JOB_RECIPE_IDS = ["local-coding-task"];
+const HIDDEN_ASSISTANT_JOB_RECIPE_IDS = ["local-coding-task", "email-triage"] as const;
+const HIDDEN_ASSISTANT_JOB_RECIPE_PLACEHOLDERS = HIDDEN_ASSISTANT_JOB_RECIPE_IDS.map(
+  () => "?",
+).join(", ");
+
+function visibleAssistantJobRecipeSql(column: string) {
+  return `COALESCE(${column}, '') NOT IN (${HIDDEN_ASSISTANT_JOB_RECIPE_PLACEHOLDERS})`;
+}
+
+function isHiddenAssistantJobRecipeId(recipeId: string | null | undefined) {
+  return HIDDEN_ASSISTANT_JOB_RECIPE_IDS.some((hiddenRecipeId) => hiddenRecipeId === recipeId);
+}
 
 type AssistantJobActionResultStatus =
   | "skipped"
@@ -497,7 +508,7 @@ export async function createAssistantJobBuilderAction(
     return {
       kind: "job_unsupported",
       summary:
-        "I can set up starter jobs for Daily Briefing, Weekly Review, Inbox Watch, or Invoice and Receipt Triage. I cannot create that custom job yet.",
+        "I can set up starter jobs for Daily Briefing, Weekly Review, or Invoice and Receipt Triage. I cannot create that custom job yet.",
       availableActions: [],
     };
   }
@@ -571,6 +582,7 @@ function selectAssistantJobBuilderRecipe(request: string) {
   ];
 
   const matched = candidates.find((candidate) =>
+    !isHiddenAssistantJobRecipeId(candidate.recipeId) &&
     candidate.keywords.some((keyword) => normalized.includes(keyword)),
   );
 
@@ -618,7 +630,9 @@ function formatAssistantJobSetupRequirement(requirement: string) {
 export async function listAssistantJobRecipes(env: Env, userId: string) {
   const readySetupRequirements = await getAssistantJobReadySetupRequirements(env, userId);
   return {
-    recipes: ASSISTANT_JOB_STARTER_RECIPES.map((recipe) => {
+    recipes: ASSISTANT_JOB_STARTER_RECIPES.filter(
+      (recipe) => !isHiddenAssistantJobRecipeId(recipe.id),
+    ).map((recipe) => {
       const serialized = serializeRecipe(recipe);
       const validation = validateAssistantJobDraft(createAssistantJobDraftFromRecipe(recipe), {
         readySetupRequirements,
@@ -698,17 +712,16 @@ async function validateAssistantJobDraftForUser(
 
 export async function listAssistantJobs(env: Env, userId: string, status?: string | null) {
   const normalizedStatus = normalizeJobStatus(status);
-  const hiddenRecipeId = HIDDEN_ASSISTANT_JOB_RECIPE_IDS[0];
   const query = normalizedStatus
     ? `SELECT * FROM assistant_jobs
-       WHERE user_id = ? AND status = ? AND COALESCE(recipe_id, '') != ?
+       WHERE user_id = ? AND status = ? AND ${visibleAssistantJobRecipeSql("recipe_id")}
        ORDER BY updated_at DESC, created_at DESC`
     : `SELECT * FROM assistant_jobs
-       WHERE user_id = ? AND status != 'archived' AND COALESCE(recipe_id, '') != ?
+       WHERE user_id = ? AND status != 'archived' AND ${visibleAssistantJobRecipeSql("recipe_id")}
        ORDER BY updated_at DESC, created_at DESC`;
   const stmt = normalizedStatus
-    ? env.DB.prepare(query).bind(userId, normalizedStatus, hiddenRecipeId)
-    : env.DB.prepare(query).bind(userId, hiddenRecipeId);
+    ? env.DB.prepare(query).bind(userId, normalizedStatus, ...HIDDEN_ASSISTANT_JOB_RECIPE_IDS)
+    : env.DB.prepare(query).bind(userId, ...HIDDEN_ASSISTANT_JOB_RECIPE_IDS);
   const rows = await stmt.all<AssistantJobRow>();
   const reconciledRows = await Promise.all(
     rows.results.map((row) => reconcileAssistantJobReadiness(env, userId, row)),
@@ -979,14 +992,14 @@ export async function dispatchDueScheduledAssistantJobs(
   const rows = await env.DB.prepare(
     `SELECT * FROM assistant_jobs
      WHERE status = 'active'
-       AND COALESCE(recipe_id, '') != ?
+       AND ${visibleAssistantJobRecipeSql("recipe_id")}
        AND current_version_id IS NOT NULL
        AND next_run_at IS NOT NULL
        AND next_run_at <= ?
      ORDER BY next_run_at ASC
      LIMIT ?`,
   )
-    .bind(HIDDEN_ASSISTANT_JOB_RECIPE_IDS[0], checkedAt, limit)
+    .bind(...HIDDEN_ASSISTANT_JOB_RECIPE_IDS, checkedAt, limit)
     .all<AssistantJobRow>();
 
   const jobs = [];
@@ -3154,11 +3167,11 @@ async function listEventTriggerCandidates(env: Env, userId: string) {
        ON v.id = j.current_version_id AND v.user_id = j.user_id
      WHERE j.user_id = ?
        AND j.status = 'active'
-       AND COALESCE(j.recipe_id, '') != ?
+       AND ${visibleAssistantJobRecipeSql("j.recipe_id")}
        AND j.archived_at IS NULL
      ORDER BY j.updated_at DESC, j.created_at DESC`,
   )
-    .bind(userId, HIDDEN_ASSISTANT_JOB_RECIPE_IDS[0])
+    .bind(userId, ...HIDDEN_ASSISTANT_JOB_RECIPE_IDS)
     .all<AssistantJobMatchCandidateRow>();
   return rows.results;
 }
