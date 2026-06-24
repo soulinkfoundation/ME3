@@ -364,6 +364,7 @@ const commerceLoading = ref(false);
 const commerceSaving = ref(false);
 const commerceSettings = ref<CommerceSettingsResponse | null>(null);
 const stripeSecretInput = ref("");
+const showStripeSecret = ref(false);
 const defaultCurrencyInput = ref("USD");
 const savedDefaultCurrencyInput = ref("USD");
 const commerceMessage = ref<string | null>(null);
@@ -2728,12 +2729,6 @@ onMounted(async () => {
                 />
 
                 <template v-else>
-                  <p class="hint">
-                    Add your Stripe secret key here to accept direct paid
-                    bookings from your ME3 site. Use sk_test_ for testing or
-                    sk_live_ for live payments.
-                  </p>
-
                   <div class="commerce-settings-row">
                     <label class="field commerce-settings-row__field">
                       <span>Default currency</span>
@@ -2751,6 +2746,48 @@ onMounted(async () => {
                       </select>
                     </label>
 
+                    <div
+                      v-if="!commerceSettings?.stripe.keyHint"
+                      class="field commerce-settings-row__field commerce-settings-row__field--secret payment-key-field"
+                    >
+                      <label for="stripe-secret-key-input">
+                        Stripe secret key
+                      </label>
+                      <p class="field-hint payment-key-field__hint">
+                        Add your Stripe secret key here to accept direct paid
+                        bookings from your ME3 site. Use sk_test_ for testing
+                        or sk_live_ for live payments.
+                      </p>
+                      <div class="password-field payment-key-row">
+                        <input
+                          id="stripe-secret-key-input"
+                          v-model="stripeSecretInput"
+                          class="input password-field__input payment-key-row__input"
+                          :type="showStripeSecret ? 'text' : 'password'"
+                          autocomplete="off"
+                          spellcheck="false"
+                          placeholder="sk_test_..."
+                          @keydown.enter.prevent="saveCommerceSettings"
+                        />
+                        <button
+                          type="button"
+                          class="password-field__toggle"
+                          :aria-label="
+                            showStripeSecret
+                              ? 'Hide Stripe secret key'
+                              : 'Show Stripe secret key'
+                          "
+                          :aria-pressed="showStripeSecret"
+                          @click="showStripeSecret = !showStripeSecret"
+                        >
+                          <UiIcon
+                            :name="showStripeSecret ? 'EyeOff' : 'Eye'"
+                            :size="18"
+                          />
+                        </button>
+                      </div>
+                    </div>
+
                     <Button
                       color="primary"
                       size="compact"
@@ -2758,7 +2795,7 @@ onMounted(async () => {
                       :disabled="commerceSaveDisabled"
                       @click="saveCommerceSettings"
                     >
-                      {{ commerceSaving ? "Saving..." : "Save" }}
+                      {{ commerceSaving ? "Saving..." : "Save settings" }}
                     </Button>
                   </div>
 
@@ -2782,24 +2819,6 @@ onMounted(async () => {
                     A local encryption key will be initialized before this
                     Stripe key is stored.
                   </p>
-
-                  <label
-                    v-if="!commerceSettings?.stripe.keyHint"
-                    class="field payment-key-field"
-                  >
-                    <span>Stripe secret key</span>
-                    <div class="payment-key-row">
-                      <input
-                        v-model="stripeSecretInput"
-                        class="input payment-key-row__input"
-                        type="password"
-                        autocomplete="off"
-                        spellcheck="false"
-                        placeholder="sk_test_..."
-                        @keydown.enter.prevent="saveCommerceSettings"
-                      />
-                    </div>
-                  </label>
 
                   <Button
                     v-if="commerceSettings?.stripe.source === 'stored'"
@@ -4111,13 +4130,10 @@ h1 {
   margin: 8px 0 0;
 }
 
-#account-payments .hint {
-  margin-bottom: 8px;
-}
-
 .commerce-settings-row {
-  display: flex;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(260px, 1.6fr) auto;
+  align-items: end;
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -4131,17 +4147,46 @@ h1 {
   margin-top: 0;
 }
 
+.payment-key-field__hint {
+  margin: -2px 0 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .payment-key-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  position: relative;
 }
 
 .payment-key-row__input {
-  flex: 1;
-  min-width: 0;
   min-height: 36px;
-  padding: 8px 12px;
+  padding: 8px 44px 8px 12px;
+}
+
+.password-field__toggle {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ui-radius-sm, 8px);
+  background: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.password-field__toggle:hover,
+.password-field__toggle:focus-visible {
+  color: var(--ui-text, var(--color-text));
+}
+
+.password-field__toggle:focus-visible {
+  outline: 2px solid var(--ui-text, var(--color-text));
+  outline-offset: 2px;
 }
 
 .outbound-sender-panel {
@@ -4546,9 +4591,8 @@ h1 {
     align-items: stretch;
   }
 
-  .commerce-settings-row,
-  .payment-key-row {
-    flex-direction: column;
+  .commerce-settings-row {
+    grid-template-columns: 1fr;
   }
 
   .timezone-row__actions {
