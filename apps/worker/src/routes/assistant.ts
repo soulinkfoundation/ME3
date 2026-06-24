@@ -122,6 +122,13 @@ type AssistantAttachmentContentRow = {
   status: "ready" | "error" | "deleted";
   storage_key: string | null;
 };
+type AssistantAttachmentTextContextRow = {
+  id: string;
+  filename: string;
+  mime_type: string;
+  extracted_text: string | null;
+  text_truncated: number | null;
+};
 type SoulinkDispatchBody = {
   ownerSubject?: unknown;
   ownerNodeId?: unknown;
@@ -537,6 +544,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       actionCards: metadata.actionCards.length ? metadata.actionCards : undefined,
       siteAction: metadata.siteAction || undefined,
       imageAction: metadata.imageAction || undefined,
+      attachments: metadata.attachments.length ? metadata.attachments : undefined,
     };
   }
 
@@ -544,17 +552,20 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     actionCards: AgentChatActionCard[];
     imageAction: AgentChatImageAction | null;
     siteAction: AssistantSiteToolAction["siteAction"] | null;
+    attachments: AssistantAttachmentAuditManifestItem[];
   } {
-    if (!metadataJson) return { actionCards: [], imageAction: null, siteAction: null };
+    if (!metadataJson)
+      return { actionCards: [], imageAction: null, siteAction: null, attachments: [] };
     try {
       const parsed = JSON.parse(metadataJson) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { actionCards: [], imageAction: null, siteAction: null };
+        return { actionCards: [], imageAction: null, siteAction: null, attachments: [] };
       }
       const metadata = parsed as Record<string, unknown>;
       const cards = metadata.actionCards;
       const imageAction = metadata.imageAction;
       const siteAction = metadata.siteAction;
+      const attachments = metadata.attachments;
       return {
         actionCards: Array.isArray(cards) ? (cards as AgentChatActionCard[]) : [],
         imageAction:
@@ -565,9 +576,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           siteAction && typeof siteAction === "object" && !Array.isArray(siteAction)
             ? (siteAction as AssistantSiteToolAction["siteAction"])
             : null,
+        attachments: createAssistantAttachmentAuditManifest(attachments),
       };
     } catch {
-      return { actionCards: [], imageAction: null, siteAction: null };
+      return { actionCards: [], imageAction: null, siteAction: null, attachments: [] };
     }
   }
 
@@ -594,13 +606,30 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     userText: string,
     assistantText: string,
     assistantMetadata: Record<string, unknown> = {},
+    userMetadata: Record<string, unknown> | null = null,
   ) {
     try {
+      const normalizedUserMetadata =
+        userMetadata && Object.keys(userMetadata).length > 0
+          ? JSON.stringify(userMetadata)
+          : null;
       await env.DB.batch([
-        env.DB.prepare(
-          "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
-        )
-          .bind(crypto.randomUUID(), ownerId, "user", userText, threadId),
+        normalizedUserMetadata
+          ? env.DB.prepare(
+              "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+              .bind(
+                crypto.randomUUID(),
+                ownerId,
+                "user",
+                userText,
+                threadId,
+                normalizedUserMetadata,
+              )
+          : env.DB.prepare(
+              "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id) VALUES (?, ?, ?, ?, ?)",
+            )
+              .bind(crypto.randomUUID(), ownerId, "user", userText, threadId),
         env.DB.prepare(
           "INSERT INTO assistant_messages (id, owner_id, role, content, thread_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
         )
@@ -2825,6 +2854,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const requestedThreadId = normalizeAssistantThreadId(body.threadId);
     const requestedProjectId = normalizeNullableText(body.projectId);
     const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
+    const userMessageMetadata = assistantUserMessageMetadataFromManifest(attachmentManifest);
 
     const replyToMessageId =
       typeof body.replyToMessageId === "string" ||
@@ -2848,7 +2878,15 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const builderAction = await createAssistantJobBuilderAction(c.env, ownerId, messageText);
     if (builderAction) {
       const replyText = assistantJobBuilderReplyText(builderAction);
-      await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, replyText);
+      await persistAssistantTurnMessages(
+        c.env,
+        ownerId,
+        thread.id,
+        messageText,
+        replyText,
+        {},
+        userMessageMetadata,
+      );
       await touchAssistantThread(c.env, ownerId, thread.id);
       return c.json({
         ok: true,
@@ -2883,10 +2921,17 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         messageText,
         siteAction.replyText,
         { siteAction: siteAction.siteAction },
+        userMessageMetadata,
       );
       await touchAssistantThread(c.env, ownerId, thread.id);
       return c.json(buildAssistantSiteToolPayload(thread.id, siteAction));
     }
+
+    const attachmentTextContext = await loadAssistantAttachmentTextContext(
+      c.env,
+      ownerId,
+      attachmentManifest,
+    );
 
     const runtime = c.env.ME3_USER_AGENT;
     if (!runtime) {
@@ -2929,6 +2974,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           replyToMessageId: turn.replyToMessageId,
           selectedModel,
           attachments: attachmentManifest,
+          attachmentTextContext,
         }),
       },
     );
@@ -2987,6 +3033,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         : null;
     const attachmentCount = Array.isArray(body.attachments) ? body.attachments.length : 0;
     const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
+    const userMessageMetadata = assistantUserMessageMetadataFromManifest(attachmentManifest);
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream<Uint8Array>({
@@ -3028,7 +3075,15 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           const builderAction = await createAssistantJobBuilderAction(c.env, ownerId, messageText);
           if (builderAction) {
             const replyText = assistantJobBuilderReplyText(builderAction);
-            await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, replyText);
+            await persistAssistantTurnMessages(
+              c.env,
+              ownerId,
+              thread.id,
+              messageText,
+              replyText,
+              {},
+              userMessageMetadata,
+            );
             await touchAssistantThread(c.env, ownerId, thread.id);
             await sendAssistantStreamText(send, replyText);
             send("done", {
@@ -3065,6 +3120,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               messageText,
               siteAction.replyText,
               { siteAction: siteAction.siteAction },
+              userMessageMetadata,
             );
             await touchAssistantThread(c.env, ownerId, thread.id);
             await sendAssistantStreamText(send, siteAction.replyText);
@@ -3077,6 +3133,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
             send("error", { ok: false, error: "Agent chat runtime is not configured" });
             return;
           }
+
+          const attachmentTextContext = await loadAssistantAttachmentTextContext(
+            c.env,
+            ownerId,
+            attachmentManifest,
+          );
 
           const turn = await createAgentSandboxTurnRecord(c.env, {
             userId: ownerId,
@@ -3119,6 +3181,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
                 replyToMessageId: turn.replyToMessageId,
                 selectedModel,
                 attachments: attachmentManifest,
+                attachmentTextContext,
               }),
             },
           );
@@ -3258,6 +3321,57 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         hasText: Boolean(attachment.hasText),
         textTruncated: Boolean(attachment.textTruncated),
       }));
+  }
+
+  function assistantUserMessageMetadataFromManifest(
+    attachments: AssistantAttachmentAuditManifestItem[],
+  ): Record<string, unknown> | null {
+    const readyAttachments = attachments.filter(
+      (attachment) => attachment.status === "ready" && attachment.id,
+    );
+    return readyAttachments.length ? { attachments: readyAttachments } : null;
+  }
+
+  async function loadAssistantAttachmentTextContext(
+    env: Env,
+    ownerId: string,
+    attachments: AssistantAttachmentAuditManifestItem[],
+  ) {
+    const chunks: string[] = [];
+    for (const attachment of attachments) {
+      if (
+        attachment.kind !== "text" ||
+        attachment.status !== "ready" ||
+        !attachment.id ||
+        !attachment.hasText
+      ) {
+        continue;
+      }
+
+      const row = await env.DB.prepare(
+        `SELECT id, filename, mime_type, extracted_text, text_truncated
+         FROM assistant_attachments
+         WHERE id = ? AND owner_id = ? AND kind = 'text' AND status = 'ready'
+         LIMIT 1`,
+      )
+        .bind(attachment.id, ownerId)
+        .first<AssistantAttachmentTextContextRow>();
+      if (!row?.extracted_text) continue;
+
+      chunks.push(
+        [
+          `File: ${row.filename || attachment.name || "Attachment"}`,
+          `Type: ${row.mime_type || attachment.mimeType || "unknown"}`,
+          row.text_truncated ? "Note: extracted text was truncated." : null,
+          "Content:",
+          row.extracted_text,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    }
+
+    return chunks.length ? `Attached file context:\n\n${chunks.join("\n\n---\n\n")}` : null;
   }
 
   function classifyAssistantUploadKind(

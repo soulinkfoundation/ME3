@@ -6,6 +6,18 @@ import type {
   AgentChatTurnTrace,
 } from "../utils/agentChat";
 
+export type AgentChatMessageAttachment = {
+  id?: string | null;
+  name?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
+  kind?: string | null;
+  status?: string | null;
+  storageKey?: string | null;
+  hasText?: boolean | null;
+  textTruncated?: boolean | null;
+};
+
 export type AgentChatMessage = {
   id?: string;
   role: "user" | "assistant";
@@ -13,6 +25,7 @@ export type AgentChatMessage = {
   createdAt?: string | null;
   meta?: string | null;
   detail?: string | null;
+  attachments?: AgentChatMessageAttachment[];
   actionCards?: AgentChatActionCard[];
   imageAction?: AgentChatImageAction | null;
   emailDraftAction?: AgentChatEmailDraftAction | null;

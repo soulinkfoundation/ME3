@@ -15,7 +15,10 @@ import LandingGrids from "../../components/LandingGrids.vue";
 import PageLoading from "../../components/PageLoading.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import WorkspaceTabs from "../../components/WorkspaceTabs.vue";
-import { useAgentChat } from "../../composables/useAgentChat";
+import {
+  useAgentChat,
+  type AgentChatMessageAttachment,
+} from "../../composables/useAgentChat";
 import { useAppToast } from "../../composables/useAppToast";
 import { useInboxDraftCount } from "../../composables/useInboxDraftCount";
 import { useContactsStore, type Contact } from "../../stores/contacts";
@@ -455,6 +458,7 @@ type AssistantThreadMessage = {
   role: "user" | "assistant";
   text: string;
   createdAt: string;
+  attachments?: AgentChatMessageAttachment[] | null;
   actionCards?: AgentChatActionCard[] | null;
   imageAction?: AgentChatImageAction | null;
   siteAction?: AgentSandboxResponse["siteAction"];
@@ -772,6 +776,7 @@ const suggestedRecipeOrder = [
   "invoice-receipt-triage",
   "booking-reminder",
 ];
+const protectedJobRecipeIds = new Set(suggestedRecipeOrder);
 
 const bookingReminderSystemRecipeId = "booking-reminder";
 const bookingReminderSystemName = "Booking Reminders";
@@ -1057,11 +1062,6 @@ const assistantConsoleMessages = computed(() =>
 const assistantAttachmentsReady = computed(() =>
   assistantAttachments.value.every(
     (attachment) => attachment.status !== "uploading",
-  ),
-);
-const assistantTextAttachments = computed(() =>
-  assistantAttachments.value.filter(
-    (attachment) => attachment.kind === "text" && attachment.status === "ready",
   ),
 );
 const assistantReadyAttachments = computed(() =>
@@ -2112,6 +2112,7 @@ async function loadAssistantThreadFromRoute() {
         actionCards: AgentChatActionCard[];
         imageAction: AgentChatImageAction | null;
         emailDraftAction: AgentChatEmailDraftAction | null;
+        attachments: AgentChatMessageAttachment[];
         actionHref: string | null;
         actionLabel: string | null;
       } = {
@@ -2119,6 +2120,7 @@ async function loadAssistantThreadFromRoute() {
         role: message.role,
         text: message.text,
         createdAt: message.createdAt,
+        attachments: normalizeAssistantMessageAttachments(message.attachments),
         actionCards: normalizeAgentActionCards(message.actionCards),
         imageAction: message.imageAction || null,
         emailDraftAction: null,
@@ -2365,28 +2367,6 @@ function classifyAssistantAttachment(file: File): AssistantAttachmentKind {
   return "unsupported";
 }
 
-function buildAssistantMessageWithAttachments(text: string) {
-  const normalized = text.trim();
-  const attachments = assistantTextAttachments.value;
-  if (attachments.length === 0)
-    return normalized || "Review the attached files.";
-
-  const base = normalized || "Review the attached files.";
-  const renderedAttachments = attachments
-    .map((attachment) => {
-      const content = attachment.text?.trim() || "(No readable text.)";
-      return [
-        `File: ${attachment.name}`,
-        `Type: ${attachment.mimeType || "unknown"}`,
-        "Content:",
-        content,
-      ].join("\n");
-    })
-    .join("\n\n---\n\n");
-
-  return `${base}\n\nAttached file context:\n\n${renderedAttachments}`;
-}
-
 function serializeAssistantAttachmentsForTurn() {
   return assistantAttachments.value.map((attachment) => ({
     id: attachment.id,
@@ -2399,6 +2379,14 @@ function serializeAssistantAttachmentsForTurn() {
     hasText: Boolean(attachment.text),
     textTruncated: attachment.textTruncated,
   }));
+}
+
+function normalizeAssistantMessageAttachments(
+  attachments: AgentChatMessageAttachment[] | null | undefined,
+) {
+  return Array.isArray(attachments)
+    ? attachments.filter((attachment) => attachment?.status === "ready")
+    : [];
 }
 
 function formatFileSize(bytes: number) {
@@ -2568,6 +2556,7 @@ async function submitAssistantText(
     id: newAssistantMessageId("user"),
     role: "user",
     text: normalized,
+    attachments: normalizeAssistantMessageAttachments(attachments),
     createdAt: new Date().toISOString(),
   });
   assistantSending.value = true;
@@ -2699,7 +2688,9 @@ async function sendAssistantMessage() {
   if (!canSendAssistantMessage.value) return;
 
   const attachments = serializeAssistantAttachmentsForTurn();
-  const text = buildAssistantMessageWithAttachments(assistantDraft.value);
+  const text =
+    assistantDraft.value.trim() ||
+    (attachments.length > 0 ? "Review the attached files." : "");
   assistantDraft.value = "";
   clearAssistantAttachments();
   assistantAttachmentNotice.value = "";
@@ -3829,6 +3820,7 @@ async function duplicateJob(job: AssistantJob) {
 }
 
 async function archiveJob(job: AssistantJob) {
+  if (!canArchiveJob(job)) return;
   const confirmed = window.confirm(
     `Remove "${job.name}"? Results and run history stay in Mission Control.`,
   );
@@ -3842,6 +3834,10 @@ async function archiveJob(job: AssistantJob) {
     }
     toastSuccess("Job removed.");
   });
+}
+
+function canArchiveJob(job: AssistantJob) {
+  return !job.recipeId || !protectedJobRecipeIds.has(job.recipeId);
 }
 
 async function saveDailyBriefingTemplate() {
@@ -5049,6 +5045,40 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 class="assistant-message__content"
                 v-html="renderAssistantMarkdown(assistantMessageDisplayText(message))"
               ></div>
+              <div
+                v-if="message.attachments?.length"
+                class="assistant-message-attachments"
+                aria-label="Message attachments"
+              >
+                <span
+                  v-for="attachment in message.attachments"
+                  :key="attachment.id || attachment.name || 'attachment'"
+                  class="assistant-message-attachment"
+                  :title="
+                    [
+                      attachment.name || 'Attachment',
+                      attachment.mimeType || '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                  "
+                >
+                  <UiIcon
+                    :name="attachment.kind === 'image' ? 'Image' : 'FileText'"
+                    :size="14"
+                    aria-hidden="true"
+                  />
+                  <span class="assistant-message-attachment__name">
+                    {{ attachment.name || "Attachment" }}
+                  </span>
+                  <span
+                    v-if="typeof attachment.size === 'number'"
+                    class="assistant-message-attachment__meta"
+                  >
+                    {{ formatFileSize(attachment.size) }}
+                  </span>
+                </span>
+              </div>
               <div
                 v-if="message.imageAction?.assets?.length"
                 class="assistant-image-assets"
@@ -7267,6 +7297,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 Duplicate
               </Button>
               <Button
+                v-if="canArchiveJob(selectedJob)"
                 color="danger"
                 shape="soft"
                 size="compact"
@@ -8019,6 +8050,41 @@ function messageFromUnknown(err: unknown, fallback: string) {
 
 .assistant-message__content :deep(strong) {
   font-weight: 800;
+}
+
+.assistant-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assistant-message-attachment {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  padding: 4px 7px;
+  background: color-mix(in oklab, var(--ui-surface) 78%, transparent);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.assistant-message-attachment__name {
+  overflow: hidden;
+  max-width: min(280px, 48vw);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-message-attachment__meta {
+  color: var(--ui-text-muted);
+}
+
+.assistant-message--user .assistant-message-attachment {
+  border-color: color-mix(in oklab, var(--ui-accent) 42%, var(--ui-border));
+  background: color-mix(in oklab, var(--ui-surface) 58%, transparent);
 }
 
 .assistant-message__content :deep(:where(h1, h2, h3)) {

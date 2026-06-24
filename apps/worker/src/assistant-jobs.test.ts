@@ -160,6 +160,7 @@ describe("assistant jobs persistence", () => {
     const duplicated = await duplicateAssistantJob(env, "owner", created.job.id);
     expect(duplicated.job.status).toBe("draft");
     expect(duplicated.job.name).toBe("Weekly Review copy");
+    expect(duplicated.job.recipeId).toBeNull();
 
     const run = await runAssistantJobNow(env, "owner", created.job.id);
     expect(run.run.status).toBe("succeeded");

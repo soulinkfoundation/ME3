@@ -1984,6 +1984,24 @@ function createEnv(): Env & {
                   ) || null
                 ) as T | null;
               }
+              if (sql.includes("FROM assistant_attachments")) {
+                const row = state.assistantAttachments.find(
+                  (attachment) =>
+                    attachment.id === values[0] && attachment.owner_id === values[1],
+                );
+                return row
+                  ? ({
+                      id: row.id,
+                      filename: row.filename,
+                      mime_type: row.mime_type,
+                      kind: row.kind,
+                      status: row.status,
+                      storage_key: row.storage_key,
+                      extracted_text: row.extracted_text,
+                      text_truncated: row.text_truncated,
+                    } as T)
+                  : null;
+              }
               if (sql.includes("FROM mission_projects")) {
                 return (
                   state.missionProjects.find(
@@ -4774,6 +4792,20 @@ describe("ME3 Core Worker auth", () => {
       idFromName: vi.fn((name: string) => name),
       get: vi.fn(() => ({ fetch: runtimeFetch })),
     } as unknown as DurableObjectNamespace;
+    env.assistantAttachments.push({
+      id: "att-1",
+      owner_id: "owner",
+      thread_id: null,
+      filename: "notes.md",
+      mime_type: "text/markdown",
+      size: 128,
+      kind: "text",
+      status: "ready",
+      storage_key: null,
+      extracted_text: "# Notes\n\nRemember the launch checklist.",
+      text_truncated: 0,
+      metadata_json: "{}",
+    });
 
     const response = await app.fetch(
       new Request("http://localhost/api/assistant/chat/turn", {
@@ -4797,6 +4829,8 @@ describe("ME3 Core Worker auth", () => {
               size: 128.4,
               kind: "text",
               status: "ready",
+              hasText: true,
+              textTruncated: false,
               text: "do not audit raw attachment text",
             },
           ],
@@ -4847,15 +4881,21 @@ describe("ME3 Core Worker auth", () => {
           size: 128,
           kind: "text",
           status: "ready",
+          hasText: true,
+          textTruncated: false,
         },
       ],
     });
     expect(JSON.parse(env.agentEvents[0]?.raw_json || "{}")).not.toHaveProperty(
       "attachmentManifest.0.text",
     );
+    expect(env.agentEvents[0]?.raw_json).not.toContain(
+      "Remember the launch checklist",
+    );
     expect(runtimeFetch).toHaveBeenCalledOnce();
     const runtimeInit = runtimeCalls[0]?.[1] || {};
-    expect(JSON.parse(String(runtimeInit.body))).toMatchObject({
+    const runtimeBody = JSON.parse(String(runtimeInit.body));
+    expect(runtimeBody).toMatchObject({
       userId: "owner",
       threadId: env.assistantThreads[0]?.id,
       messageText: "Hello agent",
@@ -4872,11 +4912,18 @@ describe("ME3 Core Worker auth", () => {
           size: 128,
           kind: "text",
           status: "ready",
-          hasText: false,
+          hasText: true,
           textTruncated: false,
         },
       ],
     });
+    expect(runtimeBody.attachmentTextContext).toContain("File: notes.md");
+    expect(runtimeBody.attachmentTextContext).toContain(
+      "# Notes\n\nRemember the launch checklist.",
+    );
+    expect(runtimeBody.attachmentTextContext).not.toContain(
+      "do not audit raw attachment text",
+    );
   });
 
   it("saves and clears the assistant display name", async () => {

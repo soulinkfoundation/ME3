@@ -1459,7 +1459,7 @@ export async function duplicateAssistantJob(env: Env, userId: string, jobId: str
   const draft: AssistantJobDraft = {
     name: `${version.name} copy`,
     purpose: version.purpose,
-    recipeId: existing.recipe_id,
+    recipeId: null,
     trigger: parseJson(version.trigger_json, { kind: "manual" }) as AssistantJobDraft["trigger"],
     scope: parseJson(version.scope_json, {
       projectId: null,

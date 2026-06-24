@@ -134,6 +134,7 @@ export type AgentSandboxDispatchInput = {
   turnId: string;
   threadId?: string | null;
   messageText: string;
+  attachmentTextContext?: string | null;
   replyToMessageId?: string | number | null;
   selectedModel?: AgentChatModelSelection | null;
   attachments?: AgentChatAttachmentReference[];
@@ -1972,7 +1973,14 @@ export async function dispatchAgentSandboxTurn(
   const toolPlan = await loadCoreChatToolTurnPlan(env, storage, input);
   const toolResponse = await maybeHandleCoreToolTurn(env, storage, input, owner, toolPlan);
   if (toolResponse) {
-    await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
+    await persistAssistantMessage(
+      env,
+      input.userId,
+      "user",
+      input.messageText,
+      input.threadId,
+      assistantUserMessageMetadataForInput(input),
+    );
     if (toolResponse.replyText) {
       await persistAssistantMessage(
         env,
@@ -2008,7 +2016,14 @@ export async function dispatchAgentSandboxTurn(
     imageIntent,
   );
   if (imageTurn) {
-    await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
+    await persistAssistantMessage(
+      env,
+      input.userId,
+      "user",
+      input.messageText,
+      input.threadId,
+      assistantUserMessageMetadataForInput(input),
+    );
     if (imageTurn.response.replyText) {
       const assistantMessageId = await persistAssistantMessage(
         env,
@@ -2046,6 +2061,7 @@ export async function dispatchAgentSandboxTurn(
   const runtimeMessageText = appendAgentAttachmentReferenceContext(
     input.messageText,
     input.attachments,
+    input.attachmentTextContext,
   );
   const recent = toolPlan.recent;
   const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
@@ -2098,7 +2114,14 @@ export async function dispatchAgentSandboxTurn(
     await resolvePendingMailboxDraftSave(storage, input);
   }
 
-  await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
+  await persistAssistantMessage(
+    env,
+    input.userId,
+    "user",
+    input.messageText,
+    input.threadId,
+    assistantUserMessageMetadataForInput(input),
+  );
   if (response.replyText) {
     await persistAssistantMessage(
       env,
@@ -2125,9 +2148,11 @@ export async function dispatchAgentSandboxTurn(
 function appendAgentAttachmentReferenceContext(
   messageText: string,
   attachments: AgentSandboxDispatchInput["attachments"],
+  attachmentTextContext?: string | null,
 ) {
   const references = normalizeAgentAttachmentReferences(attachments);
-  if (references.length === 0) return messageText;
+  const textContext = normalizeNullableText(attachmentTextContext);
+  if (references.length === 0 && !textContext) return messageText;
   const rendered = references
     .map((attachment, index) =>
       [
@@ -2143,7 +2168,10 @@ function appendAgentAttachmentReferenceContext(
         .join("; "),
     )
     .join("\n");
-  return `${messageText}\n\nAssistant attachment references:\n${rendered}`;
+  const parts = [messageText];
+  if (rendered) parts.push(`Assistant attachment references:\n${rendered}`);
+  if (textContext) parts.push(textContext);
+  return parts.join("\n\n");
 }
 
 function normalizeAgentAttachmentReferences(
@@ -2168,6 +2196,13 @@ function normalizeAgentAttachmentReferences(
       textTruncated: Boolean((attachment as AgentChatAttachmentReference).textTruncated),
     }))
     .filter((attachment) => attachment.status === "ready" && Boolean(attachment.id));
+}
+
+function assistantUserMessageMetadataForInput(
+  input: Pick<AgentSandboxDispatchInput, "attachments">,
+): Record<string, unknown> | null {
+  const attachments = normalizeAgentAttachmentReferences(input.attachments);
+  return attachments.length ? { attachments } : null;
 }
 
 type AssistantImageTurnResult = {
