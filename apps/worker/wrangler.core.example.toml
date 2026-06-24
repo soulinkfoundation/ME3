@@ -24,7 +24,7 @@ remote = true
 [[d1_databases]]
 binding = "DB"
 database_name = "me3-core-db"
-database_id = "replace-with-generated-d1-id"
+database_id = "00000000-0000-0000-0000-000000000000"
 
 # Core file storage for site media and future plugin-owned files.
 [[r2_buckets]]

@@ -12,7 +12,7 @@ import {
 const DEFAULT_CONFIG = "wrangler.toml";
 const DEFAULT_DB_NAME = "me3-core-db";
 const DEFAULT_BUCKET = "me3-site-assets";
-const D1_PLACEHOLDER = "replace-with-generated-d1-id";
+const D1_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
 
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;

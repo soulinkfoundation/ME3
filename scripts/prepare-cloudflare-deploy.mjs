@@ -12,7 +12,7 @@ import {
 } from "./wrangler-toml.mjs";
 
 const DEFAULT_CONFIG = "wrangler.toml";
-const D1_PLACEHOLDER = "replace-with-generated-d1-id";
+const D1_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
 
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
