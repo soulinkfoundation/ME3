@@ -3380,8 +3380,10 @@ onBeforeUnmount(() => {
 }
 
 .mission-control--accounts-route {
+  --accounts-route-inline-padding: 24px;
+
   padding: var(--workspace-topbar-padding-block)
-    max(24px, calc(var(--app-shell-mobile-nav-leading-padding) + 12px)) 40px;
+    var(--accounts-route-inline-padding) 40px;
 }
 
 .mission-control__topbar {
@@ -3969,8 +3971,16 @@ onBeforeUnmount(() => {
 
 .accounts-toolbar {
   display: grid;
+  box-sizing: border-box;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   justify-content: normal;
+  padding-left: max(
+    0px,
+    calc(
+      var(--app-shell-mobile-nav-leading-padding) + 12px -
+        var(--accounts-route-inline-padding)
+    )
+  );
 }
 
 .accounts-tabs {
@@ -4324,8 +4334,10 @@ onBeforeUnmount(() => {
   }
 
   .mission-control--accounts-route {
-    padding: var(--workspace-topbar-padding-block) 16px 32px
-      max(16px, calc(var(--app-shell-mobile-nav-leading-padding) + 12px));
+    --accounts-route-inline-padding: 16px;
+
+    padding: var(--workspace-topbar-padding-block)
+      var(--accounts-route-inline-padding) 32px;
   }
 
   .mission-control__topbar {
