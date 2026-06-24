@@ -14,7 +14,9 @@ import Button from "../components/Button.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import TiptapEditor from "../components/TiptapEditor.vue";
 import UiIcon from "../components/UiIcon.vue";
+import { useAuthStore } from "../stores/auth";
 import { findInlineTextMatch } from "../utils/inlineJournalChips";
+import { parseJournalReminderCapture } from "../utils/journalReminderCapture";
 import {
   parseJournalTaskMarkers,
   type JournalTaskMarkerSuggestion,
@@ -77,6 +79,7 @@ type InlineJournalChip = {
 };
 
 const route = useRoute();
+const auth = useAuthStore();
 const selectedDate = ref(normalizeLocalDateInput(rawDateQuery(route.query.date)) || todayKey());
 const datePickerOpen = ref(false);
 const datePickerMonth = ref(monthKey(selectedDate.value));
@@ -171,6 +174,7 @@ const captureSubmitDisabled = computed(() => {
   }
   return !captureProjectId.value || !captureText.value.trim();
 });
+const accountTimezone = computed(() => auth.user?.timezone || browserTimezone());
 
 function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -182,6 +186,24 @@ function todayKey(): string {
 
 function browserTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function todayKeyInTimezone(timezone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+    if (value("year") && value("month") && value("day")) {
+      return `${value("year")}-${value("month")}-${value("day")}`;
+    }
+  } catch {
+    // Fall back to the browser date if the account timezone is unavailable.
+  }
+  return todayKey();
 }
 
 function defaultReminderDate(): string {
@@ -437,12 +459,22 @@ async function openCapture(mode: CaptureMode) {
     }
   }
   captureMode.value = mode;
-  captureText.value = text;
+  captureText.value = mode === "reminder" ? "" : text;
   captureTitle.value = defaultCaptureTitle(text);
   captureProjectId.value = captureProjectId.value || projects.value[0]?.id || "";
   captureReminderDate.value = defaultReminderDate();
   captureReminderTime.value = defaultReminderTime();
-  captureReminderTimezone.value = captureReminderTimezone.value || browserTimezone();
+  captureReminderTimezone.value = accountTimezone.value;
+  if (mode === "reminder") {
+    const draft = parseJournalReminderCapture(text, {
+      today: todayKeyInTimezone(accountTimezone.value),
+      fallbackDate: captureReminderDate.value,
+      fallbackTime: captureReminderTime.value,
+    });
+    captureTitle.value = defaultCaptureTitle(draft.title);
+    captureReminderDate.value = draft.date;
+    captureReminderTime.value = draft.time;
+  }
   captureOpen.value = true;
 }
 
@@ -1221,10 +1253,6 @@ onBeforeUnmount(() => {
             <input v-model="captureReminderTime" type="time" required />
           </label>
         </div>
-        <label v-if="captureMode === 'reminder'">
-          <span>Timezone</span>
-          <input v-model="captureReminderTimezone" type="text" required />
-        </label>
         <label v-if="captureMode !== 'reminder'">
           <select v-model="captureProjectId" aria-label="Project" required>
             <option
