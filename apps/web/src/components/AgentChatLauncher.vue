@@ -69,9 +69,14 @@ type AgentSandboxResponse = {
   contactsChanged?: boolean;
   error?: string;
 };
+type AssistantSettingsResponse = {
+  assistantName: string | null;
+  displayName: string;
+};
 
 const auth = useAuthStore();
 const agentChat = useAgentChat();
+const assistantDisplayName = agentChat.assistantDisplayName;
 const chatOpen = agentChat.isOpen;
 const chatMessages = agentChat.messages;
 const launcherHidden = agentChat.launcherHidden;
@@ -84,8 +89,12 @@ const error = ref<string | null>(null);
 const composerRef = ref<HTMLTextAreaElement | null>(null);
 const scrollerRef = ref<HTMLDivElement | null>(null);
 
-const launcherLabel = "Open ME3 chat";
 const showRuntimeMetadata = import.meta.env.DEV;
+const launcherLabel = computed(() => `Open ${assistantDisplayName.value} chat`);
+const panelLabel = computed(() => `${assistantDisplayName.value} assistant`);
+const closeLabel = computed(() => `Close ${assistantDisplayName.value} chat`);
+const typingLabel = computed(() => `${assistantDisplayName.value} is typing`);
+const composerLabel = computed(() => `Message ${assistantDisplayName.value}`);
 
 const canSend = computed(
   () => draft.value.trim().length > 0 && !sending.value && auth.isAuthenticated,
@@ -99,6 +108,16 @@ function formatMetadata(result: AgentSandboxResponse): string | null {
 
 function formatDetail(result: AgentSandboxResponse): string | null {
   return formatAgentRuntimeDetail(result);
+}
+
+async function loadAssistantDisplayName() {
+  try {
+    const response =
+      await api.get<AssistantSettingsResponse>("/assistant/settings");
+    agentChat.setAssistantDisplayName(response.displayName);
+  } catch {
+    agentChat.setAssistantDisplayName(null);
+  }
 }
 
 async function scrollToBottom() {
@@ -173,7 +192,8 @@ async function sendMessage() {
         (result.contentAction?.kind === "saved" ? "Open content bank" : null),
     });
   } catch (cause: any) {
-    const message = cause?.message || "Failed to reach ME3 right now";
+    const message =
+      cause?.message || `Failed to reach ${assistantDisplayName.value} right now`;
     error.value = message;
     agentChat.appendMessage({
       role: "assistant",
@@ -218,11 +238,13 @@ watch(chatOpen, async (value) => {
 watch(currentUserId, (value, previous) => {
   if (value === previous) return;
   agentChat.resetState();
+  if (value) void loadAssistantDisplayName();
 });
 
 onMounted(async () => {
   await auth.ensureInitialized();
   initialized.value = true;
+  if (auth.isAuthenticated) void loadAssistantDisplayName();
 });
 </script>
 
@@ -248,12 +270,12 @@ onMounted(async () => {
         @click="closeChat"
       />
 
-      <section v-if="chatOpen" class="agent-panel" aria-label="ME3 assistant">
+      <section v-if="chatOpen" class="agent-panel" :aria-label="panelLabel">
         <header class="agent-header">
           <button
             type="button"
             class="agent-close"
-            aria-label="Close ME3 chat"
+            :aria-label="closeLabel"
             @click="closeChat"
           >
             <UiIcon name="X" :size="18" />
@@ -317,7 +339,7 @@ onMounted(async () => {
               role="status"
               aria-live="polite"
             >
-              <span>ME3 is typing</span>
+              <span>{{ typingLabel }}</span>
               <span class="agent-typing" aria-hidden="true">
                 <span class="agent-typing-dot" />
                 <span class="agent-typing-dot" />
@@ -329,7 +351,7 @@ onMounted(async () => {
 
         <footer class="agent-composer">
           <label class="agent-sr-only" for="agent-chat-input">
-            Message ME3
+            {{ composerLabel }}
           </label>
           <div class="agent-composer-toolbar">
             <button

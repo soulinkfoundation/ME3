@@ -642,6 +642,7 @@ type VoiceTranscriptionResponse = {
 
 const { toastSuccess, toastFromUnknown } = useAppToast();
 const agentChat = useAgentChat();
+const assistantDisplayName = agentChat.assistantDisplayName;
 const contactsStore = useContactsStore();
 const { refreshInboxDraftCount } = useInboxDraftCount();
 const route = useRoute();
@@ -800,7 +801,7 @@ const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const configureStarterPrompt =
   "Help me configure my ME3 installation. First check what is already set up across my public site/profile, email mailbox, Soulink or Telegram, assistant/AI, jobs, plugins, and updates. Then suggest the missing or most useful next step. If I'm not sure, walk me through the basics.";
 const assistantPlaceholders = [
-  "Ask me3 anything...",
+  "Ask {{assistantName}} anything...",
   "Set a reminder tomorrow at 9am to...",
   "Draft a blog post about...",
   "Draft an email to tell Sarah about...",
@@ -818,11 +819,9 @@ const starterPrompts: StarterPrompt[] = [
   },
   { label: "Status update", icon: "🚀", prompt: "Review my week" },
 ];
-const assistantPlaceholder =
-  assistantPlaceholders[
-    Math.floor(Math.random() * assistantPlaceholders.length)
-  ] ||
-  assistantPlaceholders[0];
+const assistantPlaceholderIndex = Math.floor(
+  Math.random() * assistantPlaceholders.length,
+);
 const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
 const assistantTextAttachmentMaxBytes = 1_000_000;
@@ -1023,6 +1022,18 @@ const visibleStarterPrompts = computed(() =>
   showConfigureStarterPrompt.value
     ? starterPrompts
     : starterPrompts.filter((prompt) => prompt.label !== "Configure"),
+);
+const assistantMessageLabel = computed(
+  () => `Message ${assistantDisplayName.value}`,
+);
+const assistantThinkingLabel = computed(
+  () => `${assistantDisplayName.value} is thinking`,
+);
+const assistantPlaceholder = computed(() =>
+  (
+    assistantPlaceholders[assistantPlaceholderIndex] ||
+    assistantPlaceholders[0]
+  ).replace("{{assistantName}}", assistantDisplayName.value),
 );
 
 const selectedModelTitle = computed(() => {
@@ -1283,6 +1294,12 @@ async function loadPage() {
     loadJobs(),
     loadRecipes(),
     loadAiSettings(),
+    loadAssistantSettings().catch((err) => {
+      assistantSettingsError.value = messageFromUnknown(
+        err,
+        "Assistant settings could not load.",
+      );
+    }),
     loadAssistantProjects(),
     loadAssistantThreads(),
     loadAssistantThreadFromRoute(),
@@ -1679,18 +1696,24 @@ async function loadAssistantSettingsSection(section: AssistantSettingsSection) {
   await loadAssistantContext();
 }
 
+async function loadAssistantSettings() {
+  const settingsResponse =
+    await api.get<AssistantSettingsResponse>("/assistant/settings");
+  assistantSettings.value = settingsResponse;
+  assistantNameDraft.value = settingsResponse.assistantName || "";
+  agentChat.setAssistantDisplayName(settingsResponse.displayName);
+  return settingsResponse;
+}
+
 async function loadAssistantContext() {
   assistantContextLoading.value = true;
   assistantSettingsError.value = "";
   try {
-    const [settingsResponse, memoryResponse, sourceResponse] =
-      await Promise.all([
-        api.get<AssistantSettingsResponse>("/assistant/settings"),
-        api.get<MissionMemoryResponse>("/mission-control/memory"),
-        api.get<MissionSourcesResponse>("/mission-control/context-sources"),
-      ]);
-    assistantSettings.value = settingsResponse;
-    assistantNameDraft.value = settingsResponse.assistantName || "";
+    const [, memoryResponse, sourceResponse] = await Promise.all([
+      loadAssistantSettings(),
+      api.get<MissionMemoryResponse>("/mission-control/memory"),
+      api.get<MissionSourcesResponse>("/mission-control/context-sources"),
+    ]);
     assistantMemory.value = memoryResponse.memory || [];
     assistantSources.value = sourceResponse.sources || [];
   } catch (err) {
@@ -1717,6 +1740,7 @@ async function saveAssistantName() {
     );
     assistantSettings.value = response;
     assistantNameDraft.value = response.assistantName || "";
+    agentChat.setAssistantDisplayName(response.displayName);
     assistantNameNotice.value = "Name saved.";
     toastSuccess("Assistant name saved");
   } catch (err) {
@@ -2642,7 +2666,10 @@ async function submitAssistantText(
       setAssistantStoppedMessage(assistantMessageId, assistantMessageStarted);
       return;
     }
-    const message = messageFromUnknown(err, "Failed to reach ME3 right now.");
+    const message = messageFromUnknown(
+      err,
+      `Failed to reach ${assistantDisplayName.value} right now.`,
+    );
     assistantError.value = message;
     agentChat.appendMessage({
       id: newAssistantMessageId("assistant"),
@@ -4989,7 +5016,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             v-else-if="assistantConsoleMessages.length === 0"
             class="assistant-empty-state"
           >
-            <h2>Message ME3</h2>
+            <h2>{{ assistantMessageLabel }}</h2>
             <div class="starter-prompt-list" aria-label="Starter prompts">
               <button
                 v-for="prompt in visibleStarterPrompts"
@@ -5603,7 +5630,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <div
               class="assistant-message__bubble assistant-message__bubble--pending"
             >
-              <span>ME3 is thinking</span>
+              <span>{{ assistantThinkingLabel }}</span>
               <span class="assistant-typing" aria-hidden="true">
                 <span />
                 <span />
@@ -5625,7 +5652,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
           @drop="onAssistantComposerDrop"
         >
           <label class="sr-only" for="assistant-console-input">
-            Message ME3
+            {{ assistantMessageLabel }}
           </label>
           <div
             v-if="assistantAttachments.length > 0"

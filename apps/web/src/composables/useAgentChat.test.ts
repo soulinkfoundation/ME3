@@ -33,4 +33,17 @@ describe("useAgentChat", () => {
     expect(agentChat.messages.value).toHaveLength(1);
     expect(agentChat.messages.value[0]?.id).toBe("assistant-ready");
   });
+
+  it("uses the custom assistant name in ready copy", () => {
+    const agentChat = useAgentChat();
+
+    agentChat.setAssistantDisplayName("  Atlas   Prime  ");
+
+    expect(agentChat.assistantDisplayName.value).toBe("Atlas Prime");
+    expect(agentChat.messages.value[0]?.meta).toBe("Atlas Prime ready");
+
+    agentChat.resetMessages();
+
+    expect(agentChat.messages.value[0]?.meta).toBe("Atlas Prime ready");
+  });
 });

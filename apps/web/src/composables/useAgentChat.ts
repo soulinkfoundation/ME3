@@ -25,12 +25,15 @@ export type AgentChatMessage = {
   actionLabel?: string | null;
 };
 
+const defaultAssistantDisplayName = "ME3";
+const assistantDisplayName = ref(defaultAssistantDisplayName);
+
 const defaultMessages = (): AgentChatMessage[] => [
   {
     id: "assistant-ready",
     role: "assistant",
     text: "Ask me to check bookings, draft follow-up emails, manage reminders, update a contact, or help with your site and content.",
-    meta: "ME3 ready",
+    meta: `${assistantDisplayName.value} ready`,
   },
 ];
 
@@ -38,7 +41,25 @@ const isOpen = ref(false);
 const messages = ref<AgentChatMessage[]>(defaultMessages());
 const launcherHidden = ref(false);
 
+function normalizeAssistantDisplayName(name: string | null | undefined) {
+  return name?.replace(/\s+/g, " ").trim() || defaultAssistantDisplayName;
+}
+
+function syncReadyMessageMeta() {
+  const readyMessage = messages.value.find(
+    (message) => message.id === "assistant-ready",
+  );
+  if (readyMessage) readyMessage.meta = `${assistantDisplayName.value} ready`;
+}
+
 export function useAgentChat() {
+  function setAssistantDisplayName(name: string | null | undefined) {
+    const next = normalizeAssistantDisplayName(name);
+    if (assistantDisplayName.value === next) return;
+    assistantDisplayName.value = next;
+    syncReadyMessageMeta();
+  }
+
   function openChat() {
     isOpen.value = true;
   }
@@ -72,15 +93,18 @@ export function useAgentChat() {
   }
 
   function resetState() {
+    assistantDisplayName.value = defaultAssistantDisplayName;
     isOpen.value = false;
     launcherHidden.value = false;
     messages.value = defaultMessages();
   }
 
   return {
+    assistantDisplayName,
     isOpen,
     messages,
     launcherHidden,
+    setAssistantDisplayName,
     openChat,
     closeChat,
     toggleChat,
