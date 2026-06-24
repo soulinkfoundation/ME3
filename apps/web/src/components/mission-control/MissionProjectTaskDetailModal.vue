@@ -358,6 +358,30 @@ function closeFromBackdrop() {
             </label>
           </div>
 
+          <div class="task-note-meta">
+            <label class="field task-note-meta__field">
+              <span>Due</span>
+              <input
+                :value="detailDraft.dueAt"
+                type="date"
+                aria-label="Due date"
+                @input="updateDetailDraft({ dueAt: inputValue($event) })"
+              />
+            </label>
+
+            <label class="field task-note-meta__field">
+              <span>Scheduled</span>
+              <input
+                :value="detailDraft.scheduledFor"
+                type="date"
+                aria-label="Scheduled date"
+                @input="
+                  updateDetailDraft({ scheduledFor: inputValue($event) })
+                "
+              />
+            </label>
+          </div>
+
           <div class="field task-note-body-field">
             <TiptapEditor
               :model-value="detailDraft.description"

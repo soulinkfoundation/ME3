@@ -294,6 +294,8 @@ const projectTaskDetailDraft = ref<ProjectTaskDetailDraft>({
   description: "",
   status: "backlog",
   projectId: "",
+  dueAt: "",
+  scheduledFor: "",
 });
 const projectTaskDetailSaving = ref(false);
 const projectTaskDetailError = ref("");
@@ -1390,6 +1392,8 @@ function syncProjectTaskDetailDraft(task: MissionTask) {
         ? "backlog"
         : (task.status as ProjectBoardStatus),
     projectId: task.projectId || projects.value[0]?.id || "",
+    dueAt: task.dueAt?.slice(0, 10) || "",
+    scheduledFor: task.scheduledFor?.slice(0, 10) || "",
   };
 }
 
@@ -1569,6 +1573,8 @@ async function saveProjectTaskDetail() {
         description: projectTaskDetailDraft.value.description.trim() || null,
         status: projectTaskDetailDraft.value.status,
         projectId: projectTaskDetailDraft.value.projectId,
+        dueAt: projectTaskDetailDraft.value.dueAt || null,
+        scheduledFor: projectTaskDetailDraft.value.scheduledFor || null,
       },
     );
     replaceProjectTask(response.task);
