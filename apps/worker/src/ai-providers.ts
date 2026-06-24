@@ -99,7 +99,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     recommendedModels: {
       default: "@cf/qwen/qwen3-30b-a3b-fp8",
       chat: "@cf/qwen/qwen3-30b-a3b-fp8",
-      reasoning: "@cf/qwen/qwen3-30b-a3b-fp8",
+      reasoning: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
       extraction: "@cf/qwen/qwen3-30b-a3b-fp8",
     },
   },
@@ -113,10 +113,10 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     secretLabel: "API key",
     secretEnv: "OPENAI_API_KEY",
     recommendedModels: {
-      default: "gpt-4.1-mini",
-      chat: "gpt-4.1-mini",
-      reasoning: "gpt-4.1-mini",
-      extraction: "gpt-4.1-mini",
+      default: "gpt-4o",
+      chat: "gpt-4o",
+      reasoning: "gpt-5.5",
+      extraction: "gpt-4o",
     },
   },
   {
@@ -129,10 +129,10 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     secretLabel: "API key",
     secretEnv: "ANTHROPIC_API_KEY",
     recommendedModels: {
-      default: "claude-3-5-haiku-latest",
-      chat: "claude-3-5-haiku-latest",
-      reasoning: "claude-3-5-haiku-latest",
-      extraction: "claude-3-5-haiku-latest",
+      default: "claude-sonnet-4-6",
+      chat: "claude-sonnet-4-6",
+      reasoning: "claude-opus-4-8",
+      extraction: "claude-sonnet-4-6",
     },
   },
   {
