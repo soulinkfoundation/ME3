@@ -52,7 +52,7 @@ type WheelSnapshotResponse = {
 
 const STEPS = [
   "Profile",
-  "Agent",
+  "Assistant",
   "Plugins",
   "Messaging",
   "Phone",
@@ -335,8 +335,7 @@ async function loadAssistantSettings() {
     const response = await api.get<AssistantSettingsResponse>(
       "/assistant/settings",
     );
-    assistantName.value =
-      response.assistantName || response.displayName || DEFAULT_ASSISTANT_NAME;
+    assistantName.value = response.assistantName || DEFAULT_ASSISTANT_NAME;
   } catch {
     assistantName.value = assistantName.value || DEFAULT_ASSISTANT_NAME;
   } finally {
@@ -357,13 +356,12 @@ async function saveAssistantNameAndContinue() {
         assistantName: normalizedAssistantName.value,
       },
     );
-    assistantName.value =
-      response.assistantName || response.displayName || DEFAULT_ASSISTANT_NAME;
+    assistantName.value = response.assistantName || DEFAULT_ASSISTANT_NAME;
     advanceTo(3);
   } catch (error) {
     assistantNameError.value = messageFromUnknown(
       error,
-      "Could not save your agent name.",
+      "Could not save your assistant name.",
     );
   } finally {
     assistantNameSaving.value = false;
@@ -696,18 +694,18 @@ onBeforeUnmount(clearUsernameCheck);
       <section
         v-else-if="currentStep === 2"
         class="start-step"
-        aria-labelledby="agent-title"
+        aria-labelledby="assistant-title"
       >
         <div class="step-copy">
-          <h1 id="agent-title">Name your agent</h1>
-          <p>For fun, give your ME3 agent a name.</p>
+          <h1 id="assistant-title">Name your assistant</h1>
+          <p>For fun, give your ME3 assistant a name.</p>
         </div>
 
         <form class="start-form" @submit.prevent="saveAssistantNameAndContinue">
-          <label class="field" for="start-agent-name">
-            <span>Agent name</span>
+          <label class="field" for="start-assistant-name">
+            <span>Assistant name</span>
             <input
-              id="start-agent-name"
+              id="start-assistant-name"
               v-model="assistantName"
               type="text"
               :maxlength="ASSISTANT_NAME_MAX_LENGTH"
@@ -719,13 +717,13 @@ onBeforeUnmount(clearUsernameCheck);
           </label>
 
           <p v-if="assistantNameLoading" class="field-hint">
-            Loading your agent identity...
+            Loading your assistant identity...
           </p>
           <p v-else-if="assistantNameInvalid" class="error">
             Name must be {{ ASSISTANT_NAME_MAX_LENGTH }} characters or fewer.
           </p>
           <p v-else class="field-hint">
-            {{ normalizedAssistantName }} will be the name of your ME3 agent.
+            {{ normalizedAssistantName }} will be the name of your ME3 assistant.
           </p>
           <p v-if="assistantNameError" class="error">
             {{ assistantNameError }}
