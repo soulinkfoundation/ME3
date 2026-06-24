@@ -2277,10 +2277,7 @@ async function maybeHandleAssistantImageTurn(
       prompt,
       route,
     });
-    const replyText = [
-      "Generated an image and saved it to this conversation.",
-      `I used the hidden image-generation route: ${route.providerId} (${route.model}).`,
-    ].join(" ");
+    const replyText = "Generated an image and saved it to this conversation.";
     return {
       route,
       messageAssetLinks: generated.messageAssetLinks,
