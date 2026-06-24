@@ -817,6 +817,12 @@ const ACCOUNTS_PLUGIN: CorePluginManifestSummary = {
       "accounts.public-baseline",
       "Financial categories and ledger entries are included in the initial public schema.",
     ),
+    {
+      id: "accounts.financial-entry-projects",
+      path: "./apps/worker/migrations/0011_financial_entry_projects.sql",
+      destructive: false,
+      description: "Adds optional Mission Control project links to financial entries.",
+    },
   ],
   queuesAndCrons: [],
   notes: [

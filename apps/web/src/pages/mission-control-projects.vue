@@ -141,6 +141,8 @@ type FinancialEntry = {
   description: string;
   categoryId: string | null;
   categoryName: string | null;
+  projectId: string | null;
+  projectName: string | null;
   amountCents: number;
   currency: string;
   status: FinancialEntryStatus;
@@ -168,6 +170,7 @@ type AccountsEntryForm = {
   date: string;
   description: string;
   categoryId: string;
+  projectId: string;
   amount: string;
   currency: string;
   status: FinancialEntryStatus;
@@ -849,6 +852,7 @@ async function saveAccountEntry() {
     date: accountsForm.value.date,
     description: accountsForm.value.description.trim(),
     categoryId: accountsForm.value.categoryId || null,
+    projectId: accountsForm.value.projectId || null,
     amountCents: Math.round(amountValue * 100),
     currency: accountsForm.value.currency.trim().toUpperCase() || "USD",
     status: accountsForm.value.status,
@@ -896,6 +900,7 @@ function openEditAccountEntry(entry: FinancialEntry) {
     date: entry.date,
     description: entry.description,
     categoryId: entry.categoryId || "",
+    projectId: entry.projectId || "",
     amount: formatAccountsAmountInput(entry.amountCents),
     currency: entry.currency,
     status: entry.status,
@@ -2066,6 +2071,7 @@ function emptyAccountsForm(type: FinancialEntryType): AccountsEntryForm {
     date: todayKey(),
     description: "",
     categoryId: "",
+    projectId: "",
     amount: "",
     currency: accountsDefaultCurrency.value,
     status: type === "income" ? "paid" : "pending",
@@ -2837,6 +2843,7 @@ onBeforeUnmount(() => {
             <span>Date</span>
             <span>Description</span>
             <span>Category</span>
+            <span>Project</span>
             <span>Amount</span>
             <span>Status</span>
             <span>Source</span>
@@ -2857,6 +2864,7 @@ onBeforeUnmount(() => {
               <span>{{ formatShortDate(entry.date) }}</span>
               <strong>{{ entry.description }}</strong>
               <span>{{ entry.categoryName || "Uncategorized" }}</span>
+              <span>{{ entry.projectName || "No project" }}</span>
               <span>{{ formatMoney(entry.amountCents, entry.currency) }}</span>
               <span class="status-badge">{{
                 accountStatusLabel(entry.status)
@@ -3382,15 +3390,31 @@ onBeforeUnmount(() => {
             </label>
           </div>
 
-          <label class="field">
-            <span>Currency</span>
-            <input
-              v-model="accountsForm.currency"
-              type="text"
-              maxlength="3"
-              autocomplete="off"
-            />
-          </label>
+          <div class="accounts-modal__grid">
+            <label class="field">
+              <span>Project</span>
+              <select v-model="accountsForm.projectId">
+                <option value="">No project</option>
+                <option
+                  v-for="project in projects"
+                  :key="project.id"
+                  :value="project.id"
+                >
+                  {{ project.name }}
+                </option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Currency</span>
+              <input
+                v-model="accountsForm.currency"
+                type="text"
+                maxlength="3"
+                autocomplete="off"
+              />
+            </label>
+          </div>
 
           <label class="field">
             <span>Notes</span>
@@ -4220,7 +4244,7 @@ onBeforeUnmount(() => {
 }
 
 .accounts-table__loading {
-  min-width: 860px;
+  min-width: 980px;
   border-bottom: 1px solid var(--ui-border);
 }
 
@@ -4237,10 +4261,10 @@ onBeforeUnmount(() => {
   grid-template-columns: 96px minmax(180px, 1.7fr) minmax(
       128px,
       1fr
-    ) 112px 118px 118px 72px;
+    ) minmax(128px, 1fr) 112px 118px 118px 72px;
   align-items: center;
   gap: 10px;
-  min-width: 860px;
+  min-width: 980px;
   padding: 10px 0;
   border-bottom: 1px solid var(--ui-border);
 }

@@ -27,6 +27,8 @@ type FinancialEntryRow = {
   description: string;
   category_id: string | null;
   category_name?: string | null;
+  project_id: string | null;
+  project_name?: string | null;
   amount_cents: number;
   currency: string;
   status: EntryStatus;
@@ -115,14 +117,15 @@ export async function listFinancialEntries(env: Env, userId: string, query: URLS
     source,
   });
   const fromClause = `FROM financial_entries e
-    LEFT JOIN financial_categories fc ON fc.id = e.category_id`;
+    LEFT JOIN financial_categories fc ON fc.id = e.category_id
+    LEFT JOIN mission_projects mp ON mp.id = e.project_id AND mp.user_id = e.user_id`;
 
   const [entriesResult, countResult] = await Promise.all([
     env.DB.prepare(
       `SELECT e.id, e.user_id, e.entry_type, e.date, e.description, e.category_id,
-              e.amount_cents, e.currency, e.status, e.source, e.notes, e.source_ref,
+              e.project_id, e.amount_cents, e.currency, e.status, e.source, e.notes, e.source_ref,
               e.source_email_id, e.stripe_charge_id, e.created_at, e.updated_at,
-              fc.name AS category_name
+              fc.name AS category_name, mp.name AS project_name
        ${fromClause}
        ${whereClause}
        ORDER BY ${sortColumn} ${sortDir}, e.created_at DESC
@@ -160,13 +163,19 @@ export async function createFinancialEntry(env: Env, userId: string, input: unkn
     }
     categoryId = category.id;
   }
+  let projectId: string | null = null;
+  if (payload.projectId) {
+    const project = await getProjectForUser(env, userId, payload.projectId);
+    if (!project) throw new AccountsInputError("Project not found", 404);
+    projectId = project.id;
+  }
 
   const id = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO financial_entries
-       (id, user_id, entry_type, date, description, category_id, amount_cents,
+       (id, user_id, entry_type, date, description, category_id, project_id, amount_cents,
         currency, status, source, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)`,
   )
     .bind(
       id,
@@ -175,6 +184,7 @@ export async function createFinancialEntry(env: Env, userId: string, input: unkn
       payload.date,
       payload.description,
       categoryId,
+      projectId,
       payload.amountCents,
       payload.currency || "USD",
       payload.status || "pending",
@@ -214,10 +224,20 @@ export async function updateFinancialEntry(
       categoryId = category.id;
     }
   }
+  let projectId = existing.project_id;
+  if (payload.projectId !== undefined) {
+    if (payload.projectId === null) {
+      projectId = null;
+    } else {
+      const project = await getProjectForUser(env, userId, payload.projectId);
+      if (!project) throw new AccountsInputError("Project not found", 404);
+      projectId = project.id;
+    }
+  }
 
   await env.DB.prepare(
     `UPDATE financial_entries
-     SET entry_type = ?, date = ?, description = ?, category_id = ?,
+     SET entry_type = ?, date = ?, description = ?, category_id = ?, project_id = ?,
          amount_cents = ?, currency = ?, status = ?, notes = ?,
          updated_at = datetime('now')
      WHERE id = ? AND user_id = ?`,
@@ -227,6 +247,7 @@ export async function updateFinancialEntry(
       payload.date || existing.date,
       nextDescription.trim(),
       categoryId,
+      projectId,
       nextAmountCents,
       payload.currency || existing.currency,
       payload.status || existing.status,
@@ -354,9 +375,11 @@ export async function exportFinancialEntriesCsv(
   });
   const result = await env.DB.prepare(
     `SELECT e.date, e.description, COALESCE(fc.name, '') AS category_name,
+            COALESCE(mp.name, '') AS project_name,
             e.amount_cents, e.currency, e.status, e.source, COALESCE(e.notes, '') AS notes
      FROM financial_entries e
      LEFT JOIN financial_categories fc ON fc.id = e.category_id
+     LEFT JOIN mission_projects mp ON mp.id = e.project_id AND mp.user_id = e.user_id
      ${whereClause}
      ORDER BY e.date DESC, e.created_at DESC`,
   )
@@ -365,6 +388,7 @@ export async function exportFinancialEntriesCsv(
       date: string;
       description: string;
       category_name: string;
+      project_name: string;
       amount_cents: number;
       currency: string;
       status: EntryStatus;
@@ -372,13 +396,14 @@ export async function exportFinancialEntriesCsv(
       notes: string;
     }>();
 
-  const csvRows = [["date", "description", "category", "amount", "currency", "status", "source", "notes"].join(",")];
+  const csvRows = [["date", "description", "category", "project", "amount", "currency", "status", "source", "notes"].join(",")];
   for (const entry of result.results || []) {
     csvRows.push(
       [
         escapeCsv(entry.date),
         escapeCsv(entry.description),
         escapeCsv(entry.category_name),
+        escapeCsv(entry.project_name),
         escapeCsv((entry.amount_cents / 100).toFixed(2)),
         escapeCsv(entry.currency),
         escapeCsv(entry.status),
@@ -767,6 +792,12 @@ function parseEntryPayload(value: unknown) {
         : input.categoryId === null
           ? null
           : undefined,
+    projectId:
+      typeof input.projectId === "string" && input.projectId.trim()
+        ? input.projectId.trim()
+        : input.projectId === null
+          ? null
+          : undefined,
     amountCents: Number.isInteger(amountValue) ? amountValue : null,
     currency: input.currency === undefined ? undefined : parseCurrency(input.currency),
     status: input.status === undefined ? undefined : parseEntryStatus(typeof input.status === "string" ? input.status : null),
@@ -800,9 +831,9 @@ function buildEntryFiltersSql(filters: {
   if (filters.search) {
     const pattern = `%${filters.search.trim().toLowerCase()}%`;
     conditions.push(
-      `(LOWER(e.description) LIKE ? OR LOWER(COALESCE(e.notes, '')) LIKE ? OR LOWER(COALESCE(fc.name, '')) LIKE ?)`,
+      `(LOWER(e.description) LIKE ? OR LOWER(COALESCE(e.notes, '')) LIKE ? OR LOWER(COALESCE(fc.name, '')) LIKE ? OR LOWER(COALESCE(mp.name, '')) LIKE ?)`,
     );
-    params.push(pattern, pattern, pattern);
+    params.push(pattern, pattern, pattern, pattern);
   }
   if (filters.categoryId) {
     conditions.push("e.category_id = ?");
@@ -843,15 +874,28 @@ async function getCategoryForUser(env: Env, userId: string, categoryId: string) 
   );
 }
 
+async function getProjectForUser(env: Env, userId: string, projectId: string) {
+  return (
+    (await env.DB.prepare(
+      `SELECT id
+       FROM mission_projects
+       WHERE id = ? AND user_id = ? AND status != 'archived'`,
+    )
+      .bind(projectId, userId)
+      .first<{ id: string }>()) || null
+  );
+}
+
 async function getEntryForUser(env: Env, userId: string, entryId: string) {
   return (
     (await env.DB.prepare(
       `SELECT e.id, e.user_id, e.entry_type, e.date, e.description, e.category_id,
-              e.amount_cents, e.currency, e.status, e.source, e.notes, e.source_ref,
+              e.project_id, e.amount_cents, e.currency, e.status, e.source, e.notes, e.source_ref,
               e.source_email_id, e.stripe_charge_id, e.created_at, e.updated_at,
-              fc.name AS category_name
+              fc.name AS category_name, mp.name AS project_name
        FROM financial_entries e
        LEFT JOIN financial_categories fc ON fc.id = e.category_id
+       LEFT JOIN mission_projects mp ON mp.id = e.project_id AND mp.user_id = e.user_id
        WHERE e.id = ? AND e.user_id = ?`,
     )
       .bind(entryId, userId)
@@ -913,6 +957,8 @@ function serializeEntry(entry: FinancialEntryRow) {
     description: decodeMimeHeaderValue(entry.description),
     categoryId: entry.category_id,
     categoryName: entry.category_name || null,
+    projectId: entry.project_id,
+    projectName: entry.project_name || null,
     amountCents: entry.amount_cents,
     currency: entry.currency,
     status: entry.status,
