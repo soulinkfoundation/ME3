@@ -19,6 +19,10 @@ import {
   handleInboundEmail,
   type ForwardableEmailMessageLike,
 } from "./routes/mailbox";
+import {
+  ensureCoreRuntimeMigrations,
+  ensureCoreRuntimeMigrationsForRequest,
+} from "./core-runtime-migrations";
 import { Me3UserAgent } from "./user-agent";
 import type {
   AssistantJobEventQueueMessage,
@@ -59,24 +63,29 @@ export async function handleAssistantJobQueueBatch(
 }
 
 const worker = {
-  fetch(request: Request, env: Env, ctx?: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext) {
+    const migrationResponse = await ensureCoreRuntimeMigrationsForRequest(request, env);
+    if (migrationResponse) return migrationResponse;
     return app.fetch(request, env, ctx);
   },
-  email(message: ForwardableEmailMessageLike, env: Env, _ctx?: ExecutionContext) {
+  async email(message: ForwardableEmailMessageLike, env: Env, _ctx?: ExecutionContext) {
+    await ensureCoreRuntimeMigrations(env);
     return handleInboundEmail(message, env);
   },
   async scheduled(_event: ScheduledEvent, env: Env, _ctx?: ExecutionContext) {
+    await ensureCoreRuntimeMigrations(env);
     await dispatchDueScheduledAssistantJobs(env);
     await dispatchDueBookingReminders(env);
     await dispatchDueSocialPublications(env);
     await dispatchDueCalendarSourceRefreshes(env);
   },
-  queue(
+  async queue(
     batch: MessageBatch<
       AssistantJobEventQueueMessage | BookingReminderQueueMessage | SocialPublishQueueMessage
     >,
     env: Env,
   ) {
+    await ensureCoreRuntimeMigrations(env);
     if (batch.queue === BOOKING_REMINDER_QUEUE_NAME || batch.queue.includes("booking-reminders")) {
       return processBookingReminderBatch(
         batch as MessageBatch<BookingReminderQueueMessage>,
