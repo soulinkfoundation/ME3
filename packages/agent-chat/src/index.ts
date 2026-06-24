@@ -3268,6 +3268,7 @@ function parseReminderChatRequest(
   const timezone = normalizeTimeZone(owner?.timezone) || "UTC";
   const explicitDate = parseExplicitDate(messageText);
   const relativeMs = parseRelativeReminderOffsetMs(messageText);
+  const weekdayDate = parseReminderWeekdayDate(messageText, timezone);
   const dayOffset = /\btomorrow\b/i.test(messageText) ? 1 : 0;
   const time = parseExplicitReminderTime(messageText) || "09:00";
   const recurrence = parseReminderRecurrenceInput(messageText);
@@ -3279,7 +3280,7 @@ function parseReminderChatRequest(
     date = parts.date;
     parsedTime = parts.time;
   } else {
-    date = explicitDate || addDaysToDate(localDateForTimezone(timezone), dayOffset);
+    date = explicitDate || weekdayDate || addDaysToDate(localDateForTimezone(timezone), dayOffset);
   }
 
   const title = extractReminderTitle(messageText);
@@ -3290,7 +3291,12 @@ function parseReminderChatRequest(
     };
   }
 
-  if (!explicitDate && relativeMs === null && !/\btoday|tomorrow\b/i.test(messageText)) {
+  if (
+    !explicitDate &&
+    !weekdayDate &&
+    relativeMs === null &&
+    !/\btoday|tomorrow\b/i.test(messageText)
+  ) {
     return {
       error:
         "I can set that reminder. Please include a date, or say today/tomorrow or in a few hours.",
@@ -3324,8 +3330,21 @@ function parseRelativeReminderOffsetMs(messageText: string): number | null {
   return amount * 24 * 60 * 60 * 1000;
 }
 
+function parseReminderWeekdayDate(messageText: string, timezone: string): string | null {
+  const match = messageText.match(/\b(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  if (!match) return null;
+  const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const target = weekdays.indexOf(match[1].toLowerCase());
+  const today = localDateForTimezone(timezone);
+  const current = new Date(`${today}T12:00:00Z`).getUTCDay();
+  const daysUntil = (target - current + 7) % 7;
+  return addDaysToDate(today, daysUntil);
+}
+
 function parseExplicitReminderTime(messageText: string): string | null {
-  const match = messageText.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  const match =
+    messageText.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i) ||
+    messageText.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
   if (!match) return null;
   let hour = Number(match[1]);
   const minute = Number(match[2] || "0");
@@ -3351,9 +3370,11 @@ function extractReminderTitle(messageText: string): string | null {
     .replace(/^(?:remind me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder)\s+(?:to|for|about|that)?\s*/i, "")
     .replace(/^(?:don't|dont) let me forget\s+(?:to|about|that)?\s*/i, "")
     .replace(/\b(?:today|tomorrow)\b/gi, "")
+    .replace(/\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
     .replace(/\bon\s+20\d{2}-\d{2}-\d{2}\b/gi, "")
     .replace(/\bin\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?)\b/gi, "")
     .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/gi, "")
+    .replace(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, "")
     .replace(/\b(?:every day|daily|every week|weekly|every month|monthly)\b/gi, "")
     .replace(/[.?!]+$/g, "")
     .trim();

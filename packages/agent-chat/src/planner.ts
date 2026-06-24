@@ -346,9 +346,11 @@ function hasReminderSubject(messageText: string): boolean {
     .replace(/^(?:remind me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder)\s+(?:to|for|about|that)?\s*/i, "")
     .replace(/^(?:don't|dont) let me forget\s+(?:to|about|that)?\s*/i, "")
     .replace(/\b(?:today|tomorrow)\b/gi, "")
+    .replace(/\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
     .replace(/\bon\s+20\d{2}-\d{2}-\d{2}\b/gi, "")
     .replace(/\bin\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?)\b/gi, "")
     .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/gi, "")
+    .replace(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, "")
     .replace(/\b(?:every day|daily|every week|weekly|every month|monthly)\b/gi, "")
     .replace(/[.?!]+$/g, "")
     .trim();
@@ -358,6 +360,7 @@ function hasReminderSubject(messageText: string): boolean {
 function hasReminderWhen(messageText: string): boolean {
   return (
     /\b(?:today|tomorrow)\b/i.test(messageText) ||
+    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(messageText) ||
     /\b20\d{2}-\d{2}-\d{2}\b/.test(messageText) ||
     /\bin\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?)\b/i.test(messageText)
   );

@@ -1874,6 +1874,33 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
 ];
 
 describe("Core chat mailbox draft continuations", () => {
+  it("creates weekday reminders without asking for an exact date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-24T12:00:00Z"));
+
+    const env = createEnv();
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("Add reminder to get woodchips and tidy up garden saturday 8am"),
+    );
+
+    expect(response).toMatchObject({
+      source: "tool",
+      specialist: "core.reminders.create",
+      reminderAction: { kind: "created" },
+    });
+    expect(env.state.reminders).toHaveLength(1);
+    expect(env.state.reminders[0]).toMatchObject({
+      title: "get woodchips and tidy up garden",
+      remind_at: "2026-06-27T07:00:00.000Z",
+      timezone: "Europe/Dublin",
+    });
+  });
+
   it("resolves quoted draft recipients from saved contacts", async () => {
     const env = createEnv({
       recentMessages: [

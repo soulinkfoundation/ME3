@@ -63,6 +63,13 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "write",
   },
   {
+    name: "weekday reminder create request becomes a write action",
+    messageText: "Add reminder to get woodchips and tidy up garden saturday 8am",
+    kind: "write_action",
+    capabilityId: "core.reminders.create",
+    sideEffectLevel: "write",
+  },
+  {
     name: "reminder create without a time asks for clarification",
     messageText: "Remind me to follow up with Sam",
     kind: "clarify",
