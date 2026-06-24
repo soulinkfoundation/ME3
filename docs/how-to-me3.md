@@ -128,7 +128,7 @@ Use Account for owner-facing setup. Keep answers short and point owners back to 
 
 Use `pnpm deploy:cloudflare` for manual Cloudflare deploys. It prepares D1/R2 bindings, builds the app, applies D1 migrations, and runs `wrangler deploy`.
 
-Do not use `pnpm deploy`; `deploy` is a pnpm built-in command and can skip ME3's deploy preparation. The `deploy` package script exists for Cloudflare's Deploy button, which runs it as `pnpm run deploy`.
+Do not use `pnpm deploy`; `deploy` is a pnpm built-in command and can skip ME3's deploy preparation. The `deploy` package script exists for Cloudflare's Deploy button, which provisions declared D1/R2 resources from `wrangler.toml`, then runs migrations and deploys.
 
 ### Custom Domain
 

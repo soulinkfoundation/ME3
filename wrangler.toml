@@ -29,11 +29,6 @@ migrations_dir = "apps/worker/migrations"
 binding = "SITE_ASSETS"
 bucket_name = "my-me3-site-assets"
 
-# Cloudflare Email Service sender binding. Account -> Email stores the sender
-# address; this deploy-time binding lets the Worker call env.EMAIL.send().
-[[send_email]]
-name = "EMAIL"
-
 [triggers]
 crons = ["*/15 * * * *"]
 

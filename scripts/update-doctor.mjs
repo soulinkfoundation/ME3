@@ -102,11 +102,11 @@ check(
 );
 
 check(
-  "Deploy button script prepares Cloudflare resources",
-  deployButtonPreparesResources &&
+  "Deploy button script relies on Cloudflare resource provisioning",
+  !deployButtonPreparesResources &&
     /db:migrations:apply/.test(deployButtonScript) &&
     /wrangler deploy/.test(deployButtonScript),
-  "Expected package.json scripts.deploy for the Cloudflare deploy form to prepare resources, apply migrations, and deploy. Manual use should still prefer pnpm deploy:cloudflare.",
+  "Expected package.json scripts.deploy for the Cloudflare deploy form to apply migrations and deploy without running deploy:prepare. Manual use should still prefer pnpm deploy:cloudflare.",
 );
 check(
   "Cloudflare deploy script is available",
