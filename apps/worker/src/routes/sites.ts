@@ -28,7 +28,6 @@ import {
   deleteSiteFile,
   escapeCsv,
   findHeaderIndex,
-  generateUnsubscribeToken,
   getContentType,
   getCoreDomainInstructions,
   getCoreDomainState,
@@ -83,6 +82,7 @@ import {
   subscribersSetupRequired,
   titleFromSlug,
   unsubscribeHtml,
+  verifyUnsubscribeToken,
 } from "../sites";
 
 type LandingPageGenerateBody = {
@@ -322,8 +322,9 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (!email || !token || !username) return unsubscribeHtml("Invalid unsubscribe link", "This link appears to be invalid or expired.");
 
     const normalizedEmail = email.toLowerCase().trim();
-    const expectedToken = await generateUnsubscribeToken(normalizedEmail, username);
-    if (token !== expectedToken) return unsubscribeHtml("Invalid unsubscribe link", "This link appears to be invalid or expired.");
+    if (!(await verifyUnsubscribeToken(c.env, normalizedEmail, username, token))) {
+      return unsubscribeHtml("Invalid unsubscribe link", "This link appears to be invalid or expired.");
+    }
 
     const site = await getSiteByUsername(c.env, username);
     if (!site) return unsubscribeHtml("Site not found");

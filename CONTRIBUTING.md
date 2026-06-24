@@ -20,6 +20,16 @@ pnpm build
 
 Use example domains, placeholder IDs, and generated local secrets in fixtures and docs. Do not commit `.dev.vars`, Cloudflare account IDs, API keys, webhook secrets, or production ME3 Cloud configuration.
 
+Before sharing an install path publicly, check:
+
+- `pnpm build` passes.
+- `SECURITY.md`, `README.md`, and setup docs use placeholders instead of private
+  install details.
+- `wrangler.toml` has placeholder Cloudflare IDs unless it is an owner-local
+  install file that will not be committed.
+- new secrets are configured with `wrangler secret put`, not committed in source
+  or config.
+
 ## Pull Requests
 
 - Keep changes focused and explain which Core boundary they affect.

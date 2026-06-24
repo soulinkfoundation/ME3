@@ -4,6 +4,7 @@ import {
   renderLandingPageHtml,
   type LandingPageDocument,
 } from "@me3-core/plugin-landing-pages";
+import { getOrCreateInstallSessionSecret } from "./install-secrets";
 import type { AppContext } from "./http/types";
 import type { Me3SiteProfile } from "./site-generator";
 import type { DbSite, Env, OwnerProfile } from "./types";
@@ -1198,13 +1199,40 @@ export function normalizeImportedTimestamp(value: string | undefined): string | 
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-export async function generateUnsubscribeToken(email: string, username: string): Promise<string> {
-  const hash = await hashSubscriberIdentifier(`${email.toLowerCase()}${username.toLowerCase()}`);
+export async function generateUnsubscribeToken(
+  env: Env,
+  email: string,
+  username: string,
+): Promise<string> {
+  const secret = await getOrCreateInstallSessionSecret(env);
+  const hash = await sha256Text(
+    `me3:unsubscribe:${secret}:${email.toLowerCase()}:${username.toLowerCase()}`,
+  );
   return hash.slice(0, 32);
+}
+
+export async function verifyUnsubscribeToken(
+  env: Env,
+  email: string,
+  username: string,
+  token: string,
+): Promise<boolean> {
+  const expectedToken = await generateUnsubscribeToken(env, email, username);
+  return constantTimeEqual(await sha256Text(token), await sha256Text(expectedToken));
 }
 
 export async function hashSubscriberIdentifier(value: string): Promise<string> {
   return sha256Text(`me3:${value.toLowerCase()}`);
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+
+  let mismatch = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    mismatch |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return mismatch === 0;
 }
 
 export function unsubscribeHtml(title: string, body?: string, note?: string): Response {
