@@ -9,6 +9,10 @@ import { api } from "../api";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { DEFAULT_APP_PATH } from "../utils/navigation";
+import {
+  isStartLoginRedirect,
+  normalizeSafeLoginRedirect,
+} from "../utils/loginRedirect";
 import { detectBrowserTimeZone } from "../utils/timezone";
 
 definePage({
@@ -151,44 +155,30 @@ async function resolveStartPostLoginRedirect(redirect: string): Promise<string> 
   }
 }
 
-function isStartRedirectPath(pathname: string): boolean {
-  return pathname === "/start" || pathname === "/start/";
-}
-
 async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
-  if (typeof raw !== "string") return resolveDefaultPostLoginRedirect();
-  const redirect = raw.trim();
+  const redirect = normalizeSafeLoginRedirect(raw, {
+    origin: window.location.origin,
+    hostname: window.location.hostname,
+    dev: import.meta.env.DEV,
+  });
   if (!redirect) return resolveDefaultPostLoginRedirect();
 
-  if (redirect.startsWith("/") && !redirect.startsWith("//")) {
-    const parsed = new URL(redirect, window.location.origin);
-    if (isStartRedirectPath(parsed.pathname)) {
-      return resolveStartPostLoginRedirect(redirect);
-    }
-    return redirect;
+  if (isStartLoginRedirect(redirect, window.location.origin)) {
+    return resolveStartPostLoginRedirect(redirect);
   }
+  return redirect;
+}
 
-  try {
-    const parsed = new URL(redirect);
-    const allowedHosts = new Set([window.location.hostname]);
-    const sameHost = allowedHosts.has(parsed.hostname);
-    const devLocalhost =
-      import.meta.env.DEV &&
-      ["localhost", "127.0.0.1"].includes(parsed.hostname);
-    if (
-      (sameHost || devLocalhost) &&
-      ["http:", "https:"].includes(parsed.protocol)
-    ) {
-      if (isStartRedirectPath(parsed.pathname)) {
-        return resolveStartPostLoginRedirect(parsed.toString());
-      }
-      return parsed.toString();
-    }
-  } catch {
-    // Fall through to default.
+function resolveMe3OAuthRedirect(raw: unknown): string {
+  const redirect = normalizeSafeLoginRedirect(raw, {
+    origin: window.location.origin,
+    hostname: window.location.hostname,
+    dev: import.meta.env.DEV,
+  });
+  if (!redirect || isStartLoginRedirect(redirect, window.location.origin)) {
+    return DEFAULT_APP_PATH;
   }
-
-  return resolveDefaultPostLoginRedirect();
+  return redirect;
 }
 
 function navigateAfterLogin(target: string) {
@@ -292,7 +282,7 @@ async function startMe3SignIn() {
   try {
     const response = await api.post<{ ok: boolean; url?: string }>(
       "/auth/me3/start",
-      { redirect: await resolvePostLoginRedirect(route.query.redirect) },
+      { redirect: resolveMe3OAuthRedirect(route.query.redirect) },
     );
 
     if (response.ok && response.url) {
