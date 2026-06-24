@@ -2677,9 +2677,6 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else class="accounts-workspace">
-        <header class="accounts-page-header">
-          <h1 class="app-page-title">Accounts</h1>
-        </header>
         <div class="accounts-toolbar">
           <div
             class="accounts-tabs"
@@ -4050,18 +4047,6 @@ onBeforeUnmount(() => {
   display: grid;
   width: min(1120px, 100%);
   gap: 14px;
-}
-
-.accounts-page-header {
-  display: flex;
-  min-width: 0;
-  padding-left: max(
-    0px,
-    calc(
-      var(--app-shell-mobile-nav-leading-padding) + 12px -
-        var(--accounts-route-inline-padding)
-    )
-  );
 }
 
 .accounts-toolbar,

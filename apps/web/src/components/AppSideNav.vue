@@ -410,7 +410,7 @@ watch(navDrawerOpen, (isOpen) => {
   z-index: 60;
   display: flex;
   flex-direction: column;
-  width: var(--app-side-nav-width);
+  width: min(180px, calc(100vw - 32px));
   height: 100dvh;
   box-sizing: border-box;
   padding: calc(
@@ -446,7 +446,7 @@ watch(navDrawerOpen, (isOpen) => {
 .app-side-nav__links {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 9px;
   flex: 1;
   min-height: 0;
@@ -455,10 +455,26 @@ watch(navDrawerOpen, (isOpen) => {
 
 .app-side-nav__row {
   position: relative;
+  justify-content: flex-start;
+  width: 100%;
+  gap: 10px;
+  padding: 0 12px;
   font-size: 14px;
   font-weight: 600;
   text-decoration: none;
-  text-align: center;
+  text-align: left;
+}
+
+.app-side-nav__row .sr-only {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: nowrap;
+  border: 0;
 }
 
 .app-side-nav__row--active {

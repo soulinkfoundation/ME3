@@ -716,7 +716,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
     <main class="main">
       <!-- Site Header -->
       <div class="site-header">
-        <h1 class="app-page-title">Your Site</h1>
         <div class="site-info">
           <div class="site-info-main">
             <div class="site-title">
@@ -1211,10 +1210,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 }
 
 @media (max-width: 959px) {
-  .site-header > .app-page-title {
-    padding-left: 24px;
-  }
-
   .site-info-main {
     padding-left: 24px;
   }

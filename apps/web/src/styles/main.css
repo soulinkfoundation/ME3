@@ -129,14 +129,6 @@ button {
   font-family: inherit;
 }
 
-.app-page-title {
-  margin: 0;
-  color: var(--ui-text);
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
 ::selection {
   background: color-mix(in oklab, var(--color-accent), transparent 72%);
 }
