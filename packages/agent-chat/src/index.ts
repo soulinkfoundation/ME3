@@ -2516,14 +2516,6 @@ async function runWorkersAiImageGeneration(
   if (!body || !contentType) {
     throw new Error("Could not prepare Workers AI image request.");
   }
-  const options =
-    route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
-      ? {
-          gateway: {
-            id: route.aiGateway.gatewayId,
-          },
-        }
-      : undefined;
   const result = await route.ai!.run(
     route.model,
     {
@@ -2532,7 +2524,6 @@ async function runWorkersAiImageGeneration(
         contentType,
       },
     },
-    options,
   );
   return normalizeWorkersAiImageResult(result);
 }

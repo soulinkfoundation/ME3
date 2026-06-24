@@ -722,7 +722,13 @@ describe("Core chat native context", () => {
     const r2 = createR2Bucket();
 
     const response = await dispatchAgentSandboxTurn(
-      { ...env, AI: { run: aiRun }, SITE_ASSETS: r2.bucket } as never,
+      {
+        ...env,
+        AI: { run: aiRun },
+        SITE_ASSETS: r2.bucket,
+        CLOUDFLARE_ACCOUNT_ID: "cf-account",
+        CLOUDFLARE_API_TOKEN: "cf-token",
+      } as never,
       createStorage(),
       {
         ...dispatchInput("Generate an image of a quiet writing desk."),
@@ -743,8 +749,8 @@ describe("Core chat native context", () => {
           contentType: expect.stringContaining("multipart/form-data"),
         }),
       }),
-      undefined,
     );
+    expect(aiRun.mock.calls[0]).toHaveLength(2);
     expect(response.replyText).toContain("Generated an image");
     expect(response.imageAction).toMatchObject({
       kind: "generated",
