@@ -33,6 +33,12 @@ import {
   decodeMimeHeaderValue,
   parseEmailAddressHeader,
 } from "../../../shared/email-headers";
+import { classifyAssistantImageIntent } from "./image-intent";
+import {
+  DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+  modelSupportsCapability,
+  type AssistantImageCapability,
+} from "./model-capabilities";
 
 export {
   isCoreChatBookingLookupRequest,
@@ -64,6 +70,20 @@ export {
   type CoreChatCapabilityContract,
   type CoreChatCapabilitySideEffect,
 } from "./capabilities";
+
+export {
+  classifyAssistantImageIntent,
+  type AssistantImageTurnIntent,
+} from "./image-intent";
+
+export {
+  DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+  modelSupportsCapability,
+  modelSupportsImageInput,
+  type AiAgentModelCapability,
+  type AiAgentModelProviderId,
+  type AssistantImageCapability,
+} from "./model-capabilities";
 
 export {
   createAgentContentItem,
@@ -203,11 +223,33 @@ export type AgentSandboxDispatchResponse = {
     remindAt?: string;
   } | null;
   actionCards?: AgentChatActionCard[] | null;
+  imageAction?: AgentChatImageAction | null;
   contentAction?: null;
   contactsChanged?: boolean;
   modelAttempts?: AgentChatModelAttemptTrace[] | null;
   trace?: AgentChatTurnTrace | null;
   error?: string;
+};
+
+export type AgentChatImageAction = {
+  kind: "generated" | "edited" | "blocked";
+  status: "complete" | "failed" | "blocked";
+  prompt: string;
+  revisedPrompt: string | null;
+  providerId: string | null;
+  model: string | null;
+  reason?: string | null;
+  assets: Array<{
+    id: string;
+    attachmentId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    width?: number | null;
+    height?: number | null;
+    url: string;
+    storageKey: string;
+  }>;
 };
 
 export type AgentChatModelAttemptTrace = {
@@ -260,6 +302,15 @@ export type AgentChatTurnTrace = {
     debugError: string | null;
     attempts: AgentChatModelAttemptTrace[];
   };
+  imageGeneration?: {
+    intent: "generate" | "edit";
+    status: "blocked" | "started" | "succeeded" | "failed";
+    providerId: AiProviderId | null;
+    model: string | null;
+    capabilityChecked: AssistantImageCapability;
+    assetCount: number;
+    error: string | null;
+  } | null;
   toolResult: {
     status: "not_attempted" | "succeeded" | "failed" | "clarified";
     specialist: string | null;
@@ -456,6 +507,8 @@ type CoreAgentChatEnv = {
   ME3_AI_CHAT_PROVIDER?: string;
   ME3_AI_CHAT_MODEL?: string;
   ME3_AI_CHAT_BACKUP_MODEL?: string;
+  ME3_AI_IMAGE_GENERATION_PROVIDER?: string;
+  ME3_AI_IMAGE_GENERATION_MODEL?: string;
   CORE_API_ORIGIN?: string;
   CORE_WEB_ORIGIN?: string;
 };
@@ -1904,6 +1957,42 @@ export async function dispatchAgentSandboxTurn(
     return response;
   }
 
+  const imageIntent = classifyAssistantImageIntent(
+    input.messageText,
+    input.attachments,
+  );
+  const imageTurn = await maybeHandleAssistantImageTurn(
+    env,
+    input,
+    imageIntent,
+  );
+  if (imageTurn) {
+    await persistAssistantMessage(env, input.userId, "user", input.messageText, input.threadId);
+    if (imageTurn.response.replyText) {
+      await persistAssistantMessage(
+        env,
+        input.userId,
+        "assistant",
+        imageTurn.response.replyText,
+        input.threadId,
+        assistantMessageMetadataForResponse(imageTurn.response),
+      );
+    }
+    let response: AgentSandboxDispatchResponse = {
+      ...imageTurn.response,
+      threadId: input.threadId ?? null,
+    };
+    await touchAssistantThread(env, input.userId, input.threadId);
+    response = attachAgentTurnTrace(env, response, {
+      input,
+      plannerDecision: toolPlan.decision,
+      route: imageTurn.route,
+      context: null,
+    });
+    await storage.put(resultKey, response);
+    return response;
+  }
+
   const route = await resolveAiRoute(env, input.userId, input.selectedModel);
   const runtimeMessageText = appendAgentAttachmentReferenceContext(
     input.messageText,
@@ -2030,6 +2119,150 @@ function normalizeAgentAttachmentReferences(
       textTruncated: Boolean((attachment as AgentChatAttachmentReference).textTruncated),
     }))
     .filter((attachment) => attachment.status === "ready" && Boolean(attachment.id));
+}
+
+type AssistantImageTurnResult = {
+  response: AgentSandboxDispatchResponse;
+  route: AiRoute | null;
+};
+
+async function maybeHandleAssistantImageTurn(
+  env: CoreAgentChatEnv,
+  input: AgentSandboxDispatchInput,
+  intent: ReturnType<typeof classifyAssistantImageIntent>,
+): Promise<AssistantImageTurnResult | null> {
+  if (intent.kind === "none") return null;
+
+  const prompt = input.messageText.trim();
+  if (intent.kind === "ambiguous") {
+    return {
+      route: null,
+      response: blockedImageResponse({
+        turnId: input.turnId,
+        prompt,
+        kind: "blocked",
+        reason: "image_generation_intent_ambiguous",
+        replyText:
+          "Do you want me to generate an image, or write a text prompt for one?",
+        route: null,
+      }),
+    };
+  }
+
+  if (intent.capability === "image_edit") {
+    return {
+      route: null,
+      response: blockedImageResponse({
+        turnId: input.turnId,
+        prompt,
+        kind: "blocked",
+        reason: "image_edit_not_enabled",
+        replyText:
+          "Image editing is not enabled in ME3 Core yet. I can help draft edit instructions, but I won't send this to a text model as if it can edit images.",
+        route: null,
+      }),
+    };
+  }
+
+  const route = await resolveImageGenerationRoute(
+    env,
+    input.userId,
+    input.selectedModel,
+    intent.capability,
+  );
+
+  if (!route) {
+    return {
+      route: null,
+      response: blockedImageResponse({
+        turnId: input.turnId,
+        prompt,
+        kind: "blocked",
+        reason: "image_generation_route_unavailable",
+        replyText:
+          "Image generation needs a compatible image route. Configure Workers AI or another image provider before trying again.",
+        route: null,
+      }),
+    };
+  }
+
+  if (!modelSupportsCapability(route.providerId, route.model, intent.capability)) {
+    return {
+      route,
+      response: blockedImageResponse({
+        turnId: input.turnId,
+        prompt,
+        kind: "blocked",
+        reason: "image_generation_route_incompatible",
+        replyText:
+          "The configured image route does not support image generation. Use Workers AI FLUX.2 [dev] or another tested image model.",
+        route,
+      }),
+    };
+  }
+
+  if (!route.configured) {
+    return {
+      route,
+      response: blockedImageResponse({
+        turnId: input.turnId,
+        prompt,
+        kind: "blocked",
+        reason: "image_generation_provider_unconfigured",
+        replyText:
+          "Image generation is routed to a compatible model, but the provider is not configured yet. Add the provider setup in Account > AI model before trying again.",
+        route,
+      }),
+    };
+  }
+
+  return {
+    route,
+    response: blockedImageResponse({
+      turnId: input.turnId,
+      prompt,
+      kind: "blocked",
+      reason: "image_generation_adapter_pending",
+      replyText: `Image generation is routed to ${route.providerId} (${route.model}), but ME3 Core does not generate image files yet. The next slice adds the image adapter and asset storage.`,
+      route,
+    }),
+  };
+}
+
+function blockedImageResponse(input: {
+  turnId: string;
+  prompt: string;
+  kind: AgentChatImageAction["kind"];
+  reason: string;
+  replyText: string;
+  route: AiRoute | null;
+}): AgentSandboxDispatchResponse {
+  return {
+    ok: true,
+    auditId: null,
+    turnId: input.turnId,
+    specialist: "core.agent-chat.image-generation",
+    replyText: input.replyText,
+    model: input.route?.model ?? null,
+    source: "fallback",
+    fallbackReason: "Image generation blocked",
+    debugError: input.reason,
+    emailAction: null,
+    reminderAction: null,
+    actionCards: null,
+    imageAction: {
+      kind: input.kind,
+      status: "blocked",
+      prompt: input.prompt,
+      revisedPrompt: null,
+      providerId: input.route?.providerId ?? null,
+      model: input.route?.model ?? null,
+      reason: input.reason,
+      assets: [],
+    },
+    contentAction: null,
+    contactsChanged: false,
+  };
 }
 
 async function loadCoreChatToolTurnPlan(
@@ -4806,6 +5039,75 @@ async function resolveAiRoute(
   };
 }
 
+async function resolveImageGenerationRoute(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+  selectedModel: AgentChatModelSelection | null | undefined,
+  capability: AssistantImageCapability,
+): Promise<AiRoute | null> {
+  const selectedProvider = normalizeProviderId(selectedModel?.providerId);
+  const selectedModelName = normalizeModel(selectedModel?.model);
+  if (
+    selectedProvider &&
+    selectedModelName &&
+    modelSupportsCapability(selectedProvider, selectedModelName, capability)
+  ) {
+    return buildAiRoute(env, ownerId, selectedProvider, selectedModelName, null);
+  }
+
+  const stored = await getStoredImageGenerationDefault(env, ownerId);
+  const storedProvider = normalizeProviderId(stored?.provider_id);
+  const storedModel = normalizeModel(stored?.model);
+  if (storedProvider && storedModel) {
+    return buildAiRoute(env, ownerId, storedProvider, storedModel, null);
+  }
+
+  const envProvider = normalizeProviderId(env.ME3_AI_IMAGE_GENERATION_PROVIDER);
+  const envModel = normalizeModel(env.ME3_AI_IMAGE_GENERATION_MODEL);
+  if (envModel) {
+    return buildAiRoute(env, ownerId, envProvider || "workers-ai", envModel, null);
+  }
+
+  if (capability === "image_generation" && env.AI) {
+    return buildAiRoute(
+      env,
+      ownerId,
+      "workers-ai",
+      DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+      null,
+    );
+  }
+
+  return null;
+}
+
+async function buildAiRoute(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+  providerId: AiProviderId,
+  model: string,
+  backupModel: string | null,
+): Promise<AiRoute> {
+  const apiKey =
+    providerId === "openai"
+      ? env.OPENAI_API_KEY || (await getStoredApiKey(env, ownerId, providerId))
+      : providerId === "anthropic"
+        ? env.ANTHROPIC_API_KEY || (await getStoredApiKey(env, ownerId, providerId))
+        : null;
+  const aiGateway = await getAiGatewayRuntimeConfig(env, ownerId).catch(() => null);
+
+  return {
+    providerId,
+    model,
+    backupModel,
+    apiKey,
+    ai: env.AI || null,
+    aiGateway,
+    configured:
+      providerId === "workers-ai" ? Boolean(env.AI && model) : Boolean(apiKey && model),
+  };
+}
+
 async function getAiGatewayRuntimeConfig(
   env: CoreAgentChatEnv,
   ownerId: string,
@@ -4866,6 +5168,24 @@ async function getStoredChatDefault(
       `SELECT provider_id, model
        FROM ai_model_defaults
        WHERE user_id = ? AND use_case = 'chat'
+       LIMIT 1`,
+    )
+      .bind(ownerId)
+      .first<AiDefaultRow>();
+  } catch {
+    return null;
+  }
+}
+
+async function getStoredImageGenerationDefault(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+): Promise<AiDefaultRow | null> {
+  try {
+    return env.DB.prepare(
+      `SELECT provider_id, model
+       FROM ai_model_defaults
+       WHERE user_id = ? AND use_case = 'image_generation'
        LIMIT 1`,
     )
       .bind(ownerId)
@@ -5195,6 +5515,7 @@ function buildAgentTurnTrace(
       debugError: response.debugError ?? null,
       attempts: response.modelAttempts ?? [],
     },
+    imageGeneration: buildAgentTraceImageGeneration(response),
     toolResult: {
       status: toolResultTraceStatus(response, input.plannerDecision),
       specialist: response.specialist,
@@ -5203,6 +5524,28 @@ function buildAgentTurnTrace(
     audit: {
       auditId: response.auditId,
     },
+  };
+}
+
+function buildAgentTraceImageGeneration(
+  response: AgentSandboxDispatchResponse,
+): AgentChatTurnTrace["imageGeneration"] {
+  const action = response.imageAction;
+  if (!action) return null;
+  return {
+    intent: action.kind === "edited" ? "edit" : "generate",
+    status:
+      action.status === "complete"
+        ? "succeeded"
+        : action.status === "failed"
+          ? "failed"
+          : "blocked",
+    providerId: normalizeProviderId(action.providerId),
+    model: action.model,
+    capabilityChecked:
+      action.kind === "edited" ? "image_edit" : "image_generation",
+    assetCount: action.assets.length,
+    error: action.reason ?? null,
   };
 }
 
@@ -6203,9 +6546,12 @@ async function persistAssistantMessage(
 }
 
 function assistantMessageMetadataForResponse(
-  response: Pick<AgentSandboxDispatchResponse, "actionCards">,
+  response: Pick<AgentSandboxDispatchResponse, "actionCards" | "imageAction">,
 ): Record<string, unknown> | null {
-  return response.actionCards?.length ? { actionCards: response.actionCards } : null;
+  const metadata: Record<string, unknown> = {};
+  if (response.actionCards?.length) metadata.actionCards = response.actionCards;
+  if (response.imageAction) metadata.imageAction = response.imageAction;
+  return Object.keys(metadata).length ? metadata : null;
 }
 
 async function touchAssistantThread(

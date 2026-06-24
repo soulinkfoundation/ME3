@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dispatchAgentSandboxTurn } from "./agent-chat";
+import {
+  DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+  classifyAssistantImageIntent,
+  dispatchAgentSandboxTurn,
+  modelSupportsCapability,
+} from "./agent-chat";
 
 type FakeDbState = {
   owner: Record<string, unknown> | null;
@@ -21,6 +26,7 @@ type FakeDbState = {
   wheelSnapshots: Array<Record<string, unknown>>;
   reminders: Array<Record<string, unknown>>;
   bookings: Array<Record<string, unknown>>;
+  aiDefaults: Array<Record<string, unknown>>;
   persistedMessages: Array<{
     ownerId: string;
     role: string;
@@ -70,6 +76,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     wheelSnapshots: [],
     reminders: [],
     bookings: [],
+    aiDefaults: [],
     persistedMessages: [],
     ...state,
   };
@@ -81,7 +88,14 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("FROM owner_profile")) {
             return values[0] === dbState.owner?.id ? (dbState.owner as T) : null;
           }
-          if (sql.includes("FROM ai_model_defaults")) return null;
+          if (sql.includes("FROM ai_model_defaults")) {
+            const useCase = sql.includes("use_case = 'image_generation'")
+              ? "image_generation"
+              : "chat";
+            return (dbState.aiDefaults.find(
+              (row) => row.user_id === values[0] && row.use_case === useCase,
+            ) || null) as T;
+          }
           if (sql.includes("FROM ai_provider_credentials")) return null;
           if (sql.includes("FROM install_secrets")) return null;
           if (sql.includes("FROM mailbox_aliases")) {
@@ -560,6 +574,91 @@ describe("Core chat native context", () => {
       "@cf/example/selected-model",
       expect.any(Object),
     );
+  });
+
+  it("classifies image generation without treating prompt drafting or image analysis as generation", () => {
+    expect(
+      modelSupportsCapability(
+        "workers-ai",
+        DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+        "image_generation",
+      ),
+    ).toBe(true);
+    expect(
+      modelSupportsCapability("workers-ai", "@cf/qwen/qwen3-30b-a3b-fp8", "image_generation"),
+    ).toBe(false);
+    expect(classifyAssistantImageIntent("Generate an image of a sunrise.")).toMatchObject({
+      kind: "generate",
+      capability: "image_generation",
+    });
+    expect(classifyAssistantImageIntent("Write a prompt for an image of a sunrise.")).toEqual({
+      kind: "none",
+      capability: null,
+    });
+    expect(
+      classifyAssistantImageIntent("Analyze this image.", [
+        { kind: "image", mimeType: "image/png" },
+      ]),
+    ).toEqual({
+      kind: "none",
+      capability: null,
+    });
+  });
+
+  it("routes image generation away from a selected text model when Workers AI is available", async () => {
+    const aiRun = vi.fn(async () => ({
+      response: "Text model should not answer image requests.",
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      {
+        ...dispatchInput("Generate an image of a quiet writing desk."),
+        selectedModel: {
+          providerId: "workers-ai",
+          model: "@cf/qwen/qwen3-30b-a3b-fp8",
+          optionId: "workers-qwen3-30b",
+        },
+      },
+    );
+
+    expect(aiRun).not.toHaveBeenCalled();
+    expect(response.replyText).toContain("Image generation is routed to workers-ai");
+    expect(response.imageAction).toMatchObject({
+      kind: "blocked",
+      status: "blocked",
+      providerId: "workers-ai",
+      model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+      reason: "image_generation_adapter_pending",
+    });
+  });
+
+  it("blocks image generation before provider work when no compatible route exists", async () => {
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      env as never,
+      createStorage(),
+      {
+        ...dispatchInput("Generate an image of a launch banner."),
+        selectedModel: {
+          providerId: "workers-ai",
+          model: "@cf/qwen/qwen3-30b-a3b-fp8",
+          optionId: "workers-qwen3-30b",
+        },
+      },
+    );
+
+    expect(response.replyText).toContain("Image generation needs a compatible image route");
+    expect(response.imageAction).toMatchObject({
+      kind: "blocked",
+      status: "blocked",
+      providerId: null,
+      model: null,
+      reason: "image_generation_route_unavailable",
+    });
   });
 
   it("routes Workers AI chat through AI Gateway when configured", async () => {

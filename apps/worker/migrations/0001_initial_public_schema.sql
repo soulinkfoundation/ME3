@@ -67,7 +67,7 @@ CREATE TABLE ai_gateway_settings (
 );
 CREATE TABLE ai_model_defaults (
   user_id TEXT NOT NULL,
-  use_case TEXT NOT NULL CHECK (use_case IN ('default', 'chat', 'reasoning', 'extraction')),
+  use_case TEXT NOT NULL CHECK (use_case IN ('default', 'chat', 'reasoning', 'extraction', 'image_generation')),
   provider_id TEXT NOT NULL,
   model TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

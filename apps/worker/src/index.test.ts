@@ -9387,6 +9387,11 @@ describe("ME3 Core Worker auth", () => {
           providerId: "workers-ai",
           model: "@cf/qwen/qwen3-30b-a3b-fp8",
         }),
+        expect.objectContaining({
+          id: "image_generation",
+          providerId: "workers-ai",
+          model: "@cf/black-forest-labs/flux-2-dev",
+        }),
       ]),
     );
   });

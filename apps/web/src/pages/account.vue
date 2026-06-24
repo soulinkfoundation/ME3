@@ -126,7 +126,12 @@ type LocalExecutorPairingInstructions = {
   expiresAt: string | null;
 };
 
-type AiRouteId = "default" | "chat" | "reasoning" | "extraction";
+type AiRouteId =
+  | "default"
+  | "chat"
+  | "reasoning"
+  | "extraction"
+  | "image_generation";
 
 type AiProviderRecord = {
   id: string;
@@ -1170,6 +1175,7 @@ function createEmptyAiRouteInputs(): AiRouteInputs {
     chat: { providerId: "", model: "" },
     reasoning: { providerId: "", model: "" },
     extraction: { providerId: "", model: "" },
+    image_generation: { providerId: "", model: "" },
   };
 }
 
@@ -1247,7 +1253,7 @@ async function saveAiSettings() {
     model: aiDefaultRouteInput.value.model.trim(),
   };
   const defaults = Object.fromEntries(
-    (["default", "chat", "reasoning", "extraction"] as AiRouteId[]).map(
+    (["default", "chat", "reasoning", "extraction"] as const).map(
       (routeId) => [routeId, agentModel],
     ),
   );

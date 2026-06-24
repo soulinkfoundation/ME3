@@ -13,6 +13,7 @@ import {
 import {
   createAgentSandboxTurnRecord,
   type AgentChatActionCard,
+  type AgentChatImageAction,
 } from "../agent-chat";
 import {
   dispatchAgentChannelTurn,
@@ -468,31 +469,38 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       createdAt: row.created_at,
       actionCards: metadata.actionCards.length ? metadata.actionCards : undefined,
       siteAction: metadata.siteAction || undefined,
+      imageAction: metadata.imageAction || undefined,
     };
   }
 
   function parseAssistantMessageMetadata(metadataJson: string | null | undefined): {
     actionCards: AgentChatActionCard[];
+    imageAction: AgentChatImageAction | null;
     siteAction: AssistantSiteToolAction["siteAction"] | null;
   } {
-    if (!metadataJson) return { actionCards: [], siteAction: null };
+    if (!metadataJson) return { actionCards: [], imageAction: null, siteAction: null };
     try {
       const parsed = JSON.parse(metadataJson) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { actionCards: [], siteAction: null };
+        return { actionCards: [], imageAction: null, siteAction: null };
       }
       const metadata = parsed as Record<string, unknown>;
       const cards = metadata.actionCards;
+      const imageAction = metadata.imageAction;
       const siteAction = metadata.siteAction;
       return {
         actionCards: Array.isArray(cards) ? (cards as AgentChatActionCard[]) : [],
+        imageAction:
+          imageAction && typeof imageAction === "object" && !Array.isArray(imageAction)
+            ? (imageAction as AgentChatImageAction)
+            : null,
         siteAction:
           siteAction && typeof siteAction === "object" && !Array.isArray(siteAction)
             ? (siteAction as AssistantSiteToolAction["siteAction"])
             : null,
       };
     } catch {
-      return { actionCards: [], siteAction: null };
+      return { actionCards: [], imageAction: null, siteAction: null };
     }
   }
 

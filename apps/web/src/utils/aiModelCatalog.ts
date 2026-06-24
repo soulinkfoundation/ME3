@@ -3,6 +3,9 @@ export type AiAgentModelProviderId = "workers-ai" | "openai" | "anthropic";
 export type AiAgentModelCapability =
   | "text"
   | "vision"
+  | "image_input"
+  | "image_generation"
+  | "image_edit"
   | "long-context"
   | "reasoning"
   | "tool-use";
@@ -27,7 +30,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "claude-sonnet-4-6",
     runtimeLabel: "Anthropic",
     costLabel: "Paid",
-    capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
     description: "Paid Claude model with a strong speed and intelligence balance.",
   },
   {
@@ -37,7 +40,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "claude-opus-4-8",
     runtimeLabel: "Anthropic",
     costLabel: "Paid",
-    capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
     description: "Paid Claude model for the hardest planning and reasoning work.",
   },
   {
@@ -47,7 +50,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "gpt-4o",
     runtimeLabel: "OpenAI",
     costLabel: "Paid",
-    capabilities: ["text", "vision", "tool-use"],
+    capabilities: ["text", "image_input", "tool-use"],
     description: "Familiar multimodal OpenAI model with broad compatibility.",
   },
   {
@@ -57,7 +60,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "gpt-5.5",
     runtimeLabel: "OpenAI",
     costLabel: "Paid",
-    capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
     description: "OpenAI flagship for complex reasoning, coding, and agentic workflows.",
   },
   {
@@ -79,7 +82,7 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     model: "@cf/moonshotai/kimi-k2.7-code",
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Paid",
-    capabilities: ["text", "vision", "long-context", "reasoning", "tool-use"],
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
     description:
       "Kimi K2.7 Code on Workers AI for large-context agentic work and tool use.",
   },

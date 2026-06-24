@@ -29,6 +29,7 @@ import {
   resolveAgentReplyText,
   type AgentChatEmailDraftAction,
   type AgentChatActionCard,
+  type AgentChatImageAction,
   type AgentChatTurnTrace,
 } from "../../utils/agentChat";
 import { renderAssistantMarkdown } from "../../utils/assistantMarkdown";
@@ -425,6 +426,7 @@ type AgentSandboxResponse = {
     remindAt?: string;
   } | null;
   actionCards?: AgentChatActionCard[] | null;
+  imageAction?: AgentChatImageAction | null;
   contentAction?: {
     kind: "previewed" | "saved";
     itemId?: string;
@@ -454,6 +456,7 @@ type AssistantThreadMessage = {
   text: string;
   createdAt: string;
   actionCards?: AgentChatActionCard[] | null;
+  imageAction?: AgentChatImageAction | null;
   siteAction?: AgentSandboxResponse["siteAction"];
   trace?: AgentChatTurnTrace | null;
 };
@@ -1072,8 +1075,8 @@ const assistantAttachmentIssue = computed(() => {
   const hasImage = assistantAttachments.value.some(
     (attachment) => attachment.kind === "image",
   );
-  if (hasImage && !selectedModel.value.capabilities.includes("vision")) {
-    return "Switch to a vision-capable model before sending images.";
+  if (hasImage && !modelHasImageInput(selectedModel.value.capabilities)) {
+    return "Switch to an image-input-capable model before sending images.";
   }
 
   return "";
@@ -2084,6 +2087,7 @@ async function loadAssistantThreadFromRoute() {
         text: string;
         createdAt: string;
         actionCards: AgentChatActionCard[];
+        imageAction: AgentChatImageAction | null;
         emailDraftAction: AgentChatEmailDraftAction | null;
         actionHref: string | null;
         actionLabel: string | null;
@@ -2093,6 +2097,7 @@ async function loadAssistantThreadFromRoute() {
         text: message.text,
         createdAt: message.createdAt,
         actionCards: normalizeAgentActionCards(message.actionCards),
+        imageAction: message.imageAction || null,
         emailDraftAction: null,
         actionHref: actionLink?.href || null,
         actionLabel: actionLink?.label || null,
@@ -2476,12 +2481,22 @@ function setupStateForModel(option: AiAgentModelOption | undefined) {
 function capabilitySummary(capabilities: AiAgentModelCapability[]) {
   const labels: Record<AiAgentModelCapability, string> = {
     text: "Text",
-    vision: "Vision",
+    vision: "Image input",
+    image_input: "Image input",
+    image_generation: "Image generation",
+    image_edit: "Image edit",
     "long-context": "Long",
     reasoning: "Reasoning",
     "tool-use": "Tools",
   };
-  return capabilities.map((capability) => labels[capability]).join(", ");
+  return [...new Set(capabilities.map((capability) => labels[capability]))].join(", ");
+}
+
+function modelHasImageInput(capabilities: AiAgentModelCapability[]) {
+  return (
+    capabilities.includes("image_input") ||
+    capabilities.includes("vision")
+  );
 }
 
 function assistantMessageKey(
@@ -2670,6 +2685,7 @@ function applyAssistantResultToMessage(
   message.detail = formatAgentRuntimeDetail(result);
   message.trace = result.trace || null;
   message.actionCards = normalizeAgentActionCards(result.actionCards);
+  message.imageAction = result.imageAction || null;
   message.emailDraftAction = createAgentChatEmailDraftAction(
     message,
     previousUserTextForAssistantMessage(message),

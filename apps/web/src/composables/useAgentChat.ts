@@ -2,6 +2,7 @@ import { ref } from "vue";
 import type {
   AgentChatActionCard,
   AgentChatEmailDraftAction,
+  AgentChatImageAction,
   AgentChatTurnTrace,
 } from "../utils/agentChat";
 
@@ -13,6 +14,7 @@ export type AgentChatMessage = {
   meta?: string | null;
   detail?: string | null;
   actionCards?: AgentChatActionCard[];
+  imageAction?: AgentChatImageAction | null;
   emailDraftAction?: AgentChatEmailDraftAction | null;
   trace?: AgentChatTurnTrace | null;
   jobBuilderAction?: any;

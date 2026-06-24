@@ -17,7 +17,29 @@ export type AgentChatRuntimeResult = {
   contextManifest?: unknown;
   siteAction?: AgentChatSiteAction | null;
   actionCards?: AgentChatActionCard[] | null;
+  imageAction?: AgentChatImageAction | null;
   trace?: AgentChatTurnTrace | null;
+};
+
+export type AgentChatImageAction = {
+  kind: "generated" | "edited" | "blocked";
+  status: "complete" | "failed" | "blocked";
+  prompt: string;
+  revisedPrompt: string | null;
+  providerId: string | null;
+  model: string | null;
+  reason?: string | null;
+  assets: Array<{
+    id: string;
+    attachmentId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    width?: number | null;
+    height?: number | null;
+    url: string;
+    storageKey: string;
+  }>;
 };
 
 export type AgentChatSiteAction = {
@@ -136,6 +158,15 @@ export type AgentChatTurnTrace = {
       error?: string | null;
     }>;
   };
+  imageGeneration?: {
+    intent?: "generate" | "edit";
+    status?: string;
+    providerId?: string | null;
+    model?: string | null;
+    capabilityChecked?: string;
+    assetCount?: number;
+    error?: string | null;
+  } | null;
   toolResult?: {
     status?: string;
     specialist?: string | null;
@@ -249,6 +280,16 @@ export function formatAgentTraceRows(
       value: joinTraceParts([
         trace.toolResult?.status,
         trace.toolResult?.specialist,
+      ]),
+    },
+    {
+      label: "Image",
+      value: joinTraceParts([
+        trace.imageGeneration?.intent,
+        trace.imageGeneration?.status,
+        trace.imageGeneration?.providerId,
+        trace.imageGeneration?.model,
+        trace.imageGeneration?.error,
       ]),
     },
     { label: "Audit", value: trace.audit?.auditId || "" },

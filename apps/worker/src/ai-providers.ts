@@ -1,4 +1,5 @@
 import type { DbAiModelDefault, DbAiProviderCredential, Env } from "./types";
+import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL } from "@me3-core/plugin-agent-chat";
 import {
   getOrCreateInstallEncryptionKey,
   hasInstallEncryptionKey,
@@ -8,9 +9,16 @@ import {
   type AiGatewayRuntimeConfig,
 } from "./ai-gateway";
 
-export const AI_ROUTE_IDS = ["default", "chat", "reasoning", "extraction"] as const;
+export const AI_ROUTE_IDS = [
+  "default",
+  "chat",
+  "reasoning",
+  "extraction",
+  "image_generation",
+] as const;
 
 export type AiRouteId = (typeof AI_ROUTE_IDS)[number];
+type AiTextRouteId = Exclude<AiRouteId, "image_generation">;
 export type AiProviderId = "workers-ai" | "openai" | "anthropic" | "executor";
 
 type AiProviderAdapter = {
@@ -101,6 +109,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
       chat: "@cf/qwen/qwen3-30b-a3b-fp8",
       reasoning: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
       extraction: "@cf/qwen/qwen3-30b-a3b-fp8",
+      image_generation: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
     },
   },
   {
@@ -117,6 +126,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
       chat: "gpt-4o",
       reasoning: "gpt-5.5",
       extraction: "gpt-4o",
+      image_generation: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
     },
   },
   {
@@ -133,6 +143,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
       chat: "claude-sonnet-4-6",
       reasoning: "claude-opus-4-8",
       extraction: "claude-sonnet-4-6",
+      image_generation: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
     },
   },
   {
@@ -148,6 +159,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
       chat: "executor-chat",
       reasoning: "executor-reasoning",
       extraction: "executor-extraction",
+      image_generation: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
     },
   },
 ];
@@ -157,6 +169,7 @@ const ROUTE_LABELS: Record<AiRouteId, string> = {
   chat: "Chat",
   reasoning: "Reasoning",
   extraction: "Extraction",
+  image_generation: "Image generation",
 };
 
 const ROUTE_ENV_KEYS: Record<
@@ -178,6 +191,10 @@ const ROUTE_ENV_KEYS: Record<
   extraction: {
     provider: "ME3_AI_EXTRACTION_PROVIDER",
     model: "ME3_AI_EXTRACTION_MODEL",
+  },
+  image_generation: {
+    provider: "ME3_AI_IMAGE_GENERATION_PROVIDER",
+    model: "ME3_AI_IMAGE_GENERATION_MODEL",
   },
 };
 
@@ -300,7 +317,7 @@ export async function generateAiText(
   env: Env,
   ownerId: string,
   input: {
-    routeId?: AiRouteId;
+    routeId?: AiTextRouteId;
     selectedModel?: AiTextGenerationSelection | null;
     messages: AiTextMessage[];
     temperature?: number;
@@ -539,11 +556,15 @@ function resolveRoute(
   const envModel = normalizeModel(env[envKeys.model]) || normalizeModel(env.ME3_AI_MODEL);
   const storedProviderId = normalizeProviderId(storedDefault?.provider_id);
   const envProviderId = normalizeProviderId(env[envKeys.provider]) || (envModel ? "workers-ai" : null);
-  const firstConfiguredProvider = providers.find((provider) => provider.configured)?.id;
+  const inheritedRoute = routeId === "image_generation" ? undefined : fallbackRoute;
+  const firstConfiguredProvider =
+    routeId === "image_generation"
+      ? undefined
+      : providers.find((provider) => provider.configured)?.id;
   const providerId =
     storedProviderId ||
     envProviderId ||
-    fallbackRoute?.providerId ||
+    inheritedRoute?.providerId ||
     firstConfiguredProvider ||
     "workers-ai";
   const adapter = getProviderAdapter(providerId) || getProviderAdapter("workers-ai")!;
@@ -556,7 +577,7 @@ function resolveRoute(
   const model =
     normalizeModel(storedDefault?.model) ||
     envModel ||
-    fallbackRoute?.model ||
+    inheritedRoute?.model ||
     adapter.recommendedModels[routeId];
   const configured = Boolean(provider?.configured && model);
 
@@ -605,7 +626,7 @@ type ResolvedTextGenerationRoute = {
 async function resolveTextGenerationRoute(
   env: Env,
   ownerId: string,
-  routeId: AiRouteId,
+  routeId: AiTextRouteId,
   selectedModel: AiTextGenerationSelection | null,
 ): Promise<ResolvedTextGenerationRoute> {
   const settings = await getAiSettings(env, ownerId);
