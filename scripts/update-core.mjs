@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
@@ -90,6 +90,8 @@ if (!hasMergeBase("HEAD", targetCommit)) {
   await connectUnrelatedHistory();
 }
 
+preserveInstallOwnedFiles();
+
 const mergeResult = run("git", ["merge", "--no-edit", targetTag], { allowFailure: true });
 if (mergeResult.status !== 0) {
   console.error("");
@@ -157,6 +159,17 @@ function ensureUpstreamRemote() {
   }
 
   run("git", ["remote", "add", args.upstreamName, args.upstreamUrl]);
+}
+
+function preserveInstallOwnedFiles() {
+  run("git", ["config", "merge.me3-install-ours.driver", "true"]);
+  const attributesPath = capture("git", ["rev-parse", "--git-path", "info/attributes"]).trim();
+  const line = "wrangler.toml merge=me3-install-ours";
+  const existing = existsSync(attributesPath) ? readFileSync(attributesPath, "utf8") : "";
+  if (existing.split(/\r?\n/).includes(line)) return;
+
+  const prefix = existing && !existing.endsWith("\n") ? "\n" : "";
+  writeFileSync(attributesPath, `${existing}${prefix}${line}\n`);
 }
 
 async function loadInstalledCoreMetadata() {

@@ -57,6 +57,8 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          git config merge.me3-install-ours.driver true
+          printf 'wrangler.toml merge=me3-install-ours\n' > .git/info/attributes
 
           tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
           args=(--yes)
