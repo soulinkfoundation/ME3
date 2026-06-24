@@ -3,14 +3,14 @@
 </p>
 
 <p align="center">
-  ME3 thinks your personal AI (and email, calendar, website...) should belong to you, </br> and making that happen shouldn't be such a pain in the ass.
+  <strong>ME3 thinks your AI (and email, calendar, website...) should belong to you, </br> and making that happen shouldn't be such a pain in the ass.</strong>
 </p>
 
 ![ME3 screenshot](apps/web/public/me3.gif)
 
 <p align="center"><strong>
-  It's time, grasshopper... time to take ownership of your digital life!</br>
-Ready? Me too... just press the BUTTON!** 🔴👇</strong>
+  Ready to take ownership of your digital life?</br>
+Me too...👇</strong>
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@ Ready? Me too... just press the BUTTON!** 🔴👇</strong>
   </a>
 </p>
 
-## 🖥️ What's in ME3
+### 🖥️ What's in ME3
 
 - **🤖 An AI assistant/agent** you control and create jobs for to save you time. Pick any model from Open Source models to Claude.
 - **🚀 Mission Control** to manage your projects/tasks/life.
@@ -28,13 +28,13 @@ Ready? Me too... just press the BUTTON!** 🔴👇</strong>
 - **📆 A Calendar** your 🤖 can use to help you spend more time on what matters to you.
 - **🧩 Plugins**: you can build, extend and modify to make ME3 your own.
 
-Note: some features may require Cloudflare’s $5/month plan.
+Note: Cloudflare hosting is free to start; some features require a $5/month plan. AI costs are extra.
 
-## 📜 Docs
+### 📜 Docs
 
-Once you're set up, you can ask ME3 what you need to know, like how to configure a custom domain, run the app locally, or create your own plugin.
+Once you're set up, you can ask ME3 what you need to know, like how to configure a custom domain, run the app locally, or create your own plugin. Or see [how-to-me3](docs/how-to-me3.md) if reading docs is your thing.
 
-## 😘 Support
+### 😘 Support
 
 ME3 is free and open source. To help support ongoing development and maintenance, visit the [Soulink Foundation](https://soulinkfoundation.org/support)
 
