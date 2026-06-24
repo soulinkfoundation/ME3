@@ -600,6 +600,17 @@ watch(
   align-items: center;
 }
 
+.calendar-day.is-today {
+  margin: 0 -8px;
+  padding-inline: 8px;
+  border-radius: 8px;
+  background: color-mix(
+    in srgb,
+    var(--ui-accent-soft, var(--color-bg-subtle)) 45%,
+    transparent
+  );
+}
+
 .calendar-day.is-today .calendar-date-rail strong {
   display: grid;
   place-items: center;
