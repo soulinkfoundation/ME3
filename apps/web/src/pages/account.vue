@@ -391,6 +391,7 @@ const soulinkPanelRef = ref<InstanceType<typeof SoulinkConnectPanel> | null>(
 const telegramPanelRef = ref<InstanceType<typeof TelegramConnectPanel> | null>(
   null,
 );
+const telegramSetupOpen = ref(route.query.section === "telegram");
 
 const openSection = ref({
   ai: false,
@@ -2527,25 +2528,59 @@ onMounted(async () => {
                     </div>
                     <template v-else>
                       <div class="connection-line__header">
-                        <span class="connection-line__title">Telegram</span>
+                        <div class="connection-line__copy">
+                          <span class="connection-line__title">Telegram</span>
+                          <p class="connection-line__description">
+                            Chat with your ME3 assistant in Telegram.
+                          </p>
+                        </div>
                         <StatusBadge
                           v-if="telegramPanelRef?.available"
                           :tone="telegramStatusClass"
                         >
                           {{ telegramStatusLabel }}
                         </StatusBadge>
+                        <Button
+                          color="outline"
+                          size="compact"
+                          type="button"
+                          aria-controls="telegram-setup-panel"
+                          :aria-expanded="telegramSetupOpen"
+                          @click="telegramSetupOpen = !telegramSetupOpen"
+                        >
+                          {{ telegramSetupOpen ? "Hide setup" : "Configure" }}
+                        </Button>
                       </div>
-                      <ol class="telegram-setup-steps">
-                        <li>Open Telegram and search for BotFather.</li>
-                        <li>
-                          Type <code>/newbot</code> and follow the instructions.
-                        </li>
-                        <li>
-                          You will get a bot name and token. Save them here.
-                        </li>
-                      </ol>
+                      <div
+                        id="telegram-setup-panel"
+                        v-show="telegramSetupOpen"
+                        class="telegram-setup-panel"
+                      >
+                        <ol class="telegram-setup-steps">
+                          <li>Open Telegram and search for BotFather.</li>
+                          <li>
+                            Type <code>/newbot</code> and follow the instructions.
+                          </li>
+                          <li>
+                            You will get a bot name and token. Save them here.
+                          </li>
+                        </ol>
+                        <div class="connection-line__end">
+                          <TelegramConnectPanel
+                            ref="telegramPanelRef"
+                            :show-status-row="false"
+                            :compact-connected="true"
+                            :auto-prepare-when-not-connected="
+                              route.query.section === 'telegram'
+                            "
+                          />
+                        </div>
+                      </div>
                     </template>
-                    <div class="connection-line__end">
+                    <div
+                      v-if="telegramPanelRef?.connection?.status === 'active'"
+                      class="connection-line__end"
+                    >
                       <StatusBadge
                         v-if="
                           telegramPanelRef?.available &&
@@ -4112,6 +4147,11 @@ h1 {
 .connection-line--telegram-connected .connection-line__end {
   display: inline-flex;
   padding-top: 2px;
+}
+
+.telegram-setup-panel {
+  display: grid;
+  gap: 12px;
 }
 
 .telegram-setup-steps {

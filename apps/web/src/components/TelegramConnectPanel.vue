@@ -100,6 +100,7 @@ const notice = ref<string | null>(null);
 const botUsernameInput = ref("");
 const botTokenInput = ref("");
 const webhookSecretInput = ref("");
+const showBotToken = ref(false);
 
 const statusHint = computed(() => {
   if (!available.value) {
@@ -442,25 +443,39 @@ defineExpose({
         class="telegram-settings-form"
         @submit.prevent="saveAndSyncTelegramWebhook"
       >
-        <label class="telegram-field">
-          <span>Bot username</span>
+        <div class="telegram-field">
           <input
             v-model="botUsernameInput"
             type="text"
             inputmode="text"
             autocomplete="off"
-            placeholder="your_me3_bot"
+            spellcheck="false"
+            aria-label="Bot username"
+            placeholder="Bot username"
           />
-        </label>
-        <label class="telegram-field">
-          <span>Bot token</span>
-          <input
-            v-model="botTokenInput"
-            type="password"
-            autocomplete="off"
-            :placeholder="botTokenPlaceholder"
-          />
-        </label>
+        </div>
+        <div class="telegram-field">
+          <div class="password-field telegram-token-field">
+            <input
+              v-model="botTokenInput"
+              class="password-field__input"
+              :type="showBotToken ? 'text' : 'password'"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Bot token"
+              :placeholder="botTokenPlaceholder"
+            />
+            <button
+              type="button"
+              class="password-field__toggle"
+              :aria-label="showBotToken ? 'Hide bot token' : 'Show bot token'"
+              :aria-pressed="showBotToken"
+              @click="showBotToken = !showBotToken"
+            >
+              <UiIcon :name="showBotToken ? 'EyeOff' : 'Eye'" :size="18" />
+            </button>
+          </div>
+        </div>
         <div class="telegram-settings-actions">
           <Button
             color="primary"
@@ -617,23 +632,23 @@ defineExpose({
 
 .telegram-settings-form {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(220px, 1.3fr) auto;
+  align-items: center;
+  gap: 8px;
   margin-top: 14px;
 }
 
 .telegram-field {
-  display: grid;
-  gap: 6px;
   min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
 }
 
-.telegram-field input {
+.telegram-field input,
+.password-field__input {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  padding: 10px 12px;
+  min-height: 36px;
+  padding: 8px 12px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-surface);
@@ -642,10 +657,46 @@ defineExpose({
   font-weight: 500;
 }
 
-.telegram-field input:focus {
+.telegram-field input:focus,
+.password-field__input:focus {
   outline: 2px solid var(--ui-accent-soft, rgba(20, 184, 166, 0.28));
   outline-offset: 1px;
   border-color: var(--ui-accent, var(--color-border));
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field__input {
+  padding-right: 44px;
+}
+
+.password-field__toggle {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ui-radius-sm, 8px);
+  background: transparent;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.password-field__toggle:hover,
+.password-field__toggle:focus-visible {
+  color: var(--ui-text, var(--color-text));
+}
+
+.password-field__toggle:focus-visible {
+  outline: 2px solid var(--ui-text, var(--color-text));
+  outline-offset: 2px;
 }
 
 .telegram-settings-actions {
@@ -658,7 +709,10 @@ defineExpose({
 .telegram-qr-section {
   display: flex;
   flex-direction: column;
-  margin-top: 16px;
+  align-items: center;
+  width: min(100%, 480px);
+  box-sizing: border-box;
+  margin: 16px auto 0;
   padding: 20px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -674,6 +728,7 @@ defineExpose({
 .telegram-health {
   display: grid;
   gap: 8px;
+  width: 100%;
   margin: 0 0 16px;
   padding: 0;
 }
@@ -775,6 +830,10 @@ defineExpose({
 }
 
 @media (max-width: 520px) {
+  .telegram-settings-form {
+    grid-template-columns: 1fr;
+  }
+
   .telegram-settings-actions {
     grid-template-columns: 1fr;
   }
