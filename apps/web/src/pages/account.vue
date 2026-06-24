@@ -2519,22 +2519,24 @@ onMounted(async () => {
                             Chat with your ME3 assistant in Telegram.
                           </p>
                         </div>
-                        <StatusBadge
-                          v-if="telegramPanelRef?.available"
-                          :tone="telegramStatusClass"
-                        >
-                          {{ telegramStatusLabel }}
-                        </StatusBadge>
-                        <Button
-                          color="outline"
-                          size="compact"
-                          type="button"
-                          aria-controls="telegram-setup-panel"
-                          :aria-expanded="telegramSetupOpen"
-                          @click="telegramSetupOpen = !telegramSetupOpen"
-                        >
-                          {{ telegramSetupOpen ? "Hide setup" : "Configure" }}
-                        </Button>
+                        <div class="connection-line__end">
+                          <StatusBadge
+                            v-if="telegramPanelRef?.available"
+                            :tone="telegramStatusClass"
+                          >
+                            {{ telegramStatusLabel }}
+                          </StatusBadge>
+                          <Button
+                            color="outline"
+                            size="compact"
+                            type="button"
+                            aria-controls="telegram-setup-panel"
+                            :aria-expanded="telegramSetupOpen"
+                            @click="telegramSetupOpen = !telegramSetupOpen"
+                          >
+                            {{ telegramSetupOpen ? "Hide setup" : "Configure" }}
+                          </Button>
+                        </div>
                       </div>
                       <div
                         id="telegram-setup-panel"
@@ -4037,6 +4039,7 @@ h1 {
 
 .connection-line--telegram {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
 }
@@ -4111,15 +4114,14 @@ h1 {
 
 .connection-line--telegram:not(.connection-line--telegram-connected)
   .connection-line__header {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  gap: 8px 12px;
+  width: 100%;
 }
 
 .connection-line--telegram:not(.connection-line--telegram-connected)
   .connection-line__header
-  .connection-line__copy {
-  flex: 0 0 100%;
+  .connection-line__end {
+  display: inline-flex;
+  padding-top: 0;
 }
 
 .connection-line__meta {
