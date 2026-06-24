@@ -50,7 +50,14 @@ type WheelSnapshotResponse = {
   snapshot: unknown;
 };
 
-const STEPS = ["Profile", "Agent", "Plugins", "Messaging", "Wheel"] as const;
+const STEPS = [
+  "Profile",
+  "Agent",
+  "Plugins",
+  "Messaging",
+  "Phone",
+  "Wheel",
+] as const;
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
 const DEFAULT_ASSISTANT_NAME = "ME3";
 const ASSISTANT_NAME_MAX_LENGTH = 48;
@@ -466,6 +473,10 @@ function continueFromMessaging() {
   advanceTo(5);
 }
 
+function continueFromPhone() {
+  advanceTo(6);
+}
+
 function setStartWheelSegmentValue(segmentId: string, value: number) {
   const segment = wheelSegments.value.find((item) => item.id === segmentId);
   if (!segment) return;
@@ -863,6 +874,37 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
       </section>
 
+      <section
+        v-else-if="currentStep === 5"
+        class="start-step"
+        aria-labelledby="phone-title"
+      >
+        <div class="step-copy">
+          <h1 id="phone-title">Add ME3 To Your Phone</h1>
+          <p>Add your ME3 install as an app icon on your phone.</p>
+        </div>
+
+        <div class="phone-video-panel">
+          <video
+            class="phone-video"
+            src="https://me3.app/me3_shortcut.mp4"
+            autoplay
+            muted
+            playsinline
+            controls
+          />
+        </div>
+
+        <div class="step-nav split">
+          <button class="nav-btn back" type="button" @click="goToStep(4)">
+            ← Back
+          </button>
+          <button class="nav-btn next" type="button" @click="continueFromPhone">
+            Next →
+          </button>
+        </div>
+      </section>
+
       <section v-else class="start-step" aria-labelledby="wheel-title">
         <div class="step-copy">
           <h1 id="wheel-title">The Wheel Of Life</h1>
@@ -895,7 +937,7 @@ onBeforeUnmount(clearUsernameCheck);
         </div>
 
         <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(4)">
+          <button class="nav-btn back" type="button" @click="goToStep(5)">
             ← Back
           </button>
           <div class="nav-actions-right">
@@ -1311,7 +1353,8 @@ onBeforeUnmount(clearUsernameCheck);
 }
 
 .plugins-panel-wrap,
-.messaging-option {
+.messaging-option,
+.phone-video-panel {
   padding: 18px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-md, 10px);
@@ -1363,6 +1406,18 @@ onBeforeUnmount(clearUsernameCheck);
 
 .messaging-option__action {
   padding: 9px 14px;
+}
+
+.phone-video-panel {
+  display: flex;
+  justify-content: center;
+}
+
+.phone-video {
+  width: min(100%, 360px);
+  max-height: 70vh;
+  border-radius: var(--ui-radius-md, 10px);
+  background: #000;
 }
 
 .wheel-start-panel {
