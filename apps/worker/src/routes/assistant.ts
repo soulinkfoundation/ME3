@@ -60,6 +60,7 @@ const MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT = 4;
 const MAX_ASSISTANT_EXTRACTED_TEXT_CHARS = 48_000;
 const DEFAULT_ASSISTANT_NAME = "ME3";
 const MAX_ASSISTANT_NAME_LENGTH = 48;
+const ASSISTANT_STREAM_CHUNK_DELAY_MS = 16;
 
 type AssistantRouteDeps = {
   requireOwner(c: AppContext): Promise<string | null>;
@@ -88,6 +89,10 @@ type AssistantChatTurnStreamEvent =
   | "delta"
   | "done"
   | "error";
+type AssistantChatTurnStreamSend = (
+  event: AssistantChatTurnStreamEvent,
+  data: Record<string, unknown>,
+) => void;
 type AssistantThreadRow = {
   id: string;
   owner_id: string;
@@ -3025,9 +3030,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
             const replyText = assistantJobBuilderReplyText(builderAction);
             await persistAssistantTurnMessages(c.env, ownerId, thread.id, messageText, replyText);
             await touchAssistantThread(c.env, ownerId, thread.id);
-            for (const chunk of splitAssistantStreamText(replyText)) {
-              send("delta", { text: chunk });
-            }
+            await sendAssistantStreamText(send, replyText);
             send("done", {
               ok: true,
               auditId: null,
@@ -3064,9 +3067,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               { siteAction: siteAction.siteAction },
             );
             await touchAssistantThread(c.env, ownerId, thread.id);
-            for (const chunk of splitAssistantStreamText(siteAction.replyText)) {
-              send("delta", { text: chunk });
-            }
+            await sendAssistantStreamText(send, siteAction.replyText);
             send("done", buildAssistantSiteToolPayload(thread.id, siteAction));
             return;
           }
@@ -3155,9 +3156,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
           await touchAssistantThread(c.env, ownerId, thread.id);
           const replyText = typeof payload.replyText === "string" ? payload.replyText : "";
-          for (const chunk of splitAssistantStreamText(replyText)) {
-            send("delta", { text: chunk });
-          }
+          await sendAssistantStreamText(send, replyText);
           await insertAssistantChatStreamAuditEvent(c.env, {
             ownerId,
             connectionId: turn.connection.id,
@@ -3379,6 +3378,21 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       chunks.push(normalized.slice(cursor, cursor + 80));
     }
     return chunks;
+  }
+
+  async function sendAssistantStreamText(
+    send: AssistantChatTurnStreamSend,
+    text: string,
+  ) {
+    const chunks = splitAssistantStreamText(text);
+    for (const [index, chunk] of chunks.entries()) {
+      send("delta", { text: chunk });
+      if (index < chunks.length - 1) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, ASSISTANT_STREAM_CHUNK_DELAY_MS),
+        );
+      }
+    }
   }
 
   app.post("/api/assistant/chat/turn", handleAssistantChatTurn);

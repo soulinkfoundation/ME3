@@ -1251,11 +1251,10 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  chatMessages,
+  () => chatMessages.value.length,
   () => {
-    void scrollAssistantToBottom();
+    if (!assistantSending.value) void scrollAssistantToBottom();
   },
-  { deep: true },
 );
 watch(
   () => route.query.thread,
@@ -2140,9 +2139,24 @@ async function scrollAssistantToBottom() {
   (node.lastElementChild || node).scrollIntoView({ block: "end" });
 }
 
+async function scrollAssistantMessageIntoView(messageId: string) {
+  await nextTick();
+  const node = assistantScrollerRef.value;
+  if (!node) return;
+  const message = Array.from(
+    node.querySelectorAll<HTMLElement>(".assistant-message"),
+  ).find((item) => item.dataset.assistantMessageId === messageId);
+  message?.scrollIntoView({ block: "start", inline: "nearest" });
+}
+
 function autosizeAssistantComposer() {
   const el = assistantComposerRef.value;
   if (!el) return;
+  if (assistantDraft.value.length === 0) {
+    el.style.height = "";
+    el.style.overflowY = "hidden";
+    return;
+  }
   el.style.height = "auto";
   const scroll = el.scrollHeight;
   const next = Math.min(scroll, COMPOSER_MAX_HEIGHT_PX);
@@ -2551,6 +2565,7 @@ async function submitAssistantText(
         text: "",
         createdAt: new Date().toISOString(),
       });
+      void scrollAssistantMessageIntoView(assistantMessageId);
     };
 
     await api.streamEvents(
@@ -2588,7 +2603,6 @@ async function submitAssistantText(
           if (message && typeof data.text === "string") {
             message.text += data.text;
           }
-          void scrollAssistantToBottom();
           return;
         }
 
@@ -2643,7 +2657,11 @@ async function submitAssistantText(
     }
     assistantAwaitingResponse.value = false;
     assistantSending.value = false;
-    await scrollAssistantToBottom();
+    if (assistantMessageStarted) {
+      await scrollAssistantMessageIntoView(assistantMessageId);
+    } else {
+      await scrollAssistantToBottom();
+    }
     await nextTick();
     autosizeAssistantComposer();
     assistantComposerRef.value?.focus();
@@ -4996,6 +5014,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
             "
             class="assistant-message"
             :class="`assistant-message--${message.role}`"
+            :data-assistant-message-id="message.id || undefined"
           >
             <div class="assistant-message__bubble">
               <div
@@ -7899,6 +7918,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-direction: column;
   gap: 5px;
   min-width: 0;
+  scroll-margin-top: var(--assistant-header-clearance);
+  scroll-margin-bottom: var(--assistant-composer-clearance);
 }
 
 .assistant-message--assistant {

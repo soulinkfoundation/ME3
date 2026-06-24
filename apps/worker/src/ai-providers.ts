@@ -99,7 +99,7 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     id: "workers-ai",
     label: "Cloudflare Workers AI",
     description:
-      "Uses the local Workers AI binding for installs that want no external API key.",
+      "Uses the Workers AI binding for installs that want no external API key.",
     setupLabel: "AI binding",
     supportsApiKey: false,
     secretLabel: null,
