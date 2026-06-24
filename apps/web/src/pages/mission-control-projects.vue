@@ -326,6 +326,7 @@ const accountsSyncing = ref(false);
 const accountsModalOpen = ref(false);
 const accountsActionsOpen = ref(false);
 const accountsFiltersOpen = ref(false);
+const accountsEditingEntryId = ref<string | null>(null);
 const accountsError = ref("");
 const accountsTotal = ref(0);
 const accountsOffset = ref(0);
@@ -842,25 +843,39 @@ async function saveAccountEntry() {
   }
   accountsSaving.value = true;
   accountsError.value = "";
+  const editingEntryId = accountsEditingEntryId.value;
+  const payload = {
+    entryType: accountsType.value,
+    date: accountsForm.value.date,
+    description: accountsForm.value.description.trim(),
+    categoryId: accountsForm.value.categoryId || null,
+    amountCents: Math.round(amountValue * 100),
+    currency: accountsForm.value.currency.trim().toUpperCase() || "USD",
+    status: accountsForm.value.status,
+    notes: accountsForm.value.notes.trim() || null,
+  };
   try {
-    await api.post("/accounts/entries", {
-      entryType: accountsType.value,
-      date: accountsForm.value.date,
-      description: accountsForm.value.description.trim(),
-      categoryId: accountsForm.value.categoryId || null,
-      amountCents: Math.round(amountValue * 100),
-      currency: accountsForm.value.currency.trim().toUpperCase() || "USD",
-      status: accountsForm.value.status,
-      notes: accountsForm.value.notes.trim() || null,
-    });
+    if (editingEntryId) {
+      await api.put(
+        `/accounts/entries/${encodeURIComponent(editingEntryId)}`,
+        payload,
+      );
+    } else {
+      await api.post("/accounts/entries", payload);
+      accountsOffset.value = 0;
+    }
     accountsForm.value = emptyAccountsForm(accountsType.value);
+    accountsEditingEntryId.value = null;
     accountsModalOpen.value = false;
-    accountsOffset.value = 0;
     await loadAccounts();
-    toastSuccess("Entry added.");
+    toastSuccess(editingEntryId ? "Entry updated." : "Entry added.");
   } catch (e) {
     accountsError.value =
-      e instanceof ApiError ? e.message : "Could not add account entry";
+      e instanceof ApiError
+        ? e.message
+        : editingEntryId
+          ? "Could not update account entry"
+          : "Could not add account entry";
   } finally {
     accountsSaving.value = false;
   }
@@ -868,7 +883,24 @@ async function saveAccountEntry() {
 
 function openAccountsModal() {
   accountsActionsOpen.value = false;
+  accountsEditingEntryId.value = null;
   accountsForm.value = emptyAccountsForm(accountsType.value);
+  accountsError.value = "";
+  accountsModalOpen.value = true;
+}
+
+function openEditAccountEntry(entry: FinancialEntry) {
+  accountsActionsOpen.value = false;
+  accountsEditingEntryId.value = entry.id;
+  accountsForm.value = {
+    date: entry.date,
+    description: entry.description,
+    categoryId: entry.categoryId || "",
+    amount: formatAccountsAmountInput(entry.amountCents),
+    currency: entry.currency,
+    status: entry.status,
+    notes: entry.notes || "",
+  };
   accountsError.value = "";
   accountsModalOpen.value = true;
 }
@@ -876,6 +908,7 @@ function openAccountsModal() {
 function closeAccountsModal() {
   if (accountsSaving.value) return;
   accountsModalOpen.value = false;
+  accountsEditingEntryId.value = null;
 }
 
 function openAccountsFilters() {
@@ -899,6 +932,7 @@ function setAccountsType(type: FinancialEntryType) {
   if (accountsType.value === type) return;
   accountsType.value = type;
   accountsOffset.value = 0;
+  accountsEditingEntryId.value = null;
   accountsForm.value = emptyAccountsForm(type);
   void loadAccounts();
 }
@@ -2050,6 +2084,10 @@ function normalizeAccountsAmountInput(value: unknown): string {
   return String(value).trim();
 }
 
+function formatAccountsAmountInput(cents: number): string {
+  return ((cents || 0) / 100).toFixed(2);
+}
+
 function accountStatusLabel(status: FinancialEntryStatus): string {
   if (status === "needs_review") return "Needs review";
   return status.charAt(0).toUpperCase() + status.slice(1);
@@ -2645,7 +2683,7 @@ onBeforeUnmount(() => {
               :aria-selected="accountsType === 'expense' ? 'true' : 'false'"
               @click="setAccountsType('expense')"
             >
-              <UiIcon name="HandCoins" :size="17" />
+              <UiIcon name="HandCoins" :size="15" />
               <span>Expenses</span>
             </button>
             <button
@@ -2656,7 +2694,7 @@ onBeforeUnmount(() => {
               :aria-selected="accountsType === 'income' ? 'true' : 'false'"
               @click="setAccountsType('income')"
             >
-              <UiIcon name="Landmark" :size="17" />
+              <UiIcon name="Landmark" :size="15" />
               <span>Income</span>
             </button>
           </div>
@@ -2822,13 +2860,22 @@ onBeforeUnmount(() => {
                 accountStatusLabel(entry.status)
               }}</span>
               <span>{{ accountSourceLabel(entry.source) }}</span>
-              <Button color="ghost" shape="soft" size="compact" icon-only
-                type="button"
-                aria-label="Delete entry"
-                @click="deleteAccountEntry(entry)"
-              >
-                <UiIcon name="Trash2" :size="15" />
-              </Button>
+              <div class="accounts-table__row-actions">
+                <Button color="ghost" shape="soft" size="compact" icon-only
+                  type="button"
+                  aria-label="Edit entry"
+                  @click="openEditAccountEntry(entry)"
+                >
+                  <UiIcon name="Pencil" :size="15" />
+                </Button>
+                <Button color="ghost" shape="soft" size="compact" icon-only
+                  type="button"
+                  aria-label="Delete entry"
+                  @click="deleteAccountEntry(entry)"
+                >
+                  <UiIcon name="Trash2" :size="15" />
+                </Button>
+              </div>
             </article>
           </template>
         </div>
@@ -3264,7 +3311,11 @@ onBeforeUnmount(() => {
           @submit.prevent="saveAccountEntry"
         >
           <div class="mission-modal__header">
-            <h2 id="accounts-modal-title">Add account entry</h2>
+            <h2 id="accounts-modal-title">
+              {{
+                accountsEditingEntryId ? "Edit account entry" : "Add account entry"
+              }}
+            </h2>
             <Button color="ghost" shape="soft" size="compact" icon-only
               type="button"
               aria-label="Close"
@@ -3359,7 +3410,15 @@ onBeforeUnmount(() => {
               type="submit"
               :disabled="accountsFormDisabled"
             >
-              {{ accountsSaving ? "Adding..." : "Add entry" }}
+              {{
+                accountsSaving
+                  ? accountsEditingEntryId
+                    ? "Saving..."
+                    : "Adding..."
+                  : accountsEditingEntryId
+                    ? "Save changes"
+                    : "Add entry"
+              }}
             </Button>
           </div>
         </form>
@@ -4009,14 +4068,14 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  min-height: 42px;
-  padding: 0 17px;
+  min-height: 34px;
+  padding: 0 10px;
   border: 1px solid var(--ui-border);
   border-radius: 999px;
   background: var(--ui-surface);
   color: var(--ui-text-muted);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
@@ -4159,7 +4218,7 @@ onBeforeUnmount(() => {
 }
 
 .accounts-table__loading {
-  min-width: 820px;
+  min-width: 860px;
   border-bottom: 1px solid var(--ui-border);
 }
 
@@ -4176,10 +4235,10 @@ onBeforeUnmount(() => {
   grid-template-columns: 96px minmax(180px, 1.7fr) minmax(
       128px,
       1fr
-    ) 112px 118px 118px 40px;
+    ) 112px 118px 118px 72px;
   align-items: center;
   gap: 10px;
-  min-width: 820px;
+  min-width: 860px;
   padding: 10px 0;
   border-bottom: 1px solid var(--ui-border);
 }
@@ -4207,6 +4266,12 @@ onBeforeUnmount(() => {
 .accounts-table__row .me3-btn {
   width: 30px;
   height: 30px;
+}
+
+.accounts-table__row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
 }
 
 .accounts-modal {
@@ -4407,8 +4472,8 @@ onBeforeUnmount(() => {
   }
 
   .accounts-mode-tab {
-    min-height: 38px;
-    padding: 0 13px;
+    min-height: 34px;
+    padding: 0 10px;
     font-size: 13px;
   }
 }
