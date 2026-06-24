@@ -111,6 +111,7 @@ const organizeOpen = ref(false);
 const organizeSuggestions = ref<OrganizeTaskSuggestion[]>([]);
 const organizeSaving = ref(false);
 const organizeError = ref("");
+const showJournalOrganize = false;
 const editorWrap = ref<HTMLElement | null>(null);
 const inlineJournalChips = ref<InlineJournalChip[]>([]);
 const selectionToolbar = ref({
@@ -979,6 +980,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="journal__topbar-actions">
         <Button
+          v-if="showJournalOrganize"
           color="ghost"
           shape="soft"
           size="compact"
