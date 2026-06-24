@@ -2233,8 +2233,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="mission-control">
-    <header class="mission-control__topbar">
+  <main
+    class="mission-control"
+    :class="{ 'mission-control--accounts-route': isAccountsRoute }"
+  >
+    <header v-if="!isAccountsRoute" class="mission-control__topbar">
       <MissionProjectPicker
         v-if="activeSection === 'projects'"
         :open="projectPickerOpen"
@@ -3204,6 +3207,11 @@ onBeforeUnmount(() => {
   color: var(--ui-text);
 }
 
+.mission-control--accounts-route {
+  padding: var(--workspace-topbar-padding-block)
+    max(24px, calc(var(--app-shell-mobile-nav-leading-padding) + 12px)) 40px;
+}
+
 .mission-control__topbar {
   position: sticky;
   top: 0;
@@ -4048,6 +4056,11 @@ onBeforeUnmount(() => {
 @media (max-width: 959px) {
   .mission-control {
     padding: 0 14px 32px;
+  }
+
+  .mission-control--accounts-route {
+    padding: var(--workspace-topbar-padding-block)
+      max(16px, calc(var(--app-shell-mobile-nav-leading-padding) + 12px)) 32px;
   }
 
   .mission-control__topbar {
