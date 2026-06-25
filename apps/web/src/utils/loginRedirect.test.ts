@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isStartLoginRedirect,
-  normalizeSafeLoginRedirect,
-} from "./loginRedirect";
-import { DEFAULT_APP_PATH } from "./navigation";
+import { resolveMe3OAuthRedirect } from "./loginRedirect";
 
 const options = {
   origin: "https://core.example",
@@ -11,25 +7,17 @@ const options = {
   dev: false,
 };
 
-function resolveMe3OAuthRedirect(raw: unknown): string {
-  const redirect = normalizeSafeLoginRedirect(raw, options);
-  if (!redirect || isStartLoginRedirect(redirect, options.origin)) {
-    return DEFAULT_APP_PATH;
-  }
-  return redirect;
-}
-
 describe("login redirects", () => {
-  it("does not send /start through ME3.app OAuth", () => {
-    expect(resolveMe3OAuthRedirect(undefined)).toBe(DEFAULT_APP_PATH);
-    expect(resolveMe3OAuthRedirect("/start")).toBe(DEFAULT_APP_PATH);
-    expect(resolveMe3OAuthRedirect("https://core.example/start")).toBe(
-      DEFAULT_APP_PATH,
+  it("returns to root for ME3.app OAuth when setup state should decide", () => {
+    expect(resolveMe3OAuthRedirect(undefined, options)).toBe("/");
+    expect(resolveMe3OAuthRedirect("/start", options)).toBe("/");
+    expect(resolveMe3OAuthRedirect("https://core.example/start", options)).toBe(
+      "/",
     );
   });
 
   it("keeps safe non-start redirects", () => {
-    expect(resolveMe3OAuthRedirect("/account?section=connections")).toBe(
+    expect(resolveMe3OAuthRedirect("/account?section=connections", options)).toBe(
       "/account?section=connections",
     );
   });

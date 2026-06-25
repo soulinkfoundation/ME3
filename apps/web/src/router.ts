@@ -247,6 +247,10 @@ router.beforeEach(async (to, _from, next) => {
       next({ path: "/login", query: { redirect: to.fullPath } });
       return;
     }
+    if ((await resolveDefaultAppPathForSession()) === "/start") {
+      next({ path: "/start", replace: true });
+      return;
+    }
   }
 
   if (to.meta.requiresPlugin) {

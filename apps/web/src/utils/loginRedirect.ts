@@ -41,3 +41,14 @@ export function normalizeSafeLoginRedirect(
 export function isStartLoginRedirect(redirect: string, origin: string): boolean {
   return isStartRedirectPath(new URL(redirect, origin).pathname);
 }
+
+export function resolveMe3OAuthRedirect(
+  raw: unknown,
+  options: LoginRedirectOptions,
+): string {
+  const redirect = normalizeSafeLoginRedirect(raw, options);
+  if (!redirect || isStartLoginRedirect(redirect, options.origin)) {
+    return "/";
+  }
+  return redirect;
+}

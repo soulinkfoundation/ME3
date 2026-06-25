@@ -320,6 +320,19 @@ test.describe("/start onboarding wizard", () => {
     expect(tooltipBox?.y).toBeGreaterThanOrEqual(0);
   });
 
+  test("redirects authenticated first-time workspace routes to /start", async ({
+    page,
+  }) => {
+    await page.goto("/mission-control");
+
+    await expect(page).toHaveURL(/\/start$/);
+    await expect(
+      page.getByRole("heading", {
+        name: "Let's get started with ME3",
+      }),
+    ).toBeVisible();
+  });
+
   test("allows existing profile owners to open /start directly", async ({
     page,
   }) => {

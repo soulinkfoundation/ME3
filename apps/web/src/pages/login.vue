@@ -12,6 +12,7 @@ import { DEFAULT_APP_PATH } from "../utils/navigation";
 import {
   isStartLoginRedirect,
   normalizeSafeLoginRedirect,
+  resolveMe3OAuthRedirect,
 } from "../utils/loginRedirect";
 import { detectBrowserTimeZone } from "../utils/timezone";
 
@@ -169,18 +170,6 @@ async function resolvePostLoginRedirect(raw: unknown): Promise<string> {
   return redirect;
 }
 
-function resolveMe3OAuthRedirect(raw: unknown): string {
-  const redirect = normalizeSafeLoginRedirect(raw, {
-    origin: window.location.origin,
-    hostname: window.location.hostname,
-    dev: import.meta.env.DEV,
-  });
-  if (!redirect || isStartLoginRedirect(redirect, window.location.origin)) {
-    return DEFAULT_APP_PATH;
-  }
-  return redirect;
-}
-
 function navigateAfterLogin(target: string) {
   if (target.startsWith("http://") || target.startsWith("https://")) {
     window.location.href = target;
@@ -282,7 +271,13 @@ async function startMe3SignIn() {
   try {
     const response = await api.post<{ ok: boolean; url?: string }>(
       "/auth/me3/start",
-      { redirect: resolveMe3OAuthRedirect(route.query.redirect) },
+      {
+        redirect: resolveMe3OAuthRedirect(route.query.redirect, {
+          origin: window.location.origin,
+          hostname: window.location.hostname,
+          dev: import.meta.env.DEV,
+        }),
+      },
     );
 
     if (response.ok && response.url) {
