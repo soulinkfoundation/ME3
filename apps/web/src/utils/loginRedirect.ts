@@ -2,6 +2,7 @@ export interface LoginRedirectOptions {
   origin: string;
   hostname: string;
   dev: boolean;
+  setupIncomplete?: boolean;
 }
 
 export function isStartRedirectPath(pathname: string): boolean {
@@ -46,6 +47,8 @@ export function resolveMe3OAuthRedirect(
   raw: unknown,
   options: LoginRedirectOptions,
 ): string {
+  if (options.setupIncomplete) return "/start";
+
   const redirect = normalizeSafeLoginRedirect(raw, options);
   if (!redirect || isStartLoginRedirect(redirect, options.origin)) {
     return "/";

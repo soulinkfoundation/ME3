@@ -276,6 +276,7 @@ async function startMe3SignIn() {
           origin: window.location.origin,
           hostname: window.location.hostname,
           dev: import.meta.env.DEV,
+          setupIncomplete: !ownerAuthConfigured.value,
         }),
       },
     );
