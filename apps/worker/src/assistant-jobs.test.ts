@@ -5,6 +5,7 @@ import {
   createAssistantJob,
   dispatchDueScheduledAssistantJobs,
   duplicateAssistantJob,
+  ensureDefaultAssistantJobs,
   executeAssistantJobRun,
   getAssistantJob,
   listAssistantJobIngressEvents,
@@ -226,6 +227,32 @@ describe("assistant jobs persistence", () => {
     await archiveAssistantJob(env, "owner", created.job.id);
     const afterArchive = await listAssistantJobs(env, "owner");
     expect(afterArchive.jobs.map((job) => job.id)).not.toContain(created.job.id);
+  });
+
+  it("seeds the protected default jobs for new installs", async () => {
+    const env = createAssistantJobsEnv();
+
+    await ensureDefaultAssistantJobs(env, "owner");
+    await ensureDefaultAssistantJobs(env, "owner");
+
+    expect(env.__state.jobs.map((job) => job.recipe_id)).toEqual([
+      "daily-briefing",
+      "invoice-receipt-triage",
+      "booking-reminder",
+    ]);
+    expect(env.__state.versions).toHaveLength(3);
+    expect(env.__state.jobs.map((job) => job.status)).toEqual([
+      "active",
+      "needs_setup",
+      "active",
+    ]);
+
+    await expect(
+      archiveAssistantJob(env, "owner", env.__state.jobs[0]?.id || ""),
+    ).rejects.toMatchObject({
+      message: "Default Assistant Jobs cannot be removed.",
+      status: 409,
+    });
   });
 
   it("loads Weekly Review detail from mission task metadata", async () => {

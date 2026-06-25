@@ -140,6 +140,11 @@ const HIDDEN_ASSISTANT_JOB_RECIPE_IDS = ["local-coding-task", "email-triage"] as
 const HIDDEN_ASSISTANT_JOB_RECIPE_PLACEHOLDERS = HIDDEN_ASSISTANT_JOB_RECIPE_IDS.map(
   () => "?",
 ).join(", ");
+const DEFAULT_ASSISTANT_JOB_RECIPE_IDS = [
+  "daily-briefing",
+  "invoice-receipt-triage",
+  "booking-reminder",
+] as const;
 
 function visibleAssistantJobRecipeSql(column: string) {
   return `COALESCE(${column}, '') NOT IN (${HIDDEN_ASSISTANT_JOB_RECIPE_PLACEHOLDERS})`;
@@ -147,6 +152,10 @@ function visibleAssistantJobRecipeSql(column: string) {
 
 function isHiddenAssistantJobRecipeId(recipeId: string | null | undefined) {
   return HIDDEN_ASSISTANT_JOB_RECIPE_IDS.some((hiddenRecipeId) => hiddenRecipeId === recipeId);
+}
+
+function isDefaultAssistantJobRecipeId(recipeId: string | null | undefined) {
+  return DEFAULT_ASSISTANT_JOB_RECIPE_IDS.some((defaultRecipeId) => defaultRecipeId === recipeId);
 }
 
 type AssistantJobActionResultStatus =
@@ -647,6 +656,64 @@ export async function listAssistantJobRecipes(env: Env, userId: string) {
     }),
     capabilities: ASSISTANT_JOB_CAPABILITIES,
   };
+}
+
+export async function ensureDefaultAssistantJobs(env: Env, userId: string) {
+  for (const recipeId of DEFAULT_ASSISTANT_JOB_RECIPE_IDS) {
+    const recipe = getAssistantJobStarterRecipe(recipeId);
+    if (!recipe || await findExistingAssistantJobForRecipe(env, userId, recipeId)) continue;
+    await createDefaultAssistantJob(env, userId, recipe);
+  }
+}
+
+async function createDefaultAssistantJob(
+  env: Env,
+  userId: string,
+  recipe: AssistantJobStarterRecipe,
+) {
+  const draft = await withComputedScheduleNextRunAt(
+    env,
+    userId,
+    createAssistantJobDraftFromRecipe(recipe),
+  );
+  const validation = await validateAssistantJobDraftForUser(env, userId, draft);
+  const jobId = `default:${userId}:${recipe.id}`;
+  const versionId = `${jobId}:v1`;
+  const now = new Date().toISOString();
+  const setupState = { validationStatus: validation.status, errors: validation.errors };
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO assistant_jobs
+       (id, user_id, recipe_id, name, purpose, status, current_version_id, project_id,
+        destination_json, trigger_summary, next_run_at, setup_state_json, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'assistant', ?, ?)`,
+    ).bind(
+      jobId,
+      userId,
+      draft.recipeId,
+      draft.name,
+      draft.purpose,
+      resolveInitialStatus(validation, null),
+      versionId,
+      draft.projectId,
+      stringifyJson(draft.destination),
+      summarizeTrigger(draft.trigger),
+      draft.trigger.kind === "schedule" ? draft.trigger.nextRunAt : null,
+      stringifyJson(setupState),
+      now,
+      now,
+    ),
+    buildInsertVersionStatement(env, {
+      versionId,
+      jobId,
+      userId,
+      versionNumber: 1,
+      draft,
+      validation,
+      createdAt: now,
+    }),
+  ]);
 }
 
 async function getAssistantJobReadySetupRequirements(env: Env, userId: string) {
@@ -1503,7 +1570,10 @@ export async function duplicateAssistantJob(env: Env, userId: string, jobId: str
 }
 
 export async function archiveAssistantJob(env: Env, userId: string, jobId: string) {
-  await requireAssistantJob(env, userId, jobId);
+  const existing = await requireAssistantJob(env, userId, jobId);
+  if (isDefaultAssistantJobRecipeId(existing.recipe_id)) {
+    throw new AssistantJobsInputError("Default Assistant Jobs cannot be removed.", 409);
+  }
   await env.DB.prepare(
     `UPDATE assistant_jobs
      SET status = 'archived', archived_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP

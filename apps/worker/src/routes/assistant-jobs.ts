@@ -3,6 +3,7 @@ import {
   archiveAssistantJob,
   createAssistantJob,
   duplicateAssistantJob,
+  ensureDefaultAssistantJobs,
   getAssistantJob,
   listAssistantJobIngressEvents,
   listAssistantJobRecipes,
@@ -92,6 +93,7 @@ export function registerAssistantJobsRoutes(app: AppHono, deps: OwnerRouteDeps) 
     if (!ownerId) return deps.unauthorized(c);
 
     try {
+      await ensureDefaultAssistantJobs(c.env, ownerId);
       return c.json(await listAssistantJobs(c.env, ownerId, c.req.query("status")));
     } catch (error) {
       return assistantJobsErrorResponse(c, error);

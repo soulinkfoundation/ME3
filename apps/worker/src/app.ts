@@ -20,6 +20,7 @@ import {
 import {
   createAssistantJobBuilderAction,
   dispatchDueScheduledAssistantJobs,
+  ensureDefaultAssistantJobs,
   markAssistantJobQueueMessageFailed,
   processAssistantJobQueueMessage,
   type AssistantJobBuilderAction,
@@ -621,6 +622,7 @@ app.post("/api/admin/bootstrap", async (c) => {
     .run();
 
   await getOrCreateInstallEncryptionKey(c.env);
+  await ensureDefaultAssistantJobs(c.env, owner.id);
   await clearAuthRateLimit(c.env, rateLimitScope);
   await setOwnerSession(c, owner.id);
 
@@ -2242,6 +2244,7 @@ async function upsertMe3ClaimedOwner(
     .run();
 
   await setStoredMe3CloudOwnerId(env, String(payload.sub));
+  await ensureDefaultAssistantJobs(env, "owner");
   if (typeof payload.core_update_token === "string" && payload.core_update_token.trim()) {
     await setStoredInstallSecret(
       env,
