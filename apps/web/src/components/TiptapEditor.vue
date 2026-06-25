@@ -1042,6 +1042,28 @@ function flushPendingImages(): PendingImage[] {
   return queued;
 }
 
+function insertText(text: string) {
+  const value = text.trim();
+  if (!value) return;
+  const activeEditor = editor.value;
+  if (!activeEditor) return;
+
+  const { from, to } = activeEditor.state.selection;
+  const docSize = activeEditor.state.doc.content.size;
+  const before =
+    from > 0 ? activeEditor.state.doc.textBetween(from - 1, from) : "";
+  const after =
+    to < docSize ? activeEditor.state.doc.textBetween(to, to + 1) : "";
+  const prefix = before && !/\s$/.test(before) ? " " : "";
+  const suffix = after && !/^\s/.test(after) ? " " : "";
+
+  activeEditor
+    .chain()
+    .focus()
+    .insertContent({ type: "text", text: `${prefix}${value}${suffix}` })
+    .run();
+}
+
 onBeforeUnmount(() => {
   flushPendingImages();
   pendingImages.value.clear();
@@ -1054,6 +1076,7 @@ defineExpose({
   getImageIds: () => getActiveImageIds(editor.value),
   getPendingImages: () => Array.from(pendingImages.value.values()),
   flushPendingImages,
+  insertText,
 });
 </script>
 

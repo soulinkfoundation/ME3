@@ -21,6 +21,7 @@ import {
 } from "../../composables/useAgentChat";
 import { useAppToast } from "../../composables/useAppToast";
 import { useInboxDraftCount } from "../../composables/useInboxDraftCount";
+import { useVoiceDictation } from "../../composables/useVoiceDictation";
 import { useContactsStore, type Contact } from "../../stores/contacts";
 import {
   formatAgentTraceRows,
@@ -635,15 +636,6 @@ type AssistantThreadMessagesResponse = {
 
 type JobsResponse = { jobs: AssistantJob[] };
 type RecipesResponse = { recipes: AssistantJobRecipe[] };
-type VoiceTranscriptionResponse = {
-  ok: boolean;
-  providerId: string;
-  model: string;
-  text: string;
-  wordCount: number | null;
-  language: string | null;
-};
-
 const { toastSuccess, toastFromUnknown } = useAppToast();
 const agentChat = useAgentChat();
 const assistantDisplayName = agentChat.assistantDisplayName;
@@ -743,17 +735,20 @@ const selectedModelTouched = ref(Boolean(storedAssistantModelId));
 const aiSettingsLoading = ref(false);
 const aiSettingsError = ref("");
 const aiProviders = ref<AiProviderRecord[]>([]);
-const voiceDictationState = ref<
-  "idle" | "listening" | "processing" | "unsupported"
->("idle");
-const voiceDictationError = ref<string | null>(null);
-const voiceMediaRecorder = ref<MediaRecorder | null>(null);
-const voiceMediaStream = ref<MediaStream | null>(null);
-const voiceRecordingElapsedSeconds = ref(0);
-const voiceAudioChunks: Blob[] = [];
-let voiceStopTimeout: number | null = null;
-let voiceRecordingTimer: number | null = null;
-let voiceDiscardRecording = false;
+const {
+  canUse: canUseVoiceDictation,
+  elapsedLabel: voiceRecordingElapsedLabel,
+  state: voiceDictationState,
+  statusText: voiceDictationStatusText,
+  toggle: toggleVoiceDictation,
+} = useVoiceDictation({
+  disabled: () => assistantSending.value,
+  filenamePrefix: "assistant-dictation",
+  onStart: () => {
+    assistantError.value = null;
+  },
+  onTranscript: insertVoiceTranscript,
+});
 let assistantAbortController: AbortController | null = null;
 let assistantThreadSearchDebounceId: number | null = null;
 
@@ -1235,27 +1230,13 @@ const canSendAssistantMessage = computed(
     !assistantThreadLoading.value &&
     !assistantAttachmentIssue.value,
 );
-const canUseVoiceDictation = computed(
-  () => !assistantSending.value && voiceDictationState.value !== "processing",
-);
-const voiceDictationStatusText = computed(() => {
-  if (voiceDictationError.value) return voiceDictationError.value;
-  return "";
-});
-const voiceRecordingElapsedLabel = computed(() =>
-  formatRecordingElapsed(voiceRecordingElapsedSeconds.value),
-);
 onMounted(() => {
-  if (!supportsMediaRecording()) {
-    voiceDictationState.value = "unsupported";
-  }
   void loadPage();
   void syncAssistantSettingsFromRoute();
   window.addEventListener("keydown", handleWindowKeydown);
 });
 
 onBeforeUnmount(() => {
-  stopVoiceDictation({ discard: true });
   clearAssistantAttachments();
   cancelAssistantThreadSearchDebounce();
   window.removeEventListener("keydown", handleWindowKeydown);
@@ -3480,123 +3461,6 @@ function findPreviousUserMessageIndex(
   return -1;
 }
 
-async function toggleVoiceDictation() {
-  if (!canUseVoiceDictation.value) return;
-  if (voiceDictationState.value === "listening") {
-    stopVoiceDictation();
-    return;
-  }
-  await startVoiceDictation();
-}
-
-async function startVoiceDictation() {
-  if (!supportsMediaRecording()) {
-    voiceDictationState.value = "unsupported";
-    voiceDictationError.value =
-      "Voice dictation is not available in this browser.";
-    return;
-  }
-
-  voiceDictationError.value = null;
-  assistantError.value = null;
-  voiceAudioChunks.splice(0);
-  voiceDiscardRecording = false;
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = getPreferredVoiceMimeType();
-    const recorder = new MediaRecorder(
-      stream,
-      mimeType ? { mimeType } : undefined,
-    );
-    voiceMediaStream.value = stream;
-    voiceMediaRecorder.value = recorder;
-
-    recorder.addEventListener("dataavailable", (event) => {
-      if (event.data.size > 0) voiceAudioChunks.push(event.data);
-    });
-    recorder.addEventListener("stop", () => {
-      void transcribeRecordedVoice(
-        recorder.mimeType || mimeType || "audio/webm",
-      );
-    });
-
-    recorder.start();
-    voiceDictationState.value = "listening";
-    startVoiceRecordingTimer();
-    voiceStopTimeout = window.setTimeout(() => {
-      stopVoiceDictation();
-    }, 120_000);
-  } catch (err) {
-    cleanupVoiceRecorder();
-    voiceDictationState.value = "idle";
-    voiceDictationError.value = messageFromUnknown(
-      err,
-      "Could not start voice dictation.",
-    );
-  }
-}
-
-function stopVoiceDictation(options: { discard?: boolean } = {}) {
-  if (voiceStopTimeout !== null) {
-    window.clearTimeout(voiceStopTimeout);
-    voiceStopTimeout = null;
-  }
-
-  const recorder = voiceMediaRecorder.value;
-  if (options.discard) {
-    voiceDiscardRecording = true;
-    voiceAudioChunks.splice(0);
-  }
-  if (recorder && recorder.state !== "inactive") {
-    recorder.stop();
-  } else {
-    cleanupVoiceRecorder();
-  }
-}
-
-async function transcribeRecordedVoice(mimeType: string) {
-  if (voiceDiscardRecording) {
-    voiceDiscardRecording = false;
-    voiceAudioChunks.splice(0);
-    cleanupVoiceRecorder();
-    voiceDictationState.value = "idle";
-    return;
-  }
-
-  const chunks = voiceAudioChunks.splice(0);
-  cleanupVoiceRecorder();
-  if (chunks.length === 0) {
-    voiceDictationState.value = "idle";
-    return;
-  }
-
-  voiceDictationState.value = "processing";
-  voiceDictationError.value = null;
-
-  try {
-    const formData = new FormData();
-    const audio = new Blob(chunks, { type: mimeType });
-    formData.append(
-      "audio",
-      audio,
-      `assistant-dictation.${extensionForMimeType(mimeType)}`,
-    );
-    const result = await api.upload<VoiceTranscriptionResponse>(
-      "/assistant/voice/transcribe",
-      formData,
-    );
-    insertVoiceTranscript(result.text);
-    voiceDictationState.value = "idle";
-  } catch (err) {
-    voiceDictationState.value = "idle";
-    voiceDictationError.value = messageFromUnknown(
-      err,
-      "Voice transcription failed.",
-    );
-  }
-}
-
 function insertVoiceTranscript(text: string) {
   const transcript = text.trim();
   if (!transcript) return;
@@ -3617,63 +3481,6 @@ function insertVoiceTranscript(text: string) {
     assistantComposerRef.value?.focus();
     assistantComposerRef.value?.setSelectionRange(cursor, cursor);
   });
-}
-
-function cleanupVoiceRecorder() {
-  stopVoiceRecordingTimer();
-  voiceMediaRecorder.value = null;
-  voiceMediaStream.value?.getTracks().forEach((track) => track.stop());
-  voiceMediaStream.value = null;
-}
-
-function startVoiceRecordingTimer() {
-  stopVoiceRecordingTimer();
-  voiceRecordingElapsedSeconds.value = 0;
-  voiceRecordingTimer = window.setInterval(() => {
-    voiceRecordingElapsedSeconds.value += 1;
-  }, 1000);
-}
-
-function stopVoiceRecordingTimer() {
-  if (voiceRecordingTimer !== null) {
-    window.clearInterval(voiceRecordingTimer);
-    voiceRecordingTimer = null;
-  }
-}
-
-function formatRecordingElapsed(seconds: number) {
-  const safeSeconds = Math.max(0, seconds);
-  const minutes = Math.floor(safeSeconds / 60);
-  const remainingSeconds = safeSeconds % 60;
-  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-}
-
-function supportsMediaRecording() {
-  return (
-    typeof navigator !== "undefined" &&
-    Boolean(navigator.mediaDevices?.getUserMedia) &&
-    typeof MediaRecorder !== "undefined"
-  );
-}
-
-function getPreferredVoiceMimeType() {
-  const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/mp4",
-    "audio/ogg;codecs=opus",
-  ];
-  return (
-    candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ||
-    ""
-  );
-}
-
-function extensionForMimeType(mimeType: string) {
-  if (mimeType.includes("mp4")) return "m4a";
-  if (mimeType.includes("ogg")) return "ogg";
-  if (mimeType.includes("wav")) return "wav";
-  return "webm";
 }
 
 function onAssistantComposerKeydown(event: KeyboardEvent) {

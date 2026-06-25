@@ -14,6 +14,7 @@ import Button from "../components/Button.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import TiptapEditor from "../components/TiptapEditor.vue";
 import UiIcon from "../components/UiIcon.vue";
+import { useVoiceDictation } from "../composables/useVoiceDictation";
 import { useAuthStore } from "../stores/auth";
 import { findInlineTextMatch } from "../utils/inlineJournalChips";
 import { parseJournalReminderCapture } from "../utils/journalReminderCapture";
@@ -77,6 +78,9 @@ type InlineJournalChip = {
   left: number;
   top: number;
 };
+type TiptapEditorExpose = {
+  insertText: (text: string) => void;
+};
 
 const route = useRoute();
 const auth = useAuthStore();
@@ -113,6 +117,7 @@ const organizeSaving = ref(false);
 const organizeError = ref("");
 const showJournalOrganize = false;
 const editorWrap = ref<HTMLElement | null>(null);
+const editorRef = ref<TiptapEditorExpose | null>(null);
 const inlineJournalChips = ref<InlineJournalChip[]>([]);
 const selectionToolbar = ref({
   visible: false,
@@ -176,6 +181,17 @@ const captureSubmitDisabled = computed(() => {
   return !captureProjectId.value || !captureText.value.trim();
 });
 const accountTimezone = computed(() => auth.user?.timezone || browserTimezone());
+const {
+  canUse: canUseVoiceDictation,
+  elapsedLabel: voiceRecordingElapsedLabel,
+  state: voiceDictationState,
+  statusText: voiceDictationStatusText,
+  toggle: toggleVoiceDictation,
+} = useVoiceDictation({
+  disabled: () => loading.value,
+  filenamePrefix: "journal-dictation",
+  onTranscript: insertVoiceTranscript,
+});
 
 function dateToKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -291,6 +307,10 @@ function htmlToLineText(value: string): string {
   return blocks.length
     ? blocks.join("\n")
     : (doc.body.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function insertVoiceTranscript(text: string) {
+  editorRef.value?.insertText(text);
 }
 
 function projectName(projectId: string | null): string {
@@ -980,6 +1000,31 @@ onBeforeUnmount(() => {
       </div>
       <div class="journal__topbar-actions">
         <Button
+          :color="voiceDictationState === 'listening' ? 'accent' : 'ghost'"
+          shape="soft"
+          size="compact"
+          icon-only
+          :aria-label="
+            voiceDictationState === 'listening'
+              ? 'Stop voice dictation'
+              : 'Start voice dictation'
+          "
+          :aria-pressed="voiceDictationState === 'listening' ? 'true' : 'false'"
+          :disabled="!canUseVoiceDictation"
+          :title="
+            voiceDictationState === 'listening'
+              ? 'Stop dictation'
+              : 'Voice dictation'
+          "
+          type="button"
+          @click="toggleVoiceDictation"
+        >
+          <UiIcon
+            :name="voiceDictationState === 'listening' ? 'Square' : 'Mic'"
+            :size="16"
+          />
+        </Button>
+        <Button
           v-if="showJournalOrganize"
           color="ghost"
           shape="soft"
@@ -1125,6 +1170,7 @@ onBeforeUnmount(() => {
           :class="{ 'is-loading': loading }"
         >
           <TiptapEditor
+            ref="editorRef"
             v-model="description"
             v-model:title="title"
             show-title-field
@@ -1155,6 +1201,15 @@ onBeforeUnmount(() => {
 
         <div class="journal__status" aria-live="polite">
           <span v-if="loading">Loading</span>
+          <span v-else-if="voiceDictationState === 'listening'">
+            Recording {{ voiceRecordingElapsedLabel }}
+          </span>
+          <span v-else-if="voiceDictationState === 'processing'">
+            Transcribing
+          </span>
+          <span v-else-if="voiceDictationStatusText">
+            {{ voiceDictationStatusText }}
+          </span>
           <span v-else>{{ saveStatusText }}</span>
         </div>
       </section>
