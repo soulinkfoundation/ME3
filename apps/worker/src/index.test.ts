@@ -421,8 +421,25 @@ function createEnv(): Env & {
       return results;
     },
     prepare(sql: string) {
+      const runtimeTableNames = new Set([
+        "mission_tasks",
+        "commerce_settings",
+        "financial_entries",
+      ]);
       return {
+        async run() {
+          return { success: true };
+        },
         async all<T>() {
+          if (sql.includes("PRAGMA table_info")) {
+            return {
+              results: [
+                { name: "pinned_at" },
+                { name: "default_currency" },
+                { name: "project_id" },
+              ] as T[],
+            };
+          }
           if (sql.includes("FROM plugin_installations")) {
             return { results: state.pluginInstallations as T[] };
           }
@@ -2319,6 +2336,13 @@ function createEnv(): Env & {
               if (sql.includes("FROM install_secrets")) {
                 const value = state.installSecrets.get(values[0] as string);
                 return value ? ({ value } as T) : null;
+              }
+              if (sql.includes("FROM sqlite_master")) {
+                const name = values[0] as string;
+                return runtimeTableNames.has(name) ? ({ name } as T) : null;
+              }
+              if (sql.includes("FROM core_runtime_migrations")) {
+                return null;
               }
               if (sql.includes("FROM commerce_settings")) {
                 return state.commerceSettings?.user_id === values[0]
