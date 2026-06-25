@@ -741,7 +741,8 @@ const me3ConnectionStatusClass = computed(() =>
 
 const me3ConnectionDescription = computed(() => {
   const connection = me3Connection.value;
-  if (!connection) return "Use ME3.app to claim and sign in to this Core install.";
+  if (!connection)
+    return "Use ME3.app to claim and sign in to this Core install.";
   if (connection.connected) {
     return connection.meJsonSource === "core_install"
       ? "ME3.app is linked and should prefer this Core install's public me.json."
@@ -750,7 +751,9 @@ const me3ConnectionDescription = computed(() => {
   return "Use ME3.app to claim and sign in to this Core install.";
 });
 
-const coreGithubConnection = computed(() => coreGithubStatus.value?.github || null);
+const coreGithubConnection = computed(
+  () => coreGithubStatus.value?.github || null,
+);
 
 const coreGithubNeedsMe3Reconnect = computed(
   () =>
@@ -1375,9 +1378,10 @@ async function saveAiSettings() {
     model: aiDefaultRouteInput.value.model.trim(),
   };
   const defaults = Object.fromEntries(
-    (["default", "chat", "reasoning", "extraction"] as const).map(
-      (routeId) => [routeId, agentModel],
-    ),
+    (["default", "chat", "reasoning", "extraction"] as const).map((routeId) => [
+      routeId,
+      agentModel,
+    ]),
   );
 
   try {
@@ -1503,8 +1507,12 @@ async function saveCommerceSettings() {
     const payload: { defaultCurrency: string; stripeSecretKey?: string } = {
       defaultCurrency: defaultCurrencyInput.value,
     };
-    if (hasStripeSecret) payload.stripeSecretKey = stripeSecretInput.value.trim();
-    const response = await api.put<CommerceSettingsResponse>("/commerce/settings", payload);
+    if (hasStripeSecret)
+      payload.stripeSecretKey = stripeSecretInput.value.trim();
+    const response = await api.put<CommerceSettingsResponse>(
+      "/commerce/settings",
+      payload,
+    );
     syncCommerceSettings(response);
     commerceMessage.value = hasStripeSecret
       ? "Payment settings saved."
@@ -1888,7 +1896,13 @@ onMounted(async () => {
                   disabled
                 />
               </label>
-              <Button color="secondary" shape="soft" size="compact" type="button" @click="logout">
+              <Button
+                color="secondary"
+                shape="soft"
+                size="compact"
+                type="button"
+                @click="logout"
+              >
                 Sign out
               </Button>
             </div>
@@ -1951,7 +1965,9 @@ onMounted(async () => {
                       embedded
                       :username="customDomainSite.username"
                       :show-settings-link="false"
-                      :profile-published="Boolean(customDomainSite.published_at)"
+                      :profile-published="
+                        Boolean(customDomainSite.published_at)
+                      "
                       :initial-domain="customDomainSuggestedDomain"
                       @domain-status-changed="() => void sites.fetchSites()"
                     />
@@ -2188,7 +2204,11 @@ onMounted(async () => {
                         "
                         @click="sendEmailProviderTest"
                       >
-                        {{ emailProviderTesting ? "Sending..." : "Send test email" }}
+                        {{
+                          emailProviderTesting
+                            ? "Sending..."
+                            : "Send test email"
+                        }}
                       </button>
                       <p class="email-provider-test-note">
                         Save changes first. The test sends to
@@ -2282,315 +2302,308 @@ onMounted(async () => {
             :hidden="!openSection.appConnections"
           >
             <div class="advanced-subsection">
-
-                <div class="connection-lines">
-                  <div
-                    v-if="appConnectionsLoading"
-                    class="connection-line connection-line--loading"
-                  >
+              <div class="connection-lines">
+                <div
+                  v-if="appConnectionsLoading"
+                  class="connection-line connection-line--loading"
+                >
+                  <span class="connection-line__title">ME3.app</span>
+                  <span class="connection-line__meta">Loading...</span>
+                </div>
+                <div
+                  v-else
+                  class="connection-line"
+                  :class="{
+                    'connection-line--connected': me3Connection?.connected,
+                  }"
+                >
+                  <div class="connection-line__copy">
                     <span class="connection-line__title">ME3.app</span>
-                    <span class="connection-line__meta">Loading...</span>
-                  </div>
-                  <div
-                    v-else
-                    class="connection-line"
-                    :class="{
-                      'connection-line--connected': me3Connection?.connected,
-                    }"
-                  >
-                    <div class="connection-line__copy">
-                      <span class="connection-line__title">ME3.app</span>
-                      <p class="connection-line__description">
-                        {{ me3ConnectionDescription }}
-                      </p>
-                      <div
-                        v-if="me3Connection?.connected"
-                        class="connection-line__details"
-                      >
-                        <a
-                          :href="me3Connection.meJsonUrl"
-                          target="_blank"
-                          rel="noopener"
-                        >
-                          Core me.json
-                        </a>
-                      </div>
-                    </div>
-                    <div class="connection-line__end">
-                      <StatusBadge :tone="me3ConnectionStatusClass">
-                        {{ me3ConnectionStatusLabel }}
-                      </StatusBadge>
-                      <Button
-                        v-if="me3Connection?.connected"
-                        color="outline"
-                        size="compact"
-                        type="button"
-                        :disabled="
-                          appConnectionsSaving ||
-                          !me3Connection.disconnectAvailable
-                        "
-                        @click="disconnectMe3App"
-                      >
-                        {{
-                          appConnectionsSaving
-                            ? "Disconnecting..."
-                            : "Disconnect"
-                        }}
-                      </Button>
-                      <Button
-                        v-else
-                        color="primary"
-                        size="compact"
-                        type="button"
-                        :disabled="appConnectionsSaving"
-                        @click="connectMe3App"
-                      >
-                        {{ appConnectionsSaving ? "Opening..." : "Connect" }}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div
-                    class="connection-line"
-                    :class="{
-                      'connection-line--connected':
-                        coreGithubConnection?.connected,
-                    }"
-                  >
-                    <div class="connection-line__copy">
-                      <span class="connection-line__title"
-                        >ME3 Core Updates</span
-                      >
-                      <p class="connection-line__description">
-                        {{ coreGithubDescription }}
-                      </p>
-                      <div class="connection-line__details">
-                        <span v-if="coreGithubInstalledVersion">
-                          Installed v{{ coreGithubInstalledVersion }}
-                        </span>
-                        <span v-if="coreGithubLatestVersion">
-                          Latest v{{ coreGithubLatestVersion }}
-                        </span>
-                        <span v-if="coreGithubUpdateAvailable">
-                          Update available
-                        </span>
-                        <a
-                          v-if="
-                            coreGithubConnection?.repositoryUrl &&
-                            coreGithubRepositoryLabel
-                          "
-                          :href="coreGithubConnection.repositoryUrl"
-                          target="_blank"
-                          rel="noopener"
-                        >
-                          {{ coreGithubRepositoryLabel }}
-                        </a>
-                        <a
-                          v-if="coreGithubRunUrl"
-                          :href="coreGithubRunUrl"
-                          target="_blank"
-                          rel="noopener"
-                        >
-                          Latest run
-                        </a>
-                      </div>
-                      <p
-                        v-if="coreGithubMessage"
-                        class="connection-line__message"
-                      >
-                        {{ coreGithubMessage }}
-                      </p>
-                      <p v-if="coreGithubError" class="connection-line__error">
-                        {{ coreGithubError }}
-                      </p>
-                    </div>
-                    <div class="connection-line__end">
-                      <StatusBadge :tone="coreGithubStatusClass">
-                        {{ coreGithubStatusLabel }}
-                      </StatusBadge>
-                      <Button
-                        v-if="coreGithubConnection?.connected"
-                        color="primary"
-                        size="compact"
-                        type="button"
-                        :disabled="Boolean(coreGithubSaving)"
-                        @click="updateCoreFromGithub"
-                      >
-                        {{
-                          coreGithubSaving === "update"
-                            ? "Starting..."
-                            : "Update"
-                        }}
-                      </Button>
-                      <Button
-                        v-if="coreGithubConnection?.connected"
-                        color="outline"
-                        size="compact"
-                        type="button"
-                        :disabled="Boolean(coreGithubSaving)"
-                        @click="disconnectCoreGithubUpdater"
-                      >
-                        {{
-                          coreGithubSaving === "disconnect"
-                            ? "Disconnecting..."
-                            : "Disconnect"
-                        }}
-                      </Button>
-                      <Button
-                        v-else
-                        color="primary"
-                        size="compact"
-                        type="button"
-                        :disabled="
-                          Boolean(coreGithubSaving) ||
-                          appConnectionsSaving ||
-                          coreGithubLoading ||
-                          !coreGithubStatus?.me3AppConnected
-                        "
-                        @click="connectCoreGithubUpdater"
-                      >
-                        {{ coreGithubConnectLabel }}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div
-                    class="connection-line"
-                    :class="{
-                      'connection-line--connected':
-                        soulinkPanelRef?.connection?.status === 'active',
-                    }"
-                  >
-                    <div class="connection-line__copy">
-                      <span class="connection-line__title">Soulink</span>
-                      <p class="connection-line__description">
-                        Chat with your ME3 assistant on the go.
-                      </p>
-                    </div>
-                    <div class="connection-line__end">
-                      <StatusBadge
-                        v-if="soulinkPanelRef?.available"
-                        :tone="soulinkStatusClass"
-                      >
-                        {{ soulinkStatusLabel }}
-                      </StatusBadge>
-                      <SoulinkConnectPanel
-                        ref="soulinkPanelRef"
-                        variant="inline"
-                        :auto-prepare-when-not-connected="
-                          route.query.section === 'soulink'
-                        "
-                      />
-                    </div>
-                  </div>
-
-                  <div
-                    class="connection-line connection-line--telegram"
-                    :class="{
-                      'connection-line--connected':
-                        telegramPanelRef?.connection?.status === 'active',
-                      'connection-line--telegram-connected':
-                        telegramPanelRef?.connection?.status === 'active',
-                    }"
-                  >
+                    <p class="connection-line__description">
+                      {{ me3ConnectionDescription }}
+                    </p>
                     <div
-                      v-if="telegramPanelRef?.connection?.status === 'active'"
-                      class="connection-line__copy"
+                      v-if="me3Connection?.connected"
+                      class="connection-line__details"
                     >
-                      <span class="connection-line__title">Telegram</span>
-                      <p class="connection-line__description">
-                        Chat with your ME3 assistant in Telegram.
-                      </p>
-                    </div>
-                    <template v-else>
-                      <div class="connection-line__header">
-                        <div class="connection-line__copy">
-                          <span class="connection-line__title">Telegram</span>
-                          <p class="connection-line__description">
-                            Chat with your ME3 assistant in Telegram.
-                          </p>
-                        </div>
-                        <div class="connection-line__end">
-                          <StatusBadge
-                            v-if="telegramPanelRef?.available"
-                            :tone="telegramStatusClass"
-                          >
-                            {{ telegramStatusLabel }}
-                          </StatusBadge>
-                          <Button
-                            color="outline"
-                            size="compact"
-                            type="button"
-                            aria-controls="telegram-setup-panel"
-                            :aria-expanded="telegramSetupOpen"
-                            @click="telegramSetupOpen = !telegramSetupOpen"
-                          >
-                            {{ telegramSetupOpen ? "Hide setup" : "Configure" }}
-                          </Button>
-                        </div>
-                      </div>
-                      <div
-                        id="telegram-setup-panel"
-                        v-show="telegramSetupOpen"
-                        class="telegram-setup-panel"
+                      <a
+                        :href="me3Connection.meJsonUrl"
+                        target="_blank"
+                        rel="noopener"
                       >
-                        <ol class="telegram-setup-steps">
-                          <li>Open Telegram and search for BotFather.</li>
-                          <li>
-                            Type <code>/newbot</code> and follow the instructions.
-                          </li>
-                          <li>
-                            You will get a bot name and token. Save them here.
-                          </li>
-                        </ol>
-                        <div class="connection-line__end">
-                          <TelegramConnectPanel
-                            ref="telegramPanelRef"
-                            :show-status-row="false"
-                            :compact-connected="true"
-                            :auto-prepare-when-not-connected="
-                              route.query.section === 'telegram'
-                            "
-                          />
-                        </div>
-                      </div>
-                    </template>
-                    <div
-                      v-if="telegramPanelRef?.connection?.status === 'active'"
-                      class="connection-line__end"
+                        Core me.json
+                      </a>
+                    </div>
+                  </div>
+                  <div class="connection-line__end">
+                    <StatusBadge :tone="me3ConnectionStatusClass">
+                      {{ me3ConnectionStatusLabel }}
+                    </StatusBadge>
+                    <Button
+                      v-if="me3Connection?.connected"
+                      color="outline"
+                      size="compact"
+                      type="button"
+                      :disabled="
+                        appConnectionsSaving ||
+                        !me3Connection.disconnectAvailable
+                      "
+                      @click="disconnectMe3App"
                     >
-                      <StatusBadge
-                        v-if="
-                          telegramPanelRef?.available &&
-                          telegramPanelRef?.connection?.status === 'active'
-                        "
-                        :tone="telegramStatusClass"
-                      >
-                        {{ telegramStatusLabel }}
-                      </StatusBadge>
-                      <TelegramConnectPanel
-                        ref="telegramPanelRef"
-                        :show-status-row="false"
-                        :compact-connected="true"
-                        :auto-prepare-when-not-connected="
-                          route.query.section === 'telegram'
-                        "
-                      />
-                    </div>
+                      {{
+                        appConnectionsSaving ? "Disconnecting..." : "Disconnect"
+                      }}
+                    </Button>
+                    <Button
+                      v-else
+                      color="primary"
+                      size="compact"
+                      type="button"
+                      :disabled="appConnectionsSaving"
+                      @click="connectMe3App"
+                    >
+                      {{ appConnectionsSaving ? "Opening..." : "Connect" }}
+                    </Button>
                   </div>
                 </div>
 
-                <template v-if="!appConnectionsLoading">
-                  <p v-if="appConnectionsError" class="error">
-                    {{ appConnectionsError }}
-                  </p>
-                </template>
-                <p v-if="soulinkPanelRef?.error" class="error">
-                  {{ soulinkPanelRef.error }}
+                <div
+                  class="connection-line"
+                  :class="{
+                    'connection-line--connected':
+                      coreGithubConnection?.connected,
+                  }"
+                >
+                  <div class="connection-line__copy">
+                    <span class="connection-line__title">ME3 Core Updates</span>
+                    <p class="connection-line__description">
+                      {{ coreGithubDescription }}
+                    </p>
+                    <div class="connection-line__details">
+                      <span v-if="coreGithubInstalledVersion">
+                        Installed v{{ coreGithubInstalledVersion }}
+                      </span>
+                      <span v-if="coreGithubLatestVersion">
+                        Latest v{{ coreGithubLatestVersion }}
+                      </span>
+                      <span v-if="coreGithubUpdateAvailable">
+                        Update available
+                      </span>
+                      <a
+                        v-if="
+                          coreGithubConnection?.repositoryUrl &&
+                          coreGithubRepositoryLabel
+                        "
+                        :href="coreGithubConnection.repositoryUrl"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        {{ coreGithubRepositoryLabel }}
+                      </a>
+                      <a
+                        v-if="coreGithubRunUrl"
+                        :href="coreGithubRunUrl"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        Latest run
+                      </a>
+                    </div>
+                    <p
+                      v-if="coreGithubMessage"
+                      class="connection-line__message"
+                    >
+                      {{ coreGithubMessage }}
+                    </p>
+                    <p v-if="coreGithubError" class="connection-line__error">
+                      {{ coreGithubError }}
+                    </p>
+                  </div>
+                  <div class="connection-line__end">
+                    <StatusBadge :tone="coreGithubStatusClass">
+                      {{ coreGithubStatusLabel }}
+                    </StatusBadge>
+                    <Button
+                      v-if="coreGithubConnection?.connected"
+                      color="primary"
+                      size="compact"
+                      type="button"
+                      :disabled="Boolean(coreGithubSaving)"
+                      @click="updateCoreFromGithub"
+                    >
+                      {{
+                        coreGithubSaving === "update" ? "Starting..." : "Update"
+                      }}
+                    </Button>
+                    <Button
+                      v-if="coreGithubConnection?.connected"
+                      color="outline"
+                      size="compact"
+                      type="button"
+                      :disabled="Boolean(coreGithubSaving)"
+                      @click="disconnectCoreGithubUpdater"
+                    >
+                      {{
+                        coreGithubSaving === "disconnect"
+                          ? "Disconnecting..."
+                          : "Disconnect"
+                      }}
+                    </Button>
+                    <Button
+                      v-else
+                      color="primary"
+                      size="compact"
+                      type="button"
+                      :disabled="
+                        Boolean(coreGithubSaving) ||
+                        appConnectionsSaving ||
+                        coreGithubLoading ||
+                        !coreGithubStatus?.me3AppConnected
+                      "
+                      @click="connectCoreGithubUpdater"
+                    >
+                      {{ coreGithubConnectLabel }}
+                    </Button>
+                  </div>
+                </div>
+
+                <div
+                  class="connection-line"
+                  :class="{
+                    'connection-line--connected':
+                      soulinkPanelRef?.connection?.status === 'active',
+                  }"
+                >
+                  <div class="connection-line__copy">
+                    <span class="connection-line__title">Soulink</span>
+                    <p class="connection-line__description">
+                      Chat with your ME3 assistant on the go.
+                    </p>
+                  </div>
+                  <div class="connection-line__end">
+                    <StatusBadge
+                      v-if="soulinkPanelRef?.available"
+                      :tone="soulinkStatusClass"
+                    >
+                      {{ soulinkStatusLabel }}
+                    </StatusBadge>
+                    <SoulinkConnectPanel
+                      ref="soulinkPanelRef"
+                      variant="inline"
+                      :auto-prepare-when-not-connected="
+                        route.query.section === 'soulink'
+                      "
+                    />
+                  </div>
+                </div>
+
+                <div
+                  class="connection-line connection-line--telegram"
+                  :class="{
+                    'connection-line--connected':
+                      telegramPanelRef?.connection?.status === 'active',
+                    'connection-line--telegram-connected':
+                      telegramPanelRef?.connection?.status === 'active',
+                  }"
+                >
+                  <div
+                    v-if="telegramPanelRef?.connection?.status === 'active'"
+                    class="connection-line__copy"
+                  >
+                    <span class="connection-line__title">Telegram</span>
+                    <p class="connection-line__description">
+                      Chat with your ME3 assistant in Telegram.
+                    </p>
+                  </div>
+                  <template v-else>
+                    <div class="connection-line__header">
+                      <div class="connection-line__copy">
+                        <span class="connection-line__title">Telegram</span>
+                        <p class="connection-line__description">
+                          Chat with your ME3 assistant in Telegram.
+                        </p>
+                      </div>
+                      <div class="connection-line__end">
+                        <StatusBadge
+                          v-if="telegramPanelRef?.available"
+                          :tone="telegramStatusClass"
+                        >
+                          {{ telegramStatusLabel }}
+                        </StatusBadge>
+                        <Button
+                          color="outline"
+                          size="compact"
+                          type="button"
+                          aria-controls="telegram-setup-panel"
+                          :aria-expanded="telegramSetupOpen"
+                          @click="telegramSetupOpen = !telegramSetupOpen"
+                        >
+                          {{ telegramSetupOpen ? "Hide setup" : "Configure" }}
+                        </Button>
+                      </div>
+                    </div>
+                    <div
+                      id="telegram-setup-panel"
+                      v-show="telegramSetupOpen"
+                      class="telegram-setup-panel"
+                    >
+                      <ol class="telegram-setup-steps">
+                        <li>Open Telegram and search for BotFather.</li>
+                        <li>
+                          Type <code>/newbot</code> and follow the instructions.
+                        </li>
+                        <li>
+                          You will get a bot name and token. Save them here.
+                        </li>
+                      </ol>
+                      <div class="connection-line__end">
+                        <TelegramConnectPanel
+                          ref="telegramPanelRef"
+                          :show-status-row="false"
+                          :compact-connected="true"
+                          :auto-prepare-when-not-connected="
+                            route.query.section === 'telegram'
+                          "
+                        />
+                      </div>
+                    </div>
+                  </template>
+                  <div
+                    v-if="telegramPanelRef?.connection?.status === 'active'"
+                    class="connection-line__end"
+                  >
+                    <StatusBadge
+                      v-if="
+                        telegramPanelRef?.available &&
+                        telegramPanelRef?.connection?.status === 'active'
+                      "
+                      :tone="telegramStatusClass"
+                    >
+                      {{ telegramStatusLabel }}
+                    </StatusBadge>
+                    <TelegramConnectPanel
+                      ref="telegramPanelRef"
+                      :show-status-row="false"
+                      :compact-connected="true"
+                      :auto-prepare-when-not-connected="
+                        route.query.section === 'telegram'
+                      "
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <template v-if="!appConnectionsLoading">
+                <p v-if="appConnectionsError" class="error">
+                  {{ appConnectionsError }}
                 </p>
-                <p v-if="telegramPanelRef?.error" class="error">
-                  {{ telegramPanelRef.error }}
-                </p>
+              </template>
+              <p v-if="soulinkPanelRef?.error" class="error">
+                {{ soulinkPanelRef.error }}
+              </p>
+              <p v-if="telegramPanelRef?.error" class="error">
+                {{ telegramPanelRef.error }}
+              </p>
             </div>
           </div>
         </section>
@@ -2621,111 +2634,113 @@ onMounted(async () => {
             :hidden="!openSection.ai"
           >
             <div class="advanced-subsection">
+              <PageLoading
+                v-if="aiSettingsLoading"
+                compact
+                label="Loading AI provider settings..."
+              />
 
-                <PageLoading
-                  v-if="aiSettingsLoading"
-                  compact
-                  label="Loading AI provider settings..."
-                />
+              <template v-else>
+                <p v-if="aiSettingsError" class="error">
+                  {{ aiSettingsError }}
+                </p>
 
-                <template v-else>
-                  <p v-if="aiSettingsError" class="error">
-                    {{ aiSettingsError }}
-                  </p>
+                <p v-if="!aiEncryptionConfigured" class="error">
+                  Install encryption is created automatically during owner
+                  setup. If this remains visible, run the latest migrations and
+                  sign in or bootstrap again.
+                </p>
 
-                  <p v-if="!aiEncryptionConfigured" class="error">
-                    Install encryption is created automatically during owner
-                    setup. If this remains visible, run the latest migrations
-                    and sign in or bootstrap again.
-                  </p>
-
-                  <div class="ai-model-row">
-                    <label class="field ai-model-row__field">
-                      <span class="ai-model-row__label">Provider</span>
-                      <select
-                        class="input ai-model-row__input"
-                        :value="aiDefaultRouteInput.providerId"
-                        @change="
-                          handleAgentProviderChange(
-                            ($event.target as HTMLSelectElement).value,
-                          )
-                        "
-                      >
-                        <option
-                          v-for="provider in visibleAiProviders"
-                          :key="provider.id"
-                          :value="provider.id"
-                        >
-                          {{ provider.label }}
-                        </option>
-                      </select>
-                    </label>
-
-                    <label class="field ai-model-row__field">
-                      <span class="ai-model-row__label">Model</span>
-                      <select
-                        class="input ai-model-row__input"
-                        :value="aiDefaultRouteInput.model"
-                        @change="
-                          handleAgentModelChange(
-                            ($event.target as HTMLSelectElement).value,
-                          )
-                        "
-                      >
-                        <option
-                          v-for="option in visibleAgentModelOptions"
-                          :key="option.id"
-                          :value="option.model"
-                        >
-                          {{ option.label }} · {{ option.costLabel }}
-                        </option>
-                      </select>
-                    </label>
-
-                    <Button
-                      color="primary"
-                      size="compact"
-                      type="button"
-                      :disabled="aiSettingsSaveDisabled"
-                      @click="saveAiSettings"
-                    >
-                      {{ aiSettingsSaving ? "Saving..." : "Save" }}
-                    </Button>
-                  </div>
-
-                  <p class="selected-model-note selected-model-note--compact">
-                    <strong>{{ selectedAgentModelCostLabel }}</strong>
-                    {{ selectedAgentModelDescription }}
-                  </p>
-
-                  <label
-                    v-if="selectedAgentProvider?.supportsApiKey"
-                    class="field ai-model-key-field"
-                  >
-                    <span>{{ selectedAgentProvider.label }} API key</span>
-                    <input
-                      v-model="selectedProviderKeyInput"
+                <div class="ai-model-row">
+                  <label class="field ai-model-row__field">
+                    <span class="ai-model-row__label">Provider</span>
+                    <select
                       class="input ai-model-row__input"
-                      type="password"
-                      autocomplete="off"
-                      spellcheck="false"
-                      :placeholder="
-                        selectedAgentProvider.configured
-                          ? 'Paste a new key to replace stored key'
-                          : 'Paste API key'
+                      :value="aiDefaultRouteInput.providerId"
+                      @change="
+                        handleAgentProviderChange(
+                          ($event.target as HTMLSelectElement).value,
+                        )
                       "
-                    />
+                    >
+                      <option
+                        v-for="provider in visibleAiProviders"
+                        :key="provider.id"
+                        :value="provider.id"
+                      >
+                        {{ provider.label }}
+                      </option>
+                    </select>
                   </label>
 
-                  <p v-if="aiSettingsMessage" class="success">
-                    {{ aiSettingsMessage }}
-                  </p>
-                </template>
+                  <label class="field ai-model-row__field">
+                    <span class="ai-model-row__label">Model</span>
+                    <select
+                      class="input ai-model-row__input"
+                      :value="aiDefaultRouteInput.model"
+                      @change="
+                        handleAgentModelChange(
+                          ($event.target as HTMLSelectElement).value,
+                        )
+                      "
+                    >
+                      <option
+                        v-for="option in visibleAgentModelOptions"
+                        :key="option.id"
+                        :value="option.model"
+                      >
+                        {{ option.label }} · {{ option.costLabel }}
+                      </option>
+                    </select>
+                  </label>
+
+                  <Button
+                    color="primary"
+                    size="compact"
+                    type="button"
+                    :disabled="aiSettingsSaveDisabled"
+                    @click="saveAiSettings"
+                  >
+                    {{ aiSettingsSaving ? "Saving..." : "Save" }}
+                  </Button>
+                </div>
+
+                <p class="selected-model-note selected-model-note--compact">
+                  <strong>{{ selectedAgentModelCostLabel }}</strong>
+                  {{ selectedAgentModelDescription }}
+                </p>
+
+                <label
+                  v-if="selectedAgentProvider?.supportsApiKey"
+                  class="field ai-model-key-field"
+                >
+                  <span>{{ selectedAgentProvider.label }} API key</span>
+                  <input
+                    v-model="selectedProviderKeyInput"
+                    class="input ai-model-row__input"
+                    type="password"
+                    autocomplete="off"
+                    spellcheck="false"
+                    :placeholder="
+                      selectedAgentProvider.configured
+                        ? 'Paste a new key to replace stored key'
+                        : 'Paste API key'
+                    "
+                  />
+                </label>
+
+                <p v-if="aiSettingsMessage" class="success">
+                  {{ aiSettingsMessage }}
+                </p>
+              </template>
             </div>
           </div>
         </section>
 
-        <section id="account-payments" class="card accordion-card payments-section">
+        <section
+          id="account-payments"
+          class="card accordion-card payments-section"
+        >
           <button
             id="account-trigger-payments"
             class="accordion-trigger"
@@ -2747,116 +2762,112 @@ onMounted(async () => {
             :hidden="!openSection.payments"
           >
             <div class="advanced-subsection">
+              <PageLoading
+                v-if="commerceLoading"
+                compact
+                label="Loading payment settings..."
+              />
 
-                <PageLoading
-                  v-if="commerceLoading"
-                  compact
-                  label="Loading payment settings..."
-                />
-
-                <template v-else>
-                  <div class="commerce-settings-row">
-                    <label class="field commerce-settings-row__field">
-                      <span>Default currency</span>
-                      <select
-                        v-model="defaultCurrencyInput"
-                        class="input"
+              <template v-else>
+                <div class="commerce-settings-row">
+                  <label class="field commerce-settings-row__field">
+                    <span>Default currency</span>
+                    <select v-model="defaultCurrencyInput" class="input">
+                      <option
+                        v-for="option in commerceCurrencyOptions"
+                        :key="option.value"
+                        :value="option.value"
                       >
-                        <option
-                          v-for="option in commerceCurrencyOptions"
-                          :key="option.value"
-                          :value="option.value"
-                        >
-                          {{ option.label }}
-                        </option>
-                      </select>
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+
+                  <div
+                    v-if="!commerceSettings?.stripe.keyHint"
+                    class="field commerce-settings-row__field commerce-settings-row__field--secret payment-key-field"
+                  >
+                    <label for="stripe-secret-key-input">
+                      Stripe secret key
                     </label>
-
-                    <div
-                      v-if="!commerceSettings?.stripe.keyHint"
-                      class="field commerce-settings-row__field commerce-settings-row__field--secret payment-key-field"
-                    >
-                      <label for="stripe-secret-key-input">
-                        Stripe secret key
-                      </label>
-                      <div class="password-field payment-key-row">
-                        <input
-                          id="stripe-secret-key-input"
-                          v-model="stripeSecretInput"
-                          class="input password-field__input payment-key-row__input"
-                          :type="showStripeSecret ? 'text' : 'password'"
-                          autocomplete="off"
-                          spellcheck="false"
-                          placeholder="sk_live_... or sk_test_..."
-                          @keydown.enter.prevent="saveCommerceSettings"
+                    <div class="password-field payment-key-row">
+                      <input
+                        id="stripe-secret-key-input"
+                        v-model="stripeSecretInput"
+                        class="input password-field__input payment-key-row__input"
+                        :type="showStripeSecret ? 'text' : 'password'"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="sk_live_... or sk_test_..."
+                        @keydown.enter.prevent="saveCommerceSettings"
+                      />
+                      <button
+                        type="button"
+                        class="password-field__toggle"
+                        :aria-label="
+                          showStripeSecret
+                            ? 'Hide Stripe secret key'
+                            : 'Show Stripe secret key'
+                        "
+                        :aria-pressed="showStripeSecret"
+                        @click="showStripeSecret = !showStripeSecret"
+                      >
+                        <UiIcon
+                          :name="showStripeSecret ? 'EyeOff' : 'Eye'"
+                          :size="18"
                         />
-                        <button
-                          type="button"
-                          class="password-field__toggle"
-                          :aria-label="
-                            showStripeSecret
-                              ? 'Hide Stripe secret key'
-                              : 'Show Stripe secret key'
-                          "
-                          :aria-pressed="showStripeSecret"
-                          @click="showStripeSecret = !showStripeSecret"
-                        >
-                          <UiIcon
-                            :name="showStripeSecret ? 'EyeOff' : 'Eye'"
-                            :size="18"
-                          />
-                        </button>
-                      </div>
+                      </button>
                     </div>
-
-                    <Button
-                      color="primary"
-                      size="compact"
-                      type="button"
-                      :disabled="commerceSaveDisabled"
-                      @click="saveCommerceSettings"
-                    >
-                      {{ commerceSaving ? "Saving..." : "Save settings" }}
-                    </Button>
                   </div>
 
-                  <p
-                    v-if="
-                      commerceSettings?.stripe.source === 'environment' &&
-                      commerceSettings?.stripe.keyHint
-                    "
-                    class="field-hint"
-                  >
-                    A configured Wrangler secret takes priority over any stored
-                    account key.
-                  </p>
-
-                  <p
-                    v-if="
-                      commerceSettings && !commerceSettings.encryptionConfigured
-                    "
-                    class="field-hint"
-                  >
-                    A local encryption key will be initialized before this
-                    Stripe key is stored.
-                  </p>
-
                   <Button
-                    v-if="commerceSettings?.stripe.source === 'stored'"
-                    color="outline"
+                    color="primary"
                     size="compact"
                     type="button"
-                    :disabled="commerceClearDisabled"
-                    @click="clearCommerceStripeKey"
+                    :disabled="commerceSaveDisabled"
+                    @click="saveCommerceSettings"
                   >
-                    Remove stored key
+                    {{ commerceSaving ? "Saving..." : "Save settings" }}
                   </Button>
+                </div>
 
-                  <p v-if="commerceMessage" class="success">
-                    {{ commerceMessage }}
-                  </p>
-                  <p v-if="commerceError" class="error">{{ commerceError }}</p>
-                </template>
+                <p
+                  v-if="
+                    commerceSettings?.stripe.source === 'environment' &&
+                    commerceSettings?.stripe.keyHint
+                  "
+                  class="field-hint"
+                >
+                  A configured Wrangler secret takes priority over any stored
+                  account key.
+                </p>
+
+                <p
+                  v-if="
+                    commerceSettings && !commerceSettings.encryptionConfigured
+                  "
+                  class="field-hint"
+                >
+                  A local encryption key will be initialized before this Stripe
+                  key is stored.
+                </p>
+
+                <Button
+                  v-if="commerceSettings?.stripe.source === 'stored'"
+                  color="outline"
+                  size="compact"
+                  type="button"
+                  :disabled="commerceClearDisabled"
+                  @click="clearCommerceStripeKey"
+                >
+                  Remove stored key
+                </Button>
+
+                <p v-if="commerceMessage" class="success">
+                  {{ commerceMessage }}
+                </p>
+                <p v-if="commerceError" class="error">{{ commerceError }}</p>
+              </template>
             </div>
           </div>
         </section>
@@ -2883,48 +2894,47 @@ onMounted(async () => {
             :hidden="!openSection.timezone"
           >
             <div class="advanced-subsection">
-
-                <div class="timezone-row">
-                  <label class="field timezone-row__field">
-                    <input
-                      v-model="timezoneInput"
-                      class="input timezone-row__input"
-                      type="text"
-                      list="account-timezone-options"
-                      aria-label="Timezone"
-                      placeholder="Start typing a timezone"
-                      spellcheck="false"
-                    />
-                    <datalist id="account-timezone-options">
-                      <option
-                        v-for="zone in supportedTimeZones"
-                        :key="zone"
-                        :value="zone"
-                      >
-                        {{ getTimeZoneDisplayLabel(zone) }}
-                      </option>
-                    </datalist>
-                  </label>
-                  <div class="timezone-row__actions">
-                    <Button
-                      color="outline"
-                      size="compact"
-                      type="button"
-                      @click="detectTimezoneValue"
+              <div class="timezone-row">
+                <label class="field timezone-row__field">
+                  <input
+                    v-model="timezoneInput"
+                    class="input timezone-row__input"
+                    type="text"
+                    list="account-timezone-options"
+                    aria-label="Timezone"
+                    placeholder="Start typing a timezone"
+                    spellcheck="false"
+                  />
+                  <datalist id="account-timezone-options">
+                    <option
+                      v-for="zone in supportedTimeZones"
+                      :key="zone"
+                      :value="zone"
                     >
-                      Detect from browser
-                    </Button>
-                    <Button
-                      color="primary"
-                      size="compact"
-                      type="button"
-                      :disabled="saveDisabled"
-                      @click="saveSettings"
-                    >
-                      {{ saving ? "Saving..." : "Save" }}
-                    </Button>
-                  </div>
+                      {{ getTimeZoneDisplayLabel(zone) }}
+                    </option>
+                  </datalist>
+                </label>
+                <div class="timezone-row__actions">
+                  <Button
+                    color="outline"
+                    size="compact"
+                    type="button"
+                    @click="detectTimezoneValue"
+                  >
+                    Detect from browser
+                  </Button>
+                  <Button
+                    color="primary"
+                    size="compact"
+                    type="button"
+                    :disabled="saveDisabled"
+                    @click="saveSettings"
+                  >
+                    {{ saving ? "Saving..." : "Save" }}
+                  </Button>
                 </div>
+              </div>
 
               <p v-if="message" class="success">{{ message }}</p>
               <p v-if="error" class="error">{{ error }}</p>
@@ -2948,7 +2958,9 @@ onMounted(async () => {
         >
           <div class="modal-header local-executor-modal__header">
             <div>
-              <h2 id="local-executor-modal-title">Connect to your local computer</h2>
+              <h2 id="local-executor-modal-title">
+                Connect to your local computer
+              </h2>
             </div>
             <Button
               color="ghost"
@@ -2975,8 +2987,8 @@ onMounted(async () => {
             <li>
               <strong>Clone your ME3 Core repo.</strong>
               <span>
-                Put the ME3 Core repo on the computer that will run local
-                tasks. This is the repo with
+                Put the ME3 Core repo on the computer that will run local tasks.
+                This is the repo with
                 <code>packages/local-executor</code> inside it.
               </span>
             </li>
@@ -2995,15 +3007,10 @@ onMounted(async () => {
                   shape="soft"
                   type="button"
                   @click="
-                    copyLocalExecutorCommand(
-                      LOCAL_EXECUTOR_CD_COMMAND,
-                      'cd',
-                    )
+                    copyLocalExecutorCommand(LOCAL_EXECUTOR_CD_COMMAND, 'cd')
                   "
                 >
-                  {{
-                    localExecutorCopiedCommand === "cd" ? "Copied" : "Copy"
-                  }}
+                  {{ localExecutorCopiedCommand === "cd" ? "Copied" : "Copy" }}
                 </Button>
               </div>
             </li>
@@ -3091,9 +3098,8 @@ onMounted(async () => {
             <li>
               <strong>Start the local runner.</strong>
               <span>
-                Leave this Terminal window open. This is the process that
-                checks ME3 and picks up local tasks while your computer is
-                awake.
+                Leave this Terminal window open. This is the process that checks
+                ME3 and picks up local tasks while your computer is awake.
               </span>
               <div class="local-executor-command">
                 <pre><code>{{ LOCAL_EXECUTOR_RUN_COMMAND }}</code></pre>
@@ -3103,15 +3109,10 @@ onMounted(async () => {
                   shape="soft"
                   type="button"
                   @click="
-                    copyLocalExecutorCommand(
-                      LOCAL_EXECUTOR_RUN_COMMAND,
-                      'run',
-                    )
+                    copyLocalExecutorCommand(LOCAL_EXECUTOR_RUN_COMMAND, 'run')
                   "
                 >
-                  {{
-                    localExecutorCopiedCommand === "run" ? "Copied" : "Copy"
-                  }}
+                  {{ localExecutorCopiedCommand === "run" ? "Copied" : "Copy" }}
                 </Button>
               </div>
               <span>
@@ -3142,9 +3143,8 @@ onMounted(async () => {
               <strong>Add a local project in Mission Control.</strong>
               <span>
                 Visit your ME3 site, open Mission Control, go to Projects, and
-                add a project with type <code>Local</code>. Use the local
-                folder path for the project repo you want the runner to work
-                in.
+                add a project with type <code>Local</code>. Use the local folder
+                path for the project repo you want the runner to work in.
               </span>
               <router-link
                 class="local-executor-project-link"
@@ -3166,8 +3166,8 @@ onMounted(async () => {
               <strong>Review the result.</strong>
               <span>
                 The local runner follows the rules in that project repo,
-                including its <code>AGENTS.md</code>. When the run succeeds,
-                ME3 moves the task to Review.
+                including its <code>AGENTS.md</code>. When the run succeeds, ME3
+                moves the task to Review.
               </span>
             </li>
           </ol>
@@ -3223,7 +3223,7 @@ onMounted(async () => {
               <ol>
                 <li>
                   <a
-                    href="https://dash.cloudflare.com//?to=/:account/workers-and-pages"
+                    href="https://dash.cloudflare.com/?to=/:account/workers-and-pages"
                     target="_blank"
                     rel="noopener noreferrer"
                     >Click here</a
@@ -3350,14 +3350,13 @@ onMounted(async () => {
               </li>
             </ol>
             <p>
-              If you want to use another sender/provider like Postmark,
-              Mailgun, or SMTP, they need different configuration.
+              If you want to use another sender/provider like Postmark, Mailgun,
+              or SMTP, they need different configuration.
             </p>
           </div>
         </section>
       </div>
     </Teleport>
-
   </div>
 </template>
 
@@ -4525,7 +4524,11 @@ h1 {
 }
 
 .local-executor-project-link:hover {
-  background: color-mix(in oklab, var(--ui-accent, var(--color-primary)), transparent 88%);
+  background: color-mix(
+    in oklab,
+    var(--ui-accent, var(--color-primary)),
+    transparent 88%
+  );
 }
 
 .local-executor-note {
@@ -4556,8 +4559,8 @@ h1 {
 .local-executor-steps code,
 .local-executor-command code {
   color: var(--ui-text, var(--color-text));
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono",
-    monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 }
 
 .local-executor-command {
