@@ -61,6 +61,26 @@ describe("wizard store", () => {
       expect(store.draftSourceUrl).toBe("https://example.com");
     });
 
+    it("repairs saved preview/undefined profile asset URLs", () => {
+      localStorage.setItem(
+        "me3_wizard_state",
+        JSON.stringify({
+          profile: {
+            name: "Test User",
+            handle: "testuser",
+            avatar: "https://me3.kieranbutler.com/preview/undefined/files/avatar.jpg",
+            banner: "/preview/undefined/files/banner.jpg",
+          },
+          username: "testuser",
+        }),
+      );
+
+      const store = useWizardStore();
+
+      expect(store.profile.avatar).toBe("/preview/testuser/files/avatar.jpg");
+      expect(store.profile.banner).toBe("/preview/testuser/files/banner.jpg");
+    });
+
     it("drops legacy standalone posts when loading posts from localStorage", () => {
       localStorage.setItem(
         "me3_wizard_state",
@@ -848,6 +868,22 @@ describe("wizard store", () => {
       expect(store.pages).toHaveLength(1);
       expect(store.username).toBe("existing");
       expect(store.isUsernameAvailable).toBe(true);
+    });
+
+    it("falls back to the profile handle when resolving loaded site assets without a username", () => {
+      const store = useWizardStore();
+      const siteProfile = {
+        name: "Existing User",
+        handle: "existing",
+        avatar: "./files/avatar.jpg",
+        banner: "/preview/undefined/files/banner.jpg",
+      };
+
+      store.loadFromSiteContent(siteProfile, [], [], [], undefined);
+
+      expect(store.username).toBe("existing");
+      expect(store.profile.avatar).toBe("/preview/existing/files/avatar.jpg");
+      expect(store.profile.banner).toBe("/preview/existing/files/banner.jpg");
     });
 
     it("should load lastPublishedAt when provided", () => {

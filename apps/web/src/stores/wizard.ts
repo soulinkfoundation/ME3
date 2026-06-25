@@ -486,6 +486,48 @@ const DEFAULT_TESTIMONIALS_TITLE = "Testimonials";
 
 const STORAGE_KEY = "me3_wizard_state";
 
+function normalizeAssetSiteUsername(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim().replace(/^@/, "");
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") return null;
+  return trimmed;
+}
+
+function resolveWizardSiteAssetUrl(
+  value: string | null | undefined,
+  siteUsername: string | null | undefined,
+): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const fallbackUsername = normalizeAssetSiteUsername(siteUsername);
+  const previewAsset = trimmed.match(
+    /^(?:https?:\/\/[^/]+)?(?:\.?\/)?preview\/([^/]+)\/((?:files\/[^?#\s]+)|favicon\.png)([?#][^\s]*)?$/i,
+  );
+  if (previewAsset) {
+    const assetUsername =
+      fallbackUsername || normalizeAssetSiteUsername(previewAsset[1]);
+    const assetPath = `${previewAsset[2]}${previewAsset[3] || ""}`;
+    return assetUsername
+      ? `/preview/${encodeURIComponent(assetUsername)}/${assetPath}`
+      : `./${assetPath}`;
+  }
+
+  if (/^(https?:|data:|blob:)/i.test(trimmed)) return trimmed;
+
+  const normalized = trimmed
+    .replace(/^\.?\//, "")
+    .replace(/^(\.\.\/)+/, "");
+  if (normalized.startsWith("files/") || normalized === "favicon.png") {
+    return fallbackUsername
+      ? `/preview/${encodeURIComponent(fallbackUsername)}/${normalized}`
+      : `./${normalized}`;
+  }
+
+  return trimmed;
+}
+
 function generateSlug(title: string): string {
   return title
     .toLowerCase()
@@ -3677,9 +3719,20 @@ export const useWizardStore = defineStore("wizard", () => {
           typeof state.ownerUserId === "string" ? state.ownerUserId : null;
         const storedProfile = state.profile || {};
         const storedBooking = storedProfile.booking || {};
+        const storedUsername = normalizeAssetSiteUsername(state.username);
+        const storedAssetUsername =
+          storedUsername || normalizeAssetSiteUsername(storedProfile.handle);
         profile.value = {
           ...defaultProfile,
           ...storedProfile,
+          avatar: resolveWizardSiteAssetUrl(
+            storedProfile.avatar,
+            storedAssetUsername,
+          ),
+          banner: resolveWizardSiteAssetUrl(
+            storedProfile.banner,
+            storedAssetUsername,
+          ),
           locationData: normalizeLocationData(storedProfile.locationData),
           business: normalizeBusinessConfig(storedProfile.business),
           booking: normalizeWizardBookingConfig(storedBooking),
@@ -3719,17 +3772,18 @@ export const useWizardStore = defineStore("wizard", () => {
         }));
         testimonials.value = (state.testimonials || []).map((t: any) => {
           const av = t.avatar;
+          const avatar =
+            typeof av === "string" &&
+            (av.startsWith("data:") || av.startsWith("blob:"))
+              ? undefined
+              : resolveWizardSiteAssetUrl(av, storedAssetUsername) || undefined;
           return {
             ...t,
             avatarBlob: null,
-            avatar:
-              typeof av === "string" &&
-              (av.startsWith("data:") || av.startsWith("blob:"))
-                ? undefined
-                : av,
+            avatar,
           };
         });
-        username.value = state.username || "";
+        username.value = storedUsername || "";
         vibe.value = state.vibe || defaultVibe;
         accentOverride.value = state.accentOverride || null;
         newsletterEnabled.value =
@@ -4016,31 +4070,25 @@ export const useWizardStore = defineStore("wizard", () => {
       excerpt?: string;
       confirmationEmail?: WizardProductConfirmationEmail;
     }>,
-    siteUsername: string,
+    siteUsername: string | null | undefined,
     sitePublishedAt?: string | null,
     siteSourceUrl?: string | null,
   ) {
+    const resolvedSiteUsername =
+      normalizeAssetSiteUsername(siteUsername) ||
+      normalizeAssetSiteUsername(siteProfile.handle) ||
+      normalizeAssetSiteUsername(username.value) ||
+      "";
+
     // Reset first
     reset();
 
     // Set username
-    username.value = siteUsername;
+    username.value = resolvedSiteUsername;
     isUsernameAvailable.value = true; // Already claimed by this user
 
-    const previewAssetBase = `/preview/${encodeURIComponent(siteUsername)}/`;
     const resolveLoadedSiteAssetUrl = (value: string | null | undefined): string | null => {
-      if (!value) return null;
-      const trimmed = value.trim();
-      if (!trimmed) return null;
-      if (/^(https?:|data:|blob:)/i.test(trimmed)) return trimmed;
-      if (trimmed.startsWith(previewAssetBase)) return trimmed;
-      const normalized = trimmed
-        .replace(/^\.?\//, "")
-        .replace(/^(\.\.\/)+/, "");
-      if (normalized.startsWith("files/") || normalized === "favicon.png") {
-        return `${previewAssetBase}${normalized}`;
-      }
-      return trimmed;
+      return resolveWizardSiteAssetUrl(value, resolvedSiteUsername);
     };
     const resolveLoadedContentAssetUrls = (content: string): string =>
       content.replace(
@@ -4305,7 +4353,7 @@ export const useWizardStore = defineStore("wizard", () => {
 
     profile.value = {
       name: siteProfile.name || "",
-      handle: siteProfile.handle || siteUsername,
+      handle: siteProfile.handle || resolvedSiteUsername,
       location: (siteProfile as any).location || "",
       locationData: normalizeLocationData((siteProfile as any).locationData),
       bio: siteProfile.bio || "",
