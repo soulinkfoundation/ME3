@@ -4,6 +4,10 @@ type CoreConfig = {
   siteHost?: string | null;
 };
 
+type PublicProfileSite = {
+  custom_domain?: string | null;
+};
+
 function browserOrigin(): string {
   if (typeof window === "undefined") return "";
   return window.location.origin.replace(/\/+$/, "");
@@ -12,6 +16,16 @@ function browserOrigin(): string {
 function fallbackPublicSiteUrl(): string {
   const origin = browserOrigin();
   return origin ? `${origin}/me` : "/me";
+}
+
+export function configuredPublicProfileUrl(
+  site?: PublicProfileSite | null,
+): string | null {
+  const domain = site?.custom_domain
+    ?.trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+  return domain ? `https://${domain}` : null;
 }
 
 export async function resolvePublicSiteUrl(): Promise<string> {
@@ -28,10 +42,16 @@ export async function resolvePublicSiteUrl(): Promise<string> {
   return fallbackPublicSiteUrl();
 }
 
-export async function resolvePublicProfileUrl(username: string): Promise<string> {
+export async function resolvePublicProfileUrl(
+  username: string,
+  site?: PublicProfileSite | null,
+): Promise<string> {
   if (import.meta.env.DEV) {
     return `http://localhost:8787/preview/${encodeURIComponent(username)}/`;
   }
+
+  const configuredUrl = configuredPublicProfileUrl(site);
+  if (configuredUrl) return configuredUrl;
 
   return resolvePublicSiteUrl();
 }

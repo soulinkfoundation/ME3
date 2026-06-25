@@ -248,8 +248,8 @@ async function uploadAndRegenerate(
 }
 
 onMounted(async () => {
-  liveUrl.value = await resolvePublicProfileUrl(username.value);
   await loadBuilder();
+  liveUrl.value = await resolvePublicProfileUrl(username.value, site.value);
   if (site.value && !isLandingPage.value) {
     router.replace(`/sites/${username.value}`);
     return;

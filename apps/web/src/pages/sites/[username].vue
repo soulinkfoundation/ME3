@@ -75,6 +75,10 @@ const siteUrlLabel = computed(() =>
   siteUrl.value.replace(/^https?:\/\//, "").replace(/\/$/, ""),
 );
 
+async function syncSiteUrl() {
+  siteUrl.value = await resolvePublicProfileUrl(username.value, site.value);
+}
+
 // UI State
 const showAdvancedUpload = ref(false);
 const showDeleteConfirm = ref(false);
@@ -142,11 +146,10 @@ turndown.addRule("tiptapTaskItem", {
 });
 
 onMounted(async () => {
-  siteUrl.value = await resolvePublicProfileUrl(username.value);
-
   if (sites.sites.length === 0) {
     await sites.fetchSites();
   }
+  await syncSiteUrl();
 
   await syncLandingPagesFeature();
   window.addEventListener("me3:plugins-changed", handlePluginsChanged);
@@ -369,6 +372,7 @@ async function publishLandingPage() {
       return;
     }
     await sites.fetchSites();
+    await syncSiteUrl();
   } finally {
     publishBusy.value = false;
   }
@@ -385,6 +389,7 @@ async function unpublishLandingPage() {
       return;
     }
     await sites.fetchSites();
+    await syncSiteUrl();
   } finally {
     publishBusy.value = false;
   }
