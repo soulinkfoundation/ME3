@@ -28,11 +28,11 @@ Me too...👇</strong>
 - **📆 A Calendar** your 🤖 can use to help you spend more time on what matters to you.
 - **🧩 Plugins**: you can build, extend and modify to make ME3 your own.
 
-Note: Cloudflare hosting is free to start; some features require a $5/month plan. AI costs are extra.
+Note: Cloudflare hosting is free to start; some features require a $5/month plan. AI costs are extra, depending on the models you configure.
 
 ### 📜 Docs
 
-Once you're set up, you can ask ME3 what you need to know, like how to configure a custom domain, run the app locally, or create your own plugin. Or see [how-to-me3](docs/how-to-me3.md) if reading docs is your thing.
+Point your ME3 or any AI at this [how-to-me3](docs/how-to-me3.md) to find out how to configure your custom domain, run the app locally, create your own plugin and more.
 
 ### 😘 Support
 
