@@ -6,14 +6,17 @@
   <strong>ME3 thinks your AI (and email, calendar, website...) should belong to you, </br> and making that happen shouldn't be such a pain in the ass.</strong>
 </p>
 
-![ME3 screenshot](apps/web/public/me3.gif)
-
-<p align="center"><strong>
-  Ready to take ownership of your digital life?</br>
-Me too...👇</strong>
+<p align="center">
+  <strong>Ready to take ownership of your digital life? Me too...👇</strong>
 </p>
 
-<p align="center">
+[![ME3 demo](https://me3.app/me3_screenshots.gif)](https://me3.app/me3_screenshots.mp4)
+
+
+### 🚀 Installing
+1. Create a free Cloudflare account, with R2 enabled.
+2. Click here 👇
+<p>
   <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3">
     <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" />
   </a>
