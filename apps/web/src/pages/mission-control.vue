@@ -212,6 +212,7 @@ const aiUsage = ref<AiUsageCardData | null>(null);
 const aiUsageLoading = ref(false);
 const aiUsageError = ref("");
 const aiUsageModalOpen = ref(false);
+const aiUsageConfigureOpen = ref(false);
 const setupChecklistDismissed = ref(false);
 
 const cards = computed(() =>
@@ -718,6 +719,13 @@ async function loadProjectsSummary() {
   }
 }
 
+function closeOpenDashboardModals() {
+  aiUsageModalOpen.value = false;
+  aiUsageConfigureOpen.value = false;
+  cardPickerOpen.value = false;
+  quickActionPickerOpen.value = false;
+}
+
 async function saveMissionStatement() {
   if (missionStatementSaving.value) return;
   missionStatementSaving.value = true;
@@ -781,7 +789,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="mission-dashboard">
+  <main class="mission-dashboard" @keydown.esc="closeOpenDashboardModals">
     <header class="mission-dashboard__topbar">
       <div class="mission-dashboard__topbar-spacer" aria-hidden="true" />
       <div
@@ -1197,6 +1205,14 @@ onMounted(() => {
                 <code>CLOUDFLARE_API_TOKEN</code> Worker secrets to show AI
                 usage here.
               </p>
+              <Button
+                color="outline"
+                shape="soft"
+                size="compact"
+                @click="aiUsageConfigureOpen = true"
+              >
+                Configure
+              </Button>
             </div>
             <div v-else-if="aiUsage?.error" class="dashboard-empty">
               <p>{{ aiUsage.error }}</p>
@@ -1207,6 +1223,14 @@ onMounted(() => {
                 @click="loadAiUsage"
               >
                 Retry
+              </Button>
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                @click="aiUsageConfigureOpen = true"
+              >
+                Configure
               </Button>
             </div>
             <div v-else-if="aiUsage" class="ai-usage-summary">
@@ -1419,6 +1443,85 @@ onMounted(() => {
         </button>
       </div>
     </section>
+
+    <div
+      v-if="aiUsageConfigureOpen"
+      class="dashboard-modal-backdrop"
+      @click.self="aiUsageConfigureOpen = false"
+    >
+      <section
+        class="dashboard-modal dashboard-modal--wide"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ai-usage-configure-title"
+        tabindex="-1"
+        @keydown.esc="aiUsageConfigureOpen = false"
+      >
+        <header class="dashboard-modal__header">
+          <h2 id="ai-usage-configure-title">Configure AI Usage</h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Close AI usage setup"
+            @click="aiUsageConfigureOpen = false"
+          >
+            <UiIcon name="X" :size="18" />
+          </Button>
+        </header>
+        <div class="dashboard-modal__body">
+          <ol class="ai-usage-config">
+            <li>
+              <span>1</span>
+              <p>
+                Open the
+                <a
+                  href="https://dash.cloudflare.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >Cloudflare dashboard</a>, search
+                <strong>account id</strong>, and copy the value.
+              </p>
+            </li>
+            <li>
+              <span>2</span>
+              <p>
+                Search <strong>API tokens</strong>, create a token, and give it
+                Account permissions for <strong>AI Gateway</strong>:
+                <strong>Edit</strong>, <strong>Read</strong>, and
+                <strong>Run</strong>.
+              </p>
+            </li>
+            <li>
+              <span>3</span>
+              <p>
+                Visit
+                <a
+                  href="https://dash.cloudflare.com/?to=/:account/workers-and-pages"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >Workers &amp; Pages</a>, open your ME3 Worker, then go to Settings -> Variables and
+                secrets -> Add.
+              </p>
+            </li>
+            <li>
+              <span>4</span>
+              <p>
+                Add <code>CLOUDFLARE_ACCOUNT_ID</code> with the account ID, and
+                add <code>CLOUDFLARE_API_TOKEN</code> with the new token.
+              </p>
+            </li>
+            <li>
+              <span>5</span>
+              <p>
+                You may need to redeploy your Worker before ME3 can read them.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+    </div>
 
     <div
       v-if="aiUsageModalOpen"
@@ -2053,6 +2156,56 @@ onMounted(() => {
   color: var(--ui-text-muted);
   font-size: 12px;
   font-weight: 650;
+}
+
+.ai-usage-config {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-usage-config li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.ai-usage-config li > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ai-usage-config p {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ai-usage-config strong,
+.ai-usage-config code {
+  color: var(--ui-text);
+}
+
+.ai-usage-config a {
+  color: var(--ui-accent-strong);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.ai-usage-config a:hover,
+.ai-usage-config a:focus-visible {
+  text-decoration: underline;
 }
 
 .project-summary {
