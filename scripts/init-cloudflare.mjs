@@ -30,6 +30,7 @@ const aiGatewayApiToken =
     process.env.CLOUDFLARE_API_TOKEN ||
     ""
   ).trim();
+let promptAiGatewaySecrets = false;
 
 if (!existsSync(configPath)) {
   fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
@@ -58,6 +59,10 @@ console.log(`Wrangler config: ${configPath}`);
 
 if (!args.yes) {
   await confirm("This will create or reuse Cloudflare D1/R2 resources and put Worker secrets. Continue?");
+}
+
+if (!args.skipSecrets && !args.yes) {
+  promptAiGatewaySecrets = await shouldPromptForAiGatewaySecrets();
 }
 
 runWrangler(["whoami"], {
@@ -252,6 +257,7 @@ function printHelp() {
   console.log(`Usage: pnpm init:cloudflare -- [options]
 
 Prepares Cloudflare resources for a manual ME3 Core deploy.
+Interactive setup can also prompt for optional AI Gateway usage secrets.
 
 Options:
   --config <path>          Wrangler config path (default: wrangler.toml)
@@ -272,13 +278,19 @@ Options:
 }
 
 async function confirm(question) {
+  if (await optionalConfirm(question)) {
+    return;
+  }
+
+  console.log("Cancelled.");
+  process.exit(0);
+}
+
+async function optionalConfirm(question) {
   const rl = createInterface({ input, output });
   try {
     const answer = await rl.question(`${question} [y/N] `);
-    if (!/^y(es)?$/i.test(answer.trim())) {
-      console.log("Cancelled.");
-      process.exit(0);
-    }
+    return /^y(es)?$/i.test(answer.trim());
   } finally {
     rl.close();
   }
@@ -310,7 +322,48 @@ function putSecret(name, value) {
   });
 }
 
+function putSecretInteractive(name, label) {
+  console.log(`Set ${label} (${name}) when Wrangler prompts.`);
+  const result = spawnSync("pnpm", ["exec", "wrangler", "secret", "put", name, "--config", configPath], {
+    stdio: "inherit",
+  });
+
+  if (result.status === 0) return;
+
+  fail(
+    `Could not put the ${name} Worker secret. ` +
+      `You can set it later with \`pnpm exec wrangler secret put ${name} --config ${configPath}\`.`,
+  );
+}
+
+async function shouldPromptForAiGatewaySecrets() {
+  if (aiGatewayAccountId && aiGatewayApiToken) return false;
+
+  if (!aiGatewayAccountId && !aiGatewayApiToken) {
+    return optionalConfirm("Configure AI Gateway usage reporting now?");
+  }
+
+  return optionalConfirm("AI Gateway setup is missing one value. Add the missing secret now?");
+}
+
 function putAiGatewaySecrets() {
+  if (promptAiGatewaySecrets) {
+    if (aiGatewayAccountId) {
+      putSecret("CLOUDFLARE_ACCOUNT_ID", aiGatewayAccountId);
+    } else {
+      putSecretInteractive("CLOUDFLARE_ACCOUNT_ID", "the Cloudflare account ID");
+    }
+
+    if (aiGatewayApiToken) {
+      putSecret("CLOUDFLARE_API_TOKEN", aiGatewayApiToken);
+    } else {
+      putSecretInteractive("CLOUDFLARE_API_TOKEN", "the Cloudflare API token");
+    }
+
+    console.log("AI Gateway Worker secrets are set.");
+    return;
+  }
+
   if (!aiGatewayAccountId && !aiGatewayApiToken) {
     console.log(
       "Skipped AI Gateway secrets; set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN later to enable usage reporting.",

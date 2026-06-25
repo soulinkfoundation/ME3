@@ -40,6 +40,12 @@
       },
       "AI": {
         "description": "Workers AI binding used by ME3's default assistant and voice features. You can add other model providers inside ME3 later."
+      },
+      "CLOUDFLARE_ACCOUNT_ID": {
+        "description": "Optional for `/mission-control` AI Usage: your Cloudflare account ID. ME3 stores it as a Worker secret and uses the `default` AI Gateway."
+      },
+      "CLOUDFLARE_API_TOKEN": {
+        "description": "Optional secret for `/mission-control` AI Usage: a Cloudflare API token that can read AI Gateway logs for this account. You can leave it blank and add it later as a Worker secret."
       }
     }
   },

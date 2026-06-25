@@ -157,7 +157,8 @@ Do not use `pnpm deploy`; `deploy` is a pnpm built-in command and can skip ME3's
 - Workers AI uses the Cloudflare `AI` binding and does not need an API key.
 - OpenAI and Anthropic keys can be saved in Account; Core encrypts stored provider secrets and never returns them to the browser.
 - AI Gateway usage is backend-only setup. Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as Worker secrets; ME3 uses Cloudflare's `default` gateway.
-- For new installs, pass the values to setup without committing them:
+- Deploy-to-Cloudflare installs can enter these optional secrets in the setup form.
+- Manual new installs can answer the `pnpm init:cloudflare` AI Gateway prompt, or pass the values without committing them:
 
 ```bash
 ME3_AI_GATEWAY_CLOUDFLARE_ACCOUNT_ID="your-account-id" \
