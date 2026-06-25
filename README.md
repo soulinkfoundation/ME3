@@ -2,9 +2,7 @@
   <img src="apps/web/public/me3-logo-light.png" alt="ME3 logo" width="120" />
 </p>
 
-<p align="center">
-  <strong>ME3 thinks your AI (and email, calendar, website...) should belong to you, </br> and making that happen shouldn't be such a pain in the ass.</strong>
-</p>
+<p align="center">Free, open-source software for your AI, email, calendar, website and more.</p>
 
 <p align="center">
   <strong>Ready to take ownership of your digital life? Me too...👇</strong>
@@ -13,7 +11,7 @@
 [![ME3 demo](https://me3.app/me3_screenshots.gif)](https://me3.app/me3_screenshots.mp4)
 
 
-### 🚀 Installing
+### 🚀 Install in minutes
 1. Create a free Cloudflare account, with R2 enabled.
 2. Click here 👇
 <p>
