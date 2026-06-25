@@ -1,4 +1,5 @@
 import {
+  INSTALL_ENCRYPTION_KEY_NAME,
   getOrCreateInstallEncryptionKey,
   hasInstallEncryptionKey,
 } from "./install-secrets";
@@ -671,7 +672,7 @@ async function decryptSecretSafely(env: Env, encrypted: string): Promise<string 
 async function getInstallEncryptionKey(env: Env): Promise<string | null> {
   try {
     const row = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
-      .bind("token_encryption_key")
+      .bind(INSTALL_ENCRYPTION_KEY_NAME)
       .first<{ value: string }>();
     return row?.value || null;
   } catch {

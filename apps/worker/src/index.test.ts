@@ -3,7 +3,7 @@ import Stripe from "stripe";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL } from "@me3-core/plugin-agent-chat";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
-import { generateAiText } from "./ai-providers";
+import { generateAiText, updateAiSettings } from "./ai-providers";
 import { ME3_CORE_VERSION } from "./core-version";
 import {
   CORE_PLUGIN_CATALOG,
@@ -9662,6 +9662,35 @@ describe("ME3 Core Worker auth", () => {
       expect(init.headers).toMatchObject({
         Authorization: "Bearer sk-openai-secret",
         "cf-aig-authorization": "Bearer cf-gateway-token",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses stored AI provider keys when encryption key lives in install secrets", async () => {
+    const env = createEnv();
+    env.TOKEN_ENCRYPTION_KEY = undefined;
+
+    await updateAiSettings(env, "owner", {
+      providers: [{ id: "openai", apiKey: "sk-openai-secret" }],
+    });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ choices: [{ message: { content: "Stored key reply" } }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await generateAiText(env, "owner", {
+        selectedModel: { providerId: "openai", model: "gpt-4.1-mini" },
+        messages: [{ role: "user", content: "Hello" }],
+      });
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+
+      expect(result.text).toBe("Stored key reply");
+      expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toBeTruthy();
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer sk-openai-secret",
       });
     } finally {
       vi.unstubAllGlobals();

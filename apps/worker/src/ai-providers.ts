@@ -1,6 +1,7 @@
 import type { DbAiModelDefault, DbAiProviderCredential, Env } from "./types";
 import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL } from "@me3-core/plugin-agent-chat";
 import {
+  INSTALL_ENCRYPTION_KEY_NAME,
   getOrCreateInstallEncryptionKey,
   hasInstallEncryptionKey,
 } from "./install-secrets";
@@ -676,7 +677,7 @@ async function getInstallEncryptionKey(env: Env): Promise<string | null> {
   if (env.TOKEN_ENCRYPTION_KEY) return env.TOKEN_ENCRYPTION_KEY;
   try {
     const row = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
-      .bind("token_encryption_key")
+      .bind(INSTALL_ENCRYPTION_KEY_NAME)
       .first<{ value: string }>();
     return row?.value || null;
   } catch {
