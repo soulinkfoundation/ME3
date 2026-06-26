@@ -1699,7 +1699,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex: 1;
   flex-direction: column;
-  min-height: 0;
+  min-height: auto;
   --tiptap-toolbar-offset: var(--workspace-topbar-height);
 }
 
@@ -1712,7 +1712,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex: 1;
   flex-direction: column;
-  min-height: 0;
+  min-height: auto;
 }
 
 .journal__editor-wrap :deep(.tiptap-editor--workspace .editor-toolbar),
@@ -1732,15 +1732,15 @@ onBeforeUnmount(() => {
   display: flex;
   flex: 1;
   flex-direction: column;
-  min-height: 0;
-  overflow-y: auto;
+  min-height: auto;
+  overflow-y: visible;
   padding: 8px 0 0;
   background: transparent;
 }
 
 .journal__editor-wrap :deep(.tiptap-editor--workspace .editor-content-wrapper .ProseMirror) {
   flex: 1;
-  min-height: 100%;
+  min-height: max(200px, calc(100dvh - var(--workspace-topbar-height) - 132px));
 }
 
 .journal__status {
