@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import Button from "../Button.vue";
 import TiptapEditor from "../TiptapEditor.vue";
 import UiIcon from "../UiIcon.vue";
@@ -62,6 +62,11 @@ const taskProject = computed(() =>
   props.task ? projectForTask(props.projects, props.task) : null,
 );
 const backdropPointerStarted = ref(false);
+const isFullscreen = ref(false);
+
+watch([() => props.task?.id, () => Boolean(props.weeklyReview)], () => {
+  isFullscreen.value = false;
+});
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement | HTMLTextAreaElement).value;
@@ -92,6 +97,10 @@ function closeFromBackdrop() {
   backdropPointerStarted.value = false;
   emit("close");
 }
+
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value;
+}
 </script>
 
 <template>
@@ -99,6 +108,7 @@ function closeFromBackdrop() {
     <div
       v-if="task"
       class="mission-modal"
+      :class="{ 'mission-modal--fullscreen': isFullscreen && !weeklyReview }"
       role="presentation"
       @pointerdown.self="markBackdropPointerStart"
       @pointerdown.capture="backdropPointerStarted = false"
@@ -106,18 +116,42 @@ function closeFromBackdrop() {
     >
       <div
         class="mission-modal__dialog task-detail-modal"
-        :class="{ 'task-detail-modal--note': !weeklyReview }"
+        :class="{
+          'task-detail-modal--note': !weeklyReview,
+          'task-detail-modal--fullscreen': isFullscreen && !weeklyReview,
+        }"
         role="dialog"
         aria-modal="true"
         aria-labelledby="task-detail-modal-title"
       >
-        <div class="mission-modal__header">
-          <h2
-            id="task-detail-modal-title"
-            :class="{ 'task-detail-modal__title--hidden': !weeklyReview }"
+        <div class="task-detail-modal__window-actions">
+          <Button
+            v-if="!weeklyReview"
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            aria-label="Archive task"
+            title="Archive task"
+            :disabled="detailSaving || taskActionId === task.id"
+            @click="emit('archive')"
           >
-            {{ weeklyReview ? "Weekly Review" : "Item details" }}
-          </h2>
+            <UiIcon name="Archive" :size="16" />
+          </Button>
+          <Button
+            v-if="!weeklyReview"
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            type="button"
+            :aria-label="isFullscreen ? 'Exit full screen' : 'Full screen'"
+            :title="isFullscreen ? 'Exit full screen' : 'Full screen'"
+            @click="toggleFullscreen"
+          >
+            <UiIcon :name="isFullscreen ? 'Minimize2' : 'Expand'" :size="16" />
+          </Button>
           <Button
             color="ghost"
             shape="soft"
@@ -130,6 +164,17 @@ function closeFromBackdrop() {
             <UiIcon name="X" :size="18" />
           </Button>
         </div>
+
+        <div v-if="weeklyReview" class="mission-modal__header">
+          <h2 id="task-detail-modal-title">Weekly Review</h2>
+        </div>
+        <h2
+          v-else
+          id="task-detail-modal-title"
+          class="task-detail-modal__title--hidden"
+        >
+          Item details
+        </h2>
 
         <div v-if="weeklyReview" class="task-detail-modal__context">
           <span>{{ projectName(projects, task.projectId) }}</span>
@@ -326,6 +371,7 @@ function closeFromBackdrop() {
 
           <div class="task-note-meta">
             <label class="field task-note-meta__field">
+              <span class="task-note-meta__label">Project</span>
               <select
                 :value="detailDraft.projectId"
                 aria-label="Project"
@@ -342,6 +388,7 @@ function closeFromBackdrop() {
             </label>
 
             <label class="field task-note-meta__field">
+              <span class="task-note-meta__label">Status</span>
               <select
                 :value="detailDraft.status"
                 aria-label="Status"
@@ -356,11 +403,9 @@ function closeFromBackdrop() {
                 </option>
               </select>
             </label>
-          </div>
 
-          <div class="task-note-meta">
             <label class="field task-note-meta__field">
-              <span>Date</span>
+              <span class="task-note-meta__label">Date</span>
               <input
                 :value="detailDraft.scheduledFor"
                 type="date"
@@ -372,11 +417,12 @@ function closeFromBackdrop() {
             </label>
           </div>
 
-          <div class="field task-note-body-field">
+          <div class="task-note-body-field">
             <TiptapEditor
               :model-value="detailDraft.description"
               class="task-note-body-field__editor"
               placeholder="Add notes"
+              variant="workspace"
               @update:model-value="
                 updateDetailDraft({ description: $event })
               "
@@ -389,27 +435,7 @@ function closeFromBackdrop() {
         </p>
 
         <div class="mission-modal__actions task-detail-modal__actions">
-          <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="detailSaving || taskActionId === task.id"
-            @click="emit('archive')"
-          >
-            Archive
-          </Button>
           <div class="task-detail-modal__primary-actions">
-            <Button
-              color="outline"
-              shape="soft"
-              size="compact"
-              type="button"
-              :disabled="detailSaving || weeklyReviewSubmitting"
-              @click="emit('close')"
-            >
-              Cancel
-            </Button>
             <Button
               v-if="weeklyReview"
               color="primary"
@@ -450,7 +476,13 @@ function closeFromBackdrop() {
   background: color-mix(in oklab, #000, transparent 64%);
 }
 
+.mission-modal--fullscreen {
+  padding: 0;
+  background: var(--ui-bg);
+}
+
 .mission-modal__dialog {
+  position: relative;
   display: grid;
   width: min(460px, 100%);
   max-height: min(720px, calc(100vh - 48px));
@@ -467,9 +499,21 @@ function closeFromBackdrop() {
 .task-detail-modal--note {
   width: min(720px, 100%);
   max-height: min(820px, calc(100vh - 48px));
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   gap: 16px;
-  padding: 22px;
+  overflow: hidden;
+  padding: 70px 28px 22px;
+}
+
+.task-detail-modal--fullscreen {
+  width: 100%;
+  height: 100dvh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: var(--ui-bg);
+  box-shadow: none;
+  padding: 72px max(24px, calc((100vw - 700px) / 2)) 24px;
 }
 
 .mission-modal__header,
@@ -483,6 +527,22 @@ function closeFromBackdrop() {
 .mission-modal__header h2 {
   margin: 0;
   font-size: 16px;
+}
+
+.task-detail-modal__window-actions {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-detail-modal--fullscreen .task-detail-modal__window-actions {
+  position: fixed;
+  top: 18px;
+  right: 24px;
 }
 
 .task-detail-modal__title--hidden {
@@ -537,7 +597,7 @@ function closeFromBackdrop() {
 }
 
 .task-detail-modal__actions {
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .task-detail-modal__primary-actions {
@@ -582,7 +642,7 @@ function closeFromBackdrop() {
 
 .task-note-meta {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr) minmax(150px, 0.75fr);
   gap: 10px;
   min-width: 0;
 }
@@ -591,32 +651,91 @@ function closeFromBackdrop() {
   min-width: 0;
 }
 
+.task-note-meta__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .task-note-body-field {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+  color: var(--ui-text);
+  font-size: inherit;
+  font-weight: 400;
 }
 
 .task-note-body-field__editor {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  --tiptap-toolbar-offset: 0px;
+}
+
+.task-note-body-field__editor :deep(.tiptap-editor--workspace) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-height: 0;
 }
 
 .task-note-body-field__editor :deep(.editor-toolbar) {
   position: static;
-  padding: 6px;
-  border: 1px solid var(--ui-border);
-  background: var(--ui-surface-muted);
+  width: 100%;
+  margin: 0;
+  padding: 0 0 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.task-note-body-field__editor :deep(.editor-toolbar::-webkit-scrollbar) {
+  display: none;
+}
+
+.task-note-body-field__editor :deep(.toolbar-btn),
+.task-note-body-field__editor :deep(.toolbar-divider) {
+  flex: 0 0 auto;
 }
 
 .task-note-body-field__editor :deep(.editor-content-wrapper) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-height: 340px;
   max-height: min(520px, calc(100vh - 330px));
   overflow: auto;
-  background: var(--ui-bg);
+  padding: 8px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .task-note-body-field__editor :deep(.ProseMirror) {
   min-height: 308px;
-  font-size: 15px;
-  line-height: 1.65;
+  font: inherit;
+  font-weight: 400;
+}
+
+.task-detail-modal--fullscreen
+  .task-note-body-field__editor
+  :deep(.editor-content-wrapper) {
+  min-height: 0;
+  max-height: none;
+}
+
+.task-detail-modal--fullscreen .task-note-body-field__editor :deep(.ProseMirror) {
+  flex: 1;
+  min-height: 100%;
 }
 
 .status-badge {
@@ -903,18 +1022,24 @@ function closeFromBackdrop() {
     padding: 14px;
   }
 
+  .mission-modal--fullscreen {
+    padding: 0;
+  }
+
   .task-detail-modal--note {
     width: 100%;
     max-height: calc(100vh - 28px);
-    padding: 18px;
+    padding: 64px 18px 18px;
+  }
+
+  .task-detail-modal--fullscreen {
+    height: 100dvh;
+    max-height: none;
+    padding: 64px 18px 18px;
   }
 
   .task-note-title-field__input {
     font-size: 24px;
-  }
-
-  .task-note-meta {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .task-note-body-field__editor :deep(.editor-content-wrapper) {
@@ -924,6 +1049,12 @@ function closeFromBackdrop() {
 
   .task-note-body-field__editor :deep(.ProseMirror) {
     min-height: 268px;
+  }
+}
+
+@media (max-width: 640px) {
+  .task-note-meta {
+    grid-template-columns: 1fr;
   }
 }
 </style>
