@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import Button from "../Button.vue";
 import TiptapEditor from "../TiptapEditor.vue";
 import UiIcon from "../UiIcon.vue";
@@ -62,11 +62,6 @@ const taskProject = computed(() =>
   props.task ? projectForTask(props.projects, props.task) : null,
 );
 const backdropPointerStarted = ref(false);
-const isFullscreen = ref(false);
-
-watch([() => props.task?.id, () => Boolean(props.weeklyReview)], () => {
-  isFullscreen.value = false;
-});
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement | HTMLTextAreaElement).value;
@@ -97,10 +92,6 @@ function closeFromBackdrop() {
   backdropPointerStarted.value = false;
   emit("close");
 }
-
-function toggleFullscreen() {
-  isFullscreen.value = !isFullscreen.value;
-}
 </script>
 
 <template>
@@ -108,7 +99,7 @@ function toggleFullscreen() {
     <div
       v-if="task"
       class="mission-modal"
-      :class="{ 'mission-modal--fullscreen': isFullscreen && !weeklyReview }"
+      :class="{ 'mission-modal--fullscreen': !weeklyReview }"
       role="presentation"
       @pointerdown.self="markBackdropPointerStart"
       @pointerdown.capture="backdropPointerStarted = false"
@@ -118,7 +109,7 @@ function toggleFullscreen() {
         class="mission-modal__dialog task-detail-modal"
         :class="{
           'task-detail-modal--note': !weeklyReview,
-          'task-detail-modal--fullscreen': isFullscreen && !weeklyReview,
+          'task-detail-modal--fullscreen': !weeklyReview,
         }"
         role="dialog"
         aria-modal="true"
@@ -138,19 +129,6 @@ function toggleFullscreen() {
             @click="emit('archive')"
           >
             <UiIcon name="Archive" :size="16" />
-          </Button>
-          <Button
-            v-if="!weeklyReview"
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            type="button"
-            :aria-label="isFullscreen ? 'Exit full screen' : 'Full screen'"
-            :title="isFullscreen ? 'Exit full screen' : 'Full screen'"
-            @click="toggleFullscreen"
-          >
-            <UiIcon :name="isFullscreen ? 'Minimize2' : 'Expand'" :size="16" />
           </Button>
           <Button
             color="ghost"
@@ -695,10 +673,11 @@ function toggleFullscreen() {
   flex-wrap: nowrap;
   justify-content: flex-start;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
 
-.task-note-body-field__editor :deep(.editor-toolbar::-webkit-scrollbar) {
+.task-note-body-field__editor :deep(.editor-toolbar)::-webkit-scrollbar {
   display: none;
 }
 
