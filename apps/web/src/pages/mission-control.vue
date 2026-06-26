@@ -1200,11 +1200,6 @@ onMounted(() => {
               </Button>
             </div>
             <div v-else-if="aiUsage?.setupRequired" class="dashboard-empty">
-              <p>
-                Add <code>CLOUDFLARE_ACCOUNT_ID</code> and
-                <code>CLOUDFLARE_API_TOKEN</code> Worker secrets to show AI
-                usage here.
-              </p>
               <Button
                 color="outline"
                 shape="soft"
