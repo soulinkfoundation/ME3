@@ -1105,7 +1105,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const text = normalizeAssistantIntentText(messageText);
     if (!text) return false;
     if (isAssistantSiteApprovalIntent(text) || isAssistantSiteStatusIntent(text)) return false;
-    const siteish = /\b(site|website|homepage|about page|about section|bio|blog|post|article|page)\b/.test(text);
+    const siteish =
+      /(?:^|[\s(])@[a-z0-9](?:[a-z0-9_-]{1,28}[a-z0-9])?/i.test(messageText) ||
+      /\b(site|website|homepage|site builder|profile site|profile page|public profile|landing page|portfolio|about page|about section|bio field)\b/.test(text) ||
+      /\b(my|the|this|your)\s+(bio|page)\b/.test(text);
     const actionish = /\b(update|add|create|write|draft|make|publish|change|edit|put|append)\b/.test(text);
     const contentTarget =
       /\b(about page|about section|bio|blog post|post about|article about|blog|page)\b/.test(text);

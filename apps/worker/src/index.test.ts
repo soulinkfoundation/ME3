@@ -4949,6 +4949,120 @@ describe("ME3 Core Worker auth", () => {
     );
   });
 
+  it("keeps generic blog drafting prompts in agent chat", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env);
+    const runtimeCalls: Array<[string, RequestInit]> = [];
+    const runtimeFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      runtimeCalls.push([url, init || {}]);
+      return Response.json({
+        ok: true,
+        auditId: null,
+        turnId: `turn-${runtimeCalls.length}`,
+        specialist: "core.agent-chat",
+        replyText:
+          runtimeCalls.length === 1 ? "Creative draft from Core chat." : "Yes, the model is working.",
+        model: "gpt-5.5",
+        source: "openai",
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      });
+    });
+
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const creativePrompt =
+      "Draft a blog post in a humorous Mission: Impossible style for ME3. Transcript: 'Good morning, Mr. Phelps. Your mission, Jim, should you decide to accept it, is to make Stefan believe Townsend's information. This tape will self-destruct in five seconds.'";
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: creativePrompt,
+          model: {
+            providerId: "openai",
+            model: "gpt-5.5",
+            optionId: "openai-gpt-5.5",
+          },
+        }),
+      }),
+      env,
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+    const threadId = String(payload.threadId);
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      specialist: "core.agent-chat",
+      replyText: "Creative draft from Core chat.",
+      model: "gpt-5.5",
+      source: "openai",
+    });
+    expect(payload.siteAction).toBeUndefined();
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+    expect(
+      env.siteFiles.some(
+        (file) =>
+          file.site_id === "site-assistant" &&
+          (file.path.startsWith("assistant/site-update-drafts/") ||
+            file.path.startsWith("src/blog/")),
+      ),
+    ).toBe(false);
+    expect(JSON.parse(String(runtimeCalls[0]?.[1].body))).toMatchObject({
+      messageText: creativePrompt,
+      selectedModel: {
+        providerId: "openai",
+        model: "gpt-5.5",
+        optionId: "openai-gpt-5.5",
+      },
+    });
+
+    const followupResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          threadId,
+          messageText: "is the model working",
+          model: {
+            providerId: "openai",
+            model: "gpt-5.5",
+            optionId: "openai-gpt-5.5",
+          },
+        }),
+      }),
+      env,
+    );
+    const followupPayload = (await followupResponse.json()) as Record<string, unknown>;
+
+    expect(followupResponse.status).toBe(200);
+    expect(followupPayload).toMatchObject({
+      ok: true,
+      specialist: "core.agent-chat",
+      replyText: "Yes, the model is working.",
+    });
+    expect(runtimeFetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(runtimeCalls[1]?.[1].body))).toMatchObject({
+      threadId,
+      messageText: "is the model working",
+    });
+  });
+
   it("saves and clears the assistant display name", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
@@ -5358,7 +5472,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           messageText:
-            "Draft and save an outline for a blog post on the benefits of an open source personal ai assistant.",
+            "For my site, draft and save an outline for a blog post on the benefits of an open source personal ai assistant.",
         }),
       }),
       env,
