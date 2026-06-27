@@ -357,7 +357,13 @@ const visibleProjectStatuses = computed(() =>
   projectBoardStatuses.filter((status) => status.id !== "done"),
 );
 const aiUsageTopModels = computed(() =>
-  (aiUsage.value?.models || []).slice(0, 6),
+  (aiUsage.value?.models || []).slice(0, 3),
+);
+const aiUsageMoreModelsCount = computed(() =>
+  Math.max(
+    0,
+    (aiUsage.value?.models.length || 0) - aiUsageTopModels.value.length,
+  ),
 );
 const aiUsageDetailsAvailable = computed(
   () =>
@@ -1254,11 +1260,20 @@ onMounted(() => {
                   class="ai-usage-models__row"
                 >
                   <div>
-                    <strong>{{ model.model }}</strong>
-                    <span>{{ model.provider }}</span>
+                    <strong :title="model.model">{{ model.model }}</strong>
+                    <span :title="model.provider">{{ model.provider }}</span>
                   </div>
                   <span>{{ formatCurrency(model.cost) }}</span>
                 </div>
+                <button
+                  v-if="!dashboardEditing && aiUsageMoreModelsCount"
+                  type="button"
+                  class="ai-usage-models__more"
+                  :aria-label="`Show ${aiUsageMoreModelsCount} more AI usage items`"
+                  @click="aiUsageModalOpen = true"
+                >
+                  {{ aiUsageMoreModelsCount }} more
+                </button>
               </div>
             </div>
             <div v-else class="dashboard-empty">
@@ -2187,33 +2202,75 @@ onMounted(() => {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  padding-bottom: 8px;
+  min-height: 28px;
+  padding-bottom: 6px;
   border-bottom: 1px solid var(--ui-border);
 }
 
-.ai-usage-models__row:last-child {
+.ai-usage-models__row:last-child,
+.ai-usage-models__row:has(+ .ai-usage-models__more) {
   padding-bottom: 0;
   border-bottom: 0;
 }
 
 .ai-usage-models__row div {
-  display: grid;
+  display: flex;
   min-width: 0;
-  gap: 2px;
+  align-items: baseline;
+  gap: 7px;
 }
 
 .ai-usage-models__row strong {
+  min-width: 0;
   overflow: hidden;
   color: var(--ui-text);
   font-size: 12px;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ai-usage-models__row span {
+  min-width: 0;
+  overflow: hidden;
   color: var(--ui-text-muted);
   font-size: 12px;
   font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-usage-models__row > span {
+  flex-shrink: 0;
+  color: var(--ui-text-muted);
+}
+
+.ai-usage-models__more {
+  justify-self: start;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.ai-usage-models__more:hover,
+.ai-usage-models__more:focus-visible {
+  color: var(--ui-accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ai-usage-models__more:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
 }
 
 .ai-usage-config {
