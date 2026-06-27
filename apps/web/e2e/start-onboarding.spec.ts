@@ -304,7 +304,7 @@ test.describe("/start onboarding wizard", () => {
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Exit" })).toHaveCount(0);
     await expect(page.locator(".step-indicator")).toHaveCount(0);
-    await expect(page.locator(".progress-step")).toHaveCount(5);
+    await expect(page.locator(".progress-step")).toHaveCount(3);
     await expect(page.getByRole("link", { name: "site profile" })).toHaveAttribute(
       "target",
       "_blank",
@@ -452,54 +452,24 @@ test.describe("/start onboarding wizard", () => {
     await expect(page.getByText("starter is available.")).toBeVisible();
 
     await page.getByRole("button", { name: "Next →" }).click();
-    await expect(page.getByRole("heading", { name: "Name your agent" })).toBeVisible();
-    await expect(page.locator("#start-agent-name")).toHaveValue("ME3");
+    await expect(
+      page.getByRole("heading", { name: "The Wheel Of Life" }),
+    ).toBeVisible();
     expect(uploadBody).toContain("me.json");
     expect(uploadBody).toContain("Starter User");
     expect(uploadBody).toContain("starter");
 
-    await page.getByRole("button", { name: "Next →" }).click();
-    await expect(page.getByRole("heading", { name: "Choose plugins" })).toBeVisible();
     await page.getByRole("button", { name: "Skip" }).click();
     await expect(
-      page.getByRole("heading", { name: "Connect a messaging app" }),
-    ).toBeVisible();
-    expect(soulinkSetupRequestCount).toBe(0);
-    await page.getByRole("button", { name: "Skip" }).click();
-    await expect(
-      page.getByRole("heading", { name: "The Wheel Of Life" }),
+      page.getByRole("heading", { name: "Choose plugins" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Skip" }).click();
     await expect(page).toHaveURL(/\/assistant$/);
+    expect(soulinkSetupRequestCount).toBe(0);
   });
 
-  test("saves agent name and Wheel context", async ({ page }) => {
-    let assistantPayload = "";
+  test("saves Wheel context before plugins", async ({ page }) => {
     let wheelPayload = "";
-
-    await page.route("**/api/assistant/settings", async (route) => {
-      if (route.request().method() === "GET") {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            assistantName: null,
-            displayName: "ME3",
-          }),
-        });
-        return;
-      }
-
-      assistantPayload = route.request().postData() || "";
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          assistantName: "Atlas",
-          displayName: "Atlas",
-        }),
-      });
-    });
 
     await page.route("**/api/mission-control/wheel/snapshots", async (route) => {
       wheelPayload = route.request().postData() || "";
@@ -522,12 +492,6 @@ test.describe("/start onboarding wizard", () => {
     await expect(page.getByText("starter is available.")).toBeVisible();
     await page.getByRole("button", { name: "Next →" }).click();
 
-    await page.locator("#start-agent-name").fill("Atlas");
-    await page.getByRole("button", { name: "Next →" }).click();
-    expect(assistantPayload).toContain('"assistantName":"Atlas"');
-
-    await page.getByRole("button", { name: "Skip" }).click();
-    await page.getByRole("button", { name: "Skip" }).click();
     await expect(
       page.getByRole("heading", { name: "The Wheel Of Life" }),
     ).toBeVisible();
@@ -542,8 +506,12 @@ test.describe("/start onboarding wizard", () => {
     await page
       .locator("#start-wheel-note")
       .fill("Protect deep work while rebuilding routines.");
-    await page.getByRole("button", { name: "Save & finish →" }).click();
+    await page.getByRole("button", { name: "Save & continue →" }).click();
 
+    await expect(
+      page.getByRole("heading", { name: "Choose plugins" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Skip" }).click();
     await expect(page).toHaveURL(/\/assistant$/);
     expect(wheelPayload).toContain('"id":"health"');
     expect(wheelPayload).toContain('"value":8');

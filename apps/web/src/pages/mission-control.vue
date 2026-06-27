@@ -214,6 +214,7 @@ const aiUsageError = ref("");
 const aiUsageModalOpen = ref(false);
 const aiUsageConfigureOpen = ref(false);
 const setupChecklistDismissed = ref(false);
+const phoneInstallModalOpen = ref(false);
 
 const cards = computed(() =>
   (dashboard.value?.cards || [])
@@ -939,6 +940,16 @@ onMounted(() => {
             </li>
             <li>
               <UiIcon name="CircleCheck" :size="15" aria-hidden="true" />
+              <button
+                class="setup-checklist-card__link"
+                type="button"
+                @click="phoneInstallModalOpen = true"
+              >
+                Add ME3 to your phone
+              </button>
+            </li>
+            <li>
+              <UiIcon name="CircleCheck" :size="15" aria-hidden="true" />
               <RouterLink to="/assistant">
                 Activate a job for your assistant
               </RouterLink>
@@ -1438,6 +1449,48 @@ onMounted(() => {
         </button>
       </div>
     </section>
+
+    <div
+      v-if="phoneInstallModalOpen"
+      class="dashboard-modal-backdrop"
+      @click.self="phoneInstallModalOpen = false"
+    >
+      <section
+        class="dashboard-modal dashboard-modal--phone"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="phone-install-title"
+        tabindex="-1"
+        @keydown.esc="phoneInstallModalOpen = false"
+      >
+        <header class="dashboard-modal__header">
+          <h2 id="phone-install-title">Add ME3 to your phone</h2>
+          <Button
+            color="ghost"
+            shape="soft"
+            size="compact"
+            icon-only
+            aria-label="Close phone install guide"
+            @click="phoneInstallModalOpen = false"
+          >
+            <UiIcon name="X" :size="18" />
+          </Button>
+        </header>
+        <div class="dashboard-modal__body phone-install-modal__body">
+          <p class="dashboard-modal__empty">
+            Add your ME3 install as an app icon on your phone.
+          </p>
+          <video
+            class="phone-install-video"
+            src="https://me3.app/me3_shortcut.mp4"
+            autoplay
+            muted
+            playsinline
+            controls
+          />
+        </div>
+      </section>
+    </div>
 
     <div
       v-if="aiUsageConfigureOpen"
@@ -1966,14 +2019,24 @@ onMounted(() => {
   color: var(--ui-accent);
 }
 
-.setup-checklist-card__list a {
+.setup-checklist-card__list a,
+.setup-checklist-card__link {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--ui-text);
+  cursor: pointer;
+  font: inherit;
   font-weight: 700;
   text-decoration: none;
+  text-align: left;
 }
 
 .setup-checklist-card__list a:hover,
-.setup-checklist-card__list a:focus-visible {
+.setup-checklist-card__list a:focus-visible,
+.setup-checklist-card__link:hover,
+.setup-checklist-card__link:focus-visible {
   color: var(--ui-accent);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -2381,6 +2444,10 @@ onMounted(() => {
   width: min(760px, 100%);
 }
 
+.dashboard-modal--phone {
+  width: min(430px, 100%);
+}
+
 .dashboard-modal__header {
   display: flex;
   align-items: center;
@@ -2402,6 +2469,17 @@ onMounted(() => {
   min-height: 0;
   overflow: auto;
   padding: 14px 16px 16px;
+}
+
+.phone-install-modal__body {
+  justify-items: center;
+}
+
+.phone-install-video {
+  width: min(100%, 360px);
+  max-height: 70vh;
+  border: 0;
+  background: transparent;
 }
 
 .dashboard-modal__empty {

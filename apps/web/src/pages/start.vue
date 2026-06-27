@@ -5,8 +5,6 @@ import { RouterLink, useRouter } from "vue-router";
 import { api, getUsernameAvailability } from "../api";
 import PluginList from "../components/PluginList.vue";
 import LifeWheelChart from "../components/mission-control/LifeWheelChart.vue";
-import SoulinkConnectPanel from "../components/SoulinkConnectPanel.vue";
-import TelegramConnectPanel from "../components/TelegramConnectPanel.vue";
 import { usePublish } from "../composables/usePublish";
 import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
@@ -32,11 +30,6 @@ definePage({
   },
 });
 
-type AssistantSettingsResponse = {
-  assistantName: string | null;
-  displayName: string;
-};
-
 type StartWheelSegment = {
   id: string;
   label: string;
@@ -50,17 +43,8 @@ type WheelSnapshotResponse = {
   snapshot: unknown;
 };
 
-const STEPS = [
-  "Profile",
-  "Assistant",
-  "Plugins",
-  "Messaging",
-  "Phone",
-  "Wheel",
-] as const;
+const STEPS = ["Profile", "Wheel", "Plugins"] as const;
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
-const DEFAULT_ASSISTANT_NAME = "ME3";
-const ASSISTANT_NAME_MAX_LENGTH = 48;
 const DEFAULT_START_WHEEL_SEGMENTS: StartWheelSegment[] = [
   {
     id: "health",
@@ -135,15 +119,10 @@ const pluginsError = ref("");
 const selectedPluginIds = ref<Set<string>>(
   new Set(RECOMMENDED_START_PLUGIN_IDS),
 );
-const assistantName = ref(DEFAULT_ASSISTANT_NAME);
-const assistantNameLoading = ref(false);
-const assistantNameSaving = ref(false);
-const assistantNameError = ref("");
 const wheelSegments = ref<StartWheelSegment[]>(cloneStartWheelSegments());
 const wheelFocusNote = ref("");
 const wheelSaving = ref(false);
 const wheelError = ref("");
-const telegramModalOpen = ref(false);
 
 let usernameCheckTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -170,19 +149,6 @@ const pluginBusyIds = computed(() =>
 );
 const pluginsCanContinue = computed(
   () => !pluginsLoading.value && !pluginsSaving.value,
-);
-const normalizedAssistantName = computed(
-  () =>
-    assistantName.value.replace(/\s+/g, " ").trim() || DEFAULT_ASSISTANT_NAME,
-);
-const assistantNameInvalid = computed(
-  () => normalizedAssistantName.value.length > ASSISTANT_NAME_MAX_LENGTH,
-);
-const assistantNameCanContinue = computed(
-  () =>
-    !assistantNameLoading.value &&
-    !assistantNameSaving.value &&
-    !assistantNameInvalid.value,
 );
 const wheelPrioritySegment = computed(() => {
   const [firstSegment] = wheelSegments.value;
@@ -327,52 +293,6 @@ async function publishProfile() {
   advanceTo(2);
 }
 
-async function loadAssistantSettings() {
-  assistantNameLoading.value = true;
-  assistantNameError.value = "";
-
-  try {
-    const response = await api.get<AssistantSettingsResponse>(
-      "/assistant/settings",
-    );
-    assistantName.value = response.assistantName || DEFAULT_ASSISTANT_NAME;
-  } catch {
-    assistantName.value = assistantName.value || DEFAULT_ASSISTANT_NAME;
-  } finally {
-    assistantNameLoading.value = false;
-  }
-}
-
-async function saveAssistantNameAndContinue() {
-  if (!assistantNameCanContinue.value) return;
-
-  assistantNameSaving.value = true;
-  assistantNameError.value = "";
-
-  try {
-    const response = await api.put<AssistantSettingsResponse>(
-      "/assistant/settings",
-      {
-        assistantName: normalizedAssistantName.value,
-      },
-    );
-    assistantName.value = response.assistantName || DEFAULT_ASSISTANT_NAME;
-    advanceTo(3);
-  } catch (error) {
-    assistantNameError.value = messageFromUnknown(
-      error,
-      "Could not save your assistant name.",
-    );
-  } finally {
-    assistantNameSaving.value = false;
-  }
-}
-
-function skipAssistantName() {
-  assistantNameError.value = "";
-  advanceTo(3);
-}
-
 function applyDefaultPluginSelection(nextPlugins: PluginRecord[]) {
   const nextSelection = new Set<string>();
   for (const plugin of nextPlugins) {
@@ -453,7 +373,7 @@ async function savePlugins() {
       syncPlugin(response.plugin);
     }
 
-    advanceTo(4);
+    await finish();
   } catch (error) {
     pluginsError.value =
       error instanceof Error ? error.message : "Could not save plugins.";
@@ -464,15 +384,7 @@ async function savePlugins() {
 
 function skipPlugins() {
   pluginsError.value = "";
-  advanceTo(4);
-}
-
-function continueFromMessaging() {
-  advanceTo(5);
-}
-
-function continueFromPhone() {
-  advanceTo(6);
+  void finish();
 }
 
 function setStartWheelSegmentValue(segmentId: string, value: number) {
@@ -496,7 +408,8 @@ async function saveWheelSnapshotAndFinish() {
     emoji: segment.emoji,
     value: Math.min(10, Math.max(1, Math.round(segment.value))),
   }));
-  const prioritySegmentId = wheelPrioritySegment.value?.id || segments[0]?.id || "";
+  const prioritySegmentId =
+    wheelPrioritySegment.value?.id || segments[0]?.id || "";
   const notes = Object.fromEntries(
     segments.map((segment) => [
       segment.id,
@@ -511,7 +424,7 @@ async function saveWheelSnapshotAndFinish() {
       segments,
       notes,
     });
-    await finish();
+    advanceTo(3);
   } catch (error) {
     wheelError.value = messageFromUnknown(
       error,
@@ -524,7 +437,7 @@ async function saveWheelSnapshotAndFinish() {
 
 async function skipWheel() {
   wheelError.value = "";
-  await finish();
+  advanceTo(3);
 }
 
 async function finish() {
@@ -541,7 +454,6 @@ watch(currentStep, (step) => {
 
 onMounted(() => {
   void sites.fetchSites();
-  void loadAssistantSettings();
 });
 
 onBeforeUnmount(clearUsernameCheck);
@@ -694,63 +606,56 @@ onBeforeUnmount(clearUsernameCheck);
       <section
         v-else-if="currentStep === 2"
         class="start-step"
-        aria-labelledby="assistant-title"
+        aria-labelledby="wheel-title"
       >
         <div class="step-copy">
-          <h1 id="assistant-title">Name your assistant</h1>
-          <p>For fun, give your ME3 assistant a name.</p>
+          <h1 id="wheel-title">The Wheel Of Life</h1>
+          <p>
+            Optionally rate each area to give ME3 a snapshot of where you're
+            at. You can update or change this later in Mission Control.
+          </p>
         </div>
 
-        <form class="start-form" @submit.prevent="saveAssistantNameAndContinue">
-          <label class="field" for="start-assistant-name">
-            <span>Assistant name</span>
-            <input
-              id="start-assistant-name"
-              v-model="assistantName"
-              type="text"
-              :maxlength="ASSISTANT_NAME_MAX_LENGTH"
-              placeholder="ME3"
-              autocomplete="off"
-              :disabled="assistantNameLoading || assistantNameSaving"
-              required
+        <div class="wheel-start-panel">
+          <LifeWheelChart
+            :segments="wheelSegments"
+            compact
+            aria-label="Wheel of Life onboarding score selector"
+            @update:segment-value="setStartWheelSegmentValue"
+          />
+
+          <label class="field" for="start-wheel-note">
+            <span>What's your main goal right now?</span>
+            <textarea
+              id="start-wheel-note"
+              v-model="wheelFocusNote"
+              maxlength="600"
+              rows="3"
+              placeholder="e.g. I want more energy for creative work."
             />
           </label>
 
-          <p v-if="assistantNameLoading" class="field-hint">
-            Loading your assistant identity...
-          </p>
-          <p v-else-if="assistantNameInvalid" class="error">
-            Name must be {{ ASSISTANT_NAME_MAX_LENGTH }} characters or fewer.
-          </p>
-          <p v-else class="field-hint">
-            {{ normalizedAssistantName }} will be the name of your ME3 assistant.
-          </p>
-          <p v-if="assistantNameError" class="error">
-            {{ assistantNameError }}
-          </p>
+          <p v-if="wheelError" class="error">{{ wheelError }}</p>
+        </div>
 
-          <div class="step-nav split">
-            <button class="nav-btn back" type="button" @click="goToStep(1)">
-              ← Back
+        <div class="step-nav split">
+          <button class="nav-btn back" type="button" @click="goToStep(1)">
+            ← Back
+          </button>
+          <div class="nav-actions-right">
+            <button class="nav-btn ghost" type="button" @click="skipWheel">
+              Skip
             </button>
-            <div class="nav-actions-right">
-              <button
-                class="nav-btn ghost"
-                type="button"
-                @click="skipAssistantName"
-              >
-                Skip
-              </button>
-              <button
-                class="nav-btn next"
-                type="submit"
-                :disabled="!assistantNameCanContinue"
-              >
-                {{ assistantNameSaving ? "Saving..." : "Next →" }}
-              </button>
-            </div>
+            <button
+              class="nav-btn next"
+              type="button"
+              :disabled="wheelSaving"
+              @click="saveWheelSnapshotAndFinish"
+            >
+              {{ wheelSaving ? "Saving..." : "Save & continue →" }}
+            </button>
           </div>
-        </form>
+        </div>
       </section>
 
       <section
@@ -798,200 +703,12 @@ onBeforeUnmount(clearUsernameCheck);
               :disabled="!pluginsCanContinue"
               @click="savePlugins"
             >
-              {{ pluginsSaving ? "Saving..." : "Next →" }}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section
-        v-else-if="currentStep === 4"
-        class="start-step"
-        aria-labelledby="messaging-title"
-      >
-        <div class="step-copy">
-          <h1 id="messaging-title">Connect a messaging app</h1>
-          <p>Chat with your assistant on the go.</p>
-        </div>
-
-        <div class="messaging-options">
-          <section class="messaging-option">
-            <div class="messaging-option__header">
-              <div>
-                <h2>Soulink</h2>
-                <p>
-                  A messaging app from the team behind ME3, built for the
-                  deepest assistant integrations as ME3 grows.
-                </p>
-              </div>
-              <span class="messaging-option__badge">Recommended</span>
-            </div>
-            <SoulinkConnectPanel
-              variant="default"
-              :show-status-details="false"
-            />
-          </section>
-
-          <section class="messaging-option">
-            <div class="messaging-option__header">
-              <div>
-                <h2>Telegram</h2>
-                <p>Use your own Telegram bot for assistant messages.</p>
-              </div>
-              <button
-                class="nav-btn ghost messaging-option__action"
-                type="button"
-                @click="telegramModalOpen = true"
-              >
-                Set up
-              </button>
-            </div>
-          </section>
-        </div>
-
-        <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(3)">
-            ← Back
-          </button>
-          <div class="nav-actions-right">
-            <button
-              class="nav-btn ghost"
-              type="button"
-              @click="continueFromMessaging"
-            >
-              Skip
-            </button>
-            <button
-              class="nav-btn next"
-              type="button"
-              @click="continueFromMessaging"
-            >
-              Next →
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section
-        v-else-if="currentStep === 5"
-        class="start-step"
-        aria-labelledby="phone-title"
-      >
-        <div class="step-copy">
-          <h1 id="phone-title">Add ME3 To Your Phone</h1>
-          <p>Add your ME3 install as an app icon on your phone.</p>
-        </div>
-
-        <div class="phone-video-panel">
-          <video
-            class="phone-video"
-            src="https://me3.app/me3_shortcut.mp4"
-            autoplay
-            muted
-            playsinline
-            controls
-          />
-        </div>
-
-        <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(4)">
-            ← Back
-          </button>
-          <button class="nav-btn next" type="button" @click="continueFromPhone">
-            Next →
-          </button>
-        </div>
-      </section>
-
-      <section v-else class="start-step" aria-labelledby="wheel-title">
-        <div class="step-copy">
-          <h1 id="wheel-title">The Wheel Of Life</h1>
-          <p>
-            Optionally rate each area to give ME3 a snapshot of where you're
-            at. You can update or change this later in Mission Control.
-          </p>
-        </div>
-
-        <div class="wheel-start-panel">
-          <LifeWheelChart
-            :segments="wheelSegments"
-            compact
-            aria-label="Wheel of Life onboarding score selector"
-            @update:segment-value="setStartWheelSegmentValue"
-          />
-
-          <label class="field" for="start-wheel-note">
-            <span>What's your main goal right now?</span>
-            <textarea
-              id="start-wheel-note"
-              v-model="wheelFocusNote"
-              maxlength="600"
-              rows="3"
-              placeholder="e.g. I want more energy for creative work."
-            />
-          </label>
-
-          <p v-if="wheelError" class="error">{{ wheelError }}</p>
-        </div>
-
-        <div class="step-nav split">
-          <button class="nav-btn back" type="button" @click="goToStep(5)">
-            ← Back
-          </button>
-          <div class="nav-actions-right">
-            <button class="nav-btn ghost" type="button" @click="skipWheel">
-              Skip
-            </button>
-            <button
-              class="nav-btn next"
-              type="button"
-              :disabled="wheelSaving"
-              @click="saveWheelSnapshotAndFinish"
-            >
-              {{ wheelSaving ? "Saving..." : "Save & finish →" }}
+              {{ pluginsSaving ? "Saving..." : "Finish →" }}
             </button>
           </div>
         </div>
       </section>
     </main>
-
-    <Teleport to="body">
-      <div
-        v-if="telegramModalOpen"
-        class="start-modal-backdrop"
-        @click.self="telegramModalOpen = false"
-      >
-        <section
-          class="start-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="telegram-setup-title"
-          tabindex="-1"
-          @keydown.escape="telegramModalOpen = false"
-        >
-          <header class="start-modal__header">
-            <h2 id="telegram-setup-title">Set up Telegram</h2>
-            <button
-              class="start-modal__close"
-              type="button"
-              aria-label="Close Telegram setup"
-              @click="telegramModalOpen = false"
-            >
-              ×
-            </button>
-          </header>
-          <ul class="telegram-setup-steps">
-            <li>Open Telegram and search for BotFather.</li>
-            <li>Type /newbot and follow BotFather's instructions.</li>
-            <li>Paste the bot username and token below.</li>
-          </ul>
-          <TelegramConnectPanel
-            variant="default"
-            :auto-prepare-when-not-connected="true"
-          />
-        </section>
-      </div>
-    </Teleport>
   </div>
 </template>
 
@@ -1350,71 +1067,11 @@ onBeforeUnmount(clearUsernameCheck);
   cursor: not-allowed;
 }
 
-.plugins-panel-wrap,
-.messaging-option {
+.plugins-panel-wrap {
   padding: 18px;
   border: 1px solid var(--ui-border, var(--color-border));
   border-radius: var(--ui-radius-md, 10px);
   background: var(--ui-surface, var(--color-bg));
-}
-
-.messaging-options {
-  display: grid;
-  gap: 12px;
-}
-
-.messaging-option {
-  display: grid;
-  gap: 16px;
-}
-
-.messaging-option__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.messaging-option__header h2,
-.start-modal__header h2 {
-  margin: 0;
-  color: var(--ui-text, var(--color-text));
-  font-size: 18px;
-  line-height: 1.2;
-}
-
-.messaging-option__header p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.messaging-option__badge {
-  flex-shrink: 0;
-  padding: 5px 8px;
-  border-radius: 999px;
-  background: var(--ui-accent-soft, rgba(20, 184, 166, 0.14));
-  color: var(--ui-accent-strong, #0f766e);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.messaging-option__action {
-  padding: 9px 14px;
-}
-
-.phone-video-panel {
-  display: flex;
-  justify-content: center;
-}
-
-.phone-video {
-  width: min(100%, 360px);
-  max-height: 70vh;
-  border: 0;
-  background: transparent;
 }
 
 .wheel-start-panel {
@@ -1435,58 +1092,6 @@ onBeforeUnmount(clearUsernameCheck);
 .wheel-start-panel :deep(.life-wheel-chart__svg) {
   width: 100%;
   max-width: none;
-}
-
-.start-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  display: grid;
-  place-items: center;
-  padding: 18px;
-  background: rgba(0, 0, 0, 0.42);
-}
-
-.start-modal {
-  display: grid;
-  gap: 16px;
-  width: min(640px, 100%);
-  max-height: min(760px, calc(100vh - 36px));
-  overflow: auto;
-  box-sizing: border-box;
-  padding: 18px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-lg, 14px);
-  background: var(--ui-surface, var(--color-bg));
-  color: var(--ui-text, var(--color-text));
-  box-shadow: var(--ui-shadow-md, 0 24px 80px rgba(0, 0, 0, 0.2));
-}
-
-.start-modal__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.start-modal__close {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 8px);
-  background: transparent;
-  color: var(--ui-text, var(--color-text));
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.telegram-setup-steps {
-  margin: 0;
-  padding-left: 20px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-  line-height: 1.55;
 }
 
 .status-row {
