@@ -39,6 +39,7 @@ import {
 import { renderAssistantMarkdown } from "../../utils/assistantMarkdown";
 import {
   AI_AGENT_MODEL_OPTIONS,
+  aiAgentModelOptionIsAvailable,
   type AiAgentModelCapability,
   type AiAgentModelOption,
   type AiAgentModelProviderId,
@@ -969,13 +970,6 @@ const inboxWatchRulesChanged = computed(() => {
   );
 });
 
-const selectedModel = computed(
-  () =>
-    AI_AGENT_MODEL_OPTIONS.find(
-      (model) => model.id === selectedModelId.value,
-    ) || AI_AGENT_MODEL_OPTIONS[0],
-);
-
 const aiProviderById = computed(() => {
   const providers = new Map<string, AiProviderRecord>();
   for (const provider of aiProviders.value) {
@@ -984,8 +978,32 @@ const aiProviderById = computed(() => {
   return providers;
 });
 
+const configuredAiProviderIds = computed(
+  () =>
+    new Set(
+      aiProviders.value
+        .filter((provider) => provider.configured)
+        .map((provider) => provider.id),
+    ),
+);
+
+const visibleAssistantModelOptions = computed(() =>
+  AI_AGENT_MODEL_OPTIONS.filter((option) =>
+    aiAgentModelOptionIsAvailable(option, configuredAiProviderIds.value),
+  ),
+);
+
+const selectedModel = computed(
+  () =>
+    visibleAssistantModelOptions.value.find(
+      (model) => model.id === selectedModelId.value,
+    ) ||
+    visibleAssistantModelOptions.value[0] ||
+    AI_AGENT_MODEL_OPTIONS[0],
+);
+
 const assistantModelOptions = computed(() =>
-  AI_AGENT_MODEL_OPTIONS.map((option) => {
+  visibleAssistantModelOptions.value.map((option) => {
     const setup = setupStateForModel(option);
     const optionTitle = [
       option.label,
@@ -2384,6 +2402,7 @@ async function loadAiSettings() {
     const response = await api.get<AiSettingsResponse>("/ai-settings");
     aiProviders.value = response.providers || [];
     applyDefaultChatModel(response);
+    syncVisibleAssistantModelSelection();
   } catch (err) {
     aiSettingsError.value = messageFromUnknown(
       err,
@@ -2391,6 +2410,23 @@ async function loadAiSettings() {
     );
   } finally {
     aiSettingsLoading.value = false;
+  }
+}
+
+function syncVisibleAssistantModelSelection() {
+  if (
+    visibleAssistantModelOptions.value.some(
+      (option) => option.id === selectedModelId.value,
+    )
+  ) {
+    return;
+  }
+
+  const fallback = visibleAssistantModelOptions.value[0];
+  if (!fallback) return;
+  selectedModelId.value = fallback.id;
+  if (selectedModelTouched.value) {
+    persistAssistantModelId(fallback.id);
   }
 }
 
