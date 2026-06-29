@@ -8,14 +8,20 @@ import UiIcon from "../UiIcon.vue";
 
 const wizard = useWizardStore();
 const sites = useSitesStore();
-const { publish, isPublishing } = usePublish();
+const {
+  publish,
+  isPublishing,
+  publishProgress,
+  publishError,
+  publishNeedsStorage,
+} = usePublish();
 
 // Publish function for broadcasting
 async function publishSite(): Promise<void> {
   // Use the composable's publish function without celebration or opening site
   const success = await publish({ celebrate: false, openSite: false });
   if (!success) {
-    throw new Error("Failed to publish site");
+    throw new Error(publishError.value || "Failed to publish post");
   }
 }
 
@@ -492,6 +498,19 @@ onMounted(() => {
         </div>
       </div>
 
+      <p v-if="publishProgress" class="publish-status">
+        {{ publishProgress }}
+      </p>
+      <p v-if="publishError" class="publish-status error">
+        {{ publishError }}
+        <router-link
+          v-if="publishNeedsStorage"
+          to="/account?section=storage"
+        >
+          Activate storage
+        </router-link>
+      </p>
+
       <div class="editor-header-title-date">
         <div class="field field-title">
           <label for="blog-title-input">Title</label>
@@ -929,6 +948,23 @@ onMounted(() => {
 
 .editor-action.publish:hover:not(:disabled):not([aria-disabled="true"]) {
   opacity: 0.92;
+}
+
+.publish-status {
+  margin: -4px 0 4px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.publish-status.error {
+  color: #dc2626;
+}
+
+.publish-status a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .draft-badge {
