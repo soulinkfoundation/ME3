@@ -3383,7 +3383,9 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
   ): "text" | "image" | null {
     const normalizedMime = mimeType.toLowerCase();
     const normalizedName = filename.toLowerCase();
-    if (normalizedMime.startsWith("image/")) return "image";
+    if (normalizedMime.startsWith("image/") || normalizedName.endsWith(".avif")) {
+      return "image";
+    }
     if (
       normalizedMime.startsWith("text/") ||
       normalizedMime === "application/json" ||
@@ -3404,8 +3406,11 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
   function normalizeAssistantAttachmentMimeType(file: File, filename: string) {
     const explicit = file.type.trim();
-    if (explicit) return explicit;
     const lower = filename.toLowerCase();
+    if (!explicit || explicit === "application/octet-stream") {
+      if (lower.endsWith(".avif")) return "image/avif";
+    }
+    if (explicit) return explicit;
     if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
     if (lower.endsWith(".csv")) return "text/csv";
     if (lower.endsWith(".tsv")) return "text/tab-separated-values";

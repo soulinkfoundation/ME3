@@ -2244,6 +2244,54 @@ async function onAssistantComposerDrop(event: DragEvent) {
   await addAssistantAttachments(files);
 }
 
+async function onAssistantComposerPaste(event: ClipboardEvent) {
+  if (assistantSending.value) return;
+  const files = assistantImageFilesFromClipboard(event.clipboardData);
+  if (files.length === 0) return;
+
+  event.preventDefault();
+  await addAssistantAttachments(files);
+}
+
+function assistantImageFilesFromClipboard(
+  clipboardData: DataTransfer | null,
+): File[] {
+  if (!clipboardData) return [];
+
+  const itemFiles = Array.from(clipboardData.items || [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file))
+    .filter(isAssistantImageAttachmentFile);
+
+  const files = itemFiles.length
+    ? itemFiles
+    : Array.from(clipboardData.files || []).filter(
+        isAssistantImageAttachmentFile,
+      );
+
+  return files.map((file, index) => normalizeAssistantClipboardImage(file, index));
+}
+
+function normalizeAssistantClipboardImage(file: File, index: number): File {
+  if (file.name && !/^image\.(png|jpe?g|gif|webp|avif)$/i.test(file.name)) {
+    return file;
+  }
+
+  const extension = assistantImageFileExtension(file) || "png";
+  const filename = `pasted-image-${assistantClipboardTimestamp()}${
+    index > 0 ? `-${index + 1}` : ""
+  }.${extension}`;
+  return new File([file], filename, {
+    type: file.type || `image/${extension === "jpg" ? "jpeg" : extension}`,
+    lastModified: file.lastModified || Date.now(),
+  });
+}
+
+function assistantClipboardTimestamp() {
+  return new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+}
+
 async function addAssistantAttachments(files: File[]) {
   assistantAttachmentNotice.value = "";
   const slots = assistantAttachmentLimit - assistantAttachments.value.length;
@@ -2264,7 +2312,7 @@ async function addAssistantAttachments(files: File[]) {
       mimeType: file.type || "application/octet-stream",
       size: file.size,
       kind: classifyAssistantAttachment(file),
-      previewUrl: file.type.toLowerCase().startsWith("image/")
+      previewUrl: isAssistantImageAttachmentFile(file)
         ? window.URL.createObjectURL(file)
         : null,
       text: null,
@@ -2348,7 +2396,7 @@ function revokeAssistantAttachmentPreview(
 function classifyAssistantAttachment(file: File): AssistantAttachmentKind {
   const mimeType = file.type.toLowerCase();
   const name = file.name.toLowerCase();
-  if (mimeType.startsWith("image/")) return "image";
+  if (isAssistantImageAttachmentFile(file)) return "image";
   if (
     mimeType.startsWith("text/") ||
     mimeType === "application/json" ||
@@ -2364,6 +2412,29 @@ function classifyAssistantAttachment(file: File): AssistantAttachmentKind {
     return "text";
   }
   return "unsupported";
+}
+
+function isAssistantImageAttachmentFile(file: File) {
+  const mimeType = file.type.toLowerCase();
+  const name = file.name.toLowerCase();
+  return mimeType.startsWith("image/") || name.endsWith(".avif");
+}
+
+function assistantImageFileExtension(file: File) {
+  const mimeType = file.type.toLowerCase();
+  if (mimeType === "image/jpeg" || mimeType === "image/jpg") return "jpg";
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/gif") return "gif";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/avif") return "avif";
+
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "jpg";
+  if (name.endsWith(".png")) return "png";
+  if (name.endsWith(".gif")) return "gif";
+  if (name.endsWith(".webp")) return "webp";
+  if (name.endsWith(".avif")) return "avif";
+  return "";
 }
 
 function serializeAssistantAttachmentsForTurn() {
@@ -5590,6 +5661,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
               :disabled="assistantSending"
               @keydown="onAssistantComposerKeydown"
               @input="autosizeAssistantComposer"
+              @paste="onAssistantComposerPaste"
             />
             <div
               v-if="voiceDictationState === 'processing'"
@@ -5635,7 +5707,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 class="sr-only"
                 type="file"
                 multiple
-                accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,text/*,application/json,application/xml,image/*"
+                accept=".txt,.md,.markdown,.csv,.tsv,.json,.xml,.avif,text/*,application/json,application/xml,image/*,image/avif"
                 @change="onAssistantAttachmentChange"
               />
               <Button
