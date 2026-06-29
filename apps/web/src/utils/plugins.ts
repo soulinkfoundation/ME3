@@ -140,8 +140,12 @@ export function isLocalExecutorPlugin(plugin: PluginRecord) {
   return plugin.id === "me3.local-executor";
 }
 
+export function pluginNavEmojiById(pluginId: string) {
+  return pluginNavEmojis[pluginId] || "🧩";
+}
+
 export function pluginNavEmoji(plugin: PluginRecord) {
-  return pluginNavEmojis[plugin.id] || "🧩";
+  return pluginNavEmojiById(plugin.id);
 }
 
 export function sortPluginsForDisplay(plugins: readonly PluginRecord[]) {

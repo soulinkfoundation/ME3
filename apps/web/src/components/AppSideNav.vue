@@ -5,6 +5,11 @@ import { api } from "../api";
 import BrandLogo from "./BrandLogo.vue";
 import UiIcon from "./UiIcon.vue";
 import { useSitesStore } from "../stores/sites";
+import {
+  APP_FEATURE_ICONS,
+  appFeatureForPath,
+  type AppFeatureId,
+} from "../utils/appFeatures";
 
 const route = useRoute();
 const sites = useSitesStore();
@@ -57,61 +62,13 @@ onBeforeUnmount(() => {
   document.body.style.overflow = "";
 });
 
-const isCalendar = computed(() => route.path.startsWith("/calendar"));
-const isMissionControl = computed(() =>
-  route.path.startsWith("/mission-control"),
-);
-const isJournal = computed(() => route.path.startsWith("/journal"));
-const isAccounts = computed(() => route.path.startsWith("/accounts"));
-const isEmail = computed(() => route.path.startsWith("/email"));
-const isSites = computed(
-  () => route.path.startsWith("/sites/") || route.path.startsWith("/create"),
-);
-const isAssistant = computed(() => route.path.startsWith("/assistant"));
-const isSocial = computed(() => route.path.startsWith("/social"));
-/** `/account` and `/account/...` only — not `/accounts` (startsWith("/account") is a false positive). */
-const isAccount = computed(() => {
-  const p = route.path;
-  return p === "/account" || p === "/account/" || p.startsWith("/account/");
-});
+const activeFeature = computed(() => appFeatureForPath(route.path));
 const navMenuLabel = computed(() =>
   navDrawerOpen.value ? "Close navigation" : "Open navigation",
 );
 
-function rowActive(
-  kind:
-    | "mission-control"
-    | "journal"
-    | "accounts"
-    | "calendar"
-    | "email"
-    | "sites"
-    | "assistant"
-    | "social"
-    | "account",
-): boolean {
-  switch (kind) {
-    case "mission-control":
-      return isMissionControl.value;
-    case "journal":
-      return isJournal.value;
-    case "accounts":
-      return isAccounts.value;
-    case "calendar":
-      return isCalendar.value;
-    case "email":
-      return isEmail.value;
-    case "sites":
-      return isSites.value;
-    case "assistant":
-      return isAssistant.value;
-    case "social":
-      return isSocial.value;
-    case "account":
-      return isAccount.value;
-    default:
-      return false;
-  }
+function rowActive(kind: AppFeatureId): boolean {
+  return activeFeature.value === kind;
 }
 
 async function loadInstalledPluginNav() {
@@ -229,7 +186,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Assistant"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">🤖</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.assistant
+          }}</span>
           <span class="sr-only">Assistant</span>
         </RouterLink>
 
@@ -242,7 +201,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Mission Control"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">🚀</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS["mission-control"]
+          }}</span>
           <span class="sr-only">Mission Control</span>
         </RouterLink>
 
@@ -255,7 +216,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Journal"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">📖</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.journal
+          }}</span>
           <span class="sr-only">Journal</span>
         </RouterLink>
 
@@ -268,7 +231,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Calendar"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">🗓️</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.calendar
+          }}</span>
           <span class="sr-only">Calendar</span>
         </RouterLink>
 
@@ -280,7 +245,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Email"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">📧</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.email
+          }}</span>
           <span class="sr-only">Email</span>
         </RouterLink>
 
@@ -292,7 +259,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Site builder"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">🌐</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.sites
+          }}</span>
           <span class="sr-only">Site builder</span>
         </RouterLink>
 
@@ -305,7 +274,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Social publishing"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">📣</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.social
+          }}</span>
           <span class="sr-only">Social publishing</span>
         </RouterLink>
 
@@ -318,7 +289,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Accounts"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">💰</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.accounts
+          }}</span>
           <span class="sr-only">Accounts</span>
         </RouterLink>
 
@@ -330,7 +303,9 @@ watch(navDrawerOpen, (isOpen) => {
           title="Settings"
           @click="closeNavDrawer"
         >
-          <span class="app-side-nav__emoji" aria-hidden="true">⚙️</span>
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.account
+          }}</span>
           <span class="sr-only">Settings</span>
         </RouterLink>
       </nav>

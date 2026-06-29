@@ -4,6 +4,7 @@ import { api } from "./api";
 import { useAuthStore } from "./stores/auth";
 import { useSitesStore } from "./stores/sites";
 import { useWizardStore } from "./stores/wizard";
+import { updateFeatureFavicon } from "./utils/favicon";
 import { DEFAULT_APP_PATH } from "./utils/navigation";
 
 const router = createRouter({
@@ -308,6 +309,7 @@ router.afterEach((to) => {
   updateMetaTag("twitter:title", ogTitle);
   updateMetaTag("twitter:description", ogDescription);
   updateMetaTag("twitter:image", ogImage);
+  updateFeatureFavicon(to.path);
 });
 
 export default router;
