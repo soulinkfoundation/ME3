@@ -87,6 +87,28 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
       "Qwen3 30B A3B FP8 on Workers AI for everyday chat, writing, and light planning.",
   },
   {
+    id: "workers-glm-4-7-flash",
+    label: "GLM 4.7 Flash",
+    providerId: "workers-ai",
+    model: "@cf/zai-org/glm-4.7-flash",
+    runtimeLabel: "Cloudflare Workers AI",
+    costLabel: "Fast",
+    capabilities: ["text", "long-context", "reasoning", "tool-use"],
+    description:
+      "Fast, efficient GLM model on Workers AI for dialogue, instruction following, and tool use.",
+  },
+  {
+    id: "workers-gpt-oss-120b",
+    label: "GPT-OSS 120B",
+    providerId: "workers-ai",
+    model: "@cf/openai/gpt-oss-120b",
+    runtimeLabel: "Cloudflare Workers AI",
+    costLabel: "Low cost",
+    capabilities: ["text", "long-context", "reasoning", "tool-use"],
+    description:
+      "OpenAI open-weight model on Workers AI for general-purpose high-reasoning and agentic tasks.",
+  },
+  {
     id: "workers-kimi-k2-7",
     label: "Kimi K2.7",
     providerId: "workers-ai",

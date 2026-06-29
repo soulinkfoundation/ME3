@@ -16,6 +16,8 @@ describe("AI model catalog", () => {
     expect(visibleLabels([])).toEqual([
       "GLM 5.2",
       "Qwen3",
+      "GLM 4.7 Flash",
+      "GPT-OSS 120B",
       "Kimi K2.7",
       "Deepseek R1",
     ]);
