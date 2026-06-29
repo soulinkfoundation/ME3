@@ -1543,12 +1543,14 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 /* Danger Section */
 .danger-section {
+  --site-danger: var(--ui-danger, #dc2626);
+
   margin-top: 24px;
 }
 
 .danger-section h2 {
   font-size: 18px;
-  color: #e53935;
+  color: var(--site-danger);
   margin-bottom: 12px;
 }
 
@@ -1556,19 +1558,35 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
   padding: 16px 20px;
-  border: 1px solid #ffcdd2;
-  border-radius: 12px;
-  background: #ffebee;
+  border: 1px solid
+    color-mix(
+      in oklab,
+      var(--site-danger) 42%,
+      var(--ui-border, var(--color-border))
+    );
+  border-radius: var(--ui-radius-lg, 12px);
+  background: color-mix(
+    in oklab,
+    var(--site-danger) 10%,
+    var(--ui-surface, var(--color-bg))
+  );
+  color: var(--ui-text, var(--color-text));
+}
+
+.danger-card > div {
+  min-width: 0;
 }
 
 .danger-card strong {
+  color: var(--ui-text, var(--color-text));
   font-size: 14px;
 }
 
 .danger-card p {
   font-size: 13px;
-  color: var(--color-text-muted);
+  color: var(--ui-text-muted, var(--color-text-muted));
   margin-top: 2px;
 }
 
