@@ -630,7 +630,7 @@ describe("Core chat native context", () => {
 
     expect(response).toMatchObject({
       replyText: "Choice-shaped reply.",
-      model: "@cf/qwen/qwen3-30b-a3b-fp8",
+      model: "@cf/zai-org/glm-5.2",
       source: "workers-ai",
     });
   });
@@ -849,7 +849,7 @@ describe("Core chat native context", () => {
 
     expect(response.replyText).toBe("Gateway model reply.");
     expect(aiRun).toHaveBeenCalledWith(
-      "@cf/qwen/qwen3-30b-a3b-fp8",
+      "@cf/zai-org/glm-5.2",
       expect.any(Object),
       {
         gateway: {
@@ -1294,7 +1294,7 @@ describe("Core chat native context", () => {
       selectedModel: {
         providerId: "workers-ai",
         configured: true,
-        responseModel: "@cf/qwen/qwen3-30b-a3b-fp8",
+        responseModel: "@cf/zai-org/glm-5.2",
       },
       context: {
         status: "loaded",

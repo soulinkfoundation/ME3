@@ -921,7 +921,7 @@ type AiGatewayRuntimeConfig = {
   routeExternalProviders: boolean;
 };
 
-const DEFAULT_WORKERS_AI_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
+const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-5.2";
 const DEFAULT_WORKERS_AI_BACKUP_MODEL = "@cf/zai-org/glm-4.7-flash";
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest";

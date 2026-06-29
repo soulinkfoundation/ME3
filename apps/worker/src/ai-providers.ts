@@ -10,6 +10,8 @@ import {
   type AiGatewayRuntimeConfig,
 } from "./ai-gateway";
 
+export const DEFAULT_WORKERS_AI_TEXT_MODEL = "@cf/zai-org/glm-5.2";
+
 export const AI_ROUTE_IDS = [
   "default",
   "chat",
@@ -106,10 +108,10 @@ const AI_PROVIDER_ADAPTERS: readonly AiProviderAdapter[] = [
     secretLabel: null,
     bindingEnv: "AI",
     recommendedModels: {
-      default: "@cf/qwen/qwen3-30b-a3b-fp8",
-      chat: "@cf/qwen/qwen3-30b-a3b-fp8",
+      default: DEFAULT_WORKERS_AI_TEXT_MODEL,
+      chat: DEFAULT_WORKERS_AI_TEXT_MODEL,
       reasoning: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
-      extraction: "@cf/qwen/qwen3-30b-a3b-fp8",
+      extraction: DEFAULT_WORKERS_AI_TEXT_MODEL,
       image_generation: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
     },
   },

@@ -3,7 +3,11 @@ import Stripe from "stripe";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
 import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL } from "@me3-core/plugin-agent-chat";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
-import { generateAiText, updateAiSettings } from "./ai-providers";
+import {
+  DEFAULT_WORKERS_AI_TEXT_MODEL,
+  generateAiText,
+  updateAiSettings,
+} from "./ai-providers";
 import { ME3_CORE_VERSION } from "./core-version";
 import {
   CORE_PLUGIN_CATALOG,
@@ -5177,11 +5181,11 @@ describe("ME3 Core Worker auth", () => {
       ok: true,
       source: "workers-ai",
       specialist: "core.sites.update_draft",
-      model: "@cf/qwen/qwen3-30b-a3b-fp8",
+      model: DEFAULT_WORKERS_AI_TEXT_MODEL,
     });
     expect(aiRun).toHaveBeenCalledOnce();
     expect(String(draftPayload.replyText)).toContain("Reply `publish`");
-    expect(String(draftPayload.replyText)).toContain("Generated with @cf/qwen/qwen3-30b-a3b-fp8");
+    expect(String(draftPayload.replyText)).toContain(`Generated with ${DEFAULT_WORKERS_AI_TEXT_MODEL}`);
     expect(String((draftPayload.siteAction as Record<string, unknown>).url)).toContain(
       "/sites/owner?edit=blog",
     );
@@ -9676,7 +9680,7 @@ describe("ME3 Core Worker auth", () => {
         expect.objectContaining({
           id: "chat",
           providerId: "workers-ai",
-          model: "@cf/qwen/qwen3-30b-a3b-fp8",
+          model: DEFAULT_WORKERS_AI_TEXT_MODEL,
         }),
         expect.objectContaining({
           id: "image_generation",

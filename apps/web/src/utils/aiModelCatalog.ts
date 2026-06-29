@@ -64,18 +64,6 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     description: "OpenAI flagship for complex reasoning, coding, and agentic workflows.",
   },
   {
-    id: "workers-qwen3-30b",
-    label: "Qwen3",
-    providerId: "workers-ai",
-    model: "@cf/qwen/qwen3-30b-a3b-fp8",
-    runtimeLabel: "Cloudflare Workers AI",
-    costLabel: "Low cost",
-    capabilities: ["text", "long-context", "reasoning"],
-    badge: "Default",
-    description:
-      "Qwen3 30B A3B FP8 on Workers AI for everyday chat, writing, and light planning.",
-  },
-  {
     id: "workers-glm-5-2",
     label: "GLM 5.2",
     providerId: "workers-ai",
@@ -83,8 +71,20 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Paid",
     capabilities: ["text", "long-context", "reasoning", "tool-use"],
+    badge: "Default",
     description:
       "Z.ai GLM 5.2 on Workers AI for agentic coding, planning, and tool-augmented work.",
+  },
+  {
+    id: "workers-qwen3-30b",
+    label: "Qwen3",
+    providerId: "workers-ai",
+    model: "@cf/qwen/qwen3-30b-a3b-fp8",
+    runtimeLabel: "Cloudflare Workers AI",
+    costLabel: "Low cost",
+    capabilities: ["text", "long-context", "reasoning"],
+    description:
+      "Qwen3 30B A3B FP8 on Workers AI for everyday chat, writing, and light planning.",
   },
   {
     id: "workers-kimi-k2-7",
