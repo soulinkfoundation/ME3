@@ -24,11 +24,6 @@ database_name = "me3-core-db"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "apps/worker/migrations"
 
-# Keep this visible to Cloudflare's Deploy form so accounts without R2 see the activation warning.
-[[r2_buckets]]
-binding = "SITE_ASSETS"
-bucket_name = "my-me3-site-assets"
-
 [triggers]
 crons = ["*/15 * * * *"]
 

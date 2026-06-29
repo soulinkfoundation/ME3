@@ -697,7 +697,9 @@ export async function putSiteFile(
   const buffer =
     typeof content === "string" ? new TextEncoder().encode(content).buffer : content;
   if (buffer.byteLength > D1_SITE_FILE_MAX_BYTES) {
-    throw new Error("File is too large for Core D1 storage. Add the SITE_ASSETS R2 binding for larger media.");
+    throw new Error(
+      "File is too large for Core D1 storage. Activate storage in Account settings to upload larger media.",
+    );
   }
   await env.DB.prepare(
     `INSERT INTO site_files (site_id, path, content, content_type, size, sha256, updated_at)

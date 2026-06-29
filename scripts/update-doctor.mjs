@@ -70,13 +70,14 @@ if (d1Block) {
 }
 
 const r2Block = getTomlArrayBlock(config, "r2_buckets", "SITE_ASSETS");
-check(
-  "R2 SITE_ASSETS binding exists or deploy script prepares it",
-  Boolean(r2Block) || deployPreparesResources,
-  'Expected [[r2_buckets]] with binding = "SITE_ASSETS", or pnpm deploy:cloudflare to run deploy:prepare.',
-);
 if (r2Block) {
-  check("R2 bucket name is set", Boolean(getTomlString(r2Block, "bucket_name")), "Expected R2 bucket_name.");
+  check(
+    "Optional R2 SITE_ASSETS bucket name is set",
+    Boolean(getTomlString(r2Block, "bucket_name")),
+    "Expected R2 bucket_name.",
+  );
+} else {
+  check("Optional R2 SITE_ASSETS binding is absent", true);
 }
 
 const emailSendBlock = getTomlNamedBlock(config, "send_email", "EMAIL");

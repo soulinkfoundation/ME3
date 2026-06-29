@@ -29,7 +29,20 @@ type CoreGithubStatus = {
   unavailableReason: string | null;
 };
 
-export function registerCoreGithubUpdaterRoutes(app: AppHono, deps: OwnerRouteDeps) {
+type CoreStorageStatus = {
+  ok: true;
+  r2Available: boolean;
+  binding: "SITE_ASSETS";
+  suggestedBucketName: string;
+  r2ActivationUrl: string;
+};
+
+const R2_BUCKET_NAME_REGEX = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+
+export function registerCoreGithubUpdaterRoutes(
+  app: AppHono,
+  deps: OwnerRouteDeps,
+) {
   app.get("/api/core/github/status", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -71,7 +84,9 @@ export function registerCoreGithubUpdaterRoutes(app: AppHono, deps: OwnerRouteDe
     const context = await requireCoreGithubContext(c);
     if ("response" in context) return context.response;
 
-    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    const body: Record<string, unknown> = await c.req
+      .json<Record<string, unknown>>()
+      .catch(() => ({}));
     return c.json(
       await fetchMe3CloudBroker(c, context, "/api/github/install/start", {
         method: "POST",
@@ -106,6 +121,54 @@ export function registerCoreGithubUpdaterRoutes(app: AppHono, deps: OwnerRouteDe
       await fetchMe3CloudBroker(c, context, "/api/core/github/disconnect", {
         method: "POST",
         body: {},
+      }),
+    );
+  });
+
+  app.get("/api/core/storage/status", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    return c.json(createCoreStorageStatus(c));
+  });
+
+  app.post("/api/core/storage/r2/activate", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    if (c.env.SITE_ASSETS) {
+      return c.json({ ok: true, active: true, r2Available: true });
+    }
+
+    let body: Record<string, unknown> = {};
+    try {
+      body = await c.req.json<Record<string, unknown>>();
+    } catch {
+      body = {};
+    }
+    const bucketName =
+      readString(body.bucketName) || createCoreStorageStatus(c).suggestedBucketName;
+    if (!R2_BUCKET_NAME_REGEX.test(bucketName)) {
+      return c.json(
+        {
+          ok: false,
+          error:
+            "Bucket name must use lowercase letters, numbers, and hyphens.",
+        },
+        400,
+      );
+    }
+
+    const context = await requireCoreGithubContext(c);
+    if ("response" in context) return context.response;
+
+    return c.json(
+      await fetchMe3CloudBroker(c, context, "/api/core/storage/r2/activate", {
+        method: "POST",
+        body: {
+          bucketName,
+          binding: "SITE_ASSETS",
+        },
       }),
     );
   });
@@ -200,7 +263,9 @@ function createCoreGithubStatus(
     core: getCoreVersionInfo(),
     me3AppConnected,
     github: {
-      connected: readBoolean(cloudStatus?.connected) || Boolean(repositoryOwner && repositoryName),
+      connected:
+        readBoolean(cloudStatus?.connected) ||
+        Boolean(repositoryOwner && repositoryName),
       accountLogin:
         readString(cloudStatus?.github_account_login) ||
         readString(cloudStatus?.accountLogin) ||
@@ -226,6 +291,51 @@ function createCoreGithubStatus(
     },
     unavailableReason,
   };
+}
+
+function createCoreStorageStatus(c: AppContext): CoreStorageStatus {
+  return {
+    ok: true,
+    r2Available: Boolean(c.env.SITE_ASSETS),
+    binding: "SITE_ASSETS",
+    suggestedBucketName: suggestedR2BucketName(c.env, c.req.url),
+    r2ActivationUrl: "https://dash.cloudflare.com/?to=/:account/r2/plans",
+  };
+}
+
+function suggestedR2BucketName(env: Env, requestUrl: string): string {
+  const explicit = normalizeBucketName(env.ME3_WORKER_NAME || "");
+  if (explicit) return buildBucketName(explicit);
+
+  const webHost = hostFromUrl(getCoreWebOrigin(env, requestUrl));
+  const hostPrefix =
+    webHost && webHost !== "localhost"
+      ? webHost.replace(/\.workers\.dev$/i, "").split(".")[0]
+      : "";
+  return buildBucketName(normalizeBucketName(hostPrefix) || "me3");
+}
+
+function buildBucketName(prefix: string): string {
+  const suffix = "-site-assets";
+  const maxPrefixLength = 63 - suffix.length;
+  const trimmedPrefix = prefix.slice(0, maxPrefixLength).replace(/-+$/g, "") || "me3";
+  return `${trimmedPrefix}${suffix}`;
+}
+
+function normalizeBucketName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function hostFromUrl(value: string): string {
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 async function getOrCreateCoreInstallId(env: Env): Promise<string> {

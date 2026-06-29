@@ -191,7 +191,13 @@ function exportProductToMarkdown(product: WizardProduct) {
 const wizard = useWizardStore();
 const auth = useAuthStore();
 const router = useRouter();
-const { isPublishing, publishProgress, publishError, publish } = usePublish();
+const {
+  isPublishing,
+  publishProgress,
+  publishError,
+  publishNeedsStorage,
+  publish,
+} = usePublish();
 const { toastError } = useAppToast();
 
 const isDownloading = ref(false);
@@ -613,6 +619,12 @@ function closeFooterModal() {
         </p>
         <p v-if="publishError" class="error">
           {{ publishError }}
+          <router-link
+            v-if="publishNeedsStorage"
+            to="/account?section=storage"
+          >
+            Activate storage
+          </router-link>
         </p>
       </div>
 

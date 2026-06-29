@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { definePage } from "unplugin-vue-router/runtime";
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import CustomDomain from "../components/CustomDomain.vue";
@@ -276,11 +276,21 @@ type CoreGithubActionResponse = {
   run_url?: string;
   htmlUrl?: string;
   html_url?: string;
+  workflowUrl?: string;
+  workflow_url?: string;
   lastUpdateRunUrl?: string;
   last_update_run_url?: string;
   github?: {
     lastUpdateRunUrl?: string | null;
   };
+};
+
+type CoreStorageStatusResponse = {
+  ok: boolean;
+  r2Available: boolean;
+  binding: "SITE_ASSETS";
+  suggestedBucketName: string;
+  r2ActivationUrl: string;
 };
 
 type CommerceSettingsResponse = {
@@ -360,6 +370,16 @@ const coreGithubLatestVersion = ref<string | null>(null);
 const coreGithubLastRunUrl = ref<string | null>(null);
 const coreGithubMessage = ref<string | null>(null);
 const coreGithubError = ref<string | null>(null);
+const storageLoading = ref(false);
+const storageSaving = ref(false);
+const storageModalOpen = ref(route.query.section === "storage");
+const storageStatus = ref<CoreStorageStatusResponse | null>(null);
+const storageMessage = ref<string | null>(null);
+const storageError = ref<string | null>(null);
+const storageActivationRunUrl = ref<string | null>(null);
+const storagePolling = ref(false);
+let storagePollTimer: number | null = null;
+let storagePollCount = 0;
 const commerceLoading = ref(false);
 const commerceSaving = ref(false);
 const commerceSettings = ref<CommerceSettingsResponse | null>(null);
@@ -400,6 +420,7 @@ const openSection = ref({
   payments: false,
   plugins: false,
   signin: false,
+  storage: route.query.section === "storage",
   timezone: false,
 });
 const showAiModelSection = true;
@@ -819,6 +840,42 @@ const coreGithubDescription = computed(() => {
   }
   return "Install the ME3 Updater GitHub App on this Core repository.";
 });
+
+const storageBucketName = computed(
+  () => storageStatus.value?.suggestedBucketName || "me3-site-assets",
+);
+
+const storageActivationUrl = computed(
+  () =>
+    storageStatus.value?.r2ActivationUrl ||
+    "https://dash.cloudflare.com/?to=/:account/r2/plans",
+);
+
+const storageStatusLabel = computed(() => {
+  if (storageLoading.value) return "Loading";
+  if (storageStatus.value?.r2Available) return "Active";
+  if (storagePolling.value) return "Activating";
+  return "Not configured";
+});
+
+const storageStatusClass = computed(() => {
+  if (storageStatus.value?.r2Available) return "active";
+  return storagePolling.value ? "pending" : "pending_setup";
+});
+
+const storageDescription = computed(() => {
+  if (storageStatus.value?.r2Available) {
+    return "Storage is active for email attachments, assistant images, generated images, and larger site media.";
+  }
+  return "Storage is needed for email attachments, assistant image uploads, generated images, and larger site media.";
+});
+
+const storageCanActivate = computed(
+  () =>
+    Boolean(coreGithubConnection.value?.connected) &&
+    !storageStatus.value?.r2Available &&
+    !storageSaving.value,
+);
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -1712,12 +1769,96 @@ async function disconnectCoreGithubUpdater() {
   }
 }
 
+async function loadCoreStorageStatus(silent = false) {
+  if (!silent) {
+    storageLoading.value = true;
+    storageError.value = null;
+  }
+
+  try {
+    const status = await api.get<CoreStorageStatusResponse>(
+      "/core/storage/status",
+    );
+    storageStatus.value = status;
+    if (status.r2Available) {
+      stopStoragePolling();
+      if (storageMessage.value?.startsWith("Waiting")) {
+        storageMessage.value = "Storage is active.";
+      }
+    }
+  } catch (e: any) {
+    storageError.value = e.message || "Failed to load storage status";
+  } finally {
+    if (!silent) storageLoading.value = false;
+  }
+}
+
+async function activateCoreStorage() {
+  if (storageSaving.value || storageStatus.value?.r2Available) return;
+  if (!coreGithubConnection.value?.connected) {
+    storageError.value = "Connect ME3 Updater to activate storage.";
+    return;
+  }
+
+  storageSaving.value = true;
+  storageMessage.value = null;
+  storageError.value = null;
+
+  try {
+    const response = await api.post<CoreGithubActionResponse>(
+      "/core/storage/r2/activate",
+      { bucketName: storageBucketName.value },
+    );
+    storageActivationRunUrl.value = readCoreGithubActionUrl(response);
+    storageMessage.value =
+      "Storage activation started. Waiting for Cloudflare to redeploy.";
+    await loadCoreStorageStatus(true);
+    if (!storageStatus.value?.r2Available) startStoragePolling();
+  } catch (e: any) {
+    storageError.value = e.message || "Failed to activate storage";
+  } finally {
+    storageSaving.value = false;
+  }
+}
+
+async function copyStorageBucketName() {
+  try {
+    await navigator.clipboard.writeText(storageBucketName.value);
+    storageMessage.value = "Bucket name copied.";
+  } catch {
+    storageError.value = "Copy failed. Select the bucket name and copy it manually.";
+  }
+}
+
+function startStoragePolling() {
+  stopStoragePolling();
+  storagePolling.value = true;
+  storagePollCount = 0;
+  storagePollTimer = window.setInterval(async () => {
+    storagePollCount += 1;
+    await loadCoreStorageStatus(true);
+    if (storageStatus.value?.r2Available || storagePollCount >= 40) {
+      stopStoragePolling();
+    }
+  }, 15_000);
+}
+
+function stopStoragePolling() {
+  if (storagePollTimer !== null) {
+    window.clearInterval(storagePollTimer);
+    storagePollTimer = null;
+  }
+  storagePolling.value = false;
+}
+
 function readCoreGithubActionUrl(response: CoreGithubActionResponse) {
   return (
     response.runUrl ||
     response.run_url ||
     response.htmlUrl ||
     response.html_url ||
+    response.workflowUrl ||
+    response.workflow_url ||
     response.lastUpdateRunUrl ||
     response.last_update_run_url ||
     response.github?.lastUpdateRunUrl ||
@@ -1750,6 +1891,7 @@ onMounted(async () => {
   void loadPlugins();
   void loadAppConnections();
   void loadCoreGithubUpdater();
+  void loadCoreStorageStatus();
   void loadCommerceSettings();
   if (
     route.query.section === "connections" ||
@@ -1766,6 +1908,10 @@ onMounted(async () => {
   }
   if (route.query.section === "mailbox") {
     openSection.value.mailbox = true;
+  }
+  if (route.query.section === "storage") {
+    openSection.value.storage = true;
+    storageModalOpen.value = true;
   }
   if (
     route.query.section === "domain" ||
@@ -1789,6 +1935,10 @@ onMounted(async () => {
     openSection.value.timezone = true;
   }
   await scrollToRouteHash();
+});
+
+onBeforeUnmount(() => {
+  stopStoragePolling();
 });
 </script>
 
@@ -2603,6 +2753,87 @@ onMounted(async () => {
           </div>
         </section>
 
+        <section class="card accordion-card storage-section">
+          <button
+            id="account-trigger-storage"
+            class="accordion-trigger"
+            type="button"
+            :aria-expanded="openSection.storage"
+            aria-controls="account-panel-storage"
+            @click="openSection.storage = !openSection.storage"
+          >
+            <span class="accordion-title-wrap accordion-title-flex">
+              <h2>Storage</h2>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true">▼</span>
+          </button>
+          <div
+            id="account-panel-storage"
+            class="accordion-panel"
+            role="region"
+            aria-labelledby="account-trigger-storage"
+            :hidden="!openSection.storage"
+          >
+            <div
+              class="connection-line"
+              :class="{
+                'connection-line--connected': storageStatus?.r2Available,
+              }"
+            >
+              <div class="connection-line__copy">
+                <span class="connection-line__title">File storage</span>
+                <p class="connection-line__description">
+                  {{ storageDescription }}
+                </p>
+                <div class="connection-line__details">
+                  <span>
+                    Binding {{ storageStatus?.binding || "SITE_ASSETS" }}
+                  </span>
+                  <span v-if="storageStatus?.r2Available">R2 enabled</span>
+                  <span v-else>R2 inactive</span>
+                  <a
+                    v-if="storageActivationRunUrl"
+                    :href="storageActivationRunUrl"
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    Latest run
+                  </a>
+                </div>
+                <p v-if="storageMessage" class="connection-line__message">
+                  {{ storageMessage }}
+                </p>
+                <p v-if="storageError" class="connection-line__error">
+                  {{ storageError }}
+                </p>
+              </div>
+              <div class="connection-line__end">
+                <StatusBadge :tone="storageStatusClass">
+                  {{ storageStatusLabel }}
+                </StatusBadge>
+                <Button
+                  color="outline"
+                  size="compact"
+                  type="button"
+                  :disabled="storageLoading"
+                  @click="loadCoreStorageStatus()"
+                >
+                  Check again
+                </Button>
+                <Button
+                  color="primary"
+                  size="compact"
+                  type="button"
+                  :disabled="storageStatus?.r2Available"
+                  @click="storageModalOpen = true"
+                >
+                  Configure
+                </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section
           v-if="showAiModelSection"
           id="account-ai-model"
@@ -3176,6 +3407,139 @@ onMounted(async () => {
 
     <Teleport to="body">
       <div
+        v-if="storageModalOpen"
+        class="modal-overlay"
+        @click.self="storageModalOpen = false"
+      >
+        <section
+          class="modal storage-guide-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="storage-guide-title"
+          tabindex="-1"
+          @keydown.escape="storageModalOpen = false"
+        >
+          <header class="modal-header">
+            <h2 id="storage-guide-title">Configure storage</h2>
+            <button
+              class="modal-close"
+              type="button"
+              aria-label="Close storage setup guide"
+              @click="storageModalOpen = false"
+            >
+              ×
+            </button>
+          </header>
+
+          <p class="storage-guide-copy">
+            R2 storage is required for email attachments, assistant image
+            uploads, generated images, and larger site media.
+          </p>
+
+          <ol class="domain-email-guide-list storage-guide-list">
+            <li>
+              <strong>Activate R2 in Cloudflare.</strong>
+              <span>
+                Open
+                <a
+                  :href="storageActivationUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >Cloudflare R2 plans</a
+                >
+                and activate storage for your account if it is not already
+                active.
+              </span>
+            </li>
+            <li>
+              <strong>Create this bucket.</strong>
+              <span>
+                In R2, create a bucket with the generated name below.
+              </span>
+              <div class="storage-bucket-row">
+                <code class="storage-bucket-code">{{ storageBucketName }}</code>
+                <Button
+                  color="outline"
+                  size="small"
+                  shape="soft"
+                  type="button"
+                  @click="copyStorageBucketName"
+                >
+                  Copy
+                </Button>
+              </div>
+            </li>
+            <li>
+              <strong>Activate storage in ME3.</strong>
+              <span>
+                ME3 Updater commits the R2 binding to your Core repo. Cloudflare
+                Workers Builds then redeploys the Worker.
+              </span>
+            </li>
+          </ol>
+
+          <p
+            v-if="!coreGithubConnection?.connected"
+            class="storage-guide-note"
+          >
+            Connect ME3 Updater to activate storage from here. You can still
+            complete the Cloudflare R2 steps first.
+          </p>
+          <p v-if="storageMessage" class="storage-guide-status">
+            {{ storageMessage }}
+            <a
+              v-if="storageActivationRunUrl"
+              :href="storageActivationRunUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              >View run</a
+            >
+          </p>
+          <p v-if="storageError" class="storage-guide-error">
+            {{ storageError }}
+          </p>
+
+          <div class="storage-guide-actions">
+            <Button
+              v-if="!coreGithubConnection?.connected"
+              color="outline"
+              size="compact"
+              shape="soft"
+              type="button"
+              @click="
+                storageModalOpen = false;
+                openSection.appConnections = true;
+              "
+            >
+              Open updater settings
+            </Button>
+            <Button
+              color="outline"
+              size="compact"
+              shape="soft"
+              type="button"
+              :disabled="storageLoading"
+              @click="loadCoreStorageStatus()"
+            >
+              Check again
+            </Button>
+            <Button
+              color="primary"
+              size="compact"
+              shape="soft"
+              type="button"
+              :disabled="!storageCanActivate"
+              @click="activateCoreStorage"
+            >
+              {{ storageSaving ? "Activating..." : "Activate storage" }}
+            </Button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
         v-if="customDomainGuideOpen"
         class="modal-overlay"
         @click.self="customDomainGuideOpen = false"
@@ -3737,6 +4101,78 @@ h1 {
   gap: 16px;
   max-height: min(720px, calc(100vh - 48px));
   overflow: auto;
+}
+
+.storage-guide-modal {
+  display: grid;
+  gap: 14px;
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+}
+
+.storage-guide-copy,
+.storage-guide-note,
+.storage-guide-status,
+.storage-guide-error {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.storage-guide-copy,
+.storage-guide-note,
+.storage-guide-status {
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.storage-guide-error {
+  color: var(--ui-danger, #b42318);
+}
+
+.storage-guide-status a {
+  margin-left: 6px;
+  color: var(--ui-accent-strong, var(--color-text));
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.storage-guide-status a:hover,
+.storage-guide-status a:focus-visible {
+  text-decoration: underline;
+}
+
+.storage-guide-list {
+  margin: 0;
+}
+
+.storage-bucket-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.storage-bucket-code {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text, var(--color-text));
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.storage-guide-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .domain-email-guide-list li {

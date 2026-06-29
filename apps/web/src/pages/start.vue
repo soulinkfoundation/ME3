@@ -100,7 +100,13 @@ const router = useRouter();
 const auth = useAuthStore();
 const sites = useSitesStore();
 const wizard = useWizardStore();
-const { isPublishing, publishProgress, publishError, publish } = usePublish();
+const {
+  isPublishing,
+  publishProgress,
+  publishError,
+  publishNeedsStorage,
+  publish,
+} = usePublish();
 
 const currentStep = ref(1);
 const furthestStep = ref(1);
@@ -589,6 +595,12 @@ onBeforeUnmount(clearUsernameCheck);
           <p v-if="publishProgress" class="field-hint">{{ publishProgress }}</p>
           <p v-if="profileError || publishError" class="error">
             {{ profileError || publishError }}
+            <router-link
+              v-if="publishError && publishNeedsStorage"
+              to="/account?section=storage"
+            >
+              Activate storage
+            </router-link>
           </p>
 
           <div class="step-nav">

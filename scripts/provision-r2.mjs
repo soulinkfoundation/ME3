@@ -4,11 +4,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import {
+  escapeRegExp,
   getPreferredSiteAssetsBucketName,
   upsertSiteAssetsBinding,
 } from "./wrangler-toml.mjs";
 
-const DEFAULT_BUCKET = "me3-site-assets";
 const DEFAULT_CONFIG = "wrangler.toml";
 const BINDING = "SITE_ASSETS";
 
@@ -20,12 +20,20 @@ if (!existsSync(configPath)) {
 }
 
 const before = readFileSync(configPath, "utf8");
-const existingBucketName = getPreferredSiteAssetsBucketName(before, DEFAULT_BUCKET);
+const workerName = getTopLevelTomlString(before, "name") || "me3";
+const defaultBucketName = buildResourceName(
+  normalizeResourcePrefix(workerName),
+  "site-assets",
+);
+const existingBucketName = getPreferredSiteAssetsBucketName(
+  before,
+  defaultBucketName,
+);
 const bucketName =
   args.bucket ||
   process.env.ME3_R2_BUCKET_NAME ||
   existingBucketName ||
-  (args.yes ? DEFAULT_BUCKET : await promptBucketName());
+  (args.yes ? defaultBucketName : await promptBucketName(defaultBucketName));
 
 if (!isValidBucketName(bucketName)) {
   fail(
@@ -85,14 +93,33 @@ function parseArgs(values) {
   return parsed;
 }
 
-async function promptBucketName() {
+async function promptBucketName(defaultBucketName) {
   const rl = createInterface({ input, output });
   try {
-    const answer = await rl.question(`R2 bucket name (${DEFAULT_BUCKET}): `);
-    return answer.trim() || DEFAULT_BUCKET;
+    const answer = await rl.question(`R2 bucket name (${defaultBucketName}): `);
+    return answer.trim() || defaultBucketName;
   } finally {
     rl.close();
   }
+}
+
+function getTopLevelTomlString(value, key) {
+  return value.match(new RegExp(`^${escapeRegExp(key)}\\s*=\\s*"([^"]+)"`, "m"))?.[1] || "";
+}
+
+function normalizeResourcePrefix(value) {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return normalized || "me3";
+}
+
+function buildResourceName(prefix, suffix) {
+  const suffixText = `-${suffix}`;
+  const maxPrefixLength = 63 - suffixText.length;
+  return `${prefix.slice(0, maxPrefixLength).replace(/-$/g, "")}${suffixText}`;
 }
 
 function runWrangler(commandArgs) {

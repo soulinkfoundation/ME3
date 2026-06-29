@@ -4233,6 +4233,84 @@ describe("ME3 Core Worker auth", () => {
     fetchMock.mockRestore();
   });
 
+  it("reports optional R2 storage status without requiring a binding", async () => {
+    const env = createEnv();
+    env.ME3_WORKER_NAME = "kierans-me3";
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/core/storage/status", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      r2Available: false,
+      binding: "SITE_ASSETS",
+      suggestedBucketName: "kierans-me3-site-assets",
+      r2ActivationUrl: "https://dash.cloudflare.com/?to=/:account/r2/plans",
+    });
+  });
+
+  it("proxies R2 storage activation to the ME3 Cloud broker", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    const session = cookieHeader(await bootstrap(env));
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    env.installSecrets.set(
+      "ME3_CORE_INSTALL_ID",
+      "core_11111111-1111-4111-8111-111111111111",
+    );
+    env.installSecrets.set("ME3_CLOUD_CORE_TOKEN", "core-update-token-123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          dispatched: true,
+          runUrl: "https://github.com/example/me3/actions/runs/123",
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const response = await app.fetch(
+      new Request("https://core.example/api/core/storage/r2/activate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ bucketName: "kierans-me3-site-assets" }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = new Headers((init as RequestInit).headers);
+    const requestBody = JSON.parse(String((init as RequestInit).body)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(response.status).toBe(200);
+    expect(body.runUrl).toBe("https://github.com/example/me3/actions/runs/123");
+    expect(url).toBe("https://api.me3.example/api/core/storage/r2/activate");
+    expect(headers.get("X-ME3-Core-Owner-ID")).toBe("user123");
+    expect(headers.get("X-ME3-Core-Update-Token")).toBe("core-update-token-123");
+    expect(requestBody).toMatchObject({
+      coreInstallId: "core_11111111-1111-4111-8111-111111111111",
+      coreOwnerId: "user123",
+      bucketName: "kierans-me3-site-assets",
+      binding: "SITE_ASSETS",
+    });
+
+    fetchMock.mockRestore();
+  });
+
   it("disconnects ME3 app auth only when password login remains available", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));

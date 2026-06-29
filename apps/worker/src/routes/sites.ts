@@ -12,7 +12,7 @@ import {
   sendGuestBookingConfirmationEmail,
   sendProductPurchaseConfirmationEmail,
 } from "../transactional-emails";
-import type { AppHono, OwnerRouteDeps } from "../http/types";
+import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 import type { DbBooking, DbSite, DbSubscriber } from "../types";
 import {
   applyPurchaseEmailTokens,
@@ -852,6 +852,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       return c.json({ ok: true, publishedAt: new Date().toISOString() });
     } catch (error) {
       if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
+      if (isD1SiteFileLimitError(error)) return siteStorageActivationRequired(c);
       throw error;
     }
   });
@@ -893,6 +894,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       });
     } catch (error) {
       if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
+      if (isD1SiteFileLimitError(error)) return siteStorageActivationRequired(c);
       throw error;
     }
   });
@@ -930,6 +932,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       });
     } catch (error) {
       if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
+      if (isD1SiteFileLimitError(error)) return siteStorageActivationRequired(c);
       throw error;
     }
   });
@@ -1166,6 +1169,24 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     return c.json({ ok: true });
   });
+}
+
+function isD1SiteFileLimitError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("File is too large for Core D1 storage")
+  );
+}
+
+function siteStorageActivationRequired(c: AppContext) {
+  return c.json(
+    {
+      error:
+        "File is too large for Core D1 storage. Activate storage in Account settings to upload larger media.",
+      activateStorageUrl: "/account?section=storage",
+    },
+    413,
+  );
 }
 
 export function registerPublicSiteRoutes(app: AppHono) {

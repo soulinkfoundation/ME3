@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import TurndownService from "turndown";
 import { useWizardStore, type WizardPageImage } from "../stores/wizard";
 import { productSendsPurchaseConfirmation } from "../../../../shared/product-purchase-confirmation";
@@ -189,6 +189,9 @@ export function usePublish() {
   const isPublishing = ref(false);
   const publishProgress = ref<string | null>(null);
   const publishError = ref<string | null>(null);
+  const publishNeedsStorage = computed(() =>
+    /activate storage/i.test(publishError.value || ""),
+  );
 
   function triggerCelebration() {
     const emojis = ["🎉", "🎊", "✨", "🌟", "💫", "🎈"];
@@ -529,6 +532,7 @@ export function usePublish() {
     isPublishing,
     publishProgress,
     publishError,
+    publishNeedsStorage,
     publish,
     triggerCelebration,
   };

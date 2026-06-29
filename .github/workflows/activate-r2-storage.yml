@@ -1,0 +1,76 @@
+name: Activate R2 Storage
+
+on:
+  workflow_dispatch:
+    inputs:
+      bucket_name:
+        description: R2 bucket name to bind as SITE_ASSETS.
+        required: true
+        type: string
+  repository_dispatch:
+    types:
+      - me3-core-storage-r2-activate
+
+permissions:
+  contents: write
+
+concurrency:
+  group: me3-core-storage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    name: Activate R2 Storage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout ME3 install
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure SITE_ASSETS binding
+        env:
+          DISPATCH_BUCKET_NAME: ${{ github.event.client_payload.bucketName }}
+          INPUT_BUCKET_NAME: ${{ inputs.bucket_name }}
+        run: |
+          set -euo pipefail
+
+          bucket_name="${INPUT_BUCKET_NAME:-${DISPATCH_BUCKET_NAME:-}}"
+          if ! [[ "$bucket_name" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then
+            echo "Invalid R2 bucket name: $bucket_name" >&2
+            exit 1
+          fi
+
+          pnpm install --frozen-lockfile
+          pnpm storage:r2:provision -- --yes --skip-create --bucket "$bucket_name"
+
+      - name: Commit and push storage binding
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "SITE_ASSETS binding is already configured."
+            exit 0
+          fi
+
+          git add wrangler.toml
+          git commit -m "Activate R2 storage"
+          git push origin HEAD:${{ github.ref_name }}

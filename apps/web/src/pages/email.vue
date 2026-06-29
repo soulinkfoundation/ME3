@@ -765,6 +765,9 @@ const composeVisibleAttachments = computed(() => [
   ...composePreservedAttachments.value,
   ...composeUploadedAttachments.value,
 ]);
+const composeNeedsStorage = computed(() =>
+  /attachment storage is not configured/i.test(composeError.value),
+);
 
 function clearSelectedMessages() {
   selectedMessageIds.value = new Set();
@@ -2713,7 +2716,15 @@ onBeforeUnmount(() => {
             </span>
           </div>
         </div>
-        <p v-if="composeError" class="compose-error">{{ composeError }}</p>
+        <p v-if="composeError" class="compose-error">
+          {{ composeError }}
+          <router-link
+            v-if="composeNeedsStorage"
+            to="/account?section=storage"
+          >
+            Activate storage
+          </router-link>
+        </p>
         <footer class="compose-modal__actions">
           <Button color="outline" shape="soft" size="compact" type="button"
             :disabled="composeSending"
@@ -4718,6 +4729,13 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 13px;
   color: #b33b2e;
+}
+
+.compose-error a {
+  margin-left: 6px;
+  color: var(--color-text);
+  font-weight: 700;
+  text-decoration: underline;
 }
 
 /* Mobile */

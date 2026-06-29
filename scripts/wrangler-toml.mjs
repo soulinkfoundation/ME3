@@ -1,9 +1,16 @@
 const SITE_ASSETS_BINDING = "SITE_ASSETS";
 const SCAFFOLD_BUCKET_NAME = "my-me3-site-assets";
-const CORE_R2_COMMENT = "# Core file storage for site media and future plugin-owned files.";
-const DEPLOY_FORM_R2_COMMENT =
+const CORE_R2_COMMENT =
+  "# Optional file storage for email attachments, assistant images, and larger site media.";
+const LEGACY_DEPLOY_FORM_R2_COMMENT =
   "# Keep this visible to Cloudflare's Deploy form so accounts without R2 see the activation warning.";
-const SITE_ASSETS_COMMENTS = [CORE_R2_COMMENT, DEPLOY_FORM_R2_COMMENT];
+const LEGACY_CORE_R2_COMMENT =
+  "# Core file storage for site media and future plugin-owned files.";
+const SITE_ASSETS_COMMENTS = [
+  CORE_R2_COMMENT,
+  LEGACY_CORE_R2_COMMENT,
+  LEGACY_DEPLOY_FORM_R2_COMMENT,
+];
 
 export function getTomlArrayBlock(value, blockName, bindingValue, bindingKey = "binding") {
   return getTomlArrayBlocks(value, blockName, bindingValue, bindingKey)[0] || "";

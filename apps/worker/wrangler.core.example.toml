@@ -26,11 +26,6 @@ binding = "DB"
 database_name = "me3-core-db"
 database_id = "00000000-0000-0000-0000-000000000000"
 
-# Core file storage for site media and future plugin-owned files.
-[[r2_buckets]]
-binding = "SITE_ASSETS"
-bucket_name = "me3-site-assets"
-
 [[queues.producers]]
 binding = "ASSISTANT_JOB_EVENTS"
 queue = "me3-assistant-job-events"

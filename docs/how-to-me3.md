@@ -23,7 +23,7 @@ ME3 Core is a Cloudflare Worker app. The web app is built into Worker assets and
 | --- | --- | --- |
 | Workers | Main runtime, API, static assets, scheduled/queue/email handlers | [Workers](https://developers.cloudflare.com/workers/) |
 | D1 | Owner data, settings, plugin state, jobs, mailbox metadata | [D1](https://developers.cloudflare.com/d1/) |
-| R2 | Site media, mailbox attachments, generated/static artifacts | [R2](https://developers.cloudflare.com/r2/) |
+| R2 | Optional at install; required for mailbox attachments, assistant images, generated images, and larger site media | [R2](https://developers.cloudflare.com/r2/) |
 | Queues | Assistant job events, booking reminders, social publishing work | [Queues](https://developers.cloudflare.com/queues/) |
 | Custom Domains | Public site host and `me3.<domain>` owner/admin host | [Worker Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) |
 | Email Routing | Incoming mailbox mail routed to the Worker email handler | [Email Routing](https://developers.cloudflare.com/email-routing/get-started/enable-email-routing/) |
@@ -126,9 +126,11 @@ Use Account for owner-facing setup. Keep answers short and point owners back to 
 
 ### Deploy Core
 
-Use `pnpm deploy:cloudflare` for manual Cloudflare deploys. It prepares D1/R2 bindings, builds the app, applies D1 migrations, and runs `wrangler deploy`.
+Use `pnpm deploy:cloudflare` for manual Cloudflare deploys. It prepares D1 bindings, preserves any existing real `SITE_ASSETS` R2 binding, builds the app, applies D1 migrations, and runs `wrangler deploy`.
 
-Do not use `pnpm deploy`; `deploy` is a pnpm built-in command and can skip ME3's deploy preparation. The `deploy` package script exists for Cloudflare's Deploy button, which provisions declared D1/R2 resources from `wrangler.toml`, then runs migrations and deploys.
+Do not use `pnpm deploy`; `deploy` is a pnpm built-in command and can skip ME3's deploy preparation. The `deploy` package script exists for Cloudflare's Deploy button, which provisions declared D1 resources from `wrangler.toml`, then runs migrations and deploys.
+
+R2 storage is not required for first install. Activate it later from Account settings > Storage when email attachments, assistant image uploads, generated images, or larger site media are needed. Power users can still run `pnpm deploy:cloudflare:with-r2` or `pnpm storage:r2:provision`.
 
 ### Custom Domain
 

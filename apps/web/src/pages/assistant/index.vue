@@ -1105,6 +1105,9 @@ const assistantAttachmentIssue = computed(() => {
 
   return "";
 });
+const assistantAttachmentNeedsStorage = computed(() =>
+  /storage is not configured/i.test(assistantAttachmentIssue.value),
+);
 const assistantComposerDragActive = computed(
   () => assistantComposerDragDepth.value > 0,
 );
@@ -5830,6 +5833,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
               {{ voiceDictationStatusText }}
             </span>
           </div>
+          <p v-if="assistantAttachmentIssue" class="assistant-error">
+            {{ assistantAttachmentIssue }}
+            <RouterLink
+              v-if="assistantAttachmentNeedsStorage"
+              to="/account?section=storage"
+            >
+              Activate storage
+            </RouterLink>
+          </p>
           <p v-if="assistantError" class="assistant-error">
             {{ assistantError }}
           </p>
@@ -9200,6 +9212,13 @@ function messageFromUnknown(err: unknown, fallback: string) {
   color: var(--ui-text-muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.assistant-error a {
+  margin-left: 6px;
+  color: var(--ui-text);
+  font-weight: 700;
+  text-decoration: underline;
 }
 
 .assistant-modal__header p {

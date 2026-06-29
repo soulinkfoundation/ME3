@@ -6,6 +6,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { spawnSync } from "node:child_process";
 import {
   getPreferredSiteAssetsBucketName,
+  removeSiteAssetsBinding,
   upsertSiteAssetsBinding,
 } from "./wrangler-toml.mjs";
 
@@ -13,6 +14,7 @@ const DEFAULT_CONFIG = "wrangler.toml";
 const DEFAULT_DB_NAME = "me3-core-db";
 const DEFAULT_BUCKET = "me3-site-assets";
 const D1_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
+const SCAFFOLD_BUCKET_NAME = "my-me3-site-assets";
 
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
@@ -39,13 +41,21 @@ const originalConfig = readFileSync(configPath, "utf8");
 let config = originalConfig;
 const db = getD1Config(config);
 const dbName = args.dbName || db.databaseName || DEFAULT_DB_NAME;
-const bucketName = args.bucket || getPreferredSiteAssetsBucketName(config, DEFAULT_BUCKET) || DEFAULT_BUCKET;
+const bucketName =
+  args.bucket ||
+  process.env.ME3_R2_BUCKET_NAME ||
+  getPreferredSiteAssetsBucketName(config, DEFAULT_BUCKET) ||
+  DEFAULT_BUCKET;
+const existingBucketName = getPreferredSiteAssetsBucketName(config, "");
+const hasExistingRealR2Binding =
+  Boolean(existingBucketName) && existingBucketName !== SCAFFOLD_BUCKET_NAME;
+const wantsR2 = args.withR2 || Boolean(args.bucket || process.env.ME3_R2_BUCKET_NAME);
 
 if (!isValidResourceName(dbName)) {
   fail(`Invalid D1 database name "${dbName}". Use lowercase letters, numbers, and hyphens.`);
 }
 
-if (!isValidResourceName(bucketName)) {
+if (wantsR2 && !isValidResourceName(bucketName)) {
   fail(`Invalid R2 bucket name "${bucketName}". Use lowercase letters, numbers, and hyphens.`);
 }
 
@@ -57,7 +67,7 @@ console.log("Preparing ME3 Core for a manual Cloudflare deploy.");
 console.log(`Wrangler config: ${configPath}`);
 
 if (!args.yes) {
-  await confirm("This will create or reuse Cloudflare D1/R2 resources and put Worker secrets. Continue?");
+  await confirm("This will create or reuse Cloudflare D1 resources and put Worker secrets. Continue?");
 }
 
 runWrangler(["whoami"], {
@@ -87,13 +97,21 @@ if (args.dbId) {
   console.log(`Configured DB already present -> ${db.databaseName} (${db.databaseId})`);
 }
 
-if (!args.skipR2) {
+if (args.skipR2) {
+  config = removeSiteAssetsBinding(config);
+  console.log("Skipped SITE_ASSETS storage.");
+} else if (wantsR2) {
   runWrangler(["r2", "bucket", "create", bucketName], {
     allowAlreadyExists: true,
     failureMessage: "Could not create the R2 bucket.",
   });
   config = upsertSiteAssetsBinding(config, bucketName);
   console.log(`Configured SITE_ASSETS -> ${bucketName}`);
+} else if (hasExistingRealR2Binding) {
+  console.log(`Keeping existing SITE_ASSETS -> ${existingBucketName}`);
+} else {
+  config = removeSiteAssetsBinding(config);
+  console.log("Skipped SITE_ASSETS storage; activate R2 later from Account settings when needed.");
 }
 
 config = ensureEmailSendBinding(config);
@@ -151,6 +169,7 @@ function parseArgs(values) {
     skipR2: false,
     skipQueues: false,
     skipSecrets: false,
+    withR2: false,
     yes: false,
   };
 
@@ -162,6 +181,8 @@ function parseArgs(values) {
       parsed.yes = true;
     } else if (value === "--skip-r2") {
       parsed.skipR2 = true;
+    } else if (value === "--with-r2") {
+      parsed.withR2 = true;
     } else if (value === "--skip-queues") {
       parsed.skipQueues = true;
     } else if (value === "--skip-secrets") {
@@ -263,6 +284,7 @@ Options:
                            Set CLOUDFLARE_ACCOUNT_ID for AI Gateway usage
   --cloudflare-api-token <token>
                            Set CLOUDFLARE_API_TOKEN for AI Gateway usage
+  --with-r2                Create or reuse SITE_ASSETS R2 storage now
   --skip-r2                Do not create or configure SITE_ASSETS
   --skip-queues            Do not create queues from wrangler.toml
   --skip-secrets           Do not write Worker secrets

@@ -12,7 +12,7 @@
 
 
 ### 🚀 Install in minutes
-1. Create a free Cloudflare account, with R2 enabled.
+1. Create a free Cloudflare account.
 2. Click here 👇
 <p>
   <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/soulinkfoundation/ME3">
@@ -29,7 +29,7 @@
 - **📆 A Calendar** your 🤖 can use to help you spend more time on what matters to you.
 - **🧩 Plugins**: you can build, extend and modify to make ME3 your own.
 
-Note: Cloudflare hosting is free to start; some features require a $5/month plan. AI costs are extra, depending on the models you configure.
+Note: Cloudflare hosting is free to start; some features require a $5/month plan. AI costs are extra, depending on the models you configure. R2 storage can be activated later from Account settings for email attachments, assistant images, generated images, and larger site media.
 
 ### 📜 Docs
 

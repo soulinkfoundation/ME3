@@ -13,6 +13,7 @@ import {
 
 const DEFAULT_CONFIG = "wrangler.toml";
 const D1_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
+const SCAFFOLD_BUCKET_NAME = "my-me3-site-assets";
 
 const args = parseArgs(process.argv.slice(2));
 const configPath = args.config || DEFAULT_CONFIG;
@@ -27,6 +28,11 @@ const workerName = getTopLevelTomlString(config, "name") || "my-me3";
 const resourcePrefix = normalizeResourcePrefix(workerName);
 const d1Block = getTomlArrayBlock(config, "d1_databases", "DB");
 const defaultBucketName = buildResourceName(resourcePrefix, "site-assets");
+const existingR2Block = getTomlArrayBlock(config, "r2_buckets", "SITE_ASSETS");
+const existingBucketName = getTomlString(existingR2Block, "bucket_name");
+const hasExistingRealR2Binding =
+  Boolean(existingBucketName) && existingBucketName !== SCAFFOLD_BUCKET_NAME;
+const wantsR2 = args.withR2 || Boolean(args.bucket || process.env.ME3_R2_BUCKET_NAME);
 const dbName =
   args.dbName ||
   getTomlString(d1Block, "database_name") ||
@@ -42,7 +48,7 @@ if (!isValidResourceName(dbName)) {
   fail(`Invalid D1 database name "${dbName}". Use lowercase letters, numbers, and hyphens.`);
 }
 
-if (!args.skipR2 && !isValidResourceName(bucketName)) {
+if (wantsR2 && !isValidResourceName(bucketName)) {
   fail(`Invalid R2 bucket name "${bucketName}". Use lowercase letters, numbers, and hyphens.`);
 }
 
@@ -58,7 +64,7 @@ console.log(
 if (args.skipR2) {
   config = removeSiteAssetsBinding(config);
   console.log("Skipped storage; email attachments and assistant image uploads will be unavailable.");
-} else {
+} else if (wantsR2) {
   const r2Ready = args.skipCreate || ensureR2Bucket(bucketName);
   if (!r2Ready) {
     fail(
@@ -73,6 +79,11 @@ if (args.skipR2) {
   }
   config = upsertSiteAssetsBinding(config, bucketName);
   console.log(`Configured SITE_ASSETS -> ${bucketName}`);
+} else if (hasExistingRealR2Binding) {
+  console.log(`Keeping existing SITE_ASSETS -> ${existingBucketName}`);
+} else {
+  config = removeSiteAssetsBinding(config);
+  console.log("Skipped storage; activate R2 later from Account settings when needed.");
 }
 
 if (config !== originalConfig) {
@@ -89,6 +100,7 @@ function parseArgs(values) {
     dbName: "",
     skipCreate: false,
     skipR2: false,
+    withR2: false,
   };
 
   for (let index = 0; index < values.length; index += 1) {
@@ -114,6 +126,8 @@ function parseArgs(values) {
       parsed.skipCreate = true;
     } else if (value === "--skip-r2") {
       parsed.skipR2 = true;
+    } else if (value === "--with-r2") {
+      parsed.withR2 = true;
     } else if (value === "--help" || value === "-h") {
       printHelp();
       process.exit(0);
@@ -130,13 +144,15 @@ function printHelp() {
 
 Creates or reuses the Cloudflare resources ME3 needs for deploy, then writes
 their bindings into wrangler.toml. Resource names are derived from the Worker
-project name so Deploy to Cloudflare can keep the setup form small. Storage
-must be active for email attachments, assistant image uploads, and larger media.
+project name so Deploy to Cloudflare can keep the setup form small. Storage is
+optional at install; activate R2 later from Account settings for email
+attachments, assistant image uploads, generated images, and larger media.
 
 Options:
   --config <path>   Wrangler config path (default: wrangler.toml)
   --db-name <name>  D1 database name
-  --bucket <name>   R2 bucket name
+  --bucket <name>   R2 bucket name; implies --with-r2
+  --with-r2         Create or reuse SITE_ASSETS R2 storage now
   --skip-r2         Remove storage and deploy without file/email attachments
   --skip-create     Update config only; do not call Cloudflare APIs
   --help, -h        Show this help
