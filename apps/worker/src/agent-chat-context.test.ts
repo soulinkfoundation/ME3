@@ -2264,6 +2264,49 @@ describe("Core chat mailbox draft continuations", () => {
     });
   });
 
+  it("saves only the email body when the wrapper intro includes extra prose", async () => {
+    const env = createEnv({
+      recentMessages: [
+        {
+          role: "assistant",
+          content:
+            "Here's a draft email for Mary. I've kept it personal and high-level,\n" +
+            "focused on what ME3 actually does.\n\n" +
+            "Hi Mary,\n\n" +
+            "Quick note on what I've been building - ME3 is my personal business AI assistant.\n\n" +
+            "Best,\n" +
+            "Kieran",
+        },
+      ],
+      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
+    });
+
+    const saved = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        ME3_ASSISTANT_DEBUG_TRACE: "true",
+      } as never,
+      createStorage(),
+      dispatchInput("Save that draft to mary@example.com"),
+    );
+
+    expect(saved).toMatchObject({
+      source: "tool",
+      specialist: "core.mailbox.draft",
+      emailAction: { kind: "drafted" },
+    });
+    expect(env.state.mailboxMessages[0]).toMatchObject({
+      to_address: "mary@example.com",
+      subject: "Draft email",
+      text_body:
+        "Hi Mary,\n\n" +
+        "Quick note on what I've been building - ME3 is my personal business AI assistant.\n\n" +
+        "Best,\n" +
+        "Kieran",
+      created_by: "agent",
+    });
+  });
+
   it("saves a pending draft when the owner replies with only the missing recipient", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));

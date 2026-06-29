@@ -96,6 +96,34 @@ describe("agent chat utils", () => {
     });
   });
 
+  it("strips conversational draft intro paragraphs from email draft bodies", () => {
+    expect(
+      inferAgentChatEmailDraft(
+        [
+          "Here's a draft email for Mary. I've kept it personal and high-level,",
+          "focused on what ME3 actually does.",
+          "",
+          "Hi Mary,",
+          "",
+          "Quick note on what I've been building - ME3 is my personal business AI assistant.",
+          "",
+          "Best,",
+          "Kieran",
+        ].join("\n"),
+        "Draft an email to Mary about ME3",
+      ),
+    ).toEqual({
+      toName: "Mary",
+      toAddress: null,
+      subject: "",
+      body:
+        "Hi Mary,\n\n" +
+        "Quick note on what I've been building - ME3 is my personal business AI assistant.\n\n" +
+        "Best,\nKieran",
+      displayText: "",
+    });
+  });
+
   it("does not infer a draft card for ordinary assistant text", () => {
     expect(
       inferAgentChatEmailDraft(

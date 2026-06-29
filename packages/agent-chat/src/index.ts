@@ -963,6 +963,12 @@ const OUTREACH_STATUSES = new Set<Exclude<AgentContactOutreachStatus, null>>([
 const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
 const PENDING_MAILBOX_DRAFT_SAVE_TTL_MS = 2 * 60 * 60 * 1000;
+const DRAFT_WRAPPER_INTRO_PARAGRAPH_PATTERN =
+  /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\b|[\s:,.!?])[\s\S]*?(?:\n\s*\n|$)/i;
+const DRAFT_WRAPPER_INTRO_LINE_PATTERN =
+  /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\b|[\s:,.!?])[^\n]*(?:\n|$)/i;
+const DRAFT_WRAPPER_INTRO_ONLY_LINE_PATTERN =
+  /^\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\b|[\s:,.!?])[^\n]*$/im;
 
 export function isAgentSandboxDispatchInput(
   value: unknown,
@@ -3905,21 +3911,27 @@ function parseDraftText(text: string): { subject: string | null; body: string } 
 
 function stripAgentDraftWrapperText(text: string): string {
   let body = text.replace(/\r\n/g, "\n").trim();
-  const draftMarker = body.match(
-    /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*(?:\n|$)/i,
-  );
+  const paragraphMarker = body.match(DRAFT_WRAPPER_INTRO_PARAGRAPH_PATTERN);
+  const draftMarker =
+    paragraphMarker && !draftWrapperParagraphIncludesEmailBody(paragraphMarker[0])
+      ? paragraphMarker
+      : body.match(DRAFT_WRAPPER_INTRO_LINE_PATTERN);
   if (draftMarker?.index !== undefined) {
     body = body.slice(draftMarker.index + draftMarker[0].length).trim();
   }
-  body = body.replace(
-    /^\s*(?:here(?:'|’)s|here is)\s+(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*$/im,
-    "",
-  );
+  body = body.replace(DRAFT_WRAPPER_INTRO_ONLY_LINE_PATTERN, "");
   const closingPromptIndex = body.search(
     /\n\s*(?:[-–—]\s*)?(?:please\s+let\s+me\s+know\s+if\s+you(?:'|’)d\s+like\s+(?:me\s+)?to\s+(?:make\s+any\s+changes\s+or\s+if\s+you(?:'|’)d\s+like\s+me\s+to\s+)?save\s+this\s+draft\.?|this is a chat draft only|if you want|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
   );
   if (closingPromptIndex >= 0) body = body.slice(0, closingPromptIndex).trim();
   return body.trim();
+}
+
+function draftWrapperParagraphIncludesEmailBody(paragraph: string): boolean {
+  const rest = paragraph.split(/\n/).slice(1).join("\n");
+  return /^\s*(?:[-–—]{3,}|(?:\*\*)?\s*(?:to|recipient|subject|subject line)\s*:|(?:hi|hello|dear)\b)/im.test(
+    rest,
+  );
 }
 
 function stripSimpleMarkdown(text: string): string {

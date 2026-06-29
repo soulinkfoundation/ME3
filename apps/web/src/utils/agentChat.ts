@@ -191,6 +191,12 @@ const ACTION_CARD_STATUSES = new Set<AgentChatActionCardStatus>([
   "complete",
   "failed",
 ]);
+const DRAFT_WRAPPER_INTRO_PARAGRAPH_PATTERN =
+  /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\b|[\s:,.!?])[\s\S]*?(?:\n\s*\n|$)/i;
+const DRAFT_WRAPPER_INTRO_LINE_PATTERN =
+  /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\b|[\s:,.!?])[^\n]*(?:\n|$)/i;
+const DRAFT_WRAPPER_INTRO_ONLY_LINE_PATTERN =
+  /^\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\b|[\s:,.!?])[^\n]*$/im;
 
 export function formatAgentRuntimeMetadata(
   result: AgentChatRuntimeResult,
@@ -526,19 +532,25 @@ function extractDraftSubject(text: string): string {
 
 function stripAgentDraftWrapperText(text: string): string {
   let body = normalizeDraftText(text);
-  const draftMarker = body.match(
-    /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:your\s+|the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*(?:\n|$)/i,
-  );
+  const paragraphMarker = body.match(DRAFT_WRAPPER_INTRO_PARAGRAPH_PATTERN);
+  const draftMarker =
+    paragraphMarker && !draftWrapperParagraphIncludesEmailBody(paragraphMarker[0])
+      ? paragraphMarker
+      : body.match(DRAFT_WRAPPER_INTRO_LINE_PATTERN);
   if (draftMarker?.index !== undefined) {
     body = body.slice(draftMarker.index + draftMarker[0].length).trim();
   }
-  body = body.replace(
-    /^\s*(?:here(?:'|’)s|here is)\s+(?:a\s+)?(?:friendly\s+)?draft(?:\s+(?:email|reply|message))?(?:\s+for\s+(?:your\s+|the\s+)?(?:email|reply|message)(?:\s+to\s+[^:\n]+)?)?\s*:?\s*$/im,
-    "",
-  );
+  body = body.replace(DRAFT_WRAPPER_INTRO_ONLY_LINE_PATTERN, "");
   const closingPromptIndex = body.search(draftClosingPromptPattern());
   if (closingPromptIndex >= 0) body = body.slice(0, closingPromptIndex).trim();
   return body.trim();
+}
+
+function draftWrapperParagraphIncludesEmailBody(paragraph: string): boolean {
+  const rest = paragraph.split(/\n/).slice(1).join("\n");
+  return /^\s*(?:[-–—]{3,}|(?:\*\*)?\s*(?:to|recipient|subject|subject line)\s*:|(?:hi|hello|dear)\b)/im.test(
+    rest,
+  );
 }
 
 function extractDraftDisplayText(text: string): string {
