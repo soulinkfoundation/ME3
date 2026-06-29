@@ -56,6 +56,7 @@ const runtimeCallbackUrl = ref("");
 const connection = ref<SoulinkConnectionRecord | null>(null);
 const error = ref<string | null>(null);
 const notice = ref<string | null>(null);
+const soulinkWaitlistUrl = "https://soulinkfoundation.org";
 
 const isConnected = computed(() => connection.value?.status === "active");
 const isRuntimeCallbackLocal = computed(() =>
@@ -240,17 +241,9 @@ defineExpose({
           v-else
           color="primary"
           size="compact"
-          type="button"
-          :disabled="loading || setupLoading || !canConnect"
-          @click="setupSoulink"
+          :href="soulinkWaitlistUrl"
         >
-          {{
-            loading
-              ? "Loading..."
-              : setupLoading
-                ? "Connecting..."
-                : "Connect"
-          }}
+          Join Waitlist
         </Button>
       </div>
     </template>

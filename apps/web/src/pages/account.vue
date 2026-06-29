@@ -2468,36 +2468,6 @@ onMounted(async () => {
                 </div>
 
                 <div
-                  class="connection-line"
-                  :class="{
-                    'connection-line--connected':
-                      soulinkPanelRef?.connection?.status === 'active',
-                  }"
-                >
-                  <div class="connection-line__copy">
-                    <span class="connection-line__title">Soulink</span>
-                    <p class="connection-line__description">
-                      Chat with your ME3 assistant on the go.
-                    </p>
-                  </div>
-                  <div class="connection-line__end">
-                    <StatusBadge
-                      v-if="soulinkPanelRef?.available"
-                      :tone="soulinkStatusClass"
-                    >
-                      {{ soulinkStatusLabel }}
-                    </StatusBadge>
-                    <SoulinkConnectPanel
-                      ref="soulinkPanelRef"
-                      variant="inline"
-                      :auto-prepare-when-not-connected="
-                        route.query.section === 'soulink'
-                      "
-                    />
-                  </div>
-                </div>
-
-                <div
                   class="connection-line connection-line--telegram"
                   :class="{
                     'connection-line--connected':
@@ -2589,6 +2559,31 @@ onMounted(async () => {
                         route.query.section === 'telegram'
                       "
                     />
+                  </div>
+                </div>
+
+                <div
+                  class="connection-line"
+                  :class="{
+                    'connection-line--connected':
+                      soulinkPanelRef?.connection?.status === 'active',
+                  }"
+                >
+                  <div class="connection-line__copy">
+                    <span class="connection-line__title">Soulink (Beta)</span>
+                    <p class="connection-line__description">
+                      Chat with your ME3 assistant on the go. Built by the
+                      creator of ME3.
+                    </p>
+                  </div>
+                  <div class="connection-line__end">
+                    <StatusBadge
+                      v-if="soulinkPanelRef?.available"
+                      :tone="soulinkStatusClass"
+                    >
+                      {{ soulinkStatusLabel }}
+                    </StatusBadge>
+                    <SoulinkConnectPanel ref="soulinkPanelRef" variant="inline" />
                   </div>
                 </div>
               </div>
