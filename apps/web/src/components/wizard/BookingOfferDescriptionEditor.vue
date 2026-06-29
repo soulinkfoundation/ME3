@@ -212,6 +212,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  color: var(--ui-text, var(--color-text));
 }
 
 .booking-offer-description-editor__toolbar {
@@ -227,20 +228,25 @@ onBeforeUnmount(() => {
   width: 32px;
   height: 32px;
   padding: 0;
-  border: 1px solid var(--color-border, #e5e5e5);
-  border-radius: 6px;
-  background: var(--color-surface, #fff);
-  color: var(--color-text, #111);
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 6px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
   cursor: pointer;
 }
 
 .booking-offer-description-editor__btn:hover {
-  background: var(--color-surface-muted, #f5f5f5);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
 }
 
 .booking-offer-description-editor__btn.active {
-  border-color: var(--color-accent, #6366f1);
-  background: color-mix(in srgb, var(--color-accent, #6366f1) 12%, transparent);
+  border-color: var(--ui-accent, var(--color-accent));
+  background: color-mix(
+    in oklab,
+    var(--ui-accent, var(--color-accent)) 14%,
+    var(--ui-surface, var(--color-bg))
+  );
+  color: var(--ui-text, var(--color-text));
 }
 
 .booking-offer-description-editor__btn--text {
@@ -248,10 +254,11 @@ onBeforeUnmount(() => {
 }
 
 .booking-offer-description-editor__surface {
-  border: 1px solid var(--color-border, #e5e5e5);
-  border-radius: 8px;
-  background: var(--color-surface, #fff);
   min-height: 72px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-md, 8px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
 }
 
 .booking-offer-description-editor__surface :deep(.tiptap) {
@@ -260,10 +267,11 @@ onBeforeUnmount(() => {
   outline: none;
   font-size: 0.95rem;
   line-height: 1.45;
+  color: var(--ui-text, var(--color-text));
 }
 
 .booking-offer-description-editor__surface :deep(.tiptap p.is-editor-empty:first-child::before) {
-  color: var(--color-text-muted, #737373);
+  color: var(--ui-text-muted, var(--color-text-muted));
   content: attr(data-placeholder);
   float: left;
   height: 0;
@@ -271,7 +279,7 @@ onBeforeUnmount(() => {
 }
 
 .booking-offer-description-editor__surface :deep(.tiptap a) {
-  color: var(--color-accent, #6366f1);
+  color: var(--ui-accent, var(--color-accent));
   text-decoration: underline;
 }
 
@@ -290,9 +298,11 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 380px;
   padding: 16px;
-  border-radius: 10px;
-  background: var(--color-surface, #fff);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-lg, 10px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  box-shadow: var(--ui-shadow-md, 0 12px 40px rgba(0, 0, 0, 0.18));
 }
 
 .booking-offer-description-editor__modal h4 {
@@ -304,15 +314,21 @@ onBeforeUnmount(() => {
 .booking-offer-description-editor__modal input {
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--color-border, #e5e5e5);
-  border-radius: 6px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 6px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
   font-size: 0.95rem;
+}
+
+.booking-offer-description-editor__modal input::placeholder {
+  color: var(--ui-text-muted, var(--color-text-muted));
 }
 
 .booking-offer-description-editor__error {
   margin: 8px 0 0;
   font-size: 0.85rem;
-  color: #b91c1c;
+  color: var(--ui-danger, #b91c1c);
 }
 
 .booking-offer-description-editor__modal-actions {
@@ -325,25 +341,34 @@ onBeforeUnmount(() => {
 
 .booking-offer-description-editor__modal-actions button {
   padding: 6px 12px;
-  border-radius: 6px;
+  border-radius: var(--ui-radius-sm, 6px);
   border: 1px solid transparent;
   font-size: 0.9rem;
   cursor: pointer;
 }
 
 .btn-cancel {
-  background: transparent;
-  border-color: var(--color-border, #e5e5e5) !important;
+  background: var(--ui-surface, var(--color-bg));
+  border-color: var(--ui-border, var(--color-border)) !important;
+  color: var(--ui-text, var(--color-text));
 }
 
 .btn-remove {
-  color: #b91c1c;
-  background: transparent;
-  border-color: #fecaca !important;
+  border-color: color-mix(
+    in oklab,
+    var(--ui-danger, #b91c1c) 36%,
+    var(--ui-border, var(--color-border))
+  ) !important;
+  background: color-mix(
+    in oklab,
+    var(--ui-danger, #b91c1c) 10%,
+    var(--ui-surface, var(--color-bg))
+  );
+  color: var(--ui-danger, #b91c1c);
 }
 
 .btn-save {
-  background: var(--color-accent, #6366f1);
-  color: #fff;
+  background: var(--ui-accent, var(--color-accent));
+  color: var(--ui-accent-contrast, var(--color-accent-contrast));
 }
 </style>
