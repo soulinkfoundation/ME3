@@ -998,6 +998,8 @@ export function markdownToHtml(markdown: string, basePath = "./"): string {
   const html: string[] = [];
   let paragraph: string[] = [];
   let list: { type: "ul" | "ol"; items: string[] } | null = null;
+  let blockquoteLines: string[] = [];
+  let pendingImageFilenameCaption = false;
   const flushParagraph = () => {
     if (paragraph.length === 0) return;
     html.push(`<p>${parseInlineMarkdown(unescapeMarkdownPunctuation(paragraph.join(" ")), basePath)}</p>`);
@@ -1008,18 +1010,51 @@ export function markdownToHtml(markdown: string, basePath = "./"): string {
     html.push(`<${list.type}>${list.items.map((item) => `<li>${parseInlineMarkdown(unescapeMarkdownPunctuation(item), basePath)}</li>`).join("")}</${list.type}>`);
     list = null;
   };
+  const flushBlockquote = () => {
+    if (blockquoteLines.length === 0) return;
+    const groups: string[][] = [[]];
+
+    for (const quoteLine of blockquoteLines) {
+      const content = quoteLine.trim();
+      if (!content) {
+        if (groups[groups.length - 1].length > 0) groups.push([]);
+        continue;
+      }
+      groups[groups.length - 1].push(content);
+    }
+
+    const body = groups
+      .filter((group) => group.length > 0)
+      .map((group) => `<p>${parseInlineMarkdown(unescapeMarkdownPunctuation(group.join(" ")), basePath)}</p>`)
+      .join("");
+    if (body) html.push(`<blockquote>${body}</blockquote>`);
+    blockquoteLines = [];
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
       flushParagraph();
       flushList();
+      flushBlockquote();
+      continue;
+    }
+    if (pendingImageFilenameCaption) {
+      pendingImageFilenameCaption = false;
+      if (isStandaloneImageFilename(trimmed)) continue;
+    }
+    const blockquote = trimmed.match(/^>\s?(.*)$/);
+    if (blockquote) {
+      flushParagraph();
+      flushList();
+      blockquoteLines.push(blockquote[1]);
       continue;
     }
     const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       flushParagraph();
       flushList();
+      flushBlockquote();
       const level = heading[1].length;
       html.push(`<h${level}>${parseInlineMarkdown(unescapeMarkdownPunctuation(heading[2]), basePath)}</h${level}>`);
       continue;
@@ -1028,19 +1063,18 @@ export function markdownToHtml(markdown: string, basePath = "./"): string {
     if (image) {
       flushParagraph();
       flushList();
-      html.push(`<figure><img src="${escapeHtml(contentAssetPathForHtml(image[2], basePath))}" alt="${escapeHtml(unescapeMarkdownPunctuation(image[1] || ""))}" loading="lazy" decoding="async">${image[3] ? `<figcaption>${escapeHtml(unescapeMarkdownPunctuation(image[3]))}</figcaption>` : ""}</figure>`);
-      continue;
-    }
-    const blockquote = trimmed.match(/^>\s+(.+)$/);
-    if (blockquote) {
-      flushParagraph();
-      flushList();
-      html.push(`<blockquote>${parseInlineMarkdown(unescapeMarkdownPunctuation(blockquote[1]), basePath)}</blockquote>`);
+      flushBlockquote();
+      const caption = image[3] && !isStandaloneImageFilename(image[3])
+        ? `<figcaption>${escapeHtml(unescapeMarkdownPunctuation(image[3]))}</figcaption>`
+        : "";
+      html.push(`<figure><img src="${escapeHtml(contentAssetPathForHtml(image[2], basePath))}" alt="${escapeHtml(unescapeMarkdownPunctuation(image[1] || ""))}" loading="lazy" decoding="async">${caption}</figure>`);
+      pendingImageFilenameCaption = true;
       continue;
     }
     const unordered = trimmed.match(/^[-*]\s+(.+)$/);
     if (unordered) {
       flushParagraph();
+      flushBlockquote();
       if (!list || list.type !== "ul") {
         flushList();
         list = { type: "ul", items: [] };
@@ -1051,6 +1085,7 @@ export function markdownToHtml(markdown: string, basePath = "./"): string {
     const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
     if (ordered) {
       flushParagraph();
+      flushBlockquote();
       if (!list || list.type !== "ol") {
         flushList();
         list = { type: "ol", items: [] };
@@ -1058,11 +1093,13 @@ export function markdownToHtml(markdown: string, basePath = "./"): string {
       list.items.push(ordered[1]);
       continue;
     }
+    flushBlockquote();
     flushList();
     paragraph.push(trimmed);
   }
   flushParagraph();
   flushList();
+  flushBlockquote();
   return html.join("\n");
 }
 
@@ -1070,17 +1107,37 @@ function parseInlineMarkdown(value: string, basePath = "./"): string {
   const escaped = escapeHtml(value);
   return escaped
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^\w])__([^_\n]+)__($|[^\w])/g, "$1<strong>$2</strong>$3")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/(^|[^\w])_([^_\n]+)_($|[^\w])/g, "$1<em>$2</em>$3")
     .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|\.?\/[^)\s]+|files\/[^)\s]+)\)/g, (_match, alt, src) => `<img src="${escapeHtml(contentAssetPathForHtml(src, basePath))}" alt="${alt}" loading="lazy" decoding="async">`)
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(
+      /\[([^\]]+)\]\((&lt;\s*(?:https?:\/\/|mailto:|tel:|#)(?:(?!&gt;).)+&gt;|(?:https?:\/\/|mailto:|tel:|#)[^)\s]+)\)/g,
+      (_match, label, href) => {
+        const normalizedHref = normalizeMarkdownLinkHref(href);
+        const externalAttrs = /^https?:\/\//i.test(normalizedHref)
+          ? ' target="_blank" rel="noopener"'
+          : "";
+        return `<a href="${escapeHtml(normalizedHref)}"${externalAttrs}>${label}</a>`;
+      },
+    );
 }
 
 function unescapeMarkdownPunctuation(value: string): string {
-  return value.replace(/\\([\\`*{}[\]()#+\-.!_>])/g, "$1");
+  return value.replace(/\\([\\`*{}[\]()#+\-.!_>"'])/g, "$1");
 }
 
 function looksLikeHtml(value: string): boolean {
-  return /<\/?[a-z][\s\S]*>/i.test(value.trim());
+  return /<\/?[a-z][a-z0-9-]*(?:\s|>|\/>)[\s\S]*>/i.test(value.trim());
+}
+
+function normalizeMarkdownLinkHref(value: string): string {
+  return value
+    .trim()
+    .replace(/^&lt;\s*/i, "")
+    .replace(/&gt;$/i, "")
+    .trim()
+    .replace(/^(mailto:|tel:)\s+/i, "$1");
 }
 
 function rewriteContentAssetPaths(html: string, basePath: string): string {
@@ -1107,12 +1164,51 @@ function contentAssetPathForHtml(url: string, basePath = "./"): string {
 }
 
 function markdownToText(markdown: string): string {
-  return markdown
+  return unescapeMarkdownPunctuation(stripImportedImageFilenameCaptions(markdown))
     .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/[#*_>`-]/g, "")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/[*_]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function stripImportedImageFilenameCaptions(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const kept: string[] = [];
+  let pendingImageFilenameCaption = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      kept.push(line);
+      continue;
+    }
+
+    if (pendingImageFilenameCaption) {
+      pendingImageFilenameCaption = false;
+      if (isStandaloneImageFilename(trimmed)) continue;
+    }
+
+    kept.push(line);
+    if (/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)$/.test(trimmed)) {
+      pendingImageFilenameCaption = true;
+    }
+  }
+
+  return kept.join("\n");
+}
+
+function isStandaloneImageFilename(value: string): boolean {
+  const normalized = unescapeMarkdownPunctuation(value)
+    .trim()
+    .replace(/^`(.+)`$/, "$1")
+    .trim();
+  return /^[^/\\<>|?*\n]+\.(?:png|jpe?g|gif|webp|svg|avif)$/i.test(normalized);
 }
 
 function formatPricing(pricing?: BookingPricingConfig): string {
@@ -1295,7 +1391,7 @@ function siteCssOverrides(vibe: string): string {
 
 function siteCss(vibe: string, accentOverride?: string): string {
   const theme = siteThemeTokens(vibe, accentOverride);
-  return `:root{--bg:${theme.bg};--surface:${theme.surface};--text:${theme.text};--muted:${theme.muted};--border:${theme.border};--accent:${theme.accent};--radius-sm:8px;--radius-md:12px;--radius:16px;--radius-full:9999px;--font:${theme.font};--mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55}.container{width:min(640px,100%);margin:0 auto;min-height:100vh;background:var(--surface)}.banner{position:relative;height:190px;overflow:hidden;border-radius:0 0 var(--radius) var(--radius);background:#ddd}.banner img{width:100%;height:100%;object-fit:cover;display:block}.link-icon svg{width:28px;height:28px}.btn-icon svg{width:16px;height:16px}.btn-icon{display:inline-flex;align-items:center;justify-content:center;line-height:1}.main{padding:0 32px 36px}.profile-header{text-align:center;margin-top:-56px;position:relative}.banner+.main .profile-header{margin-top:-56px}.avatar{width:120px;height:120px;border-radius:999px;object-fit:cover;border:5px solid var(--surface);background:var(--surface)}.name{font-size:clamp(2rem,7vw,3rem);line-height:1.05;margin:22px 0 8px;font-weight:800;letter-spacing:0}.location,.bio{color:var(--muted);margin:8px auto;max-width:38rem}.nav{display:flex;gap:8px;justify-content:center;margin:28px 0 24px;flex-wrap:wrap}.nav-link{border-radius:var(--radius-full);padding:9px 16px;text-decoration:none;color:var(--muted);font-weight:700}.nav-link.active{background:var(--text);color:var(--surface)}.buttons{display:grid;gap:8px;margin:20px 0}.cta-button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:12px 16px;border-radius:var(--radius-md);text-decoration:none;font-weight:700;font-size:14px;letter-spacing:0;background:var(--accent);color:${theme.accentText}}.cta-button.primary{background:var(--accent);color:${theme.accentText}}.cta-button.secondary{background:var(--text);color:var(--surface)}.cta-button.outline{background:transparent;color:var(--text);border:2px solid var(--text)}.links{display:flex;justify-content:center;align-items:center;gap:16px;flex-wrap:wrap;margin:22px 0}.link-item{width:56px;height:56px;border-radius:999px;display:grid;place-items:center;color:var(--text);background:rgba(0,0,0,.06);padding:0;line-height:1}.link-label{display:none}.testimonials,.booking,.newsletter{margin:32px 0;padding:40px 48px;border-radius:24px;background:var(--border)}.booking,.newsletter{text-align:center}.booking h2,.newsletter h2,.testimonials h2{margin:0 0 14px;line-height:1.2}.booking>p,.newsletter>p{max-width:36rem;margin:0 auto 24px;color:var(--muted);font-size:1.1rem;line-height:1.55}.booking-subtitle{font-size:1.1rem;margin:22px 0 18px}.booking-session-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:16px 0 24px}.booking-session-preview:has(.booking-card:only-child){grid-template-columns:1fr}.booking-card{border:0;border-radius:16px;padding:20px 24px;margin:0;display:grid;gap:12px;text-align:left;background:transparent;cursor:pointer}.booking-card.active{border:2px solid var(--text);background:var(--surface)}.booking-card span,.booking-card small{color:var(--muted)}.booking-widget{display:grid;gap:18px;max-width:760px;margin:0 auto}.booking-selection-summary{margin:0;font-weight:800}.booking-form{display:none;gap:16px;margin:8px auto 0;text-align:left;max-width:520px;width:100%}.booking-form.is-visible{display:grid}.booking-actions{display:grid;grid-template-columns:minmax(120px,1fr) minmax(180px,2fr);gap:16px}.booking-back,.booking-submit{font:inherit;font-weight:800;border:0;border-radius:18px;padding:18px 22px;cursor:pointer}.booking-back{background:var(--surface);color:var(--text)}.booking-submit{background:var(--accent);color:${theme.accentText}}.booking-status{min-height:1.4em;color:var(--muted);margin:0}.booking-status.is-error{color:#b42318}.booking-timezone,.booking-empty-times{color:var(--muted);font-size:1rem;margin:8px 0 0}.booking-selected-time{padding:18px 22px;border-radius:18px;background:var(--surface);text-align:center;font-weight:800;font-size:1.1rem}.booking label{display:grid;gap:8px;color:var(--muted);text-align:left}.booking-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;justify-content:center;max-width:520px;margin:0 auto}.booking-slot{font:inherit;border:0;border-radius:16px;background:var(--surface);color:inherit;padding:18px 20px;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:1.1rem}.booking-slot.active{outline:2px solid var(--text);outline-offset:0;background:var(--surface)}input,select,textarea{font:inherit;padding:18px 22px;border:0;border-radius:18px;background:var(--surface);color:inherit;box-sizing:border-box;width:100%}input::placeholder,textarea::placeholder{color:var(--muted);font-weight:700}textarea{resize:vertical}.booking-note{font-style:italic;color:var(--muted);text-align:center}.testimonial-list{display:grid;gap:16px}.testimonials h2{text-align:center}.testimonial-card{display:grid;gap:20px;padding:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);margin:0}.testimonial-card__person{display:flex;align-items:center;gap:14px}.testimonial-card__avatar{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;flex:0 0 auto;border-radius:999px;background:rgba(0,0,0,.08);color:var(--text);font-weight:800;object-fit:cover}.testimonial-card__meta{display:grid;gap:2px;min-width:0}.testimonial-card__name{color:var(--text)}.testimonial-card__handle{color:var(--muted);font-size:.9rem}.testimonial-link{margin-left:auto;color:var(--accent);font-weight:700}.testimonial-card__quote{font-size:1.05rem;line-height:1.55;margin:0}.newsletter form{display:flex;gap:10px;max-width:520px;margin:18px auto 10px}.newsletter input{min-width:0;flex:1}.newsletter button{font:inherit;font-weight:800;border:0;border-radius:var(--radius-md);background:var(--accent);color:${theme.accentText};padding:0 22px;cursor:pointer}.footer{text-align:center;color:var(--muted);padding:24px 32px}.footer a{color:inherit}.page-header{padding:28px 32px 0}.back-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;font-weight:800}.avatar-small{width:42px;height:42px;border-radius:999px;object-fit:cover}.content{margin:32px 0;padding:32px;background:transparent;border-radius:0}.content h1{font-size:2.2rem;line-height:1.1}.content img{max-width:100%;height:auto}.collection-list,.blog-items,.shop-items{display:grid;gap:12px}.collection-card,.blog-item,.shop-item{display:grid;gap:8px;text-decoration:none;color:inherit;padding:18px;border:2px solid var(--border);border-radius:var(--radius-md);background:transparent}.blog-item-title,.shop-item-title{font-weight:800;color:var(--text);line-height:1.25}.blog-item-date,.shop-item-price,.blog-item-excerpt,.shop-item-excerpt{color:var(--muted);line-height:1.45}.post-type{display:inline-flex;margin-left:8px;padding:2px 8px;border-radius:999px;background:rgba(0,0,0,.08);font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;vertical-align:middle}@media (max-width:560px){.main{padding:0 20px 28px}.testimonials,.booking,.newsletter{padding:28px}.newsletter form{display:grid}.booking-session-preview,.booking-slots,.booking-actions{grid-template-columns:1fr}}${vibe === "tech" ? `:root{--radius-sm:0;--radius-md:0;--radius:0}.name{text-transform:lowercase;font-family:var(--font)}.name:before{content:"> ";color:var(--accent)}.banner{border-radius:0}.nav-link{border-radius:0}.nav-link.active{background:var(--text);color:#111}.links{background:#242424;padding:16px}.link-item{border-radius:0;background:transparent}.booking,.newsletter{background:#242424}.content{background:transparent}.testimonials{background:transparent;padding-left:0;padding-right:0}.testimonial-card{background:#050505;border-color:#2a2a2a;border-radius:24px}.testimonial-card__avatar{background:#242424}.booking-card{background:#050505}.booking-slot.active{background:#050505}.cta-button{border-radius:0}` : ""}`;
+  return `:root{--bg:${theme.bg};--surface:${theme.surface};--text:${theme.text};--muted:${theme.muted};--border:${theme.border};--accent:${theme.accent};--radius-sm:8px;--radius-md:12px;--radius:16px;--radius-full:9999px;--font:${theme.font};--mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.55}.container{width:min(640px,100%);margin:0 auto;min-height:100vh;background:var(--surface)}.banner{position:relative;height:190px;overflow:hidden;border-radius:0 0 var(--radius) var(--radius);background:#ddd}.banner img{width:100%;height:100%;object-fit:cover;display:block}.link-icon svg{width:28px;height:28px}.btn-icon svg{width:16px;height:16px}.btn-icon{display:inline-flex;align-items:center;justify-content:center;line-height:1}.main{padding:0 32px 36px}.profile-header{text-align:center;margin-top:-56px;position:relative}.banner+.main .profile-header{margin-top:-56px}.avatar{width:120px;height:120px;border-radius:999px;object-fit:cover;border:5px solid var(--surface);background:var(--surface)}.name{font-size:clamp(2rem,7vw,3rem);line-height:1.05;margin:22px 0 8px;font-weight:800;letter-spacing:0}.location,.bio{color:var(--muted);margin:8px auto;max-width:38rem}.nav{display:flex;gap:8px;justify-content:center;margin:28px 0 24px;flex-wrap:wrap}.nav-link{border-radius:var(--radius-full);padding:9px 16px;text-decoration:none;color:var(--muted);font-weight:700}.nav-link.active{background:var(--text);color:var(--surface)}.buttons{display:grid;gap:8px;margin:20px 0}.cta-button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:12px 16px;border-radius:var(--radius-md);text-decoration:none;font-weight:700;font-size:14px;letter-spacing:0;background:var(--accent);color:${theme.accentText}}.cta-button.primary{background:var(--accent);color:${theme.accentText}}.cta-button.secondary{background:var(--text);color:var(--surface)}.cta-button.outline{background:transparent;color:var(--text);border:2px solid var(--text)}.links{display:flex;justify-content:center;align-items:center;gap:16px;flex-wrap:wrap;margin:22px 0}.link-item{width:56px;height:56px;border-radius:999px;display:grid;place-items:center;color:var(--text);background:rgba(0,0,0,.06);padding:0;line-height:1}.link-label{display:none}.testimonials,.booking,.newsletter{margin:32px 0;padding:40px 48px;border-radius:24px;background:var(--border)}.booking,.newsletter{text-align:center}.booking h2,.newsletter h2,.testimonials h2{margin:0 0 14px;line-height:1.2}.booking>p,.newsletter>p{max-width:36rem;margin:0 auto 24px;color:var(--muted);font-size:1.1rem;line-height:1.55}.booking-subtitle{font-size:1.1rem;margin:22px 0 18px}.booking-session-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:16px 0 24px}.booking-session-preview:has(.booking-card:only-child){grid-template-columns:1fr}.booking-card{border:0;border-radius:16px;padding:20px 24px;margin:0;display:grid;gap:12px;text-align:left;background:transparent;cursor:pointer}.booking-card.active{border:2px solid var(--text);background:var(--surface)}.booking-card span,.booking-card small{color:var(--muted)}.booking-widget{display:grid;gap:18px;max-width:760px;margin:0 auto}.booking-selection-summary{margin:0;font-weight:800}.booking-form{display:none;gap:16px;margin:8px auto 0;text-align:left;max-width:520px;width:100%}.booking-form.is-visible{display:grid}.booking-actions{display:grid;grid-template-columns:minmax(120px,1fr) minmax(180px,2fr);gap:16px}.booking-back,.booking-submit{font:inherit;font-weight:800;border:0;border-radius:18px;padding:18px 22px;cursor:pointer}.booking-back{background:var(--surface);color:var(--text)}.booking-submit{background:var(--accent);color:${theme.accentText}}.booking-status{min-height:1.4em;color:var(--muted);margin:0}.booking-status.is-error{color:#b42318}.booking-timezone,.booking-empty-times{color:var(--muted);font-size:1rem;margin:8px 0 0}.booking-selected-time{padding:18px 22px;border-radius:18px;background:var(--surface);text-align:center;font-weight:800;font-size:1.1rem}.booking label{display:grid;gap:8px;color:var(--muted);text-align:left}.booking-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;justify-content:center;max-width:520px;margin:0 auto}.booking-slot{font:inherit;border:0;border-radius:16px;background:var(--surface);color:inherit;padding:18px 20px;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:1.1rem}.booking-slot.active{outline:2px solid var(--text);outline-offset:0;background:var(--surface)}input,select,textarea{font:inherit;padding:18px 22px;border:0;border-radius:18px;background:var(--surface);color:inherit;box-sizing:border-box;width:100%}input::placeholder,textarea::placeholder{color:var(--muted);font-weight:700}textarea{resize:vertical}.booking-note{font-style:italic;color:var(--muted);text-align:center}.testimonial-list{display:grid;gap:16px}.testimonials h2{text-align:center}.testimonial-card{display:grid;gap:20px;padding:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);margin:0}.testimonial-card__person{display:flex;align-items:center;gap:14px}.testimonial-card__avatar{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;flex:0 0 auto;border-radius:999px;background:rgba(0,0,0,.08);color:var(--text);font-weight:800;object-fit:cover}.testimonial-card__meta{display:grid;gap:2px;min-width:0}.testimonial-card__name{color:var(--text)}.testimonial-card__handle{color:var(--muted);font-size:.9rem}.testimonial-link{margin-left:auto;color:var(--accent);font-weight:700}.testimonial-card__quote{font-size:1.05rem;line-height:1.55;margin:0}.newsletter form{display:flex;gap:10px;max-width:520px;margin:18px auto 10px}.newsletter input{min-width:0;flex:1}.newsletter button{font:inherit;font-weight:800;border:0;border-radius:var(--radius-md);background:var(--accent);color:${theme.accentText};padding:0 22px;cursor:pointer}.footer{text-align:center;color:var(--muted);padding:24px 32px}.footer a{color:inherit}.page-header{padding:28px 32px 0}.back-link{display:inline-flex;align-items:center;gap:10px;color:inherit;text-decoration:none;font-weight:800}.avatar-small{width:42px;height:42px;border-radius:999px;object-fit:cover}.content{margin:32px 0;padding:0 32px 32px;background:transparent;border-radius:0}.content h1{font-size:2.2rem;line-height:1.1;margin-top:0}.content img{max-width:100%;height:auto}.collection-list,.blog-items,.shop-items{display:grid;gap:12px}.collection-card,.blog-item,.shop-item{display:grid;gap:8px;text-decoration:none;color:inherit;padding:18px;border:2px solid var(--border);border-radius:var(--radius-md);background:transparent}.blog-item-title,.shop-item-title{font-weight:800;color:var(--text);line-height:1.25}.blog-item-date,.shop-item-price,.blog-item-excerpt,.shop-item-excerpt{color:var(--muted);line-height:1.45}.post-type{display:inline-flex;margin-left:8px;padding:2px 8px;border-radius:999px;background:rgba(0,0,0,.08);font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;vertical-align:middle}@media (max-width:560px){.main{padding:0 20px 28px}.testimonials,.booking,.newsletter{padding:28px}.newsletter form{display:grid}.booking-session-preview,.booking-slots,.booking-actions{grid-template-columns:1fr}}${vibe === "tech" ? `:root{--radius-sm:0;--radius-md:0;--radius:0}.name{text-transform:lowercase;font-family:var(--font)}.name:before{content:"> ";color:var(--accent)}.banner{border-radius:0}.nav-link{border-radius:0}.nav-link.active{background:var(--text);color:#111}.links{background:#242424;padding:16px}.link-item{border-radius:0;background:transparent}.booking,.newsletter{background:#242424}.content{background:transparent}.testimonials{background:transparent;padding-left:0;padding-right:0}.testimonial-card{background:#050505;border-color:#2a2a2a;border-radius:24px}.testimonial-card__avatar{background:#242424}.booking-card{background:#050505}.booking-slot.active{background:#050505}.cta-button{border-radius:0}` : ""}`;
 }
 
 function siteThemeTokens(vibe: string, accentOverride?: string): {

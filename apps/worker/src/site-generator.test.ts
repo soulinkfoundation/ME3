@@ -82,13 +82,25 @@ describe("site generator", () => {
             publishedAt: "2026-02-03",
             excerpt: "A short hello from the blog.",
           },
+          {
+            slug: "why-me3",
+            title: "Why ME3",
+            file: "blog/why-me3.md",
+            publishedAt: "2026-02-04",
+          },
+          {
+            slug: "image-import",
+            title: "Image Import",
+            file: "blog/image-import.md",
+            publishedAt: "2026-02-05",
+          },
         ],
       },
       [
         {
           name: "now.md",
           content:
-            "### Work\n\n\\[\\*\\*ME3\\*\\*\\](https://me3.app)\n\n![Alt text](./files/now-1.webp)",
+            "### Work\n\n\\[\\*\\*ME3\\*\\*\\](https://me3.app)\n\n[**Book here**](https://kieranbutler.com/#booking) **or** [**email me**](<mailto: hello@example.com>)\n\n![Alt text](./files/now-1.webp)",
         },
         {
           name: "about.md",
@@ -100,6 +112,16 @@ describe("site generator", () => {
           content:
             '<figure><img src="/preview/testuser/files/post-1.webp" alt="Post"></figure>',
         },
+        {
+          name: "blog/why-me3.md",
+          content:
+            "\\_“I’m allergic to tech... I want simple!”\\_\n\n“\\_Me too...\\_” I said, and I pulled that thread.\n\nThe result is **ME3**, free software you own and host yourself.\n\n> Good morning, Ethan.\n>\n> Intelligence suggests that the Ministry of Smoke and Mirrors is harvesting all human knowledge.\n>\n> Godspeed Ethan.",
+        },
+        {
+          name: "blog/image-import.md",
+          content:
+            '![Ouroboros](https://example.com/ouroboros.webp "ouroboros.png")\n\nouroboros.png\n\nActual story after the imported image.',
+        },
       ],
     );
 
@@ -108,11 +130,50 @@ describe("site generator", () => {
       '<a href="https://me3.app" target="_blank" rel="noopener"><strong>ME3</strong></a>',
     );
     expect(files["now.html"]).toContain(
+      '<a href="https://kieranbutler.com/#booking" target="_blank" rel="noopener"><strong>Book here</strong></a>',
+    );
+    expect(files["now.html"]).toContain(
+      '<a href="mailto:hello@example.com"><strong>email me</strong></a>',
+    );
+    expect(files["now.html"]).toContain(
       '<img src="./files/now-1.webp" alt="Alt text"',
     );
     expect(files["about.html"]).toContain('src="./files/about-1.webp"');
     expect(files["blog/hello.html"]).toContain('src="../files/post-1.webp"');
     expect(files["now.html"]).not.toContain("\\[\\*\\*ME3");
+    expect(files["blog/index.html"]).toContain(
+      "“I’m allergic to tech... I want simple!” “Me too...” I said",
+    );
+    expect(files["blog/index.html"]).not.toContain("\\“");
+    expect(files["blog/index.html"]).not.toContain("\\Me");
+    expect(files["blog/why-me3.html"]).toContain(
+      "<em>“I’m allergic to tech... I want simple!”</em>",
+    );
+    expect(files["blog/why-me3.html"]).toContain(
+      "“<em>Me too...</em>” I said",
+    );
+    expect(files["blog/why-me3.html"]).toContain(
+      "The result is <strong>ME3</strong>",
+    );
+    expect(files["blog/why-me3.html"]).toContain(
+      "<blockquote><p>Good morning, Ethan.</p><p>Intelligence suggests that the Ministry of Smoke and Mirrors is harvesting all human knowledge.</p><p>Godspeed Ethan.</p></blockquote>",
+    );
+    expect(files["blog/why-me3.html"]).not.toContain("<p>&gt;</p>");
+    expect(files["blog/image-import.html"]).toContain(
+      '<figure><img src="https://example.com/ouroboros.webp" alt="Ouroboros"',
+    );
+    expect(files["blog/image-import.html"]).not.toContain(
+      "<figcaption>ouroboros.png</figcaption>",
+    );
+    expect(files["blog/image-import.html"]).not.toContain(
+      "<p>ouroboros.png</p>",
+    );
+    expect(files["blog/index.html"]).toContain(
+      "Actual story after the imported image.",
+    );
+    expect(files["blog/index.html"]).not.toContain(
+      'blog-item-excerpt">ouroboros.png',
+    );
   });
 
   it("normalizes stale preview-prefixed profile image paths", async () => {
@@ -268,7 +329,8 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain(".cta-button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:12px 16px;border-radius:var(--radius-md)");
     expect(files["index.html"]).toContain(".link-item{width:56px;height:56px;border-radius:999px");
     expect(files["index.html"]).toContain(".testimonials,.booking,.newsletter{margin:32px 0;padding:40px 48px;border-radius:24px;background:var(--border)}");
-    expect(files["index.html"]).toContain(".content{margin:32px 0;padding:32px;background:transparent;border-radius:0}");
+    expect(files["index.html"]).toContain(".content{margin:32px 0;padding:0 32px 32px;background:transparent;border-radius:0}");
+    expect(files["index.html"]).toContain(".content h1{font-size:2.2rem;line-height:1.1;margin-top:0}");
     expect(files["index.html"]).toContain(".booking-card{border:0;border-radius:16px");
     expect(files["index.html"]).toContain(".booking-back,.booking-submit{font:inherit;font-weight:800;border:0;border-radius:18px");
     expect(files["index.html"]).toContain("Confirm Booking");
