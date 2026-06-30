@@ -3141,6 +3141,7 @@ class FakeSmtpSocket implements Socket {
 
 async function createSignedMe3ClaimToken(input: {
   issuer: string;
+  userId?: string;
   state: string;
   coreOrigin: string;
   callbackUrl: string;
@@ -3173,7 +3174,7 @@ async function createSignedMe3ClaimToken(input: {
   const header = { alg: "RS256", typ: "JWT", kid: "test-key" };
   const payload: Record<string, unknown> = {
     iss: input.issuer,
-    sub: "user123",
+    sub: input.userId || "user123",
     aud: "me3-core-install-claim",
     email: input.email,
     install_id: input.installId || "core_11111111-1111-4111-8111-111111111111",
@@ -3818,6 +3819,80 @@ describe("ME3 Core Worker auth", () => {
     expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBe("user123");
     expect(env.installSecrets.get("ME3_CLOUD_CORE_TOKEN")).toBe("core-update-token-123");
     expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
+    expect(env.me3ClaimStates).toHaveLength(0);
+
+    fetchMock.mockRestore();
+  });
+
+  it("rejects a verified ME3 Cloud claim from a different linked ME3 user", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_ORIGIN = "https://me3.example";
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    env.owner = {
+      id: "owner",
+      email: "owner@example.com",
+      name: "Owner",
+      username: "kieran",
+      bio: null,
+      avatar_url: null,
+      timezone: null,
+      locale: null,
+      assistant_name: null,
+      password_hash: null,
+    };
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    env.installSecrets.set("ME3_CLOUD_CORE_TOKEN", "core-update-token-123");
+
+    const startResponse = await app.fetch(
+      new Request("https://core.example/api/auth/me3/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirect: "/account" }),
+      }),
+      env,
+    );
+    const startBody = (await startResponse.json()) as { state: string };
+    const installId = env.me3ClaimStates[0].install_id || "";
+    const signedClaim = await createSignedMe3ClaimToken({
+      issuer: "https://api.me3.example",
+      userId: "user456",
+      state: startBody.state,
+      installId,
+      coreOrigin: "http://localhost:4000",
+      callbackUrl: "http://localhost:8787/api/auth/me3/callback",
+      email: "attacker@example.com",
+      handle: "attacker",
+      coreUpdateToken: "attacker-core-update-token",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ keys: [signedClaim.publicJwk] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const callbackResponse = await app.fetch(
+      new Request(
+        `http://localhost:8787/api/auth/me3/callback?state=${encodeURIComponent(
+          startBody.state,
+        )}&claim_token=${encodeURIComponent(signedClaim.token)}`,
+      ),
+      env,
+    );
+
+    expect(startResponse.status).toBe(200);
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("location")).toContain(
+      "me3_claim_error=claim_owner_mismatch",
+    );
+    expect(callbackResponse.headers.get("set-cookie")).toBeNull();
+    expect(env.owner).toMatchObject({
+      email: "owner@example.com",
+      name: "Owner",
+      username: "kieran",
+      password_hash: null,
+    });
+    expect(env.installSecrets.get("ME3_CLOUD_OWNER_ID")).toBe("user123");
+    expect(env.installSecrets.get("ME3_CLOUD_CORE_TOKEN")).toBe("core-update-token-123");
     expect(env.me3ClaimStates).toHaveLength(0);
 
     fetchMock.mockRestore();

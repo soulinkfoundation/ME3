@@ -559,6 +559,12 @@ app.get("/api/auth/me3/callback", async (c) => {
     return redirectMe3ClaimError(c, "claim_mismatch", pending.redirect_path);
   }
 
+  const storedMe3OwnerId = await getStoredMe3CloudOwnerId(c.env);
+  if (storedMe3OwnerId && payload.sub !== storedMe3OwnerId) {
+    await deleteMe3ClaimState(c.env, state);
+    return redirectMe3ClaimError(c, "claim_owner_mismatch", pending.redirect_path);
+  }
+
   await upsertMe3ClaimedOwner(c.env, payload, claimedHandle);
   await getOrCreateInstallEncryptionKey(c.env);
   await deleteMe3ClaimState(c.env, state);
