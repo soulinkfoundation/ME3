@@ -1645,11 +1645,14 @@ defineExpose({
 }
 
 .editor-modal {
-  background: white;
   padding: 24px;
-  border-radius: 12px;
   min-width: 320px;
   max-width: 90vw;
+  border: 1px solid var(--ui-border, var(--color-border, #ddd));
+  border-radius: var(--ui-radius-lg, 12px);
+  background: var(--ui-surface, var(--color-bg, #ffffff));
+  color: var(--ui-text, var(--color-text, #232428));
+  box-shadow: var(--ui-shadow-md, 0 18px 42px rgba(0, 0, 0, 0.18));
 }
 
 .editor-modal h4 {
@@ -1662,19 +1665,31 @@ defineExpose({
   margin-bottom: 8px;
   font-size: 13px;
   font-weight: 600;
+  color: var(--ui-text, var(--color-text, #232428));
 }
 
 .editor-modal input {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid var(--color-border, #ddd);
-  border-radius: 6px;
+  border: 1px solid var(--ui-border, var(--color-border, #ddd));
+  border-radius: var(--ui-radius-sm, 6px);
+  background: var(--ui-surface, var(--color-bg, #ffffff));
+  color: var(--ui-text, var(--color-text, #232428));
   font-size: 14px;
   margin-bottom: 8px;
 }
 
+.editor-modal input::placeholder {
+  color: var(--ui-text-muted, var(--color-text-muted, #5d6368));
+}
+
+.editor-modal input:focus {
+  border-color: var(--ui-accent, var(--color-accent, #007bff));
+  outline: none;
+}
+
 .link-error {
-  color: #dc3545;
+  color: var(--ui-danger, #dc3545);
   font-size: 13px;
   margin: 0 0 12px 0;
 }
@@ -1687,37 +1702,53 @@ defineExpose({
 
 .link-btn {
   padding: 8px 16px;
-  border: none;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm, 6px);
   cursor: pointer;
   font-size: 14px;
-  transition: background 0.2s;
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    color 0.2s;
 }
 
 .link-btn.secondary {
-  background: var(--color-surface, #f5f5f5);
+  border-color: var(--ui-border, var(--color-border, #ddd));
+  background: var(--ui-surface-muted, var(--color-bg-subtle, #f5f5f5));
+  color: var(--ui-text, var(--color-text, #232428));
 }
 
 .link-btn.secondary:hover {
-  background: var(--color-surface-hover, #e8e8e8);
+  border-color: var(--ui-border-strong, var(--color-border-strong, #cfcfcf));
+  background: var(--ui-bg, var(--color-bg-muted, #e8e8e8));
 }
 
 .link-btn.danger {
-  background: #dc3545;
-  color: white;
+  border-color: color-mix(
+    in oklab,
+    var(--ui-danger, #dc3545) 42%,
+    var(--ui-border, var(--color-border, #ddd))
+  );
+  background: color-mix(
+    in oklab,
+    var(--ui-danger, #dc3545) 12%,
+    var(--ui-surface, var(--color-bg, #ffffff))
+  );
+  color: var(--ui-danger, #dc3545);
 }
 
 .link-btn.danger:hover {
-  background: #c82333;
+  background: var(--ui-danger, #dc3545);
+  color: #ffffff;
 }
 
 .link-btn.primary {
-  background: var(--color-primary, #007bff);
-  color: white;
+  background: var(--ui-accent, var(--color-accent, #007bff));
+  color: var(--ui-accent-contrast, var(--color-accent-contrast, #ffffff));
 }
 
 .link-btn.primary:hover {
-  background: var(--color-primary-hover, #0056b3);
+  background: var(--ui-accent-strong, #0056b3);
 }
 
 .editor-title-field {
