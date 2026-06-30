@@ -4266,10 +4266,26 @@ const INVOICE_BODY_CUES = [
   "payment confirmation",
   "thank you for your payment",
 ];
+const INVOICE_NON_TRANSACTIONAL_NOTICE_CUES = [
+  "introducing",
+  "eligible for",
+  "how it works",
+  "learn more",
+  "for example",
+  "available for",
+  "available to",
+  "allowing you to",
+  "new feature",
+  "beta",
+  "preview",
+];
+const INVOICE_TRANSACTIONAL_CUE_PATTERN =
+  /\b(invoice|receipt|billing statement|amount due|balance due|grand total|invoice number|invoice #|payment received|payment confirmation|thank you for your payment|successful payment|payment of|charged|charge receipt|paid invoice|order confirmation)\b/i;
 const INVOICE_AMOUNT_PATTERN =
   /([$€£¥])\s?(\d[\d,]*(?:\.\d{1,2})?)|(?:\b(USD|EUR|GBP|CAD|AUD|NZD|JPY|CHF|SEK|NOK|DKK|SGD|HKD)\b)\s?(\d[\d,]*(?:\.\d{1,2})?)/i;
 const INVOICE_LABELLED_AMOUNT_PATTERN =
   /(?:total|amount\s*due|balance\s*due|grand\s*total|subtotal|net\s*amount|invoice\s*total)[:\s]*[$€£¥]?\s?(\d[\d,]*(?:\.\d{1,2})?)/i;
+const MIN_INVOICE_MESSAGE_SCORE = 5;
 function isInvoiceReceiptTriageJob(job: AssistantJobRow, draft: AssistantJobDraft) {
   return job.recipe_id === "invoice-receipt-triage" || draft.recipeId === "invoice-receipt-triage";
 }
@@ -4290,7 +4306,7 @@ async function buildInvoiceReceiptTriageResult(
 
   for (const message of messages) {
     const score = scoreInvoiceMessage(message);
-    if (score < 3) {
+    if (score < MIN_INVOICE_MESSAGE_SCORE) {
       skipped += 1;
       continue;
     }
@@ -4365,6 +4381,7 @@ function scoreInvoiceMessage(message: MailboxMessageRow) {
   const subject = decodedMessageSubject(message).toLowerCase();
   const from = (message.from_address || "").toLowerCase();
   const body = (message.text_body || "").toLowerCase();
+  if (looksLikeNonTransactionalFinanceNotice(subject, body)) return 0;
   let score = 0;
   if (INVOICE_SUBJECT_KEYWORDS.some((keyword) => subject.includes(keyword))) score += 3;
   if (INVOICE_SENDER_KEYWORDS.some((keyword) => from.includes(keyword))) score += 2;
@@ -4374,6 +4391,12 @@ function scoreInvoiceMessage(message: MailboxMessageRow) {
   }
   if (INVOICE_LABELLED_AMOUNT_PATTERN.test(body)) score += 2;
   return score;
+}
+
+function looksLikeNonTransactionalFinanceNotice(subject: string, body: string) {
+  const text = `${subject}\n${body}`;
+  if (INVOICE_TRANSACTIONAL_CUE_PATTERN.test(text)) return false;
+  return INVOICE_NON_TRANSACTIONAL_NOTICE_CUES.some((cue) => text.includes(cue));
 }
 
 function extractInvoiceFromMessage(

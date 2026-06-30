@@ -683,6 +683,41 @@ describe("assistant jobs persistence", () => {
     });
   });
 
+  it("skips Stripe feature announcements with example settlement fees", async () => {
+    const env = createAssistantJobsEnv({
+      mailbox: activeMailboxRow(),
+      pluginInstallations: [accountsPluginInstallationRow()],
+      mailboxMessages: [
+        mailboxMessageRow({
+          id: "stripe-settlement-feature",
+          thread_key: "thread-stripe-settlement-feature",
+          from_address: "Stripe <notifications@stripe.com>",
+          subject: "Introducing next-day settlement",
+          text_body:
+            "Your account is eligible for next-day settlement, allowing you to access your earnings on the next business day. How it works: Payments should arrive in your bank account on the next business day. Next-day settlement is available for EUR payments. The fee is 0.9% of charges settled the next day. For example, you'll pay €9 for €1,000 in charges settled the next day. Learn more about next-day settlement.",
+          received_at: "2026-06-29T10:00:00Z",
+        }),
+      ],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "invoice-receipt-triage" });
+    const run = await runAssistantJobNow(env, "owner", created.job.id);
+
+    expect(run.run.status).toBe("succeeded");
+    expect(run.run.outputPreview).toBe(
+      "Invoice and Receipt Triage added 0 account entries; 0 need review and 1 skipped.",
+    );
+    expect(env.__state.financialEntries).toHaveLength(0);
+    expect(run.actionResults).toContainEqual(
+      expect.objectContaining({
+        actionId: "create-accounts-entries",
+        capabilityId: "accounts.entry.create",
+        status: "succeeded",
+        externalRef: "accounts:0:entries:0:review:0:candidates:1:skipped",
+      }),
+    );
+  });
+
   it("uses the owner's default currency when invoice emails omit one", async () => {
     const env = createAssistantJobsEnv({
       mailbox: activeMailboxRow(),
