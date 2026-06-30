@@ -252,6 +252,20 @@ watch(navDrawerOpen, (isOpen) => {
         </RouterLink>
 
         <RouterLink
+          to="/files"
+          class="app-side-nav__row app-side-nav-control"
+          :class="{ 'app-side-nav__row--active': rowActive('files') }"
+          aria-label="Files"
+          title="Files"
+          @click="closeNavDrawer"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS.files
+          }}</span>
+          <span class="sr-only">Files</span>
+        </RouterLink>
+
+        <RouterLink
           :to="sitesPath"
           class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('sites') }"

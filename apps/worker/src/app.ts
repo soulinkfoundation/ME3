@@ -102,6 +102,7 @@ import { registerAssistantJobsRoutes } from "./routes/assistant-jobs";
 import { registerAssistantSkillsRoutes } from "./routes/assistant-skills";
 import { registerContactsRoutes } from "./routes/contacts";
 import { registerCoreGithubUpdaterRoutes } from "./routes/core-github-updater";
+import { registerFilesRoutes } from "./routes/files";
 import { registerJournalRoutes } from "./routes/journal";
 import { registerLocalExecutorRoutes } from "./routes/local-executor";
 import {
@@ -344,6 +345,7 @@ const OWNER_APP_ROUTE_PREFIXES = [
   "/contacts",
   "/create",
   "/email",
+  "/files",
   "/journal",
   "/login",
   "/mission-control",
@@ -830,6 +832,7 @@ app.post("/api/plugins/:pluginId/deactivate", async (c) => {
 });
 
 registerAccountsRoutes(app, { requireOwner, unauthorized });
+registerFilesRoutes(app, { requireOwner, unauthorized });
 registerJournalRoutes(app, { requireOwner, unauthorized });
 registerMissionControlRoutes(app, { requireOwner, unauthorized });
 registerLocalExecutorRoutes(app, { requireOwner, unauthorized, getCoreApiOrigin });
