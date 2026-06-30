@@ -266,6 +266,9 @@ const projectLogoName = ref("");
 const projectIconName = ref("");
 const projectSaving = ref(false);
 const projectError = ref("");
+const projectDeleteCandidateId = ref("");
+const projectDeleteSaving = ref(false);
+const projectDeleteError = ref("");
 const projectTasks = ref<MissionTask[]>([]);
 const projectJournalLinks = ref<JournalProjectLink[]>([]);
 const projectJournalLinksLoading = ref(false);
@@ -413,6 +416,25 @@ const projectCreateDisabled = computed(
     projectTitle.value.trim().length === 0 ||
     (projectType.value === "local" &&
       projectLocalPath.value.trim().length === 0),
+);
+const editingProject = computed(() =>
+  editingProjectId.value
+    ? projects.value.find((project) => project.id === editingProjectId.value) ||
+      null
+    : null,
+);
+const editingProjectCanDelete = computed(
+  () =>
+    projectModalMode.value === "edit" &&
+    Boolean(editingProject.value) &&
+    editingProject.value?.slug !== "personal",
+);
+const projectDeleteCandidate = computed(() =>
+  projectDeleteCandidateId.value
+    ? projects.value.find(
+        (project) => project.id === projectDeleteCandidateId.value,
+      ) || null
+    : null,
 );
 const selectedProjectDetail = computed(
   () =>
@@ -1259,6 +1281,20 @@ function closeProjectModal() {
   projectModalOpen.value = false;
 }
 
+function openProjectDeleteConfirmation() {
+  const project = editingProject.value;
+  if (!project || project.slug === "personal" || projectSaving.value) return;
+  projectDeleteCandidateId.value = project.id;
+  projectDeleteError.value = "";
+  projectModalOpen.value = false;
+}
+
+function closeProjectDeleteModal() {
+  if (projectDeleteSaving.value) return;
+  projectDeleteCandidateId.value = "";
+  projectDeleteError.value = "";
+}
+
 function chooseProjectLogo(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -1364,6 +1400,50 @@ async function saveProject() {
       e instanceof ApiError ? e.message : "Could not save project";
   } finally {
     projectSaving.value = false;
+  }
+}
+
+async function deleteProject() {
+  const project = projectDeleteCandidate.value;
+  if (!project || projectDeleteSaving.value) return;
+  projectDeleteSaving.value = true;
+  projectDeleteError.value = "";
+  try {
+    const response = await api.delete<{
+      ok: true;
+      projectId: string;
+      archivedTasks: number;
+    }>(`/mission-control/projects/${encodeURIComponent(project.id)}`);
+    const wasSelected = selectedProjectDetailId.value === project.id;
+    projects.value = projects.value.filter((item) => item.id !== project.id);
+    projectTasks.value = projectTasks.value.filter(
+      (task) => task.projectId !== project.id,
+    );
+    completedProjectTasks.value = completedProjectTasks.value.filter(
+      (task) => task.projectId !== project.id,
+    );
+    projectJournalLinks.value = projectJournalLinks.value.filter(
+      (link) => link.projectId !== project.id,
+    );
+    if (selectedProjectTaskDetail.value?.projectId === project.id) {
+      closeProjectTaskDetail({ force: true });
+    }
+    if (wasSelected) selectProjectDetail("");
+    resetProjectTaskComposer();
+    projectDeleteCandidateId.value = "";
+    const archivedTasks = response.archivedTasks || 0;
+    toastSuccess(
+      archivedTasks > 0
+        ? `Project deleted; archived ${archivedTasks} ${
+            archivedTasks === 1 ? "item" : "items"
+          }.`
+        : "Project deleted.",
+    );
+  } catch (e) {
+    projectDeleteError.value =
+      e instanceof ApiError ? e.message : "Could not delete project";
+  } finally {
+    projectDeleteSaving.value = false;
   }
 }
 
@@ -3110,12 +3190,81 @@ onBeforeUnmount(() => {
       :saving="projectSaving"
       :error="projectError"
       :create-disabled="projectCreateDisabled"
+      :can-delete="editingProjectCanDelete"
       @update:project-icon-name="setProjectIconName"
       @choose-logo="chooseProjectLogo"
       @remove-logo="removeProjectLogo"
       @close="closeProjectModal"
       @submit="projectModalMode === 'edit' ? saveProject() : addProject()"
+      @delete-project="openProjectDeleteConfirmation"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="projectDeleteCandidate"
+        class="mission-modal mission-modal--compact"
+        role="presentation"
+        @click.self="closeProjectDeleteModal"
+      >
+        <section
+          class="mission-modal__dialog project-delete-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="project-delete-modal-title"
+          @keydown.esc.prevent="closeProjectDeleteModal"
+        >
+          <div class="mission-modal__header">
+            <h2 id="project-delete-modal-title">
+              Delete {{ projectDeleteCandidate.name }}?
+            </h2>
+            <Button
+              color="ghost"
+              shape="soft"
+              size="compact"
+              icon-only
+              type="button"
+              aria-label="Close"
+              :disabled="projectDeleteSaving"
+              @click="closeProjectDeleteModal"
+            >
+              <UiIcon name="X" :size="18" />
+            </Button>
+          </div>
+          <p class="project-delete-modal__copy">
+            The project will be hidden from active Mission Control views. Its
+            open and completed items will be archived with it, while history,
+            journal links, runs, and account records remain available in the
+            database.
+          </p>
+          <p v-if="projectDeleteError" class="mission-modal__error">
+            {{ projectDeleteError }}
+          </p>
+          <div class="mission-modal__actions">
+            <Button
+              color="outline"
+              shape="soft"
+              size="compact"
+              type="button"
+              :disabled="projectDeleteSaving"
+              @click="closeProjectDeleteModal"
+            >
+              Cancel
+            </Button>
+            <Button
+              color="danger"
+              shape="soft"
+              size="compact"
+              type="button"
+              :disabled="projectDeleteSaving"
+              @click="deleteProject"
+            >
+              <UiIcon name="Trash2" :size="14" />
+              {{ projectDeleteSaving ? "Deleting..." : "Delete project" }}
+            </Button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
 
     <Teleport to="body">
       <div
@@ -4350,6 +4499,13 @@ onBeforeUnmount(() => {
 
 .mission-modal--compact .mission-modal__dialog {
   width: min(360px, 100%);
+}
+
+.project-delete-modal__copy {
+  margin: 0;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .mission-modal__header,

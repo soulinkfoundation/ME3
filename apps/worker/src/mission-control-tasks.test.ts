@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  archiveMissionProject,
   createMissionTaskFromJournal,
   deleteJournalProjectLink,
   listMissionTaskPage,
@@ -25,6 +26,22 @@ type StoredTaskRow = {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+};
+
+type StoredProjectRow = {
+  id: string;
+  user_id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  status: "active" | "paused" | "archived";
+  color: string | null;
+  icon: string | null;
+  source_kind: "manual" | "daemon_repo" | "beads" | "import";
+  source_ref: string | null;
+  metadata_json: string;
+  created_at: string;
+  updated_at: string;
 };
 
 function taskRow(
@@ -176,6 +193,93 @@ function createTaskEnv(rows: StoredTaskRow[]) {
   return { DB: db } as unknown as Env;
 }
 
+function projectRow(
+  id: string,
+  name: string,
+  slug: string,
+): StoredProjectRow {
+  return {
+    id,
+    user_id: "owner",
+    name,
+    slug,
+    description: null,
+    status: "active",
+    color: null,
+    icon: null,
+    source_kind: "manual",
+    source_ref: null,
+    metadata_json: "{}",
+    created_at: "2026-06-30T09:00:00Z",
+    updated_at: "2026-06-30T09:00:00Z",
+  };
+}
+
+function createProjectArchiveEnv(
+  projects: StoredProjectRow[],
+  tasks: StoredTaskRow[],
+) {
+  const db = {
+    prepare(sql: string) {
+      return {
+        bind(...values: unknown[]) {
+          return {
+            async first<T>() {
+              if (sql.includes("FROM mission_projects")) {
+                const [projectId, userId] = values;
+                return (
+                  projects.find(
+                    (project) =>
+                      project.id === projectId && project.user_id === userId,
+                  ) || null
+                ) as T | null;
+              }
+              return null as T | null;
+            },
+            async run() {
+              if (sql.includes("UPDATE mission_projects")) {
+                const [projectId, userId] = values;
+                const project = projects.find(
+                  (candidate) =>
+                    candidate.id === projectId &&
+                    candidate.user_id === userId &&
+                    candidate.status !== "archived",
+                );
+                if (!project) return { meta: { changes: 0 } };
+                project.status = "archived";
+                project.updated_at = "2026-06-30T10:00:00Z";
+                return { meta: { changes: 1 } };
+              }
+
+              if (sql.includes("UPDATE mission_tasks")) {
+                const [userId, projectId] = values;
+                let changes = 0;
+                for (const task of tasks) {
+                  if (
+                    task.user_id === userId &&
+                    task.project_id === projectId &&
+                    task.archived_at === null
+                  ) {
+                    task.archived_at = "2026-06-30T10:00:00Z";
+                    task.pinned_at = null;
+                    task.updated_at = "2026-06-30T10:00:00Z";
+                    changes += 1;
+                  }
+                }
+                return { meta: { changes } };
+              }
+
+              return { meta: { changes: 0 } };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  return { DB: db } as unknown as Env;
+}
+
 describe("Mission Control task pagination", () => {
   it("pages active tasks within the selected project", async () => {
     const env = createTaskEnv([
@@ -276,7 +380,69 @@ describe("Mission Control task pagination", () => {
       listMissionTaskPage(env, "owner", { cursor: "not-a-valid-cursor" }),
     ).rejects.toThrow("Task cursor is invalid");
   });
+});
 
+describe("Mission Control project deletion", () => {
+  it("archives a project and its unarchived tasks", async () => {
+    const projects = [
+      projectRow("project-1", "ME3", "me3"),
+      projectRow("project-2", "Soulink", "soulink"),
+    ];
+    const tasks = [
+      taskRow("open", "project-1", 2, "2026-06-20"),
+      { ...taskRow("done", "project-1", 3, "2026-06-21"), status: "done" as const },
+      archivedTaskRow(
+        "archived",
+        "project-1",
+        "2026-06-01T09:00:00Z",
+        "2026-06-01T09:00:00Z",
+      ),
+      taskRow("other", "project-2", 1, "2026-06-20"),
+    ];
+    tasks[0]!.pinned_at = "2026-06-20T10:00:00Z";
+    const env = createProjectArchiveEnv(projects, tasks);
+
+    await expect(
+      archiveMissionProject(env, "owner", "project-1"),
+    ).resolves.toEqual({
+      ok: true,
+      projectId: "project-1",
+      archivedTasks: 2,
+    });
+
+    expect(projects[0]!.status).toBe("archived");
+    expect(tasks.find((task) => task.id === "open")).toMatchObject({
+      archived_at: "2026-06-30T10:00:00Z",
+      pinned_at: null,
+    });
+    expect(tasks.find((task) => task.id === "done")).toMatchObject({
+      archived_at: "2026-06-30T10:00:00Z",
+    });
+    expect(tasks.find((task) => task.id === "archived")).toMatchObject({
+      archived_at: "2026-06-01T09:00:00Z",
+    });
+    expect(tasks.find((task) => task.id === "other")).toMatchObject({
+      archived_at: null,
+    });
+  });
+
+  it("protects the Personal project", async () => {
+    const projects = [projectRow("project-personal", "Personal", "personal")];
+    const tasks = [taskRow("personal-task", "project-personal", 2, "2026-06-20")];
+    const env = createProjectArchiveEnv(projects, tasks);
+
+    await expect(
+      archiveMissionProject(env, "owner", "project-personal"),
+    ).rejects.toMatchObject({
+      message: "Personal project cannot be deleted",
+      status: 409,
+    });
+    expect(projects[0]!.status).toBe("active");
+    expect(tasks[0]!.archived_at).toBeNull();
+  });
+});
+
+describe("Mission Control journal project links", () => {
   it("creates a task with a journal source link", async () => {
     const tasks: StoredTaskRow[] = [];
     const links: Array<{

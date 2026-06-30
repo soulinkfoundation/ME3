@@ -16,6 +16,7 @@ defineProps<{
   saving: boolean;
   error: string;
   createDisabled: boolean;
+  canDelete?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -28,6 +29,7 @@ const emit = defineEmits<{
   removeLogo: [];
   close: [];
   submit: [];
+  deleteProject: [];
 }>();
 
 function inputValue(event: Event): string {
@@ -157,6 +159,19 @@ function projectTypeValue(event: Event): "standard" | "local" {
 
         <div class="mission-modal__actions">
           <Button
+            v-if="mode === 'edit' && canDelete"
+            color="danger"
+            shape="soft"
+            size="compact"
+            type="button"
+            class="project-modal__delete"
+            :disabled="saving"
+            @click="emit('deleteProject')"
+          >
+            <UiIcon name="Trash2" :size="14" />
+            Delete project
+          </Button>
+          <Button
             color="outline"
             shape="soft"
             size="compact"
@@ -230,6 +245,10 @@ function projectTypeValue(event: Event): "standard" | "local" {
 .mission-modal__actions {
   justify-content: flex-end;
   padding-top: 4px;
+}
+
+.project-modal__delete {
+  margin-right: auto;
 }
 
 .field {

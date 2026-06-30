@@ -3,6 +3,7 @@ import { getAiGatewayUsageSummary } from "../ai-gateway";
 import { LocalExecutorInputError } from "../local-executor";
 import {
   MissionControlInputError,
+  archiveMissionProject,
   approveMissionMemory,
   archiveMissionProjectColumn,
   archiveMissionTask,
@@ -227,6 +228,21 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
           c.req.param("id"),
           await c.req.json().catch(() => ({})),
         ),
+      );
+    } catch (error) {
+      return missionControlErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/mission-control/projects/:id", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireMissionControlPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      return c.json(
+        await archiveMissionProject(c.env, ownerId, c.req.param("id")),
       );
     } catch (error) {
       return missionControlErrorResponse(c, error);

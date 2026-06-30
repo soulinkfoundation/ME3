@@ -714,6 +714,40 @@ export async function updateMissionProject(
   };
 }
 
+export async function archiveMissionProject(
+  env: Env,
+  userId: string,
+  projectId: string,
+) {
+  const existing = await getMissionProject(env, userId, projectId);
+  if (!existing) throw new MissionControlInputError("Project not found", 404);
+  if (existing.slug === "personal") {
+    throw new MissionControlInputError("Personal project cannot be deleted", 409);
+  }
+
+  await env.DB.prepare(
+    `UPDATE mission_projects
+     SET status = 'archived', updated_at = datetime('now')
+     WHERE id = ? AND user_id = ? AND status != 'archived'`,
+  )
+    .bind(projectId, userId)
+    .run();
+
+  const tasksResult = await env.DB.prepare(
+    `UPDATE mission_tasks
+     SET archived_at = datetime('now'), pinned_at = NULL, updated_at = datetime('now')
+     WHERE user_id = ? AND project_id = ? AND archived_at IS NULL`,
+  )
+    .bind(userId, projectId)
+    .run();
+
+  return {
+    ok: true,
+    projectId,
+    archivedTasks: tasksResult.meta?.changes || 0,
+  };
+}
+
 export async function updateMissionProjectColumn(
   env: Env,
   userId: string,
