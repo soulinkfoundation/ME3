@@ -1,4 +1,6 @@
-CREATE TABLE drive_folders (
+-- Runtime migrations may have already repaired older local installs before
+-- Wrangler records this D1 migration, so keep this migration idempotent.
+CREATE TABLE IF NOT EXISTS drive_folders (
   id TEXT PRIMARY KEY,
   owner_id TEXT NOT NULL DEFAULT 'owner',
   parent_id TEXT REFERENCES drive_folders(id) ON DELETE CASCADE,
@@ -11,7 +13,7 @@ CREATE TABLE drive_folders (
   UNIQUE(owner_id, parent_id, name)
 );
 
-CREATE TABLE drive_files (
+CREATE TABLE IF NOT EXISTS drive_files (
   id TEXT PRIMARY KEY,
   owner_id TEXT NOT NULL DEFAULT 'owner',
   folder_id TEXT REFERENCES drive_folders(id) ON DELETE SET NULL,
@@ -33,22 +35,22 @@ CREATE TABLE drive_files (
   UNIQUE(owner_id, folder_id, filename)
 );
 
-CREATE UNIQUE INDEX idx_drive_folders_root_name
+CREATE UNIQUE INDEX IF NOT EXISTS idx_drive_folders_root_name
   ON drive_folders(owner_id, name)
   WHERE parent_id IS NULL AND status = 'active';
 
-CREATE UNIQUE INDEX idx_drive_files_root_filename
+CREATE UNIQUE INDEX IF NOT EXISTS idx_drive_files_root_filename
   ON drive_files(owner_id, filename)
   WHERE folder_id IS NULL AND status = 'ready';
 
-CREATE INDEX idx_drive_folders_owner_parent
+CREATE INDEX IF NOT EXISTS idx_drive_folders_owner_parent
   ON drive_folders(owner_id, parent_id, status, name);
 
-CREATE INDEX idx_drive_folders_owner_path
+CREATE INDEX IF NOT EXISTS idx_drive_folders_owner_path
   ON drive_folders(owner_id, path);
 
-CREATE INDEX idx_drive_files_owner_folder
+CREATE INDEX IF NOT EXISTS idx_drive_files_owner_folder
   ON drive_files(owner_id, folder_id, status, filename);
 
-CREATE INDEX idx_drive_files_owner_updated
+CREATE INDEX IF NOT EXISTS idx_drive_files_owner_updated
   ON drive_files(owner_id, updated_at DESC);
