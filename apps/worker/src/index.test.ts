@@ -5220,6 +5220,152 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
+  it("requires @site before assistant chat can draft site updates", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env, { blogEnabled: true });
+    const runtimeFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        auditId: null,
+        turnId: "turn-agent",
+        specialist: "core.agent-chat",
+        replyText: "Agent chat reply.",
+        model: "test-model",
+        source: "fallback",
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      }),
+    );
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+    const aiRun = vi.fn(async () => ({
+      response: JSON.stringify({ bio: "This should not be written." }),
+    }));
+    env.AI = { run: aiRun } as unknown as Ai;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: 'Update my site short bio field to say "This should not be written."',
+        }),
+      }),
+      env,
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+    const userMessage = env.messages.find((message) => message.role === "user");
+    const assistantMessage = env.messages.find((message) => message.role === "assistant");
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      specialist: "core.assistant-scopes",
+      source: "tool",
+      siteAction: null,
+    });
+    expect(String(payload.replyText)).toContain("Add @site");
+    expect(runtimeFetch).not.toHaveBeenCalled();
+    expect(aiRun).not.toHaveBeenCalled();
+    expect(siteFileText(env, "site-assistant", "src/me.json")).not.toContain(
+      "This should not be written.",
+    );
+    expect(
+      env.siteFiles.some(
+        (file) =>
+          file.site_id === "site-assistant" &&
+          file.path.startsWith("assistant/site-update-drafts/"),
+      ),
+    ).toBe(false);
+    expect(userMessage?.content).toContain("Update my site");
+    expect(JSON.parse(userMessage?.metadata_json || "{}")).toEqual({});
+    expect(JSON.parse(assistantMessage?.metadata_json || "{}")).toMatchObject({
+      assistantScopeDecision: {
+        site: {
+          allowed: false,
+          requested: true,
+          reason: "scope_missing",
+        },
+      },
+    });
+  });
+
+  it("requires @site again before publishing a pending assistant site draft", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env, { blogEnabled: true });
+    env.AI = {
+      run: vi.fn(async () => ({
+        response: JSON.stringify({
+          bio: "Scoped draft bio.",
+        }),
+      })),
+    } as unknown as Ai;
+
+    const draftResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: '@site update my site bio to "Scoped draft bio."',
+        }),
+      }),
+      env,
+    );
+    const draftPayload = (await draftResponse.json()) as Record<string, unknown>;
+    const threadId = String(draftPayload.threadId);
+
+    const publishResponse = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          threadId,
+          messageText: "publish it",
+        }),
+      }),
+      env,
+    );
+    const publishPayload = (await publishResponse.json()) as Record<string, unknown>;
+
+    expect(draftResponse.status).toBe(200);
+    expect(publishResponse.status).toBe(200);
+    expect(publishPayload).toMatchObject({
+      ok: true,
+      specialist: "core.assistant-scopes",
+      siteAction: null,
+    });
+    expect(String(publishPayload.replyText)).toContain("Add @site");
+    expect(env.sites.find((site) => site.id === "site-assistant")?.published_at).toBeNull();
+    expect(siteFileText(env, "site-assistant", "public/me.json") || "").not.toContain(
+      "Scoped draft bio.",
+    );
+    expect(
+      env.siteFiles.some(
+        (file) =>
+          file.site_id === "site-assistant" &&
+          file.path.startsWith("assistant/site-update-drafts/") &&
+          file.path.endsWith(`${threadId}.json`),
+      ),
+    ).toBe(true);
+  });
+
   it("saves and clears the assistant display name", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
@@ -5315,7 +5461,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           messageText:
-            "Update my site, add a made up paragraph to my about page and add a blog post about 'personal ai assistants'. make it all up, do your best :)",
+            "@site Update my site, add a made up paragraph to my about page and add a blog post about 'personal ai assistants'. make it all up, do your best :)",
         }),
       }),
       env,
@@ -5336,6 +5482,7 @@ describe("ME3 Core Worker auth", () => {
       specialist: "core.sites.update_draft",
       model: DEFAULT_WORKERS_AI_TEXT_MODEL,
     });
+    expect(env.assistantThreads[0]?.title).not.toContain("@site");
     expect(aiRun).toHaveBeenCalledOnce();
     expect(String(draftPayload.replyText)).toContain("Reply `publish`");
     expect(String(draftPayload.replyText)).toContain(`Generated with ${DEFAULT_WORKERS_AI_TEXT_MODEL}`);
@@ -5348,6 +5495,14 @@ describe("ME3 Core Worker auth", () => {
         message.role === "assistant" &&
         message.content.includes("Draft saved"),
     );
+    const persistedUserMessage = env.messages.find(
+      (message) => message.threadId === threadId && message.role === "user",
+    );
+    expect(persistedUserMessage?.content).toContain("@site Update my site");
+    expect(JSON.parse(persistedUserMessage?.metadata_json || "{}")).toMatchObject({
+      assistantScopes: ["site"],
+      assistantScopeTokens: ["@site"],
+    });
     const persistedMetadata = JSON.parse(
       persistedAssistantMessage?.metadata_json || "{}",
     ) as Record<string, any>;
@@ -5384,7 +5539,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           threadId,
-          messageText: "yes publish them",
+          messageText: "@site yes publish them",
         }),
       }),
       env,
@@ -5468,7 +5623,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           messageText:
-            'Update my site short bio field to say "I build useful AI systems for everyday creative momentum."',
+            '@site update @owner short bio field to say "I build useful AI systems for everyday creative momentum."',
         }),
       }),
       env,
@@ -5520,7 +5675,7 @@ describe("ME3 Core Worker auth", () => {
           Cookie: session,
         },
         body: JSON.stringify({
-          messageText: 'Update my site short bio field to say "Published local site bio."',
+          messageText: '@site Update my site short bio field to say "Published local site bio."',
         }),
       }),
       env,
@@ -5537,7 +5692,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           threadId,
-          messageText: "publish it",
+          messageText: "@site publish it",
         }),
       }),
       env,
@@ -5573,7 +5728,7 @@ describe("ME3 Core Worker auth", () => {
           Cookie: session,
         },
         body: JSON.stringify({
-          messageText: "Update my site, draft a blog post about personal ai assistants.",
+          messageText: "@site Update my site, draft a blog post about personal ai assistants.",
         }),
       }),
       env,
@@ -5629,7 +5784,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           messageText:
-            "For my site, draft and save an outline for a blog post on the benefits of an open source personal ai assistant.",
+            "@site For my site, draft and save an outline for a blog post on the benefits of an open source personal ai assistant.",
         }),
       }),
       env,
@@ -5662,7 +5817,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           threadId,
-          messageText: "Ok I enabled it, please try again",
+          messageText: "@site Ok I enabled it, please try again",
         }),
       }),
       env,
@@ -5712,7 +5867,7 @@ describe("ME3 Core Worker auth", () => {
           Cookie: session,
         },
         body: JSON.stringify({
-          messageText: "Update my site, draft a blog post about personal ai assistants.",
+          messageText: "@site Update my site, draft a blog post about personal ai assistants.",
         }),
       }),
       env,
@@ -5729,7 +5884,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           threadId,
-          messageText: "can you save it as a draft?",
+          messageText: "@site can you save it as a draft?",
         }),
       }),
       env,
@@ -5768,7 +5923,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           messageText:
-            "Update my site, draft a humorous blog post about bees, just the outline will do I will write it myself.",
+            "@site Update my site, draft a humorous blog post about bees, just the outline will do I will write it myself.",
         }),
       }),
       env,
@@ -5818,7 +5973,7 @@ describe("ME3 Core Worker auth", () => {
           Cookie: session,
         },
         body: JSON.stringify({
-          messageText: "list all blog posts",
+          messageText: "@site list all blog posts",
         }),
       }),
       env,
@@ -5893,7 +6048,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           threadId: "thread-legacy-site-draft",
-          messageText: "just do it",
+          messageText: "@site just do it",
         }),
       }),
       env,
@@ -5998,6 +6153,57 @@ describe("ME3 Core Worker auth", () => {
         },
       ],
     });
+  });
+
+  it("requires @site on streaming assistant site update turns", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env);
+    const runtimeFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        auditId: null,
+        turnId: "turn-stream-agent",
+        specialist: "core.agent-chat",
+        replyText: "Agent chat reply.",
+        model: "test-model",
+        source: "fallback",
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      }),
+    );
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          messageText: 'Update my site short bio field to say "Streaming unsafe write."',
+        }),
+      }),
+      env,
+    );
+    const streamText = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(streamText).toContain("event: delta");
+    expect(streamText).toContain("Add @site");
+    expect(streamText).toContain("core.assistant-scopes");
+    expect(runtimeFetch).not.toHaveBeenCalled();
+    expect(siteFileText(env, "site-assistant", "src/me.json")).not.toContain(
+      "Streaming unsafe write.",
+    );
   });
 
   it("records stopped owner assistant streams in sandbox audit metadata", async () => {

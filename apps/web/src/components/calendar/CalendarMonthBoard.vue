@@ -58,6 +58,7 @@ const ACCENT_PALETTE = [
 ];
 
 function colorForEvent(ev: CalendarAgendaEvent): string {
+  if (ev.color) return ev.color;
   if (ev.siteKey === "__reminders__") return "#9aa0a6";
   let h = 0;
   for (let i = 0; i < ev.siteKey.length; i += 1) {

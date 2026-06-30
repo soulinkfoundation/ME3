@@ -5,12 +5,15 @@ export interface CalendarAgendaDetailLine {
 
 export interface CalendarAgendaEvent {
   id: string;
+  entryType?: "booking" | "reminder" | "event" | "birthday" | "imported" | "task";
+  recordId?: string;
   sourceLabel: string;
   title: string;
   siteKey: string;
   siteLabel: string;
   startsAt: string;
   endsAt: string;
+  color?: string | null;
   allDay?: boolean;
   kind?: "event" | "birthday";
   recurrenceRule?: string | null;

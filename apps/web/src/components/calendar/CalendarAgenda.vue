@@ -65,6 +65,7 @@ const CALENDAR_KIND_ICONS: Record<string, UiIconName> = {
   Birthday: "Gift",
   Event: "CalendarClock",
   Reminder: "AlarmClock",
+  Task: "CircleCheck",
 };
 
 const selectedEventId = ref("");

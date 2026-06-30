@@ -1053,6 +1053,9 @@ const assistantPlaceholder = computed(() =>
     assistantPlaceholders[0]
   ).replace("{{assistantName}}", assistantDisplayName.value),
 );
+const assistantSiteScopeActive = computed(() =>
+  assistantTextStartsWithSiteScope(assistantDraft.value),
+);
 
 const selectedModelTitle = computed(() => {
   const model = selectedModel.value;
@@ -2192,6 +2195,30 @@ function autosizeAssistantComposer() {
   el.style.overflowY = scroll > COMPOSER_MAX_HEIGHT_PX ? "auto" : "hidden";
 }
 
+function assistantTextStartsWithSiteScope(text: string) {
+  return /^@site(?=$|\s)/i.test(text.trimStart());
+}
+
+function assistantScopesForText(text: string) {
+  return assistantTextStartsWithSiteScope(text) ? ["site"] : [];
+}
+
+function toggleAssistantSiteScope() {
+  if (assistantSending.value) return;
+  const current = assistantDraft.value.trimStart();
+  assistantDraft.value = assistantTextStartsWithSiteScope(current)
+    ? current.replace(/^@site(?=$|\s)\s*/i, "")
+    : current
+      ? `@site ${current}`
+      : "@site ";
+  void nextTick(() => {
+    autosizeAssistantComposer();
+    assistantComposerRef.value?.focus();
+    const cursor = assistantDraft.value.length;
+    assistantComposerRef.value?.setSelectionRange(cursor, cursor);
+  });
+}
+
 async function useStarterPrompt(prompt: string) {
   assistantDraft.value = prompt;
   assistantError.value = null;
@@ -2678,6 +2705,7 @@ async function submitAssistantText(
         messageText: normalized,
         threadId: assistantThreadId.value,
         projectId: assistantThreadId.value ? undefined : routeProjectId(),
+        scopes: assistantScopesForText(normalized),
         attachments,
         model: selectedModel.value
           ? {
@@ -5653,6 +5681,16 @@ function messageFromUnknown(err: unknown, fallback: string) {
               </button>
             </span>
           </div>
+          <div
+            v-if="assistantSiteScopeActive"
+            class="assistant-scopes"
+            aria-label="Active assistant scopes"
+          >
+            <span class="assistant-scope-chip">
+              <UiIcon name="LayoutGrid" :size="13" aria-hidden="true" />
+              <span>Site</span>
+            </span>
+          </div>
           <div class="assistant-input-wrap">
             <textarea
               id="assistant-console-input"
@@ -5727,6 +5765,29 @@ function messageFromUnknown(err: unknown, fallback: string) {
               >
                 <UiIcon name="Paperclip" :size="18" aria-hidden="true" />
               </Button>
+              <Button
+                :color="assistantSiteScopeActive ? 'accent' : 'ghost'"
+                shape="pill"
+                size="small"
+                icon-only
+                class="composer-icon-button"
+                type="button"
+                :title="
+                  assistantSiteScopeActive
+                    ? 'Remove site scope'
+                    : 'Use site scope'
+                "
+                :aria-label="
+                  assistantSiteScopeActive
+                    ? 'Remove site scope'
+                    : 'Use site scope'
+                "
+                :aria-pressed="assistantSiteScopeActive"
+                :disabled="assistantSending"
+                @click="toggleAssistantSiteScope"
+              >
+                <UiIcon name="LayoutGrid" :size="17" aria-hidden="true" />
+              </Button>
             </div>
 
             <div class="assistant-composer__right">
@@ -5765,13 +5826,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
                 >
                   {{ selectedModelSetup.statusLabel }}
                 </RouterLink>
-                <span
-                  v-else-if="selectedModelSetup.statusLabel !== 'Ready'"
-                  class="model-picker__status"
-                  :class="selectedModelSetup.className"
-                >
-                  {{ selectedModelSetup.statusLabel }}
-                </span>
               </div>
               <Button
                 :color="
@@ -8913,6 +8967,28 @@ function messageFromUnknown(err: unknown, fallback: string) {
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
+}
+
+.assistant-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.assistant-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 1px solid color-mix(in oklab, var(--ui-accent) 32%, var(--ui-border));
+  border-radius: 999px;
+  padding: 0 10px;
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .assistant-attachment {

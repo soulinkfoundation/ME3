@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
+import { useRouter } from "vue-router";
 import CalendarAgenda from "../components/calendar/CalendarAgenda.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import CalendarMiniMonth from "../components/calendar/CalendarMiniMonth.vue";
@@ -110,6 +111,29 @@ interface CalendarSourceRow {
   createdAt: string;
 }
 
+interface CalendarTaskRow {
+  id: string;
+  title: string;
+  description: string | null;
+  status: "backlog" | "in_progress" | "review";
+  priority: number;
+  dueAt: string | null;
+  scheduledFor: string | null;
+  startsAt: string;
+  endsAt: string;
+  timezone: string | null;
+  allDay: boolean;
+  dateSource: "scheduled_for" | "due_at";
+  projectId: string | null;
+  projectName: string;
+  projectColor: string | null;
+  projectIcon: string | null;
+  sourceKind: string;
+  sourceRef: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface CalendarSiteOption {
   value: string;
   label: string;
@@ -121,6 +145,7 @@ interface CalendarFeedResponse {
   events: CalendarEventRow[];
   importedEvents: CalendarEventRow[];
   sources: CalendarSourceRow[];
+  tasks: CalendarTaskRow[];
 }
 
 type CreateMode =
@@ -135,6 +160,7 @@ type QuickCreateMode = Exclude<CreateMode, "import" | null>;
 const PERSONAL_EVENTS_KEY = "__events__";
 const BIRTHDAYS_KEY = "__birthdays__";
 const REMINDERS_KEY = "__reminders__";
+const PROJECT_TASKS_KEY = "__project_tasks__";
 const QUICK_CREATE_MODES: QuickCreateMode[] = [
   "event",
   "birthday",
@@ -147,12 +173,14 @@ const QUICK_CREATE_LABELS: Record<QuickCreateMode, string> = {
   reminder: "Reminder",
   booking: "Booking",
 };
+const router = useRouter();
 const sites = useSitesStore();
 const bookings = ref<CalendarBookingRow[]>([]);
 const reminders = ref<CalendarReminderRow[]>([]);
 const events = ref<CalendarEventRow[]>([]);
 const importedEvents = ref<CalendarEventRow[]>([]);
 const sources = ref<CalendarSourceRow[]>([]);
+const tasks = ref<CalendarTaskRow[]>([]);
 const loading = ref(false);
 const calendarLoaded = ref(false);
 const error = ref("");
@@ -463,6 +491,41 @@ function formatEventDate(value: string) {
   }).format(new Date(value));
 }
 
+function formatTaskStatus(status: CalendarTaskRow["status"]): string {
+  if (status === "in_progress") return "Doing";
+  if (status === "review") return "Review";
+  return "Backlog";
+}
+
+function formatTaskPriority(priority: number): string {
+  if (priority <= 1) return "High";
+  if (priority === 2) return "Medium";
+  return "Normal";
+}
+
+function formatTaskDateValue(value: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }).format(new Date(year, month - 1, day));
+  }
+  return formatEventTimeRange({
+    id: "task-date",
+    sourceLabel: "Task",
+    title: "Task",
+    siteKey: PROJECT_TASKS_KEY,
+    siteLabel: "Project tasks",
+    startsAt: value,
+    endsAt: value,
+    summary: "",
+    detailLines: [],
+  });
+}
+
 function formatEventTimeRange(event: CalendarAgendaEvent) {
   if (event.allDay) {
     return formatEventDate(event.startsAt);
@@ -645,6 +708,8 @@ function mapBookingToCalendarEvent(
 ): CalendarAgendaEvent {
   return {
     id: booking.id,
+    entryType: "booking",
+    recordId: booking.id,
     sourceLabel: "Booking",
     title: booking.guest_name || "Unnamed booking",
     siteKey: booking.username,
@@ -667,6 +732,8 @@ function mapReminderToCalendarEvent(
 ): CalendarAgendaEvent {
   return {
     id: reminder.id,
+    entryType: "reminder",
+    recordId: reminder.id,
     sourceLabel: "Reminder",
     title: reminder.title,
     siteKey: REMINDERS_KEY,
@@ -691,6 +758,33 @@ function mapReminderToCalendarEvent(
   };
 }
 
+function mapTaskToCalendarEvent(task: CalendarTaskRow): CalendarAgendaEvent {
+  return {
+    id: task.id,
+    entryType: "task",
+    recordId: task.id,
+    sourceLabel: "Task",
+    title: task.title,
+    siteKey: PROJECT_TASKS_KEY,
+    siteLabel: task.projectName || "Personal",
+    startsAt: task.startsAt,
+    endsAt: task.endsAt,
+    allDay: task.allDay,
+    color: task.projectColor,
+    summary: formatTaskStatus(task.status),
+    detailLines: [
+      { label: "Project", value: task.projectName || "Personal" },
+      { label: "Status", value: formatTaskStatus(task.status) },
+      { label: "Priority", value: formatTaskPriority(task.priority) },
+      ...(task.dueAt && task.dateSource !== "due_at"
+        ? [{ label: "Due", value: formatTaskDateValue(task.dueAt) }]
+        : []),
+    ],
+    notes: task.description,
+    actionLabel: "Open task",
+  };
+}
+
 function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
   const isImported = event.sourceKind === "imported";
   const isBirthday = event.kind === "birthday";
@@ -702,6 +796,8 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
       : PERSONAL_EVENTS_KEY;
   return {
     id: event.id,
+    entryType: isImported ? "imported" : isBirthday ? "birthday" : "event",
+    recordId: event.id,
     sourceLabel: isImported ? "Imported" : isBirthday ? "Birthday" : "Event",
     title: event.title || "Untitled event",
     siteKey,
@@ -763,6 +859,7 @@ const siteOptions = computed<CalendarSiteOption[]>(() => [
   { value: PERSONAL_EVENTS_KEY, label: "Personal events" },
   { value: BIRTHDAYS_KEY, label: "Birthdays" },
   { value: REMINDERS_KEY, label: "Agent reminders" },
+  { value: PROJECT_TASKS_KEY, label: "Project tasks" },
   ...sources.value.map((source) => ({
     value: `import:${source.id}`,
     label: source.name,
@@ -775,6 +872,7 @@ const mergedRangeEvents = computed(() =>
     ...events.value.map(mapEventToCalendarEvent),
     ...importedEvents.value.map(mapEventToCalendarEvent),
     ...reminders.value.map(mapReminderToCalendarEvent),
+    ...tasks.value.map(mapTaskToCalendarEvent),
   ].sort(
     (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
   ),
@@ -825,6 +923,7 @@ async function reloadCalendar() {
     events.value = response.events || [];
     importedEvents.value = response.importedEvents || [];
     sources.value = response.sources || [];
+    tasks.value = response.tasks || [];
     calendarLoaded.value = true;
   } catch (err) {
     if (token !== calendarLoadToken) return;
@@ -836,6 +935,7 @@ async function reloadCalendar() {
       events.value = [];
       importedEvents.value = [];
       sources.value = [];
+      tasks.value = [];
     } else {
       toastFromUnknown(err, "Failed to refresh calendar");
     }
@@ -881,7 +981,12 @@ async function deleteCalendarEvent(eventId: string) {
 }
 
 function handleEventAction(event: CalendarAgendaEvent) {
-  if (event.sourceLabel === "Reminder") {
+  if (event.entryType === "task") {
+    openTaskInMissionControl(event.id);
+    return;
+  }
+
+  if (event.entryType === "reminder" || event.sourceLabel === "Reminder") {
     openEditReminder(event.id);
     return;
   }
@@ -894,24 +999,45 @@ function handleEventAction(event: CalendarAgendaEvent) {
     return;
   }
 
-  if (event.sourceLabel === "Event" || event.sourceLabel === "Birthday") {
+  if (
+    event.entryType === "event" ||
+    event.entryType === "birthday" ||
+    event.sourceLabel === "Event" ||
+    event.sourceLabel === "Birthday"
+  ) {
     openEditEvent(event.id);
   }
 }
 
 function handleEventDangerAction(event: CalendarAgendaEvent) {
-  if (event.sourceLabel === "Reminder") {
+  if (event.entryType === "reminder" || event.sourceLabel === "Reminder") {
     void cancelReminder(event.id);
     return;
   }
 
-  if (event.sourceLabel === "Event" || event.sourceLabel === "Birthday") {
+  if (
+    event.entryType === "event" ||
+    event.entryType === "birthday" ||
+    event.sourceLabel === "Event" ||
+    event.sourceLabel === "Birthday"
+  ) {
     void deleteCalendarEvent(event.id);
   }
 }
 
+function openTaskInMissionControl(taskId: string) {
+  const task = tasks.value.find((item) => item.id === taskId);
+  void router.push({
+    path: "/mission-control/projects",
+    query: {
+      ...(task?.projectId ? { project: task.projectId } : {}),
+      task: taskId,
+    },
+  });
+}
+
 async function handleCancelBooking(event: CalendarAgendaEvent) {
-  if (event.sourceLabel !== "Booking") return;
+  if (event.entryType !== "booking" && event.sourceLabel !== "Booking") return;
   if (
     !window.confirm(
       "Cancel this booking? The guest will receive a cancellation email.",
