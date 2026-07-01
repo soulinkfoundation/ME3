@@ -584,6 +584,48 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
 
 <template>
   <main class="files-page">
+    <Teleport v-if="r2Available" to="#app-side-nav-mobile-page-controls">
+      <div class="files-mobile-controls">
+        <form class="files-search" role="search" @submit.prevent="loadItems">
+          <UiIcon name="Search" :size="16" aria-hidden="true" />
+          <label class="sr-only" for="files-search-input">Search files</label>
+          <input
+            id="files-search-input"
+            v-model="searchQuery"
+            type="search"
+            placeholder="Search"
+          />
+        </form>
+
+        <Button
+          color="outline"
+          shape="soft"
+          size="compact"
+          type="button"
+          @click="openNewFolderDialog"
+        >
+          <template #icon>
+            <UiIcon name="Folder" :size="15" aria-hidden="true" />
+          </template>
+          New folder
+        </Button>
+
+        <Button
+          color="primary"
+          shape="soft"
+          size="compact"
+          type="button"
+          :disabled="uploadBusy"
+          @click="triggerUpload"
+        >
+          <template #icon>
+            <UiIcon name="Upload" :size="15" aria-hidden="true" />
+          </template>
+          {{ uploadBusy ? "Uploading" : "Upload" }}
+        </Button>
+      </div>
+    </Teleport>
+
     <input
       ref="uploadInput"
       class="files-hidden-input"
@@ -614,48 +656,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
       @dragleave.prevent="dropActive = false"
       @drop.prevent="handleDrop"
     >
-      <header class="files-toolbar">
-        <div class="files-toolbar__actions">
-          <form class="files-search" role="search" @submit.prevent="loadItems">
-            <UiIcon name="Search" :size="16" aria-hidden="true" />
-            <label class="sr-only" for="files-search-input">Search files</label>
-            <input
-              id="files-search-input"
-              v-model="searchQuery"
-              type="search"
-              placeholder="Search"
-            />
-          </form>
-
-          <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            @click="openNewFolderDialog"
-          >
-            <template #icon>
-              <UiIcon name="Folder" :size="15" aria-hidden="true" />
-            </template>
-            New folder
-          </Button>
-
-          <Button
-            color="primary"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="uploadBusy"
-            @click="triggerUpload"
-          >
-            <template #icon>
-              <UiIcon name="Upload" :size="15" aria-hidden="true" />
-            </template>
-            {{ uploadBusy ? "Uploading" : "Upload" }}
-          </Button>
-        </div>
-      </header>
-
       <div v-if="error || message" class="files-status-line">
         <p v-if="error" class="files-status-line__error">{{ error }}</p>
         <p v-else class="files-status-line__message">{{ message }}</p>
@@ -1083,37 +1083,23 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 100dvh;
+  min-height: calc(100dvh - var(--app-shell-mobile-nav-height));
   overflow: hidden;
 }
 
-.files-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
+.files-mobile-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 66px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
-  background: var(--ui-bg, var(--color-bg));
-}
-
-.files-toolbar__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
   gap: 10px;
-  min-width: 0;
+  width: 100%;
 }
 
 .files-search {
   display: flex;
   align-items: center;
   gap: 7px;
-  width: min(260px, 28vw);
+  width: 100%;
   height: 36px;
   padding: 0 10px;
   border: 1px solid var(--ui-border, var(--color-border));
@@ -1610,16 +1596,6 @@ button.files-icon-button {
 }
 
 @media (max-width: 980px) {
-  .files-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .files-toolbar__actions,
-  .files-search {
-    width: 100%;
-  }
-
   .files-body {
     grid-template-columns: 1fr;
     overflow: auto;
@@ -1645,14 +1621,6 @@ button.files-icon-button {
 }
 
 @media (max-width: 700px) {
-  .files-toolbar__actions {
-    flex-wrap: wrap;
-  }
-
-  .files-search {
-    order: -1;
-  }
-
   .files-list__header {
     display: none;
   }
