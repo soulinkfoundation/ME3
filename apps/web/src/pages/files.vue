@@ -600,10 +600,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
     <section v-else-if="!r2Available" class="files-empty-setup">
       <div class="files-empty-setup__icon" aria-hidden="true">📂</div>
       <h1>Files need storage</h1>
-      <p>
-        Private file storage uses the optional SITE_ASSETS R2 bucket. Activate it in
-        Account Storage to browse, upload, and preview files here.
-      </p>
       <Button color="primary" shape="soft" size="medium" to="/account?section=storage">
         Configure storage
       </Button>
@@ -1059,7 +1055,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
   letter-spacing: 0;
 }
 
-.files-empty-setup p,
 .files-folder-empty p,
 .files-preview__empty p,
 .files-dialog__copy {
