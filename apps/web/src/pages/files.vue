@@ -128,16 +128,6 @@ const folderMap = computed(() => new Map(folders.value.map((folder) => [folder.i
 const currentFolder = computed(() =>
   currentFolderId.value ? folderMap.value.get(currentFolderId.value) || null : null,
 );
-const breadcrumbs = computed(() => {
-  const trail: Array<{ id: string | null; name: string }> = [{ id: null, name: "Files" }];
-  const stack: DriveFolder[] = [];
-  let cursor = currentFolder.value;
-  while (cursor) {
-    stack.unshift(cursor);
-    cursor = cursor.parentId ? folderMap.value.get(cursor.parentId) || null : null;
-  }
-  return [...trail, ...stack.map((folder) => ({ id: folder.id, name: folder.name }))];
-});
 const currentFolderLabel = computed(() => currentFolder.value?.name || "Files");
 const combinedItems = computed<DriveItem[]>(() => [
   ...currentFolders.value.map((folder) => ({
@@ -636,17 +626,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
       <header class="files-toolbar">
         <div class="files-toolbar__title">
           <h1>{{ currentFolderLabel }}</h1>
-          <nav class="files-breadcrumbs" aria-label="Folder path">
-            <button
-              v-for="crumb in breadcrumbs"
-              :key="crumb.id || 'root'"
-              type="button"
-              :aria-current="crumb.id === currentFolderId ? 'page' : undefined"
-              @click="openFolder(crumb.id)"
-            >
-              {{ crumb.name }}
-            </button>
-          </nav>
         </div>
 
         <div class="files-toolbar__actions">
@@ -1141,40 +1120,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
   display: grid;
   gap: 5px;
   min-width: 0;
-}
-
-.files-breadcrumbs {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 4px;
-  overflow: hidden;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-}
-
-.files-breadcrumbs button {
-  min-width: 0;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.files-breadcrumbs button:not(:last-child)::after {
-  content: "/";
-  padding-left: 4px;
-  color: var(--ui-border-strong, var(--color-border));
-}
-
-.files-breadcrumbs button:hover,
-.files-breadcrumbs button:focus-visible {
-  color: var(--ui-accent, var(--color-accent));
 }
 
 .files-toolbar__actions {
