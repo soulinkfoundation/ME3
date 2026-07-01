@@ -124,11 +124,6 @@ const dialogFolderId = ref<string | null>(null);
 let searchTimer: number | null = null;
 
 const r2Available = computed(() => status.value?.r2Available === true);
-const folderMap = computed(() => new Map(folders.value.map((folder) => [folder.id, folder])));
-const currentFolder = computed(() =>
-  currentFolderId.value ? folderMap.value.get(currentFolderId.value) || null : null,
-);
-const currentFolderLabel = computed(() => currentFolder.value?.name || "Files");
 const combinedItems = computed<DriveItem[]>(() => [
   ...currentFolders.value.map((folder) => ({
     kind: "folder" as const,
@@ -624,10 +619,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
       @drop.prevent="handleDrop"
     >
       <header class="files-toolbar">
-        <div class="files-toolbar__title">
-          <h1>{{ currentFolderLabel }}</h1>
-        </div>
-
         <div class="files-toolbar__actions">
           <form class="files-search" role="search" @submit.prevent="loadItems">
             <UiIcon name="Search" :size="16" aria-hidden="true" />
@@ -1060,7 +1051,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
 
 .files-empty-setup h1,
 .files-folder-empty h2,
-.files-toolbar h1,
 .files-preview h2,
 .files-dialog h2 {
   margin: 0;
@@ -1114,12 +1104,6 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
   padding: 10px 16px;
   border-bottom: 1px solid var(--ui-border, var(--color-border));
   background: var(--ui-bg, var(--color-bg));
-}
-
-.files-toolbar__title {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
 }
 
 .files-toolbar__actions {
