@@ -1867,6 +1867,56 @@ function readCoreGithubActionUrl(response: CoreGithubActionResponse) {
   );
 }
 
+function readRouteQueryString(value: unknown): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function clearCoreGithubInstallQuery() {
+  const query = { ...route.query };
+  delete query.installation_id;
+  delete query.installationId;
+  delete query.setup_action;
+  delete query.setupAction;
+  delete query.repository_selection;
+  delete query.repositorySelection;
+  delete query.state;
+  void router.replace({ path: route.path, query, hash: route.hash });
+}
+
+async function completeCoreGithubInstallFromRoute() {
+  const installationId =
+    readRouteQueryString(route.query.installation_id) ||
+    readRouteQueryString(route.query.installationId);
+  if (!installationId) return false;
+
+  coreGithubSaving.value = "connect";
+  coreGithubMessage.value = null;
+  coreGithubError.value = null;
+
+  try {
+    await api.post<CoreGithubActionResponse>("/core/github/install/complete", {
+      installationId,
+      setupAction:
+        readRouteQueryString(route.query.setup_action) ||
+        readRouteQueryString(route.query.setupAction),
+      repositorySelection:
+        readRouteQueryString(route.query.repository_selection) ||
+        readRouteQueryString(route.query.repositorySelection),
+      state: readRouteQueryString(route.query.state),
+    });
+    coreGithubMessage.value = "GitHub updater connected.";
+  } catch (e: any) {
+    coreGithubError.value = e.message || "Failed to complete GitHub install";
+  } finally {
+    coreGithubSaving.value = null;
+    clearCoreGithubInstallQuery();
+    await loadCoreGithubUpdater();
+  }
+
+  return true;
+}
+
 async function logout() {
   await auth.logout();
   router.push("/");
@@ -1890,7 +1940,9 @@ onMounted(async () => {
   void loadEmailProviderSettings();
   void loadPlugins();
   void loadAppConnections();
-  void loadCoreGithubUpdater();
+  void completeCoreGithubInstallFromRoute().then((completed) => {
+    if (!completed) void loadCoreGithubUpdater();
+  });
   void loadCoreStorageStatus();
   void loadCommerceSettings();
   if (

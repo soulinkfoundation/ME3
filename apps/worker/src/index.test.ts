@@ -4317,6 +4317,72 @@ describe("ME3 Core Worker auth", () => {
     fetchMock.mockRestore();
   });
 
+  it("proxies GitHub updater install completion to the ME3 Cloud broker", async () => {
+    const env = createEnv();
+    env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
+    const session = cookieHeader(await bootstrap(env));
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "user123");
+    env.installSecrets.set(
+      "ME3_CORE_INSTALL_ID",
+      "core_11111111-1111-4111-8111-111111111111",
+    );
+    env.installSecrets.set("ME3_CLOUD_CORE_TOKEN", "core-update-token-123");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          connected: true,
+          repositoryOwner: "kieranbutler",
+          repositoryName: "my-me3",
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const response = await app.fetch(
+      new Request("https://core.example/api/core/github/install/complete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({
+          installationId: "12345678",
+          setupAction: "install",
+          repositorySelection: "selected",
+          state: "state-123",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; connected: boolean };
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = new Headers((init as RequestInit).headers);
+    const requestBody = JSON.parse(String((init as RequestInit).body)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(response.status).toBe(200);
+    expect(body.connected).toBe(true);
+    expect(url).toBe("https://api.me3.example/api/github/install/complete");
+    expect(headers.get("X-ME3-Core-Owner-ID")).toBe("user123");
+    expect(headers.get("X-ME3-Core-Install-ID")).toBe(
+      "core_11111111-1111-4111-8111-111111111111",
+    );
+    expect(headers.get("X-ME3-Core-Update-Token")).toBe("core-update-token-123");
+    expect(requestBody).toMatchObject({
+      coreInstallId: "core_11111111-1111-4111-8111-111111111111",
+      coreOwnerId: "user123",
+      installationId: "12345678",
+      setupAction: "install",
+      repositorySelection: "selected",
+      state: "state-123",
+    });
+
+    fetchMock.mockRestore();
+  });
+
   it("reports optional R2 storage status without requiring a binding", async () => {
     const env = createEnv();
     env.ME3_WORKER_NAME = "kierans-me3";

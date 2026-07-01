@@ -95,6 +95,42 @@ export function registerCoreGithubUpdaterRoutes(
     );
   });
 
+  app.post("/api/core/github/install/complete", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+
+    const context = await requireCoreGithubContext(c);
+    if ("response" in context) return context.response;
+
+    const body: Record<string, unknown> = await c.req
+      .json<Record<string, unknown>>()
+      .catch(() => ({}));
+    const installationId =
+      readString(body.installationId) || readString(body.installation_id);
+    if (!/^\d+$/.test(installationId)) {
+      return c.json({ ok: false, error: "Missing GitHub installation id." }, 400);
+    }
+
+    const setupAction =
+      readString(body.setupAction) || readString(body.setup_action);
+    const repositorySelection =
+      readString(body.repositorySelection) ||
+      readString(body.repository_selection);
+    const state = readString(body.state);
+
+    return c.json(
+      await fetchMe3CloudBroker(c, context, "/api/github/install/complete", {
+        method: "POST",
+        body: {
+          installationId,
+          setupAction: setupAction || undefined,
+          repositorySelection: repositorySelection || undefined,
+          state: state || undefined,
+        },
+      }),
+    );
+  });
+
   app.post("/api/core/github/update", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
