@@ -28,6 +28,7 @@ export interface Env {
 
   ME3_ASSISTANT_DEBUG_TRACE?: string;
   ME3_ASSISTANT_TRACE?: string;
+  ME3_ASSISTANT_SITE_TOOLS_ENABLED?: string;
   ME3_AI_MODEL?: string;
   ME3_AI_DEFAULT_PROVIDER?: string;
   ME3_AI_DEFAULT_MODEL?: string;

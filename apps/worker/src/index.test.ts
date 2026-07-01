@@ -2907,8 +2907,17 @@ function siteFileText(
 
 function addAssistantEditableSite(
   env: ReturnType<typeof createEnv>,
-  options: { blogEnabled?: boolean; publishedAt?: string | null } = {},
+  options: {
+    blogEnabled?: boolean;
+    publishedAt?: string | null;
+    assistantSiteToolsEnabled?: boolean;
+  } = {},
 ) {
+  if (options.assistantSiteToolsEnabled === false) {
+    delete env.ME3_ASSISTANT_SITE_TOOLS_ENABLED;
+  } else {
+    env.ME3_ASSISTANT_SITE_TOOLS_ENABLED = "1";
+  }
   env.sites.push({
     id: "site-assistant",
     user_id: "owner",
@@ -5220,10 +5229,13 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
-  it("requires @site before assistant chat can draft site updates", async () => {
+  it("routes site-looking prompts through agent chat when assistant site tools are disabled", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
-    addAssistantEditableSite(env, { blogEnabled: true });
+    addAssistantEditableSite(env, {
+      blogEnabled: true,
+      assistantSiteToolsEnabled: false,
+    });
     const runtimeFetch = vi.fn(async () =>
       Response.json({
         ok: true,
@@ -5264,18 +5276,16 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const payload = (await response.json()) as Record<string, unknown>;
-    const userMessage = env.messages.find((message) => message.role === "user");
-    const assistantMessage = env.messages.find((message) => message.role === "assistant");
 
     expect(response.status).toBe(200);
     expect(payload).toMatchObject({
       ok: true,
-      specialist: "core.assistant-scopes",
-      source: "tool",
-      siteAction: null,
+      specialist: "core.agent-chat",
+      replyText: "Agent chat reply.",
     });
-    expect(String(payload.replyText)).toContain("Add @site");
-    expect(runtimeFetch).not.toHaveBeenCalled();
+    expect(String(payload.replyText)).not.toContain("Add @site");
+    expect(payload.siteAction).toBeUndefined();
+    expect(runtimeFetch).toHaveBeenCalledOnce();
     expect(aiRun).not.toHaveBeenCalled();
     expect(siteFileText(env, "site-assistant", "src/me.json")).not.toContain(
       "This should not be written.",
@@ -5287,17 +5297,6 @@ describe("ME3 Core Worker auth", () => {
           file.path.startsWith("assistant/site-update-drafts/"),
       ),
     ).toBe(false);
-    expect(userMessage?.content).toContain("Update my site");
-    expect(JSON.parse(userMessage?.metadata_json || "{}")).toEqual({});
-    expect(JSON.parse(assistantMessage?.metadata_json || "{}")).toMatchObject({
-      assistantScopeDecision: {
-        site: {
-          allowed: false,
-          requested: true,
-          reason: "scope_missing",
-        },
-      },
-    });
   });
 
   it("requires @site again before publishing a pending assistant site draft", async () => {

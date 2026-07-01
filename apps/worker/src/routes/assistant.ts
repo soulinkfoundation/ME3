@@ -179,6 +179,11 @@ function serializeAssistantSettings(row: AssistantSettingsRow | null) {
   };
 }
 
+function assistantSiteToolsEnabled(env: Env): boolean {
+  // ponytail: launch kill switch; delete site tool routing after the assistant stabilizes.
+  return /^(1|true|yes)$/i.test(String(env.ME3_ASSISTANT_SITE_TOOLS_ENABLED || "").trim());
+}
+
 async function getAssistantSettings(env: Env, ownerId: string) {
   const row = await env.DB.prepare(
     "SELECT assistant_name FROM owner_profile WHERE id = ?",
@@ -2936,9 +2941,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (!displayMessageText) {
       return c.json({ ok: false, error: "Message text is required" }, 400);
     }
-    const scopeParse = parseAssistantScopes(displayMessageText, body.scopes);
-    const messageText = scopeParse.cleanMessageText || displayMessageText;
-    const siteScopeAllowed = assistantScopesIncludeSite(scopeParse.scopes);
+    const siteToolsEnabled = assistantSiteToolsEnabled(c.env);
+    const scopeParse = siteToolsEnabled
+      ? parseAssistantScopes(displayMessageText, body.scopes)
+      : null;
+    const messageText = scopeParse?.cleanMessageText || displayMessageText;
+    const siteScopeAllowed = scopeParse ? assistantScopesIncludeSite(scopeParse.scopes) : false;
     const selectedModel = parseAssistantChatTurnModelSelection(body.model);
     if (selectedModel && "error" in selectedModel) {
       return c.json({ ok: false, error: selectedModel.error }, 400);
@@ -2948,7 +2956,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
     const userMessageMetadata = assistantUserMessageMetadataFromManifest(
       attachmentManifest,
-      scopeParse,
+      scopeParse || undefined,
     );
 
     const replyToMessageId =
@@ -3000,49 +3008,51 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       });
     }
 
-    const scopeRequiredReply = siteScopeAllowed
-      ? null
-      : await assistantSiteScopeRequiredReply(c.env, ownerId, thread.id, messageText);
-    const scopeDecision = assistantScopeDecision(
-      scopeParse.scopes,
-      siteScopeAllowed || Boolean(scopeRequiredReply),
-    );
-    if (scopeRequiredReply) {
-      await persistAssistantTurnMessages(
-        c.env,
-        ownerId,
-        thread.id,
-        displayMessageText,
-        scopeRequiredReply,
-        { assistantScopeDecision: scopeDecision },
-        userMessageMetadata,
+    if (siteToolsEnabled) {
+      const scopeRequiredReply = siteScopeAllowed
+        ? null
+        : await assistantSiteScopeRequiredReply(c.env, ownerId, thread.id, messageText);
+      const scopeDecision = assistantScopeDecision(
+        scopeParse?.scopes || [],
+        siteScopeAllowed || Boolean(scopeRequiredReply),
       );
-      await touchAssistantThread(c.env, ownerId, thread.id);
-      return c.json(buildAssistantScopeRequiredPayload(thread.id, scopeRequiredReply, scopeDecision));
-    }
-
-    const siteAction = siteScopeAllowed
-      ? await maybeHandleAssistantSiteToolAction(
+      if (scopeRequiredReply) {
+        await persistAssistantTurnMessages(
           c.env,
           ownerId,
           thread.id,
-          messageText,
-          c.req.url,
-          selectedModel,
-        )
-      : null;
-    if (siteAction) {
-      await persistAssistantTurnMessages(
-        c.env,
-        ownerId,
-        thread.id,
-        displayMessageText,
-        siteAction.replyText,
-        { siteAction: siteAction.siteAction, assistantScopeDecision: scopeDecision },
-        userMessageMetadata,
-      );
-      await touchAssistantThread(c.env, ownerId, thread.id);
-      return c.json(buildAssistantSiteToolPayload(thread.id, siteAction, scopeDecision));
+          displayMessageText,
+          scopeRequiredReply,
+          { assistantScopeDecision: scopeDecision },
+          userMessageMetadata,
+        );
+        await touchAssistantThread(c.env, ownerId, thread.id);
+        return c.json(buildAssistantScopeRequiredPayload(thread.id, scopeRequiredReply, scopeDecision));
+      }
+
+      const siteAction = siteScopeAllowed
+        ? await maybeHandleAssistantSiteToolAction(
+            c.env,
+            ownerId,
+            thread.id,
+            messageText,
+            c.req.url,
+            selectedModel,
+          )
+        : null;
+      if (siteAction) {
+        await persistAssistantTurnMessages(
+          c.env,
+          ownerId,
+          thread.id,
+          displayMessageText,
+          siteAction.replyText,
+          { siteAction: siteAction.siteAction, assistantScopeDecision: scopeDecision },
+          userMessageMetadata,
+        );
+        await touchAssistantThread(c.env, ownerId, thread.id);
+        return c.json(buildAssistantSiteToolPayload(thread.id, siteAction, scopeDecision));
+      }
     }
 
     const attachmentTextContext = await loadAssistantAttachmentTextContext(
@@ -3070,8 +3080,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         requestedThreadId,
         requestedProjectId,
         selectedModel: selectedModel || null,
-        assistantScopes: scopeParse.scopes,
-        assistantScopeTokens: scopeParse.scopeTokens,
+        ...(scopeParse
+          ? {
+              assistantScopes: scopeParse.scopes,
+              assistantScopeTokens: scopeParse.scopeTokens,
+            }
+          : {}),
         attachmentCount: Array.isArray(body.attachments) ? body.attachments.length : 0,
         attachmentManifest,
       },
@@ -3139,9 +3153,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (!displayMessageText) {
       return c.json({ ok: false, error: "Message text is required" }, 400);
     }
-    const scopeParse = parseAssistantScopes(displayMessageText, body.scopes);
-    const messageText = scopeParse.cleanMessageText || displayMessageText;
-    const siteScopeAllowed = assistantScopesIncludeSite(scopeParse.scopes);
+    const siteToolsEnabled = assistantSiteToolsEnabled(c.env);
+    const scopeParse = siteToolsEnabled
+      ? parseAssistantScopes(displayMessageText, body.scopes)
+      : null;
+    const messageText = scopeParse?.cleanMessageText || displayMessageText;
+    const siteScopeAllowed = scopeParse ? assistantScopesIncludeSite(scopeParse.scopes) : false;
     const selectedModel = parseAssistantChatTurnModelSelection(body.model);
     if (selectedModel && "error" in selectedModel) {
       return c.json({ ok: false, error: selectedModel.error }, 400);
@@ -3158,7 +3175,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const attachmentManifest = createAssistantAttachmentAuditManifest(body.attachments);
     const userMessageMetadata = assistantUserMessageMetadataFromManifest(
       attachmentManifest,
-      scopeParse,
+      scopeParse || undefined,
     );
     const encoder = new TextEncoder();
 
@@ -3230,56 +3247,58 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
             return;
           }
 
-          const scopeRequiredReply = siteScopeAllowed
-            ? null
-            : await assistantSiteScopeRequiredReply(c.env, ownerId, thread.id, messageText);
-          const scopeDecision = assistantScopeDecision(
-            scopeParse.scopes,
-            siteScopeAllowed || Boolean(scopeRequiredReply),
-          );
-          if (scopeRequiredReply) {
-            await persistAssistantTurnMessages(
-              c.env,
-              ownerId,
-              thread.id,
-              displayMessageText,
-              scopeRequiredReply,
-              { assistantScopeDecision: scopeDecision },
-              userMessageMetadata,
+          if (siteToolsEnabled) {
+            const scopeRequiredReply = siteScopeAllowed
+              ? null
+              : await assistantSiteScopeRequiredReply(c.env, ownerId, thread.id, messageText);
+            const scopeDecision = assistantScopeDecision(
+              scopeParse?.scopes || [],
+              siteScopeAllowed || Boolean(scopeRequiredReply),
             );
-            await touchAssistantThread(c.env, ownerId, thread.id);
-            await sendAssistantStreamText(send, scopeRequiredReply);
-            send(
-              "done",
-              buildAssistantScopeRequiredPayload(thread.id, scopeRequiredReply, scopeDecision),
-            );
-            return;
-          }
-
-          const siteAction = siteScopeAllowed
-            ? await maybeHandleAssistantSiteToolAction(
+            if (scopeRequiredReply) {
+              await persistAssistantTurnMessages(
                 c.env,
                 ownerId,
                 thread.id,
-                messageText,
-                c.req.url,
-                selectedModel,
-              )
-            : null;
-          if (siteAction) {
-            await persistAssistantTurnMessages(
-              c.env,
-              ownerId,
-              thread.id,
-              displayMessageText,
-              siteAction.replyText,
-              { siteAction: siteAction.siteAction, assistantScopeDecision: scopeDecision },
-              userMessageMetadata,
-            );
-            await touchAssistantThread(c.env, ownerId, thread.id);
-            await sendAssistantStreamText(send, siteAction.replyText);
-            send("done", buildAssistantSiteToolPayload(thread.id, siteAction, scopeDecision));
-            return;
+                displayMessageText,
+                scopeRequiredReply,
+                { assistantScopeDecision: scopeDecision },
+                userMessageMetadata,
+              );
+              await touchAssistantThread(c.env, ownerId, thread.id);
+              await sendAssistantStreamText(send, scopeRequiredReply);
+              send(
+                "done",
+                buildAssistantScopeRequiredPayload(thread.id, scopeRequiredReply, scopeDecision),
+              );
+              return;
+            }
+
+            const siteAction = siteScopeAllowed
+              ? await maybeHandleAssistantSiteToolAction(
+                  c.env,
+                  ownerId,
+                  thread.id,
+                  messageText,
+                  c.req.url,
+                  selectedModel,
+                )
+              : null;
+            if (siteAction) {
+              await persistAssistantTurnMessages(
+                c.env,
+                ownerId,
+                thread.id,
+                displayMessageText,
+                siteAction.replyText,
+                { siteAction: siteAction.siteAction, assistantScopeDecision: scopeDecision },
+                userMessageMetadata,
+              );
+              await touchAssistantThread(c.env, ownerId, thread.id);
+              await sendAssistantStreamText(send, siteAction.replyText);
+              send("done", buildAssistantSiteToolPayload(thread.id, siteAction, scopeDecision));
+              return;
+            }
           }
 
           const runtime = c.env.ME3_USER_AGENT;
@@ -3306,8 +3325,12 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               requestedThreadId,
               requestedProjectId,
               selectedModel: selectedModel || null,
-              assistantScopes: scopeParse.scopes,
-              assistantScopeTokens: scopeParse.scopeTokens,
+              ...(scopeParse
+                ? {
+                    assistantScopes: scopeParse.scopes,
+                    assistantScopeTokens: scopeParse.scopeTokens,
+                  }
+                : {}),
               attachmentCount,
               attachmentManifest,
             },
