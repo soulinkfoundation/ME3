@@ -3791,24 +3791,28 @@ h1 {
   order: 2;
 }
 
-.plugins-section {
+.storage-section {
   order: 3;
 }
 
-.app-connections-section {
+.plugins-section {
   order: 4;
 }
 
-.ai-section {
+.app-connections-section {
   order: 5;
 }
 
-.payments-section {
+.ai-section {
   order: 6;
 }
 
-.timezone-section {
+.payments-section {
   order: 7;
+}
+
+.timezone-section {
+  order: 8;
 }
 
 .card {
