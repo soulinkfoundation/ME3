@@ -801,12 +801,6 @@ const weekdayOptions = [
 const monthDayOptions = Array.from({ length: 28 }, (_, index) => index + 1);
 const configureStarterPrompt =
   "Help me configure my ME3 installation. First check what is already set up across my public site/profile, email mailbox, Soulink or Telegram, assistant/AI, jobs, plugins, and updates. Then suggest the missing or most useful next step. If I'm not sure, walk me through the basics.";
-const assistantPlaceholders = [
-  "Ask {{assistantName}} anything...",
-  "Set a reminder tomorrow at 9am to...",
-  "Draft a blog post about...",
-  "Draft an email to tell Sarah about...",
-];
 type StarterPrompt = {
   label: string;
   icon: string;
@@ -820,9 +814,6 @@ const starterPrompts: StarterPrompt[] = [
   },
   { label: "Status update", icon: "🚀", prompt: "Review my week" },
 ];
-const assistantPlaceholderIndex = Math.floor(
-  Math.random() * assistantPlaceholders.length,
-);
 const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
 const assistantTextAttachmentMaxBytes = 1_000_000;
@@ -1047,13 +1038,6 @@ const assistantMessageLabel = computed(
 const assistantThinkingLabel = computed(
   () => `${assistantDisplayName.value} is thinking`,
 );
-const assistantPlaceholder = computed(() =>
-  (
-    assistantPlaceholders[assistantPlaceholderIndex] ||
-    assistantPlaceholders[0]
-  ).replace("{{assistantName}}", assistantDisplayName.value),
-);
-
 const selectedModelTitle = computed(() => {
   const model = selectedModel.value;
   if (!model) return "Model";
@@ -5648,7 +5632,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
               v-model="assistantDraft"
               class="assistant-input"
               rows="1"
-              :placeholder="assistantPlaceholder"
               :disabled="assistantSending"
               @keydown="onAssistantComposerKeydown"
               @input="autosizeAssistantComposer"
