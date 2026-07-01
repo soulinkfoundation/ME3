@@ -1639,10 +1639,5 @@ button.files-icon-button {
     grid-column: 2;
     grid-row: 1;
   }
-
-  .files-list-controls {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }
 </style>
