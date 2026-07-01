@@ -309,6 +309,11 @@ function selectItem(item: DriveItem) {
   selected.value = { kind: item.kind, id: item.id };
 }
 
+function closePreview() {
+  selected.value = null;
+  rowMenuId.value = null;
+}
+
 function activateItem(item: DriveItem) {
   if (item.kind === "folder") {
     openFolder(item.id);
@@ -661,7 +666,7 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
         <p v-else class="files-status-line__message">{{ message }}</p>
       </div>
 
-      <div class="files-body">
+      <div class="files-body" :class="{ 'files-body--preview-open': selectedFile }">
         <aside class="files-tree" aria-label="Folders">
           <button
             type="button"
@@ -819,6 +824,15 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
         <aside class="files-preview" aria-label="Selected file details">
           <template v-if="selectedItem">
             <header class="files-preview__header">
+              <button
+                type="button"
+                class="files-icon-button files-preview__back"
+                aria-label="Back to files"
+                title="Back to files"
+                @click="closePreview"
+              >
+                <UiIcon name="ArrowLeft" :size="16" aria-hidden="true" />
+              </button>
               <div class="files-preview__title">
                 <UiIcon :name="itemIcon(selectedItem)" :size="20" aria-hidden="true" />
                 <h2>{{ itemName(selectedItem) }}</h2>
@@ -1422,6 +1436,11 @@ button.files-icon-button {
   gap: 6px;
 }
 
+.files-preview__back {
+  display: none;
+  flex-shrink: 0;
+}
+
 .files-preview__body {
   min-height: 230px;
   border-bottom: 1px solid var(--ui-border, var(--color-border));
@@ -1601,6 +1620,19 @@ button.files-icon-button {
     overflow: auto;
   }
 
+  .files-body:not(.files-body--preview-open) .files-preview {
+    display: none;
+  }
+
+  .files-body--preview-open {
+    overflow: hidden;
+  }
+
+  .files-body--preview-open .files-tree,
+  .files-body--preview-open .files-list-panel {
+    display: none;
+  }
+
   .files-tree {
     flex-direction: row;
     border-right: none;
@@ -1617,6 +1649,14 @@ button.files-icon-button {
     min-height: 320px;
     border-left: none;
     border-top: 1px solid var(--ui-border, var(--color-border));
+  }
+
+  .files-body--preview-open .files-preview {
+    border-top: none;
+  }
+
+  .files-preview__back {
+    display: inline-flex;
   }
 }
 
