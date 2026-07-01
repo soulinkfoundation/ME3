@@ -1637,15 +1637,16 @@ button.files-icon-button {
   }
 
   .files-tree {
-    flex-direction: row;
+    height: 160px;
+    flex-direction: column;
     border-right: none;
     border-bottom: 1px solid var(--ui-border, var(--color-border));
-    overflow-x: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .files-tree__row {
     flex: 0 0 auto;
-    padding: 0 10px;
   }
 
   .files-preview {
