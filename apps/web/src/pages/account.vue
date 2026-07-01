@@ -3431,6 +3431,7 @@ onBeforeUnmount(() => {
           <p class="storage-guide-copy">
             R2 storage is required for email attachments, assistant image
             uploads, generated images, and larger site media.
+            <strong>Cloudflare R2 includes 10 GB-month of Standard storage free.</strong>
           </p>
 
           <ol class="domain-email-guide-list storage-guide-list">
