@@ -4,6 +4,7 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { API_BASE, ApiError, api } from "../api";
 import Button from "../components/Button.vue";
 import UiIcon from "../components/UiIcon.vue";
+import { useAppToast } from "../composables/useAppToast";
 import type { UiIconName } from "../utils/icons";
 
 definePage({
@@ -122,6 +123,7 @@ const dialogItem = ref<DriveItem | null>(null);
 const dialogName = ref("");
 const dialogFolderId = ref<string | null>(null);
 let searchTimer: number | null = null;
+const { toastSuccess } = useAppToast();
 
 const r2Available = computed(() => status.value?.r2Available === true);
 const combinedItems = computed<DriveItem[]>(() => [
@@ -456,10 +458,11 @@ async function uploadFileList(list: FileList | File[] | null | undefined) {
     if (currentFolderId.value) form.append("folderId", currentFolderId.value);
     for (const file of filesToUpload) form.append("files", file);
     const response = await api.upload<UploadResponse>("/files/upload", form);
-    message.value =
+    const uploadMessage =
       response.files.length === 1
         ? `${response.files[0]?.filename || "File"} uploaded.`
         : `${response.files.length} files uploaded.`;
+    toastSuccess(uploadMessage);
     if (response.files[0]) selected.value = { kind: "file", id: response.files[0].id };
     await refreshFoldersAndItems();
   } catch (e) {
@@ -683,7 +686,7 @@ function apiErrorMessage(errorValue: unknown, fallback: string): string {
             type="button"
             class="files-tree__row"
             :class="{ 'is-active': currentFolderId === folder.id }"
-            :style="{ '--folder-depth': String(folder.path.split('/').length) }"
+            :style="{ '--folder-depth': String(folder.path.split('/').length + 1) }"
             @click="openFolder(folder.id)"
           >
             <UiIcon name="Folder" :size="16" aria-hidden="true" />
