@@ -563,7 +563,7 @@ describe("assistant jobs persistence", () => {
     const run = await runAssistantJobNow(env, "owner", created.job.id);
 
     expect(run.run.outputPreview).toContain("drafted 1 reply");
-    expect(run.run.outputPreview).toContain("created 1 task");
+    expect(run.run.outputPreview).not.toContain("created 1 task");
     expect(run.run.outputPreview).toContain("notified you 1 time");
     expect(env.__state.mailboxMessages).toContainEqual(
       expect.objectContaining({
@@ -574,12 +574,7 @@ describe("assistant jobs persistence", () => {
         source_id: "message-ada",
       }),
     );
-    expect(env.__state.tasks).toContainEqual(
-      expect.objectContaining({
-        title: "Inbox Watch: ada@example.com",
-        source_ref: expect.stringContaining("inbox-watch:"),
-      }),
-    );
+    expect(env.__state.tasks).toHaveLength(0);
     expect(env.__state.channelEvents).toContainEqual(
       expect.objectContaining({
         status: "sent",

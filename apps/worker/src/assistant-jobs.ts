@@ -4669,21 +4669,6 @@ async function executeInboxWatchRuleOutcomes(
         }
       }
 
-      if (rule.actions.createTask) {
-        const taskId = await createInboxWatchMissionTask(env, {
-          userId: input.userId,
-          runId: input.run.id,
-          job: input.job,
-          draft: input.draft,
-          rule,
-          item,
-        });
-        if (taskId) {
-          counts.tasks += 1;
-          counts.taskIds.push(taskId);
-        }
-      }
-
       if (rule.actions.notifyOwner) {
         if (!notificationConnection) {
           counts.skippedNotifications += 1;
@@ -4778,60 +4763,6 @@ async function createInboxWatchReplyDraft(
     )
     .run();
   return draftId;
-}
-
-async function createInboxWatchMissionTask(
-  env: Env,
-  input: {
-    userId: string;
-    runId: string;
-    job: AssistantJobRow;
-    draft: AssistantJobDraft;
-    rule: InboxWatchRuleConfig;
-    item: EmailTriageItem;
-  },
-): Promise<string | null> {
-  const taskId = inboxWatchArtifactId("task", input.runId, input.item.id, input.rule.id);
-  const projectId =
-    input.draft.destination.projectId ||
-    input.draft.scope.projectId ||
-    input.job.project_id ||
-    null;
-  const now = new Date().toISOString();
-  await env.DB.prepare(
-     `INSERT OR IGNORE INTO mission_tasks
-       (id, user_id, project_id, title, description, status, priority, due_at, scheduled_for,
-        source_kind, source_ref, approval_id, metadata_json, created_at, updated_at, archived_at)
-     VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, 'agent', ?, NULL, ?, ?, ?, NULL)`,
-  )
-    .bind(
-      taskId,
-      input.userId,
-      projectId,
-      `Inbox Watch: ${input.item.from}`,
-      [
-        `Matched rule: ${input.rule.label}`,
-        `Subject: ${input.item.subject}`,
-        `Summary: ${input.item.summary}`,
-        "Suggested next step: review and follow up.",
-      ].join("\n"),
-      3,
-      null,
-      null,
-      `inbox-watch:${input.runId}:${input.item.id}:${input.rule.id}`,
-      stringifyJson({
-        assistantJobId: input.job.id,
-        assistantJobRunId: input.runId,
-        inboxWatchRuleId: input.rule.id,
-        inboxWatchRuleLabel: input.rule.label,
-        sourceMessageId: input.item.id,
-        sourceThreadKey: input.item.threadKey,
-      }),
-      now,
-      now,
-    )
-    .run();
-  return taskId;
 }
 
 async function sendInboxWatchOwnerNotification(
