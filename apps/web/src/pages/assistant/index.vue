@@ -2852,11 +2852,7 @@ function createAgentChatEmailDraftAction(
     id: `email-draft:${message.id || draft.subject || draft.body.slice(0, 24)}`,
     to,
     status: "draft",
-    statusLabel: isValidEmailAddress(to)
-      ? "Ready"
-      : draft.toName
-        ? `Needs ${draft.toName}'s email`
-        : "Needs recipient",
+    statusLabel: isValidEmailAddress(to) ? "Ready" : "Needs recipient's email",
     savedDraftId: null,
     busy: null,
     error: null,
@@ -3032,9 +3028,7 @@ function canSubmitAssistantEmailDraft(action: AgentChatEmailDraftAction) {
 function assistantEmailDraftHint(action: AgentChatEmailDraftAction) {
   if (action.error) return action.error;
   if (!action.to.trim()) {
-    return action.toName
-      ? `Add ${action.toName}'s email before saving.`
-      : "Add a recipient email before saving.";
+    return "Add recipient's email before saving.";
   }
   if (!isValidEmailAddress(action.to)) return "Use a valid recipient email.";
   if (!action.subject.trim()) return "Add a subject before saving.";
@@ -3050,9 +3044,7 @@ function touchAgentChatEmailDraftAction(action: AgentChatEmailDraftAction) {
     ? action.savedDraftId
       ? "Unsaved edits"
       : "Ready"
-    : action.toName
-      ? `Needs ${action.toName}'s email`
-      : "Needs recipient";
+    : "Needs recipient's email";
 }
 
 async function saveAgentChatEmailDraftAction(
@@ -5366,11 +5358,7 @@ function messageFromUnknown(err: unknown, fallback: string) {
                       v-model.trim="message.emailDraftAction.to"
                       type="email"
                       autocomplete="email"
-                      :placeholder="
-                        message.emailDraftAction.toName
-                          ? `${message.emailDraftAction.toName}'s email`
-                          : 'recipient@example.com'
-                      "
+                      placeholder="recipient's email"
                       :disabled="message.emailDraftAction.busy !== null"
                       @input="
                         touchAgentChatEmailDraftAction(

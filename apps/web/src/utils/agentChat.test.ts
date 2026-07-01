@@ -124,6 +124,28 @@ describe("agent chat utils", () => {
     });
   });
 
+  it("does not treat purpose phrases as email recipients", () => {
+    expect(
+      inferAgentChatEmailDraft(
+        [
+          "Subject: Cats",
+          "",
+          "Hi,",
+          "",
+          "I wanted to share a few thoughts about cats.",
+          "",
+          "Would you like me to adjust the tone, add specific details, or save this as a draft?",
+        ].join("\n"),
+        "Draft an email to share a few thoughts about cats",
+      ),
+    ).toMatchObject({
+      toName: null,
+      toAddress: null,
+      subject: "Cats",
+      body: "Hi,\n\nI wanted to share a few thoughts about cats.",
+    });
+  });
+
   it("does not infer a draft card for ordinary assistant text", () => {
     expect(
       inferAgentChatEmailDraft(

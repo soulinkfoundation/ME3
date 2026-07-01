@@ -593,6 +593,13 @@ function extractDraftRecipientName(text: string): string | null {
     ?.replace(/\b(?:about|regarding|re|subject|saying|with)\b[\s\S]*$/i, "")
     .replace(/[:：]+$/u, "")
     .trim();
+  if (
+    /^(?:adjust|ask|connect|discuss|draft|explain|follow|invite|reply|respond|save|send|share|tell|thank|update|write)\b/i.test(
+      phrase || "",
+    )
+  ) {
+    return null;
+  }
   return phrase || null;
 }
 
