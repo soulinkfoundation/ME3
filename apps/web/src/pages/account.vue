@@ -2785,14 +2785,11 @@ onBeforeUnmount(() => {
                 <p class="connection-line__description">
                   {{ storageDescription }}
                 </p>
-                <div class="connection-line__details">
-                  <span>
-                    Binding {{ storageStatus?.binding || "SITE_ASSETS" }}
-                  </span>
-                  <span v-if="storageStatus?.r2Available">R2 enabled</span>
-                  <span v-else>R2 inactive</span>
+                <div
+                  v-if="storageActivationRunUrl"
+                  class="connection-line__details"
+                >
                   <a
-                    v-if="storageActivationRunUrl"
                     :href="storageActivationRunUrl"
                     target="_blank"
                     rel="noopener"
