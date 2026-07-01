@@ -27,7 +27,7 @@ let config = originalConfig;
 const workerName = getTopLevelTomlString(config, "name") || "my-me3";
 const resourcePrefix = normalizeResourcePrefix(workerName);
 const d1Block = getTomlArrayBlock(config, "d1_databases", "DB");
-const defaultBucketName = buildResourceName(resourcePrefix, "site-assets");
+const defaultBucketName = buildResourceName(resourcePrefix, storageResourceSuffix(resourcePrefix));
 const existingR2Block = getTomlArrayBlock(config, "r2_buckets", "SITE_ASSETS");
 const existingBucketName = getTomlString(existingR2Block, "bucket_name");
 const hasExistingRealR2Binding =
@@ -294,6 +294,10 @@ function buildResourceName(prefix, suffix) {
   const suffixText = `-${suffix}`;
   const maxPrefixLength = 63 - suffixText.length;
   return `${prefix.slice(0, maxPrefixLength).replace(/-$/g, "")}${suffixText}`;
+}
+
+function storageResourceSuffix(prefix) {
+  return /(\b|-)me3(\b|-)/.test(prefix) ? "storage" : "me3-storage";
 }
 
 function isValidResourceName(value) {

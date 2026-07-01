@@ -1571,8 +1571,10 @@ onMounted(() => {
             <li>
               <span>4</span>
               <p>
-                Add <code>CLOUDFLARE_ACCOUNT_ID</code> with the account ID, and
-                add <code>CLOUDFLARE_API_TOKEN</code> with the new token.
+                Add <code>CLOUDFLARE_ACCOUNT_ID</code> with the account ID,
+                optionally add <code>CLOUDFLARE_AI_GATEWAY_ID</code> with this
+                install's gateway name, and add <code>CLOUDFLARE_API_TOKEN</code>
+                with the new token.
               </p>
             </li>
             <li>

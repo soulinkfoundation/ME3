@@ -841,6 +841,7 @@ describe("Core chat native context", () => {
         ...env,
         AI: { run: aiRun },
         CLOUDFLARE_ACCOUNT_ID: "cf-account",
+        CLOUDFLARE_AI_GATEWAY_ID: "friend-one",
         CLOUDFLARE_API_TOKEN: "cf-token",
       } as never,
       createStorage(),
@@ -853,7 +854,7 @@ describe("Core chat native context", () => {
       expect.any(Object),
       {
         gateway: {
-          id: "default",
+          id: "friend-one",
         },
       },
     );

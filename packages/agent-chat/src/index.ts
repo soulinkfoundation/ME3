@@ -518,6 +518,7 @@ type CoreAgentChatEnv = {
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_AI_GATEWAY_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
   TOKEN_ENCRYPTION_KEY?: string;
   ME3_ASSISTANT_DEBUG_TRACE?: string;
@@ -5620,7 +5621,10 @@ async function getAiGatewayRuntimeConfig(
 ): Promise<AiGatewayRuntimeConfig> {
   const row = await getAiGatewaySettingsRow(env, ownerId);
   const accountId = row?.account_id || env.CLOUDFLARE_ACCOUNT_ID || null;
-  const gatewayId = row?.gateway_id?.trim() || (accountId ? DEFAULT_AI_GATEWAY_ID : null);
+  const gatewayId =
+    row?.gateway_id?.trim() ||
+    normalizeEnvGatewayId(env.CLOUDFLARE_AI_GATEWAY_ID) ||
+    (accountId ? DEFAULT_AI_GATEWAY_ID : null);
   const storedToken = row?.encrypted_api_token
     ? await decryptSecretSafely(env, row.encrypted_api_token)
     : null;
@@ -5633,6 +5637,10 @@ async function getAiGatewayRuntimeConfig(
     routeWorkersAi: Boolean(accountId && gatewayId && apiToken),
     routeExternalProviders: Boolean(accountId && gatewayId && apiToken),
   };
+}
+
+function normalizeEnvGatewayId(value: string | undefined): string {
+  return value?.trim().slice(0, 64) || "";
 }
 
 async function getAiGatewaySettingsRow(

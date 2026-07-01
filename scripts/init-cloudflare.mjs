@@ -12,7 +12,6 @@ import {
 
 const DEFAULT_CONFIG = "wrangler.toml";
 const DEFAULT_DB_NAME = "me3-core-db";
-const DEFAULT_BUCKET = "me3-site-assets";
 const D1_PLACEHOLDER = "00000000-0000-0000-0000-000000000000";
 const SCAFFOLD_BUCKET_NAME = "my-me3-site-assets";
 
@@ -32,6 +31,15 @@ const aiGatewayApiToken =
     process.env.CLOUDFLARE_API_TOKEN ||
     ""
   ).trim();
+const aiGatewayId =
+  (
+    args.cloudflareAiGatewayId ||
+    process.env.ME3_AI_GATEWAY_CLOUDFLARE_GATEWAY_ID ||
+    process.env.CLOUDFLARE_AI_GATEWAY_ID ||
+    ""
+  )
+    .trim()
+    .slice(0, 64);
 
 if (!existsSync(configPath)) {
   fail(`Could not find ${configPath}. Run this from the ME3 Core repo root.`);
@@ -41,11 +49,14 @@ const originalConfig = readFileSync(configPath, "utf8");
 let config = originalConfig;
 const db = getD1Config(config);
 const dbName = args.dbName || db.databaseName || DEFAULT_DB_NAME;
+const workerName = getTopLevelTomlString(config, "name") || "me3";
+const resourcePrefix = normalizeResourcePrefix(workerName);
+const defaultBucketName = buildResourceName(resourcePrefix, storageResourceSuffix(resourcePrefix));
 const bucketName =
   args.bucket ||
   process.env.ME3_R2_BUCKET_NAME ||
-  getPreferredSiteAssetsBucketName(config, DEFAULT_BUCKET) ||
-  DEFAULT_BUCKET;
+  getPreferredSiteAssetsBucketName(config, defaultBucketName) ||
+  defaultBucketName;
 const existingBucketName = getPreferredSiteAssetsBucketName(config, "");
 const hasExistingRealR2Binding =
   Boolean(existingBucketName) && existingBucketName !== SCAFFOLD_BUCKET_NAME;
@@ -165,6 +176,7 @@ function parseArgs(values) {
     dbId: "",
     dbName: "",
     cloudflareAccountId: "",
+    cloudflareAiGatewayId: "",
     cloudflareApiToken: "",
     skipR2: false,
     skipQueues: false,
@@ -217,6 +229,11 @@ function parseArgs(values) {
       index += 1;
     } else if (value.startsWith("--cloudflare-account-id=")) {
       parsed.cloudflareAccountId = value.slice("--cloudflare-account-id=".length);
+    } else if (value === "--cloudflare-ai-gateway-id") {
+      parsed.cloudflareAiGatewayId = values[index + 1] || "";
+      index += 1;
+    } else if (value.startsWith("--cloudflare-ai-gateway-id=")) {
+      parsed.cloudflareAiGatewayId = value.slice("--cloudflare-ai-gateway-id=".length);
     } else if (value === "--cloudflare-api-token") {
       parsed.cloudflareApiToken = values[index + 1] || "";
       index += 1;
@@ -282,6 +299,8 @@ Options:
   --setup-password <value> SETUP_PASSWORD secret value
   --cloudflare-account-id <id>
                            Set CLOUDFLARE_ACCOUNT_ID for AI Gateway usage
+  --cloudflare-ai-gateway-id <id>
+                           Set CLOUDFLARE_AI_GATEWAY_ID for AI Gateway usage
   --cloudflare-api-token <token>
                            Set CLOUDFLARE_API_TOKEN for AI Gateway usage
   --with-r2                Create or reuse SITE_ASSETS R2 storage now
@@ -333,23 +352,30 @@ function putSecret(name, value) {
 }
 
 function putAiGatewaySecrets() {
-  if (!aiGatewayAccountId && !aiGatewayApiToken) {
+  if (!aiGatewayAccountId && !aiGatewayApiToken && !aiGatewayId) {
     console.log(
-      "Skipped AI Gateway secrets; set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN later to enable usage reporting.",
+      "Skipped AI Gateway secrets; set CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID, and CLOUDFLARE_API_TOKEN later to enable usage reporting.",
     );
     return;
   }
 
-  if (!aiGatewayAccountId || !aiGatewayApiToken) {
+  let wroteSecret = false;
+  if (aiGatewayAccountId && aiGatewayApiToken) {
+    putSecret("CLOUDFLARE_ACCOUNT_ID", aiGatewayAccountId);
+    putSecret("CLOUDFLARE_API_TOKEN", aiGatewayApiToken);
+    wroteSecret = true;
+  } else if (aiGatewayAccountId || aiGatewayApiToken) {
     console.warn(
       "Skipped AI Gateway secrets; both CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required.",
     );
-    return;
   }
 
-  putSecret("CLOUDFLARE_ACCOUNT_ID", aiGatewayAccountId);
-  putSecret("CLOUDFLARE_API_TOKEN", aiGatewayApiToken);
-  console.log("AI Gateway Worker secrets are set.");
+  if (aiGatewayId) {
+    putSecret("CLOUDFLARE_AI_GATEWAY_ID", aiGatewayId);
+    wroteSecret = true;
+  }
+
+  if (wroteSecret) console.log("AI Gateway Worker secrets are set.");
 }
 
 function getD1Config(value) {
@@ -414,6 +440,29 @@ function setTomlString(block, key, value) {
     return block.replace(pattern, `${key} = "${value}"`);
   }
   return `${block.trimEnd()}\n${key} = "${value}"\n`;
+}
+
+function getTopLevelTomlString(value, key) {
+  return value.match(new RegExp(`^${key}\\s*=\\s*"([^"]+)"`, "m"))?.[1] || "";
+}
+
+function normalizeResourcePrefix(value) {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return normalized || "me3";
+}
+
+function buildResourceName(prefix, suffix) {
+  const suffixText = `-${suffix}`;
+  const maxPrefixLength = 63 - suffixText.length;
+  return `${prefix.slice(0, maxPrefixLength).replace(/-$/g, "")}${suffixText}`;
+}
+
+function storageResourceSuffix(prefix) {
+  return /(\b|-)me3(\b|-)/.test(prefix) ? "storage" : "me3-storage";
 }
 
 function parseDatabaseId(text) {

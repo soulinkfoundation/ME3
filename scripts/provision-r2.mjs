@@ -23,7 +23,7 @@ const before = readFileSync(configPath, "utf8");
 const workerName = getTopLevelTomlString(before, "name") || "me3";
 const defaultBucketName = buildResourceName(
   normalizeResourcePrefix(workerName),
-  "site-assets",
+  storageResourceSuffix(normalizeResourcePrefix(workerName)),
 );
 const existingBucketName = getPreferredSiteAssetsBucketName(
   before,
@@ -120,6 +120,10 @@ function buildResourceName(prefix, suffix) {
   const suffixText = `-${suffix}`;
   const maxPrefixLength = 63 - suffixText.length;
   return `${prefix.slice(0, maxPrefixLength).replace(/-$/g, "")}${suffixText}`;
+}
+
+function storageResourceSuffix(prefix) {
+  return /(\b|-)me3(\b|-)/.test(prefix) ? "storage" : "me3-storage";
 }
 
 function runWrangler(commandArgs) {

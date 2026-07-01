@@ -165,7 +165,7 @@ export function registerCoreGithubUpdaterRoutes(
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
 
-    return c.json(createCoreStorageStatus(c));
+    return c.json(await createCoreStorageStatus(c));
   });
 
   app.post("/api/core/storage/r2/activate", async (c) => {
@@ -183,7 +183,7 @@ export function registerCoreGithubUpdaterRoutes(
       body = {};
     }
     const bucketName =
-      readString(body.bucketName) || createCoreStorageStatus(c).suggestedBucketName;
+      readString(body.bucketName) || (await createCoreStorageStatus(c)).suggestedBucketName;
     if (!R2_BUCKET_NAME_REGEX.test(bucketName)) {
       return c.json(
         {
@@ -329,19 +329,23 @@ function createCoreGithubStatus(
   };
 }
 
-function createCoreStorageStatus(c: AppContext): CoreStorageStatus {
+async function createCoreStorageStatus(c: AppContext): Promise<CoreStorageStatus> {
+  const installId = await getOrCreateCoreInstallId(c.env).catch(() => "");
   return {
     ok: true,
     r2Available: Boolean(c.env.SITE_ASSETS),
     binding: "SITE_ASSETS",
-    suggestedBucketName: suggestedR2BucketName(c.env, c.req.url),
+    suggestedBucketName: suggestedR2BucketName(c.env, c.req.url, installId),
     r2ActivationUrl: "https://dash.cloudflare.com/?to=/:account/r2/plans",
   };
 }
 
-function suggestedR2BucketName(env: Env, requestUrl: string): string {
+function suggestedR2BucketName(env: Env, requestUrl: string, installId: string): string {
   const explicit = normalizeBucketName(env.ME3_WORKER_NAME || "");
   if (explicit) return buildBucketName(explicit);
+
+  const installPrefix = normalizeBucketName(installId);
+  if (installPrefix) return buildBucketName(installPrefix);
 
   const webHost = hostFromUrl(getCoreWebOrigin(env, requestUrl));
   const hostPrefix =
@@ -352,7 +356,7 @@ function suggestedR2BucketName(env: Env, requestUrl: string): string {
 }
 
 function buildBucketName(prefix: string): string {
-  const suffix = "-site-assets";
+  const suffix = `-${/(\b|-)me3(\b|-)/.test(prefix) ? "storage" : "me3-storage"}`;
   const maxPrefixLength = 63 - suffix.length;
   const trimmedPrefix = prefix.slice(0, maxPrefixLength).replace(/-+$/g, "") || "me3";
   return `${trimmedPrefix}${suffix}`;

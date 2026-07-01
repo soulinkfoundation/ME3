@@ -135,7 +135,10 @@ export async function getAiGatewaySettings(
 ): Promise<AiGatewaySettingsResponse> {
   const row = await getAiGatewaySettingsRow(env, userId);
   const accountId = row?.account_id || env.CLOUDFLARE_ACCOUNT_ID || "";
-  const gatewayId = row?.gateway_id?.trim() || DEFAULT_AI_GATEWAY_ID;
+  const gatewayId =
+    row?.gateway_id?.trim() ||
+    normalizeEnvGatewayId(env.CLOUDFLARE_AI_GATEWAY_ID) ||
+    DEFAULT_AI_GATEWAY_ID;
   const hasStoredToken = Boolean(row?.encrypted_api_token);
   const hasEnvToken = Boolean(env.CLOUDFLARE_API_TOKEN);
   const configured = Boolean(accountId && gatewayId && (hasStoredToken || hasEnvToken));
@@ -249,7 +252,10 @@ export async function getAiGatewayRuntimeConfig(
 ): Promise<AiGatewayRuntimeConfig> {
   const row = await getAiGatewaySettingsRow(env, userId);
   const accountId = row?.account_id || env.CLOUDFLARE_ACCOUNT_ID || null;
-  const gatewayId = row?.gateway_id?.trim() || (accountId ? DEFAULT_AI_GATEWAY_ID : null);
+  const gatewayId =
+    row?.gateway_id?.trim() ||
+    normalizeEnvGatewayId(env.CLOUDFLARE_AI_GATEWAY_ID) ||
+    (accountId ? DEFAULT_AI_GATEWAY_ID : null);
   const storedToken = row?.encrypted_api_token
     ? await decryptSecretSafely(env, row.encrypted_api_token)
     : null;
@@ -262,6 +268,10 @@ export async function getAiGatewayRuntimeConfig(
     routeWorkersAi: Boolean(accountId && gatewayId && apiToken),
     routeExternalProviders: Boolean(accountId && gatewayId && apiToken),
   };
+}
+
+function normalizeEnvGatewayId(value: string | undefined): string {
+  return value?.trim().slice(0, 64) || "";
 }
 
 export async function getAiGatewayUsageSummary(

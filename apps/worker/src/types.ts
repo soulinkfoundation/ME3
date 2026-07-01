@@ -60,6 +60,7 @@ export interface Env {
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_AI_GATEWAY_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;

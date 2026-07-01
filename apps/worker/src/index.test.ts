@@ -4401,7 +4401,7 @@ describe("ME3 Core Worker auth", () => {
       ok: true,
       r2Available: false,
       binding: "SITE_ASSETS",
-      suggestedBucketName: "kierans-me3-site-assets",
+      suggestedBucketName: "kierans-me3-storage",
       r2ActivationUrl: "https://dash.cloudflare.com/?to=/:account/r2/plans",
     });
   });
@@ -4434,7 +4434,7 @@ describe("ME3 Core Worker auth", () => {
           "Content-Type": "application/json",
           Cookie: session,
         },
-        body: JSON.stringify({ bucketName: "kierans-me3-site-assets" }),
+        body: JSON.stringify({}),
       }),
       env,
     );
@@ -4454,7 +4454,7 @@ describe("ME3 Core Worker auth", () => {
     expect(requestBody).toMatchObject({
       coreInstallId: "core_11111111-1111-4111-8111-111111111111",
       coreOwnerId: "user123",
-      bucketName: "kierans-me3-site-assets",
+      bucketName: "core-11111111-1111-4111-8111-111111111111-me3-storage",
       binding: "SITE_ASSETS",
     });
 
@@ -10173,6 +10173,7 @@ describe("ME3 Core Worker auth", () => {
 
   it("routes OpenAI text generation through AI Gateway when enabled", async () => {
     const env = createEnv();
+    env.CLOUDFLARE_AI_GATEWAY_ID = "friend-one";
     const session = cookieHeader(await bootstrap(env));
 
     await app.fetch(
@@ -10204,7 +10205,7 @@ describe("ME3 Core Worker auth", () => {
     );
     expect(await gatewayResponse.json()).toMatchObject({
       configured: true,
-      gatewayId: "default",
+      gatewayId: "friend-one",
       routeWorkersAi: true,
       routeExternalProviders: true,
     });
@@ -10222,7 +10223,7 @@ describe("ME3 Core Worker auth", () => {
 
       expect(result.text).toBe("Gateway reply");
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://gateway.ai.cloudflare.com/v1/cf-account/default/openai/chat/completions",
+        "https://gateway.ai.cloudflare.com/v1/cf-account/friend-one/openai/chat/completions",
         expect.any(Object),
       );
       expect(init.headers).toMatchObject({

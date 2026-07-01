@@ -842,7 +842,7 @@ const coreGithubDescription = computed(() => {
 });
 
 const storageBucketName = computed(
-  () => storageStatus.value?.suggestedBucketName || "me3-site-assets",
+  () => storageStatus.value?.suggestedBucketName || "me3-storage",
 );
 
 const storageActivationUrl = computed(
