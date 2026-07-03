@@ -25,6 +25,7 @@ import {
   formatShortDate,
   isLocalProject,
   missionTasksUrl,
+  projectTaskViewModeFromPreference,
   projectBoardColumnsForProject,
   projectBoardStatusesForProject,
   projectForTask,
@@ -42,6 +43,7 @@ import type {
   MissionTask,
   ProjectBoardColumn,
   ProjectBoardStatus,
+  ProjectTaskViewMode,
   ProjectTaskDetailDraft,
   ProjectTaskListGroup,
   WeeklyReviewTaskCleanupAction,
@@ -287,7 +289,7 @@ const completedProjectTasksError = ref("");
 const completedProjectTasksNextCursor = ref<string | null>(null);
 const localExecutorStatus = ref<LocalExecutorStatusResponse | null>(null);
 const kanbanEnabled = ref(false);
-const projectTaskViewMode = ref<"list" | "kanban">("list");
+const projectTaskViewMode = ref<ProjectTaskViewMode>("list");
 const projectCompletedOpen = ref(false);
 const projectTaskDraft = ref("");
 const projectTaskProjectId = ref("");
@@ -1243,6 +1245,7 @@ function cyclePrimarySection() {
 
 function openProjectModal() {
   projectPickerOpen.value = false;
+  projectActionsMenuOpen.value = false;
   projectModalMode.value = "add";
   editingProjectId.value = "";
   projectTitle.value = "";
@@ -1262,6 +1265,7 @@ function projectIconIsLogo(value: string | null | undefined): boolean {
 
 function openEditProjectModal(project: MissionProject) {
   projectPickerOpen.value = false;
+  projectActionsMenuOpen.value = false;
   projectModalMode.value = "edit";
   editingProjectId.value = project.id;
   projectTitle.value = project.name;
@@ -1276,6 +1280,11 @@ function openEditProjectModal(project: MissionProject) {
   projectIconName.value = projectIconIsLogo(project.icon) ? "" : project.icon || "";
   projectError.value = "";
   projectModalOpen.value = true;
+}
+
+function openSelectedProjectModal() {
+  const project = selectedProjectDetail.value;
+  if (project) openEditProjectModal(project);
 }
 
 function closeProjectModal() {
@@ -1490,7 +1499,7 @@ function toggleProjectLog() {
   if (projectLogOpen.value) void loadProjectJournalLinks();
 }
 
-function setProjectTaskViewMode(mode: "list" | "kanban") {
+function setProjectTaskViewMode(mode: ProjectTaskViewMode) {
   const nextMode = mode === "kanban" && kanbanEnabled.value ? "kanban" : "list";
   if (projectTaskViewMode.value === nextMode) return;
   projectTaskViewMode.value = nextMode;
@@ -2537,9 +2546,12 @@ onMounted(() => {
     void router.replace("/journal");
     return;
   }
-  kanbanEnabled.value =
-    window.localStorage.getItem(PROJECTS_KANBAN_ENABLED_STORAGE_KEY) === "1";
-  projectTaskViewMode.value = kanbanEnabled.value ? "kanban" : "list";
+  const preferredViewMode = projectTaskViewModeFromPreference(
+    window.localStorage.getItem(PROJECTS_KANBAN_ENABLED_STORAGE_KEY),
+    window.matchMedia("(min-width: 960px)").matches,
+  );
+  kanbanEnabled.value = preferredViewMode === "kanban";
+  projectTaskViewMode.value = preferredViewMode;
   void loadMissionControlWorkspace();
   void loadPluginCapabilities();
   if (activeSection.value === "projects") {
@@ -2638,6 +2650,16 @@ onBeforeUnmount(() => {
             >
               <UiIcon :name="projectViewToggleIcon" :size="15" />
               {{ projectViewToggleLabel }}
+            </button>
+            <button
+              v-if="selectedProjectDetail"
+              type="button"
+              class="mission-control__actions-item"
+              role="menuitem"
+              @click="openSelectedProjectModal"
+            >
+              <UiIcon name="Pencil" :size="15" />
+              Edit project
             </button>
             <button
               type="button"

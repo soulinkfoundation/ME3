@@ -116,6 +116,7 @@ export type LocalExecutorStatusResponse = {
 };
 
 export type ProjectBoardStatus = Exclude<MissionTask["status"], "cancelled">;
+export type ProjectTaskViewMode = "list" | "kanban";
 
 export type ProjectBoardColumn = {
   id: string;
@@ -158,6 +159,16 @@ export const activeProjectTaskStatuses: ProjectBoardStatus[] = [
 ];
 
 export const PROJECT_TASK_PAGE_SIZE = 50;
+
+export function projectTaskViewModeFromPreference(
+  storedKanbanEnabled: string | null,
+  isDesktop: boolean,
+): ProjectTaskViewMode {
+  return storedKanbanEnabled === "1" ||
+    (storedKanbanEnabled === null && isDesktop)
+    ? "kanban"
+    : "list";
+}
 
 function projectIconValue(project: MissionProject | null | undefined): string {
   return textValue(project?.icon);
