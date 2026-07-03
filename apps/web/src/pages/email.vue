@@ -709,6 +709,7 @@ function syncSelectedMessages(nextMessages: InboxMessage[]) {
     !nextMessages.some((message) => message.id === expandedId.value)
   ) {
     expandedId.value = null;
+    mobileThreadOpen.value = false;
   }
   const nextIds = new Set(nextMessages.map((message) => message.id));
   selectedMessageIds.value = new Set(
