@@ -17,6 +17,7 @@ type StoredTaskRow = {
   description: string | null;
   status: "backlog" | "in_progress" | "review" | "done" | "cancelled";
   priority: number;
+  position: number;
   pinned_at: string | null;
   due_at: string | null;
   scheduled_for: string | null;
@@ -72,6 +73,7 @@ function taskRow(
     description: null,
     status: "backlog",
     priority,
+    position: 0,
     pinned_at: null,
     due_at: null,
     scheduled_for: sortDate,
@@ -125,10 +127,11 @@ function createTaskEnv(rows: StoredTaskRow[]) {
               if (sql.includes("COALESCE(pinned_at, '') < ?")) {
                 const pinnedRank = Number(values[valueIndex]);
                 const pinnedAt = String(values[valueIndex + 2]);
-                const priority = Number(values[valueIndex + 5]);
-                const sortValue = String(values[valueIndex + 9]);
-                const id = String(values[valueIndex + 14]);
-                valueIndex += 15;
+                const position = Number(values[valueIndex + 5]);
+                const priority = Number(values[valueIndex + 9]);
+                const sortValue = String(values[valueIndex + 14]);
+                const id = String(values[valueIndex + 20]);
+                valueIndex += 21;
                 results = results.filter((row) => {
                   const rowPinnedRank = row.pinned_at ? 0 : 1;
                   const rowPinnedAt = row.pinned_at || "";
@@ -138,13 +141,19 @@ function createTaskEnv(rows: StoredTaskRow[]) {
                     (rowPinnedRank === pinnedRank && rowPinnedAt < pinnedAt) ||
                     (rowPinnedRank === pinnedRank &&
                       rowPinnedAt === pinnedAt &&
+                      row.position > position) ||
+                    (rowPinnedRank === pinnedRank &&
+                      rowPinnedAt === pinnedAt &&
+                      row.position === position &&
                       row.priority > priority) ||
                     (rowPinnedRank === pinnedRank &&
                       rowPinnedAt === pinnedAt &&
+                      row.position === position &&
                       row.priority === priority &&
                       rowSortValue > sortValue) ||
                     (rowPinnedRank === pinnedRank &&
                       rowPinnedAt === pinnedAt &&
+                      row.position === position &&
                       row.priority === priority &&
                       rowSortValue === sortValue &&
                       row.id > id)
@@ -186,6 +195,8 @@ function createTaskEnv(rows: StoredTaskRow[]) {
                   a.pinned_at || "",
                 );
                 if (pinnedAtDelta !== 0) return pinnedAtDelta;
+                const positionDelta = a.position - b.position;
+                if (positionDelta !== 0) return positionDelta;
                 const priorityDelta = a.priority - b.priority;
                 if (priorityDelta !== 0) return priorityDelta;
                 const aSort = a.due_at || a.scheduled_for || a.created_at;
@@ -444,6 +455,24 @@ describe("Mission Control task pagination", () => {
 
     expect(secondPage.tasks.map((task) => task.id)).toEqual(["task-c"]);
     expect(secondPage.nextCursor).toBeNull();
+  });
+
+  it("orders active tasks by board position before priority", async () => {
+    const highPriorityLater = taskRow("high-priority-later", "project-1", 1, "2026-05-01");
+    highPriorityLater.position = 2000;
+    const normalPriorityFirst = taskRow("normal-priority-first", "project-1", 3, "2026-05-02");
+    normalPriorityFirst.position = 1000;
+    const env = createTaskEnv([highPriorityLater, normalPriorityFirst]);
+
+    const page = await listMissionTaskPage(env, "owner", {
+      projectId: "project-1",
+      limit: 2,
+    });
+
+    expect(page.tasks.map((task) => task.id)).toEqual([
+      "normal-priority-first",
+      "high-priority-later",
+    ]);
   });
 
   it("pages archived project tasks newest first", async () => {
@@ -717,6 +746,7 @@ describe("Mission Control journal project links", () => {
                       description: description || null,
                       status: "backlog",
                       priority: 3,
+                      position: 0,
                       pinned_at: null,
                       due_at: null,
                       scheduled_for: null,

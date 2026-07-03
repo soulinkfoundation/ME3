@@ -346,13 +346,15 @@ class FakeMissionLocalExecutorStatement {
         id: values[0] as string,
         user_id: values[1] as string,
         project_id: values[2] as string | null,
-        title: values[3] as string,
-        description: values[4] as string | null,
-        status: values[5] as string,
-        priority: values[6] as number,
-        pinned_at: values[7] ? "2026-06-01T09:05:00Z" : null,
-        due_at: values[8] as string | null,
-        scheduled_for: values[9] as string | null,
+        column_id: values[3] as string | null,
+        title: values[4] as string,
+        description: values[5] as string | null,
+        status: values[6] as string,
+        priority: values[7] as number,
+        position: values[8] as number,
+        pinned_at: values[9] ? "2026-06-01T09:05:00Z" : null,
+        due_at: values[10] as string | null,
+        scheduled_for: values[11] as string | null,
         source_kind: "manual",
         source_ref: null,
         approval_id: null,
@@ -366,18 +368,20 @@ class FakeMissionLocalExecutorStatement {
 
     if (sql.includes("UPDATE mission_tasks")) {
       const task = this.state.tasks.find(
-        (candidate) => candidate.id === values[9] && candidate.user_id === values[10],
+        (candidate) => candidate.id === values[11] && candidate.user_id === values[12],
       );
       if (task) {
         task.project_id = values[0] as string | null;
-        task.title = values[1] as string;
-        task.description = values[2] as string | null;
-        task.status = values[3] as string;
-        task.priority = values[4] as number;
-        if (values[5]) task.pinned_at = task.pinned_at || "2026-06-01T09:10:00Z";
-        if (values[6]) task.pinned_at = null;
-        task.due_at = values[7] as string | null;
-        task.scheduled_for = values[8] as string | null;
+        task.column_id = values[1] as string | null;
+        task.title = values[2] as string;
+        task.description = values[3] as string | null;
+        task.status = values[4] as string;
+        task.priority = values[5] as number;
+        task.position = values[6] as number;
+        if (values[7]) task.pinned_at = task.pinned_at || "2026-06-01T09:10:00Z";
+        if (values[8]) task.pinned_at = null;
+        task.due_at = values[9] as string | null;
+        task.scheduled_for = values[10] as string | null;
         task.updated_at = "2026-06-01T09:10:00Z";
       }
       return { success: true };

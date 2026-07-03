@@ -30,6 +30,7 @@ import {
   projectBoardStatusesForProject,
   projectForTask,
   projectName,
+  reorderProjectBoardColumnTasks,
   sortProjectTasks,
   taskDescriptionText,
   weeklyReviewMetadata,
@@ -43,6 +44,7 @@ import type {
   MissionTask,
   ProjectBoardColumn,
   ProjectBoardStatus,
+  ProjectTaskDropPlacement,
   ProjectTaskViewMode,
   ProjectTaskDetailDraft,
   ProjectTaskListGroup,
@@ -1887,6 +1889,78 @@ async function setProjectTaskStatus(
   }
 }
 
+async function reorderProjectTaskOnBoard(
+  task: MissionTask,
+  column: ProjectBoardColumn,
+  targetTask: MissionTask | null,
+  placement: ProjectTaskDropPlacement,
+) {
+  if (projectTaskActionId.value) return;
+  const nextColumnId = column.columnId || null;
+  const movedTask = {
+    ...task,
+    status: column.status,
+    columnId: nextColumnId,
+  };
+  const reorderedTasks = reorderProjectBoardColumnTasks(
+    column.tasks,
+    movedTask,
+    targetTask,
+    placement,
+  );
+  const changedTasks = reorderedTasks.filter((nextTask) => {
+    const current = projectTasks.value.find((item) => item.id === nextTask.id);
+    return (
+      current &&
+      (current.status !== nextTask.status ||
+        (current.columnId || null) !== (nextTask.columnId || null) ||
+        current.position !== nextTask.position)
+    );
+  });
+  if (changedTasks.length === 0) return;
+
+  const previousProjectTasks = [...projectTasks.value];
+  const previousCompletedProjectTasks = [...completedProjectTasks.value];
+  const changedById = new Map(changedTasks.map((item) => [item.id, item]));
+  projectTaskActionId.value = task.id;
+  projectTasksError.value = "";
+  projectTasks.value = sortProjectTasks(
+    projectTasks.value.map((item) => changedById.get(item.id) || item),
+  );
+  try {
+    for (const nextTask of changedTasks) {
+      const response = await api.patch<{ task: MissionTask }>(
+        `/mission-control/tasks/${encodeURIComponent(nextTask.id)}`,
+        {
+          status: nextTask.status,
+          columnId: nextTask.columnId,
+          position: nextTask.position,
+        },
+      );
+      replaceProjectTask(response.task);
+      if (response.task.status === "done") {
+        completedProjectTasks.value = [
+          response.task,
+          ...completedProjectTasks.value.filter(
+            (item) => item.id !== response.task.id,
+          ),
+        ];
+      } else {
+        completedProjectTasks.value = completedProjectTasks.value.filter(
+          (item) => item.id !== response.task.id,
+        );
+      }
+    }
+  } catch (e) {
+    projectTasks.value = previousProjectTasks;
+    completedProjectTasks.value = previousCompletedProjectTasks;
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not reorder item";
+  } finally {
+    projectTaskActionId.value = "";
+  }
+}
+
 async function renameProjectColumn(column: ProjectBoardColumn, name: string) {
   const project = selectedProjectDetail.value;
   if (
@@ -2041,7 +2115,12 @@ function handleProjectColumnDragLeave(
   if (projectTaskDropStatus.value === columnId) projectTaskDropStatus.value = "";
 }
 
-async function dropProjectTask(event: DragEvent, column: ProjectBoardColumn) {
+async function dropProjectTask(
+  event: DragEvent,
+  column: ProjectBoardColumn,
+  targetTask?: MissionTask,
+  placement: ProjectTaskDropPlacement = "after",
+) {
   event.preventDefault();
   const taskId =
     draggedProjectTaskId.value ||
@@ -2050,9 +2129,12 @@ async function dropProjectTask(event: DragEvent, column: ProjectBoardColumn) {
   endProjectTaskDrag();
   const task = projectTasks.value.find((item) => item.id === taskId);
   if (!task) return;
-  await setProjectTaskStatus(task, column.status, column.columnId || undefined, {
-    optimistic: true,
-  });
+  if (targetTask?.id === task.id) return;
+  const fallbackTarget =
+    targetTask ||
+    column.tasks.filter((item) => item.id !== task.id).at(-1) ||
+    null;
+  await reorderProjectTaskOnBoard(task, column, fallbackTarget, placement);
 }
 
 function startProjectColumnReorder(

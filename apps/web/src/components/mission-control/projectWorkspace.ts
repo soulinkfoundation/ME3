@@ -37,6 +37,7 @@ export type MissionTask = {
   sourceKind: "manual" | "capture" | "agent" | "beads" | "daemon";
   sourceRef: string | null;
   priority: number;
+  position: number;
   pinnedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -117,6 +118,7 @@ export type LocalExecutorStatusResponse = {
 
 export type ProjectBoardStatus = Exclude<MissionTask["status"], "cancelled">;
 export type ProjectTaskViewMode = "list" | "kanban";
+export type ProjectTaskDropPlacement = "before" | "after";
 
 export type ProjectBoardColumn = {
   id: string;
@@ -168,6 +170,29 @@ export function projectTaskViewModeFromPreference(
     (storedKanbanEnabled === null && isDesktop)
     ? "kanban"
     : "list";
+}
+
+export function reorderProjectBoardColumnTasks(
+  columnTasks: MissionTask[],
+  draggedTask: MissionTask,
+  targetTask: MissionTask | null,
+  placement: ProjectTaskDropPlacement,
+): MissionTask[] {
+  const nextTasks = columnTasks.filter((task) => task.id !== draggedTask.id);
+  let targetIndex = targetTask
+    ? nextTasks.findIndex((task) => task.id === targetTask.id)
+    : nextTasks.length;
+  if (targetIndex < 0) targetIndex = nextTasks.length;
+  if (targetTask && placement === "after") targetIndex += 1;
+
+  return [
+    ...nextTasks.slice(0, targetIndex),
+    draggedTask,
+    ...nextTasks.slice(targetIndex),
+  ].map((task, index) => ({
+    ...task,
+    position: (index + 1) * 1000,
+  }));
 }
 
 function projectIconValue(project: MissionProject | null | undefined): string {
@@ -449,6 +474,7 @@ export function sortProjectTasks(tasks: MissionTask[]): MissionTask[] {
       const pinnedDelta = (b.pinnedAt || "").localeCompare(a.pinnedAt || "");
       if (pinnedDelta !== 0) return pinnedDelta;
     }
+    if (a.position !== b.position) return a.position - b.position;
     if (a.priority !== b.priority) return a.priority - b.priority;
     const aSort = a.dueAt || a.scheduledFor || a.createdAt;
     const bSort = b.dueAt || b.scheduledFor || b.createdAt;

@@ -20,6 +20,7 @@ import {
 import type {
   MissionProject,
   MissionTask,
+  ProjectTaskDropPlacement,
   ProjectBoardColumn,
 } from "./projectWorkspace";
 
@@ -55,7 +56,12 @@ const emit = defineEmits<{
   "load-more": [];
   "column-drag-over": [event: DragEvent, columnId: string];
   "column-drag-leave": [event: DragEvent, columnId: string];
-  "drop-task": [event: DragEvent, column: ProjectBoardColumn];
+  "drop-task": [
+    event: DragEvent,
+    column: ProjectBoardColumn,
+    targetTask?: MissionTask,
+    placement?: ProjectTaskDropPlacement,
+  ];
   "column-reorder-start": [event: DragEvent, column: ProjectBoardColumn];
   "column-reorder-over": [event: DragEvent, column: ProjectBoardColumn];
   "column-reorder-leave": [event: DragEvent, column: ProjectBoardColumn];
@@ -106,6 +112,26 @@ function handleColumnDragLeave(event: DragEvent, column: ProjectBoardColumn) {
 function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
   emit("column-reorder-drop", event, column);
   emit("drop-task", event, column);
+}
+
+function taskDropPlacement(event: DragEvent): ProjectTaskDropPlacement {
+  const target = event.currentTarget as HTMLElement | null;
+  if (!target) return "after";
+  const bounds = target.getBoundingClientRect();
+  return event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+}
+
+function handleTaskDragOver(event: DragEvent) {
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+}
+
+function handleTaskDrop(
+  event: DragEvent,
+  column: ProjectBoardColumn,
+  task: MissionTask,
+) {
+  emit("drop-task", event, column, task, taskDropPlacement(event));
 }
 </script>
 
@@ -322,6 +348,8 @@ function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
             @keydown.space.prevent="emit('open-detail', task)"
             @dragstart="emit('task-drag-start', $event, task)"
             @dragend="emit('task-drag-end')"
+            @dragover="handleTaskDragOver"
+            @drop.stop="handleTaskDrop($event, column, task)"
           >
             <p class="project-task-card__title">{{ task.title }}</p>
             <p
