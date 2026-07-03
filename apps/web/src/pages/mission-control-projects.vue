@@ -318,7 +318,11 @@ const projectTaskDetailDraft = ref<ProjectTaskDetailDraft>({
   scheduledFor: "",
 });
 const projectTaskDetailSaving = ref(false);
+const projectTaskDetailSaveState = ref<"idle" | "saving" | "saved" | "error">(
+  "idle",
+);
 const projectTaskDetailError = ref("");
+let projectTaskDetailSaveTimer: number | null = null;
 const weeklyReviewTaskActions = ref<
   Record<string, WeeklyReviewTaskCleanupAction>
 >({});
@@ -618,13 +622,12 @@ const projectViewToggleIcon = computed<UiIconName>(() =>
   projectTaskViewMode.value === "kanban" ? "List" : "SquareKanban",
 );
 const projectLogToggleLabel = computed(() => "Project journal");
-const projectTaskDetailSaveDisabled = computed(
-  () =>
-    projectTaskDetailSaving.value ||
-    weeklyReviewSubmitting.value ||
-    !selectedProjectTaskDetail.value ||
-    !projectTaskDetailDraft.value.title.trim(),
-);
+const projectTaskDetailSaveStatusText = computed(() => {
+  if (projectTaskDetailSaveState.value === "saving") return "Saving";
+  if (projectTaskDetailSaveState.value === "saved") return "Saved";
+  if (projectTaskDetailSaveState.value === "error") return "Could not save";
+  return "";
+});
 const weeklyReviewSubmitDisabled = computed(
   () =>
     weeklyReviewSubmitting.value ||
@@ -1555,14 +1558,52 @@ function toggleWeeklyReviewReminder(reminderId: string) {
   weeklyReviewReminderIds.value = next;
 }
 
+function projectTaskDetailStatus(task: MissionTask): ProjectBoardStatus {
+  return task.status === "cancelled"
+    ? "backlog"
+    : (task.status as ProjectBoardStatus);
+}
+
+function projectTaskDetailHasChanges(
+  task = selectedProjectTaskDetail.value,
+): boolean {
+  if (!task) return false;
+  return (
+    projectTaskDetailDraft.value.title.trim() !== task.title ||
+    (projectTaskDetailDraft.value.description.trim() || "") !==
+      (task.description || "") ||
+    projectTaskDetailDraft.value.status !== projectTaskDetailStatus(task) ||
+    projectTaskDetailDraft.value.projectId !==
+      (task.projectId || projects.value[0]?.id || "") ||
+    (projectTaskDetailDraft.value.scheduledFor || "") !==
+      (task.scheduledFor?.slice(0, 10) || "")
+  );
+}
+
+function clearProjectTaskDetailSaveTimer() {
+  if (!projectTaskDetailSaveTimer) return;
+  window.clearTimeout(projectTaskDetailSaveTimer);
+  projectTaskDetailSaveTimer = null;
+}
+
+function scheduleProjectTaskDetailSave() {
+  clearProjectTaskDetailSaveTimer();
+  projectTaskDetailSaveState.value = "idle";
+  projectTaskDetailSaveTimer = window.setTimeout(() => {
+    void saveProjectTaskDetail();
+  }, 700);
+}
+
+async function flushProjectTaskDetailSave(): Promise<boolean> {
+  if (!projectTaskDetailSaveTimer && !projectTaskDetailHasChanges()) return true;
+  return saveProjectTaskDetail();
+}
+
 function syncProjectTaskDetailDraft(task: MissionTask) {
   projectTaskDetailDraft.value = {
     title: task.title,
     description: task.description || "",
-    status:
-      task.status === "cancelled"
-        ? "backlog"
-        : (task.status as ProjectBoardStatus),
+    status: projectTaskDetailStatus(task),
     projectId: task.projectId || projects.value[0]?.id || "",
     scheduledFor: task.scheduledFor?.slice(0, 10) || "",
   };
@@ -1577,18 +1618,23 @@ function openProjectTaskDetail(task: MissionTask) {
     return;
   selectedProjectTaskDetailId.value = task.id;
   projectTaskDetailError.value = "";
+  projectTaskDetailSaveState.value = "saved";
+  clearProjectTaskDetailSaveTimer();
   syncProjectTaskDetailDraft(task);
   resetWeeklyReviewSelection(task);
 }
 
-function closeProjectTaskDetail(options: { force?: boolean } = {}) {
+async function closeProjectTaskDetail(options: { force?: boolean } = {}) {
   if (
     (projectTaskDetailSaving.value || weeklyReviewSubmitting.value) &&
     !options.force
   )
     return;
+  if (!options.force && !(await flushProjectTaskDetailSave())) return;
+  clearProjectTaskDetailSaveTimer();
   selectedProjectTaskDetailId.value = "";
   projectTaskDetailError.value = "";
+  projectTaskDetailSaveState.value = "idle";
   resetWeeklyReviewSelection(null);
   clearTaskRouteQuery();
 }
@@ -1729,17 +1775,29 @@ async function runProjectTaskLocally(task: MissionTask) {
   }
 }
 
-async function saveProjectTaskDetail() {
+async function saveProjectTaskDetail(): Promise<boolean> {
+  clearProjectTaskDetailSaveTimer();
   const task = selectedProjectTaskDetail.value;
   const title = projectTaskDetailDraft.value.title.trim();
+  if (!task || selectedProjectTaskIsWeeklyReview.value) return true;
+  if (!projectTaskDetailHasChanges(task)) {
+    projectTaskDetailSaveState.value = "saved";
+    return true;
+  }
+  if (!title) {
+    projectTaskDetailError.value = "Title is required";
+    projectTaskDetailSaveState.value = "error";
+    return false;
+  }
   if (
-    !task ||
-    !title ||
     projectTaskDetailSaving.value ||
-    selectedProjectTaskIsWeeklyReview.value
-  )
-    return;
+    weeklyReviewSubmitting.value
+  ) {
+    scheduleProjectTaskDetailSave();
+    return false;
+  }
   projectTaskDetailSaving.value = true;
+  projectTaskDetailSaveState.value = "saving";
   projectTaskDetailError.value = "";
   try {
     const response = await api.patch<{ task: MissionTask }>(
@@ -1753,12 +1811,17 @@ async function saveProjectTaskDetail() {
       },
     );
     replaceProjectTask(response.task);
-    syncProjectTaskDetailDraft(response.task);
-    closeProjectTaskDetail({ force: true });
-    toastSuccess("Task updated");
+    if (projectTaskDetailHasChanges(response.task)) {
+      scheduleProjectTaskDetailSave();
+      return false;
+    }
+    projectTaskDetailSaveState.value = "saved";
+    return true;
   } catch (e) {
     projectTaskDetailError.value =
       e instanceof ApiError ? e.message : "Could not update task";
+    projectTaskDetailSaveState.value = "error";
+    return false;
   } finally {
     projectTaskDetailSaving.value = false;
   }
@@ -2619,6 +2682,27 @@ watch(selectedProjectDetailId, (next, previous) => {
   }
 });
 
+watch(
+  projectTaskDetailDraft,
+  () => {
+    if (
+      !selectedProjectTaskDetail.value ||
+      selectedProjectTaskIsWeeklyReview.value
+    ) {
+      clearProjectTaskDetailSaveTimer();
+      return;
+    }
+    if (!projectTaskDetailHasChanges()) {
+      clearProjectTaskDetailSaveTimer();
+      if (!projectTaskDetailSaving.value) projectTaskDetailSaveState.value = "saved";
+      return;
+    }
+    projectTaskDetailError.value = "";
+    scheduleProjectTaskDetailSave();
+  },
+  { deep: true },
+);
+
 onMounted(() => {
   if (!isAccountsRoute.value && normalizeRawSection(route.query.section) === "accounts") {
     void router.replace("/accounts");
@@ -2650,6 +2734,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  void flushProjectTaskDetailSave();
   window.removeEventListener("keydown", handleWindowKeydown);
   window.removeEventListener("click", handleWindowClick);
 });
@@ -3614,12 +3699,11 @@ onBeforeUnmount(() => {
       :weekly-review-reminder-ids="weeklyReviewReminderIds"
       :detail-error="projectTaskDetailError"
       :detail-saving="projectTaskDetailSaving"
+      :detail-save-status-text="projectTaskDetailSaveStatusText"
       :weekly-review-submitting="weeklyReviewSubmitting"
       :task-action-id="projectTaskActionId"
-      :save-disabled="projectTaskDetailSaveDisabled"
       :submit-disabled="weeklyReviewSubmitDisabled"
       @close="closeProjectTaskDetail()"
-      @save="saveProjectTaskDetail"
       @submit="submitSelectedWeeklyReview"
       @archive="archiveSelectedProjectTask"
       @set-weekly-review-task-action="setWeeklyReviewTaskAction"

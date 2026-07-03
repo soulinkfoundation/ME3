@@ -36,9 +36,9 @@ const props = defineProps<{
   weeklyReviewCompletedOpen: boolean;
   detailError: string;
   detailSaving: boolean;
+  detailSaveStatusText: string;
   weeklyReviewSubmitting: boolean;
   taskActionId: string;
-  saveDisabled: boolean;
   submitDisabled: boolean;
 }>();
 
@@ -47,7 +47,6 @@ const emit = defineEmits<{
   "update:weeklyReviewCustomMemory": [value: string];
   "update:weeklyReviewCompletedOpen": [value: boolean];
   close: [];
-  save: [];
   submit: [];
   archive: [];
   "set-weekly-review-task-action": [
@@ -115,21 +114,7 @@ function closeFromBackdrop() {
         aria-modal="true"
         aria-labelledby="task-detail-modal-title"
       >
-        <div class="task-detail-modal__window-actions">
-          <Button
-            v-if="!weeklyReview"
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            type="button"
-            aria-label="Archive task"
-            title="Archive task"
-            :disabled="detailSaving || taskActionId === task.id"
-            @click="emit('archive')"
-          >
-            <UiIcon name="Archive" :size="16" />
-          </Button>
+        <div v-if="weeklyReview" class="task-detail-modal__window-actions">
           <Button
             color="ghost"
             shape="soft"
@@ -334,18 +319,56 @@ function closeFromBackdrop() {
         </template>
 
         <template v-else>
-          <label class="task-note-title-field">
-            <span class="task-note-title-field__label">Title</span>
-            <input
-              :value="detailDraft.title"
-              class="task-note-title-field__input"
-              type="text"
-              autocomplete="off"
-              placeholder="Title"
-              autofocus
-              @input="updateDetailDraft({ title: inputValue($event) })"
-            />
-          </label>
+          <header class="task-detail-modal__note-header">
+            <label class="task-note-title-field">
+              <span class="task-note-title-field__label">Title</span>
+              <input
+                :value="detailDraft.title"
+                class="task-note-title-field__input"
+                type="text"
+                autocomplete="off"
+                placeholder="Title"
+                autofocus
+                @input="updateDetailDraft({ title: inputValue($event) })"
+              />
+            </label>
+
+            <div
+              class="task-detail-modal__window-actions task-detail-modal__window-actions--inline"
+            >
+              <span
+                v-if="detailSaveStatusText"
+                class="task-detail-modal__save-status"
+                aria-live="polite"
+              >
+                {{ detailSaveStatusText }}
+              </span>
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                aria-label="Archive task"
+                title="Archive task"
+                :disabled="detailSaving || taskActionId === task.id"
+                @click="emit('archive')"
+              >
+                <UiIcon name="Archive" :size="16" />
+              </Button>
+              <Button
+                color="ghost"
+                shape="soft"
+                size="compact"
+                icon-only
+                type="button"
+                aria-label="Close"
+                @click="emit('close')"
+              >
+                <UiIcon name="X" :size="18" />
+              </Button>
+            </div>
+          </header>
 
           <div class="task-note-meta">
             <label class="field task-note-meta__field">
@@ -412,10 +435,12 @@ function closeFromBackdrop() {
           {{ detailError }}
         </p>
 
-        <div class="mission-modal__actions task-detail-modal__actions">
+        <div
+          v-if="weeklyReview"
+          class="mission-modal__actions task-detail-modal__actions"
+        >
           <div class="task-detail-modal__primary-actions">
             <Button
-              v-if="weeklyReview"
               color="primary"
               shape="soft"
               size="compact"
@@ -424,17 +449,6 @@ function closeFromBackdrop() {
               @click="emit('submit')"
             >
               {{ weeklyReviewSubmitting ? "Submitting..." : "Submit review" }}
-            </Button>
-            <Button
-              v-else
-              color="primary"
-              shape="soft"
-              size="compact"
-              type="button"
-              :disabled="saveDisabled"
-              @click="emit('save')"
-            >
-              {{ detailSaving ? "Saving..." : "Save" }}
             </Button>
           </div>
         </div>
@@ -455,6 +469,9 @@ function closeFromBackdrop() {
 }
 
 .mission-modal--fullscreen {
+  align-items: start;
+  justify-items: stretch;
+  overflow-y: auto;
   padding: 0;
   background: var(--ui-bg);
 }
@@ -477,21 +494,21 @@ function closeFromBackdrop() {
 .task-detail-modal--note {
   width: min(720px, 100%);
   max-height: min(820px, calc(100vh - 48px));
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 16px;
-  overflow: hidden;
-  padding: 70px 28px 22px;
+  padding: 28px;
 }
 
 .task-detail-modal--fullscreen {
   width: 100%;
-  height: 100dvh;
+  min-height: 100dvh;
+  height: auto;
   max-height: none;
   border: 0;
   border-radius: 0;
   background: var(--ui-bg);
   box-shadow: none;
-  padding: 72px max(24px, calc((100vw - 700px) / 2)) 24px;
+  padding: 28px max(24px, calc((100vw - 700px) / 2)) 32px;
 }
 
 .mission-modal__header,
@@ -521,6 +538,33 @@ function closeFromBackdrop() {
   position: fixed;
   top: 18px;
   right: 24px;
+}
+
+.task-detail-modal__note-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  min-width: 0;
+}
+
+.task-detail-modal__window-actions--inline {
+  position: static;
+  justify-self: end;
+  padding-top: 2px;
+}
+
+.task-detail-modal--fullscreen .task-detail-modal__window-actions--inline {
+  position: static;
+  top: auto;
+  right: auto;
+}
+
+.task-detail-modal__save-status {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .task-detail-modal__title--hidden {
@@ -691,8 +735,8 @@ function closeFromBackdrop() {
   flex: 1;
   flex-direction: column;
   min-height: 340px;
-  max-height: min(520px, calc(100vh - 330px));
-  overflow: auto;
+  max-height: none;
+  overflow-y: visible;
   padding: 8px 0 0;
   border: 0;
   border-radius: 0;
@@ -708,13 +752,13 @@ function closeFromBackdrop() {
 .task-detail-modal--fullscreen
   .task-note-body-field__editor
   :deep(.editor-content-wrapper) {
-  min-height: 0;
+  min-height: auto;
   max-height: none;
 }
 
 .task-detail-modal--fullscreen .task-note-body-field__editor :deep(.ProseMirror) {
   flex: 1;
-  min-height: 100%;
+  min-height: max(300px, calc(100dvh - 250px));
 }
 
 .status-badge {
@@ -1008,13 +1052,14 @@ function closeFromBackdrop() {
   .task-detail-modal--note {
     width: 100%;
     max-height: calc(100vh - 28px);
-    padding: 64px 18px 18px;
+    padding: 18px;
   }
 
   .task-detail-modal--fullscreen {
-    height: 100dvh;
+    min-height: 100dvh;
+    height: auto;
     max-height: none;
-    padding: 64px 18px 18px;
+    padding: 18px;
   }
 
   .task-note-title-field__input {
@@ -1023,7 +1068,8 @@ function closeFromBackdrop() {
 
   .task-note-body-field__editor :deep(.editor-content-wrapper) {
     min-height: 300px;
-    max-height: min(520px, calc(100vh - 360px));
+    max-height: none;
+    overflow-y: visible;
   }
 
   .task-note-body-field__editor :deep(.ProseMirror) {
