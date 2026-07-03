@@ -1818,14 +1818,36 @@ async function setProjectTaskStatus(
   task: MissionTask,
   status: MissionTask["status"],
   columnId?: string,
+  options: { optimistic?: boolean } = {},
 ) {
   if (
     (task.status === status && (!columnId || task.columnId === columnId)) ||
     projectTaskActionId.value
   )
     return;
+  const previousProjectTasks = options.optimistic ? [...projectTasks.value] : [];
+  const previousCompletedProjectTasks = options.optimistic
+    ? [...completedProjectTasks.value]
+    : [];
   projectTaskActionId.value = task.id;
   projectTasksError.value = "";
+  if (options.optimistic) {
+    replaceProjectTask({
+      ...task,
+      status,
+      columnId: columnId || null,
+    });
+    if (status === "done") {
+      completedProjectTasks.value = [
+        { ...task, status, columnId: columnId || null },
+        ...completedProjectTasks.value.filter((item) => item.id !== task.id),
+      ];
+    } else {
+      completedProjectTasks.value = completedProjectTasks.value.filter(
+        (item) => item.id !== task.id,
+      );
+    }
+  }
   try {
     const response = await api.patch<{ task: MissionTask }>(
       `/mission-control/tasks/${encodeURIComponent(task.id)}`,
@@ -1845,6 +1867,10 @@ async function setProjectTaskStatus(
       );
     }
   } catch (e) {
+    if (options.optimistic) {
+      projectTasks.value = previousProjectTasks;
+      completedProjectTasks.value = previousCompletedProjectTasks;
+    }
     projectTasksError.value =
       e instanceof ApiError ? e.message : "Could not update task";
   } finally {
@@ -2015,7 +2041,9 @@ async function dropProjectTask(event: DragEvent, column: ProjectBoardColumn) {
   endProjectTaskDrag();
   const task = projectTasks.value.find((item) => item.id === taskId);
   if (!task) return;
-  await setProjectTaskStatus(task, column.status, column.columnId || undefined);
+  await setProjectTaskStatus(task, column.status, column.columnId || undefined, {
+    optimistic: true,
+  });
 }
 
 function startProjectColumnReorder(

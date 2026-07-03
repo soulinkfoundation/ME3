@@ -486,7 +486,7 @@ function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
           @click="emit('add-column')"
         >
           <UiIcon name="Plus" :size="15" />
-          {{ columnActionId === "new" ? "Adding..." : "Add column" }}
+          {{ columnActionId === "new" ? "Adding..." : "Add" }}
         </button>
       </div>
 
@@ -507,7 +507,7 @@ function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
 <style scoped>
 .projects-workspace {
   display: grid;
-  width: min(1120px, 100%);
+  width: 100%;
   gap: 18px;
 }
 
@@ -532,9 +532,7 @@ function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
 }
 
 .project-board {
-  display: grid;
-  grid-auto-columns: minmax(180px, 1fr);
-  grid-auto-flow: column;
+  display: flex;
   align-items: stretch;
   gap: 12px;
   min-width: 0;
@@ -557,6 +555,7 @@ function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
 
 .project-board__column {
   display: grid;
+  flex: 1 0 180px;
   align-content: start;
   gap: 8px;
   min-width: 180px;
@@ -937,10 +936,13 @@ function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
   display: inline-flex;
   align-items: center;
   align-self: start;
+  flex: 0 0 auto;
+  justify-self: start;
   justify-content: center;
   gap: 6px;
-  min-width: 180px;
+  min-width: 0;
   min-height: 38px;
+  padding: 0 12px;
   border: 1px dashed var(--ui-border);
   border-radius: var(--ui-radius-md);
   background: transparent;
@@ -1069,8 +1071,9 @@ function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
 }
 
 @media (max-width: 959px) {
-  .project-board {
-    grid-auto-columns: minmax(220px, 82vw);
+  .project-board__column {
+    flex: 0 0 82vw;
+    min-width: 220px;
   }
 }
 </style>
