@@ -35,6 +35,8 @@ defineProps<{
   columns: ProjectBoardColumn[];
   dropStatus: string;
   draggedTaskId: string;
+  draggedColumnId: string;
+  columnDropTargetId: string;
   actionId: string;
   columnActionId: string;
   localRunId: string;
@@ -54,6 +56,12 @@ const emit = defineEmits<{
   "column-drag-over": [event: DragEvent, columnId: string];
   "column-drag-leave": [event: DragEvent, columnId: string];
   "drop-task": [event: DragEvent, column: ProjectBoardColumn];
+  "column-reorder-start": [event: DragEvent, column: ProjectBoardColumn];
+  "column-reorder-over": [event: DragEvent, column: ProjectBoardColumn];
+  "column-reorder-leave": [event: DragEvent, column: ProjectBoardColumn];
+  "column-reorder-drop": [event: DragEvent, column: ProjectBoardColumn];
+  "column-reorder-end": [];
+  "move-column": [column: ProjectBoardColumn, direction: -1 | 1];
   "open-detail": [task: MissionTask];
   "task-drag-start": [event: DragEvent, task: MissionTask];
   "task-drag-end": [];
@@ -83,6 +91,21 @@ function projectChipStyle(project: MissionProject | null) {
 
 function blurOnEnter(event: KeyboardEvent) {
   (event.target as HTMLInputElement).blur();
+}
+
+function handleColumnDragOver(event: DragEvent, column: ProjectBoardColumn) {
+  emit("column-drag-over", event, column.id);
+  emit("column-reorder-over", event, column);
+}
+
+function handleColumnDragLeave(event: DragEvent, column: ProjectBoardColumn) {
+  emit("column-drag-leave", event, column.id);
+  emit("column-reorder-leave", event, column);
+}
+
+function handleColumnDrop(event: DragEvent, column: ProjectBoardColumn) {
+  emit("column-reorder-drop", event, column);
+  emit("drop-task", event, column);
 }
 </script>
 
@@ -230,13 +253,32 @@ function blurOnEnter(event: KeyboardEvent) {
           class="project-board__column"
           :class="{
             'is-drop-target': dropStatus === column.id,
+            'is-column-dragging': draggedColumnId === column.id,
+            'is-column-drop-target':
+              columnDropTargetId === column.id && draggedColumnId !== column.id,
           }"
           :aria-label="column.label"
-          @dragover="emit('column-drag-over', $event, column.id)"
-          @dragleave="emit('column-drag-leave', $event, column.id)"
-          @drop="emit('drop-task', $event, column)"
+          @dragover="handleColumnDragOver($event, column)"
+          @dragleave="handleColumnDragLeave($event, column)"
+          @drop="handleColumnDrop($event, column)"
         >
           <div class="project-board__column-header">
+            <button
+              v-if="selectedProject && columns.length > 1"
+              type="button"
+              class="project-board__column-drag"
+              draggable="true"
+              :disabled="saving || Boolean(columnActionId)"
+              :aria-label="`Move ${column.label} column`"
+              :title="`Move ${column.label} column`"
+              @click.stop
+              @dragstart.stop="emit('column-reorder-start', $event, column)"
+              @dragend="emit('column-reorder-end')"
+              @keydown.left.prevent="emit('move-column', column, -1)"
+              @keydown.right.prevent="emit('move-column', column, 1)"
+            >
+              <UiIcon name="GripVertical" :size="14" />
+            </button>
             <input
               v-if="selectedProject"
               class="project-board__column-name"
@@ -493,7 +535,7 @@ function blurOnEnter(event: KeyboardEvent) {
   display: grid;
   grid-auto-columns: minmax(180px, 1fr);
   grid-auto-flow: column;
-  align-items: start;
+  align-items: stretch;
   gap: 12px;
   min-width: 0;
   padding-bottom: 6px;
@@ -519,14 +561,25 @@ function blurOnEnter(event: KeyboardEvent) {
   gap: 8px;
   min-width: 180px;
   border-radius: var(--ui-radius-md);
+  min-height: 100%;
   transition:
     background-color 0.16s ease,
+    opacity 0.16s ease,
     outline-color 0.16s ease;
 }
 
 .project-board__column.is-drop-target {
   background: color-mix(in oklab, var(--ui-accent-soft), transparent 30%);
   outline: 1px solid color-mix(in oklab, var(--ui-accent), transparent 55%);
+  outline-offset: 6px;
+}
+
+.project-board__column.is-column-dragging {
+  opacity: 0.52;
+}
+
+.project-board__column.is-column-drop-target {
+  outline: 1px dashed color-mix(in oklab, var(--ui-accent), transparent 35%);
   outline-offset: 6px;
 }
 
@@ -537,6 +590,36 @@ function blurOnEnter(event: KeyboardEvent) {
   gap: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--ui-border);
+}
+
+.project-board__column-drag {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  cursor: grab;
+}
+
+.project-board__column-drag:hover,
+.project-board__column-drag:focus-visible {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
+  outline: none;
+}
+
+.project-board__column-drag:active {
+  cursor: grabbing;
+}
+
+.project-board__column-drag:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .project-board__column-remove {
@@ -563,12 +646,15 @@ function blurOnEnter(event: KeyboardEvent) {
 }
 
 .project-board__column-header h2 {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   font-size: 13px;
   line-height: 1.25;
 }
 
 .project-board__column-name {
+  flex: 1 1 auto;
   width: 100%;
   min-width: 0;
   padding: 4px 6px;

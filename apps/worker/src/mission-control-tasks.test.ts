@@ -4,6 +4,7 @@ import {
   createMissionTaskFromJournal,
   deleteJournalProjectLink,
   listMissionTaskPage,
+  updateMissionProjectColumn,
 } from "./mission-control";
 import type { Env } from "./types";
 
@@ -40,6 +41,18 @@ type StoredProjectRow = {
   source_kind: "manual" | "daemon_repo" | "beads" | "import";
   source_ref: string | null;
   metadata_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type StoredProjectColumnRow = {
+  id: string;
+  user_id: string;
+  project_id: string;
+  name: string;
+  status: "backlog" | "in_progress" | "review" | "done";
+  position: number;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -215,6 +228,25 @@ function projectRow(
   };
 }
 
+function projectColumnRow(
+  projectId: string,
+  status: StoredProjectColumnRow["status"],
+  name: string,
+  position: number,
+): StoredProjectColumnRow {
+  return {
+    id: `${projectId}:${status}`,
+    user_id: "owner",
+    project_id: projectId,
+    name,
+    status,
+    position,
+    archived_at: null,
+    created_at: "2026-06-30T09:00:00Z",
+    updated_at: "2026-06-30T09:00:00Z",
+  };
+}
+
 function createProjectArchiveEnv(
   projects: StoredProjectRow[],
   tasks: StoredTaskRow[],
@@ -267,6 +299,112 @@ function createProjectArchiveEnv(
                   }
                 }
                 return { meta: { changes } };
+              }
+
+              return { meta: { changes: 0 } };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  return { DB: db } as unknown as Env;
+}
+
+function createProjectColumnEnv(
+  project: StoredProjectRow,
+  columns: StoredProjectColumnRow[],
+) {
+  const db = {
+    prepare(sql: string) {
+      return {
+        bind(...values: unknown[]) {
+          return {
+            async first<T>() {
+              if (sql.includes("FROM mission_projects")) {
+                const [projectId, userId] = values;
+                return project.id === projectId && project.user_id === userId
+                  ? (project as T)
+                  : null;
+              }
+              if (sql.includes("FROM mission_project_columns")) {
+                const [columnId, userId, projectId] = values;
+                return (
+                  columns.find(
+                    (column) =>
+                      column.id === columnId &&
+                      column.user_id === userId &&
+                      column.project_id === projectId &&
+                      column.archived_at === null,
+                  ) || null
+                ) as T | null;
+              }
+              return null as T | null;
+            },
+            async all<T>() {
+              if (sql.includes("FROM mission_project_columns")) {
+                const [userId, projectId] = values;
+                return {
+                  results: columns
+                    .filter(
+                      (column) =>
+                        column.user_id === userId &&
+                        column.project_id === projectId &&
+                        column.archived_at === null,
+                    )
+                    .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id)) as T[],
+                };
+              }
+              return { results: [] as T[] };
+            },
+            async run() {
+              if (sql.includes("INSERT OR IGNORE INTO mission_project_columns")) {
+                const [id, userId, projectId, name, status, position] = values as [
+                  string,
+                  string,
+                  string,
+                  string,
+                  StoredProjectColumnRow["status"],
+                  number,
+                ];
+                if (columns.some((column) => column.id === id)) {
+                  return { meta: { changes: 0 } };
+                }
+                columns.push({
+                  id,
+                  user_id: userId,
+                  project_id: projectId,
+                  name,
+                  status,
+                  position,
+                  archived_at: null,
+                  created_at: "2026-06-30T09:00:00Z",
+                  updated_at: "2026-06-30T09:00:00Z",
+                });
+                return { meta: { changes: 1 } };
+              }
+
+              if (sql.includes("UPDATE mission_project_columns")) {
+                const [name, position, columnId, userId, projectId] = values as [
+                  string,
+                  number,
+                  string,
+                  string,
+                  string,
+                ];
+                const column = columns.find(
+                  (item) =>
+                    item.id === columnId &&
+                    item.user_id === userId &&
+                    item.project_id === projectId &&
+                    item.archived_at === null,
+                );
+                if (!column) return { meta: { changes: 0 } };
+                column.name = name;
+                column.position = position;
+                column.updated_at = "2026-06-30T10:00:00Z";
+                return { meta: { changes: 1 } };
               }
 
               return { meta: { changes: 0 } };
@@ -439,6 +577,45 @@ describe("Mission Control project deletion", () => {
     });
     expect(projects[0]!.status).toBe("active");
     expect(tasks[0]!.archived_at).toBeNull();
+  });
+});
+
+describe("Mission Control project columns", () => {
+  it("reorders columns by persisted position", async () => {
+    const project = projectRow("project-1", "ME3", "me3");
+    const columns = [
+      projectColumnRow("project-1", "backlog", "Backlog", 0),
+      projectColumnRow("project-1", "in_progress", "Doing", 1),
+      projectColumnRow("project-1", "review", "Review", 2),
+      projectColumnRow("project-1", "done", "Done", 3),
+    ];
+    const env = createProjectColumnEnv(project, columns);
+
+    const response = await updateMissionProjectColumn(
+      env,
+      "owner",
+      "project-1",
+      "project-1:backlog",
+      { position: 2 },
+    );
+
+    expect(response.column.position).toBe(2);
+    expect(response.columns.map((column) => column.id)).toEqual([
+      "project-1:in_progress",
+      "project-1:review",
+      "project-1:backlog",
+      "project-1:done",
+    ]);
+    expect(
+      [...columns]
+        .sort((a, b) => a.position - b.position)
+        .map((column) => [column.id, column.position]),
+    ).toEqual([
+      ["project-1:in_progress", 0],
+      ["project-1:review", 1],
+      ["project-1:backlog", 2],
+      ["project-1:done", 3],
+    ]);
   });
 });
 

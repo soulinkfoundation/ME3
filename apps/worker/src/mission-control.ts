@@ -759,21 +759,58 @@ export async function updateMissionProjectColumn(
   const existing = await getMissionProjectColumn(env, userId, projectId, columnId);
   if (!existing) throw new MissionControlInputError("Project column not found", 404);
   const body = isRecord(input) ? input : {};
-  const name = normalizeNullableText(body.name);
-  if (!name) throw new MissionControlInputError("Column name is required");
+  const nameProvided = body.name !== undefined;
+  const name = nameProvided ? normalizeNullableText(body.name) : existing.name;
+  if (nameProvided && !name) throw new MissionControlInputError("Column name is required");
+  const nextName = name || existing.name;
+  const positionProvided = body.position !== undefined;
+  const position = positionProvided
+    ? normalizeProjectColumnPosition(body.position)
+    : null;
+  if (positionProvided && position === null) {
+    throw new MissionControlInputError("Column position is invalid");
+  }
+  if (!nameProvided && !positionProvided) {
+    throw new MissionControlInputError("Column update is required");
+  }
+
+  if (position !== null) {
+    const activeColumns = await listMissionProjectColumnRows(env, userId, projectId);
+    const reorderedColumns = activeColumns.filter((column) => column.id !== columnId);
+    const nextPosition = Math.max(0, Math.min(position, reorderedColumns.length));
+    reorderedColumns.splice(nextPosition, 0, { ...existing, name: nextName });
+
+    for (const [index, column] of reorderedColumns.entries()) {
+      await env.DB.prepare(
+        `UPDATE mission_project_columns
+         SET name = ?, position = ?, updated_at = datetime('now')
+         WHERE id = ? AND user_id = ? AND project_id = ? AND archived_at IS NULL`,
+      )
+        .bind(column.name, index, column.id, userId, projectId)
+        .run();
+    }
+
+    return {
+      column: serializeProjectColumn(
+        (await getMissionProjectColumn(env, userId, projectId, columnId)) as MissionProjectColumnRow,
+      ),
+      columns: await listMissionProjectColumns(env, userId, projectId),
+    };
+  }
 
   await env.DB.prepare(
     `UPDATE mission_project_columns
      SET name = ?, updated_at = datetime('now')
      WHERE id = ? AND user_id = ? AND project_id = ?`,
   )
-    .bind(name, columnId, userId, projectId)
+    .bind(nextName, columnId, userId, projectId)
     .run();
 
   return {
     column: serializeProjectColumn(
       (await getMissionProjectColumn(env, userId, projectId, columnId)) as MissionProjectColumnRow,
     ),
+    columns: await listMissionProjectColumns(env, userId, projectId),
   };
 }
 
@@ -3452,6 +3489,13 @@ function normalizeSortOrder(value: unknown): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, Math.min(999, Math.round(parsed)));
+}
+
+function normalizeProjectColumnPosition(value: unknown): number | null {
+  if (value === null || value === "") return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.round(parsed));
 }
 
 function normalizeDashboardCardSize(value: unknown): DashboardCardSize | null {

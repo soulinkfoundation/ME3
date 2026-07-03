@@ -303,6 +303,8 @@ const projectColumnError = ref("");
 const projectColumnInput = ref<HTMLInputElement | null>(null);
 const draggedProjectTaskId = ref("");
 const projectTaskDropStatus = ref("");
+const draggedProjectColumnId = ref("");
+const projectColumnDropTargetId = ref("");
 const selectedProjectTaskDetailId = ref("");
 const projectTaskDetailDraft = ref<ProjectTaskDetailDraft>({
   title: "",
@@ -1556,7 +1558,12 @@ function syncProjectTaskDetailDraft(task: MissionTask) {
 }
 
 function openProjectTaskDetail(task: MissionTask) {
-  if (draggedProjectTaskId.value || projectTaskDetailSaving.value) return;
+  if (
+    draggedProjectTaskId.value ||
+    draggedProjectColumnId.value ||
+    projectTaskDetailSaving.value
+  )
+    return;
   selectedProjectTaskDetailId.value = task.id;
   projectTaskDetailError.value = "";
   syncProjectTaskDetailDraft(task);
@@ -2009,6 +2016,117 @@ async function dropProjectTask(event: DragEvent, column: ProjectBoardColumn) {
   const task = projectTasks.value.find((item) => item.id === taskId);
   if (!task) return;
   await setProjectTaskStatus(task, column.status, column.columnId || undefined);
+}
+
+function startProjectColumnReorder(
+  event: DragEvent,
+  column: ProjectBoardColumn,
+) {
+  if (
+    !selectedProjectDetail.value ||
+    projectColumnActionId.value ||
+    projectTaskActionId.value
+  ) {
+    event.preventDefault();
+    return;
+  }
+  draggedProjectColumnId.value = column.id;
+  projectColumnDropTargetId.value = column.id;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-me3-project-column", column.id);
+    event.dataTransfer.setData("text/plain", column.id);
+  }
+}
+
+function endProjectColumnReorder() {
+  draggedProjectColumnId.value = "";
+  projectColumnDropTargetId.value = "";
+}
+
+function handleProjectColumnReorderOver(
+  event: DragEvent,
+  column: ProjectBoardColumn,
+) {
+  if (!draggedProjectColumnId.value) return;
+  event.preventDefault();
+  projectColumnDropTargetId.value = column.id;
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "move";
+  }
+}
+
+function handleProjectColumnReorderLeave(
+  event: DragEvent,
+  column: ProjectBoardColumn,
+) {
+  const currentTarget = event.currentTarget as HTMLElement | null;
+  const relatedTarget = event.relatedTarget as Node | null;
+  if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget))
+    return;
+  if (projectColumnDropTargetId.value === column.id) {
+    projectColumnDropTargetId.value = "";
+  }
+}
+
+async function dropProjectColumn(
+  event: DragEvent,
+  target: ProjectBoardColumn,
+) {
+  const sourceId =
+    draggedProjectColumnId.value ||
+    event.dataTransfer?.getData("application/x-me3-project-column") ||
+    "";
+  if (!sourceId) return;
+  event.preventDefault();
+  endProjectColumnReorder();
+  await moveProjectColumnToTarget(sourceId, target.id);
+}
+
+async function moveProjectColumn(
+  column: ProjectBoardColumn,
+  direction: -1 | 1,
+) {
+  const currentIndex = projectBoardColumns.value.findIndex(
+    (item) => item.id === column.id,
+  );
+  const target = projectBoardColumns.value[currentIndex + direction];
+  if (!target) return;
+  await moveProjectColumnToTarget(column.id, target.id);
+}
+
+async function moveProjectColumnToTarget(
+  sourceId: string,
+  targetId: string,
+) {
+  const project = selectedProjectDetail.value;
+  if (!project || sourceId === targetId || projectColumnActionId.value) return;
+  const sourceIndex = projectBoardColumns.value.findIndex(
+    (column) => column.id === sourceId,
+  );
+  const targetIndex = projectBoardColumns.value.findIndex(
+    (column) => column.id === targetId,
+  );
+  if (sourceIndex < 0 || targetIndex < 0) return;
+
+  projectColumnActionId.value = sourceId;
+  projectTasksError.value = "";
+  try {
+    const response = await api.patch<{
+      columns: NonNullable<MissionProject["columns"]>;
+    }>(
+      `/mission-control/projects/${encodeURIComponent(project.id)}/columns/${encodeURIComponent(sourceId)}`,
+      { position: targetIndex },
+    );
+    projects.value = projects.value.map((item) =>
+      item.id === project.id ? { ...item, columns: response.columns } : item,
+    );
+  } catch (e) {
+    projectTasksError.value =
+      e instanceof ApiError ? e.message : "Could not reorder columns";
+  } finally {
+    projectColumnActionId.value = "";
+  }
 }
 
 async function archiveProjectTask(task: MissionTask): Promise<boolean> {
@@ -2708,6 +2826,8 @@ onBeforeUnmount(() => {
           :columns="projectBoardColumns"
           :drop-status="projectTaskDropStatus"
           :dragged-task-id="draggedProjectTaskId"
+          :dragged-column-id="draggedProjectColumnId"
+          :column-drop-target-id="projectColumnDropTargetId"
           :action-id="projectTaskActionId"
           :column-action-id="projectColumnActionId"
           :local-run-id="projectTaskLocalRunId"
@@ -2719,6 +2839,12 @@ onBeforeUnmount(() => {
           @column-drag-over="handleProjectColumnDragOver"
           @column-drag-leave="handleProjectColumnDragLeave"
           @drop-task="dropProjectTask"
+          @column-reorder-start="startProjectColumnReorder"
+          @column-reorder-over="handleProjectColumnReorderOver"
+          @column-reorder-leave="handleProjectColumnReorderLeave"
+          @column-reorder-drop="dropProjectColumn"
+          @column-reorder-end="endProjectColumnReorder"
+          @move-column="moveProjectColumn"
           @open-detail="openProjectTaskDetail"
           @task-drag-start="startProjectTaskDrag"
           @task-drag-end="endProjectTaskDrag"
