@@ -1071,7 +1071,9 @@ function contactLabels(contact: Me3AgentContextContact): readonly string[] {
 }
 
 function projectLabels(project: Me3AgentContextProject): readonly string[] {
-  return [project.name, ...(project.aliases || [])].filter(Boolean);
+  return [project.name, ...(project.aliases || []), project.summary].filter(
+    (label): label is string => Boolean(label),
+  );
 }
 
 function hasContactDirectoryIntent(requestTokens: ReadonlySet<string>): boolean {

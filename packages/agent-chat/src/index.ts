@@ -47,6 +47,7 @@ export {
   isCoreChatMailboxDraftSaveRequest,
   isCoreChatMissionTaskArchiveRequest,
   isCoreChatMissionTaskCreateRequest,
+  isCoreChatMissionContextReadRequest,
   isCoreChatMissionTaskListRequest,
   isCoreChatMissionTaskUpdateRequest,
   isCoreChatReminderCreateRequest,
@@ -638,10 +639,15 @@ type DbPluginInstallationRow = {
 };
 
 type DbCoreSetupProfileSiteRow = {
+  id?: string | null;
   username: string | null;
   custom_domain: string | null;
   custom_domain_status: string | null;
   published_at: string | null;
+};
+
+type DbSiteMeJsonRow = {
+  content: unknown;
 };
 
 type CoreSetupPluginReadiness = {
@@ -804,6 +810,14 @@ type DbMissionProjectRow = {
   updated_at: string;
 };
 
+type AgentMissionProject = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  status: string;
+};
+
 type DbMissionTaskRow = {
   id: string;
   project_id: string | null;
@@ -823,6 +837,15 @@ type AgentMissionTask = {
   projectName: string;
   dueAt: string | null;
   status: string;
+};
+
+type AgentPublicBusinessContext = {
+  positioningStatement: string | null;
+  audience: string | null;
+  primaryProblem: string | null;
+  solution: string | null;
+  targetMarket: string | null;
+  primaryOutcome: string | null;
 };
 
 type DbAssistantSkillRow = {
@@ -2927,6 +2950,21 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
+  if (plannerDecision.capabilityId === "core.mission.context.read") {
+    const contextPlan = await parseMissionContextReadChatRequest(env, input.userId, messageText);
+    if ("error" in contextPlan) {
+      return toolResponse(input.turnId, "core.mission.context.read", contextPlan.error, {
+        fallbackReason: "Mission context details required",
+      });
+    }
+
+    return toolResponse(
+      input.turnId,
+      "core.mission.context.read",
+      formatMissionContextReadReply(contextPlan.context),
+    );
+  }
+
   if (plannerDecision.capabilityId === "core.mission.task.list") {
     const taskPlan = await parseMissionTaskListChatRequest(env, input.userId, messageText);
     if ("error" in taskPlan) {
@@ -3147,13 +3185,11 @@ async function parseMissionTaskChatRequest(
   const projects = await loadAgentMissionProjects(env, userId);
   const projectName = extractMissionTaskProjectName(messageText);
   const project = projectName
-    ? findAgentMissionProject(projects, projectName)
+    ? resolveAgentMissionProject(projects, projectName)
     : projects.find((item) => item.slug === "personal") || projects[0];
+  if (project && "error" in project) return project;
   if (!project) {
     return { error: "I could not find a Mission Control project to add that to." };
-  }
-  if (projectName && !findAgentMissionProject(projects, projectName)) {
-    return { error: `I could not find a Mission Control project called "${projectName}".` };
   }
 
   const title = extractMissionTaskTitle(messageText, projectName);
@@ -3167,6 +3203,58 @@ async function parseMissionTaskChatRequest(
       projectId: project.id,
       projectName: project.name,
       dueAt: extractMissionTaskDueDate(messageText, owner?.timezone || "UTC"),
+    },
+  };
+}
+
+async function parseMissionContextReadChatRequest(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageText: string,
+): Promise<
+  | {
+      context: {
+        project: AgentMissionProject | null;
+        projects: AgentMissionProject[];
+        tasks: AgentMissionTask[];
+        missionStatement: string | null;
+        business: AgentPublicBusinessContext | null;
+      };
+    }
+  | { error: string }
+> {
+  const [projects, tasks, missionStatement, business] = await Promise.all([
+    loadAgentMissionProjects(env, userId),
+    loadAgentMissionTasks(env, userId),
+    loadAgentMissionStatementText(env, userId),
+    loadAgentPublicBusinessContext(env, userId),
+  ]);
+  const projectName =
+    extractMissionTaskProjectName(messageText) ||
+    extractMissionTaskListProjectName(messageText);
+  const projectResult = resolveAgentMissionProject(projects, projectName || messageText, {
+    allowDescriptionMatch: true,
+  });
+  if ("error" in projectResult) {
+    if (projectName) return projectResult;
+    return {
+      context: {
+        project: null,
+        projects,
+        tasks,
+        missionStatement,
+        business,
+      },
+    };
+  }
+
+  return {
+    context: {
+      project: projectResult,
+      projects: [projectResult],
+      tasks: tasks.filter((task) => task.projectId === projectResult.id),
+      missionStatement,
+      business,
     },
   };
 }
@@ -3228,9 +3316,9 @@ async function parseMissionTaskListChatRequest(
   ]);
   const projectName = extractMissionTaskProjectName(messageText) ||
     extractMissionTaskListProjectName(messageText);
-  const project = projectName ? findAgentMissionProject(projects, projectName) : null;
-  if (projectName && !project) {
-    return { error: `I could not find a Mission Control project called "${projectName}".` };
+  const project = projectName ? resolveAgentMissionProject(projects, projectName) : null;
+  if (project && "error" in project) {
+    return project;
   }
 
   const status = parseMissionTaskStatus(messageText);
@@ -3280,9 +3368,9 @@ async function parseMissionTaskUpdateChatRequest(
   if ("error" in task) return task;
 
   const projectName = parsed.projectName;
-  const project = projectName ? findAgentMissionProject(projects, projectName) : null;
-  if (projectName && !project) {
-    return { error: `I could not find a Mission Control project called "${projectName}".` };
+  const project = projectName ? resolveAgentMissionProject(projects, projectName) : null;
+  if (project && "error" in project) {
+    return project;
   }
 
   const status = parsed.status || task.status || "backlog";
@@ -3430,16 +3518,61 @@ async function archiveAgentMissionTask(
 async function loadAgentMissionProjects(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
-): Promise<Array<{ id: string; name: string; slug: string }>> {
+): Promise<AgentMissionProject[]> {
   const rows = await env.DB.prepare(
-    `SELECT id, name, slug
+    `SELECT id, name, slug, description, status
      FROM mission_projects
      WHERE user_id = ? AND status != 'archived'
      ORDER BY CASE WHEN slug = 'personal' THEN 0 ELSE 1 END, name ASC`,
   )
     .bind(userId)
-    .all<{ id: string; name: string; slug: string }>();
+    .all<AgentMissionProject>();
   return rows.results || [];
+}
+
+async function loadAgentMissionStatementText(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+): Promise<string | null> {
+  const statement = await loadCoreContextMissionStatement(env, userId);
+  return statement?.statement || null;
+}
+
+async function loadAgentPublicBusinessContext(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+): Promise<AgentPublicBusinessContext | null> {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT sf.content
+       FROM sites s
+       JOIN site_files sf ON sf.site_id = s.id
+       WHERE s.user_id = ?
+         AND COALESCE(s.site_type, 'profile') = 'profile'
+         AND sf.path IN ('src/me.json', 'me.json')
+       ORDER BY s.updated_at DESC,
+                CASE WHEN sf.path = 'src/me.json' THEN 0 ELSE 1 END
+       LIMIT 1`,
+    )
+      .bind(userId)
+      .first<DbSiteMeJsonRow>();
+    const text = decodeSiteFileText(row?.content);
+    if (!text) return null;
+    const profile = JSON.parse(text) as { business?: Record<string, unknown> | null };
+    const business = profile.business;
+    if (!business || typeof business !== "object") return null;
+    const context: AgentPublicBusinessContext = {
+      positioningStatement: normalizeNullableText(business.positioningStatement),
+      audience: normalizeNullableText(business.audience),
+      primaryProblem: normalizeNullableText(business.primaryProblem),
+      solution: normalizeNullableText(business.solution),
+      targetMarket: normalizeNullableText(business.targetMarket),
+      primaryOutcome: normalizeNullableText(business.primaryOutcome),
+    };
+    return Object.values(context).some(Boolean) ? context : null;
+  } catch {
+    return null;
+  }
 }
 
 async function loadAgentMissionTasks(
@@ -3499,16 +3632,87 @@ function findAgentMissionTask(
   return { error: `I could not find a Mission Control task matching "${title}".` };
 }
 
-function findAgentMissionProject(
-  projects: Array<{ id: string; name: string; slug: string }>,
-  name: string,
-) {
-  const lookupKeys = new Set(missionProjectLookupKeys(name));
-  return projects.find(
-    (project) =>
-      missionProjectLookupKeys(project.name).some((key) => lookupKeys.has(key)) ||
-      missionProjectLookupKeys(project.slug).some((key) => lookupKeys.has(key)),
-  );
+function resolveAgentMissionProject(
+  projects: AgentMissionProject[],
+  query: string,
+  options: { allowDescriptionMatch?: boolean } = {},
+): AgentMissionProject | { error: string } {
+  const result = resolveAgentEntity(projects, query, {
+    labels: (project) => [
+      { value: project.name, weight: 1 },
+      { value: project.slug, weight: 1 },
+      ...(options.allowDescriptionMatch && project.description
+        ? [{ value: project.description, weight: 0.75 }]
+        : []),
+    ],
+    format: (project) => project.name,
+  });
+  if (result.kind === "resolved") return result.item;
+  if (result.kind === "ambiguous") {
+    return {
+      error: `I found multiple Mission Control projects that might match "${query}": ${result.candidates
+        .map((project) => project.name)
+        .join(", ")}. Which one should I use?`,
+    };
+  }
+  return { error: `I could not find a Mission Control project matching "${query}".` };
+}
+
+function resolveAgentEntity<T>(
+  items: T[],
+  query: string,
+  options: {
+    labels: (item: T) => Array<{ value: string | null | undefined; weight?: number }>;
+    format: (item: T) => string;
+  },
+):
+  | { kind: "resolved"; item: T }
+  | { kind: "ambiguous"; candidates: T[] }
+  | { kind: "missing" } {
+  const normalizedQuery = normalizeAgentEntityText(query);
+  const queryTokens = importantAgentEntityTokens(normalizedQuery);
+  if (!normalizedQuery || queryTokens.size === 0) return { kind: "missing" };
+
+  const scored = items
+    .map((item) => {
+      const bestScore = Math.max(
+        0,
+        ...options.labels(item).map((label) =>
+          scoreAgentEntityLabel(normalizedQuery, queryTokens, label.value, label.weight ?? 1),
+        ),
+      );
+      return { item, score: bestScore };
+    })
+    .filter((match) => match.score >= 55)
+    .sort(
+      (left, right) =>
+        right.score - left.score || options.format(left.item).localeCompare(options.format(right.item)),
+    );
+
+  const best = scored[0];
+  if (!best) return { kind: "missing" };
+  if (best.score >= 95) return { kind: "resolved", item: best.item };
+  const close = scored.filter((match) => best.score - match.score < 12);
+  if (close.length > 1) return { kind: "ambiguous", candidates: close.slice(0, 5).map((match) => match.item) };
+  return best.score >= 70 ? { kind: "resolved", item: best.item } : { kind: "missing" };
+}
+
+function scoreAgentEntityLabel(
+  normalizedQuery: string,
+  queryTokens: ReadonlySet<string>,
+  label: string | null | undefined,
+  weight: number,
+): number {
+  const normalizedLabel = normalizeAgentEntityText(label || "");
+  const labelTokens = importantAgentEntityTokens(normalizedLabel);
+  if (!normalizedLabel || labelTokens.size === 0) return 0;
+  if (normalizedQuery === normalizedLabel) return 100 * weight;
+  if (normalizedQuery.includes(normalizedLabel)) return 92 * weight;
+  const overlap = [...labelTokens].filter((token) => queryTokens.has(token)).length;
+  if (overlap === 0) return 0;
+  const coverage = overlap / labelTokens.size;
+  if (coverage === 1) return (labelTokens.size === 1 ? 82 : 88) * weight;
+  return (45 + coverage * 35) * weight;
 }
 
 function parseMissionTaskUpdateText(
@@ -3593,6 +3797,48 @@ function formatMissionTaskListReply(tasks: AgentMissionTask[], filterLabel: stri
   return [
     ...lines,
     ...(tasks.length > shown ? [`...and ${tasks.length - shown} more.`] : []),
+  ].join("\n");
+}
+
+function formatMissionContextReadReply(input: {
+  project: AgentMissionProject | null;
+  projects: AgentMissionProject[];
+  tasks: AgentMissionTask[];
+  missionStatement: string | null;
+  business: AgentPublicBusinessContext | null;
+}): string {
+  const lines = [
+    input.project
+      ? `Mission Control context for ${input.project.name}:`
+      : "Mission Control context:",
+  ];
+  if (input.project) {
+    lines.push(`- Purpose: ${input.project.description || "Not set yet."}`);
+  } else if (input.projects.length) {
+    lines.push(`- Projects: ${input.projects.slice(0, 8).map((project) => project.name).join(", ")}`);
+  }
+  lines.push(
+    `- Mission statement: ${input.missionStatement || "Not set yet."}`,
+    `- Audience: ${input.business?.audience || input.business?.targetMarket || "Not set yet."}`,
+  );
+  if (input.business?.positioningStatement) {
+    lines.push(`- Positioning: ${input.business.positioningStatement}`);
+  }
+  if (input.tasks.length) {
+    lines.push(
+      "",
+      "Tasks:",
+      ...input.tasks.slice(0, 20).map((task, index) => {
+        const due = task.dueAt ? `, due ${task.dueAt}` : "";
+        return `${index + 1}. ${task.title} (${task.projectName}, ${missionTaskStatusLabel(task.status)}${due})`;
+      }),
+    );
+  } else {
+    lines.push("", "Tasks: none found.");
+  }
+  return [
+    ...lines,
+    ...(input.tasks.length > 20 ? [`...and ${input.tasks.length - 20} more tasks.`] : []),
   ].join("\n");
 }
 
@@ -3694,17 +3940,55 @@ function normalizeMissionTaskText(value: string): string {
   return value.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
 }
 
-function missionProjectLookupKeys(value: string): string[] {
-  const normalized = normalizeMissionTaskText(value)
-    .replace(/[:]+/g, " ")
+function normalizeAgentEntityText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const withoutThe = normalized.replace(/^the\s+/, "");
-  const withoutProjectPrefix = withoutThe.replace(/^project\s+/, "");
-  const withoutProjectSuffix = withoutProjectPrefix.replace(/\s+project$/, "");
-  return Array.from(
-    new Set([normalized, withoutThe, withoutProjectPrefix, withoutProjectSuffix].filter(Boolean)),
+}
+
+function importantAgentEntityTokens(value: string): ReadonlySet<string> {
+  const stop = new Set([
+    "a",
+    "about",
+    "and",
+    "any",
+    "can",
+    "check",
+    "context",
+    "for",
+    "goals",
+    "in",
+    "list",
+    "me",
+    "mission",
+    "my",
+    "of",
+    "please",
+    "project",
+    "projects",
+    "pull",
+    "read",
+    "show",
+    "tasks",
+    "the",
+    "to",
+    "up",
+    "you",
+  ]);
+  return new Set(
+    normalizeAgentEntityText(value)
+      .split(" ")
+      .filter((token) => token.length > 1 && !stop.has(token)),
   );
+}
+
+function decodeSiteFileText(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (value instanceof ArrayBuffer) return new TextDecoder().decode(value);
+  if (ArrayBuffer.isView(value)) return new TextDecoder().decode(value);
+  return null;
 }
 
 function escapeRegExp(value: string): string {
@@ -6180,6 +6464,7 @@ async function loadCoreChatAgentContext(
       calendarEvents,
       privateMemory,
       missionStatement,
+      publicBusiness,
       lifeSnapshot,
       skills,
     ] =
@@ -6190,6 +6475,7 @@ async function loadCoreChatAgentContext(
         loadCoreContextCalendarEvents(env, input.ownerId),
         loadCoreContextPrivateMemory(env, input.ownerId),
         loadCoreContextMissionStatement(env, input.ownerId),
+        loadAgentPublicBusinessContext(env, input.ownerId),
         loadCoreContextLifeSnapshot(env, input.ownerId),
         loadCoreContextSkills(env, input.ownerId, input.messageText),
       ]);
@@ -6205,7 +6491,7 @@ async function loadCoreChatAgentContext(
       lifeSnapshot,
       publicIdentity: input.owner
         ? {
-            summary: input.owner.bio,
+            summary: summarizeAgentPublicIdentity(input.owner.bio, publicBusiness),
             meJsonUrl: coreMeJsonUrl(env),
             actions: ["chat"],
             source: contextSource({
@@ -6718,6 +7004,21 @@ function mapOwnerProfileToContext(owner: OwnerProfileRow) {
       reason: "Always include a small owner profile.",
     }),
   };
+}
+
+function summarizeAgentPublicIdentity(
+  ownerBio: string | null | undefined,
+  business: AgentPublicBusinessContext | null,
+): string | null {
+  return [
+    ownerBio,
+    business?.positioningStatement ? `Positioning: ${business.positioningStatement}` : null,
+    business?.audience ? `Audience: ${business.audience}` : null,
+    business?.targetMarket ? `Target market: ${business.targetMarket}` : null,
+    business?.primaryOutcome ? `Primary outcome: ${business.primaryOutcome}` : null,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join(" | ") || null;
 }
 
 function mapRecentMessagesToContext(

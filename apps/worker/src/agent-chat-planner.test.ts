@@ -136,6 +136,13 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "read",
   },
   {
+    name: "Mission Control context read becomes a context read action",
+    messageText: "Read the mission context for project ME3 Launch.",
+    kind: "read_action",
+    capabilityId: "core.mission.context.read",
+    sideEffectLevel: "read",
+  },
+  {
     name: "week review becomes a Mission Control read action",
     messageText: "Review my week",
     kind: "read_action",

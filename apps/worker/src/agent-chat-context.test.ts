@@ -11,6 +11,7 @@ type FakeDbState = {
   recentMessages: Array<Record<string, unknown>>;
   pluginInstallations: Array<Record<string, unknown>>;
   sites: Array<Record<string, unknown>>;
+  siteFiles: Array<Record<string, unknown>>;
   assistantJobs: Array<Record<string, unknown>>;
   contacts: Array<Record<string, unknown>>;
   mailboxAliases: Array<Record<string, unknown>>;
@@ -111,6 +112,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     recentMessages: [],
     pluginInstallations: [],
     sites: [],
+    siteFiles: [],
     assistantJobs: [],
     contacts: [],
     mailboxAliases: [],
@@ -153,6 +155,20 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("FROM install_secrets")) return null;
           if (sql.includes("FROM mailbox_aliases")) {
             return (dbState.mailboxAliases.find((alias) => alias.user_id === values[0]) || null) as T;
+          }
+          if (sql.includes("JOIN site_files")) {
+            const site = dbState.sites.find(
+              (item) =>
+                item.user_id === values[0] &&
+                (!item.site_type || item.site_type === "profile"),
+            );
+            return (
+              dbState.siteFiles.find(
+                (file) =>
+                  file.site_id === site?.id &&
+                  (file.path === "src/me.json" || file.path === "me.json"),
+              ) || null
+            ) as T;
           }
           if (sql.includes("FROM sites")) {
             return (dbState.sites.find(
@@ -454,6 +470,14 @@ describe("Core chat native context", () => {
           metadata: { projectId: "project-analytics" },
         }),
       ],
+      sites: [profileSiteRow("site-profile", "kieran", { published: true })],
+      siteFiles: [
+        siteMeJsonRow("site-profile", {
+          business: {
+            audience: "Founders building calmer agent products",
+          },
+        }),
+      ],
       projects: [
         projectRow("project-analytics", "Analytics Workflow", "analytics-workflow"),
         projectRow("project-compiler", "Compiler Notes", "compiler-notes"),
@@ -496,6 +520,7 @@ describe("Core chat native context", () => {
 
     expect(system).toContain("ME3 agent context packet:");
     expect(system).toContain("Contacts\n- Ada Lovelace (client)");
+    expect(system).toContain("Audience: Founders building calmer agent products");
     expect(system).toContain("Email threads\n- Workflow notes");
     expect(system).toContain("Projects\n- Analytics Workflow");
     expect(system).toContain("Private memory\n- relationship_note");
@@ -1591,6 +1616,7 @@ type GoldenTranscriptScenario = {
       | "core.reminders.list"
       | "core.reminders.create"
       | "core.bookings.lookup"
+      | "core.mission.context.read"
       | "core.mission.task.create"
       | "core.mission.task.list"
       | "core.mission.task.update"
@@ -1834,7 +1860,10 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     name: "direct Mission Control task list reads filtered project tasks",
     messageText: "Show in progress tasks for project ME3 Launch.",
     envState: {
-      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+      projects: [
+        projectRow("project-me3", "ME3", "me3"),
+        projectRow("project-launch", "ME3 Launch", "me3-launch"),
+      ],
       tasks: [
         taskRow("task-launch", "Prepare launch checklist", "project-launch"),
         {
@@ -1878,6 +1907,54 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       toolResultStatus: "succeeded",
       modelCallStatus: "not_attempted",
       replyIncludes: ["Draft article outline", "Writing"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "Mission Control context read includes purpose mission audience and tasks",
+    messageText: "Read the mission context and audience for project Content Strategy.",
+    envState: {
+      missionDashboardSettings: missionDashboardSettingsRow(
+        "Build useful agentic products for independent founders.",
+      ),
+      sites: [profileSiteRow("site-profile", "kieran", { published: true })],
+      siteFiles: [
+        siteMeJsonRow("site-profile", {
+          business: {
+            audience: "Independent founders with content-led businesses",
+            positioningStatement: "I help founders build calmer agent systems.",
+          },
+        }),
+      ],
+      projects: [
+        {
+          ...projectRow("project-content", "Content Strategy", "content-strategy"),
+          description: "Plan writing that turns ME3 lessons into useful articles.",
+        },
+      ],
+      tasks: [taskRow("task-content", "Draft audience-first article list", "project-content")],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.mission.context.read",
+      specialist: "core.mission.context.read",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: [
+        "Mission Control context for Content Strategy",
+        "Purpose: Plan writing that turns ME3 lessons into useful articles.",
+        "Build useful agentic products for independent founders.",
+        "Independent founders with content-led businesses",
+        "Draft audience-first article list",
+      ],
       contextSummary: "absent",
       reminderActionKind: null,
       emailActionKind: null,
@@ -2710,6 +2787,16 @@ function profileSiteRow(
     custom_domain_status: options.customDomainStatus || null,
     published_at: options.published ? "2026-05-15T09:00:00Z" : null,
     created_at: "2026-05-15T09:00:00Z",
+    updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function siteMeJsonRow(siteId: string, profile: Record<string, unknown>): Record<string, unknown> {
+  return {
+    site_id: siteId,
+    path: "src/me.json",
+    content: JSON.stringify(profile),
+    content_type: "application/json",
     updated_at: "2026-05-15T09:00:00Z",
   };
 }

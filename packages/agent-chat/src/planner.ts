@@ -107,6 +107,14 @@ export function planCoreChatToolTurn(
     });
   }
 
+  if (isCoreChatMissionContextReadRequest(messageText)) {
+    return capabilityDecision("core.mission.context.read", {
+      kind: "read_action",
+      confidence: 0.88,
+      reason: "The owner asked to read Mission Control context beyond a plain task list.",
+    });
+  }
+
   if (isCoreChatMissionTaskListRequest(messageText)) {
     return capabilityDecision("core.mission.task.list", {
       kind: "read_action",
@@ -251,6 +259,20 @@ export function isCoreChatMissionTaskCreateRequest(messageText: string): boolean
   return /\b(?:add|create|make)\s+(?:a\s+)?(?:mission\s+control\s+)?task\b/i.test(
     messageText,
   );
+}
+
+export function isCoreChatMissionContextReadRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (/\b(?:prioriti[sz]e|brainstorm|plan|strategize|strategise)\b/i.test(messageText)) {
+    return false;
+  }
+  if (!/\b(?:mission\s+control|mission|project|tasks?|goals?|audience|purpose|context|me\.json)\b/i.test(messageText)) {
+    return false;
+  }
+  return /\b(?:read|show|check|pull up|summari[sz]e|cross[-\s]?reference)\b/i.test(messageText) &&
+    /\b(?:context|mission\s+statement|goals?|audience|purpose|me\.json|cross[-\s]?reference)\b/i.test(
+      messageText,
+    );
 }
 
 export function isCoreChatMissionTaskListRequest(messageText: string): boolean {

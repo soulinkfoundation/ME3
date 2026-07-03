@@ -236,6 +236,37 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.mission.context.read",
+    owner: "core",
+    pluginId: "me3.mission-control",
+    ownerFacingLabel: "Read Mission Control context",
+    summary: "Read Mission Control project context with tasks, mission statement, and public audience context.",
+    category: "mission_control",
+    handler: {
+      surface: "chat",
+      route: "core.mission.context.read",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["mission-control"],
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: "Optional Mission Control project ID.",
+        includeTasks: "Whether to include linked tasks.",
+      },
+    },
+    auditEventKind: "mission_context_read",
+    examples: {
+      positive: ["Read the mission context for project ME3 Launch."],
+      negative: ["Show backlog tasks for project ME3 Launch."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.mission.task.update",
     owner: "core",
     pluginId: "me3.mission-control",

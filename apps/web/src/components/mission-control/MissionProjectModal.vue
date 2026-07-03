@@ -87,7 +87,7 @@ function projectTypeValue(event: Event): "standard" | "local" {
         </label>
 
         <label class="field">
-          <span>Description</span>
+          <span>Purpose</span>
           <textarea
             :value="projectDescription"
             rows="4"
