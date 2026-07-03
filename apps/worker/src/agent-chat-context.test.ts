@@ -1863,6 +1863,31 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
+    name: "natural project phrase resolves to saved Mission Control project",
+    messageText: "Can you read my tasks in the writing project?",
+    envState: {
+      projects: [projectRow("project-writing", "Writing", "writing")],
+      tasks: [taskRow("task-writing", "Draft article outline", "project-writing")],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.mission.task.list",
+      specialist: "core.mission.task.list",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["Draft article outline", "Writing"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      aiCalled: false,
+    },
+  },
+  {
     name: "week review lists open tasks across projects and completed tasks separately",
     messageText: "Review my week",
     envState: {

@@ -3503,11 +3503,11 @@ function findAgentMissionProject(
   projects: Array<{ id: string; name: string; slug: string }>,
   name: string,
 ) {
-  const normalized = normalizeMissionTaskText(name);
+  const lookupKeys = new Set(missionProjectLookupKeys(name));
   return projects.find(
     (project) =>
-      normalizeMissionTaskText(project.name) === normalized ||
-      normalizeMissionTaskText(project.slug) === normalized,
+      missionProjectLookupKeys(project.name).some((key) => lookupKeys.has(key)) ||
+      missionProjectLookupKeys(project.slug).some((key) => lookupKeys.has(key)),
   );
 }
 
@@ -3692,6 +3692,19 @@ function localDateKey(offsetDays: number, timezone: string): string {
 
 function normalizeMissionTaskText(value: string): string {
   return value.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
+}
+
+function missionProjectLookupKeys(value: string): string[] {
+  const normalized = normalizeMissionTaskText(value)
+    .replace(/[:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const withoutThe = normalized.replace(/^the\s+/, "");
+  const withoutProjectPrefix = withoutThe.replace(/^project\s+/, "");
+  const withoutProjectSuffix = withoutProjectPrefix.replace(/\s+project$/, "");
+  return Array.from(
+    new Set([normalized, withoutThe, withoutProjectPrefix, withoutProjectSuffix].filter(Boolean)),
+  );
 }
 
 function escapeRegExp(value: string): string {
