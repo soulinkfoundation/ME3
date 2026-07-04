@@ -91,16 +91,15 @@ export async function listCalendarMissionTasks(
        AND t.archived_at IS NULL
        AND t.status IN ('backlog', 'in_progress', 'review')
        AND (
+         (t.due_at IS NOT NULL AND t.due_at != ''
+          AND substr(t.due_at, 1, 10) >= ? AND substr(t.due_at, 1, 10) < ?)
+         OR
          (t.scheduled_for IS NOT NULL AND t.scheduled_for != ''
           AND t.scheduled_for >= ? AND t.scheduled_for < ?)
-         OR
-         ((t.scheduled_for IS NULL OR t.scheduled_for = '')
-          AND t.due_at IS NOT NULL AND t.due_at != ''
-          AND substr(t.due_at, 1, 10) >= ? AND substr(t.due_at, 1, 10) < ?)
        )
-     ORDER BY COALESCE(t.scheduled_for, t.due_at) ASC, t.priority ASC, t.id ASC`,
+     ORDER BY COALESCE(t.due_at, t.scheduled_for) ASC, t.priority ASC, t.id ASC`,
   )
-    .bind(ownerId, startDay, endDay, dueStartDay, dueEndDay)
+    .bind(ownerId, dueStartDay, dueEndDay, startDay, endDay)
     .all<MissionCalendarTaskDbRow>();
 
   const windowStartMs = new Date(window.start).getTime();
@@ -131,14 +130,14 @@ function serializeCalendarTask(
 
   const scheduledFor = normalizeDateKey(row.scheduled_for);
   const dueAt = normalizeDateOrDateTime(row.due_at);
-  const dateSource = scheduledFor ? "scheduled_for" : dueAt ? "due_at" : null;
+  const dateSource = dueAt ? "due_at" : scheduledFor ? "scheduled_for" : null;
   if (!dateSource) return null;
 
   const range =
-    dateSource === "scheduled_for" && scheduledFor
-      ? allDayRangeForDateKey(scheduledFor, timezone)
-      : dueAt
-        ? rangeForDueAt(dueAt, timezone)
+    dateSource === "due_at" && dueAt
+      ? rangeForDueAt(dueAt, timezone)
+      : scheduledFor
+        ? allDayRangeForDateKey(scheduledFor, timezone)
         : null;
   if (!range) return null;
 

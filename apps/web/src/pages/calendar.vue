@@ -2475,6 +2475,20 @@ onBeforeUnmount(() => {
                   />
                   <span class="cal-filter-label">Birthdays</span>
                 </label>
+                <label class="cal-filter-row">
+                  <input
+                    v-model="sidebarSiteFilter"
+                    type="radio"
+                    class="cal-filter-input"
+                    :value="PROJECT_TASKS_KEY"
+                  />
+                  <span
+                    class="cal-swatch"
+                    :style="{ background: siteDotColor(PROJECT_TASKS_KEY) }"
+                    aria-hidden="true"
+                  />
+                  <span class="cal-filter-label">Project tasks</span>
+                </label>
                 <div
                   v-for="source in sources"
                   :key="source.id"

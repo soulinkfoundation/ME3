@@ -110,6 +110,59 @@ describe("calendar task feed", () => {
       allDay: true,
     });
   });
+
+  it("shows date-only due tasks on their due date", async () => {
+    const env = createEnv({
+      timezone: "Europe/Dublin",
+      tasks: [
+        taskRow({
+          id: "task-due-date",
+          scheduled_for: null,
+          due_at: "2026-07-29",
+        }),
+      ],
+    });
+
+    const tasks = await listCalendarMissionTasks(env, "owner", {
+      start: "2026-06-28T23:00:00.000Z",
+      end: "2026-08-02T23:00:00.000Z",
+    });
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      id: "task-due-date",
+      dueAt: "2026-07-29",
+      startsAt: "2026-07-28T23:00:00.000Z",
+      endsAt: "2026-07-29T23:00:00.000Z",
+      allDay: true,
+      dateSource: "due_at",
+    });
+  });
+
+  it("prefers the due date when a task also has a scheduled date", async () => {
+    const env = createEnv({
+      tasks: [
+        taskRow({
+          id: "task-due-over-scheduled",
+          scheduled_for: "2026-08-15",
+          due_at: "2026-07-29",
+        }),
+      ],
+    });
+
+    const tasks = await listCalendarMissionTasks(env, "owner", {
+      start: "2026-07-01T00:00:00.000Z",
+      end: "2026-08-01T00:00:00.000Z",
+    });
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      id: "task-due-over-scheduled",
+      startsAt: "2026-07-29T00:00:00.000Z",
+      endsAt: "2026-07-30T00:00:00.000Z",
+      dateSource: "due_at",
+    });
+  });
 });
 
 function createEnv(input: {
