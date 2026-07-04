@@ -7,8 +7,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc --noEmit",
-    "typecheck": "tsc --noEmit"
+    "build": "node ../../scripts/check-agent-chat-index-size.mjs && tsc --noEmit",
+    "typecheck": "node ../../scripts/check-agent-chat-index-size.mjs && tsc --noEmit"
   },
   "dependencies": {
     "@me3/knowledge": "workspace:*",
