@@ -22,7 +22,7 @@ type TestTaskRow = {
 };
 
 describe("calendar task feed", () => {
-  it("returns active dated project tasks with project display data", async () => {
+  it("returns dated project tasks with project display data", async () => {
     const env = createEnv({
       tasks: [
         taskRow({
@@ -61,8 +61,13 @@ describe("calendar task feed", () => {
       end: "2026-07-01T00:00:00.000Z",
     });
 
-    expect(tasks.map((task) => task.id)).toEqual(["task-scheduled", "task-due"]);
-    expect(tasks[0]).toMatchObject({
+    expect(tasks.map((task) => task.id).sort()).toEqual([
+      "task-archived",
+      "task-done",
+      "task-due",
+      "task-scheduled",
+    ]);
+    expect(tasks.find((task) => task.id === "task-scheduled")).toMatchObject({
       id: "task-scheduled",
       title: "Launch checklist",
       scheduledFor: "2026-06-15",
@@ -76,12 +81,20 @@ describe("calendar task feed", () => {
       projectColor: "#26806f",
       projectIcon: "CircleCheck",
     });
-    expect(tasks[1]).toMatchObject({
+    expect(tasks.find((task) => task.id === "task-due")).toMatchObject({
       id: "task-due",
       startsAt: "2026-06-20T09:30:00.000Z",
       endsAt: "2026-06-20T09:30:00.000Z",
       allDay: false,
       dateSource: "due_at",
+    });
+    expect(tasks.find((task) => task.id === "task-done")).toMatchObject({
+      id: "task-done",
+      status: "done",
+    });
+    expect(tasks.find((task) => task.id === "task-archived")).toMatchObject({
+      id: "task-archived",
+      archivedAt: "2026-06-18T10:00:00.000Z",
     });
   });
 

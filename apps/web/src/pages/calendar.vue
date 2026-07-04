@@ -115,7 +115,7 @@ interface CalendarTaskRow {
   id: string;
   title: string;
   description: string | null;
-  status: "backlog" | "in_progress" | "review";
+  status: "backlog" | "in_progress" | "review" | "done";
   priority: number;
   dueAt: string | null;
   scheduledFor: string | null;
@@ -132,6 +132,7 @@ interface CalendarTaskRow {
   sourceRef: string | null;
   createdAt: string;
   updatedAt: string;
+  archivedAt: string | null;
 }
 
 interface CalendarSiteOption {
@@ -491,9 +492,11 @@ function formatEventDate(value: string) {
   }).format(new Date(value));
 }
 
-function formatTaskStatus(status: CalendarTaskRow["status"]): string {
-  if (status === "in_progress") return "Doing";
-  if (status === "review") return "Review";
+function formatTaskStatus(task: Pick<CalendarTaskRow, "archivedAt" | "status">): string {
+  if (task.archivedAt) return "Archived";
+  if (task.status === "in_progress") return "Doing";
+  if (task.status === "review") return "Review";
+  if (task.status === "done") return "Done";
   return "Backlog";
 }
 
@@ -771,10 +774,10 @@ function mapTaskToCalendarEvent(task: CalendarTaskRow): CalendarAgendaEvent {
     endsAt: task.endsAt,
     allDay: task.allDay,
     color: task.projectColor,
-    summary: formatTaskStatus(task.status),
+    summary: formatTaskStatus(task),
     detailLines: [
       { label: "Project", value: task.projectName || "Personal" },
-      { label: "Status", value: formatTaskStatus(task.status) },
+      { label: "Status", value: formatTaskStatus(task) },
       { label: "Priority", value: formatTaskPriority(task.priority) },
       ...(task.dueAt && task.dateSource !== "due_at"
         ? [{ label: "Due", value: formatTaskDateValue(task.dueAt) }]

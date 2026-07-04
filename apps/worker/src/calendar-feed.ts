@@ -14,7 +14,7 @@ export type CalendarTaskFeedRow = {
   id: string;
   title: string;
   description: string | null;
-  status: "backlog" | "in_progress" | "review";
+  status: "backlog" | "in_progress" | "review" | "done";
   priority: number;
   dueAt: string | null;
   scheduledFor: string | null;
@@ -31,6 +31,7 @@ export type CalendarTaskFeedRow = {
   sourceRef: string | null;
   createdAt: string;
   updatedAt: string;
+  archivedAt: string | null;
 };
 
 type MissionCalendarTaskDbRow = {
@@ -52,7 +53,12 @@ type MissionCalendarTaskDbRow = {
   project_icon: string | null;
 };
 
-const ACTIVE_TASK_STATUSES = new Set(["backlog", "in_progress", "review"]);
+const CALENDAR_TASK_STATUSES = new Set([
+  "backlog",
+  "in_progress",
+  "review",
+  "done",
+]);
 
 export function parseCalendarWindow(
   start: string | null | undefined,
@@ -88,8 +94,7 @@ export async function listCalendarMissionTasks(
      FROM mission_tasks t
      LEFT JOIN mission_projects p ON p.id = t.project_id AND p.user_id = t.user_id
      WHERE t.user_id = ?
-       AND t.archived_at IS NULL
-       AND t.status IN ('backlog', 'in_progress', 'review')
+       AND t.status IN ('backlog', 'in_progress', 'review', 'done')
        AND (
          (t.due_at IS NOT NULL AND t.due_at != ''
           AND substr(t.due_at, 1, 10) >= ? AND substr(t.due_at, 1, 10) < ?)
@@ -126,7 +131,7 @@ function serializeCalendarTask(
   row: MissionCalendarTaskDbRow,
   timezone: string,
 ): CalendarTaskFeedRow | null {
-  if (!ACTIVE_TASK_STATUSES.has(row.status) || row.archived_at) return null;
+  if (!CALENDAR_TASK_STATUSES.has(row.status)) return null;
 
   const scheduledFor = normalizeDateKey(row.scheduled_for);
   const dueAt = normalizeDateOrDateTime(row.due_at);
@@ -162,6 +167,7 @@ function serializeCalendarTask(
     sourceRef: row.source_ref,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    archivedAt: row.archived_at,
   };
 }
 
