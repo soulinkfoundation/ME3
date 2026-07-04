@@ -166,7 +166,9 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               dbState.siteFiles.find(
                 (file) =>
                   file.site_id === site?.id &&
-                  (file.path === "src/me.json" || file.path === "me.json"),
+                  (file.path === "public/me.json" ||
+                    file.path === "src/me.json" ||
+                    file.path === "me.json"),
               ) || null
             ) as T;
           }
@@ -1965,6 +1967,40 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
+    name: "Mission Control context read resolves spaced project handle",
+    messageText: "Read mission context for the Kieran of Earth project.",
+    envState: {
+      projects: [
+        {
+          ...projectRow("project-koe", "KieranOfEarth", "kieranofearth"),
+          description: "Coaching and consulting.",
+        },
+      ],
+      tasks: [taskRow("task-koe", "Refresh public offer page", "project-koe")],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.mission.context.read",
+      specialist: "core.mission.context.read",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: [
+        "Mission Control context for KieranOfEarth",
+        "Purpose: Coaching and consulting.",
+        "Refresh public offer page",
+      ],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      aiCalled: false,
+    },
+  },
+  {
     name: "week review lists open tasks across projects and completed tasks separately",
     messageText: "Review my week",
     envState: {
@@ -2794,7 +2830,7 @@ function profileSiteRow(
 function siteMeJsonRow(siteId: string, profile: Record<string, unknown>): Record<string, unknown> {
   return {
     site_id: siteId,
-    path: "src/me.json",
+    path: "public/me.json",
     content: JSON.stringify(profile),
     content_type: "application/json",
     updated_at: "2026-05-15T09:00:00Z",
