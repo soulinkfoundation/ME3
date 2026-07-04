@@ -172,6 +172,11 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               ) || null
             ) as T;
           }
+          if (sql.includes("FROM site_files")) {
+            return (dbState.siteFiles.find(
+              (file) => file.site_id === values[0] && file.path === values[1],
+            ) || null) as T;
+          }
           if (sql.includes("FROM sites")) {
             return (dbState.sites.find(
               (site) =>
@@ -265,6 +270,15 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           }
           if (sql.includes("FROM bookings b")) {
             return { results: dbState.bookings as T[] };
+          }
+          if (sql.includes("FROM sites")) {
+            return {
+              results: dbState.sites.filter(
+                (site) =>
+                  site.user_id === values[0] &&
+                  (!site.site_type || site.site_type === "profile"),
+              ) as T[],
+            };
           }
           if (sql.includes("FROM mission_private_memory")) {
             return { results: dbState.memory as T[] };
@@ -408,6 +422,28 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               task.updated_at = new Date().toISOString();
             }
           }
+          if (sql.includes("INSERT INTO site_files")) {
+            const content = toSiteFileBytes(values[2]);
+            const file = {
+              site_id: values[0],
+              path: values[1],
+              content,
+              content_type: values[3],
+              size: values[4],
+              sha256: values[5],
+              updated_at: new Date().toISOString(),
+            };
+            const existingIndex = dbState.siteFiles.findIndex(
+              (entry) => entry.site_id === file.site_id && entry.path === file.path,
+            );
+            if (existingIndex >= 0) dbState.siteFiles[existingIndex] = file;
+            else dbState.siteFiles.push(file);
+          }
+          if (sql.includes("DELETE FROM site_files")) {
+            dbState.siteFiles = dbState.siteFiles.filter(
+              (file) => !(file.site_id === values[0] && file.path === values[1]),
+            );
+          }
           return { meta: { changes: 1 } };
         },
       });
@@ -431,6 +467,23 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     CORE_API_ORIGIN: "https://core.example.com",
     state: dbState,
   };
+}
+
+function toSiteFileBytes(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return new TextEncoder().encode(String(value ?? ""));
+}
+
+function siteFileText(files: Array<Record<string, unknown>>, path: string): string | null {
+  const file = files.find((entry) => entry.path === path);
+  const content = file?.content;
+  if (typeof content === "string") return content;
+  if (content instanceof Uint8Array) return new TextDecoder().decode(content);
+  if (content instanceof ArrayBuffer) return new TextDecoder().decode(content);
+  if (ArrayBuffer.isView(content)) return new TextDecoder().decode(content);
+  return null;
 }
 
 afterEach(() => {
@@ -1624,7 +1677,12 @@ type GoldenTranscriptScenario = {
       | "core.mission.task.list"
       | "core.mission.task.read"
       | "core.mission.task.update"
-      | "core.mission.task.archive";
+      | "core.mission.task.archive"
+      | "core.sites.blog_post.list"
+      | "core.sites.blog_post.read"
+      | "core.sites.blog_post.create"
+      | "core.sites.blog_post.update"
+      | "core.sites.blog_post.archive";
     toolResultStatus: "not_attempted" | "succeeded" | "failed" | "clarified";
     modelCallStatus: "not_attempted" | "succeeded" | "failed" | "fallback";
     specialist?: string;
@@ -1638,6 +1696,9 @@ type GoldenTranscriptScenario = {
     missionTaskStatus?: string;
     missionTaskDescription?: string | null;
     missionTaskArchived?: boolean;
+    siteFileContains?: Array<{ path: string; text: string }>;
+    siteFileMissing?: string[];
+    sitePostCount?: number;
     aiCalled?: boolean;
     fallbackReason?: string;
   };
@@ -2218,6 +2279,265 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
+    name: "site blog post list includes metadata and body previews",
+    messageText: "Show my blog posts.",
+    envState: {
+      sites: [profileSiteRow("site-profile", "kieran")],
+      siteFiles: [
+        siteFileRow("site-profile", "src/me.json", JSON.stringify({
+          handle: "kieran",
+          name: "Kieran",
+          blogEnabled: true,
+          posts: [
+            {
+              slug: "agent-context",
+              title: "Agent Context",
+              file: "blog/agent-context.md",
+              excerpt: "How context helps the agent.",
+              publishedAt: "2026-05-20",
+              draft: false,
+            },
+            {
+              slug: "content-strategy",
+              title: "Content Strategy",
+              file: "blog/content-strategy.md",
+              draft: true,
+            },
+          ],
+        }), "application/json"),
+        siteFileRow("site-profile", "src/blog/agent-context.md", "# Agent Context\n\nContext keeps the assistant grounded."),
+        siteFileRow("site-profile", "src/blog/content-strategy.md", "# Content Strategy\n\nDraft strategy notes."),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.sites.blog_post.list",
+      specialist: "core.sites.blog_post.list",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["Agent Context", "Slug: agent-context", "Status: published, 2026-05-20", "Context keeps the assistant grounded.", "Content Strategy", "draft"],
+      contextSummary: "absent",
+      aiCalled: false,
+    },
+  },
+  {
+    name: "site blog post read includes full markdown body",
+    messageText: "Read the blog post about agent context.",
+    envState: {
+      sites: [profileSiteRow("site-profile", "kieran")],
+      siteFiles: [
+        siteFileRow("site-profile", "src/me.json", JSON.stringify({
+          handle: "kieran",
+          posts: [{ slug: "agent-context", title: "Agent Context", file: "blog/agent-context.md", draft: false }],
+        }), "application/json"),
+        siteFileRow("site-profile", "src/blog/agent-context.md", "# Agent Context\n\nFull body with enough detail to inspect."),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.sites.blog_post.read",
+      specialist: "core.sites.blog_post.read",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["Blog post on @kieran: Agent Context", "File: blog/agent-context.md", "# Agent Context", "Full body with enough detail"],
+      contextSummary: "absent",
+      aiCalled: false,
+    },
+  },
+  {
+    name: "site blog post create writes metadata and markdown",
+    messageText: "Create a draft blog post about why regex intent routing fails.",
+    envState: {
+      sites: [profileSiteRow("site-profile", "kieran")],
+      siteFiles: [
+        siteFileRow("site-profile", "src/me.json", JSON.stringify({
+          handle: "kieran",
+          posts: [],
+        }), "application/json"),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.sites.blog_post.create",
+      specialist: "core.sites.blog_post.create",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["created a draft", "Why Regex Intent Routing Fails"],
+      contextSummary: "absent",
+      siteFileContains: [
+        { path: "src/me.json", text: "why-regex-intent-routing-fails" },
+        { path: "src/blog/why-regex-intent-routing-fails.md", text: "# Why Regex Intent Routing Fails" },
+      ],
+      sitePostCount: 1,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "site blog post excerpt update resolves article alias",
+    messageText: "Update the excerpt for the agent context article to A short note about context.",
+    envState: {
+      sites: [profileSiteRow("site-profile", "kieran")],
+      siteFiles: [
+        siteFileRow("site-profile", "src/me.json", JSON.stringify({
+          handle: "kieran",
+          posts: [{ slug: "agent-context", title: "Agent Context", file: "blog/agent-context.md", draft: false }],
+        }), "application/json"),
+        siteFileRow("site-profile", "src/blog/agent-context.md", "# Agent Context\n\nBody."),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.sites.blog_post.update",
+      specialist: "core.sites.blog_post.update",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["updated", "Agent Context"],
+      contextSummary: "absent",
+      siteFileContains: [{ path: "src/me.json", text: "A short note about context" }],
+      sitePostCount: 1,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "site blog post rename keeps markdown and updates title",
+    messageText: "Rename the post ME3 assistant notes to ME3 agent notes.",
+    envState: {
+      sites: [profileSiteRow("site-profile", "kieran")],
+      siteFiles: [
+        siteFileRow("site-profile", "src/me.json", JSON.stringify({
+          handle: "kieran",
+          posts: [{ slug: "me3-assistant-notes", title: "ME3 assistant notes", file: "blog/me3-assistant-notes.md", draft: true }],
+        }), "application/json"),
+        siteFileRow("site-profile", "src/blog/me3-assistant-notes.md", "# ME3 assistant notes\n\nBody."),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.sites.blog_post.update",
+      specialist: "core.sites.blog_post.update",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["updated", "ME3 agent notes"],
+      contextSummary: "absent",
+      siteFileContains: [
+        { path: "src/me.json", text: "ME3 agent notes" },
+        { path: "src/blog/me3-assistant-notes.md", text: "# ME3 assistant notes" },
+      ],
+      sitePostCount: 1,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "site blog post publish flips draft state",
+    messageText: "Publish the draft blog post about content strategy.",
+    envState: {
+      sites: [profileSiteRow("site-profile", "kieran")],
+      siteFiles: [
+        siteFileRow("site-profile", "src/me.json", JSON.stringify({
+          handle: "kieran",
+          posts: [{ slug: "content-strategy", title: "Content Strategy", file: "blog/content-strategy.md", draft: true }],
+        }), "application/json"),
+        siteFileRow("site-profile", "src/blog/content-strategy.md", "# Content Strategy\n\nBody."),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.sites.blog_post.update",
+      specialist: "core.sites.blog_post.update",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["updated", "Content Strategy"],
+      contextSummary: "absent",
+      siteFileContains: [
+        { path: "src/me.json", text: "\"draft\": false" },
+        { path: "src/me.json", text: "\"publishedAt\": \"2026-05-31\"" },
+      ],
+      sitePostCount: 1,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "site blog post delete archives markdown and removes active metadata",
+    messageText: "Delete the old launch notes post.",
+    envState: {
+      sites: [profileSiteRow("site-profile", "kieran")],
+      siteFiles: [
+        siteFileRow("site-profile", "src/me.json", JSON.stringify({
+          handle: "kieran",
+          posts: [{ slug: "old-launch-notes", title: "Old Launch Notes", file: "blog/old-launch-notes.md", draft: false }],
+        }), "application/json"),
+        siteFileRow("site-profile", "src/blog/old-launch-notes.md", "# Old Launch Notes\n\nLegacy body."),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.sites.blog_post.archive",
+      specialist: "core.sites.blog_post.archive",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["archived", "Old Launch Notes", "archived/blog/old-launch-notes.md"],
+      contextSummary: "absent",
+      siteFileContains: [{ path: "src/archived/blog/old-launch-notes.md", text: "Legacy body" }],
+      siteFileMissing: ["src/blog/old-launch-notes.md"],
+      sitePostCount: 0,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "site blog post request asks which site when ambiguous",
+    messageText: "Show my blog posts.",
+    envState: {
+      sites: [
+        profileSiteRow("site-kieran", "kieran"),
+        profileSiteRow("site-earth", "kieranofearth"),
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.sites.blog_post.list",
+      specialist: "core.sites.blog_post.list",
+      toolResultStatus: "failed",
+      modelCallStatus: "not_attempted",
+      fallbackReason: "Site blog posts could not be listed",
+      replyIncludes: ["multiple profile sites", "@kieran", "@kieranofearth", "Which site should I use?"],
+      contextSummary: "absent",
+      aiCalled: false,
+    },
+  },
+  {
+    name: "site blog post request reports missing profile site",
+    messageText: "Show my blog posts.",
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.sites.blog_post.list",
+      specialist: "core.sites.blog_post.list",
+      toolResultStatus: "failed",
+      modelCallStatus: "not_attempted",
+      fallbackReason: "Site blog posts could not be listed",
+      replyIncludes: ["could not find a profile site"],
+      contextSummary: "absent",
+      aiCalled: false,
+    },
+  },
+  {
     name: "mailbox draft request writes no mailbox state until save is requested",
     messageText: "Can you draft a reply to Ada about the workflow notes?",
     aiReply:
@@ -2712,6 +3032,18 @@ describe("Core chat golden transcript evals", () => {
     if (scenario.expected.missionTaskArchived) {
       expect(env.state.tasks.at(-1)?.archived_at).toEqual(expect.any(String));
     }
+    for (const expectedFile of scenario.expected.siteFileContains || []) {
+      expect(siteFileText(env.state.siteFiles, expectedFile.path)).toContain(expectedFile.text);
+    }
+    for (const missingPath of scenario.expected.siteFileMissing || []) {
+      expect(siteFileText(env.state.siteFiles, missingPath)).toBeNull();
+    }
+    if (scenario.expected.sitePostCount !== undefined) {
+      const profile = JSON.parse(siteFileText(env.state.siteFiles, "src/me.json") || "{}") as {
+        posts?: unknown[];
+      };
+      expect(profile.posts || []).toHaveLength(scenario.expected.sitePostCount);
+    }
     if (
       scenario.expected.capabilityId === "core.mission.task.create" ||
       scenario.expected.capabilityId === "core.mission.task.update" ||
@@ -2926,6 +3258,21 @@ function siteMeJsonRow(siteId: string, profile: Record<string, unknown>): Record
     path: "public/me.json",
     content: JSON.stringify(profile),
     content_type: "application/json",
+    updated_at: "2026-05-15T09:00:00Z",
+  };
+}
+
+function siteFileRow(
+  siteId: string,
+  path: string,
+  text: string,
+  contentType = "text/markdown",
+): Record<string, unknown> {
+  return {
+    site_id: siteId,
+    path,
+    content: text,
+    content_type: contentType,
     updated_at: "2026-05-15T09:00:00Z",
   };
 }

@@ -107,6 +107,46 @@ export function planCoreChatToolTurn(
     });
   }
 
+  if (isCoreChatSiteBlogPostArchiveRequest(messageText)) {
+    return capabilityDecision("core.sites.blog_post.archive", {
+      kind: "write_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to archive or delete a profile-site blog post.",
+    });
+  }
+
+  if (isCoreChatSiteBlogPostUpdateRequest(messageText)) {
+    return capabilityDecision("core.sites.blog_post.update", {
+      kind: "write_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to update a profile-site blog post.",
+    });
+  }
+
+  if (isCoreChatSiteBlogPostCreateRequest(messageText)) {
+    return capabilityDecision("core.sites.blog_post.create", {
+      kind: "write_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to create a profile-site blog post.",
+    });
+  }
+
+  if (isCoreChatSiteBlogPostReadRequest(messageText)) {
+    return capabilityDecision("core.sites.blog_post.read", {
+      kind: "read_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to read one profile-site blog post.",
+    });
+  }
+
+  if (isCoreChatSiteBlogPostListRequest(messageText)) {
+    return capabilityDecision("core.sites.blog_post.list", {
+      kind: "read_action",
+      confidence: 0.9,
+      reason: "The owner directly asked to list profile-site blog posts.",
+    });
+  }
+
   if (isCoreChatMissionContextReadRequest(messageText)) {
     return capabilityDecision("core.mission.context.read", {
       kind: "read_action",
@@ -165,6 +205,7 @@ export function isCoreChatMailboxDraftSaveRequest(
   messageText: string,
   hasRecentAssistantEmailDraft: boolean,
 ): boolean {
+  if (mentionsSiteBlogPostDomain(messageText)) return false;
   const asksToSave =
     (/\b(save|store|keep)\b/i.test(messageText) &&
       /\b(it|that|this|draft|email|reply|message)\b/i.test(messageText)) ||
@@ -260,6 +301,102 @@ export function isCoreChatBookingLookupRequest(messageText: string): boolean {
       text,
     )
   );
+}
+
+export function isCoreChatSiteBlogPostListRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (isLikelyMissionTaskRequest(messageText)) return false;
+  if (!mentionsSiteBlogPostDomain(messageText)) return false;
+  if (isCoreChatSiteBlogPostCreateRequest(messageText)) return false;
+  if (isCoreChatSiteBlogPostUpdateRequest(messageText)) return false;
+  if (isCoreChatSiteBlogPostArchiveRequest(messageText)) return false;
+  if (isCoreChatSiteBlogPostReadRequest(messageText)) return false;
+  return (
+    /\b(?:list|show|check|review|pull up|see|view)\s+(?:my\s+|the\s+)?(?:profile\s+site\s+|public\s+site\s+|site\s+)?(?:blog\s+)?(?:posts?|articles?)\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:blog\s+posts?|articles?)\b.*\b(?:list|show|existing|published|drafts?)\b/i.test(
+      messageText,
+    )
+  );
+}
+
+export function isCoreChatSiteBlogPostReadRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (isLikelyMissionTaskRequest(messageText)) return false;
+  if (!mentionsSiteBlogPostDomain(messageText)) return false;
+  if (isCoreChatSiteBlogPostCreateRequest(messageText)) return false;
+  if (isCoreChatSiteBlogPostUpdateRequest(messageText)) return false;
+  if (isCoreChatSiteBlogPostArchiveRequest(messageText)) return false;
+  if (/\b(?:all|list|existing|published)\s+(?:blog\s+)?(?:posts?|articles?)\b/i.test(messageText)) {
+    return false;
+  }
+  return (
+    /\b(?:read|open|show|pull up|check|inspect)\b.*\b(?:blog\s+post|article|post|draft)\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:full\s+)?(?:article|blog\s+post|post)\s+(?:draft\s+)?(?:for|about|called|titled)\b/i.test(
+      messageText,
+    )
+  );
+}
+
+export function isCoreChatSiteBlogPostCreateRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (isLikelyMissionTaskRequest(messageText)) return false;
+  if (!mentionsSiteBlogPostDomain(messageText)) return false;
+  if (/\b(?:ideas?|brainstorm|outline options|strategy)\b/i.test(messageText)) return false;
+  return /\b(?:create|write|draft|add|make)\b.*\b(?:blog\s+post|article|post)\b/i.test(
+    messageText,
+  );
+}
+
+export function isCoreChatSiteBlogPostUpdateRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (isLikelyMissionTaskRequest(messageText)) return false;
+  if (isCoreChatSiteBlogPostCreateRequest(messageText)) return false;
+  if (
+    !mentionsSiteBlogPostDomain(messageText) &&
+    !/\b(?:rename|publish|unpublish|update|set|change|replace)\b.*\b(?:post|draft|article|excerpt|slug|title|body)\b/i.test(messageText)
+  ) {
+    return false;
+  }
+  if (isLikelySocialPostRequest(messageText)) return false;
+  if (isCoreChatSiteBlogPostArchiveRequest(messageText)) return false;
+  return (
+    /\b(?:update|edit|change|set|replace|rename|publish|unpublish)\b.*\b(?:blog\s+post|article|post|draft|slug|excerpt|title|body|published\s+date|publishedAt)\b/i.test(
+      messageText,
+    ) ||
+    /\b(?:rename|publish|unpublish)\s+(?:the\s+)?(?:draft\s+)?(?:blog\s+post|article|post)\b/i.test(
+      messageText,
+    )
+  );
+}
+
+export function isCoreChatSiteBlogPostArchiveRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (isLikelyMissionTaskRequest(messageText)) return false;
+  if (!mentionsSiteBlogPostDomain(messageText) && !/\b(?:blog\s+post|article|post)\b/i.test(messageText)) return false;
+  if (isLikelySocialPostRequest(messageText)) return false;
+  return /\b(?:delete|archive|remove)\b.*\b(?:blog\s+post|article|post)\b/i.test(
+    messageText,
+  );
+}
+
+function mentionsSiteBlogPostDomain(messageText: string): boolean {
+  return /\b(?:blog\s+posts?|blog|articles?|profile\s+site|public\s+site|site\s+posts?|site\s+drafts?)\b/i.test(
+    messageText,
+  );
+}
+
+function isLikelySocialPostRequest(messageText: string): boolean {
+  return /\b(?:social|linkedin|twitter|x\.com|instagram|tiktok|facebook|mastodon|bluesky)\b/i.test(
+    messageText,
+  );
+}
+
+function isLikelyMissionTaskRequest(messageText: string): boolean {
+  return /\b(?:mission\s+control|task|todo)\b/i.test(messageText);
 }
 
 export function isCoreChatMissionTaskCreateRequest(messageText: string): boolean {

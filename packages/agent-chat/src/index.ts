@@ -34,11 +34,8 @@ import {
   parseEmailAddressHeader,
 } from "../../../shared/email-headers";
 import { classifyAssistantImageIntent } from "./image-intent";
-import {
-  DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
-  modelSupportsCapability,
-  type AssistantImageCapability,
-} from "./model-capabilities";
+import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL, modelSupportsCapability, type AssistantImageCapability } from "./model-capabilities";
+import { maybeHandleSiteBlogPostToolTurn } from "./site-blog";
 
 export {
   isCoreChatBookingLookupRequest,
@@ -2929,6 +2926,9 @@ async function maybeHandleCoreToolTurn(
       },
     );
   }
+
+  const siteBlogResponse = await maybeHandleSiteBlogPostToolTurn(env, { userId: input.userId, turnId: input.turnId, messageText, capabilityId: plannerDecision.capabilityId });
+  if (siteBlogResponse) return siteBlogResponse;
 
   if (plannerDecision.capabilityId === "core.mission.task.create") {
     const taskPlan = await parseMissionTaskChatRequest(env, input.userId, messageText, owner);
