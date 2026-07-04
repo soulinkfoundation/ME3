@@ -49,6 +49,7 @@ export {
   isCoreChatMissionTaskCreateRequest,
   isCoreChatMissionContextReadRequest,
   isCoreChatMissionTaskListRequest,
+  isCoreChatMissionTaskReadRequest,
   isCoreChatMissionTaskUpdateRequest,
   isCoreChatReminderCreateRequest,
   isCoreChatReminderListRequest,
@@ -833,11 +834,15 @@ type DbMissionTaskRow = {
 type AgentMissionTask = {
   id: string;
   title: string;
+  description: string | null;
   projectId: string;
   projectName: string;
   dueAt: string | null;
   status: string;
 };
+
+const AGENT_MISSION_TASK_SINGLE_DESCRIPTION_LIMIT = 4000;
+const AGENT_MISSION_TASK_LIST_DESCRIPTION_LIMIT = 1000;
 
 type AgentPublicBusinessContext = {
   positioningStatement: string | null;
@@ -2965,6 +2970,21 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
+  if (plannerDecision.capabilityId === "core.mission.task.read") {
+    const taskPlan = await parseMissionTaskReadChatRequest(env, input.userId, messageText);
+    if ("error" in taskPlan) {
+      return toolResponse(input.turnId, "core.mission.task.read", taskPlan.error, {
+        fallbackReason: "Mission task read details required",
+      });
+    }
+
+    return toolResponse(
+      input.turnId,
+      "core.mission.task.read",
+      formatMissionTaskReadReply(taskPlan.task),
+    );
+  }
+
   if (plannerDecision.capabilityId === "core.mission.task.list") {
     const taskPlan = await parseMissionTaskListChatRequest(env, input.userId, messageText);
     if ("error" in taskPlan) {
@@ -3179,7 +3199,15 @@ async function parseMissionTaskChatRequest(
   messageText: string,
   owner: OwnerProfileRow | null,
 ): Promise<
-  | { input: { title: string; projectId: string; projectName: string; dueAt: string | null } }
+  | {
+      input: {
+        title: string;
+        description: string | null;
+        projectId: string;
+        projectName: string;
+        dueAt: string | null;
+      };
+    }
   | { error: string }
 > {
   const projects = await loadAgentMissionProjects(env, userId);
@@ -3192,7 +3220,8 @@ async function parseMissionTaskChatRequest(
     return { error: "I could not find a Mission Control project to add that to." };
   }
 
-  const title = extractMissionTaskTitle(messageText, projectName);
+  const description = extractMissionTaskDescription(messageText);
+  const title = extractMissionTaskTitle(messageText, projectName, description);
   if (!title) {
     return { error: "Please include the task title to add to Mission Control." };
   }
@@ -3200,6 +3229,7 @@ async function parseMissionTaskChatRequest(
   return {
     input: {
       title,
+      description,
       projectId: project.id,
       projectName: project.name,
       dueAt: extractMissionTaskDueDate(messageText, owner?.timezone || "UTC"),
@@ -3259,10 +3289,28 @@ async function parseMissionContextReadChatRequest(
   };
 }
 
+async function parseMissionTaskReadChatRequest(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  messageText: string,
+): Promise<{ task: AgentMissionTask } | { error: string }> {
+  const targetTitle = extractMissionTaskReadTitle(messageText);
+  if (!targetTitle) return { error: "Please include the task title to read." };
+  const task = findAgentMissionTask(await loadAgentMissionTasks(env, userId), targetTitle);
+  if ("error" in task) return task;
+  return { task };
+}
+
 async function createAgentMissionTask(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
-  input: { title: string; projectId: string; projectName: string; dueAt: string | null },
+  input: {
+    title: string;
+    description: string | null;
+    projectId: string;
+    projectName: string;
+    dueAt: string | null;
+  },
 ): Promise<AgentMissionTask | { error: string }> {
   const id = crypto.randomUUID();
   const status = "backlog";
@@ -3282,9 +3330,9 @@ async function createAgentMissionTask(
     await env.DB.prepare(
       `INSERT INTO mission_tasks
          (id, user_id, project_id, column_id, title, description, status, priority, due_at, source_kind)
-       VALUES (?, ?, ?, ?, ?, NULL, 'backlog', 3, ?, 'agent_chat')`,
+       VALUES (?, ?, ?, ?, ?, ?, 'backlog', 3, ?, 'agent_chat')`,
     )
-      .bind(id, userId, input.projectId, columnId, input.title, input.dueAt)
+      .bind(id, userId, input.projectId, columnId, input.title, input.description, input.dueAt)
       .run();
   } catch (error) {
     return {
@@ -3295,6 +3343,7 @@ async function createAgentMissionTask(
   return {
     id,
     title: input.title,
+    description: input.description,
     projectId: input.projectId,
     projectName: input.projectName,
     dueAt: input.dueAt,
@@ -3349,6 +3398,7 @@ async function parseMissionTaskUpdateChatRequest(
       input: {
         taskId: string;
         title: string;
+        description: string | null;
         projectId: string;
         projectName: string;
         status: string;
@@ -3378,6 +3428,7 @@ async function parseMissionTaskUpdateChatRequest(
     input: {
       taskId: task.id,
       title: parsed.title || task.title,
+      description: parsed.description === undefined ? task.description : parsed.description,
       projectId: project?.id || task.projectId,
       projectName: project?.name || task.projectName,
       status,
@@ -3391,7 +3442,17 @@ async function parseMissionTaskArchiveChatRequest(
   userId: string,
   messageText: string,
 ): Promise<
-  | { input: { taskId: string; title: string; projectId: string; projectName: string; dueAt: string | null; status: string } }
+  | {
+      input: {
+        taskId: string;
+        title: string;
+        description: string | null;
+        projectId: string;
+        projectName: string;
+        dueAt: string | null;
+        status: string;
+      };
+    }
   | { error: string }
 > {
   const targetTitle = normalizeNullableText(
@@ -3408,6 +3469,7 @@ async function parseMissionTaskArchiveChatRequest(
     input: {
       taskId: task.id,
       title: task.title,
+      description: task.description,
       projectId: task.projectId,
       projectName: task.projectName,
       dueAt: task.dueAt,
@@ -3422,6 +3484,7 @@ async function updateAgentMissionTask(
   input: {
     taskId: string;
     title: string;
+    description: string | null;
     projectId: string;
     projectName: string;
     status: string;
@@ -3449,7 +3512,7 @@ async function updateAgentMissionTask(
 
     await env.DB.prepare(
       `UPDATE mission_tasks
-       SET project_id = ?, column_id = ?, title = ?, status = ?, due_at = ?,
+       SET project_id = ?, column_id = ?, title = ?, description = ?, status = ?, due_at = ?,
            updated_at = datetime('now')
        WHERE id = ? AND user_id = ?`,
     )
@@ -3457,6 +3520,7 @@ async function updateAgentMissionTask(
         input.projectId,
         columnId,
         input.title,
+        input.description,
         input.status,
         input.dueAt,
         input.taskId,
@@ -3472,6 +3536,7 @@ async function updateAgentMissionTask(
   return {
     id: input.taskId,
     title: input.title,
+    description: input.description,
     projectId: input.projectId,
     projectName: input.projectName,
     dueAt: input.dueAt,
@@ -3485,6 +3550,7 @@ async function archiveAgentMissionTask(
   input: {
     taskId: string;
     title: string;
+    description: string | null;
     projectId: string;
     projectName: string;
     dueAt: string | null;
@@ -3508,6 +3574,7 @@ async function archiveAgentMissionTask(
   return {
     id: input.taskId,
     title: input.title,
+    description: input.description,
     projectId: input.projectId,
     projectName: input.projectName,
     dueAt: input.dueAt,
@@ -3580,7 +3647,7 @@ async function loadAgentMissionTasks(
   userId: string,
 ): Promise<AgentMissionTask[]> {
   const rows = await env.DB.prepare(
-    `SELECT t.id, t.title, t.project_id, t.status, t.due_at, t.scheduled_for,
+    `SELECT t.id, t.title, t.description, t.project_id, t.status, t.due_at, t.scheduled_for,
             p.name AS project_name
      FROM mission_tasks t
      LEFT JOIN mission_projects p
@@ -3593,6 +3660,7 @@ async function loadAgentMissionTasks(
     .all<{
       id: string;
       title: string;
+      description: string | null;
       project_id: string | null;
       status: string;
       due_at: string | null;
@@ -3606,6 +3674,7 @@ async function loadAgentMissionTasks(
       {
         id: row.id,
         title: row.title,
+        description: row.description,
         projectId: row.project_id,
         projectName: row.project_name || "Mission Control",
         dueAt: row.due_at || row.scheduled_for || null,
@@ -3721,10 +3790,23 @@ function parseMissionTaskUpdateText(
 ): {
   targetTitle: string | null;
   title: string | null;
+  description: string | null | undefined;
   projectName: string | null;
   status: string | null;
   dueAt: string | null | undefined;
 } {
+  const descriptionUpdate = parseMissionTaskDescriptionUpdate(messageText);
+  if (descriptionUpdate) {
+    return {
+      targetTitle: descriptionUpdate.targetTitle,
+      title: null,
+      description: descriptionUpdate.description,
+      projectName: null,
+      status: null,
+      dueAt: undefined,
+    };
+  }
+
   const rename = messageText.match(
     /^\s*(?:please\s+)?(?:rename|update)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?\s+to\s+["“]?(.+?)["”]?[.?!]*$/i,
   );
@@ -3732,6 +3814,7 @@ function parseMissionTaskUpdateText(
     return {
       targetTitle: normalizeNullableText(rename[1]),
       title: normalizeNullableText(rename[2]),
+      description: undefined,
       projectName: null,
       status: null,
       dueAt: undefined,
@@ -3740,6 +3823,7 @@ function parseMissionTaskUpdateText(
 
   const projectName = extractMissionTaskProjectName(messageText);
   const status = parseMissionTaskStatus(messageText);
+  const description = extractMissionTaskDescription(messageText);
   const hasDue = /\b(?:due|by|today|tomorrow|20\d{2}-\d{2}-\d{2})\b/i.test(messageText);
   const dueAt = hasDue
     ? extractMissionTaskDueDate(messageText, timezone)
@@ -3762,13 +3846,32 @@ function parseMissionTaskUpdateText(
     );
   }
 
+  target = stripMissionTaskDescriptionClause(target, description);
+
   return {
     targetTitle: normalizeNullableText(target.replace(/[.?!]+$/g, "")),
     title: null,
+    description: description === null ? undefined : description,
     projectName,
     status,
     dueAt,
   };
+}
+
+function formatMissionTaskReadReply(task: AgentMissionTask): string {
+  const due = task.dueAt ? task.dueAt : "Not set.";
+  const description =
+    formatMissionTaskDescription(task.description, AGENT_MISSION_TASK_SINGLE_DESCRIPTION_LIMIT) ||
+    "Not set yet.";
+  return [
+    `Task: ${task.title}`,
+    `- Project: ${task.projectName}`,
+    `- Status: ${missionTaskStatusLabel(task.status)}`,
+    `- Due: ${due}`,
+    "",
+    "Description:",
+    description,
+  ].join("\n");
 }
 
 function formatMissionTaskListReply(tasks: AgentMissionTask[], filterLabel: string): string {
@@ -3781,8 +3884,7 @@ function formatMissionTaskListReply(tasks: AgentMissionTask[], filterLabel: stri
       "",
       "Open tasks:",
       ...openTasks.slice(0, 20).map((task, index) => {
-        const due = task.dueAt ? `, due ${task.dueAt}` : "";
-        return `${index + 1}. ${task.title} (${task.projectName}, ${missionTaskStatusLabel(task.status)}${due})`;
+        return formatMissionTaskListItem(task, index);
       }),
     );
   }
@@ -3790,7 +3892,7 @@ function formatMissionTaskListReply(tasks: AgentMissionTask[], filterLabel: stri
     lines.push(
       "",
       "Completed tasks:",
-      ...completedTasks.slice(0, 20).map((task, index) => `${index + 1}. ${task.title}`),
+      ...completedTasks.slice(0, 20).map((task, index) => formatMissionTaskListItem(task, index)),
     );
   }
   const shown = Math.min(openTasks.length, 20) + Math.min(completedTasks.length, 20);
@@ -3829,8 +3931,7 @@ function formatMissionContextReadReply(input: {
       "",
       "Tasks:",
       ...input.tasks.slice(0, 20).map((task, index) => {
-        const due = task.dueAt ? `, due ${task.dueAt}` : "";
-        return `${index + 1}. ${task.title} (${task.projectName}, ${missionTaskStatusLabel(task.status)}${due})`;
+        return formatMissionTaskListItem(task, index);
       }),
     );
   } else {
@@ -3840,6 +3941,29 @@ function formatMissionContextReadReply(input: {
     ...lines,
     ...(input.tasks.length > 20 ? [`...and ${input.tasks.length - 20} more tasks.`] : []),
   ].join("\n");
+}
+
+function formatMissionTaskListItem(task: AgentMissionTask, index: number): string {
+  const due = task.dueAt ? `, due ${task.dueAt}` : "";
+  const summary = `${index + 1}. ${task.title} (${task.projectName}, ${missionTaskStatusLabel(task.status)}${due})`;
+  const description = formatMissionTaskDescription(
+    task.description,
+    AGENT_MISSION_TASK_LIST_DESCRIPTION_LIMIT,
+    { compact: true },
+  );
+  return description ? `${summary}\n   Description: ${description}` : summary;
+}
+
+function formatMissionTaskDescription(
+  description: string | null,
+  limit: number,
+  options: { compact?: boolean } = {},
+): string | null {
+  const normalized = normalizeNullableText(description);
+  if (!normalized) return null;
+  const text = options.compact ? normalized.replace(/\s+/g, " ") : normalized;
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).trimEnd()}... [truncated to ${limit} characters]`;
 }
 
 function extractMissionTaskProjectName(messageText: string): string | null {
@@ -3858,6 +3982,20 @@ function extractMissionTaskListProjectName(messageText: string): string | null {
     return null;
   }
   return value;
+}
+
+function extractMissionTaskReadTitle(messageText: string): string | null {
+  const target = messageText
+    .replace(/^(?:please\s+)?/i, "")
+    .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
+    .replace(/^(?:read|show|open|pull up|check|inspect)\s+(?:me\s+)?/i, "")
+    .replace(
+      /^(?:the\s+)?(?:full\s+)?(?:details?|contents?|description|notes?|body)\s+(?:for|of)\s+(?:the\s+)?(?:mission\s+control\s+)?(?:task|todo)\s*/i,
+      "",
+    )
+    .replace(/^(?:the\s+)?(?:mission\s+control\s+)?(?:task|todo)\s*/i, "")
+    .replace(/[.?!]+$/g, "");
+  return normalizeNullableText(target);
 }
 
 function parseMissionTaskStatus(messageText: string): string | null {
@@ -3885,6 +4023,7 @@ function missionTaskStatusPosition(status: string): number {
 function extractMissionTaskTitle(
   messageText: string,
   projectName: string | null,
+  description: string | null,
 ): string | null {
   let title = messageText
     .replace(/^(?:please\s+)?/i, "")
@@ -3906,10 +4045,110 @@ function extractMissionTaskTitle(
     );
   }
 
+  title = stripMissionTaskDescriptionClause(title, description);
+
   return normalizeNullableText(
     title
       .replace(/^\s*(?:to|for|about|that)\s+/i, "")
       .replace(/[.?!]+$/g, ""),
+  );
+}
+
+function extractMissionTaskDescription(messageText: string): string | null {
+  const patterns = [
+    /\b(?:with|using)\s+(?:a\s+)?(?:description|notes?|details?|body)(?:\s*(?:of|as|:))?\s+["“]([\s\S]+?)["”]\s*[.?!]*$/i,
+    /\b(?:with|using)\s+(?:a\s+)?(?:description|notes?|details?|body)(?:\s*(?:of|as|:))?\s+([\s\S]+?)\s*[.?!]*$/i,
+    /\b(?:description|notes?|details?|body)\s*(?:is|are|as|to|:)\s*["“]?([\s\S]+?)["”]?\s*[.?!]*$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = messageText.match(pattern);
+    const description = normalizeMissionTaskDescriptionText(match?.[1]);
+    if (description) return description;
+  }
+  return null;
+}
+
+function parseMissionTaskDescriptionUpdate(
+  messageText: string,
+): { targetTitle: string | null; description: string | null } | null {
+  const clear = messageText.match(
+    /^\s*(?:please\s+)?(?:clear|remove|delete)\s+(?:the\s+)?(?:task\s+)?(?:description|notes?|details?|body)\s+(?:for|from|on|of)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?[.?!]*$/i,
+  );
+  if (clear) {
+    return {
+      targetTitle: normalizeNullableText(clear[1]),
+      description: null,
+    };
+  }
+
+  const setForTask = messageText.match(
+    /^\s*(?:please\s+)?(?:set|update|change|replace)\s+(?:the\s+)?(?:description|notes?|details?|body)\s+(?:for|on|of)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?\s+(?:to|as|:)\s+["“]?([\s\S]+?)["”]?[.?!]*$/i,
+  );
+  if (setForTask) {
+    return {
+      targetTitle: normalizeNullableText(setForTask[1]),
+      description: normalizeMissionTaskDescriptionText(setForTask[2]),
+    };
+  }
+
+  const setOnTask = messageText.match(
+    /^\s*(?:please\s+)?(?:update|set|change|replace)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?\s+(?:description|notes?|details?|body)\s+(?:to|as|:)\s+["“]?([\s\S]+?)["”]?[.?!]*$/i,
+  );
+  if (setOnTask) {
+    return {
+      targetTitle: normalizeNullableText(setOnTask[1]),
+      description: normalizeMissionTaskDescriptionText(setOnTask[2]),
+    };
+  }
+
+  const addToTask = messageText.match(
+    /^\s*(?:please\s+)?(?:add|append)\s+(?:description|notes?|details?|body)\s+(?:to|for|on)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?(?:\s*:\s*|\s+(?:saying|that)\s+)([\s\S]+?)["”]?[.?!]*$/i,
+  );
+  if (addToTask) {
+    return {
+      targetTitle: normalizeNullableText(addToTask[1]),
+      description: normalizeMissionTaskDescriptionText(addToTask[2]),
+    };
+  }
+
+  return null;
+}
+
+function stripMissionTaskDescriptionClause(text: string, description: string | null): string {
+  let stripped = text;
+  if (description) {
+    const escapedDescription = escapeRegExp(description);
+    stripped = stripped
+      .replace(
+        new RegExp(
+          `\\b(?:with|using)\\s+(?:a\\s+)?(?:description|notes?|details?|body)(?:\\s*(?:of|as|:))?\\s+["“]?${escapedDescription}["”]?`,
+          "i",
+        ),
+        "",
+      )
+      .replace(
+        new RegExp(
+          `\\b(?:description|notes?|details?|body)\\s*(?:is|are|as|to|:)\\s*["“]?${escapedDescription}["”]?`,
+          "i",
+        ),
+        "",
+      );
+  }
+  return stripped
+    .replace(
+      /\b(?:with|using)\s+(?:a\s+)?(?:description|notes?|details?|body)(?:\s*(?:of|as|:))?\s+[\s\S]*$/i,
+      "",
+    )
+    .replace(/\b(?:description|notes?|details?|body)\s*(?:is|are|as|to|:)\s+[\s\S]*$/i, "");
+}
+
+function normalizeMissionTaskDescriptionText(value: unknown): string | null {
+  const normalized = normalizeNullableText(value);
+  if (!normalized) return null;
+  return normalizeNullableText(
+    normalized
+      .replace(/\s+\b(?:due|by)\s+(?:today|tomorrow|20\d{2}-\d{2}-\d{2})\b[.?!]*$/i, "")
+      .replace(/^["“]|["”]$/g, ""),
   );
 }
 

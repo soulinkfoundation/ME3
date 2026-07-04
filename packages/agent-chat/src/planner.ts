@@ -115,6 +115,14 @@ export function planCoreChatToolTurn(
     });
   }
 
+  if (isCoreChatMissionTaskReadRequest(messageText)) {
+    return capabilityDecision("core.mission.task.read", {
+      kind: "read_action",
+      confidence: 0.91,
+      reason: "The owner directly asked to read one Mission Control task.",
+    });
+  }
+
   if (isCoreChatMissionTaskListRequest(messageText)) {
     return capabilityDecision("core.mission.task.list", {
       kind: "read_action",
@@ -286,6 +294,19 @@ export function isCoreChatMissionTaskListRequest(messageText: string): boolean {
       messageText,
     ) ||
     /\b(?:what(?:'s| is)|which tasks? (?:are|is))\s+(?:in\s+)?(?:backlog|todo|to do|doing|in progress|review|done|complete|completed)\b/i.test(
+      messageText,
+    )
+  );
+}
+
+export function isCoreChatMissionTaskReadRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (/\b(?:tasks|todos)\b/i.test(messageText)) return false;
+  if (!/\b(?:task|todo)\b/i.test(messageText)) return false;
+  if (!/\b(?:read|show|open|pull up|check|inspect)\b/i.test(messageText)) return false;
+  return (
+    /\b(?:full\s+)?(?:details?|contents?|description|notes?|body)\b/i.test(messageText) ||
+    /\b(?:read|show|open|pull up|check|inspect)\s+(?:me\s+)?(?:the\s+)?(?:mission\s+control\s+)?(?:task|todo)\b/i.test(
       messageText,
     )
   );

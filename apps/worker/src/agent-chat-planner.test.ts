@@ -136,6 +136,13 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "read",
   },
   {
+    name: "direct Mission Control task detail read becomes a read action",
+    messageText: "Read the full details for task Prepare launch checklist.",
+    kind: "read_action",
+    capabilityId: "core.mission.task.read",
+    sideEffectLevel: "read",
+  },
+  {
     name: "Mission Control context read becomes a context read action",
     messageText: "Read the mission context for project ME3 Launch.",
     kind: "read_action",

@@ -371,10 +371,10 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               project_id: values[2],
               column_id: values[3],
               title: values[4],
-              description: null,
+              description: values[5],
               status: "backlog",
               priority: 3,
-              due_at: values[5],
+              due_at: values[6],
               scheduled_for: null,
               source_kind: "agent_chat",
               source_ref: null,
@@ -387,14 +387,15 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           }
           if (sql.includes("UPDATE mission_tasks") && sql.includes("SET project_id = ?")) {
             const task = dbState.tasks.find(
-              (item) => item.id === values[5] && item.user_id === values[6],
+              (item) => item.id === values[6] && item.user_id === values[7],
             );
             if (task) {
               task.project_id = values[0];
               task.column_id = values[1];
               task.title = values[2];
-              task.status = values[3];
-              task.due_at = values[4];
+              task.description = values[3];
+              task.status = values[4];
+              task.due_at = values[5];
               task.updated_at = new Date().toISOString();
             }
           }
@@ -1621,6 +1622,7 @@ type GoldenTranscriptScenario = {
       | "core.mission.context.read"
       | "core.mission.task.create"
       | "core.mission.task.list"
+      | "core.mission.task.read"
       | "core.mission.task.update"
       | "core.mission.task.archive";
     toolResultStatus: "not_attempted" | "succeeded" | "failed" | "clarified";
@@ -1634,6 +1636,7 @@ type GoldenTranscriptScenario = {
     mailboxDraftDelta?: number;
     missionTaskDelta?: number;
     missionTaskStatus?: string;
+    missionTaskDescription?: string | null;
     missionTaskArchived?: boolean;
     aiCalled?: boolean;
     fallbackReason?: string;
@@ -1836,7 +1839,8 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
   },
   {
     name: "direct Mission Control task create adds a project task",
-    messageText: "Add a task to project ME3 Launch to follow up with Sam tomorrow.",
+    messageText:
+      "Add a task to project ME3 Launch to follow up with Sam tomorrow with notes Use the partner brief before drafting.",
     envState: {
       projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
     },
@@ -1855,6 +1859,7 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       reminderDelta: 0,
       mailboxDraftDelta: 0,
       missionTaskDelta: 1,
+      missionTaskDescription: "Use the partner brief before drafting",
       aiCalled: false,
     },
   },
@@ -1898,7 +1903,12 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     messageText: "Can you read my tasks in the writing project?",
     envState: {
       projects: [projectRow("project-writing", "Writing", "writing")],
-      tasks: [taskRow("task-writing", "Draft article outline", "project-writing")],
+      tasks: [
+        {
+          ...taskRow("task-writing", "Draft article outline", "project-writing"),
+          description: "Frame the article around agent context, audience, and next actions.",
+        },
+      ],
     },
     expected: {
       source: "tool",
@@ -1908,7 +1918,47 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       specialist: "core.mission.task.list",
       toolResultStatus: "succeeded",
       modelCallStatus: "not_attempted",
-      replyIncludes: ["Draft article outline", "Writing"],
+      replyIncludes: [
+        "Draft article outline",
+        "Writing",
+        "Frame the article around agent context, audience, and next actions.",
+      ],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      aiCalled: false,
+    },
+  },
+  {
+    name: "direct Mission Control task read includes full task description",
+    messageText: "Read the full details for task Draft article outline.",
+    envState: {
+      projects: [projectRow("project-writing", "Writing", "writing")],
+      tasks: [
+        {
+          ...taskRow("task-writing", "Draft article outline", "project-writing"),
+          description:
+            "Frame the article around agent context, audience, and next actions. Include the specific Mission Control prompts that failed.",
+        },
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "read_action",
+      capabilityId: "core.mission.task.read",
+      specialist: "core.mission.task.read",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: [
+        "Task: Draft article outline",
+        "Project: Writing",
+        "Description:",
+        "Include the specific Mission Control prompts that failed.",
+      ],
       contextSummary: "absent",
       reminderActionKind: null,
       emailActionKind: null,
@@ -1940,7 +1990,12 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
           description: "Plan writing that turns ME3 lessons into useful articles.",
         },
       ],
-      tasks: [taskRow("task-content", "Draft audience-first article list", "project-content")],
+      tasks: [
+        {
+          ...taskRow("task-content", "Draft audience-first article list", "project-content"),
+          description: "Cross-reference the mission statement with the audience profile.",
+        },
+      ],
     },
     expected: {
       source: "tool",
@@ -1956,6 +2011,7 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
         "Build useful agentic products for independent founders.",
         "Independent founders with content-led businesses",
         "Draft audience-first article list",
+        "Cross-reference the mission statement with the audience profile.",
       ],
       contextSummary: "absent",
       reminderActionKind: null,
@@ -2100,6 +2156,38 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       mailboxDraftDelta: 0,
       missionTaskDelta: 0,
       missionTaskStatus: "done",
+      aiCalled: false,
+    },
+  },
+  {
+    name: "direct Mission Control task update replaces task description",
+    messageText:
+      "Update task Prepare launch checklist notes to Use the final launch criteria and add rollout risks.",
+    envState: {
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+      tasks: [
+        {
+          ...taskRow("task-launch", "Prepare launch checklist", "project-launch"),
+          description: "Old launch notes.",
+        },
+      ],
+    },
+    expected: {
+      source: "tool",
+      routePath: "tool",
+      plannerKind: "write_action",
+      capabilityId: "core.mission.task.update",
+      specialist: "core.mission.task.update",
+      toolResultStatus: "succeeded",
+      modelCallStatus: "not_attempted",
+      replyIncludes: ["updated", "Prepare launch checklist"],
+      contextSummary: "absent",
+      reminderActionKind: null,
+      emailActionKind: null,
+      reminderDelta: 0,
+      mailboxDraftDelta: 0,
+      missionTaskDelta: 0,
+      missionTaskDescription: "Use the final launch criteria and add rollout risks",
       aiCalled: false,
     },
   },
@@ -2615,6 +2703,11 @@ describe("Core chat golden transcript evals", () => {
     );
     if (scenario.expected.missionTaskStatus) {
       expect(env.state.tasks.at(-1)?.status).toBe(scenario.expected.missionTaskStatus);
+    }
+    if ("missionTaskDescription" in scenario.expected) {
+      expect(env.state.tasks.at(-1)?.description ?? null).toBe(
+        scenario.expected.missionTaskDescription ?? null,
+      );
     }
     if (scenario.expected.missionTaskArchived) {
       expect(env.state.tasks.at(-1)?.archived_at).toEqual(expect.any(String));

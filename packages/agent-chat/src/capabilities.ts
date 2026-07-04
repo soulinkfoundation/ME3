@@ -190,6 +190,7 @@ export const CORE_CHAT_CAPABILITIES = [
       required: ["title"],
       properties: {
         title: "Task title.",
+        description: "Optional task description, notes, details, or body.",
         projectId: "Mission Control project ID.",
         dueAt: "Optional YYYY-MM-DD due date.",
       },
@@ -229,6 +230,37 @@ export const CORE_CHAT_CAPABILITIES = [
     examples: {
       positive: ["Show backlog tasks for project ME3 Launch."],
       negative: ["Help me prioritise my Mission Control tasks."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.mission.task.read",
+    owner: "core",
+    pluginId: "me3.mission-control",
+    ownerFacingLabel: "Read Mission Control task",
+    summary: "Read one Mission Control task, including its full description where possible.",
+    category: "mission_control",
+    handler: {
+      surface: "chat",
+      route: "core.mission.task.read",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["mission-control"],
+    inputSchema: {
+      type: "object",
+      required: ["taskId"],
+      properties: {
+        taskId: "Mission Control task ID.",
+      },
+    },
+    auditEventKind: "mission_task_read",
+    examples: {
+      positive: ["Read the full details for task Prepare launch checklist."],
+      negative: ["Show backlog tasks for project ME3 Launch."],
     },
     chat: {
       intentKind: "read_action",
@@ -286,6 +318,7 @@ export const CORE_CHAT_CAPABILITIES = [
       properties: {
         taskId: "Mission Control task ID.",
         title: "Optional replacement task title.",
+        description: "Optional replacement task description, notes, details, or body.",
         projectId: "Optional destination project ID.",
         status: "Optional task status.",
         dueAt: "Optional YYYY-MM-DD due date.",
