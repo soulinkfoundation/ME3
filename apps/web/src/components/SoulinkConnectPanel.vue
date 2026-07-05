@@ -238,6 +238,16 @@ defineExpose({
           {{ disconnectLoading ? "Disconnecting..." : "Disconnect" }}
         </Button>
         <Button
+          v-else-if="canConnect"
+          color="primary"
+          size="compact"
+          type="button"
+          :disabled="setupLoading"
+          @click="setupSoulink"
+        >
+          {{ setupLoading ? "Connecting..." : "Connect" }}
+        </Button>
+        <Button
           v-else
           color="primary"
           size="compact"

@@ -364,7 +364,7 @@ const appConnectionsSaving = ref(false);
 const me3Connection = ref<AppConnectionsResponse["me3"] | null>(null);
 const appConnectionsError = ref<string | null>(null);
 const coreGithubLoading = ref(false);
-const coreGithubSaving = ref<"connect" | "update" | "disconnect" | null>(null);
+const coreGithubSaving = ref<"connect" | "update" | null>(null);
 const coreGithubStatus = ref<CoreGithubStatusResponse | null>(null);
 const coreGithubLatestVersion = ref<string | null>(null);
 const coreGithubLastRunUrl = ref<string | null>(null);
@@ -1750,25 +1750,6 @@ async function updateCoreFromGithub() {
   }
 }
 
-async function disconnectCoreGithubUpdater() {
-  if (coreGithubSaving.value) return;
-
-  coreGithubSaving.value = "disconnect";
-  coreGithubMessage.value = null;
-  coreGithubError.value = null;
-
-  try {
-    await api.post<CoreGithubActionResponse>("/core/github/disconnect");
-    coreGithubLastRunUrl.value = null;
-    coreGithubMessage.value = "GitHub updater disconnected.";
-    await loadCoreGithubUpdater();
-  } catch (e: any) {
-    coreGithubError.value = e.message || "Failed to disconnect GitHub updater";
-  } finally {
-    coreGithubSaving.value = null;
-  }
-}
-
 async function loadCoreStorageStatus(silent = false) {
   if (!silent) {
     storageLoading.value = true;
@@ -2058,6 +2039,92 @@ onBeforeUnmount(() => {
       <PageLoading v-if="loading" label="Loading account..." />
 
       <template v-else>
+        <section
+          v-if="coreGithubUpdateAvailable"
+          class="core-update-callout"
+          aria-labelledby="core-update-title"
+          aria-live="polite"
+        >
+          <div class="core-update-callout__copy">
+            <div class="core-update-callout__heading">
+              <UiIcon
+                class="core-update-callout__icon"
+                name="RefreshCw"
+                :size="17"
+                aria-hidden="true"
+              />
+              <h2 id="core-update-title">ME3 Core update available</h2>
+              <StatusBadge :tone="coreGithubStatusClass">
+                {{ coreGithubStatusLabel }}
+              </StatusBadge>
+            </div>
+            <p>{{ coreGithubDescription }}</p>
+            <div class="core-update-callout__details">
+              <span v-if="coreGithubInstalledVersion">
+                Installed v{{ coreGithubInstalledVersion }}
+              </span>
+              <span v-if="coreGithubLatestVersion">
+                Latest v{{ coreGithubLatestVersion }}
+              </span>
+              <a
+                v-if="
+                  coreGithubConnection?.repositoryUrl &&
+                  coreGithubRepositoryLabel
+                "
+                :href="coreGithubConnection.repositoryUrl"
+                target="_blank"
+                rel="noopener"
+              >
+                {{ coreGithubRepositoryLabel }}
+              </a>
+              <a
+                v-if="coreGithubRunUrl"
+                :href="coreGithubRunUrl"
+                target="_blank"
+                rel="noopener"
+              >
+                Latest run
+              </a>
+            </div>
+            <p
+              v-if="coreGithubMessage"
+              class="core-update-callout__message"
+            >
+              {{ coreGithubMessage }}
+            </p>
+            <p v-if="coreGithubError" class="core-update-callout__error">
+              {{ coreGithubError }}
+            </p>
+          </div>
+          <div class="core-update-callout__actions">
+            <Button
+              v-if="coreGithubConnection?.connected"
+              color="primary"
+              size="compact"
+              type="button"
+              :disabled="Boolean(coreGithubSaving)"
+              @click="updateCoreFromGithub"
+            >
+              {{ coreGithubSaving === "update" ? "Starting..." : "Update" }}
+            </Button>
+            <Button
+              v-else
+              color="primary"
+              size="compact"
+              type="button"
+              :disabled="
+                Boolean(coreGithubSaving) ||
+                appConnectionsSaving ||
+                coreGithubLoading ||
+                !coreGithubStatus?.me3AppConnected
+              "
+              @click="connectCoreGithubUpdater"
+            >
+              {{ coreGithubConnectLabel }}
+            </Button>
+          </div>
+        </section>
+
         <section class="card accordion-card signin-section primary-section">
           <button
             id="account-trigger-signin"
@@ -2565,106 +2632,6 @@ onBeforeUnmount(() => {
                       @click="connectMe3App"
                     >
                       {{ appConnectionsSaving ? "Opening..." : "Connect" }}
-                    </Button>
-                  </div>
-                </div>
-
-                <div
-                  class="connection-line"
-                  :class="{
-                    'connection-line--connected':
-                      coreGithubConnection?.connected,
-                  }"
-                >
-                  <div class="connection-line__copy">
-                    <span class="connection-line__title">ME3 Core Updates</span>
-                    <p class="connection-line__description">
-                      {{ coreGithubDescription }}
-                    </p>
-                    <div class="connection-line__details">
-                      <span v-if="coreGithubInstalledVersion">
-                        Installed v{{ coreGithubInstalledVersion }}
-                      </span>
-                      <span v-if="coreGithubLatestVersion">
-                        Latest v{{ coreGithubLatestVersion }}
-                      </span>
-                      <span v-if="coreGithubUpdateAvailable">
-                        Update available
-                      </span>
-                      <a
-                        v-if="
-                          coreGithubConnection?.repositoryUrl &&
-                          coreGithubRepositoryLabel
-                        "
-                        :href="coreGithubConnection.repositoryUrl"
-                        target="_blank"
-                        rel="noopener"
-                      >
-                        {{ coreGithubRepositoryLabel }}
-                      </a>
-                      <a
-                        v-if="coreGithubRunUrl"
-                        :href="coreGithubRunUrl"
-                        target="_blank"
-                        rel="noopener"
-                      >
-                        Latest run
-                      </a>
-                    </div>
-                    <p
-                      v-if="coreGithubMessage"
-                      class="connection-line__message"
-                    >
-                      {{ coreGithubMessage }}
-                    </p>
-                    <p v-if="coreGithubError" class="connection-line__error">
-                      {{ coreGithubError }}
-                    </p>
-                  </div>
-                  <div class="connection-line__end">
-                    <StatusBadge :tone="coreGithubStatusClass">
-                      {{ coreGithubStatusLabel }}
-                    </StatusBadge>
-                    <Button
-                      v-if="coreGithubConnection?.connected"
-                      color="primary"
-                      size="compact"
-                      type="button"
-                      :disabled="Boolean(coreGithubSaving)"
-                      @click="updateCoreFromGithub"
-                    >
-                      {{
-                        coreGithubSaving === "update" ? "Starting..." : "Update"
-                      }}
-                    </Button>
-                    <Button
-                      v-if="coreGithubConnection?.connected"
-                      color="outline"
-                      size="compact"
-                      type="button"
-                      :disabled="Boolean(coreGithubSaving)"
-                      @click="disconnectCoreGithubUpdater"
-                    >
-                      {{
-                        coreGithubSaving === "disconnect"
-                          ? "Disconnecting..."
-                          : "Disconnect"
-                      }}
-                    </Button>
-                    <Button
-                      v-else
-                      color="primary"
-                      size="compact"
-                      type="button"
-                      :disabled="
-                        Boolean(coreGithubSaving) ||
-                        appConnectionsSaving ||
-                        coreGithubLoading ||
-                        !coreGithubStatus?.me3AppConnected
-                      "
-                      @click="connectCoreGithubUpdater"
-                    >
-                      {{ coreGithubConnectLabel }}
                     </Button>
                   </div>
                 </div>
@@ -3556,12 +3523,15 @@ onBeforeUnmount(() => {
               size="compact"
               shape="soft"
               type="button"
-              @click="
-                storageModalOpen = false;
-                openSection.appConnections = true;
+              :disabled="
+                Boolean(coreGithubSaving) ||
+                appConnectionsSaving ||
+                coreGithubLoading ||
+                !coreGithubStatus?.me3AppConnected
               "
+              @click="connectCoreGithubUpdater"
             >
-              Open updater settings
+              {{ coreGithubConnectLabel }}
             </Button>
             <Button
               color="outline"
@@ -3863,6 +3833,96 @@ h1 {
 
 .timezone-section {
   order: 8;
+}
+
+.core-update-callout {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid
+    color-mix(
+      in oklab,
+      var(--ui-accent, #4caf50) 34%,
+      var(--ui-border, var(--color-border))
+    );
+  border-radius: var(--ui-radius-sm, 8px);
+  background: color-mix(
+    in oklab,
+    var(--ui-accent, #4caf50) 12%,
+    var(--ui-surface, var(--color-bg))
+  );
+}
+
+.core-update-callout__copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.core-update-callout__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.core-update-callout__icon {
+  flex-shrink: 0;
+  color: var(--ui-accent-strong, var(--color-accent));
+}
+
+.core-update-callout h2,
+.core-update-callout p {
+  margin: 0;
+}
+
+.core-update-callout h2 {
+  color: var(--ui-text, var(--color-text));
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.core-update-callout p {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.core-update-callout__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.core-update-callout__details a {
+  color: var(--ui-accent-strong, var(--color-text));
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.core-update-callout__details a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.core-update-callout__actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.core-update-callout__message {
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
+.core-update-callout__error {
+  color: var(--ui-danger, #b42318);
 }
 
 .card {
@@ -5082,6 +5142,15 @@ h1 {
   .email-row,
   .connection-line {
     align-items: stretch;
+  }
+
+  .core-update-callout {
+    flex-direction: column;
+  }
+
+  .core-update-callout__actions,
+  .core-update-callout__actions :deep(.me3-btn) {
+    width: 100%;
   }
 
   .connection-line {
