@@ -86,6 +86,7 @@ import {
   transcribeVoiceDictation,
 } from "./voice-dictation";
 import { authenticateMobileOwner } from "./mobile-pairing";
+import { verifyMe3CloudJwt } from "./me3-cloud-jwt";
 import { registerAccountsRoutes } from "./routes/accounts";
 import { registerAssistantRoutes } from "./routes/assistant";
 import { registerBookingRoutes } from "./routes/booking";
@@ -264,7 +265,6 @@ type Me3AppConnectionDetails = {
 type AccountUpdateBody = { timezone?: unknown; locale?: unknown };
 type SessionPayload = { sub: string; iat: number; exp: number };
 type OwnerRecord = OwnerProfile & { password_hash: string | null };
-type JwtHeader = { alg?: unknown; kid?: unknown; typ?: unknown };
 type AuthRateLimitPolicy = {
   route: string;
   maxAttempts: number;
@@ -1967,48 +1967,7 @@ async function verifySessionToken(token: string, secret: string): Promise<Sessio
 }
 
 async function verifyMe3ClaimToken(env: Env, token: string): Promise<Me3ClaimTokenPayload> {
-  const parts = token.split(".");
-  if (parts.length !== 3) throw new Error("Claim token must be a JWT");
-
-  const [encodedHeader, encodedPayload, encodedSignature] = parts;
-  const header = JSON.parse(decodeBase64Url(encodedHeader)) as JwtHeader;
-  if (header.alg !== "RS256" || typeof header.kid !== "string") {
-    throw new Error("Claim token uses an unsupported signature");
-  }
-
-  const payload = JSON.parse(decodeBase64Url(encodedPayload)) as Me3ClaimTokenPayload;
-  const issuer = getMe3CloudApiOrigin(env);
-  if (payload.iss !== issuer) throw new Error("Claim token issuer is invalid");
-  if (typeof payload.exp !== "number" || payload.exp <= currentUnixTime()) {
-    throw new Error("Claim token is expired");
-  }
-
-  const jwksResponse = await fetch(new URL("/.well-known/jwks.json", issuer).toString());
-  if (!jwksResponse.ok) throw new Error("Could not fetch ME3 Cloud signing keys");
-
-  const jwks = (await jwksResponse.json()) as { keys?: Array<JsonWebKey & { kid?: string }> };
-  const jwk = jwks.keys?.find((key) => key.kid === header.kid);
-  if (!jwk) throw new Error("Claim token signing key was not found");
-
-  const key = await crypto.subtle.importKey(
-    "jwk",
-    { ...jwk, alg: "RS256", ext: true },
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
-  const signatureBytes = decodeBase64UrlBytes(encodedSignature);
-  const signature = new ArrayBuffer(signatureBytes.byteLength);
-  new Uint8Array(signature).set(signatureBytes);
-  const valid = await crypto.subtle.verify(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    signature,
-    new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
-  );
-  if (!valid) throw new Error("Claim token signature is invalid");
-
-  return payload;
+  return verifyMe3CloudJwt<Me3ClaimTokenPayload>(env, token);
 }
 
 async function hmacSha256(data: string, secret: string): Promise<ArrayBuffer> {

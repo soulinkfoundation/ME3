@@ -78,7 +78,13 @@ export function registerMobileRoutes(app: AppHono, deps: MobileRouteDeps) {
 
   app.post("/api/mobile/token", async (c) => {
     try {
-      return c.json(await claimMobileTokenFromHostedSession(), 501);
+      return c.json(
+        await claimMobileTokenFromHostedSession(
+          c.env,
+          await c.req.json().catch(() => ({})),
+          origins(c, deps),
+        ),
+      );
     } catch (error) {
       return mobileErrorResponse(c, error);
     }

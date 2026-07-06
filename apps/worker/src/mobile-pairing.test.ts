@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   approveMobilePairing,
   authenticateMobileOwner,
   claimMobilePairing,
+  claimMobileTokenFromHostedSession,
   getMobileConfig,
   refreshMobileToken,
   revokeMobileToken,
@@ -131,6 +132,81 @@ describe("mobile pairing", () => {
     expect(config.auth.refreshEndpoint).toBe("/api/mobile/token/refresh");
     expect(config.capabilities.assistant).toBe(true);
   });
+
+  it("issues mobile tokens for a valid hosted ME3 session", async () => {
+    const env = createEnv();
+    const config = await getMobileConfig(env, origins);
+    const signed = await createSignedHostedSession({
+      issuer: "https://api.me3.test",
+      installIds: [config.installId],
+    });
+    stubJwks(signed.publicJwk);
+
+    try {
+      const tokenResponse = await claimMobileTokenFromHostedSession(env, {
+        grant_type: "me3_app_claim",
+        installId: config.installId,
+        me3SessionToken: signed.token,
+        device: {
+          id: "ios-hosted-1",
+          name: "Kieran's iPhone",
+          platform: "ios",
+          appVersion: "0.2.0",
+        },
+      }, origins);
+
+      expect(tokenResponse.accessToken).toMatch(/^me3mat_/);
+      expect(tokenResponse.refreshToken).toMatch(/^me3mrt_/);
+      expect(await authenticateMobileOwner(
+        env,
+        `Bearer ${tokenResponse.accessToken}`,
+      )).toBe("owner");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects hosted ME3 sessions for the wrong install id", async () => {
+    const env = createEnv();
+    const config = await getMobileConfig(env, origins);
+    const signed = await createSignedHostedSession({
+      issuer: "https://api.me3.test",
+      installIds: [config.installId],
+    });
+    stubJwks(signed.publicJwk);
+
+    try {
+      await expect(
+        claimMobileTokenFromHostedSession(env, {
+          grant_type: "me3_app_claim",
+          installId: "core_22222222-2222-4222-8222-222222222222",
+          me3SessionToken: signed.token,
+          device: { id: "ios-hosted-2", name: "iPhone" },
+        }, origins),
+      ).rejects.toMatchObject({ status: 403 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects expired hosted ME3 sessions", async () => {
+    const env = createEnv();
+    const config = await getMobileConfig(env, origins);
+    const signed = await createSignedHostedSession({
+      issuer: "https://api.me3.test",
+      installIds: [config.installId],
+      expiresIn: -60,
+    });
+
+    await expect(
+      claimMobileTokenFromHostedSession(env, {
+        grant_type: "me3_app_claim",
+        installId: config.installId,
+        me3SessionToken: signed.token,
+        device: { id: "ios-hosted-3", name: "iPhone" },
+      }, origins),
+    ).rejects.toMatchObject({ status: 401 });
+  });
 });
 
 function createEnv(): Env {
@@ -141,6 +217,7 @@ function createEnv(): Env {
   };
   return {
     DB: new MobilePairingDb(state) as unknown as D1Database,
+    ME3_CLOUD_API_ORIGIN: "https://api.me3.test",
   } as Env;
 }
 
@@ -342,4 +419,77 @@ class MobilePairingStatement {
 
 function result(changes: number) {
   return { success: true, meta: { changes } };
+}
+
+async function createSignedHostedSession(input: {
+  issuer: string;
+  installIds: string[];
+  userId?: string;
+  expiresIn?: number;
+}) {
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"],
+  );
+  const publicJwk = (await crypto.subtle.exportKey("jwk", keyPair.publicKey)) as JsonWebKey & {
+    kid?: string;
+    alg?: string;
+    use?: string;
+  };
+  publicJwk.kid = "hosted-session-test-key";
+  publicJwk.alg = "RS256";
+  publicJwk.use = "sig";
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT", kid: publicJwk.kid };
+  const payload = {
+    iss: input.issuer,
+    sub: input.userId || "user123",
+    aud: "me3-mobile-hosted-session",
+    typ: "me3_mobile_hosted_session",
+    email: "owner@example.com",
+    install_ids: input.installIds,
+    scope: "mobile.v1",
+    iat: now,
+    exp: now + (input.expiresIn ?? 300),
+    jti: crypto.randomUUID(),
+  };
+  const signingInput = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    keyPair.privateKey,
+    new TextEncoder().encode(signingInput),
+  );
+  return {
+    token: `${signingInput}.${encodeBase64Url(new Uint8Array(signature))}`,
+    publicJwk,
+  };
+}
+
+function stubJwks(publicJwk: JsonWebKey) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "https://api.me3.test/.well-known/jwks.json") {
+        return Response.json({ keys: [publicJwk] });
+      }
+      return Response.json({}, { status: 404 });
+    }),
+  );
+}
+
+function base64UrlJson(value: unknown): string {
+  return encodeBase64Url(new TextEncoder().encode(JSON.stringify(value)));
+}
+
+function encodeBase64Url(value: Uint8Array): string {
+  let binary = "";
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }

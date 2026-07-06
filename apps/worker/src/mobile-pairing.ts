@@ -1,5 +1,7 @@
 import { getOrCreateInstallSessionSecret } from "./install-secrets";
+import { verifyMe3CloudJwt } from "./me3-cloud-jwt";
 import {
+  getStoredMe3CloudOwnerId,
   getOwnerProfile,
   normalizeNullableText,
   sha256Text,
@@ -64,6 +66,20 @@ type MobileAccessPayload = {
   scope: string[];
   iat: number;
   exp: number;
+};
+
+type HostedMobileSessionPayload = {
+  iss?: unknown;
+  sub?: unknown;
+  aud?: unknown;
+  typ?: unknown;
+  email?: unknown;
+  handle?: unknown;
+  install_ids?: unknown;
+  scope?: unknown;
+  iat?: unknown;
+  exp?: unknown;
+  jti?: unknown;
 };
 
 type MobileOriginOptions = {
@@ -247,11 +263,56 @@ export async function claimMobilePairing(
   }, origins);
 }
 
-export async function claimMobileTokenFromHostedSession(): Promise<never> {
-  throw new MobilePairingInputError(
-    "ME3.app mobile install claim is not enabled on this install yet",
-    501,
+export async function claimMobileTokenFromHostedSession(
+  env: Env,
+  input: unknown,
+  origins: MobileOriginOptions,
+) {
+  const body = isRecord(input) ? input : {};
+  if (normalizeNullableText(body.grant_type) !== "me3_app_claim") {
+    throw new MobilePairingInputError("Unsupported mobile token grant", 400);
+  }
+
+  const requestedInstallId = normalizeMe3InstallId(body.installId ?? body.install_id);
+  if (!requestedInstallId) throw new MobilePairingInputError("Install id is required");
+
+  const localInstallId = await getOrCreateMe3InstallId(env);
+  if (requestedInstallId !== localInstallId) {
+    throw new MobilePairingInputError("Hosted ME3 session is for a different install", 403);
+  }
+
+  const sessionToken = normalizeNullableText(
+    body.me3SessionToken ?? body.me3_session_token,
   );
+  if (!sessionToken) {
+    throw new MobilePairingInputError("Hosted ME3 session token is required", 401);
+  }
+
+  let payload: HostedMobileSessionPayload;
+  try {
+    payload = await verifyMe3CloudJwt<HostedMobileSessionPayload>(env, sessionToken);
+  } catch {
+    throw new MobilePairingInputError("Hosted ME3 session was not accepted", 401);
+  }
+
+  if (!hostedSessionAllowsInstall(payload, localInstallId)) {
+    throw new MobilePairingInputError("Hosted ME3 session is not allowed for this install", 403);
+  }
+
+  const storedCloudOwnerId = await getStoredMe3CloudOwnerId(env).catch(() => null);
+  if (storedCloudOwnerId && payload.sub !== storedCloudOwnerId) {
+    throw new MobilePairingInputError("Hosted ME3 session is not allowed for this owner", 403);
+  }
+
+  const deviceInput = isRecord(body.device)
+    ? body.device
+    : {
+        id: body.deviceId ?? body.device_id,
+        name: body.deviceName ?? body.device_name,
+        platform: body.platform,
+        appVersion: body.appVersion ?? body.app_version,
+      };
+  return issueMobileTokens(env, "owner", normalizeDeviceDescriptor(deviceInput), origins);
 }
 
 export async function refreshMobileToken(
@@ -504,6 +565,21 @@ function normalizeMe3InstallId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
   return ME3_CORE_INSTALL_ID_REGEX.test(normalized) ? normalized : null;
+}
+
+function hostedSessionAllowsInstall(
+  payload: HostedMobileSessionPayload,
+  installId: string,
+): boolean {
+  if (
+    payload.typ !== "me3_mobile_hosted_session" ||
+    payload.aud !== "me3-mobile-hosted-session" ||
+    payload.scope !== "mobile.v1" ||
+    typeof payload.sub !== "string"
+  ) {
+    return false;
+  }
+  return Array.isArray(payload.install_ids) && payload.install_ids.includes(installId);
 }
 
 async function getMobilePairing(env: Env, pairingId: string): Promise<MobilePairingRow | null> {
