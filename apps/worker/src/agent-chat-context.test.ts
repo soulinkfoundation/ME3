@@ -2402,6 +2402,32 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
+    name: "weak article read fallback stays model-first when stored post is missing",
+    messageText: "Read the article about launch operations and summarize it for me.",
+    aiReply: "Here is a model summary of the article request.",
+    withAi: true,
+    envState: {
+      sites: [profileSiteRow("site-profile", "kieran")],
+      siteFiles: [
+        siteFileRow("site-profile", "src/me.json", JSON.stringify({
+          handle: "kieran",
+          posts: [{ slug: "agent-context", title: "Agent Context", file: "blog/agent-context.md", draft: false }],
+        }), "application/json"),
+        siteFileRow("site-profile", "src/blog/agent-context.md", "# Agent Context\n\nFull body."),
+      ],
+    },
+    expected: {
+      source: "workers-ai",
+      routePath: "model",
+      plannerKind: "read_action",
+      capabilityId: "core.sites.blog_post.read",
+      toolResultStatus: "not_attempted",
+      modelCallStatus: "succeeded",
+      replyIncludes: ["model summary"],
+      aiCalled: true,
+    },
+  },
+  {
     name: "site blog post create writes metadata and markdown",
     messageText: "Create a draft blog post about why regex intent routing fails.",
     envState: {

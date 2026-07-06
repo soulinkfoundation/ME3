@@ -17,6 +17,13 @@ type ProjectRow = Record<string, unknown> & {
   metadata_json: string;
 };
 type PolicyRow = Record<string, unknown> & { id: string; user_id: string; path_hint: string };
+type ProjectColumnRow = Record<string, unknown> & {
+  id: string;
+  user_id: string;
+  project_id: string;
+  archived_at: string | null;
+  position: number;
+};
 type TaskRow = Record<string, unknown> & {
   id: string;
   user_id: string;
@@ -151,6 +158,7 @@ type MissionLocalExecutorState = {
   localExecutorEnabled: boolean;
   pairings: PairingRow[];
   projects: ProjectRow[];
+  columns: ProjectColumnRow[];
   policies: PolicyRow[];
   tasks: TaskRow[];
   runs: RunRow[];
@@ -169,6 +177,7 @@ function createMissionLocalExecutorEnv(
     localExecutorEnabled: true,
     pairings: [],
     projects: [],
+    columns: [],
     policies: [],
     tasks: [],
     runs: [],
@@ -341,6 +350,23 @@ class FakeMissionLocalExecutorStatement {
       return { success: true };
     }
 
+    if (sql.includes("INSERT OR IGNORE INTO mission_project_columns")) {
+      if (!this.state.columns.some((column) => column.id === values[0])) {
+        this.state.columns.push({
+          id: values[0] as string,
+          user_id: values[1] as string,
+          project_id: values[2] as string,
+          name: values[3] as string,
+          status: values[4] as string,
+          position: values[5] as number,
+          archived_at: null,
+          created_at: "2026-06-01T09:00:00Z",
+          updated_at: "2026-06-01T09:00:00Z",
+        });
+      }
+      return { success: true };
+    }
+
     if (sql.includes("INSERT INTO mission_tasks")) {
       this.state.tasks.push({
         id: values[0] as string,
@@ -449,6 +475,18 @@ class FakeMissionLocalExecutorStatement {
       ) as T | null;
     }
 
+    if (sql.includes("FROM mission_project_columns")) {
+      return (
+        this.state.columns.find(
+          (column) =>
+            column.id === values[0] &&
+            column.user_id === values[1] &&
+            column.project_id === values[2] &&
+            column.archived_at === null,
+        ) || null
+      ) as T | null;
+    }
+
     if (sql.includes("FROM mission_agent_runs") && sql.includes("task_id = ?")) {
       return (
         this.state.missionRuns.find(
@@ -491,6 +529,19 @@ class FakeMissionLocalExecutorStatement {
     if (sql.includes("FROM local_executor_run_events")) {
       return {
         results: this.state.runEvents.filter((event) => event.run_id === values[0]) as T[],
+      };
+    }
+
+    if (sql.includes("FROM mission_project_columns")) {
+      return {
+        results: this.state.columns
+          .filter(
+            (column) =>
+              column.user_id === values[0] &&
+              column.project_id === values[1] &&
+              column.archived_at === null,
+          )
+          .sort((left, right) => left.position - right.position || left.id.localeCompare(right.id)) as T[],
       };
     }
 

@@ -139,6 +139,14 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "none",
   },
   {
+    name: "article audience and purpose request stays conversational",
+    messageText:
+      "Read this article and summarize the audience and purpose for me.",
+    kind: "conversation",
+    capabilityId: "core.agent-chat.conversation",
+    sideEffectLevel: "none",
+  },
+  {
     name: "direct Mission Control task create becomes a write action",
     messageText: "Add a task to project ME3 Launch to follow up with Sam tomorrow.",
     kind: "write_action",

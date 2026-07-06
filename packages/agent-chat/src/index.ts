@@ -5,6 +5,7 @@ import {
 import {
   isCoreChatWeeklyReviewRequest,
   planCoreChatToolTurn,
+  type CoreChatCapabilityId,
   type CoreChatToolPlannerDecision,
 } from "./planner";
 import {
@@ -2855,9 +2856,13 @@ async function maybeHandleCoreToolTurn(
           draftPlan.pendingMailboxDraftSave,
         );
       }
-      return toolResponse(input.turnId, "core.mailbox.draft", draftPlan.error, {
-        fallbackReason: "Mailbox draft details required",
-      });
+      return recoverNativeToolParserErrorResponse(
+        toolResponse(input.turnId, "core.mailbox.draft", draftPlan.error, {
+          fallbackReason: "Mailbox draft details required",
+        }),
+        plannerDecision,
+        messageText,
+      );
     }
 
     const draft = await createAgentMailboxDraft(env, input.userId, draftPlan.input);
@@ -2920,9 +2925,13 @@ async function maybeHandleCoreToolTurn(
           reminderPlan.pendingReminderCreate,
         );
       }
-      return toolResponse(input.turnId, "core.reminders.create", reminderPlan.error, {
-        fallbackReason: "Reminder details required",
-      });
+      return recoverNativeToolParserErrorResponse(
+        toolResponse(input.turnId, "core.reminders.create", reminderPlan.error, {
+          fallbackReason: "Reminder details required",
+        }),
+        plannerDecision,
+        messageText,
+      );
     }
 
     const reminder = await createAgentReminder(env, input.userId, reminderPlan.input);
@@ -2950,15 +2959,30 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
-  const siteBlogResponse = await maybeHandleSiteBlogPostToolTurn(env, { userId: input.userId, turnId: input.turnId, messageText, capabilityId: plannerDecision.capabilityId });
-  if (siteBlogResponse) return siteBlogResponse;
+  const siteBlogResponse = await maybeHandleSiteBlogPostToolTurn(env, {
+    userId: input.userId,
+    turnId: input.turnId,
+    messageText,
+    capabilityId: plannerDecision.capabilityId,
+  });
+  if (siteBlogResponse) {
+    return recoverNativeToolParserErrorResponse(
+      siteBlogResponse,
+      plannerDecision,
+      messageText,
+    );
+  }
 
   if (plannerDecision.capabilityId === "core.mission.task.create") {
     const taskPlan = await parseMissionTaskChatRequest(env, input.userId, messageText, owner);
     if ("error" in taskPlan) {
-      return toolResponse(input.turnId, "core.mission.task.create", taskPlan.error, {
-        fallbackReason: "Mission task details required",
-      });
+      return recoverNativeToolParserErrorResponse(
+        toolResponse(input.turnId, "core.mission.task.create", taskPlan.error, {
+          fallbackReason: "Mission task details required",
+        }),
+        plannerDecision,
+        messageText,
+      );
     }
 
     const task = await createAgentMissionTask(env, input.userId, taskPlan.input);
@@ -2981,9 +3005,13 @@ async function maybeHandleCoreToolTurn(
   if (plannerDecision.capabilityId === "core.mission.context.read") {
     const contextPlan = await parseMissionContextReadChatRequest(env, input.userId, messageText);
     if ("error" in contextPlan) {
-      return toolResponse(input.turnId, "core.mission.context.read", contextPlan.error, {
-        fallbackReason: "Mission context details required",
-      });
+      return recoverNativeToolParserErrorResponse(
+        toolResponse(input.turnId, "core.mission.context.read", contextPlan.error, {
+          fallbackReason: "Mission context details required",
+        }),
+        plannerDecision,
+        messageText,
+      );
     }
 
     return toolResponse(
@@ -2996,9 +3024,13 @@ async function maybeHandleCoreToolTurn(
   if (plannerDecision.capabilityId === "core.mission.task.read") {
     const taskPlan = await parseMissionTaskReadChatRequest(env, input.userId, messageText);
     if ("error" in taskPlan) {
-      return toolResponse(input.turnId, "core.mission.task.read", taskPlan.error, {
-        fallbackReason: "Mission task read details required",
-      });
+      return recoverNativeToolParserErrorResponse(
+        toolResponse(input.turnId, "core.mission.task.read", taskPlan.error, {
+          fallbackReason: "Mission task read details required",
+        }),
+        plannerDecision,
+        messageText,
+      );
     }
 
     return toolResponse(
@@ -3011,9 +3043,13 @@ async function maybeHandleCoreToolTurn(
   if (plannerDecision.capabilityId === "core.mission.task.list") {
     const taskPlan = await parseMissionTaskListChatRequest(env, input.userId, messageText);
     if ("error" in taskPlan) {
-      return toolResponse(input.turnId, "core.mission.task.list", taskPlan.error, {
-        fallbackReason: "Mission task list details required",
-      });
+      return recoverNativeToolParserErrorResponse(
+        toolResponse(input.turnId, "core.mission.task.list", taskPlan.error, {
+          fallbackReason: "Mission task list details required",
+        }),
+        plannerDecision,
+        messageText,
+      );
     }
 
     const replyText = formatMissionTaskListReply(taskPlan.tasks, taskPlan.filterLabel);
@@ -3023,9 +3059,13 @@ async function maybeHandleCoreToolTurn(
   if (plannerDecision.capabilityId === "core.mission.task.update") {
     const taskPlan = await parseMissionTaskUpdateChatRequest(env, input.userId, messageText, owner);
     if ("error" in taskPlan) {
-      return toolResponse(input.turnId, "core.mission.task.update", taskPlan.error, {
-        fallbackReason: "Mission task update details required",
-      });
+      return recoverNativeToolParserErrorResponse(
+        toolResponse(input.turnId, "core.mission.task.update", taskPlan.error, {
+          fallbackReason: "Mission task update details required",
+        }),
+        plannerDecision,
+        messageText,
+      );
     }
 
     const task = await updateAgentMissionTask(env, input.userId, taskPlan.input);
@@ -3048,9 +3088,13 @@ async function maybeHandleCoreToolTurn(
   if (plannerDecision.capabilityId === "core.mission.task.archive") {
     const taskPlan = await parseMissionTaskArchiveChatRequest(env, input.userId, messageText);
     if ("error" in taskPlan) {
-      return toolResponse(input.turnId, "core.mission.task.archive", taskPlan.error, {
-        fallbackReason: "Mission task archive details required",
-      });
+      return recoverNativeToolParserErrorResponse(
+        toolResponse(input.turnId, "core.mission.task.archive", taskPlan.error, {
+          fallbackReason: "Mission task archive details required",
+        }),
+        plannerDecision,
+        messageText,
+      );
     }
 
     const task = await archiveAgentMissionTask(env, input.userId, taskPlan.input);
@@ -3086,6 +3130,64 @@ async function maybeHandleCoreToolTurn(
   }
 
   return null;
+}
+
+const RECOVERABLE_NATIVE_TOOL_PARSER_REASONS = new Set([
+  "Reminder details required",
+  "Mission task details required",
+  "Mission context details required",
+  "Mission task read details required",
+  "Mission task list details required",
+  "Mission task update details required",
+  "Mission task archive details required",
+  "Site blog posts could not be listed",
+  "Site blog post could not be read",
+  "Site blog post details required",
+  "Site blog post update details required",
+  "Site blog post archive details required",
+]);
+
+function recoverNativeToolParserErrorResponse(
+  response: AgentSandboxDispatchResponse,
+  plannerDecision: CoreChatToolPlannerDecision,
+  messageText: string,
+): AgentSandboxDispatchResponse | null {
+  if (!response.fallbackReason) return response;
+  if (!RECOVERABLE_NATIVE_TOOL_PARSER_REASONS.has(response.fallbackReason)) {
+    return response;
+  }
+  if (messageExplicitlyNamesNativeToolDomain(messageText, plannerDecision.capabilityId)) {
+    return response;
+  }
+  return null;
+}
+
+function messageExplicitlyNamesNativeToolDomain(
+  messageText: string,
+  capabilityId: CoreChatCapabilityId,
+): boolean {
+  if (capabilityId.startsWith("core.mission.")) {
+    return /\b(?:mission\s+control|mission|tasks?|todos?|project|backlog|to\s+do|doing|in\s+progress|review|done|completed|me\.json)\b/i.test(
+      messageText,
+    );
+  }
+  if (capabilityId.startsWith("core.sites.")) {
+    return /\b(?:profile\s+site|public\s+site|site\s+(?:posts?|drafts?|blog)|blog(?:\s+posts?)?|blog\s+post|site\s+post|site\s+draft)\b/i.test(
+      messageText,
+    );
+  }
+  if (capabilityId.startsWith("core.reminders.")) {
+    return /\b(?:remind(?:er)?\s+me|reminders?|nudges?|don't\s+let\s+me\s+forget|dont\s+let\s+me\s+forget)\b/i.test(
+      messageText,
+    );
+  }
+  if (capabilityId === "core.mailbox.draft") {
+    return /\b(?:mailbox|email|draft|reply)\b/i.test(messageText);
+  }
+  if (capabilityId === "core.bookings.lookup") {
+    return /\b(?:bookings?|appointments?|sessions?|calls?)\b/i.test(messageText);
+  }
+  return true;
 }
 
 function toolResponse(

@@ -344,6 +344,9 @@ export function isCoreChatSiteBlogPostReadRequest(messageText: string): boolean 
   if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
   if (isLikelyMissionTaskRequest(messageText)) return false;
   if (!mentionsSiteBlogPostDomain(messageText)) return false;
+  if (/\bthis\s+article\b/i.test(messageText) && !mentionsExplicitSiteBlogDomain(messageText)) {
+    return false;
+  }
   if (isCoreChatSiteBlogPostCreateRequest(messageText)) return false;
   if (isCoreChatSiteBlogPostUpdateRequest(messageText)) return false;
   if (isCoreChatSiteBlogPostArchiveRequest(messageText)) return false;
@@ -408,6 +411,12 @@ function mentionsSiteBlogPostDomain(messageText: string): boolean {
   );
 }
 
+function mentionsExplicitSiteBlogDomain(messageText: string): boolean {
+  return /\b(?:blog|profile\s+site|public\s+site|site\s+(?:posts?|drafts?)|draft|post)\b/i.test(
+    messageText,
+  );
+}
+
 function isLikelySocialPostRequest(messageText: string): boolean {
   return /\b(?:social|linkedin|twitter|x\.com|instagram|tiktok|facebook|mastodon|bluesky)\b/i.test(
     messageText,
@@ -430,7 +439,7 @@ export function isCoreChatMissionContextReadRequest(messageText: string): boolea
   if (/\b(?:prioriti[sz]e|brainstorm|plan|strategize|strategise)\b/i.test(messageText)) {
     return false;
   }
-  if (!/\b(?:mission\s+control|mission|project|tasks?|goals?|audience|purpose|me\.json)\b/i.test(messageText)) {
+  if (!/\b(?:mission\s+control|mission|project|tasks?|me\.json)\b/i.test(messageText)) {
     return false;
   }
   return /\b(?:read|show|check|pull up|summari[sz]e|cross[-\s]?reference)\b/i.test(messageText) &&
