@@ -999,6 +999,41 @@ CREATE TABLE owner_profile (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE mobile_pairings (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT 'owner',
+  device_id TEXT NOT NULL,
+  device_name TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT 'ios',
+  app_version TEXT,
+  code_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'claimed', 'expired', 'revoked')),
+  expires_at TEXT NOT NULL,
+  approved_at TEXT,
+  claimed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
+);
+CREATE TABLE mobile_refresh_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT 'owner',
+  device_id TEXT NOT NULL,
+  device_name TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT 'ios',
+  app_version TEXT,
+  token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'rotated', 'revoked')),
+  scope_json TEXT NOT NULL DEFAULT '[]',
+  expires_at TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
+);
 CREATE TABLE plugin_installations (
   plugin_id TEXT PRIMARY KEY,
   version TEXT NOT NULL,
@@ -1435,6 +1470,14 @@ CREATE INDEX idx_local_executor_runs_policy_status
   ON local_executor_runs(project_policy_id, status, created_at);
 CREATE INDEX idx_local_executor_runs_user_status
   ON local_executor_runs(user_id, status, created_at);
+CREATE INDEX idx_mobile_pairings_expires
+  ON mobile_pairings(expires_at);
+CREATE INDEX idx_mobile_pairings_user_status
+  ON mobile_pairings(user_id, status, created_at DESC);
+CREATE INDEX idx_mobile_refresh_tokens_expires
+  ON mobile_refresh_tokens(expires_at);
+CREATE INDEX idx_mobile_refresh_tokens_user_device
+  ON mobile_refresh_tokens(user_id, device_id, status);
 CREATE INDEX idx_mailbox_messages_folder_created
   ON mailbox_messages(mailbox_id, folder, created_at DESC);
 CREATE INDEX idx_mailbox_messages_mailbox_created

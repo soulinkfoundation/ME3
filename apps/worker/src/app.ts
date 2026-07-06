@@ -85,6 +85,7 @@ import {
   VoiceDictationInputError,
   transcribeVoiceDictation,
 } from "./voice-dictation";
+import { authenticateMobileOwner } from "./mobile-pairing";
 import { registerAccountsRoutes } from "./routes/accounts";
 import { registerAssistantRoutes } from "./routes/assistant";
 import { registerBookingRoutes } from "./routes/booking";
@@ -98,6 +99,7 @@ import { registerCoreGithubUpdaterRoutes } from "./routes/core-github-updater";
 import { registerFilesRoutes } from "./routes/files";
 import { registerJournalRoutes } from "./routes/journal";
 import { registerLocalExecutorRoutes } from "./routes/local-executor";
+import { registerMobileRoutes } from "./routes/mobile";
 import {
   handleInboundEmail,
   registerMailboxRoutes,
@@ -331,6 +333,7 @@ const OWNER_APP_ROUTE_PREFIXES = [
   "/files",
   "/journal",
   "/login",
+  "/mobile",
   "/mission-control",
   "/mission-control-projects",
   "/mission-control-wheel-of-life",
@@ -386,7 +389,7 @@ app.use(
 
 app.use("*", async (c, next) => {
   await next();
-  applyResponseSecurityHeaders(c);
+  await applyResponseSecurityHeaders(c);
 });
 
 app.use("*", async (c, next) => {
@@ -825,6 +828,7 @@ registerFilesRoutes(app, { requireOwner, unauthorized });
 registerJournalRoutes(app, { requireOwner, unauthorized });
 registerMissionControlRoutes(app, { requireOwner, unauthorized });
 registerLocalExecutorRoutes(app, { requireOwner, unauthorized, getCoreApiOrigin });
+registerMobileRoutes(app, { requireOwner, unauthorized, getCoreApiOrigin, getCoreWebOrigin });
 app.get("/api/social/status", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -1318,7 +1322,10 @@ function normalizeClaimRedirect(value: unknown): string {
 }
 
 async function requireOwner(c: AppContext): Promise<string | null> {
-  return getSessionOwnerId(c);
+  return (
+    await getSessionOwnerId(c) ||
+    await authenticateMobileOwner(c.env, c.req.header("Authorization") || null)
+  );
 }
 
 function unauthorized(c: AppContext) {
@@ -1437,9 +1444,12 @@ function getRateLimitClientKey(c: AppContext): string {
   return `host:${hostnameFromUrl(c.req.url) || "unknown"}`;
 }
 
-function applyResponseSecurityHeaders(c: AppContext) {
+async function applyResponseSecurityHeaders(c: AppContext) {
   const requestUrl = new URL(c.req.url);
   const pathname = requestUrl.pathname;
+  const isApiRequest = pathname.startsWith("/api/");
+  const isPublicSiteResponse =
+    !isApiRequest && await isPublicSiteHost(c.env, c.req.url);
 
   setDefaultHeader(c, "X-Content-Type-Options", "nosniff");
   setDefaultHeader(c, "Referrer-Policy", "strict-origin-when-cross-origin");
@@ -1447,11 +1457,11 @@ function applyResponseSecurityHeaders(c: AppContext) {
     setDefaultHeader(c, "Strict-Transport-Security", STRICT_TRANSPORT_SECURITY_HEADER);
   }
 
-  if (pathname.startsWith("/api/")) {
+  if (isApiRequest) {
     setDefaultHeader(c, "Cache-Control", "no-store");
   }
 
-  if (isOwnerSurfaceRequest(c, pathname)) {
+  if (!isPublicSiteResponse && isOwnerSurfaceRequest(c, pathname)) {
     setDefaultHeader(c, "X-Frame-Options", "DENY");
     setDefaultHeader(c, "Content-Security-Policy", "frame-ancestors 'none'");
   }
