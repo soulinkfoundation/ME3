@@ -1,4 +1,4 @@
-CREATE TABLE mobile_pairings (
+CREATE TABLE IF NOT EXISTS mobile_pairings (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT 'owner',
   device_id TEXT NOT NULL,
@@ -16,13 +16,13 @@ CREATE TABLE mobile_pairings (
   FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_mobile_pairings_user_status
+CREATE INDEX IF NOT EXISTS idx_mobile_pairings_user_status
   ON mobile_pairings(user_id, status, created_at DESC);
 
-CREATE INDEX idx_mobile_pairings_expires
+CREATE INDEX IF NOT EXISTS idx_mobile_pairings_expires
   ON mobile_pairings(expires_at);
 
-CREATE TABLE mobile_refresh_tokens (
+CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL DEFAULT 'owner',
   device_id TEXT NOT NULL,
@@ -41,8 +41,8 @@ CREATE TABLE mobile_refresh_tokens (
   FOREIGN KEY (user_id) REFERENCES owner_profile(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_mobile_refresh_tokens_user_device
+CREATE INDEX IF NOT EXISTS idx_mobile_refresh_tokens_user_device
   ON mobile_refresh_tokens(user_id, device_id, status);
 
-CREATE INDEX idx_mobile_refresh_tokens_expires
+CREATE INDEX IF NOT EXISTS idx_mobile_refresh_tokens_expires
   ON mobile_refresh_tokens(expires_at);
