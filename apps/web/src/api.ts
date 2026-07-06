@@ -322,8 +322,9 @@ export const api = {
     return request<T>(endpoint, { method: 'DELETE' })
   },
 
-  upload<T>(endpoint: string, formData: FormData): Promise<T> {
+  upload<T>(endpoint: string, formData: FormData, options: RequestInit = {}): Promise<T> {
     return fetch(`${API_BASE}${endpoint}`, {
+      ...options,
       method: 'POST',
       body: formData,
       credentials: 'include',

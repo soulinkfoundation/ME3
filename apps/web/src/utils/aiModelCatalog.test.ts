@@ -14,9 +14,9 @@ function visibleLabels(configuredProviderIds: string[]) {
 describe("AI model catalog", () => {
   it("keeps Workers AI visible and hides API-key providers until configured", () => {
     expect(visibleLabels([])).toEqual([
+      "GLM 4.7 Flash",
       "GLM 5.2",
       "Qwen3",
-      "GLM 4.7 Flash",
       "GPT-OSS 120B",
       "Kimi K2.7",
       "Deepseek R1",

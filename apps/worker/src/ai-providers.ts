@@ -10,7 +10,7 @@ import {
   type AiGatewayRuntimeConfig,
 } from "./ai-gateway";
 
-export const DEFAULT_WORKERS_AI_TEXT_MODEL = "@cf/zai-org/glm-5.2";
+export const DEFAULT_WORKERS_AI_TEXT_MODEL = "@cf/zai-org/glm-4.7-flash";
 
 export const AI_ROUTE_IDS = [
   "default",

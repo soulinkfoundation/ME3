@@ -13,6 +13,7 @@ type PlannerScenario = {
   messageText: string;
   hasRecentAssistantEmailDraft?: boolean;
   hasPendingMailboxDraftRecipient?: boolean;
+  hasPendingReminderCreate?: boolean;
   kind: CoreChatPlannerIntentKind;
   capabilityId: CoreChatCapabilityId;
   sideEffectLevel: CoreChatSideEffectLevel;
@@ -77,6 +78,21 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "none",
   },
   {
+    name: "typoed reminder create without a time asks for clarification",
+    messageText: "Reminder me to tell Erum about Soulink",
+    kind: "clarify",
+    capabilityId: "core.reminders.create",
+    sideEffectLevel: "none",
+  },
+  {
+    name: "pending reminder timing continuation becomes a write action",
+    messageText: "tomorrow at 9am",
+    hasPendingReminderCreate: true,
+    kind: "write_action",
+    capabilityId: "core.reminders.create",
+    sideEffectLevel: "write",
+  },
+  {
     name: "upcoming booking lookup becomes a read action",
     messageText: "Can you check my upcoming bookings this week?",
     kind: "read_action",
@@ -110,6 +126,14 @@ const plannerScenarios: PlannerScenario[] = [
   {
     name: "email composition prompt stays conversational",
     messageText: "Create an email to Ada about the launch.",
+    kind: "conversation",
+    capabilityId: "core.agent-chat.conversation",
+    sideEffectLevel: "none",
+  },
+  {
+    name: "article context title brainstorming stays conversational",
+    messageText:
+      "Need a YouTube thumbnail and title for a video about AI harnesses. Here's the Substack article I wrote for context: https://example.com/post can you read it? Want some ideas for titles",
     kind: "conversation",
     capabilityId: "core.agent-chat.conversation",
     sideEffectLevel: "none",
@@ -325,6 +349,7 @@ describe("Core chat tool planner", () => {
       messageText: scenario.messageText,
       hasRecentAssistantEmailDraft: scenario.hasRecentAssistantEmailDraft,
       hasPendingMailboxDraftRecipient: scenario.hasPendingMailboxDraftRecipient,
+      hasPendingReminderCreate: scenario.hasPendingReminderCreate,
     });
 
     expect(decision).toMatchObject({

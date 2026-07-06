@@ -64,6 +64,18 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     description: "OpenAI flagship for complex reasoning, coding, and agentic workflows.",
   },
   {
+    id: "workers-glm-4-7-flash",
+    label: "GLM 4.7 Flash",
+    providerId: "workers-ai",
+    model: "@cf/zai-org/glm-4.7-flash",
+    runtimeLabel: "Cloudflare Workers AI",
+    costLabel: "Fast",
+    capabilities: ["text", "long-context", "reasoning", "tool-use"],
+    badge: "Default",
+    description:
+      "Fast, efficient GLM model on Workers AI for dialogue, instruction following, and tool use.",
+  },
+  {
     id: "workers-glm-5-2",
     label: "GLM 5.2",
     providerId: "workers-ai",
@@ -71,7 +83,6 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     runtimeLabel: "Cloudflare Workers AI",
     costLabel: "Paid",
     capabilities: ["text", "long-context", "reasoning", "tool-use"],
-    badge: "Default",
     description:
       "Z.ai GLM 5.2 on Workers AI for agentic coding, planning, and tool-augmented work.",
   },
@@ -85,17 +96,6 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
     capabilities: ["text", "long-context", "reasoning"],
     description:
       "Qwen3 30B A3B FP8 on Workers AI for everyday chat, writing, and light planning.",
-  },
-  {
-    id: "workers-glm-4-7-flash",
-    label: "GLM 4.7 Flash",
-    providerId: "workers-ai",
-    model: "@cf/zai-org/glm-4.7-flash",
-    runtimeLabel: "Cloudflare Workers AI",
-    costLabel: "Fast",
-    capabilities: ["text", "long-context", "reasoning", "tool-use"],
-    description:
-      "Fast, efficient GLM model on Workers AI for dialogue, instruction following, and tool use.",
   },
   {
     id: "workers-gpt-oss-120b",

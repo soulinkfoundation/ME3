@@ -96,6 +96,25 @@ describe('api client', () => {
         })
       )
     })
+
+    it('should pass upload request options', async () => {
+      const formData = new FormData()
+      const controller = new AbortController()
+
+      vi.mocked(fetch).mockResolvedValue(mockJsonResponse({ success: true }))
+
+      await api.upload('/upload', formData, { signal: controller.signal })
+
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/upload',
+        expect.objectContaining({
+          body: formData,
+          credentials: 'include',
+          method: 'POST',
+          signal: controller.signal,
+        })
+      )
+    })
   })
 
   describe('request methods', () => {

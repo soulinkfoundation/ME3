@@ -1979,7 +1979,15 @@ onBeforeUnmount(() => {
   <div class="account-page">
     <Teleport to="#app-side-nav-mobile-page-controls">
       <div class="account-mobile-nav">
-        <h1 class="account-mobile-nav__title">Account</h1>
+        <h1 class="account-title account-mobile-nav__title">
+          <span>Account</span>
+          <span
+            v-if="coreGithubInstalledVersion"
+            class="account-title__version"
+          >
+            v{{ coreGithubInstalledVersion }}
+          </span>
+        </h1>
         <div
           class="theme-segmented account-theme-switch account-mobile-nav__actions"
           role="radiogroup"
@@ -2009,7 +2017,15 @@ onBeforeUnmount(() => {
     <main class="main">
       <header class="account-header">
         <div>
-          <h1>Account</h1>
+          <h1 class="account-title">
+            <span>Account</span>
+            <span
+              v-if="coreGithubInstalledVersion"
+              class="account-title__version"
+            >
+              v{{ coreGithubInstalledVersion }}
+            </span>
+          </h1>
         </div>
         <div
           class="theme-segmented account-theme-switch"
@@ -3764,6 +3780,21 @@ h1 {
   margin: 0;
   font-size: 28px;
   line-height: 1.1;
+}
+
+.account-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.account-title__version {
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 0.72em;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .account-theme-switch {

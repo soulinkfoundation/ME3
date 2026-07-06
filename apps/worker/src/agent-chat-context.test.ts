@@ -711,7 +711,7 @@ describe("Core chat native context", () => {
 
     expect(response).toMatchObject({
       replyText: "Choice-shaped reply.",
-      model: "@cf/zai-org/glm-5.2",
+      model: "@cf/zai-org/glm-4.7-flash",
       source: "workers-ai",
     });
   });
@@ -931,7 +931,7 @@ describe("Core chat native context", () => {
 
     expect(response.replyText).toBe("Gateway model reply.");
     expect(aiRun).toHaveBeenCalledWith(
-      "@cf/zai-org/glm-5.2",
+      "@cf/zai-org/glm-4.7-flash",
       expect.any(Object),
       {
         gateway: {
@@ -1111,17 +1111,17 @@ describe("Core chat native context", () => {
 
     expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
       "@cf/qwen/qwen3-30b-a3b-fp8",
-      "@cf/zai-org/glm-4.7-flash",
+      "@cf/zai-org/glm-5.2",
     ]);
     expect(response).toMatchObject({
       replyText: "Backup model reply.",
-      model: "@cf/zai-org/glm-4.7-flash",
+      model: "@cf/zai-org/glm-5.2",
       source: "workers-ai",
     });
     expect(response.trace?.modelCall).toMatchObject({
       status: "succeeded",
       providerId: "workers-ai",
-      model: "@cf/zai-org/glm-4.7-flash",
+      model: "@cf/zai-org/glm-5.2",
       attempts: [
         {
           providerId: "workers-ai",
@@ -1131,7 +1131,7 @@ describe("Core chat native context", () => {
         },
         {
           providerId: "workers-ai",
-          model: "@cf/zai-org/glm-4.7-flash",
+          model: "@cf/zai-org/glm-5.2",
           status: "succeeded",
           error: null,
         },
@@ -1157,7 +1157,7 @@ describe("Core chat native context", () => {
 
     expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
       "@cf/qwen/qwen3-30b-a3b-fp8",
-      "@cf/zai-org/glm-4.7-flash",
+      "@cf/zai-org/glm-5.2",
     ]);
     expect(response).toMatchObject({
       source: "fallback",
@@ -1170,7 +1170,7 @@ describe("Core chat native context", () => {
       status: "failed",
       attempts: [
         { model: "@cf/qwen/qwen3-30b-a3b-fp8", status: "empty" },
-        { model: "@cf/zai-org/glm-4.7-flash", status: "empty" },
+        { model: "@cf/zai-org/glm-5.2", status: "empty" },
       ],
     });
     expect(env.state.persistedMessages.map((message) => message.role)).toEqual(["user"]);
@@ -1210,7 +1210,7 @@ describe("Core chat native context", () => {
           error: "Workers AI unavailable",
         },
         {
-          model: "@cf/zai-org/glm-4.7-flash",
+          model: "@cf/zai-org/glm-5.2",
           status: "failed",
           error: "Workers AI unavailable",
         },
@@ -1376,7 +1376,7 @@ describe("Core chat native context", () => {
       selectedModel: {
         providerId: "workers-ai",
         configured: true,
-        responseModel: "@cf/zai-org/glm-5.2",
+        responseModel: "@cf/zai-org/glm-4.7-flash",
       },
       context: {
         status: "loaded",
@@ -1561,6 +1561,59 @@ describe("Core chat native context", () => {
         },
       ],
     });
+  });
+
+  it("creates a pending reminder when the owner follows up with the missing time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-05T12:00:00Z"));
+
+    const aiRun = vi.fn(async () => ({
+      response: "The model should not handle reminder continuations.",
+    }));
+    const env = createEnv();
+    const storage = createStorage();
+    const runtimeEnv = {
+      ...env,
+      AI: { run: aiRun },
+      ME3_ASSISTANT_DEBUG_TRACE: "true",
+    };
+
+    const clarify = await dispatchAgentSandboxTurn(
+      runtimeEnv as never,
+      storage,
+      dispatchInput("Reminder me to tell erum about soulink"),
+    );
+
+    expect(clarify).toMatchObject({
+      source: "tool",
+      specialist: "core.reminders.create",
+      fallbackReason: "Reminder details required",
+      reminderAction: null,
+    });
+    expect(clarify.replyText).toContain("Please include a date");
+    expect(env.state.reminders).toHaveLength(0);
+
+    const created = await dispatchAgentSandboxTurn(
+      runtimeEnv as never,
+      storage,
+      dispatchInput("tomorrow at 9am"),
+    );
+
+    expect(created).toMatchObject({
+      source: "tool",
+      specialist: "core.reminders.create",
+      reminderAction: {
+        kind: "created",
+        title: "tell erum about soulink",
+      },
+    });
+    expect(env.state.reminders).toHaveLength(1);
+    expect(env.state.reminders[0]).toMatchObject({
+      title: "tell erum about soulink",
+      remind_at: "2026-07-06T08:00:00.000Z",
+      timezone: "Europe/Dublin",
+    });
+    expect(aiRun).not.toHaveBeenCalled();
   });
 
   it("answers upcoming booking questions through the tool layer", async () => {

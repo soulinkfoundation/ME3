@@ -16,6 +16,7 @@ export type CoreChatToolPlannerInput = {
   messageText: string;
   hasRecentAssistantEmailDraft?: boolean;
   hasPendingMailboxDraftRecipient?: boolean;
+  hasPendingReminderCreate?: boolean;
 };
 
 export type CoreChatToolPlannerDecision = {
@@ -56,6 +57,18 @@ export function planCoreChatToolTurn(
       confidence: 0.94,
       reason:
         "The owner supplied the missing recipient for a pending mailbox draft save request.",
+    });
+  }
+
+  if (
+    input.hasPendingReminderCreate &&
+    isCoreChatReminderWhenOnlyContinuation(messageText)
+  ) {
+    return capabilityDecision("core.reminders.create", {
+      kind: "write_action",
+      confidence: 0.93,
+      reason:
+        "The owner supplied the missing reminder timing for a pending reminder create request.",
     });
   }
 
@@ -274,9 +287,15 @@ export function isCoreChatCapabilityExplorationRequest(messageText: string): boo
 }
 
 export function isCoreChatReminderCreateRequest(messageText: string): boolean {
-  return /\b(remind me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder|don't let me forget|dont let me forget)\b/i.test(
+  return /\b(remind(?:er)? me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder|don't let me forget|dont let me forget)\b/i.test(
     messageText,
   );
+}
+
+function isCoreChatReminderWhenOnlyContinuation(messageText: string): boolean {
+  if (isCoreChatReminderCreateRequest(messageText)) return false;
+  if (isCoreChatReminderListRequest(messageText)) return false;
+  return hasReminderWhen(messageText);
 }
 
 export function isCoreChatBookingLookupRequest(messageText: string): boolean {
@@ -411,7 +430,7 @@ export function isCoreChatMissionContextReadRequest(messageText: string): boolea
   if (/\b(?:prioriti[sz]e|brainstorm|plan|strategize|strategise)\b/i.test(messageText)) {
     return false;
   }
-  if (!/\b(?:mission\s+control|mission|project|tasks?|goals?|audience|purpose|context|me\.json)\b/i.test(messageText)) {
+  if (!/\b(?:mission\s+control|mission|project|tasks?|goals?|audience|purpose|me\.json)\b/i.test(messageText)) {
     return false;
   }
   return /\b(?:read|show|check|pull up|summari[sz]e|cross[-\s]?reference)\b/i.test(messageText) &&
@@ -523,7 +542,7 @@ function hasReminderSubject(messageText: string): boolean {
   const stripped = messageText
     .replace(/^(?:please\s+)?/i, "")
     .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-    .replace(/^(?:remind me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder)\s+(?:to|for|about|that)?\s*/i, "")
+    .replace(/^(?:remind(?:er)? me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder)\s+(?:to|for|about|that)?\s*/i, "")
     .replace(/^(?:don't|dont) let me forget\s+(?:to|about|that)?\s*/i, "")
     .replace(/\b(?:today|tomorrow)\b/gi, "")
     .replace(/\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")

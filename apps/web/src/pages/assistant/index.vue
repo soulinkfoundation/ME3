@@ -730,7 +730,7 @@ const assistantAttachmentNotice = ref("");
 const assistantComposerDragDepth = ref(0);
 const assistantModelStorageKey = "me3.assistant.selectedModelId";
 const storedAssistantModelId = getStoredAssistantModelId();
-const initialAssistantModelId = storedAssistantModelId || "workers-glm-5-2";
+const initialAssistantModelId = storedAssistantModelId || "workers-glm-4-7-flash";
 const selectedModelId = ref(initialAssistantModelId);
 const selectedModelTouched = ref(Boolean(storedAssistantModelId));
 const aiSettingsLoading = ref(false);
@@ -826,6 +826,7 @@ const assistantAttachmentLimit = 4;
 const assistantAttachmentMaxBytes = 10_000_000;
 const assistantTextAttachmentMaxBytes = 1_000_000;
 const assistantAttachmentTextBudget = 48_000;
+const assistantAttachmentUploadTimeoutMs = 60_000;
 const assistantNameMaxLength = 48;
 
 const sortedJobs = computed(() =>
@@ -2342,6 +2343,12 @@ async function addAssistantAttachments(files: File[]) {
       continue;
     }
 
+    const uploadController = new AbortController();
+    const uploadTimeoutId = window.setTimeout(
+      () => uploadController.abort(),
+      assistantAttachmentUploadTimeoutMs,
+    );
+
     try {
       const formData = new FormData();
       formData.append("attachments", file);
@@ -2350,6 +2357,7 @@ async function addAssistantAttachments(files: File[]) {
       const response = await api.upload<AssistantAttachmentUploadResponse>(
         "/assistant/attachments",
         formData,
+        { signal: uploadController.signal },
       );
       const uploaded = response.attachments[0];
       if (!uploaded)
@@ -2367,7 +2375,11 @@ async function addAssistantAttachments(files: File[]) {
       draft.status = "ready";
     } catch (err) {
       draft.status = "error";
-      draft.error = messageFromUnknown(err, `Could not upload ${draft.name}.`);
+      draft.error = isAbortError(err)
+        ? `${draft.name} upload timed out. Remove it and try again.`
+        : messageFromUnknown(err, `Could not upload ${draft.name}.`);
+    } finally {
+      window.clearTimeout(uploadTimeoutId);
     }
   }
 }

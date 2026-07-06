@@ -3,7 +3,6 @@ import {
   normalizeTimeZone,
 } from "@me3-core/plugin-calendar";
 import {
-  isCoreChatReminderCreateRequest,
   isCoreChatWeeklyReviewRequest,
   planCoreChatToolTurn,
   type CoreChatToolPlannerDecision,
@@ -35,6 +34,13 @@ import {
 } from "../../../shared/email-headers";
 import { classifyAssistantImageIntent } from "./image-intent";
 import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL, modelSupportsCapability, type AssistantImageCapability } from "./model-capabilities";
+import {
+  loadPendingReminderCreate,
+  parseReminderChatRequest,
+  resolvePendingReminderCreate,
+  savePendingReminderCreate,
+  type PendingReminderCreate,
+} from "./reminders";
 import { maybeHandleSiteBlogPostToolTurn } from "./site-blog";
 
 export {
@@ -589,6 +595,7 @@ type CoreChatToolTurnPlan = {
   decision: CoreChatToolPlannerDecision;
   recent: Array<{ role: "user" | "assistant"; content: string }>;
   pendingMailboxDraftSave: PendingMailboxDraftSave | null;
+  pendingReminderCreate: PendingReminderCreate | null;
 };
 
 type PendingMailboxDraftSave = {
@@ -947,8 +954,8 @@ type AiGatewayRuntimeConfig = {
   routeExternalProviders: boolean;
 };
 
-const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-5.2";
-const DEFAULT_WORKERS_AI_BACKUP_MODEL = "@cf/zai-org/glm-4.7-flash";
+const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-4.7-flash";
+const DEFAULT_WORKERS_AI_BACKUP_MODEL = "@cf/zai-org/glm-5.2";
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest";
 const DEFAULT_AI_GATEWAY_ID = "default";
@@ -2796,17 +2803,20 @@ async function loadCoreChatToolTurnPlan(
   storage: StorageLike,
   input: AgentSandboxDispatchInput,
 ): Promise<CoreChatToolTurnPlan> {
-  const [recent, pendingMailboxDraftSave] = await Promise.all([
+  const [recent, pendingMailboxDraftSave, pendingReminderCreate] = await Promise.all([
     loadRecentMessages(env, input.userId, input.threadId),
     loadPendingMailboxDraftSave(storage, input),
+    loadPendingReminderCreate(storage, input),
   ]);
   return {
     recent,
     pendingMailboxDraftSave,
+    pendingReminderCreate,
     decision: planCoreChatToolTurn({
       messageText: input.messageText.trim(),
       hasRecentAssistantEmailDraft: Boolean(latestAssistantEmailDraft(recent)),
       hasPendingMailboxDraftRecipient: Boolean(pendingMailboxDraftSave),
+      hasPendingReminderCreate: Boolean(pendingReminderCreate),
     }),
   };
 }
@@ -2896,9 +2906,20 @@ async function maybeHandleCoreToolTurn(
   }
 
   if (plannerDecision.capabilityId === "core.reminders.create") {
-    const reminderPlan = parseReminderChatRequest(messageText, owner);
+    const reminderPlan = parseReminderChatRequest(
+      messageText,
+      owner?.timezone,
+      toolPlan.pendingReminderCreate,
+    );
     if (!reminderPlan) return null;
     if ("error" in reminderPlan) {
+      if (reminderPlan.pendingReminderCreate) {
+        await savePendingReminderCreate(
+          storage,
+          input,
+          reminderPlan.pendingReminderCreate,
+        );
+      }
       return toolResponse(input.turnId, "core.reminders.create", reminderPlan.error, {
         fallbackReason: "Reminder details required",
       });
@@ -2910,6 +2931,8 @@ async function maybeHandleCoreToolTurn(
         fallbackReason: "Reminder could not be created",
       });
     }
+
+    await resolvePendingReminderCreate(storage, input);
 
     return toolResponse(
       input.turnId,
@@ -4534,128 +4557,6 @@ function normalizeContactLookupName(value: unknown): string {
         .toLowerCase()
         .replace(/\s+/g, " ")
     : "";
-}
-
-function parseReminderChatRequest(
-  messageText: string,
-  owner: OwnerProfileRow | null,
-): { input: AgentReminderInput } | { error: string } | null {
-  if (!isCoreChatReminderCreateRequest(messageText)) return null;
-
-  const timezone = normalizeTimeZone(owner?.timezone) || "UTC";
-  const explicitDate = parseExplicitDate(messageText);
-  const relativeMs = parseRelativeReminderOffsetMs(messageText);
-  const weekdayDate = parseReminderWeekdayDate(messageText, timezone);
-  const dayOffset = /\btomorrow\b/i.test(messageText) ? 1 : 0;
-  const time = parseExplicitReminderTime(messageText) || "09:00";
-  const recurrence = parseReminderRecurrenceInput(messageText);
-  let date: string;
-  let parsedTime = time;
-
-  if (relativeMs !== null) {
-    const parts = dateTimePartsForInstant(new Date(Date.now() + relativeMs), timezone);
-    date = parts.date;
-    parsedTime = parts.time;
-  } else {
-    date = explicitDate || weekdayDate || addDaysToDate(localDateForTimezone(timezone), dayOffset);
-  }
-
-  const title = extractReminderTitle(messageText);
-  if (!title) {
-    return {
-      error:
-        "I can set that reminder, but I need what you want to be reminded about.",
-    };
-  }
-
-  if (
-    !explicitDate &&
-    !weekdayDate &&
-    relativeMs === null &&
-    !/\btoday|tomorrow\b/i.test(messageText)
-  ) {
-    return {
-      error:
-        "I can set that reminder. Please include a date, or say today/tomorrow or in a few hours.",
-    };
-  }
-
-  return {
-    input: {
-      title,
-      date,
-      time: parsedTime,
-      timezone,
-      recurrence,
-    },
-  };
-}
-
-function parseExplicitDate(messageText: string): string | null {
-  const match = messageText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
-  return match?.[1] || null;
-}
-
-function parseRelativeReminderOffsetMs(messageText: string): number | null {
-  const match = messageText.match(/\bin\s+(\d+)\s+(minutes?|mins?|hours?|hrs?|days?)\b/i);
-  if (!match) return null;
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  const unit = match[2].toLowerCase();
-  if (unit.startsWith("min")) return amount * 60 * 1000;
-  if (unit.startsWith("hour") || unit.startsWith("hr")) return amount * 60 * 60 * 1000;
-  return amount * 24 * 60 * 60 * 1000;
-}
-
-function parseReminderWeekdayDate(messageText: string, timezone: string): string | null {
-  const match = messageText.match(/\b(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
-  if (!match) return null;
-  const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-  const target = weekdays.indexOf(match[1].toLowerCase());
-  const today = localDateForTimezone(timezone);
-  const current = new Date(`${today}T12:00:00Z`).getUTCDay();
-  const daysUntil = (target - current + 7) % 7;
-  return addDaysToDate(today, daysUntil);
-}
-
-function parseExplicitReminderTime(messageText: string): string | null {
-  const match =
-    messageText.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i) ||
-    messageText.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
-  if (!match) return null;
-  let hour = Number(match[1]);
-  const minute = Number(match[2] || "0");
-  const meridiem = match[3]?.toLowerCase();
-  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return null;
-  if (meridiem === "pm" && hour < 12) hour += 12;
-  if (meridiem === "am" && hour === 12) hour = 0;
-  if (hour > 23) return null;
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-}
-
-function parseReminderRecurrenceInput(messageText: string): string | null {
-  if (/\bevery day|daily\b/i.test(messageText)) return "daily";
-  if (/\bevery week|weekly\b/i.test(messageText)) return "weekly";
-  if (/\bevery month|monthly\b/i.test(messageText)) return "monthly";
-  return null;
-}
-
-function extractReminderTitle(messageText: string): string | null {
-  const stripped = messageText
-    .replace(/^(?:please\s+)?/i, "")
-    .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-    .replace(/^(?:remind me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder)\s+(?:to|for|about|that)?\s*/i, "")
-    .replace(/^(?:don't|dont) let me forget\s+(?:to|about|that)?\s*/i, "")
-    .replace(/\b(?:today|tomorrow)\b/gi, "")
-    .replace(/\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
-    .replace(/\bon\s+20\d{2}-\d{2}-\d{2}\b/gi, "")
-    .replace(/\bin\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?)\b/gi, "")
-    .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/gi, "")
-    .replace(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, "")
-    .replace(/\b(?:every day|daily|every week|weekly|every month|monthly)\b/gi, "")
-    .replace(/[.?!]+$/g, "")
-    .trim();
-  return stripped || null;
 }
 
 async function listPendingAgentReminders(
