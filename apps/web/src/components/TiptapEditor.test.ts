@@ -545,6 +545,43 @@ describe("TiptapEditor", () => {
     expect(emitted[0][0].blob).toBeInstanceOf(Blob);
   });
 
+  it("should use an injected image uploader instead of queueing pending images", async () => {
+    const uploadImage = vi.fn().mockResolvedValue({
+      id: "uploaded-image",
+      src: "/api/journal/media/2026-06-02/uploaded-image.jpg",
+    });
+    const wrapper = mount(TiptapEditor, {
+      props: {
+        modelValue: "",
+        uploadImage,
+      },
+    });
+
+    const file = new File(["test"], "test.jpg", { type: "image/jpeg" });
+    const fileInput = wrapper.find(".image-input");
+    setInputFiles(fileInput as DOMWrapper<HTMLInputElement>, [file]);
+    await fileInput.trigger("change");
+    await flushPromises();
+
+    expect(uploadImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: expect.any(String),
+        filename: "test.jpg",
+        mimeType: "image/jpeg",
+        ext: "jpg",
+      }),
+    );
+    expect((wrapper.vm as any).getPendingImages()).toEqual([]);
+    expect(mockInsertContent).toHaveBeenCalledWith({
+      type: "image",
+      attrs: {
+        src: "/api/journal/media/2026-06-02/uploaded-image.jpg",
+        alt: "test.jpg",
+        "data-image-id": "uploaded-image",
+      },
+    });
+  });
+
   it("should emit imageRemoved and revoke object URLs when images are removed", async () => {
     const wrapper = mount(TiptapEditor, {
       props: {

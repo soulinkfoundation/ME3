@@ -34,6 +34,13 @@ const props = withDefaults(
     titlePlaceholder?: string;
     titleMaxLength?: number;
     titleDisabled?: boolean;
+    uploadImage?: (input: {
+      blob: Blob;
+      id: string;
+      filename: string;
+      mimeType: string;
+      ext: string;
+    }) => Promise<{ src: string; id?: string }>;
   }>(),
   {
     variant: "default",
@@ -701,7 +708,10 @@ async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: number) {
   }
 }
 
-async function prepareImageAsset(blob: Blob): Promise<CarouselImageResult> {
+async function prepareImageAsset(
+  blob: Blob,
+  filename = "journal-image",
+): Promise<CarouselImageResult> {
   if (blob.type && !allowedImageTypes.has(blob.type)) {
     throw new Error("Please upload a JPEG, PNG, WebP, or GIF image.");
   }
@@ -711,6 +721,19 @@ async function prepareImageAsset(blob: Blob): Promise<CarouselImageResult> {
 
   const imageId = makeImageId();
   const ext = extForMime(compressed.type);
+  const uploadFilename = ensureImageFilename(filename, ext);
+
+  if (props.uploadImage) {
+    const uploaded = await props.uploadImage({
+      blob: compressed.blob,
+      id: imageId,
+      filename: uploadFilename,
+      mimeType: compressed.type,
+      ext,
+    });
+    return { id: uploaded.id || imageId, dataUrl: uploaded.src };
+  }
+
   const dataUrl = await blobToDataUrl(compressed.blob);
 
   pendingImages.value.set(imageId, {
@@ -724,7 +747,7 @@ async function prepareImageAsset(blob: Blob): Promise<CarouselImageResult> {
 }
 
 async function uploadCarouselFile(file: File): Promise<CarouselImageResult> {
-  return prepareImageAsset(file);
+  return prepareImageAsset(file, file.name);
 }
 
 async function uploadRandomCarouselImage(): Promise<CarouselImageResult> {
@@ -735,7 +758,7 @@ async function uploadRandomCarouselImage(): Promise<CarouselImageResult> {
     throw new Error("Couldn't load a random image. Please try again.");
   }
   const blob = await res.blob();
-  return prepareImageAsset(blob);
+  return prepareImageAsset(blob, "random-image.jpg");
 }
 
 provide(CAROUSEL_IMAGE_PROVIDER_KEY, {
@@ -936,6 +959,16 @@ function extForMime(mimeType: string): string {
   }
 }
 
+function ensureImageFilename(filename: string, ext: string): string {
+  const cleanBase =
+    filename
+      .replace(/\.[a-z0-9]+$/i, "")
+      .replace(/[^a-z0-9._-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "journal-image";
+  return `${cleanBase}.${ext}`;
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -975,7 +1008,7 @@ async function handleImageSelected(event: Event) {
     const imageNodes: Array<Record<string, any>> = [];
 
     for (const file of validFiles) {
-      const prepared = await prepareImageAsset(file);
+      const prepared = await prepareImageAsset(file, file.name);
 
       imageNodes.push({
         type: "image",

@@ -48,6 +48,16 @@ type JournalArchiveEntry = JournalEntry & {
   preview: string;
 };
 
+type JournalMediaUploadResponse = {
+  ok: true;
+  id: string;
+  src: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  storage: "r2" | "inline";
+};
+
 type MissionProject = {
   id: string;
   name: string;
@@ -395,6 +405,29 @@ async function saveEntry() {
         ? saveError.message
         : "Could not save journal entry.";
   }
+}
+
+async function uploadJournalImage(input: {
+  blob: Blob;
+  id: string;
+  filename: string;
+  mimeType: string;
+  ext: string;
+}) {
+  const form = new FormData();
+  form.append("date", selectedDate.value);
+  form.append(
+    "image",
+    new File([input.blob], input.filename, { type: input.mimeType }),
+  );
+  const response = await api.upload<JournalMediaUploadResponse>(
+    "/journal/media",
+    form,
+  );
+  return {
+    id: response.id || input.id,
+    src: response.src,
+  };
 }
 
 async function flushPendingSave() {
@@ -1178,6 +1211,7 @@ onBeforeUnmount(() => {
             title-placeholder="Untitled note"
             :title-max-length="180"
             :title-disabled="loading"
+            :upload-image="uploadJournalImage"
             placeholder="Write your note here..."
           />
         </div>

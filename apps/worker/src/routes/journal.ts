@@ -2,8 +2,10 @@ import { JOURNAL_PLUGIN_ID } from "@me3-core/plugin-journal";
 import {
   JournalInputError,
   deleteJournalDay,
+  getJournalMedia,
   getJournalDay,
   listJournalArchive,
+  uploadJournalMedia,
   updateJournalDay,
 } from "../journal";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
@@ -68,6 +70,56 @@ export function registerJournalRoutes(app: AppHono, deps: OwnerRouteDeps) {
           limit: c.req.query("limit"),
         }),
       );
+    } catch (error) {
+      return journalErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/journal/media", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireJournalPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      const form = await c.req.formData();
+      const file = form.get("image") || form.get("file");
+      if (!(file instanceof File)) {
+        throw new JournalInputError("Journal image upload is required");
+      }
+      const date = form.get("date");
+      return c.json(
+        await uploadJournalMedia(c.env, ownerId, {
+          date,
+          file,
+        }),
+        201,
+      );
+    } catch (error) {
+      return journalErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/journal/media/:date/:filename", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireJournalPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      const media = await getJournalMedia(
+        c.env,
+        ownerId,
+        c.req.param("date"),
+        c.req.param("filename"),
+      );
+      return new Response(media.body, {
+        headers: {
+          "content-type": media.mimeType,
+          "cache-control": "private, max-age=31536000, immutable",
+          ...(media.size ? { "content-length": String(media.size) } : {}),
+        },
+      });
     } catch (error) {
       return journalErrorResponse(c, error);
     }

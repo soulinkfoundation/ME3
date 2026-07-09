@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   deleteJournalDay,
+  getJournalMedia,
   getJournalDay,
   listJournalArchive,
+  uploadJournalMedia,
   updateJournalDay,
 } from "./journal";
 import type { Env } from "./types";
@@ -215,6 +217,92 @@ describe("Journal plugin entries", () => {
     });
     await expect(listJournalArchive(env, "owner")).resolves.toEqual({
       entries: [],
+    });
+  });
+
+  it("returns an inline image fallback when R2 is not configured", async () => {
+    const env = createJournalEnv();
+    const file = new File([new Uint8Array([1, 2, 3])], "note.png", {
+      type: "image/png",
+    });
+
+    const result = await uploadJournalMedia(env, "owner", {
+      date: "2026-06-02",
+      file,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      mimeType: "image/png",
+      size: 3,
+      storage: "inline",
+    });
+    expect(result.filename).toMatch(/^[0-9a-f-]+\.png$/);
+    expect(result.src).toBe("data:image/png;base64,AQID");
+  });
+
+  it("stores journal images in SITE_ASSETS when R2 is configured", async () => {
+    const putCalls: Array<{
+      key: string;
+      value: ArrayBuffer | ReadableStream | string;
+      options?: R2PutOptions;
+    }> = [];
+    const env = {
+      ...createJournalEnv(),
+      SITE_ASSETS: {
+        put: async (
+          key: string,
+          value: ArrayBuffer | ReadableStream | string,
+          options?: R2PutOptions,
+        ) => {
+          putCalls.push({ key, value, options });
+          return null;
+        },
+      },
+    } as unknown as Env;
+    const file = new File([new Uint8Array([4, 5, 6])], "note.webp", {
+      type: "image/webp",
+    });
+
+    const result = await uploadJournalMedia(env, "owner", {
+      date: "2026-06-02",
+      file,
+    });
+
+    expect(result.storage).toBe("r2");
+    expect(result.src).toBe(`/api/journal/media/2026-06-02/${result.filename}`);
+    expect(putCalls).toHaveLength(1);
+    expect(putCalls[0].key).toBe(`journal/owner/2026-06-02/${result.filename}`);
+    expect(putCalls[0].options?.httpMetadata).toEqual({ contentType: "image/webp" });
+    expect(putCalls[0].options?.customMetadata).toMatchObject({
+      feature: "journal",
+      ownerId: "owner",
+      date: "2026-06-02",
+      originalName: "note.webp",
+    });
+  });
+
+  it("reads journal images back from SITE_ASSETS", async () => {
+    const env = {
+      ...createJournalEnv(),
+      SITE_ASSETS: {
+        get: async (key: string) => {
+          expect(key).toBe("journal/owner/2026-06-02/image.png");
+          return {
+            body: new ReadableStream(),
+            size: 3,
+            httpMetadata: { contentType: "image/png" },
+            customMetadata: {},
+          };
+        },
+      },
+    } as unknown as Env;
+
+    await expect(
+      getJournalMedia(env, "owner", "2026-06-02", "image.png"),
+    ).resolves.toMatchObject({
+      mimeType: "image/png",
+      size: 3,
     });
   });
 });
