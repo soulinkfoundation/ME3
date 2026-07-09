@@ -4,6 +4,7 @@ import {
   classifyAssistantImageIntent,
   dispatchAgentSandboxTurn,
   modelSupportsCapability,
+  modelSupportsImageInput,
 } from "./agent-chat";
 
 type FakeDbState = {
@@ -744,6 +745,73 @@ describe("Core chat native context", () => {
       "@cf/example/selected-model",
       expect.any(Object),
     );
+  });
+
+  it("passes ready image attachments to selected Workers AI vision models", async () => {
+    const imageStorageKey = "assistant/owner/thread-1/image.png";
+    const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const r2 = createR2Bucket();
+    await r2.bucket.put(imageStorageKey, imageBytes, {
+      httpMetadata: { contentType: "image/png" },
+    });
+    const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
+      response: "Image reply.",
+    }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        SITE_ASSETS: r2.bucket,
+      } as never,
+      createStorage(),
+      {
+        ...dispatchInput("What is in this image?"),
+        selectedModel: {
+          providerId: "workers-ai",
+          model: "@cf/moonshotai/kimi-k2.7-code",
+          optionId: "workers-kimi-k2-7",
+        },
+        attachments: [
+          {
+            id: "attachment-image",
+            name: "image.png",
+            mimeType: "image/png",
+            size: imageBytes.byteLength,
+            kind: "image",
+            status: "ready",
+            storageKey: imageStorageKey,
+            hasText: false,
+            textTruncated: false,
+          },
+        ],
+      },
+    );
+
+    expect(modelSupportsImageInput("workers-ai", "@cf/moonshotai/kimi-k2.7-code")).toBe(
+      true,
+    );
+    expect(response).toMatchObject({
+      replyText: "Image reply.",
+      model: "@cf/moonshotai/kimi-k2.7-code",
+      source: "workers-ai",
+    });
+    expect(aiRun).toHaveBeenCalledWith(
+      "@cf/moonshotai/kimi-k2.7-code",
+      expect.objectContaining({
+        image: "data:image/png;base64,iVBORw==",
+        messages: expect.any(Array),
+      }),
+    );
+    const modelInput = aiRun.mock.calls[0]?.[1] as {
+      messages: Array<{ role: string; content: string }>;
+      image?: string;
+    };
+    expect(modelInput.messages.at(-1)?.content).toContain(
+      "Assistant attachment references",
+    );
+    expect(modelInput.messages.at(-1)?.content).toContain("image.png");
   });
 
   it("classifies image generation without treating prompt drafting or image analysis as generation", () => {

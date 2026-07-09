@@ -896,6 +896,34 @@ describe("assistant jobs persistence", () => {
     });
   });
 
+  it("renders rich Mission Control task descriptions as plain text in daily briefing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-07T07:00:00.000Z"));
+    const env = createAssistantJobsEnv({
+      tasks: [
+        {
+          ...taskRow("task-1", "Order a nuc of bees", "project-1"),
+          description:
+            '<p>Ask donough</p><p></p><p><a target="_blank" rel="noopener noreferrer" href="https://nihbs.org/nucs-and-queens/">https://nihbs.org/nucs-and-queens/</a></p>',
+          due_at: "2026-07-07T09:00:00.000Z",
+        },
+      ],
+    });
+
+    const created = await createAssistantJob(env, "owner", { recipeId: "daily-briefing" });
+
+    await runAssistantJobNow(env, "owner", created.job.id);
+
+    const message = JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)
+      .dailyBriefing.message;
+    expect(message).toContain(
+      "- Order a nuc of bees: Ask donough https://nihbs.org/nucs-and-queens/",
+    );
+    expect(message).not.toContain("<p>");
+    expect(message).not.toContain("target=");
+    expect(message).not.toContain("</a>");
+  });
+
   it("customizes the daily briefing notification template", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-24T07:00:00.000Z"));

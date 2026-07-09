@@ -34,7 +34,15 @@ import {
   parseEmailAddressHeader,
 } from "../../../shared/email-headers";
 import { classifyAssistantImageIntent } from "./image-intent";
-import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL, modelSupportsCapability, type AssistantImageCapability } from "./model-capabilities";
+import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL, modelSupportsCapability, modelSupportsImageInput, type AssistantImageCapability } from "./model-capabilities";
+import {
+  modelErrorMessage,
+  runModelTurn,
+  type AgentChatAiGatewayRuntimeConfig,
+  type AgentChatAiRoute,
+  type AgentChatImageInput,
+  type AgentChatTextMessage,
+} from "./model-runtime";
 import {
   loadPendingReminderCreate,
   parseReminderChatRequest,
@@ -937,23 +945,9 @@ type D1RunResultLike = {
 
 type AiProviderId = "workers-ai" | "openai" | "anthropic";
 
-type AiRoute = {
-  providerId: AiProviderId;
-  model: string;
-  backupModel: string | null;
-  apiKey: string | null;
-  ai: CoreAgentChatEnv["AI"] | null;
-  aiGateway: AiGatewayRuntimeConfig | null;
-  configured: boolean;
-};
+type AiRoute = AgentChatAiRoute;
 
-type AiGatewayRuntimeConfig = {
-  accountId: string | null;
-  gatewayId: string | null;
-  apiToken: string | null;
-  routeWorkersAi: boolean;
-  routeExternalProviders: boolean;
-};
+type AiGatewayRuntimeConfig = AgentChatAiGatewayRuntimeConfig;
 
 const DEFAULT_WORKERS_AI_MODEL = "@cf/zai-org/glm-4.7-flash";
 const DEFAULT_WORKERS_AI_BACKUP_MODEL = "@cf/zai-org/glm-5.2";
@@ -2125,6 +2119,13 @@ export async function dispatchAgentSandboxTurn(
     agentContext?.prompt ?? null,
     buildCoreChatOrientationPrompt(toolPlan.decision, setupReadiness),
   );
+  let imageInputs: AgentChatImageInput[] = [];
+  let imageInputError: string | null = null;
+  try {
+    imageInputs = await loadAgentImageInputs(env, input.attachments);
+  } catch (error) {
+    imageInputError = modelErrorMessage(error) || "Could not load image attachment.";
+  }
 
   let response: AgentSandboxDispatchResponse;
   if (!route.configured) {
@@ -2146,8 +2147,27 @@ export async function dispatchAgentSandboxTurn(
       contentAction: null,
       contactsChanged: false,
     };
+  } else if (imageInputError) {
+    response = blockedImageInputResponse({
+      turnId: input.turnId,
+      route,
+      reason: "image_attachment_unavailable",
+      replyText: "I couldn't load the attached image for this turn. Remove it and try again.",
+      debugError: imageInputError,
+    });
+  } else if (
+    imageInputs.length > 0 &&
+    !modelSupportsImageInput(route.providerId, route.model)
+  ) {
+    response = blockedImageInputResponse({
+      turnId: input.turnId,
+      route,
+      reason: "model_does_not_support_image_input",
+      replyText:
+        "This turn includes an image, but the selected model cannot read images. Try again with an image-input model.",
+    });
   } else {
-    response = await runModelTurn(route, messages, input.turnId);
+    response = await runModelTurn(route, messages, input.turnId, imageInputs);
   }
   response = attachAgentContextToResponse(response, agentContext);
   if (toolPlan.pendingMailboxDraftSave) {
@@ -2212,6 +2232,53 @@ function appendAgentAttachmentReferenceContext(
   if (rendered) parts.push(`Assistant attachment references:\n${rendered}`);
   if (textContext) parts.push(textContext);
   return parts.join("\n\n");
+}
+
+async function loadAgentImageInputs(
+  env: CoreAgentChatEnv,
+  attachments: AgentSandboxDispatchInput["attachments"],
+): Promise<AgentChatImageInput[]> {
+  const references = normalizeAgentAttachmentReferences(attachments).filter(
+    (attachment) => attachment.kind === "image",
+  );
+  if (references.length === 0) return [];
+  if (!env.SITE_ASSETS) throw new Error("Image attachment storage is not configured.");
+
+  const images: AgentChatImageInput[] = [];
+  for (const attachment of references) {
+    const storageKey = attachment.storageKey;
+    if (!storageKey) throw new Error(`${attachment.name || "Image"} has no storage reference.`);
+    const object = await env.SITE_ASSETS.get(storageKey);
+    if (!object) throw new Error(`${attachment.name || "Image"} is no longer available.`);
+    const mimeType =
+      normalizeImageMimeType(attachment.mimeType) ||
+      normalizeImageMimeType(object.httpMetadata?.contentType) ||
+      "image/png";
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    const base64 = bytesToBase64(bytes);
+    images.push({
+      name: attachment.name || "Image",
+      mimeType,
+      base64,
+      dataUrl: `data:${mimeType};base64,${base64}`,
+    });
+  }
+  return images;
+}
+
+function normalizeImageMimeType(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const mimeType = value.trim().toLowerCase();
+  return mimeType.startsWith("image/") ? mimeType : null;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function normalizeAgentAttachmentReferences(
@@ -2442,6 +2509,31 @@ function blockedImageResponse(input: {
       reason: input.reason,
       assets: [],
     },
+    contentAction: null,
+    contactsChanged: false,
+  };
+}
+
+function blockedImageInputResponse(input: {
+  turnId: string;
+  route: AiRoute;
+  reason: string;
+  replyText: string;
+  debugError?: string | null;
+}): AgentSandboxDispatchResponse {
+  return {
+    ok: true,
+    auditId: null,
+    turnId: input.turnId,
+    specialist: "core.agent-chat",
+    replyText: input.replyText,
+    model: input.route.model,
+    source: "fallback",
+    fallbackReason: "Image input blocked",
+    debugError: input.debugError || input.reason,
+    emailAction: null,
+    reminderAction: null,
+    actionCards: null,
     contentAction: null,
     contactsChanged: false,
   };
@@ -5743,298 +5835,6 @@ async function insertSandboxEvent(
     .run();
 
   return { id };
-}
-
-async function runModelTurn(
-  route: AiRoute,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-  turnId: string,
-): Promise<AgentSandboxDispatchResponse> {
-  const attempts =
-    route.providerId === "workers-ai" && route.backupModel && route.backupModel !== route.model
-      ? [route.model, route.backupModel]
-      : [route.model];
-  let lastError: unknown = null;
-  const modelAttempts: AgentChatModelAttemptTrace[] = [];
-
-  for (const model of attempts) {
-    try {
-      const attemptRoute = { ...route, model };
-      const replyText =
-        route.providerId === "openai"
-          ? await runOpenAi(attemptRoute, messages)
-          : route.providerId === "anthropic"
-            ? await runAnthropic(attemptRoute, messages)
-            : await runWorkersAi(attemptRoute, messages);
-
-      if (!isEmptyModelReply(replyText, attemptRoute)) {
-        modelAttempts.push({
-          providerId: route.providerId,
-          model,
-          status: "succeeded",
-          error: null,
-        });
-        return {
-          ok: true,
-          auditId: null,
-          turnId,
-          specialist: "core.agent-chat",
-          replyText,
-          model,
-          source: route.providerId,
-          fallbackReason: null,
-          debugError: null,
-          emailAction: null,
-          reminderAction: null,
-          actionCards: null,
-          contentAction: null,
-          contactsChanged: false,
-          modelAttempts,
-        };
-      }
-
-      const message = "Model returned an empty reply.";
-      modelAttempts.push({
-        providerId: route.providerId,
-        model,
-        status: "empty",
-        error: message,
-      });
-      lastError = new Error(emptyModelReply(attemptRoute));
-    } catch (error) {
-      const message = modelErrorMessage(error);
-      modelAttempts.push({
-        providerId: route.providerId,
-        model,
-        status: "failed",
-        error: message,
-      });
-      lastError = error;
-    }
-  }
-
-  return modelFallbackResponse(route, turnId, modelAttempts, lastError);
-}
-
-function modelFallbackResponse(
-  route: AiRoute,
-  turnId: string,
-  modelAttempts: AgentChatModelAttemptTrace[],
-  lastError: unknown,
-): AgentSandboxDispatchResponse {
-  const onlyEmptyReplies =
-    modelAttempts.length > 0 && modelAttempts.every((attempt) => attempt.status === "empty");
-  const attemptedBackup = modelAttempts.some((attempt) => attempt.model !== route.model);
-  const debugError =
-    modelErrorMessage(lastError) ||
-    modelAttempts
-      .map((attempt) => attempt.error)
-      .filter(Boolean)
-      .join("; ") ||
-    "Model request failed";
-
-  return {
-      ok: true,
-      auditId: null,
-      turnId,
-      specialist: "core.agent-chat",
-      replyText: onlyEmptyReplies
-        ? [
-            "I reached the configured AI model, but it returned an empty reply.",
-            attemptedBackup
-              ? "I also tried the backup model, but it did not return usable text."
-              : null,
-            "Try another model, or check Account > AI model before trying again.",
-          ]
-            .filter(Boolean)
-            .join(" ")
-        : [
-            "I reached the ME3 Core agent runtime, but the model provider failed before it could answer.",
-            attemptedBackup
-              ? "I also tried the backup model and it failed too."
-              : null,
-            "Check your AI provider settings or try another model.",
-          ]
-            .filter(Boolean)
-            .join(" "),
-      model: route.model,
-      source: "fallback",
-      fallbackReason: onlyEmptyReplies
-        ? "Model returned empty response"
-        : "Model request failed",
-      debugError,
-      emailAction: null,
-      reminderAction: null,
-      actionCards: null,
-      contentAction: null,
-      contactsChanged: false,
-      modelAttempts,
-  };
-}
-
-function modelErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : typeof error === "string" ? error : "";
-}
-
-async function runOpenAi(
-  route: AiRoute,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-): Promise<string> {
-  if (!route.apiKey) throw new Error("OpenAI API key is not configured");
-  const body: Record<string, unknown> = {
-    model: route.model,
-    messages,
-  };
-  if (!isOpenAiReasoningModel(route.model)) {
-    body.temperature = 0.4;
-  }
-
-  const gatewayUrl = externalProviderGatewayUrl(route, "openai", "chat/completions");
-  const response = await fetch(gatewayUrl || "https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${route.apiKey}`,
-      ...(gatewayUrl && route.aiGateway?.apiToken
-        ? { "cf-aig-authorization": `Bearer ${route.aiGateway.apiToken}` }
-        : {}),
-    },
-    body: JSON.stringify(body),
-  });
-
-  const payload = (await response.json().catch(() => null)) as
-    | {
-        choices?: Array<{ message?: { content?: unknown; refusal?: unknown } }>;
-        error?: { message?: string };
-      }
-    | null;
-
-  if (!response.ok) {
-    throw new Error(payload?.error?.message || `OpenAI request failed (${response.status})`);
-  }
-
-  const message = payload?.choices?.[0]?.message;
-  return (
-    extractModelText(message?.content) ||
-    extractModelText(message?.refusal) ||
-    emptyModelReply(route)
-  );
-}
-
-function isOpenAiReasoningModel(model: string): boolean {
-  const normalized = model.trim().toLowerCase();
-  return /^gpt-5(?:[.-]|$)/.test(normalized) || /^o\d(?:[.-]|$)/.test(normalized);
-}
-
-async function runAnthropic(
-  route: AiRoute,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-): Promise<string> {
-  if (!route.apiKey) throw new Error("Anthropic API key is not configured");
-
-  const system = messages.find((message) => message.role === "system")?.content || "";
-  const turns = messages
-    .filter((message) => message.role !== "system")
-    .map((message) => ({ role: message.role, content: message.content }));
-
-  const gatewayUrl = externalProviderGatewayUrl(route, "anthropic", "v1/messages");
-  const response = await fetch(gatewayUrl || "https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": route.apiKey,
-      "anthropic-version": "2023-06-01",
-      ...(gatewayUrl && route.aiGateway?.apiToken
-        ? { "cf-aig-authorization": `Bearer ${route.aiGateway.apiToken}` }
-        : {}),
-    },
-    body: JSON.stringify({
-      model: route.model,
-      max_tokens: 800,
-      system,
-      messages: turns,
-    }),
-  });
-
-  const payload = (await response.json().catch(() => null)) as
-    | {
-        content?: Array<{ type?: string; text?: string }>;
-        error?: { message?: string };
-      }
-    | null;
-
-  if (!response.ok) {
-    throw new Error(payload?.error?.message || `Anthropic request failed (${response.status})`);
-  }
-
-  return extractModelText(payload?.content) || emptyModelReply(route);
-}
-
-async function runWorkersAi(
-  route: AiRoute,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-): Promise<string> {
-  if (!route.ai) throw new Error("Workers AI binding is not configured");
-  const requestOptions =
-    route.aiGateway?.routeWorkersAi && route.aiGateway.gatewayId
-      ? {
-          gateway: {
-            id: route.aiGateway.gatewayId,
-          },
-        }
-      : undefined;
-  const result = requestOptions
-    ? await route.ai.run(route.model, { messages }, requestOptions)
-    : await route.ai.run(route.model, { messages });
-  return extractModelText(result) || emptyModelReply(route);
-}
-
-function externalProviderGatewayUrl(
-  route: AiRoute,
-  provider: "openai" | "anthropic",
-  path: string,
-): string | null {
-  const gateway = route.aiGateway;
-  if (
-    !gateway?.routeExternalProviders ||
-    !gateway.accountId ||
-    !gateway.gatewayId ||
-    !gateway.apiToken
-  ) {
-    return null;
-  }
-  return `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(
-    gateway.accountId,
-  )}/${encodeURIComponent(gateway.gatewayId)}/${provider}/${path}`;
-}
-
-function extractModelText(value: unknown): string {
-  if (typeof value === "string") return value.trim();
-  if (Array.isArray(value)) return value.map((part) => extractModelText(part)).join("").trim();
-  if (!value || typeof value !== "object") return "";
-
-  const record = value as Record<string, unknown>;
-  return (
-    extractModelText(record.text) ||
-    extractModelText(record.output_text) ||
-    extractModelText(record.response) ||
-    extractModelText(record.content) ||
-    extractModelText(record.parsed) ||
-    extractModelText(record.data) ||
-    extractModelText(record.message) ||
-    extractModelText(record.choices) ||
-    extractModelText(record.delta) ||
-    extractModelText(record.result) ||
-    extractModelText(record.output)
-  );
-}
-
-function emptyModelReply(route: AiRoute): string {
-  return `I reached ${route.providerId} (${route.model}), but it returned an empty reply. Check Account > AI model or try another model.`;
-}
-
-function isEmptyModelReply(replyText: string, route: AiRoute): boolean {
-  return replyText === emptyModelReply(route);
 }
 
 async function resolveAiRoute(

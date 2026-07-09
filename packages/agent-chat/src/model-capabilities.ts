@@ -30,6 +30,34 @@ export const DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL =
 
 const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
   {
+    providerId: "anthropic",
+    model: "claude-sonnet-4-6",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "anthropic",
+    model: "claude-opus-4-8",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "openai",
+    model: "gpt-4o",
+    capabilities: ["text", "image_input", "tool-use"],
+  },
+  {
+    providerId: "openai",
+    model: "gpt-5.5",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
+    model: "@cf/moonshotai/kimi-k2.7-code",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+    image: {
+      maxInputImages: 1,
+    },
+  },
+  {
     providerId: "workers-ai",
     model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
     capabilities: ["image_generation"],

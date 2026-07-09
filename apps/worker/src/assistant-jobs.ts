@@ -3442,25 +3442,62 @@ async function loadAssistantJobTasksContext(
     )
       .bind(userId)
       .all<MissionTaskContextRow>();
-    return (rows.results || []).map((row) => ({
-      id: row.id,
-      title: row.description ? `${row.title}: ${row.description}` : row.title,
-      status: row.status,
-      dueAt: row.due_at || row.scheduled_for,
-      projectId: row.project_id,
-      source: contextSource({
+    return (rows.results || []).map((row) => {
+      const description = richTextToPlainText(row.description);
+      return {
         id: row.id,
-        kind: "task",
-        label: row.title,
-        visibility: "private",
-        sourceRef: row.source_ref,
-        updatedAt: row.updated_at,
-      }),
-    }));
+        title: description ? `${row.title}: ${description}` : row.title,
+        status: row.status,
+        dueAt: row.due_at || row.scheduled_for,
+        projectId: row.project_id,
+        source: contextSource({
+          id: row.id,
+          kind: "task",
+          label: row.title,
+          visibility: "private",
+          sourceRef: row.source_ref,
+          updatedAt: row.updated_at,
+        }),
+      };
+    });
   } catch {
     failedSources.push(failedContextSource("mission-tasks", "task", "Mission tasks"));
     return [];
   }
+}
+
+function richTextToPlainText(value: string | null) {
+  if (!value) return "";
+  return decodeHtmlEntities(
+    value
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<br\s*\/?>/gi, " ")
+      .replace(/<\/(?:p|div|li|h[1-6]|blockquote)>/gi, " ")
+      .replace(/<[^>]+>/g, " "),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeHtmlEntities(value: string) {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (match, code: string) => htmlCodePointToString(match, code, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (match, code: string) =>
+      htmlCodePointToString(match, code, 16),
+    );
+}
+
+function htmlCodePointToString(fallback: string, value: string, radix: number) {
+  const codePoint = Number.parseInt(value, radix);
+  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return fallback;
+  return String.fromCodePoint(codePoint);
 }
 
 async function loadAssistantJobMemoryContext(

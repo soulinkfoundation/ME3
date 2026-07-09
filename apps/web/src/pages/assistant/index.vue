@@ -673,6 +673,7 @@ const assistantActionCardBusy = ref<string | null>(null);
 const assistantDraftHydrationIds = new Set<string>();
 const assistantContactsLoaded = ref(false);
 const assistantAwaitingResponse = ref(false);
+const assistantTurnStatusText = ref("");
 const assistantError = ref<string | null>(null);
 const assistantThreadId = ref<string | null>(null);
 const assistantThreadLoading = ref(Boolean(route.query.thread));
@@ -1098,8 +1099,8 @@ const assistantAttachmentIssue = computed(() => {
   const hasImage = assistantAttachments.value.some(
     (attachment) => attachment.kind === "image",
   );
-  if (hasImage && !modelHasImageInput(selectedModel.value.capabilities)) {
-    return "Switch to an image-input-capable model before sending images.";
+  if (hasImage && !resolveAssistantTurnModel(assistantAttachments.value)) {
+    return "No image-input-capable model is available for this attachment.";
   }
 
   return "";
@@ -2465,7 +2466,7 @@ function serializeAssistantAttachmentsForTurn() {
 }
 
 function normalizeAssistantMessageAttachments(
-  attachments: AgentChatMessageAttachment[] | null | undefined,
+  attachments: ReadonlyArray<AgentChatMessageAttachment> | null | undefined,
 ) {
   return Array.isArray(attachments)
     ? attachments.filter((attachment) => attachment?.status === "ready")
@@ -2626,6 +2627,61 @@ function modelHasImageInput(capabilities: AiAgentModelCapability[]) {
   );
 }
 
+function attachmentsContainReadyImage(
+  attachments: ReadonlyArray<AgentChatMessageAttachment>,
+) {
+  return attachments.some(
+    (attachment) =>
+      attachment.kind === "image" && attachment.status === "ready",
+  );
+}
+
+function readyImageAttachmentCount(
+  attachments: ReadonlyArray<AgentChatMessageAttachment>,
+) {
+  return attachments.filter(
+    (attachment) =>
+      attachment.kind === "image" && attachment.status === "ready",
+  ).length;
+}
+
+function preferredImageInputModel() {
+  return (
+    visibleAssistantModelOptions.value.find(
+      (option) =>
+        option.id === "workers-kimi-k2-7" &&
+        modelHasImageInput(option.capabilities),
+    ) ||
+    visibleAssistantModelOptions.value.find((option) =>
+      modelHasImageInput(option.capabilities),
+    ) ||
+    null
+  );
+}
+
+function resolveAssistantTurnModel(
+  attachments: ReadonlyArray<AgentChatMessageAttachment>,
+) {
+  const currentModel = selectedModel.value;
+  if (!attachmentsContainReadyImage(attachments)) return currentModel;
+  if (modelHasImageInput(currentModel.capabilities)) return currentModel;
+  return preferredImageInputModel();
+}
+
+function assistantTurnStatusForModel(
+  attachments: ReadonlyArray<AgentChatMessageAttachment>,
+  turnModel: AiAgentModelOption | null,
+) {
+  const imageCount = readyImageAttachmentCount(attachments);
+  if (imageCount === 0 || !turnModel) return "";
+
+  const imageLabel = imageCount === 1 ? "image" : `${imageCount} images`;
+  if (turnModel.id !== selectedModel.value.id) {
+    return `Using ${turnModel.label} for ${imageLabel}.`;
+  }
+  return `Reading ${imageLabel} with ${turnModel.label}.`;
+}
+
 function assistantMessageKey(
   message: { id?: string; role: string; text: string },
   index?: number,
@@ -2645,12 +2701,18 @@ function assistantMessageIndex(message: (typeof chatMessages.value)[number]) {
 
 async function submitAssistantText(
   text: string,
-  attachments = serializeAssistantAttachmentsForTurn(),
+  attachments: ReadonlyArray<AgentChatMessageAttachment> =
+    serializeAssistantAttachmentsForTurn(),
+  turnModel = resolveAssistantTurnModel(attachments),
 ) {
   const normalized = text.trim();
   if (!normalized || assistantSending.value) return;
 
   assistantError.value = null;
+  assistantTurnStatusText.value = assistantTurnStatusForModel(
+    attachments,
+    turnModel,
+  );
   const abortController = new AbortController();
   assistantAbortController = abortController;
   agentChat.appendMessage({
@@ -2689,11 +2751,11 @@ async function submitAssistantText(
         threadId: assistantThreadId.value,
         projectId: assistantThreadId.value ? undefined : routeProjectId(),
         attachments,
-        model: selectedModel.value
+        model: turnModel
           ? {
-              providerId: selectedModel.value.providerId,
-              model: selectedModel.value.model,
-              optionId: selectedModel.value.id,
+              providerId: turnModel.providerId,
+              model: turnModel.model,
+              optionId: turnModel.id,
             }
           : null,
       },
@@ -2774,6 +2836,7 @@ async function submitAssistantText(
     }
     assistantAwaitingResponse.value = false;
     assistantSending.value = false;
+    assistantTurnStatusText.value = "";
     if (assistantMessageStarted) {
       await scrollAssistantMessageIntoView(assistantMessageId);
     } else {
@@ -3537,8 +3600,11 @@ async function retryAssistantTurn(
   const text = chatMessages.value[startIndex]?.text.trim();
   if (!text) return;
 
+  const attachments = normalizeAssistantMessageAttachments(
+    chatMessages.value[startIndex]?.attachments,
+  );
   chatMessages.value.splice(startIndex);
-  await submitAssistantText(text);
+  await submitAssistantText(text, attachments);
 }
 
 function editAndResendAssistantTurn(
@@ -5575,7 +5641,15 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <div
               class="assistant-message__bubble assistant-message__bubble--pending"
             >
-              <span>{{ assistantThinkingLabel }}</span>
+              <span class="assistant-message__pending-main">
+                {{ assistantThinkingLabel }}
+              </span>
+              <span
+                v-if="assistantTurnStatusText"
+                class="assistant-message__pending-detail"
+              >
+                {{ assistantTurnStatusText }}
+              </span>
               <span class="assistant-typing" aria-hidden="true">
                 <span />
                 <span />
@@ -7942,10 +8016,22 @@ function messageFromUnknown(err: unknown, fallback: string) {
 }
 
 .assistant-message__bubble--pending {
-  display: inline-flex;
+  display: inline-grid;
+  grid-template-columns: auto auto;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   color: var(--ui-text-muted);
+}
+
+.assistant-message__pending-main {
+  color: var(--ui-text);
+}
+
+.assistant-message__pending-detail {
+  grid-column: 1 / -1;
+  max-width: min(420px, 70vw);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .assistant-message__content
