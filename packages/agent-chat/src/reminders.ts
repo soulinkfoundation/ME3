@@ -1,319 +1,320 @@
-import { normalizeTimeZone } from "@me3-core/plugin-calendar";
-import { isCoreChatReminderCreateRequest } from "./planner";
-import type { AgentReminderInput } from "./index";
+import {
+  getUtcMsForLocalTime,
+  normalizeEventRecurrenceRule,
+  normalizeTimeZone,
+} from "@me3-core/plugin-calendar";
 
-export type PendingReminderCreate = {
-  capabilityId: "core.reminders.create";
-  status: "active" | "resolved" | "expired";
-  missingField: "when";
-  threadId: string | null;
+export type AgentReminderInput = {
+  title?: unknown;
+  notes?: unknown;
+  remindAt?: unknown;
+  date?: unknown;
+  time?: unknown;
+  timezone?: unknown;
+  recurrence?: unknown;
+};
+
+export type AgentReminder = {
+  id: string;
   title: string;
-  timezone: string;
-  createdAt: string;
-  expiresAt: string;
+  notes: string | null;
+  remindAt: string;
+  timezone: string | null;
+  recurrenceRule: string | null;
+  contextType?: "contact" | "booking" | null;
+  contextId?: string | null;
+  contextLabel?: string | null;
+  status: "pending" | "delivered" | "dismissed" | "cancelled" | "failed";
+  deliveredAt?: string | null;
+  dismissedAt?: string | null;
+  createdAt?: string;
 };
 
-type StorageLike = {
-  get<T = unknown>(key: string): Promise<T | undefined>;
-  put<T = unknown>(key: string, value: T): Promise<void>;
-};
-
-type ReminderTurnContext = {
-  userId: string;
-  threadId?: string | null;
-};
-
-const PENDING_REMINDER_CREATE_TTL_MS = 30 * 60 * 1000;
-
-export function parseReminderChatRequest(
-  messageText: string,
-  ownerTimezone: string | null | undefined,
-  pendingReminderCreate?: PendingReminderCreate | null,
-):
-  | { input: AgentReminderInput }
-  | { error: string; pendingReminderCreate?: PendingReminderCreate }
-  | null {
-  if (!isCoreChatReminderCreateRequest(messageText) && !pendingReminderCreate) {
-    return null;
-  }
-
-  const timezone =
-    normalizeTimeZone(ownerTimezone) ||
-    normalizeTimeZone(pendingReminderCreate?.timezone) ||
-    "UTC";
-  const explicitDate = parseExplicitDate(messageText);
-  const relativeMs = parseRelativeReminderOffsetMs(messageText);
-  const weekdayDate = parseReminderWeekdayDate(messageText, timezone);
-  const hasTodayOrTomorrow = /\btoday|tomorrow\b/i.test(messageText);
-  const hasReminderDate = Boolean(
-    explicitDate || weekdayDate || relativeMs !== null || hasTodayOrTomorrow,
-  );
-  const dayOffset = /\btomorrow\b/i.test(messageText) ? 1 : 0;
-  const time = parseExplicitReminderTime(messageText) || "09:00";
-  const recurrence = parseReminderRecurrenceInput(messageText);
-  let date: string;
-  let parsedTime = time;
-
-  if (relativeMs !== null) {
-    const parts = dateTimePartsForInstant(new Date(Date.now() + relativeMs), timezone);
-    date = parts.date;
-    parsedTime = parts.time;
-  } else {
-    date = explicitDate || weekdayDate || addDaysToDate(localDateForTimezone(timezone), dayOffset);
-  }
-
-  const title = extractReminderTitle(messageText) || pendingReminderCreate?.title || null;
-  if (!title) {
-    return {
-      error:
-        "I can set that reminder, but I need what you want to be reminded about.",
-    };
-  }
-
-  if (!hasReminderDate) {
-    return {
-      error:
-        "I can set that reminder. Please include a date, or say today/tomorrow or in a few hours.",
-      pendingReminderCreate: buildPendingReminderCreate(title, timezone),
-    };
-  }
-
-  return {
-    input: {
-      title,
-      date,
-      time: parsedTime,
-      timezone,
-      recurrence,
-    },
-  };
-}
-
-export async function loadPendingReminderCreate(
-  storage: StorageLike,
-  input: ReminderTurnContext,
-): Promise<PendingReminderCreate | null> {
-  try {
-    const key = pendingReminderCreateStorageKey(input);
-    const pending = normalizePendingReminderCreate(await storage.get(key));
-    if (!pending) return null;
-    if (!isActivePendingReminderCreate(pending)) {
-      await storage.put(key, {
-        ...pending,
-        status: "expired",
-        expiresAt: new Date().toISOString(),
-      });
-      return null;
+export type AgentReminderParseResult =
+  | {
+      title: string;
+      notes: string | null;
+      remindAt: string;
+      timezone: string;
+      recurrenceRule: string | null;
     }
-    return pending;
-  } catch {
-    return null;
+  | { error: string };
+
+type ReminderDb = {
+  prepare(sql: string): {
+    bind(...values: unknown[]): {
+      first<T = unknown>(): Promise<T | null>;
+      all<T = unknown>(): Promise<{ results?: T[] }>;
+      run(): Promise<{ meta?: { changes?: number } }>;
+    };
+  };
+};
+
+type ReminderEnv = { DB: ReminderDb };
+
+type DbReminderRow = {
+  id: string;
+  title: string;
+  notes: string | null;
+  remind_at: string;
+  timezone: string | null;
+  recurrence_rule: string | null;
+  context_type?: "contact" | "booking" | null;
+  context_id?: string | null;
+  context_label?: string | null;
+  status: "pending" | "delivered" | "dismissed" | "cancelled" | "failed";
+  delivered_at?: string | null;
+  dismissed_at?: string | null;
+  created_at?: string;
+};
+
+export function parseAgentReminderInput(
+  input: AgentReminderInput | null | undefined,
+): AgentReminderParseResult {
+  const title = normalizeNullableText(input?.title);
+  const notes = normalizeNullableText(input?.notes);
+  const directRemindAt = normalizeNullableText(input?.remindAt);
+  const date = typeof input?.date === "string" ? input.date.trim() : "";
+  const time = typeof input?.time === "string" ? input.time.trim() : "";
+
+  if (!title) return { error: "Title is required" };
+  if (directRemindAt) {
+    if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(directRemindAt)) {
+      return { error: "Reminder timestamp must include a timezone offset" };
+    }
+    const parsedRemindAt = Date.parse(directRemindAt);
+    if (!Number.isFinite(parsedRemindAt)) {
+      return { error: "Reminder timestamp must be a valid ISO date-time" };
+    }
+    const timezone = normalizeTimeZone(input?.timezone) || "UTC";
+    const recurrenceRule = parseReminderRecurrenceRule(
+      input?.recurrence,
+      new Date(parsedRemindAt).toISOString().slice(0, 10),
+    );
+    if (hasExplicitReminderRecurrence(input?.recurrence) && !recurrenceRule) {
+      return { error: "Invalid recurrence value" };
+    }
+    return {
+      title,
+      notes,
+      remindAt: new Date(parsedRemindAt).toISOString(),
+      timezone,
+      recurrenceRule,
+    };
   }
-}
-
-export async function savePendingReminderCreate(
-  storage: StorageLike,
-  input: ReminderTurnContext,
-  pending: PendingReminderCreate,
-): Promise<void> {
-  try {
-    const threadId = normalizePendingReminderThreadId(input.threadId);
-    await storage.put(pendingReminderCreateStorageKey(input), {
-      ...pending,
-      status: "active",
-      threadId,
-    });
-  } catch {
-    // Pending clarification state should improve follow-up routing, not fail chat.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { error: "Date must be in YYYY-MM-DD format" };
   }
-}
-
-export async function resolvePendingReminderCreate(
-  storage: StorageLike,
-  input: ReminderTurnContext,
-): Promise<void> {
-  try {
-    const key = pendingReminderCreateStorageKey(input);
-    const pending = normalizePendingReminderCreate(await storage.get(key));
-    if (!pending) return;
-    await storage.put(key, {
-      ...pending,
-      status: "resolved",
-      expiresAt: new Date().toISOString(),
-    });
-  } catch {
-    // Reminder persistence has already succeeded; stale pending state can expire.
+  if (!/^\d{2}:\d{2}$/.test(time)) {
+    return { error: "Time must be in HH:MM format" };
   }
+
+  const timezone = normalizeTimeZone(input?.timezone) || "UTC";
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const remindAt = new Date(
+    getUtcMsForLocalTime({ year, month, day, hour, minute }, timezone),
+  ).toISOString();
+  const recurrenceRule = parseReminderRecurrenceRule(input?.recurrence, date);
+  if (hasExplicitReminderRecurrence(input?.recurrence) && !recurrenceRule) {
+    return { error: "Invalid recurrence value" };
+  }
+
+  return { title, notes, remindAt, timezone, recurrenceRule };
 }
 
-function parseExplicitDate(messageText: string): string | null {
-  const match = messageText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
-  return match?.[1] || null;
+export async function listPendingAgentReminders(
+  env: ReminderEnv,
+  userId: string,
+): Promise<AgentReminder[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, title, notes, remind_at, timezone, recurrence_rule, context_type,
+            context_id, context_label, status, delivered_at, dismissed_at, created_at
+     FROM user_reminders
+     WHERE user_id = ? AND status IN ('pending', 'failed')
+     ORDER BY remind_at ASC
+     LIMIT 8`,
+  )
+    .bind(userId)
+    .all<DbReminderRow>();
+  return (rows.results || []).map(serializeAgentReminder);
 }
 
-function parseRelativeReminderOffsetMs(messageText: string): number | null {
-  const match = messageText.match(/\bin\s+(\d+)\s+(minutes?|mins?|hours?|hrs?|days?)\b/i);
-  if (!match) return null;
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  const unit = match[2].toLowerCase();
-  if (unit.startsWith("min")) return amount * 60 * 1000;
-  if (unit.startsWith("hour") || unit.startsWith("hr")) return amount * 60 * 60 * 1000;
-  return amount * 24 * 60 * 60 * 1000;
+export async function getPendingAgentReminder(
+  env: ReminderEnv,
+  userId: string,
+  reminderId: string,
+): Promise<AgentReminder | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, title, notes, remind_at, timezone, recurrence_rule, context_type,
+            context_id, context_label, status, delivered_at, dismissed_at, created_at
+     FROM user_reminders
+     WHERE id = ? AND user_id = ? AND status IN ('pending', 'failed')
+     LIMIT 1`,
+  )
+    .bind(reminderId, userId)
+    .first<DbReminderRow>();
+  return row ? serializeAgentReminder(row) : null;
 }
 
-function parseReminderWeekdayDate(messageText: string, timezone: string): string | null {
-  const match = messageText.match(/\b(?:on\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
-  if (!match) return null;
-  const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-  const target = weekdays.indexOf(match[1].toLowerCase());
-  const today = localDateForTimezone(timezone);
-  const current = new Date(`${today}T12:00:00Z`).getUTCDay();
-  const daysUntil = (target - current + 7) % 7;
-  return addDaysToDate(today, daysUntil);
-}
+export async function createAgentReminder(
+  env: ReminderEnv,
+  userId: string,
+  input: AgentReminderInput,
+  options: { idempotencyKey?: string | null } = {},
+): Promise<AgentReminder | { error: string }> {
+  const parsed = parseAgentReminderInput(input);
+  if ("error" in parsed) return parsed;
 
-function parseExplicitReminderTime(messageText: string): string | null {
-  const match =
-    messageText.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i) ||
-    messageText.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
-  if (!match) return null;
-  let hour = Number(match[1]);
-  const minute = Number(match[2] || "0");
-  const meridiem = match[3]?.toLowerCase();
-  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return null;
-  if (meridiem === "pm" && hour < 12) hour += 12;
-  if (meridiem === "am" && hour === 12) hour = 0;
-  if (hour > 23) return null;
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-}
+  const idempotencyKey = normalizeNullableText(options.idempotencyKey);
+  if (idempotencyKey) {
+    const existing = await getAgentReminderByDispatchId(
+      env,
+      userId,
+      idempotencyKey,
+    );
+    if (existing) return serializeAgentReminder(existing);
+  }
 
-function parseReminderRecurrenceInput(messageText: string): string | null {
-  if (/\bevery day|daily\b/i.test(messageText)) return "daily";
-  if (/\bevery week|weekly\b/i.test(messageText)) return "weekly";
-  if (/\bevery month|monthly\b/i.test(messageText)) return "monthly";
-  return null;
-}
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT ${idempotencyKey ? "OR IGNORE " : ""}INTO user_reminders
+       (id, user_id, title, notes, remind_at, timezone, recurrence_rule,
+        status, source_dispatch_id, created_via)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'agent')`,
+  )
+    .bind(
+      id,
+      userId,
+      parsed.title,
+      parsed.notes,
+      parsed.remindAt,
+      parsed.timezone,
+      parsed.recurrenceRule,
+      idempotencyKey,
+    )
+    .run();
 
-function extractReminderTitle(messageText: string): string | null {
-  const stripped = messageText
-    .replace(/^(?:please\s+)?/i, "")
-    .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-    .replace(/^(?:remind(?:er)? me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder)\s+(?:to|for|about|that)?\s*/i, "")
-    .replace(/^(?:don't|dont) let me forget\s+(?:to|about|that)?\s*/i, "")
-    .replace(/\b(?:today|tomorrow)\b/gi, "")
-    .replace(/\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, "")
-    .replace(/\bon\s+20\d{2}-\d{2}-\d{2}\b/gi, "")
-    .replace(/\bin\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?)\b/gi, "")
-    .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/gi, "")
-    .replace(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, "")
-    .replace(/\b(?:every day|daily|every week|weekly|every month|monthly)\b/gi, "")
-    .replace(/[.?!]+$/g, "")
-    .trim();
-  return stripped || null;
-}
+  if (idempotencyKey) {
+    const stored = await getAgentReminderByDispatchId(env, userId, idempotencyKey);
+    if (!stored) return { error: "Reminder could not be recorded." };
+    return serializeAgentReminder(stored);
+  }
 
-function buildPendingReminderCreate(
-  title: string,
-  timezone: string,
-): PendingReminderCreate {
-  const nowMs = Date.now();
   return {
-    capabilityId: "core.reminders.create",
-    status: "active",
-    missingField: "when",
-    threadId: null,
-    title,
-    timezone,
-    createdAt: new Date(nowMs).toISOString(),
-    expiresAt: new Date(nowMs + PENDING_REMINDER_CREATE_TTL_MS).toISOString(),
+    id,
+    title: parsed.title,
+    notes: parsed.notes,
+    remindAt: parsed.remindAt,
+    timezone: parsed.timezone,
+    recurrenceRule: parsed.recurrenceRule,
+    status: "pending",
   };
 }
 
-function pendingReminderCreateStorageKey(input: ReminderTurnContext): string {
-  const threadKey = normalizePendingReminderThreadId(input.threadId) || "__global__";
-  return `agent-chat:pending:core.reminders.create:${encodeURIComponent(input.userId)}:${encodeURIComponent(threadKey)}`;
-}
+export async function updateAgentReminder(
+  env: ReminderEnv,
+  userId: string,
+  reminderId: string,
+  input: AgentReminderInput,
+): Promise<AgentReminder | { error: string; status?: 400 | 404 }> {
+  const parsed = parseAgentReminderInput(input);
+  if ("error" in parsed) return { ...parsed, status: 400 };
 
-function normalizePendingReminderCreate(value: unknown): PendingReminderCreate | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Partial<PendingReminderCreate>;
-  if (candidate.capabilityId !== "core.reminders.create") return null;
-  if (
-    candidate.status !== "active" &&
-    candidate.status !== "resolved" &&
-    candidate.status !== "expired"
-  ) {
-    return null;
+  const result = await env.DB.prepare(
+    `UPDATE user_reminders
+     SET title = ?, notes = ?, remind_at = ?, timezone = ?, recurrence_rule = ?,
+         error_message = NULL, updated_at = datetime('now')
+     WHERE id = ? AND user_id = ? AND status IN ('pending', 'failed')`,
+  )
+    .bind(
+      parsed.title,
+      parsed.notes,
+      parsed.remindAt,
+      parsed.timezone,
+      parsed.recurrenceRule,
+      reminderId,
+      userId,
+    )
+    .run();
+
+  if ((result.meta?.changes || 0) === 0) {
+    return { error: "Reminder not found", status: 404 };
   }
-  if (candidate.status !== "active") return null;
-  if (candidate.missingField !== "when") return null;
-  const title = normalizeNullableText(candidate.title);
-  const timezone = normalizeTimeZone(candidate.timezone) || "UTC";
-  const expiresAt = normalizeNullableText(candidate.expiresAt);
-  const createdAt = normalizeNullableText(candidate.createdAt);
-  if (!title || !expiresAt || !createdAt) return null;
+
   return {
-    capabilityId: "core.reminders.create",
-    status: "active",
-    missingField: "when",
-    threadId: normalizePendingReminderThreadId(candidate.threadId),
-    title,
-    timezone,
-    createdAt,
-    expiresAt,
+    id: reminderId,
+    title: parsed.title,
+    notes: parsed.notes,
+    remindAt: parsed.remindAt,
+    timezone: parsed.timezone,
+    recurrenceRule: parsed.recurrenceRule,
+    status: "pending",
   };
 }
 
-function normalizePendingReminderThreadId(value: unknown): string | null {
-  return normalizeNullableText(value);
+export async function cancelAgentReminder(
+  env: ReminderEnv,
+  userId: string,
+  reminderId: string,
+): Promise<{ ok: true } | { error: string; status: 404 }> {
+  const result = await env.DB.prepare(
+    `UPDATE user_reminders
+     SET status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now')
+     WHERE id = ? AND user_id = ? AND status IN ('pending', 'failed')`,
+  )
+    .bind(reminderId, userId)
+    .run();
+
+  if ((result.meta?.changes || 0) === 0) {
+    return { error: "Reminder not found", status: 404 };
+  }
+  return { ok: true };
 }
 
-function isActivePendingReminderCreate(pending: PendingReminderCreate): boolean {
-  const expiresAtMs = Date.parse(pending.expiresAt);
-  return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
-}
-
-function dateTimePartsForInstant(date: Date, timezone: string): { date: string; time: string } {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+export function serializeAgentReminder(reminder: DbReminderRow): AgentReminder {
   return {
-    date: `${value("year")}-${value("month")}-${value("day")}`,
-    time: `${value("hour")}:${value("minute")}`,
+    id: reminder.id,
+    title: reminder.title,
+    notes: reminder.notes,
+    remindAt: reminder.remind_at,
+    timezone: reminder.timezone,
+    recurrenceRule: reminder.recurrence_rule,
+    contextType: reminder.context_type ?? null,
+    contextId: reminder.context_id ?? null,
+    contextLabel: reminder.context_label ?? null,
+    status: reminder.status,
+    deliveredAt: reminder.delivered_at ?? null,
+    dismissedAt: reminder.dismissed_at ?? null,
+    createdAt: reminder.created_at,
   };
 }
 
-function localDateForTimezone(timezone: string | null): string {
-  const normalizedTimezone = normalizeTimeZone(timezone) || "UTC";
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: normalizedTimezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date());
-    const year = parts.find((part) => part.type === "year")?.value;
-    const month = parts.find((part) => part.type === "month")?.value;
-    const day = parts.find((part) => part.type === "day")?.value;
-    if (year && month && day) return `${year}-${month}-${day}`;
-  } catch {
-    // Fall back to UTC if the stored timezone is invalid in this runtime.
-  }
-  return new Date().toISOString().slice(0, 10);
+async function getAgentReminderByDispatchId(
+  env: ReminderEnv,
+  userId: string,
+  sourceDispatchId: string,
+): Promise<DbReminderRow | null> {
+  return env.DB.prepare(
+    `SELECT id, title, notes, remind_at, timezone, recurrence_rule, context_type,
+            context_id, context_label, status, delivered_at, dismissed_at, created_at
+     FROM user_reminders
+     WHERE user_id = ? AND source_dispatch_id = ?
+     LIMIT 1`,
+  )
+    .bind(userId, sourceDispatchId)
+    .first<DbReminderRow>();
 }
 
-function addDaysToDate(dateKey: string, days: number): string {
-  const date = new Date(`${dateKey}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
+function parseReminderRecurrenceRule(recurrence: unknown, date: string): string | null {
+  return normalizeEventRecurrenceRule(recurrence, "event", date);
+}
+
+function hasExplicitReminderRecurrence(recurrence: unknown): boolean {
+  if (recurrence == null) return false;
+  if (typeof recurrence !== "string") return true;
+  const normalized = recurrence.trim().toLowerCase();
+  return normalized !== "" && normalized !== "none";
 }
 
 function normalizeNullableText(value: unknown): string | null {

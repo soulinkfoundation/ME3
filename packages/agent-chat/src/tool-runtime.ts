@@ -320,10 +320,16 @@ export function fromWorkersAiToolResponse(
   const error = providerError(root, "Workers AI");
   if (error) throw new Error(error);
   const result = asRecord(root.result) || root;
-  const rawCalls = Array.isArray(result.tool_calls) ? result.tool_calls : [];
+  const choices = Array.isArray(result.choices) ? result.choices : [];
+  const message = asRecord(asRecord(choices[0])?.message);
+  const rawCalls = Array.isArray(result.tool_calls)
+    ? result.tool_calls
+    : Array.isArray(message?.tool_calls)
+      ? message.tool_calls
+      : [];
 
   return {
-    text: extractText(result.response),
+    text: extractText(result.response) || extractText(message?.content),
     toolCalls: rawCalls.map((value, index) =>
       parseWorkersAiToolCall(value, index),
     ),

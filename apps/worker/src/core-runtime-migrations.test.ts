@@ -22,6 +22,13 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("agent_turn_results")).toBe(true);
     expect(db.tables.has("agent_tool_executions")).toBe(true);
     expect(db.columns.get("financial_entries")?.has("project_id")).toBe(true);
+    expect(db.columns.get("social_packages")?.has("source_type")).toBe(true);
+    expect(db.columns.get("social_packages")?.has("source_ref")).toBe(true);
+    expect(db.columns.get("social_packages")?.has("source_snapshot")).toBe(true);
+    expect(db.columns.get("social_packages")?.has("idea_text")).toBe(true);
+    expect(db.columns.get("social_variants")?.has("target_account_id")).toBe(true);
+    expect(db.columns.get("social_variants")?.has("approved_at")).toBe(true);
+    expect(db.columns.get("social_variants")?.has("approved_by_user_id")).toBe(true);
     expect(db.migrations.get("0002_mission_task_pins")).toBe(
       "2026-06-24-mission-task-pins-v1",
     );
@@ -36,6 +43,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0015_agent_runtime_idempotency")).toBe(
       "2026-07-09-agent-runtime-idempotency-v2",
+    );
+    expect(db.migrations.get("0016_social_content_packages")).toBe(
+      "2026-07-10-social-content-packages-v1",
     );
   });
 
@@ -99,6 +109,8 @@ class RuntimeMigrationDb {
     "mailbox_messages",
     "owner_profile",
     "mission_projects",
+    "social_packages",
+    "social_variants",
   ]);
   readonly columns = new Map<string, Set<string>>([
     ["commerce_settings", new Set(["user_id", "encrypted_stripe_secret_key"])],
@@ -116,6 +128,33 @@ class RuntimeMigrationDb {
     ],
     ["mission_tasks", new Set(["id", "user_id", "title", "status", "priority"])],
     ["mailbox_messages", new Set(["id", "mailbox_id", "message_kind"])],
+    [
+      "social_packages",
+      new Set([
+        "id",
+        "site_id",
+        "post_slug",
+        "post_title_snapshot",
+        "source_hash",
+        "goal",
+        "status",
+        "created_by",
+        "created_at",
+        "updated_at",
+      ]),
+    ],
+    [
+      "social_variants",
+      new Set([
+        "id",
+        "package_id",
+        "platform",
+        "format",
+        "body_text",
+        "approval_status",
+        "scheduled_for",
+      ]),
+    ],
   ]);
   readonly migrations = new Map<string, string>();
   readonly statements: string[] = [];
@@ -232,6 +271,20 @@ class RuntimeMigrationStatement {
         throw new Error("duplicate column name: agent_idempotency_key");
       }
       columns?.add("agent_idempotency_key");
+      return { success: true };
+    }
+    if (
+      this.sql.includes("ALTER TABLE social_packages") ||
+      this.sql.includes("ALTER TABLE social_variants")
+    ) {
+      const match = this.sql.match(/ALTER TABLE (\w+) ADD COLUMN (\w+)/);
+      if (!match) throw new Error("invalid social alter statement");
+      const [, tableName, columnName] = match;
+      const columns = this.db.columns.get(tableName || "");
+      if (columns?.has(columnName || "")) {
+        throw new Error(`duplicate column name: ${columnName}`);
+      }
+      columns?.add(columnName || "");
       return { success: true };
     }
     if (this.sql.includes("INSERT INTO core_runtime_migrations")) {

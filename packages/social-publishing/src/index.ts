@@ -1,5 +1,22 @@
 import { adapterFor } from "./adapters";
 
+export {
+  SOCIAL_CONTENT_SOURCE_TYPES,
+  SocialContentPackageInputError,
+  createSocialContentPackage,
+  getSocialContentPackage,
+  updateSocialAccountVariant,
+  type CreateSocialContentPackageInput,
+  type SocialAccountVariant,
+  type SocialContentApprovalStatus,
+  type SocialContentPackage,
+  type SocialContentPackageDetail,
+  type SocialContentPackageEnv,
+  type SocialContentSourceType,
+  type SocialContentVariantFormat,
+  type UpdateSocialAccountVariantInput,
+} from "./content-packages";
+
 export const SOCIAL_PUBLISHING_PLUGIN_ID = "me3.social-publishing";
 export const SOCIAL_PUBLISH_QUEUE_NAME = "me3-social-publish";
 export const SOCIAL_PUBLISH_QUEUE_BINDING = "SOCIAL_PUBLISH_QUEUE";

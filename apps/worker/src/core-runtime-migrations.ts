@@ -52,6 +52,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-09-agent-runtime-idempotency-v2",
     apply: applyAgentRuntimeIdempotencyMigration,
   },
+  {
+    id: "0016_social_content_packages",
+    checksum: "2026-07-10-social-content-packages-v1",
+    apply: applySocialContentPackagesMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -466,6 +471,58 @@ async function applyAgentRuntimeIdempotencyMigration(
     .run();
 }
 
+async function applySocialContentPackagesMigration(db: D1Database): Promise<void> {
+  await addColumnIfMissing(
+    db,
+    "social_packages",
+    "source_type",
+    "TEXT NOT NULL DEFAULT 'site'",
+  );
+  await addColumnIfMissing(db, "social_packages", "source_ref", "TEXT");
+  await addColumnIfMissing(
+    db,
+    "social_packages",
+    "source_snapshot",
+    "TEXT NOT NULL DEFAULT ''",
+  );
+  await addColumnIfMissing(
+    db,
+    "social_packages",
+    "idea_text",
+    "TEXT NOT NULL DEFAULT ''",
+  );
+  await addColumnIfMissing(db, "social_variants", "target_account_id", "TEXT");
+  await addColumnIfMissing(db, "social_variants", "approved_at", "TEXT");
+  await addColumnIfMissing(db, "social_variants", "approved_by_user_id", "TEXT");
+
+  await db
+    .prepare(
+      `UPDATE social_packages
+       SET source_ref = COALESCE(source_ref, 'post:' || post_slug),
+           source_snapshot = CASE
+             WHEN source_snapshot = '' THEN post_title_snapshot
+             ELSE source_snapshot
+           END,
+           idea_text = CASE
+             WHEN idea_text = '' THEN post_title_snapshot
+             ELSE idea_text
+           END`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_social_packages_source
+       ON social_packages(site_id, source_type, source_ref)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_social_variants_target_account
+       ON social_variants(target_account_id, approval_status, scheduled_for)`,
+    )
+    .run();
+}
+
 async function tableExists(db: D1Database, tableName: string): Promise<boolean> {
   const row = await db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
@@ -481,4 +538,23 @@ async function columnExists(
 ): Promise<boolean> {
   const result = await db.prepare(`PRAGMA table_info(${tableName})`).all<SqliteNameRow>();
   return (result.results || []).some((row) => row.name === columnName);
+}
+
+async function addColumnIfMissing(
+  db: D1Database,
+  tableName: string,
+  columnName: string,
+  declaration: string,
+): Promise<void> {
+  if (!(await tableExists(db, tableName))) {
+    throw new Error(`Cannot add ${tableName}.${columnName}: table is missing`);
+  }
+  if (await columnExists(db, tableName, columnName)) return;
+  try {
+    await db
+      .prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${declaration}`)
+      .run();
+  } catch (error) {
+    if (!(await columnExists(db, tableName, columnName))) throw error;
+  }
 }

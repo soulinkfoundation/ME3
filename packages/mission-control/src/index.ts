@@ -122,3 +122,17 @@ export function slugifyMissionProjectName(value: string): string {
     .replace(/^-+|-+$/g, "");
   return slug || "project";
 }
+
+export {
+  archiveAgentMissionTask,
+  createAgentMissionTask,
+  getAgentMissionTask,
+  listAgentMissionProjects,
+  listAgentMissionTasks,
+  updateAgentMissionTask,
+  type AgentMissionProject,
+  type AgentMissionTask,
+  type AgentMissionTaskError,
+  type CreateAgentMissionTaskInput,
+  type UpdateAgentMissionTaskInput,
+} from "./agent-tasks";

@@ -429,6 +429,8 @@ function createEnv(): Env & {
         "mission_tasks",
         "commerce_settings",
         "financial_entries",
+        "social_packages",
+        "social_variants",
       ]);
       return {
         async run() {

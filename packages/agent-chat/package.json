@@ -13,6 +13,7 @@
   "dependencies": {
     "@me3/knowledge": "workspace:*",
     "@me3-core/plugin-calendar": "workspace:*",
+    "@me3-core/plugin-mission-control": "workspace:*",
     "@me3-core/plugin-social-publishing": "workspace:*"
   },
   "devDependencies": {

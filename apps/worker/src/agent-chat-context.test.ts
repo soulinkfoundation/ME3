@@ -32,6 +32,7 @@ type FakeDbState = {
   assistantAttachments: Array<Record<string, unknown>>;
   assistantMessageAssets: Array<Record<string, unknown>>;
   aiUsageEvents: Array<Record<string, unknown>>;
+  agentToolExecutions: Array<Record<string, unknown>>;
   persistedMessages: Array<{
     id: string;
     ownerId: string;
@@ -137,6 +138,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     assistantAttachments: [],
     assistantMessageAssets: [],
     aiUsageEvents: [],
+    agentToolExecutions: [],
     persistedMessages: [],
     ...state,
   };
@@ -236,10 +238,49 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             ) || null) as T;
           }
           if (sql.includes("FROM user_reminders")) {
+            if (sql.includes("WHERE id = ? AND user_id = ?")) {
+              return (dbState.reminders.find(
+                (reminder) =>
+                  reminder.id === values[0] &&
+                  reminder.user_id === values[1] &&
+                  (reminder.status === "pending" || reminder.status === "failed"),
+              ) || null) as T;
+            }
             return (dbState.reminders.find(
               (reminder) =>
                 reminder.user_id === values[0] &&
                 reminder.source_dispatch_id === values[1],
+            ) || null) as T;
+          }
+          if (sql.includes("FROM mission_tasks t")) {
+            const task = sql.includes("t.source_ref = ?")
+              ? dbState.tasks.find(
+                  (item) =>
+                    item.user_id === values[0] &&
+                    item.source_ref === values[1] &&
+                    !item.archived_at,
+                )
+              : dbState.tasks.find(
+                  (item) =>
+                    item.id === values[0] &&
+                    item.user_id === values[1] &&
+                    !item.archived_at,
+                );
+            return (task
+              ? {
+                  ...task,
+                  project_name:
+                    dbState.projects.find((project) => project.id === task.project_id)
+                      ?.name || null,
+                }
+              : null) as T;
+          }
+          if (sql.includes("FROM agent_tool_executions")) {
+            return (dbState.agentToolExecutions.find(
+              (execution) =>
+                execution.user_id === values[0] &&
+                execution.request_id === values[1] &&
+                execution.tool_call_id === values[2],
             ) || null) as T;
           }
           return null;
@@ -370,6 +411,67 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               status: "pending",
               created_at: new Date().toISOString(),
             });
+          }
+          if (sql.includes("INSERT OR IGNORE INTO agent_tool_executions")) {
+            const duplicate = dbState.agentToolExecutions.some(
+              (execution) =>
+                execution.user_id === values[1] &&
+                execution.request_id === values[2] &&
+                execution.tool_call_id === values[3],
+            );
+            if (!duplicate) {
+              dbState.agentToolExecutions.push({
+                id: values[0],
+                user_id: values[1],
+                request_id: values[2],
+                tool_call_id: values[3],
+                tool_name: values[4],
+                status: "running",
+                result_json: null,
+                error_message: null,
+              });
+            }
+          }
+          if (sql.includes("UPDATE agent_tool_executions")) {
+            const execution = dbState.agentToolExecutions.find(
+              (item) => item.id === values[1],
+            );
+            if (execution && sql.includes("status = 'succeeded'")) {
+              execution.status = "succeeded";
+              execution.result_json = values[0];
+              execution.error_message = null;
+            }
+            if (execution && sql.includes("status = 'failed'")) {
+              execution.status = "failed";
+              execution.error_message = values[0];
+            }
+          }
+          if (sql.includes("UPDATE user_reminders") && sql.includes("SET title = ?")) {
+            const reminder = dbState.reminders.find(
+              (item) =>
+                item.id === values[5] &&
+                item.user_id === values[6] &&
+                (item.status === "pending" || item.status === "failed"),
+            );
+            if (reminder) {
+              reminder.title = values[0];
+              reminder.notes = values[1];
+              reminder.remind_at = values[2];
+              reminder.timezone = values[3];
+              reminder.recurrence_rule = values[4];
+              reminder.status = "pending";
+            }
+            return { meta: { changes: reminder ? 1 : 0 } };
+          }
+          if (sql.includes("UPDATE user_reminders") && sql.includes("status = 'cancelled'")) {
+            const reminder = dbState.reminders.find(
+              (item) =>
+                item.id === values[0] &&
+                item.user_id === values[1] &&
+                (item.status === "pending" || item.status === "failed"),
+            );
+            if (reminder) reminder.status = "cancelled";
+            return { meta: { changes: reminder ? 1 : 0 } };
           }
           if (sql.includes("INTO mailbox_messages")) {
             const duplicate = dbState.mailboxMessages.some(
@@ -538,6 +640,11 @@ function dispatchInput(messageText: string) {
     turnId: crypto.randomUUID(),
     messageText,
   };
+}
+
+function workersAiSequence(...responses: unknown[]) {
+  const pending = [...responses];
+  return vi.fn(async () => pending.shift());
 }
 
 describe("Core chat native context", () => {
@@ -1521,7 +1628,15 @@ describe("Core chat native context", () => {
     });
   });
 
-  it("attaches a development trace for native tool turns when enabled", async () => {
+  it("attaches a development trace for Runtime v2 reminder turns", async () => {
+    const aiRun = workersAiSequence(
+      {
+        tool_calls: [
+          { id: "list-1", name: "core_reminders_list", arguments: {} },
+        ],
+      },
+      { response: "You have one reminder: Ship ME3." },
+    );
     const env = createEnv({
       reminders: [
         {
@@ -1541,7 +1656,7 @@ describe("Core chat native context", () => {
     });
 
     const response = await dispatchAgentSandboxTurn(
-      { ...env, ME3_ASSISTANT_DEBUG_TRACE: "true" } as never,
+      { ...env, AI: { run: aiRun }, ME3_ASSISTANT_DEBUG_TRACE: "true" } as never,
       createStorage(),
       dispatchInput("Do I have any pending reminders?"),
     );
@@ -1552,15 +1667,18 @@ describe("Core chat native context", () => {
         capabilityId: "core.reminders.list",
       },
       route: {
-        path: "tool",
+        path: "model",
         capabilityId: "core.reminders.list",
       },
-      selectedModel: null,
+      selectedModel: {
+        providerId: "workers-ai",
+        configured: true,
+      },
       context: {
-        status: "not_attempted",
+        status: "loaded",
       },
       modelCall: {
-        status: "not_attempted",
+        status: "succeeded",
       },
       toolResult: {
         status: "succeeded",
@@ -1601,7 +1719,15 @@ describe("Core chat native context", () => {
     });
   });
 
-  it("still lists reminders for direct reminder list requests", async () => {
+  it("lists reminders through the configured model tool loop", async () => {
+    const aiRun = workersAiSequence(
+      {
+        tool_calls: [
+          { id: "list-1", name: "core_reminders_list", arguments: {} },
+        ],
+      },
+      { response: "You have one reminder: Ship ME3." },
+    );
     const env = createEnv({
       reminders: [
         {
@@ -1621,20 +1747,20 @@ describe("Core chat native context", () => {
     });
 
     const response = await dispatchAgentSandboxTurn(
-      env as never,
+      { ...env, AI: { run: aiRun } } as never,
       createStorage(),
       dispatchInput("Do I have any pending reminders?"),
     );
 
     expect(response).toMatchObject({
-      source: "tool",
+      source: "workers-ai",
       specialist: "core.reminders.list",
       reminderAction: { kind: "listed" },
     });
     expect(response.replyText).toContain("Ship ME3");
   });
 
-  it("creates reminders directly from sandbox chat", async () => {
+  it("does not route reminder writes through the removed regex fallback", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
     const env = createEnv();
@@ -1646,7 +1772,63 @@ describe("Core chat native context", () => {
     );
 
     expect(response).toMatchObject({
-      source: "tool",
+      source: "fallback",
+      specialist: "core.agent-chat",
+      fallbackReason: "AI provider setup required",
+      reminderAction: null,
+    });
+    expect(env.state.reminders).toHaveLength(0);
+  });
+
+  it("does not route Mission task writes through the removed regex fallback", async () => {
+    const env = createEnv({
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      env as never,
+      createStorage(),
+      dispatchInput("Add Follow up with Sam to the ME3 Launch project"),
+    );
+
+    expect(response).toMatchObject({
+      source: "fallback",
+      specialist: "core.agent-chat",
+      fallbackReason: "AI provider setup required",
+      actionCards: null,
+    });
+    expect(env.state.tasks).toHaveLength(0);
+  });
+
+  it("creates reminders through the configured model tool loop", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
+    const aiRun = workersAiSequence(
+      {
+        tool_calls: [
+          {
+            id: "create-1",
+            name: "core_reminders_create",
+            arguments: {
+              title: "follow up with Sam",
+              remindAt: "2026-06-01T09:00:00+01:00",
+              timezone: "Europe/Dublin",
+            },
+          },
+        ],
+      },
+      { response: "Done. I set a reminder to follow up with Sam." },
+    );
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun } } as never,
+      createStorage(),
+      dispatchInput("Remind me to follow up with Sam tomorrow at 9am"),
+    );
+
+    expect(response).toMatchObject({
+      source: "workers-ai",
       specialist: "core.reminders.create",
       reminderAction: {
         kind: "created",
@@ -1693,69 +1875,161 @@ describe("Core chat native context", () => {
     });
   });
 
-  it("does not duplicate a reminder when its write result is lost and retried", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
-    const env = createEnv();
-    const input = {
-      ...dispatchInput("Remind me to follow up with Sam tomorrow at 9am"),
-      requestId: "retry-reminder",
-    };
-
-    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
-    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
-
-    expect(env.state.reminders).toHaveLength(1);
-    expect(env.state.reminders[0]?.source_dispatch_id).toBe("retry-reminder");
-  });
-
-  it("does not duplicate a Mission task when its write result is lost and retried", async () => {
+  it("creates Mission Control tasks through the shared configured model loop", async () => {
+    const aiRun = workersAiSequence(
+      {
+        tool_calls: [
+          { id: "task-list-1", name: "core_mission_task_list", arguments: {} },
+        ],
+      },
+      {
+        tool_calls: [
+          {
+            id: "task-create-1",
+            name: "core_mission_task_create",
+            arguments: {
+              title: "Follow up with Sam",
+              projectId: "project-launch",
+              dueAt: "2026-07-15",
+            },
+          },
+        ],
+      },
+      { response: "Added Follow up with Sam to ME3 Launch." },
+    );
     const env = createEnv({
       projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
     });
-    const input = {
-      ...dispatchInput("Add a task to project ME3 Launch to follow up with Sam tomorrow"),
-      requestId: "retry-task",
-    };
 
-    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
-    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun }, ME3_ASSISTANT_DEBUG_TRACE: "true" } as never,
+      createStorage(),
+      dispatchInput("Add Follow up with Sam to the ME3 Launch project by 15 July"),
+    );
 
+    expect(response).toMatchObject({
+      source: "workers-ai",
+      specialist: "core.mission.task.create",
+      actionCards: [
+        expect.objectContaining({
+          kind: "mission.task_created",
+          summary: "Follow up with Sam",
+        }),
+      ],
+      trace: {
+        route: { path: "model", capabilityId: "core.mission.task.create" },
+        modelCall: { status: "succeeded" },
+        toolResult: {
+          status: "succeeded",
+          specialist: "core.mission.task.create",
+        },
+      },
+    });
     expect(env.state.tasks).toHaveLength(1);
-    expect(env.state.tasks[0]?.source_ref).toBe("retry-task");
+    expect(env.state.tasks[0]).toMatchObject({
+      title: "Follow up with Sam",
+      project_id: "project-launch",
+      due_at: "2026-07-15",
+    });
   });
 
-  it("does not duplicate a mailbox draft when its write result is lost and retried", async () => {
+  it("saves structured mailbox drafts through the shared model loop", async () => {
+    const body = "Hi Ada,\n\nThe launch checklist is ready.\n\nBest,\nKieran";
+    const aiRun = workersAiSequence(
+      {
+        tool_calls: [
+          {
+            id: "draft-1",
+            name: "core_mailbox_draft",
+            arguments: {
+              to: "ada@example.com",
+              subject: "Launch checklist",
+              body,
+            },
+          },
+        ],
+      },
+      { response: "I saved the draft for review. It has not been sent." },
+    );
     const env = createEnv({
-      recentMessages: [
-        {
-          role: "assistant",
-          content: "Subject: Hello\n\nHi Ada,\n\nA quick update.\n\nThanks,\nKieran",
-        },
-      ],
       mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
     });
-    const input = {
-      ...dispatchInput("Save that draft to ada@example.com"),
-      requestId: "retry-draft",
-    };
 
-    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
-    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
-
-    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(1);
-    expect(env.state.mailboxMessages[0]?.agent_idempotency_key).toBe(
-      "retry-draft",
+    const response = await dispatchAgentSandboxTurn(
+      { ...env, AI: { run: aiRun }, ME3_ASSISTANT_DEBUG_TRACE: "true" } as never,
+      createStorage(),
+      dispatchInput("Draft an email to Ada saying the launch checklist is ready"),
     );
+
+    expect(response).toMatchObject({
+      source: "workers-ai",
+      specialist: "core.mailbox.draft",
+      emailAction: { kind: "drafted" },
+      actionCards: [
+        expect.objectContaining({
+          kind: "mailbox.draft_saved",
+          status: "pending_approval",
+        }),
+      ],
+      trace: {
+        route: { path: "model", capabilityId: "core.mailbox.draft" },
+        toolResult: { status: "succeeded", specialist: "core.mailbox.draft" },
+      },
+    });
+    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(1);
+    expect(env.state.mailboxMessages[0]).toMatchObject({
+      to_address: "ada@example.com",
+      subject: "Launch checklist",
+      text_body: body,
+      status: "pending_approval",
+      created_by: "agent",
+    });
+    expect(response.replyText).toContain("not been sent");
   });
 
-  it("creates a pending reminder when the owner follows up with the missing time", async () => {
+  it("does not create mailbox drafts without a configured model", async () => {
+    const env = createEnv({
+      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
+    });
+    const response = await dispatchAgentSandboxTurn(
+      env as never,
+      createStorage(),
+      dispatchInput("Save an email draft to ada@example.com"),
+    );
+
+    expect(response).toMatchObject({
+      source: "fallback",
+      fallbackReason: "AI provider setup required",
+      emailAction: null,
+    });
+    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(0);
+  });
+
+  it("clarifies an incomplete reminder and creates it from the follow-up", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-05T12:00:00Z"));
 
-    const aiRun = vi.fn(async () => ({
-      response: "The model should not handle reminder continuations.",
-    }));
+    const aiRun = vi.fn(async () => {
+      if (aiRun.mock.calls.length === 1) {
+        return { response: "What date and time should I remind you?" };
+      }
+      if (aiRun.mock.calls.length === 2) {
+        return {
+          tool_calls: [
+            {
+              id: "reminder-create-1",
+              name: "core_reminders_create",
+              arguments: {
+                title: "tell erum about soulink",
+                remindAt: "2026-07-06T09:00:00+01:00",
+                timezone: "Europe/Dublin",
+              },
+            },
+          ],
+        };
+      }
+      return { response: "Done. I set that reminder for tomorrow at 9:00." };
+    });
     const env = createEnv();
     const storage = createStorage();
     const runtimeEnv = {
@@ -1771,12 +2045,12 @@ describe("Core chat native context", () => {
     );
 
     expect(clarify).toMatchObject({
-      source: "tool",
-      specialist: "core.reminders.create",
-      fallbackReason: "Reminder details required",
+      source: "workers-ai",
+      specialist: "core.agent-chat",
+      fallbackReason: null,
       reminderAction: null,
     });
-    expect(clarify.replyText).toContain("Please include a date");
+    expect(clarify.replyText).toContain("What date and time");
     expect(env.state.reminders).toHaveLength(0);
 
     const created = await dispatchAgentSandboxTurn(
@@ -1786,11 +2060,18 @@ describe("Core chat native context", () => {
     );
 
     expect(created).toMatchObject({
-      source: "tool",
+      source: "workers-ai",
       specialist: "core.reminders.create",
       reminderAction: {
         kind: "created",
         title: "tell erum about soulink",
+      },
+    });
+    expect(created.trace).toMatchObject({
+      modelCall: { status: "succeeded", providerId: "workers-ai" },
+      toolResult: {
+        status: "succeeded",
+        specialist: "core.reminders.create",
       },
     });
     expect(env.state.reminders).toHaveLength(1);
@@ -1799,7 +2080,7 @@ describe("Core chat native context", () => {
       remind_at: "2026-07-06T08:00:00.000Z",
       timezone: "Europe/Dublin",
     });
-    expect(aiRun).not.toHaveBeenCalled();
+    expect(aiRun).toHaveBeenCalledTimes(3);
   });
 
   it("answers upcoming booking questions through the tool layer", async () => {
@@ -2030,51 +2311,6 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
-    name: "direct reminder create runs the reminder tool",
-    messageText: "Remind me tomorrow at 9 to follow up with Sam",
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "write_action",
-      capabilityId: "core.reminders.create",
-      specialist: "core.reminders.create",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["Done. I set a reminder", "follow up with Sam"],
-      contextSummary: "absent",
-      reminderActionKind: "created",
-      emailActionKind: null,
-      reminderDelta: 1,
-      mailboxDraftDelta: 0,
-      aiCalled: false,
-    },
-  },
-  {
-    name: "direct reminder list runs the reminder lookup tool",
-    messageText: "Do I have any pending reminders?",
-    envState: {
-      reminders: [
-        reminderRow("reminder-existing", "Ship ME3", "2026-06-07T09:00:00.000Z"),
-      ],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "read_action",
-      capabilityId: "core.reminders.list",
-      specialist: "core.reminders.list",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["Ship ME3"],
-      contextSummary: "absent",
-      reminderActionKind: "listed",
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      aiCalled: false,
-    },
-  },
-  {
     name: "calendar exploration with reminders mentioned does not list reminders",
     messageText:
       "I want to explore calendar events, reminders, and availability, but don't create or list anything yet.",
@@ -2135,137 +2371,6 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       reminderDelta: 0,
       mailboxDraftDelta: 0,
       aiCalled: true,
-    },
-  },
-  {
-    name: "direct Mission Control task create adds a project task",
-    messageText:
-      "Add a task to project ME3 Launch to follow up with Sam tomorrow with notes Use the partner brief before drafting.",
-    envState: {
-      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "write_action",
-      capabilityId: "core.mission.task.create",
-      specialist: "core.mission.task.create",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["added", "follow up with Sam", "ME3 Launch"],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      missionTaskDelta: 1,
-      missionTaskDescription: "Use the partner brief before drafting",
-      aiCalled: false,
-    },
-  },
-  {
-    name: "direct Mission Control task list reads filtered project tasks",
-    messageText: "Show in progress tasks for project ME3 Launch.",
-    envState: {
-      projects: [
-        projectRow("project-me3", "ME3", "me3"),
-        projectRow("project-launch", "ME3 Launch", "me3-launch"),
-      ],
-      tasks: [
-        taskRow("task-launch", "Prepare launch checklist", "project-launch"),
-        {
-          ...taskRow("task-backlog", "Review pricing copy", "project-launch"),
-          status: "backlog",
-          column_id: "project-launch:backlog",
-        },
-      ],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "read_action",
-      capabilityId: "core.mission.task.list",
-      specialist: "core.mission.task.list",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["Prepare launch checklist", "ME3 Launch", "Doing"],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      missionTaskDelta: 0,
-      aiCalled: false,
-    },
-  },
-  {
-    name: "natural project phrase resolves to saved Mission Control project",
-    messageText: "Can you read my tasks in the writing project?",
-    envState: {
-      projects: [projectRow("project-writing", "Writing", "writing")],
-      tasks: [
-        {
-          ...taskRow("task-writing", "Draft article outline", "project-writing"),
-          description: "Frame the article around agent context, audience, and next actions.",
-        },
-      ],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "read_action",
-      capabilityId: "core.mission.task.list",
-      specialist: "core.mission.task.list",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: [
-        "Draft article outline",
-        "Writing",
-        "Frame the article around agent context, audience, and next actions.",
-      ],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      missionTaskDelta: 0,
-      aiCalled: false,
-    },
-  },
-  {
-    name: "direct Mission Control task read includes full task description",
-    messageText: "Read the full details for task Draft article outline.",
-    envState: {
-      projects: [projectRow("project-writing", "Writing", "writing")],
-      tasks: [
-        {
-          ...taskRow("task-writing", "Draft article outline", "project-writing"),
-          description:
-            "Frame the article around agent context, audience, and next actions. Include the specific Mission Control prompts that failed.",
-        },
-      ],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "read_action",
-      capabilityId: "core.mission.task.read",
-      specialist: "core.mission.task.read",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: [
-        "Task: Draft article outline",
-        "Project: Writing",
-        "Description:",
-        "Include the specific Mission Control prompts that failed.",
-      ],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      missionTaskDelta: 0,
-      aiCalled: false,
     },
   },
   {
@@ -2357,51 +2462,6 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
-    name: "week review lists open tasks across projects and completed tasks separately",
-    messageText: "Review my week",
-    envState: {
-      projects: [
-        projectRow("project-launch", "ME3 Launch", "me3-launch"),
-        projectRow("project-sales", "Sales Site", "sales-site"),
-      ],
-      tasks: [
-        taskRow("task-launch", "Prepare launch checklist", "project-launch"),
-        {
-          ...taskRow("task-sales", "Follow up sales page", "project-sales"),
-          status: "backlog",
-          column_id: "project-sales:backlog",
-        },
-        {
-          ...taskRow("task-done", "Publish launch note", "project-launch"),
-          status: "done",
-          column_id: "project-launch:done",
-        },
-      ],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "read_action",
-      capabilityId: "core.mission.task.list",
-      specialist: "core.mission.task.list",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: [
-        "Open tasks:",
-        "Prepare launch checklist (ME3 Launch, Doing",
-        "Follow up sales page (Sales Site, Backlog",
-        "Completed tasks:\n1. Publish launch note",
-      ],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      missionTaskDelta: 0,
-      aiCalled: false,
-    },
-  },
-  {
     name: "Mission Control task prioritisation stays model-first with context",
     messageText: "Help me prioritise my Mission Control tasks based on my goals.",
     aiReply:
@@ -2431,90 +2491,6 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
       mailboxDraftDelta: 0,
       missionTaskDelta: 0,
       aiCalled: true,
-    },
-  },
-  {
-    name: "direct Mission Control task update moves an existing task",
-    messageText: "Mark task Prepare launch checklist as done.",
-    envState: {
-      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
-      tasks: [taskRow("task-launch", "Prepare launch checklist", "project-launch")],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "write_action",
-      capabilityId: "core.mission.task.update",
-      specialist: "core.mission.task.update",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["updated", "Prepare launch checklist"],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      missionTaskDelta: 0,
-      missionTaskStatus: "done",
-      aiCalled: false,
-    },
-  },
-  {
-    name: "direct Mission Control task update replaces task description",
-    messageText:
-      "Update task Prepare launch checklist notes to Use the final launch criteria and add rollout risks.",
-    envState: {
-      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
-      tasks: [
-        {
-          ...taskRow("task-launch", "Prepare launch checklist", "project-launch"),
-          description: "Old launch notes.",
-        },
-      ],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "write_action",
-      capabilityId: "core.mission.task.update",
-      specialist: "core.mission.task.update",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["updated", "Prepare launch checklist"],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      missionTaskDelta: 0,
-      missionTaskDescription: "Use the final launch criteria and add rollout risks",
-      aiCalled: false,
-    },
-  },
-  {
-    name: "direct Mission Control task delete archives an existing task",
-    messageText: "Delete task Prepare launch checklist.",
-    envState: {
-      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
-      tasks: [taskRow("task-launch", "Prepare launch checklist", "project-launch")],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "write_action",
-      capabilityId: "core.mission.task.archive",
-      specialist: "core.mission.task.archive",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["archived", "Prepare launch checklist"],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      missionTaskDelta: 0,
-      missionTaskArchived: true,
-      aiCalled: false,
     },
   },
   {
@@ -2881,57 +2857,6 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
   {
-    name: "save latest email draft follow-up creates a mailbox draft only",
-    messageText: "Save that draft to ada@example.com",
-    envState: {
-      recentMessages: [
-        {
-          role: "assistant",
-          content:
-            "Subject: Workflow notes\n\nHi Ada,\n\nHere is a concise update on the workflow notes.\n\nThanks,\nKieran",
-        },
-      ],
-      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
-    },
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "write_action",
-      capabilityId: "core.mailbox.draft",
-      specialist: "core.mailbox.draft",
-      toolResultStatus: "succeeded",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["saved that email as a draft", "It has not been sent"],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: "drafted",
-      reminderDelta: 0,
-      mailboxDraftDelta: 1,
-      aiCalled: false,
-    },
-  },
-  {
-    name: "ambiguous reminder create asks for details without creating one",
-    messageText: "Remind me to follow up with Sam",
-    expected: {
-      source: "tool",
-      routePath: "tool",
-      plannerKind: "clarify",
-      capabilityId: "core.reminders.create",
-      specialist: "core.reminders.create",
-      toolResultStatus: "clarified",
-      modelCallStatus: "not_attempted",
-      replyIncludes: ["Please include a date"],
-      contextSummary: "absent",
-      reminderActionKind: null,
-      emailActionKind: null,
-      reminderDelta: 0,
-      mailboxDraftDelta: 0,
-      aiCalled: false,
-      fallbackReason: "Reminder details required",
-    },
-  },
-  {
     name: "missing AI provider falls back without claiming action",
     messageText: "Hello, are you working?",
     expected: {
@@ -2952,262 +2877,6 @@ const launchGoldenTranscriptScenarios: GoldenTranscriptScenario[] = [
     },
   },
 ];
-
-describe("Core chat mailbox draft continuations", () => {
-  it("creates weekday reminders without asking for an exact date", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-24T12:00:00Z"));
-
-    const env = createEnv();
-    const response = await dispatchAgentSandboxTurn(
-      {
-        ...env,
-        ME3_ASSISTANT_DEBUG_TRACE: "true",
-      } as never,
-      createStorage(),
-      dispatchInput("Add reminder to get woodchips and tidy up garden saturday 8am"),
-    );
-
-    expect(response).toMatchObject({
-      source: "tool",
-      specialist: "core.reminders.create",
-      reminderAction: { kind: "created" },
-    });
-    expect(env.state.reminders).toHaveLength(1);
-    expect(env.state.reminders[0]).toMatchObject({
-      title: "get woodchips and tidy up garden",
-      remind_at: "2026-06-27T07:00:00.000Z",
-      timezone: "Europe/Dublin",
-    });
-  });
-
-  it("resolves quoted draft recipients from saved contacts", async () => {
-    const env = createEnv({
-      recentMessages: [
-        {
-          role: "assistant",
-          content:
-            "Subject: Launch notes\n\nHi Jim,\n\nHere are the launch notes we discussed.\n\nThanks,\nKieran",
-        },
-      ],
-      contacts: [contactRow("contact-jim", "Jim", "jim@example.com", "contact")],
-      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
-    });
-
-    const saved = await dispatchAgentSandboxTurn(
-      {
-        ...env,
-        ME3_ASSISTANT_DEBUG_TRACE: "true",
-      } as never,
-      createStorage(),
-      dispatchInput("Save that draft to 'Jim'"),
-    );
-
-    expect(saved).toMatchObject({
-      source: "tool",
-      specialist: "core.mailbox.draft",
-      emailAction: { kind: "drafted" },
-    });
-    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(1);
-    expect(env.state.mailboxMessages[0]).toMatchObject({
-      to_address: "jim@example.com",
-      subject: "Launch notes",
-      created_by: "agent",
-    });
-  });
-
-  it("saves only the email body from assistant-wrapped drafts", async () => {
-    const env = createEnv({
-      recentMessages: [
-        {
-          role: "assistant",
-          content:
-            "I can draft it, but I can't confirm it's sent from here unless the mailbox tool returns a send result. Outbound email should go through approval first.\n\n" +
-            "Here's the draft:\n\n" +
-            "**To:** kieranbutler22@gmail.com\n" +
-            "**Subject:** Getting ready for your ME3 setup call\n\n" +
-            "Yesss {{ guestName }}!\n\n" +
-            "I'm excited to help you set up your ME3 installation - your personal OS + AI assistant for thriving in the age of AI.\n\n" +
-            "Before we meet, please have these ready:\n\n" +
-            "- Free GitHub account: **GitHub.com**\n" +
-            "- Free Cloudflare account: **Cloudflare.com**\n" +
-            "- A domain name from **GoDaddy.com** or another provider\n" +
-            "- Log in at **https://soulinkfoundation.org** by clicking **Join Waitlist**\n\n" +
-            "We'll meet here on {{ bookingTime }}:\n" +
-            "**https://soulinkfoundation.org/calls/@kieran**\n\n" +
-            "Kind regards,\n" +
-            "Kieran\n\n" +
-            "If you want, I can save a draft for you to review and approve before sending.",
-        },
-      ],
-      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
-    });
-
-    const saved = await dispatchAgentSandboxTurn(
-      {
-        ...env,
-        ME3_ASSISTANT_DEBUG_TRACE: "true",
-      } as never,
-      createStorage(),
-      dispatchInput("Save that draft"),
-    );
-
-    expect(saved).toMatchObject({
-      source: "tool",
-      specialist: "core.mailbox.draft",
-      emailAction: { kind: "drafted" },
-    });
-    expect(env.state.mailboxMessages[0]).toMatchObject({
-      to_address: "kieranbutler22@gmail.com",
-      subject: "Getting ready for your ME3 setup call",
-      text_body:
-        "Yesss {{ guestName }}!\n\n" +
-        "I'm excited to help you set up your ME3 installation - your personal OS + AI assistant for thriving in the age of AI.\n\n" +
-        "Before we meet, please have these ready:\n\n" +
-        "- Free GitHub account: GitHub.com\n" +
-        "- Free Cloudflare account: Cloudflare.com\n" +
-        "- A domain name from GoDaddy.com or another provider\n" +
-        "- Log in at https://soulinkfoundation.org by clicking Join Waitlist\n\n" +
-        "We'll meet here on {{ bookingTime }}:\n" +
-        "https://soulinkfoundation.org/calls/@kieran\n\n" +
-        "Kind regards,\n" +
-        "Kieran",
-      created_by: "agent",
-    });
-  });
-
-  it("saves only the email body when the wrapper intro includes extra prose", async () => {
-    const env = createEnv({
-      recentMessages: [
-        {
-          role: "assistant",
-          content:
-            "Here's a draft email for Mary. I've kept it personal and high-level,\n" +
-            "focused on what ME3 actually does.\n\n" +
-            "Hi Mary,\n\n" +
-            "Quick note on what I've been building - ME3 is my personal business AI assistant.\n\n" +
-            "Best,\n" +
-            "Kieran",
-        },
-      ],
-      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
-    });
-
-    const saved = await dispatchAgentSandboxTurn(
-      {
-        ...env,
-        ME3_ASSISTANT_DEBUG_TRACE: "true",
-      } as never,
-      createStorage(),
-      dispatchInput("Save that draft to mary@example.com"),
-    );
-
-    expect(saved).toMatchObject({
-      source: "tool",
-      specialist: "core.mailbox.draft",
-      emailAction: { kind: "drafted" },
-    });
-    expect(env.state.mailboxMessages[0]).toMatchObject({
-      to_address: "mary@example.com",
-      subject: "Draft email",
-      text_body:
-        "Hi Mary,\n\n" +
-        "Quick note on what I've been building - ME3 is my personal business AI assistant.\n\n" +
-        "Best,\n" +
-        "Kieran",
-      created_by: "agent",
-    });
-  });
-
-  it("saves a pending draft when the owner replies with only the missing recipient", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
-
-    const aiRun = vi.fn(async () => ({
-      response: "The model should not handle mailbox draft continuation.",
-    }));
-    const env = createEnv({
-      recentMessages: [
-        {
-          role: "assistant",
-          content:
-            "Subject: Workflow notes\n\nHi Ada,\n\nHere is a concise update on the workflow notes.\n\nThanks,\nKieran",
-        },
-      ],
-      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
-    });
-    const storage = createStorage();
-    const runtimeEnv = {
-      ...env,
-      AI: { run: aiRun },
-      ME3_ASSISTANT_DEBUG_TRACE: "true",
-    };
-
-    const clarify = await dispatchAgentSandboxTurn(
-      runtimeEnv as never,
-      storage,
-      dispatchInput("did you save it?"),
-    );
-
-    expect(clarify).toMatchObject({
-      source: "tool",
-      specialist: "core.mailbox.draft",
-      fallbackReason: "Mailbox draft details required",
-      emailAction: null,
-    });
-    expect(clarify.replyText).toContain("need the recipient email address");
-    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(0);
-
-    const saved = await dispatchAgentSandboxTurn(
-      runtimeEnv as never,
-      storage,
-      dispatchInput("test@samualburns.com"),
-    );
-
-    expect(saved).toMatchObject({
-      source: "tool",
-      specialist: "core.mailbox.draft",
-      fallbackReason: null,
-      emailAction: {
-        kind: "drafted",
-      },
-    });
-    expect(saved.replyText).toContain("saved that email as a draft");
-    expect(aiRun).not.toHaveBeenCalled();
-    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(1);
-    expect(env.state.mailboxMessages[0]).toMatchObject({
-      to_address: "test@samualburns.com",
-      subject: "Workflow notes",
-      text_body: "Hi Ada,\n\nHere is a concise update on the workflow notes.\n\nThanks,\nKieran",
-      created_by: "agent",
-    });
-    expect(saved.actionCards).toEqual([
-      expect.objectContaining({
-        kind: "mailbox.draft_saved",
-        capabilityId: "core.mailbox.draft",
-        title: "Email draft saved",
-        status: "pending_approval",
-        statusLabel: "Needs review",
-        records: [{ kind: "mailbox_draft", id: env.state.mailboxMessages[0].id }],
-        primaryAction: { label: "Review draft", href: "/email" },
-      }),
-    ]);
-    expect(
-      JSON.parse(
-        [...env.state.persistedMessages]
-          .reverse()
-          .find((message) => message.role === "assistant")?.metadata_json || "{}",
-      ),
-    ).toMatchObject({
-      actionCards: [
-        {
-          kind: "mailbox.draft_saved",
-          records: [{ kind: "mailbox_draft", id: env.state.mailboxMessages[0].id }],
-        },
-      ],
-    });
-  });
-});
 
 describe("Core chat golden transcript evals", () => {
   it.each(launchGoldenTranscriptScenarios)("$name", async (scenario) => {

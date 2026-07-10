@@ -287,6 +287,13 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       "social.public-baseline",
       "Social accounts, OAuth state, content bank, packages, variants, publications, and audit tables are included in the initial public schema.",
     ),
+    {
+      id: "social.source-first-packages",
+      path: "./apps/worker/migrations/0016_social_content_packages.sql",
+      destructive: false,
+      description:
+        "Adds source provenance, account targets, and explicit approval metadata to social content packages and variants.",
+    },
   ],
   queuesAndCrons: [...SOCIAL_PUBLISHING_RUNTIME.queuesAndCrons],
   notes: [

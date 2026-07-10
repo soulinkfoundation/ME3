@@ -14,9 +14,6 @@ export type {
 
 export type CoreChatToolPlannerInput = {
   messageText: string;
-  hasRecentAssistantEmailDraft?: boolean;
-  hasPendingMailboxDraftRecipient?: boolean;
-  hasPendingReminderCreate?: boolean;
 };
 
 export type CoreChatToolPlannerDecision = {
@@ -48,39 +45,10 @@ export function planCoreChatToolTurn(
     );
   }
 
-  if (
-    input.hasPendingMailboxDraftRecipient &&
-    isCoreChatMailboxDraftRecipientContinuation(messageText)
-  ) {
+  if (isCoreChatMailboxDraftSaveRequest(messageText)) {
     return capabilityDecision("core.mailbox.draft", {
       kind: "write_action",
-      confidence: 0.94,
-      reason:
-        "The owner supplied the missing recipient for a pending mailbox draft save request.",
-    });
-  }
-
-  if (
-    input.hasPendingReminderCreate &&
-    isCoreChatReminderWhenOnlyContinuation(messageText)
-  ) {
-    return capabilityDecision("core.reminders.create", {
-      kind: "write_action",
-      confidence: 0.93,
-      reason:
-        "The owner supplied the missing reminder timing for a pending reminder create request.",
-    });
-  }
-
-  if (
-    isCoreChatMailboxDraftSaveRequest(
-      messageText,
-      Boolean(input.hasRecentAssistantEmailDraft),
-    )
-  ) {
-    return capabilityDecision("core.mailbox.draft", {
-      kind: "write_action",
-      confidence: input.hasRecentAssistantEmailDraft ? 0.92 : 0.82,
+      confidence: 0.88,
       reason:
         "The owner asked to save a draft email. Saving is local draft state and does not send mail.",
     });
@@ -216,7 +184,6 @@ export function planCoreChatToolTurn(
 
 export function isCoreChatMailboxDraftSaveRequest(
   messageText: string,
-  hasRecentAssistantEmailDraft: boolean,
 ): boolean {
   if (mentionsSiteBlogPostDomain(messageText)) return false;
   const asksToSave =
@@ -226,18 +193,7 @@ export function isCoreChatMailboxDraftSaveRequest(
       messageText,
     );
   if (!asksToSave) return false;
-  if (/\b(draft|mailbox|email|\/email)\b/i.test(messageText)) return true;
-  return hasRecentAssistantEmailDraft;
-}
-
-export function isCoreChatMailboxDraftRecipientContinuation(
-  messageText: string,
-): boolean {
-  const trimmed = messageText.trim();
-  if (!trimmed) return false;
-  if (extractPlannerEmailAddress(trimmed)) return true;
-  return /\b(?:to|use|recipient|address|email)\b/i.test(trimmed) &&
-    trimmed.length <= 180;
+  return /\b(draft|mailbox|email|\/email)\b/i.test(messageText);
 }
 
 export function isCoreChatReminderListRequest(messageText: string): boolean {
@@ -290,12 +246,6 @@ export function isCoreChatReminderCreateRequest(messageText: string): boolean {
   return /\b(remind(?:er)? me|set (?:a )?reminder|create (?:a )?reminder|add (?:a )?reminder|don't let me forget|dont let me forget)\b/i.test(
     messageText,
   );
-}
-
-function isCoreChatReminderWhenOnlyContinuation(messageText: string): boolean {
-  if (isCoreChatReminderCreateRequest(messageText)) return false;
-  if (isCoreChatReminderListRequest(messageText)) return false;
-  return hasReminderWhen(messageText);
 }
 
 export function isCoreChatBookingLookupRequest(messageText: string): boolean {
@@ -533,11 +483,6 @@ function capabilityDecision(
     auditEventKind: capability.auditEventKind,
     reason: input.reason,
   };
-}
-
-function extractPlannerEmailAddress(text: string): string | null {
-  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match?.[0]?.trim().toLowerCase() || null;
 }
 
 function getReminderCreateMissingDetails(messageText: string): string[] {

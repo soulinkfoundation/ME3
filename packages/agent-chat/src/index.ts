@@ -1,13 +1,13 @@
+import { normalizeTimeZone } from "@me3-core/plugin-calendar";
 import {
-  getUtcMsForLocalTime,
-  normalizeTimeZone,
-} from "@me3-core/plugin-calendar";
-import {
-  isCoreChatWeeklyReviewRequest,
   planCoreChatToolTurn,
   type CoreChatCapabilityId,
   type CoreChatToolPlannerDecision,
 } from "./planner";
+import {
+  getCoreChatCapability,
+  isCoreChatCapabilityApprovalRequired,
+} from "./capabilities";
 import {
   buildMe3AgentContextPrompt,
   buildMe3CapabilityContext,
@@ -43,14 +43,44 @@ import {
   type AgentChatImageInput,
   type AgentChatTextMessage,
 } from "./model-runtime";
-import {
-  loadPendingReminderCreate,
-  parseReminderChatRequest,
-  resolvePendingReminderCreate,
-  savePendingReminderCreate,
-  type PendingReminderCreate,
+export {
+  cancelAgentReminder,
+  createAgentReminder,
+  getPendingAgentReminder,
+  listPendingAgentReminders,
+  parseAgentReminderInput,
+  serializeAgentReminder,
+  updateAgentReminder,
+  type AgentReminder,
+  type AgentReminderInput,
+  type AgentReminderParseResult,
 } from "./reminders";
+export {
+  archiveAgentMissionTask,
+  createAgentMissionTask,
+  getAgentMissionTask,
+  listAgentMissionProjects,
+  listAgentMissionTasks,
+  updateAgentMissionTask,
+  type AgentMissionProject,
+  type AgentMissionTask,
+  type AgentMissionTaskError,
+  type CreateAgentMissionTaskInput,
+  type UpdateAgentMissionTaskInput,
+} from "@me3-core/plugin-mission-control";
 import { maybeHandleSiteBlogPostToolTurn } from "./site-blog";
+import { runCoreAgentToolTurn } from "./core-agent-runtime";
+import {
+  listAgentMissionProjects as loadAgentMissionProjects,
+  listAgentMissionTasks as loadAgentMissionTasks,
+  type AgentMissionProject,
+  type AgentMissionTask,
+} from "@me3-core/plugin-mission-control";
+
+export {
+  buildReminderActionCard,
+  runCoreAgentToolTurn,
+} from "./core-agent-runtime";
 import {
   agentTurnResultStorageKey,
   cacheAgentTurnResult,
@@ -62,7 +92,6 @@ import {
 export {
   isCoreChatBookingLookupRequest,
   isCoreChatCapabilityExplorationRequest,
-  isCoreChatMailboxDraftRecipientContinuation,
   isCoreChatMailboxDraftSaveRequest,
   isCoreChatMissionTaskArchiveRequest,
   isCoreChatMissionTaskCreateRequest,
@@ -239,6 +268,8 @@ export type AgentChatActionCard = {
   kind:
     | "mailbox.draft_saved"
     | "reminder.created"
+    | "reminder.updated"
+    | "reminder.cancelled"
     | "mission.task_created"
     | "mission.task_updated"
     | "mission.task_archived";
@@ -394,42 +425,6 @@ export type AgentChatTurnTrace = {
     auditId: string | null;
   };
 };
-
-export type AgentReminderInput = {
-  title?: unknown;
-  notes?: unknown;
-  remindAt?: unknown;
-  date?: unknown;
-  time?: unknown;
-  timezone?: unknown;
-  recurrence?: unknown;
-};
-
-export type AgentReminder = {
-  id: string;
-  title: string;
-  notes: string | null;
-  remindAt: string;
-  timezone: string | null;
-  recurrenceRule: string | null;
-  contextType?: "contact" | "booking" | null;
-  contextId?: string | null;
-  contextLabel?: string | null;
-  status: "pending" | "delivered" | "dismissed" | "cancelled" | "failed";
-  deliveredAt?: string | null;
-  dismissedAt?: string | null;
-  createdAt?: string;
-};
-
-export type AgentReminderParseResult =
-  | {
-      title: string;
-      notes: string | null;
-      remindAt: string;
-      timezone: string;
-      recurrenceRule: string | null;
-    }
-  | { error: string };
 
 export type AgentContactSource =
   | "booking"
@@ -646,20 +641,6 @@ type StorageLike = {
 type CoreChatToolTurnPlan = {
   decision: CoreChatToolPlannerDecision;
   recent: Array<{ role: "user" | "assistant"; content: string }>;
-  pendingMailboxDraftSave: PendingMailboxDraftSave | null;
-  pendingReminderCreate: PendingReminderCreate | null;
-};
-
-type PendingMailboxDraftSave = {
-  capabilityId: "core.mailbox.draft";
-  status: "active" | "resolved" | "expired";
-  missingField: "toAddress";
-  threadId: string | null;
-  draftText: string;
-  subject: string | null;
-  textBody: string;
-  createdAt: string;
-  expiresAt: string;
 };
 
 type OwnerProfileRow = {
@@ -720,22 +701,6 @@ type CoreSetupJobsReadiness = {
   needsSetup: number;
   paused: number;
   draft: number;
-};
-
-type DbReminderRow = {
-  id: string;
-  title: string;
-  notes: string | null;
-  remind_at: string;
-  timezone: string | null;
-  recurrence_rule: string | null;
-  context_type?: "contact" | "booking" | null;
-  context_id?: string | null;
-  context_label?: string | null;
-  status: "pending" | "delivered" | "dismissed" | "cancelled" | "failed";
-  delivered_at?: string | null;
-  dismissed_at?: string | null;
-  created_at?: string;
 };
 
 type DbBookingRow = {
@@ -868,14 +833,6 @@ type DbMissionProjectRow = {
   updated_at: string;
 };
 
-type AgentMissionProject = {
-  id: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  status: string;
-};
-
 type DbMissionTaskRow = {
   id: string;
   project_id: string | null;
@@ -888,18 +845,6 @@ type DbMissionTaskRow = {
   updated_at: string;
 };
 
-type AgentMissionTask = {
-  id: string;
-  title: string;
-  description: string | null;
-  projectId: string;
-  projectName: string;
-  dueAt: string | null;
-  status: string;
-  sourceRef?: string | null;
-};
-
-const AGENT_MISSION_TASK_SINGLE_DESCRIPTION_LIMIT = 4000;
 const AGENT_MISSION_TASK_LIST_DESCRIPTION_LIMIT = 1000;
 
 type AgentPublicBusinessContext = {
@@ -1035,7 +980,6 @@ const OUTREACH_STATUSES = new Set<Exclude<AgentContactOutreachStatus, null>>([
 ]);
 const MAILBOX_ALIAS_REGEX = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
-const PENDING_MAILBOX_DRAFT_SAVE_TTL_MS = 2 * 60 * 60 * 1000;
 const DRAFT_WRAPPER_INTRO_PARAGRAPH_PATTERN =
   /(?:^|\n)\s*(?:here(?:'|’)s|here is)\s+(?:the\s+)?(?:a\s+)?(?:friendly\s+)?draft(?:\b|[\s:,.!?])[\s\S]*?(?:\n\s*\n|$)/i;
 const DRAFT_WRAPPER_INTRO_LINE_PATTERN =
@@ -1078,61 +1022,6 @@ function isValidAgentChatModelSelection(
       typeof model.model === "string" &&
       normalizeModel(model.model),
   );
-}
-
-export function parseAgentReminderInput(
-  input: AgentReminderInput | null | undefined,
-): AgentReminderParseResult {
-  const title = normalizeNullableText(input?.title);
-  const notes = normalizeNullableText(input?.notes);
-  const directRemindAt = normalizeNullableText(input?.remindAt);
-  const date = typeof input?.date === "string" ? input.date.trim() : "";
-  const time = typeof input?.time === "string" ? input.time.trim() : "";
-
-  if (!title) return { error: "Title is required" };
-  if (directRemindAt) {
-    if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(directRemindAt)) {
-      return { error: "Reminder timestamp must include a timezone offset" };
-    }
-    const parsedRemindAt = Date.parse(directRemindAt);
-    if (!Number.isFinite(parsedRemindAt)) {
-      return { error: "Reminder timestamp must be a valid ISO date-time" };
-    }
-    const timezone = normalizeTimeZone(input?.timezone) || "UTC";
-    const recurrenceRule = parseReminderRecurrenceRule(
-      input?.recurrence,
-      new Date(parsedRemindAt).toISOString().slice(0, 10),
-    );
-    if (hasExplicitReminderRecurrence(input?.recurrence) && !recurrenceRule) {
-      return { error: "Invalid recurrence value" };
-    }
-    return {
-      title,
-      notes,
-      remindAt: new Date(parsedRemindAt).toISOString(),
-      timezone,
-      recurrenceRule,
-    };
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return { error: "Date must be in YYYY-MM-DD format" };
-  }
-  if (!/^\d{2}:\d{2}$/.test(time)) {
-    return { error: "Time must be in HH:MM format" };
-  }
-
-  const timezone = normalizeTimeZone(input?.timezone) || "UTC";
-  const [year, month, day] = date.split("-").map(Number);
-  const [hour, minute] = time.split(":").map(Number);
-  const remindAt = new Date(
-    getUtcMsForLocalTime({ year, month, day, hour, minute }, timezone),
-  ).toISOString();
-  const recurrenceRule = parseReminderRecurrenceRule(input?.recurrence, date);
-  if (hasExplicitReminderRecurrence(input?.recurrence) && !recurrenceRule) {
-    return { error: "Invalid recurrence value" };
-  }
-
-  return { title, notes, remindAt, timezone, recurrenceRule };
 }
 
 export function parseAgentContactInput(value: unknown): AgentContactInput {
@@ -1891,155 +1780,6 @@ export async function trashAgentMailboxMessage(
   return { ok: true };
 }
 
-export async function createAgentReminder(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  input: AgentReminderInput,
-  options: { idempotencyKey?: string | null } = {},
-): Promise<AgentReminder | { error: string }> {
-  const parsed = parseAgentReminderInput(input);
-  if ("error" in parsed) return parsed;
-
-  const idempotencyKey = normalizeNullableText(options.idempotencyKey);
-  if (idempotencyKey) {
-    const existing = await getAgentReminderByDispatchId(
-      env,
-      userId,
-      idempotencyKey,
-    );
-    if (existing) return serializeAgentReminder(existing);
-  }
-
-  const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT ${idempotencyKey ? "OR IGNORE " : ""}INTO user_reminders
-       (id, user_id, title, notes, remind_at, timezone, recurrence_rule,
-        status, source_dispatch_id, created_via)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'agent')`,
-  )
-    .bind(
-      id,
-      userId,
-      parsed.title,
-      parsed.notes,
-      parsed.remindAt,
-      parsed.timezone,
-      parsed.recurrenceRule,
-      idempotencyKey,
-    )
-    .run();
-
-  if (idempotencyKey) {
-    const stored = await getAgentReminderByDispatchId(env, userId, idempotencyKey);
-    if (!stored) return { error: "Reminder could not be recorded." };
-    return serializeAgentReminder(stored);
-  }
-
-  return {
-    id,
-    title: parsed.title,
-    notes: parsed.notes,
-    remindAt: parsed.remindAt,
-    timezone: parsed.timezone,
-    recurrenceRule: parsed.recurrenceRule,
-    status: "pending",
-  };
-}
-
-async function getAgentReminderByDispatchId(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  sourceDispatchId: string,
-): Promise<DbReminderRow | null> {
-  return env.DB.prepare(
-    `SELECT id, title, notes, remind_at, timezone, recurrence_rule, context_type,
-            context_id, context_label, status, delivered_at, dismissed_at, created_at
-     FROM user_reminders
-     WHERE user_id = ? AND source_dispatch_id = ?
-     LIMIT 1`,
-  )
-    .bind(userId, sourceDispatchId)
-    .first<DbReminderRow>();
-}
-
-export async function updateAgentReminder(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  reminderId: string,
-  input: AgentReminderInput,
-): Promise<AgentReminder | { error: string; status?: 400 | 404 }> {
-  const parsed = parseAgentReminderInput(input);
-  if ("error" in parsed) return { ...parsed, status: 400 };
-
-  const result = (await env.DB.prepare(
-    `UPDATE user_reminders
-     SET title = ?, notes = ?, remind_at = ?, timezone = ?, recurrence_rule = ?,
-         error_message = NULL, updated_at = datetime('now')
-     WHERE id = ? AND user_id = ? AND status IN ('pending', 'failed')`,
-  )
-    .bind(
-      parsed.title,
-      parsed.notes,
-      parsed.remindAt,
-      parsed.timezone,
-      parsed.recurrenceRule,
-      reminderId,
-      userId,
-    )
-    .run()) as D1RunResultLike;
-
-  if ((result.meta?.changes || 0) === 0) {
-    return { error: "Reminder not found", status: 404 };
-  }
-
-  return {
-    id: reminderId,
-    title: parsed.title,
-    notes: parsed.notes,
-    remindAt: parsed.remindAt,
-    timezone: parsed.timezone,
-    recurrenceRule: parsed.recurrenceRule,
-    status: "pending",
-  };
-}
-
-export async function cancelAgentReminder(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  reminderId: string,
-): Promise<{ ok: true } | { error: string; status: 404 }> {
-  const result = (await env.DB.prepare(
-    `UPDATE user_reminders
-     SET status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now')
-     WHERE id = ? AND user_id = ? AND status IN ('pending', 'failed')`,
-  )
-    .bind(reminderId, userId)
-    .run()) as D1RunResultLike;
-
-  if ((result.meta?.changes || 0) === 0) {
-    return { error: "Reminder not found", status: 404 };
-  }
-  return { ok: true };
-}
-
-export function serializeAgentReminder(reminder: DbReminderRow): AgentReminder {
-  return {
-    id: reminder.id,
-    title: reminder.title,
-    notes: reminder.notes,
-    remindAt: reminder.remind_at,
-    timezone: reminder.timezone,
-    recurrenceRule: reminder.recurrence_rule,
-    contextType: reminder.context_type ?? null,
-    contextId: reminder.context_id ?? null,
-    contextLabel: reminder.context_label ?? null,
-    status: reminder.status,
-    deliveredAt: reminder.delivered_at ?? null,
-    dismissedAt: reminder.dismissed_at ?? null,
-    createdAt: reminder.created_at,
-  };
-}
-
 export function serializeAgentContact(row: DbContactRow): AgentContact {
   const metadata = parseJsonRecord(row.metadata);
   return {
@@ -2129,8 +1869,18 @@ export async function dispatchAgentSandboxTurn(
   await storage.put("lastSandboxTurnAt", new Date().toISOString());
 
   const owner = await getOwnerProfile(env, input.userId);
-  const toolPlan = await loadCoreChatToolTurnPlan(env, storage, input);
-  const toolResponse = await maybeHandleCoreToolTurn(env, storage, input, owner, toolPlan);
+  const toolPlan = await loadCoreChatToolTurnPlan(env, input);
+  const route = await resolveAiRoute(env, input.userId, input.selectedModel);
+  const useCoreToolRuntime = route.configured && !input.attachments?.some(
+    (attachment) =>
+      attachment.kind === "image" || attachment.mimeType?.startsWith("image/"),
+  );
+  const toolResponse = await maybeHandleCoreToolTurn(
+    env,
+    input,
+    owner,
+    toolPlan,
+  );
   if (toolResponse) {
     await persistAssistantMessage(
       env,
@@ -2216,7 +1966,6 @@ export async function dispatchAgentSandboxTurn(
     return response;
   }
 
-  const route = await resolveAiRoute(env, input.userId, input.selectedModel);
   const runtimeMessageText = appendAgentAttachmentReferenceContext(
     input.messageText,
     input.attachments,
@@ -2292,13 +2041,25 @@ export async function dispatchAgentSandboxTurn(
         "This turn includes an image, but the selected model cannot read images. Try again with an image-input model.",
     });
   } else {
-    response = await runModelTurn(route, messages, input.turnId, imageInputs);
+    response = useCoreToolRuntime
+      ? await runCoreAgentToolTurn({
+          db: env.DB,
+          userId: input.userId,
+          requestId: input.requestId,
+          turnId: input.turnId,
+          ownerTimezone: owner?.timezone,
+          route,
+          messages,
+          mailboxServices: {
+            search: (options) => listAgentMailboxMessages(env, input.userId, options),
+            read: (messageId) => getAgentMailboxMessage(env, input.userId, messageId),
+            createDraft: (draft, idempotencyKey) =>
+              createAgentMailboxDraft(env, input.userId, draft, { idempotencyKey }),
+          },
+        })
+      : await runModelTurn(route, messages, input.turnId, imageInputs);
   }
   response = attachAgentContextToResponse(response, agentContext);
-  if (toolPlan.pendingMailboxDraftSave) {
-    await resolvePendingMailboxDraftSave(storage, input);
-  }
-
   await persistAssistantMessage(
     env,
     input.userId,
@@ -3030,36 +2791,24 @@ function extensionForMimeType(mimeType: string): "png" | "jpg" | "webp" {
 
 async function loadCoreChatToolTurnPlan(
   env: CoreAgentChatEnv,
-  storage: StorageLike,
   input: AgentSandboxDispatchInput,
 ): Promise<CoreChatToolTurnPlan> {
-  const [recent, pendingMailboxDraftSave, pendingReminderCreate] = await Promise.all([
-    loadRecentMessages(env, input.userId, input.threadId),
-    loadPendingMailboxDraftSave(storage, input),
-    loadPendingReminderCreate(storage, input),
-  ]);
+  const recent = await loadRecentMessages(env, input.userId, input.threadId);
   return {
     recent,
-    pendingMailboxDraftSave,
-    pendingReminderCreate,
     decision: planCoreChatToolTurn({
       messageText: input.messageText.trim(),
-      hasRecentAssistantEmailDraft: Boolean(latestAssistantEmailDraft(recent)),
-      hasPendingMailboxDraftRecipient: Boolean(pendingMailboxDraftSave),
-      hasPendingReminderCreate: Boolean(pendingReminderCreate),
     }),
   };
 }
 
 async function maybeHandleCoreToolTurn(
   env: CoreAgentChatEnv,
-  storage: StorageLike,
   input: AgentSandboxDispatchInput,
   owner: OwnerProfileRow | null,
   toolPlan: CoreChatToolTurnPlan,
 ): Promise<AgentSandboxDispatchResponse | null> {
   const messageText = input.messageText.trim();
-  const recent = toolPlan.recent;
   const plannerDecision = toolPlan.decision;
 
   if (
@@ -3067,129 +2816,6 @@ async function maybeHandleCoreToolTurn(
     plannerDecision.capabilityId === "core.agent-chat.conversation"
   ) {
     return null;
-  }
-
-  if (plannerDecision.capabilityId === "core.mailbox.draft") {
-    const draftPlan = await parseMailboxDraftSaveRequest(
-      env,
-      input.userId,
-      messageText,
-      recent,
-      toolPlan.pendingMailboxDraftSave,
-    );
-    if ("error" in draftPlan) {
-      if (draftPlan.pendingMailboxDraftSave) {
-        await savePendingMailboxDraftSave(
-          storage,
-          input,
-          draftPlan.pendingMailboxDraftSave,
-        );
-      }
-      return recoverNativeToolParserErrorResponse(
-        toolResponse(input.turnId, "core.mailbox.draft", draftPlan.error, {
-          fallbackReason: "Mailbox draft details required",
-        }),
-        plannerDecision,
-        messageText,
-      );
-    }
-
-    const draft = await createAgentMailboxDraft(env, input.userId, draftPlan.input, {
-      idempotencyKey: input.requestId,
-    });
-    if ("error" in draft) {
-      return toolResponse(input.turnId, "core.mailbox.draft", draft.error, {
-        fallbackReason: "Mailbox draft could not be saved",
-      });
-    }
-    await resolvePendingMailboxDraftSave(storage, input);
-
-    return toolResponse(
-      input.turnId,
-      "core.mailbox.draft",
-      "Done. I saved that email as a draft in `/email` for your review. It has not been sent.",
-      {
-        emailAction: {
-          kind: "drafted",
-          draftId: draft.draft.id,
-        },
-        actionCards: [
-          buildMailboxDraftSavedActionCard(
-            draft.draft,
-            draftPlan.input.toAddress,
-            draftPlan.input.subject,
-          ),
-        ],
-      },
-    );
-  }
-
-  if (plannerDecision.capabilityId === "core.reminders.list") {
-    const reminders = await listPendingAgentReminders(env, input.userId);
-    const replyText = reminders.length
-      ? [
-          `You have ${reminders.length} pending reminder${reminders.length === 1 ? "" : "s"}:`,
-          ...reminders.map(
-            (reminder) =>
-              `- ${reminder.title} at ${formatAgentDateTime(reminder.remindAt, owner?.timezone || reminder.timezone)}`,
-          ),
-        ].join("\n")
-      : "You do not have any pending reminders right now.";
-
-    return toolResponse(input.turnId, "core.reminders.list", replyText, {
-      reminderAction: { kind: "listed" },
-    });
-  }
-
-  if (plannerDecision.capabilityId === "core.reminders.create") {
-    const reminderPlan = parseReminderChatRequest(
-      messageText,
-      owner?.timezone,
-      toolPlan.pendingReminderCreate,
-    );
-    if (!reminderPlan) return null;
-    if ("error" in reminderPlan) {
-      if (reminderPlan.pendingReminderCreate) {
-        await savePendingReminderCreate(
-          storage,
-          input,
-          reminderPlan.pendingReminderCreate,
-        );
-      }
-      return recoverNativeToolParserErrorResponse(
-        toolResponse(input.turnId, "core.reminders.create", reminderPlan.error, {
-          fallbackReason: "Reminder details required",
-        }),
-        plannerDecision,
-        messageText,
-      );
-    }
-
-    const reminder = await createAgentReminder(env, input.userId, reminderPlan.input, {
-      idempotencyKey: input.requestId,
-    });
-    if ("error" in reminder) {
-      return toolResponse(input.turnId, "core.reminders.create", reminder.error, {
-        fallbackReason: "Reminder could not be created",
-      });
-    }
-
-    await resolvePendingReminderCreate(storage, input);
-
-    return toolResponse(
-      input.turnId,
-      "core.reminders.create",
-      `Done. I set a reminder for ${formatAgentDateTime(reminder.remindAt, reminder.timezone)}: ${reminder.title}.`,
-      {
-        reminderAction: {
-          kind: "created",
-          reminderId: reminder.id,
-          title: reminder.title,
-          remindAt: reminder.remindAt,
-        },
-        actionCards: [buildReminderCreatedActionCard(reminder)],
-      },
-    );
   }
 
   const siteBlogResponse = await maybeHandleSiteBlogPostToolTurn(env, {
@@ -3203,38 +2829,6 @@ async function maybeHandleCoreToolTurn(
       siteBlogResponse,
       plannerDecision,
       messageText,
-    );
-  }
-
-  if (plannerDecision.capabilityId === "core.mission.task.create") {
-    const taskPlan = await parseMissionTaskChatRequest(env, input.userId, messageText, owner);
-    if ("error" in taskPlan) {
-      return recoverNativeToolParserErrorResponse(
-        toolResponse(input.turnId, "core.mission.task.create", taskPlan.error, {
-          fallbackReason: "Mission task details required",
-        }),
-        plannerDecision,
-        messageText,
-      );
-    }
-
-    const task = await createAgentMissionTask(env, input.userId, {
-      ...taskPlan.input,
-      idempotencyKey: input.requestId,
-    });
-    if ("error" in task) {
-      return toolResponse(input.turnId, "core.mission.task.create", task.error, {
-        fallbackReason: "Mission task could not be created",
-      });
-    }
-
-    return toolResponse(
-      input.turnId,
-      "core.mission.task.create",
-      `Done. I added "${task.title}" to ${task.projectName} in Mission Control.`,
-      {
-        actionCards: [buildMissionTaskCreatedActionCard(task)],
-      },
     );
   }
 
@@ -3257,99 +2851,6 @@ async function maybeHandleCoreToolTurn(
     );
   }
 
-  if (plannerDecision.capabilityId === "core.mission.task.read") {
-    const taskPlan = await parseMissionTaskReadChatRequest(env, input.userId, messageText);
-    if ("error" in taskPlan) {
-      return recoverNativeToolParserErrorResponse(
-        toolResponse(input.turnId, "core.mission.task.read", taskPlan.error, {
-          fallbackReason: "Mission task read details required",
-        }),
-        plannerDecision,
-        messageText,
-      );
-    }
-
-    return toolResponse(
-      input.turnId,
-      "core.mission.task.read",
-      formatMissionTaskReadReply(taskPlan.task),
-    );
-  }
-
-  if (plannerDecision.capabilityId === "core.mission.task.list") {
-    const taskPlan = await parseMissionTaskListChatRequest(env, input.userId, messageText);
-    if ("error" in taskPlan) {
-      return recoverNativeToolParserErrorResponse(
-        toolResponse(input.turnId, "core.mission.task.list", taskPlan.error, {
-          fallbackReason: "Mission task list details required",
-        }),
-        plannerDecision,
-        messageText,
-      );
-    }
-
-    const replyText = formatMissionTaskListReply(taskPlan.tasks, taskPlan.filterLabel);
-    return toolResponse(input.turnId, "core.mission.task.list", replyText);
-  }
-
-  if (plannerDecision.capabilityId === "core.mission.task.update") {
-    const taskPlan = await parseMissionTaskUpdateChatRequest(env, input.userId, messageText, owner);
-    if ("error" in taskPlan) {
-      return recoverNativeToolParserErrorResponse(
-        toolResponse(input.turnId, "core.mission.task.update", taskPlan.error, {
-          fallbackReason: "Mission task update details required",
-        }),
-        plannerDecision,
-        messageText,
-      );
-    }
-
-    const task = await updateAgentMissionTask(env, input.userId, taskPlan.input);
-    if ("error" in task) {
-      return toolResponse(input.turnId, "core.mission.task.update", task.error, {
-        fallbackReason: "Mission task could not be updated",
-      });
-    }
-
-    return toolResponse(
-      input.turnId,
-      "core.mission.task.update",
-      `Done. I updated "${task.title}" in Mission Control.`,
-      {
-        actionCards: [buildMissionTaskActionCard(task, "updated")],
-      },
-    );
-  }
-
-  if (plannerDecision.capabilityId === "core.mission.task.archive") {
-    const taskPlan = await parseMissionTaskArchiveChatRequest(env, input.userId, messageText);
-    if ("error" in taskPlan) {
-      return recoverNativeToolParserErrorResponse(
-        toolResponse(input.turnId, "core.mission.task.archive", taskPlan.error, {
-          fallbackReason: "Mission task archive details required",
-        }),
-        plannerDecision,
-        messageText,
-      );
-    }
-
-    const task = await archiveAgentMissionTask(env, input.userId, taskPlan.input);
-    if ("error" in task) {
-      return toolResponse(input.turnId, "core.mission.task.archive", task.error, {
-        fallbackReason: "Mission task could not be archived",
-      });
-    }
-
-    return toolResponse(
-      input.turnId,
-      "core.mission.task.archive",
-      `Done. I archived "${task.title}" in Mission Control.`,
-      {
-        actionCards: [buildMissionTaskActionCard(task, "archived")],
-      },
-    );
-  }
-
   if (plannerDecision.capabilityId === "core.bookings.lookup") {
     const bookings = await listUpcomingBookings(env, input.userId);
     const replyText = bookings.length
@@ -3369,13 +2870,7 @@ async function maybeHandleCoreToolTurn(
 }
 
 const RECOVERABLE_NATIVE_TOOL_PARSER_REASONS = new Set([
-  "Reminder details required",
-  "Mission task details required",
   "Mission context details required",
-  "Mission task read details required",
-  "Mission task list details required",
-  "Mission task update details required",
-  "Mission task archive details required",
   "Site blog posts could not be listed",
   "Site blog post could not be read",
   "Site blog post details required",
@@ -3411,14 +2906,6 @@ function messageExplicitlyNamesNativeToolDomain(
     return /\b(?:profile\s+site|public\s+site|site\s+(?:posts?|drafts?|blog)|blog(?:\s+posts?)?|blog\s+post|site\s+post|site\s+draft)\b/i.test(
       messageText,
     );
-  }
-  if (capabilityId.startsWith("core.reminders.")) {
-    return /\b(?:remind(?:er)?\s+me|reminders?|nudges?|don't\s+let\s+me\s+forget|dont\s+let\s+me\s+forget)\b/i.test(
-      messageText,
-    );
-  }
-  if (capabilityId === "core.mailbox.draft") {
-    return /\b(?:mailbox|email|draft|reply)\b/i.test(messageText);
   }
   if (capabilityId === "core.bookings.lookup") {
     return /\b(?:bookings?|appointments?|sessions?|calls?)\b/i.test(messageText);
@@ -3456,145 +2943,6 @@ function toolResponse(
     actionCards: options.actionCards ?? null,
     contentAction: null,
     contactsChanged: false,
-  };
-}
-
-function buildMailboxDraftSavedActionCard(
-  draft: AgentMailboxMessage,
-  fallbackToAddress: unknown,
-  fallbackSubject: unknown,
-): AgentChatActionCard {
-  const toAddress = draft.toAddress || normalizeNullableText(fallbackToAddress) || "Unknown";
-  const subject = draft.subject || normalizeNullableText(fallbackSubject) || "(no subject)";
-  return {
-    id: `mailbox-draft:${draft.id}`,
-    kind: "mailbox.draft_saved",
-    capabilityId: "core.mailbox.draft",
-    title: "Email draft saved",
-    summary: "Saved to mailbox drafts for review. It has not been sent.",
-    status: "pending_approval",
-    statusLabel: "Needs review",
-    changed: [
-      { label: "Draft", value: "Saved in mailbox" },
-      { label: "To", value: toAddress },
-      { label: "Subject", value: subject },
-      { label: "Status", value: "Not sent" },
-    ],
-    records: [{ kind: "mailbox_draft", id: draft.id }],
-    primaryAction: { label: "Review draft", href: "/email" },
-    secondaryActions: [],
-  };
-}
-
-function buildReminderCreatedActionCard(reminder: AgentReminder): AgentChatActionCard {
-  return {
-    id: `reminder:${reminder.id}`,
-    kind: "reminder.created",
-    capabilityId: "core.reminders.create",
-    title: "Reminder created",
-    summary: reminder.title,
-    status: "complete",
-    statusLabel: "Complete",
-    changed: [
-      { label: "Reminder", value: reminder.title },
-      {
-        label: "When",
-        value: formatAgentDateTime(reminder.remindAt, reminder.timezone),
-      },
-      { label: "Status", value: "Pending reminder" },
-    ],
-    records: [{ kind: "reminder", id: reminder.id }],
-    primaryAction: { label: "Open calendar", href: "/calendar" },
-    secondaryActions: [],
-  };
-}
-
-function buildMissionTaskCreatedActionCard(task: AgentMissionTask): AgentChatActionCard {
-  return buildMissionTaskActionCard(task, "created");
-}
-
-function buildMissionTaskActionCard(
-  task: AgentMissionTask,
-  action: "created" | "updated" | "archived",
-): AgentChatActionCard {
-  const title =
-    action === "created"
-      ? "Mission Control task created"
-      : action === "updated"
-        ? "Mission Control task updated"
-        : "Mission Control task archived";
-  const capabilityId =
-    action === "created"
-      ? "core.mission.task.create"
-      : action === "updated"
-        ? "core.mission.task.update"
-        : "core.mission.task.archive";
-  return {
-    id: `mission-task:${task.id}`,
-    kind:
-      action === "created"
-        ? "mission.task_created"
-        : action === "updated"
-          ? "mission.task_updated"
-          : "mission.task_archived",
-    capabilityId,
-    title,
-    summary: task.title,
-    status: "complete",
-    statusLabel: "Complete",
-    changed: [
-      { label: "Task", value: task.title },
-      { label: "Project", value: task.projectName },
-      ...(task.dueAt ? [{ label: "Due", value: task.dueAt }] : []),
-      { label: "Status", value: action === "archived" ? "archived" : task.status },
-    ],
-    records: [{ kind: "mission_task", id: task.id }],
-    primaryAction: { label: "Open Mission Control", href: "/mission-control" },
-    secondaryActions: [],
-  };
-}
-
-async function parseMissionTaskChatRequest(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  messageText: string,
-  owner: OwnerProfileRow | null,
-): Promise<
-  | {
-      input: {
-        title: string;
-        description: string | null;
-        projectId: string;
-        projectName: string;
-        dueAt: string | null;
-      };
-    }
-  | { error: string }
-> {
-  const projects = await loadAgentMissionProjects(env, userId);
-  const projectName = extractMissionTaskProjectName(messageText);
-  const project = projectName
-    ? resolveAgentMissionProject(projects, projectName)
-    : projects.find((item) => item.slug === "personal") || projects[0];
-  if (project && "error" in project) return project;
-  if (!project) {
-    return { error: "I could not find a Mission Control project to add that to." };
-  }
-
-  const description = extractMissionTaskDescription(messageText);
-  const title = extractMissionTaskTitle(messageText, projectName, description);
-  if (!title) {
-    return { error: "Please include the task title to add to Mission Control." };
-  }
-
-  return {
-    input: {
-      title,
-      description,
-      projectId: project.id,
-      projectName: project.name,
-      dueAt: extractMissionTaskDueDate(messageText, owner?.timezone || "UTC"),
-    },
   };
 }
 
@@ -3650,340 +2998,6 @@ async function parseMissionContextReadChatRequest(
   };
 }
 
-async function parseMissionTaskReadChatRequest(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  messageText: string,
-): Promise<{ task: AgentMissionTask } | { error: string }> {
-  const targetTitle = extractMissionTaskReadTitle(messageText);
-  if (!targetTitle) return { error: "Please include the task title to read." };
-  const task = findAgentMissionTask(await loadAgentMissionTasks(env, userId), targetTitle);
-  if ("error" in task) return task;
-  return { task };
-}
-
-async function createAgentMissionTask(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  input: {
-    title: string;
-    description: string | null;
-    projectId: string;
-    projectName: string;
-    dueAt: string | null;
-    idempotencyKey?: string | null;
-  },
-): Promise<AgentMissionTask | { error: string }> {
-  const idempotencyKey = normalizeNullableText(input.idempotencyKey);
-  if (idempotencyKey) {
-    const existing = (await loadAgentMissionTasks(env, userId)).find(
-      (task) => task.sourceRef === idempotencyKey,
-    );
-    if (existing) return existing;
-  }
-  const id = crypto.randomUUID();
-  const status = "backlog";
-  const columnId = `${input.projectId}:${status}`;
-
-  try {
-    // ponytail: duplicate the tiny Mission Control insert here; extract shared service if chat writes grow.
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO mission_project_columns
-         (id, user_id, project_id, name, status, position)
-       VALUES (?, ?, ?, 'Backlog', 'backlog', 0)`,
-    )
-      .bind(columnId, userId, input.projectId)
-      .run()
-      .catch(() => null);
-
-    await env.DB.prepare(
-      `INSERT ${idempotencyKey ? "OR IGNORE " : ""}INTO mission_tasks
-         (id, user_id, project_id, column_id, title, description, status,
-          priority, due_at, source_kind, source_ref)
-       VALUES (?, ?, ?, ?, ?, ?, 'backlog', 3, ?, 'agent', ?)`,
-    )
-      .bind(
-        id,
-        userId,
-        input.projectId,
-        columnId,
-        input.title,
-        input.description,
-        input.dueAt,
-        idempotencyKey,
-      )
-      .run();
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : "Mission task could not be created.",
-    };
-  }
-
-  if (idempotencyKey) {
-    const stored = (await loadAgentMissionTasks(env, userId)).find(
-      (task) => task.sourceRef === idempotencyKey,
-    );
-    if (!stored) return { error: "Mission task could not be recorded." };
-    return stored;
-  }
-
-  return {
-    id,
-    title: input.title,
-    description: input.description,
-    projectId: input.projectId,
-    projectName: input.projectName,
-    dueAt: input.dueAt,
-    status,
-  };
-}
-
-async function parseMissionTaskListChatRequest(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  messageText: string,
-): Promise<
-  | { tasks: AgentMissionTask[]; filterLabel: string }
-  | { error: string }
-> {
-  const [tasks, projects] = await Promise.all([
-    loadAgentMissionTasks(env, userId),
-    loadAgentMissionProjects(env, userId),
-  ]);
-  const projectName = extractMissionTaskProjectName(messageText) ||
-    extractMissionTaskListProjectName(messageText);
-  const project = projectName ? resolveAgentMissionProject(projects, projectName) : null;
-  if (project && "error" in project) {
-    return project;
-  }
-
-  const status = parseMissionTaskStatus(messageText);
-  const filtered = tasks.filter((task) => {
-    if (project && task.projectId !== project.id) return false;
-    if (status && task.status !== status) return false;
-    return true;
-  });
-  const parts = [
-    status ? missionTaskStatusLabel(status) : null,
-    "tasks",
-    project ? `for ${project.name}` : null,
-  ].filter(Boolean);
-
-  return {
-    tasks: filtered,
-    filterLabel: parts.join(" "),
-  };
-}
-
-async function parseMissionTaskUpdateChatRequest(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  messageText: string,
-  owner: OwnerProfileRow | null,
-): Promise<
-  | {
-      input: {
-        taskId: string;
-        title: string;
-        description: string | null;
-        projectId: string;
-        projectName: string;
-        status: string;
-        dueAt: string | null;
-      };
-    }
-  | { error: string }
-> {
-  const tasks = await loadAgentMissionTasks(env, userId);
-  const projects = await loadAgentMissionProjects(env, userId);
-  const parsed = parseMissionTaskUpdateText(messageText, owner?.timezone || "UTC");
-  if (!parsed.targetTitle) {
-    return { error: "Please include the task title to update." };
-  }
-
-  const task = findAgentMissionTask(tasks, parsed.targetTitle);
-  if ("error" in task) return task;
-
-  const projectName = parsed.projectName;
-  const project = projectName ? resolveAgentMissionProject(projects, projectName) : null;
-  if (project && "error" in project) {
-    return project;
-  }
-
-  const status = parsed.status || task.status || "backlog";
-  return {
-    input: {
-      taskId: task.id,
-      title: parsed.title || task.title,
-      description: parsed.description === undefined ? task.description : parsed.description,
-      projectId: project?.id || task.projectId,
-      projectName: project?.name || task.projectName,
-      status,
-      dueAt: parsed.dueAt === undefined ? task.dueAt : parsed.dueAt,
-    },
-  };
-}
-
-async function parseMissionTaskArchiveChatRequest(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  messageText: string,
-): Promise<
-  | {
-      input: {
-        taskId: string;
-        title: string;
-        description: string | null;
-        projectId: string;
-        projectName: string;
-        dueAt: string | null;
-        status: string;
-      };
-    }
-  | { error: string }
-> {
-  const targetTitle = normalizeNullableText(
-    messageText
-      .replace(/^(?:please\s+)?/i, "")
-      .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-      .replace(/^(?:delete|archive|remove)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s*/i, "")
-      .replace(/[.?!]+$/g, ""),
-  );
-  if (!targetTitle) return { error: "Please include the task title to archive." };
-  const task = findAgentMissionTask(await loadAgentMissionTasks(env, userId), targetTitle);
-  if ("error" in task) return task;
-  return {
-    input: {
-      taskId: task.id,
-      title: task.title,
-      description: task.description,
-      projectId: task.projectId,
-      projectName: task.projectName,
-      dueAt: task.dueAt,
-      status: task.status,
-    },
-  };
-}
-
-async function updateAgentMissionTask(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  input: {
-    taskId: string;
-    title: string;
-    description: string | null;
-    projectId: string;
-    projectName: string;
-    status: string;
-    dueAt: string | null;
-  },
-): Promise<AgentMissionTask | { error: string }> {
-  const columnId = `${input.projectId}:${input.status}`;
-
-  try {
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO mission_project_columns
-         (id, user_id, project_id, name, status, position)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-      .bind(
-        columnId,
-        userId,
-        input.projectId,
-        missionTaskStatusLabel(input.status),
-        input.status,
-        missionTaskStatusPosition(input.status),
-      )
-      .run()
-      .catch(() => null);
-
-    await env.DB.prepare(
-      `UPDATE mission_tasks
-       SET project_id = ?, column_id = ?, title = ?, description = ?, status = ?, due_at = ?,
-           updated_at = datetime('now')
-       WHERE id = ? AND user_id = ?`,
-    )
-      .bind(
-        input.projectId,
-        columnId,
-        input.title,
-        input.description,
-        input.status,
-        input.dueAt,
-        input.taskId,
-        userId,
-      )
-      .run();
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : "Mission task could not be updated.",
-    };
-  }
-
-  return {
-    id: input.taskId,
-    title: input.title,
-    description: input.description,
-    projectId: input.projectId,
-    projectName: input.projectName,
-    dueAt: input.dueAt,
-    status: input.status,
-  };
-}
-
-async function archiveAgentMissionTask(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  input: {
-    taskId: string;
-    title: string;
-    description: string | null;
-    projectId: string;
-    projectName: string;
-    dueAt: string | null;
-    status: string;
-  },
-): Promise<AgentMissionTask | { error: string }> {
-  try {
-    await env.DB.prepare(
-      `UPDATE mission_tasks
-       SET archived_at = datetime('now'), updated_at = datetime('now')
-       WHERE id = ? AND user_id = ?`,
-    )
-      .bind(input.taskId, userId)
-      .run();
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : "Mission task could not be archived.",
-    };
-  }
-
-  return {
-    id: input.taskId,
-    title: input.title,
-    description: input.description,
-    projectId: input.projectId,
-    projectName: input.projectName,
-    dueAt: input.dueAt,
-    status: input.status,
-  };
-}
-
-async function loadAgentMissionProjects(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-): Promise<AgentMissionProject[]> {
-  const rows = await env.DB.prepare(
-    `SELECT id, name, slug, description, status
-     FROM mission_projects
-     WHERE user_id = ? AND status != 'archived'
-     ORDER BY CASE WHEN slug = 'personal' THEN 0 ELSE 1 END, name ASC`,
-  )
-    .bind(userId)
-    .all<AgentMissionProject>();
-  return rows.results || [];
-}
-
 async function loadAgentMissionStatementText(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
@@ -4027,68 +3041,6 @@ async function loadAgentPublicBusinessContext(
   } catch {
     return null;
   }
-}
-
-async function loadAgentMissionTasks(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-): Promise<AgentMissionTask[]> {
-  const rows = await env.DB.prepare(
-    `SELECT t.id, t.title, t.description, t.project_id, t.status, t.due_at, t.scheduled_for,
-            t.source_ref,
-            p.name AS project_name
-     FROM mission_tasks t
-     LEFT JOIN mission_projects p
-       ON p.id = t.project_id AND p.user_id = t.user_id
-     WHERE t.user_id = ? AND t.archived_at IS NULL
-     ORDER BY t.updated_at DESC, t.id ASC
-     LIMIT 100`,
-  )
-    .bind(userId)
-    .all<{
-      id: string;
-      title: string;
-      description: string | null;
-      project_id: string | null;
-      status: string;
-      due_at: string | null;
-      scheduled_for: string | null;
-      source_ref: string | null;
-      project_name: string | null;
-    }>();
-
-  return (rows.results || []).flatMap((row) => {
-    if (!row.project_id) return [];
-    return [
-      {
-        id: row.id,
-        title: row.title,
-        description: row.description,
-        projectId: row.project_id,
-        projectName: row.project_name || "Mission Control",
-        dueAt: row.due_at || row.scheduled_for || null,
-        status: row.status,
-        sourceRef: row.source_ref,
-      },
-    ];
-  });
-}
-
-function findAgentMissionTask(
-  tasks: AgentMissionTask[],
-  title: string,
-): AgentMissionTask | { error: string } {
-  const normalized = normalizeMissionTaskText(title);
-  const exact = tasks.filter((task) => normalizeMissionTaskText(task.title) === normalized);
-  if (exact.length === 1) return exact[0];
-
-  const partial = tasks.filter((task) => normalizeMissionTaskText(task.title).includes(normalized));
-  const matches = exact.length ? exact : partial;
-  if (matches.length === 1) return matches[0];
-  if (matches.length > 1) {
-    return { error: `I found multiple Mission Control tasks matching "${title}". Please use a more specific title.` };
-  }
-  return { error: `I could not find a Mission Control task matching "${title}".` };
 }
 
 function resolveAgentMissionProject(
@@ -4174,124 +3126,6 @@ function scoreAgentEntityLabel(
   return (45 + coverage * 35) * weight;
 }
 
-function parseMissionTaskUpdateText(
-  messageText: string,
-  timezone: string,
-): {
-  targetTitle: string | null;
-  title: string | null;
-  description: string | null | undefined;
-  projectName: string | null;
-  status: string | null;
-  dueAt: string | null | undefined;
-} {
-  const descriptionUpdate = parseMissionTaskDescriptionUpdate(messageText);
-  if (descriptionUpdate) {
-    return {
-      targetTitle: descriptionUpdate.targetTitle,
-      title: null,
-      description: descriptionUpdate.description,
-      projectName: null,
-      status: null,
-      dueAt: undefined,
-    };
-  }
-
-  const rename = messageText.match(
-    /^\s*(?:please\s+)?(?:rename|update)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?\s+to\s+["“]?(.+?)["”]?[.?!]*$/i,
-  );
-  if (rename) {
-    return {
-      targetTitle: normalizeNullableText(rename[1]),
-      title: normalizeNullableText(rename[2]),
-      description: undefined,
-      projectName: null,
-      status: null,
-      dueAt: undefined,
-    };
-  }
-
-  const projectName = extractMissionTaskProjectName(messageText);
-  const status = parseMissionTaskStatus(messageText);
-  const description = extractMissionTaskDescription(messageText);
-  const hasDue = /\b(?:due|by|today|tomorrow|20\d{2}-\d{2}-\d{2})\b/i.test(messageText);
-  const dueAt = hasDue
-    ? extractMissionTaskDueDate(messageText, timezone)
-    : undefined;
-  let target = messageText
-    .replace(/^(?:please\s+)?/i, "")
-    .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-    .replace(/^(?:mark|move|update|reschedule|organize|organise)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s*/i, "")
-    .replace(/\b(?:as|to)\s+(?:done|complete|completed|backlog|todo|to do|doing|in progress|review)\b/gi, "")
-    .replace(/\b(?:due|by|to)\s+(?:today|tomorrow|20\d{2}-\d{2}-\d{2})\b/gi, "")
-    .replace(/\b(?:today|tomorrow|20\d{2}-\d{2}-\d{2})\b/gi, "");
-
-  if (projectName) {
-    target = target.replace(
-      new RegExp(
-        `\\b(?:to|in|under|for)\\s+(?:the\\s+)?(?:mission\\s+control\\s+)?project\\s+["“]?${escapeRegExp(projectName)}["”]?`,
-        "i",
-      ),
-      "",
-    );
-  }
-
-  target = stripMissionTaskDescriptionClause(target, description);
-
-  return {
-    targetTitle: normalizeNullableText(target.replace(/[.?!]+$/g, "")),
-    title: null,
-    description: description === null ? undefined : description,
-    projectName,
-    status,
-    dueAt,
-  };
-}
-
-function formatMissionTaskReadReply(task: AgentMissionTask): string {
-  const due = task.dueAt ? task.dueAt : "Not set.";
-  const description =
-    formatMissionTaskDescription(task.description, AGENT_MISSION_TASK_SINGLE_DESCRIPTION_LIMIT) ||
-    "Not set yet.";
-  return [
-    `Task: ${task.title}`,
-    `- Project: ${task.projectName}`,
-    `- Status: ${missionTaskStatusLabel(task.status)}`,
-    `- Due: ${due}`,
-    "",
-    "Description:",
-    description,
-  ].join("\n");
-}
-
-function formatMissionTaskListReply(tasks: AgentMissionTask[], filterLabel: string): string {
-  if (!tasks.length) return `I could not find any ${filterLabel}.`;
-  const completedTasks = tasks.filter((task) => task.status === "done");
-  const openTasks = tasks.filter((task) => task.status !== "done");
-  const lines = [`I found ${tasks.length} ${filterLabel}:`];
-  if (openTasks.length > 0) {
-    lines.push(
-      "",
-      "Open tasks:",
-      ...openTasks.slice(0, 20).map((task, index) => {
-        return formatMissionTaskListItem(task, index);
-      }),
-    );
-  }
-  if (completedTasks.length > 0) {
-    lines.push(
-      "",
-      "Completed tasks:",
-      ...completedTasks.slice(0, 20).map((task, index) => formatMissionTaskListItem(task, index)),
-    );
-  }
-  const shown = Math.min(openTasks.length, 20) + Math.min(completedTasks.length, 20);
-  return [
-    ...lines,
-    ...(tasks.length > shown ? [`...and ${tasks.length - shown} more.`] : []),
-  ].join("\n");
-}
-
 function formatMissionContextReadReply(input: {
   project: AgentMissionProject | null;
   projects: AgentMissionProject[];
@@ -4374,199 +3208,11 @@ function extractMissionTaskListProjectName(messageText: string): string | null {
   return value;
 }
 
-function extractMissionTaskReadTitle(messageText: string): string | null {
-  const target = messageText
-    .replace(/^(?:please\s+)?/i, "")
-    .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-    .replace(/^(?:read|show|open|pull up|check|inspect)\s+(?:me\s+)?/i, "")
-    .replace(
-      /^(?:the\s+)?(?:full\s+)?(?:details?|contents?|description|notes?|body)\s+(?:for|of)\s+(?:the\s+)?(?:mission\s+control\s+)?(?:task|todo)\s*/i,
-      "",
-    )
-    .replace(/^(?:the\s+)?(?:mission\s+control\s+)?(?:task|todo)\s*/i, "")
-    .replace(/[.?!]+$/g, "");
-  return normalizeNullableText(target);
-}
-
-function parseMissionTaskStatus(messageText: string): string | null {
-  if (/\b(?:done|complete|completed)\b/i.test(messageText)) return "done";
-  if (/\b(?:doing|in progress)\b/i.test(messageText)) return "in_progress";
-  if (/\breview\b/i.test(messageText) && !isCoreChatWeeklyReviewRequest(messageText)) return "review";
-  if (/\b(?:backlog|todo|to do)\b/i.test(messageText)) return "backlog";
-  return null;
-}
-
 function missionTaskStatusLabel(status: string): string {
   if (status === "in_progress") return "Doing";
   if (status === "review") return "Review";
   if (status === "done") return "Done";
   return "Backlog";
-}
-
-function missionTaskStatusPosition(status: string): number {
-  if (status === "in_progress") return 1;
-  if (status === "review") return 2;
-  if (status === "done") return 3;
-  return 0;
-}
-
-function extractMissionTaskTitle(
-  messageText: string,
-  projectName: string | null,
-  description: string | null,
-): string | null {
-  let title = messageText
-    .replace(/^(?:please\s+)?/i, "")
-    .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-    .replace(/^(?:add|create|make)\s+(?:a\s+)?(?:mission\s+control\s+)?task\s*/i, "")
-    .replace(/\b(?:called|named|titled)\s+/i, "")
-    .replace(/\b(?:today|tomorrow|due\s+(?:today|tomorrow)|by\s+(?:today|tomorrow))\b/gi, "")
-    .replace(/\bdue\s+20\d{2}-\d{2}-\d{2}\b/gi, "")
-    .replace(/\bby\s+20\d{2}-\d{2}-\d{2}\b/gi, "")
-    .replace(/\b20\d{2}-\d{2}-\d{2}\b/g, "");
-
-  if (projectName) {
-    title = title.replace(
-      new RegExp(
-        `\\b(?:to|in|under|for)\\s+(?:the\\s+)?(?:mission\\s+control\\s+)?project\\s+["“]?${escapeRegExp(projectName)}["”]?`,
-        "i",
-      ),
-      "",
-    );
-  }
-
-  title = stripMissionTaskDescriptionClause(title, description);
-
-  return normalizeNullableText(
-    title
-      .replace(/^\s*(?:to|for|about|that)\s+/i, "")
-      .replace(/[.?!]+$/g, ""),
-  );
-}
-
-function extractMissionTaskDescription(messageText: string): string | null {
-  const patterns = [
-    /\b(?:with|using)\s+(?:a\s+)?(?:description|notes?|details?|body)(?:\s*(?:of|as|:))?\s+["“]([\s\S]+?)["”]\s*[.?!]*$/i,
-    /\b(?:with|using)\s+(?:a\s+)?(?:description|notes?|details?|body)(?:\s*(?:of|as|:))?\s+([\s\S]+?)\s*[.?!]*$/i,
-    /\b(?:description|notes?|details?|body)\s*(?:is|are|as|to|:)\s*["“]?([\s\S]+?)["”]?\s*[.?!]*$/i,
-  ];
-  for (const pattern of patterns) {
-    const match = messageText.match(pattern);
-    const description = normalizeMissionTaskDescriptionText(match?.[1]);
-    if (description) return description;
-  }
-  return null;
-}
-
-function parseMissionTaskDescriptionUpdate(
-  messageText: string,
-): { targetTitle: string | null; description: string | null } | null {
-  const clear = messageText.match(
-    /^\s*(?:please\s+)?(?:clear|remove|delete)\s+(?:the\s+)?(?:task\s+)?(?:description|notes?|details?|body)\s+(?:for|from|on|of)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?[.?!]*$/i,
-  );
-  if (clear) {
-    return {
-      targetTitle: normalizeNullableText(clear[1]),
-      description: null,
-    };
-  }
-
-  const setForTask = messageText.match(
-    /^\s*(?:please\s+)?(?:set|update|change|replace)\s+(?:the\s+)?(?:description|notes?|details?|body)\s+(?:for|on|of)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?\s+(?:to|as|:)\s+["“]?([\s\S]+?)["”]?[.?!]*$/i,
-  );
-  if (setForTask) {
-    return {
-      targetTitle: normalizeNullableText(setForTask[1]),
-      description: normalizeMissionTaskDescriptionText(setForTask[2]),
-    };
-  }
-
-  const setOnTask = messageText.match(
-    /^\s*(?:please\s+)?(?:update|set|change|replace)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?\s+(?:description|notes?|details?|body)\s+(?:to|as|:)\s+["“]?([\s\S]+?)["”]?[.?!]*$/i,
-  );
-  if (setOnTask) {
-    return {
-      targetTitle: normalizeNullableText(setOnTask[1]),
-      description: normalizeMissionTaskDescriptionText(setOnTask[2]),
-    };
-  }
-
-  const addToTask = messageText.match(
-    /^\s*(?:please\s+)?(?:add|append)\s+(?:description|notes?|details?|body)\s+(?:to|for|on)\s+(?:the\s+)?(?:mission\s+control\s+)?task\s+["“]?(.+?)["”]?(?:\s*:\s*|\s+(?:saying|that)\s+)([\s\S]+?)["”]?[.?!]*$/i,
-  );
-  if (addToTask) {
-    return {
-      targetTitle: normalizeNullableText(addToTask[1]),
-      description: normalizeMissionTaskDescriptionText(addToTask[2]),
-    };
-  }
-
-  return null;
-}
-
-function stripMissionTaskDescriptionClause(text: string, description: string | null): string {
-  let stripped = text;
-  if (description) {
-    const escapedDescription = escapeRegExp(description);
-    stripped = stripped
-      .replace(
-        new RegExp(
-          `\\b(?:with|using)\\s+(?:a\\s+)?(?:description|notes?|details?|body)(?:\\s*(?:of|as|:))?\\s+["“]?${escapedDescription}["”]?`,
-          "i",
-        ),
-        "",
-      )
-      .replace(
-        new RegExp(
-          `\\b(?:description|notes?|details?|body)\\s*(?:is|are|as|to|:)\\s*["“]?${escapedDescription}["”]?`,
-          "i",
-        ),
-        "",
-      );
-  }
-  return stripped
-    .replace(
-      /\b(?:with|using)\s+(?:a\s+)?(?:description|notes?|details?|body)(?:\s*(?:of|as|:))?\s+[\s\S]*$/i,
-      "",
-    )
-    .replace(/\b(?:description|notes?|details?|body)\s*(?:is|are|as|to|:)\s+[\s\S]*$/i, "");
-}
-
-function normalizeMissionTaskDescriptionText(value: unknown): string | null {
-  const normalized = normalizeNullableText(value);
-  if (!normalized) return null;
-  return normalizeNullableText(
-    normalized
-      .replace(/\s+\b(?:due|by)\s+(?:today|tomorrow|20\d{2}-\d{2}-\d{2})\b[.?!]*$/i, "")
-      .replace(/^["“]|["”]$/g, ""),
-  );
-}
-
-function extractMissionTaskDueDate(
-  messageText: string,
-  timezone: string,
-): string | null {
-  const explicit = messageText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
-  if (explicit) return explicit[1];
-  if (/\btomorrow\b/i.test(messageText)) return localDateKey(1, timezone);
-  if (/\btoday\b/i.test(messageText)) return localDateKey(0, timezone);
-  return null;
-}
-
-function localDateKey(offsetDays: number, timezone: string): string {
-  const date = new Date(Date.now() + offsetDays * 86_400_000);
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: normalizeTimeZone(timezone) || "UTC",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
-  return `${value("year")}-${value("month")}-${value("day")}`;
-}
-
-function normalizeMissionTaskText(value: string): string {
-  return value.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
 }
 
 function normalizeAgentEntityText(value: string): string {
@@ -4621,222 +3267,6 @@ function decodeSiteFileText(value: unknown): string | null {
   return null;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-async function parseMailboxDraftSaveRequest(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  messageText: string,
-  recent: Array<{ role: "user" | "assistant"; content: string }>,
-  pendingMailboxDraftSave?: PendingMailboxDraftSave | null,
-): Promise<
-  | { input: AgentMailboxDraftInput }
-  | { error: string; pendingMailboxDraftSave?: PendingMailboxDraftSave }
-> {
-  const latestAssistantDraft = pendingMailboxDraftSave
-    ? { content: pendingMailboxDraftSave.draftText }
-    : latestAssistantEmailDraft(recent);
-  if (!latestAssistantDraft) {
-    return {
-      error:
-        "I can save a draft, but I need the draft text first. Paste the email body or ask me to draft it again.",
-    };
-  }
-
-  const parsed = pendingMailboxDraftSave
-    ? {
-        subject: pendingMailboxDraftSave.subject,
-        body: pendingMailboxDraftSave.textBody,
-      }
-    : parseDraftText(latestAssistantDraft.content);
-  const textBody = parsed.body.trim();
-  if (!textBody) {
-    return {
-      error:
-        "I found the request to save a draft, but I could not identify the email body to save.",
-    };
-  }
-
-  const toAddress =
-    extractEmailAddress(messageText) ||
-    extractEmailAddress(latestAssistantDraft.content) ||
-    (await resolveDraftRecipientFromContacts(env, userId, messageText, latestAssistantDraft.content));
-  if (!toAddress) {
-    return {
-      error:
-        "I can save that as a draft, but I need the recipient email address first.",
-      pendingMailboxDraftSave: buildPendingMailboxDraftSave(
-        latestAssistantDraft.content,
-        parsed,
-      ),
-    };
-  }
-
-  return {
-    input: {
-      toAddress,
-      subject: parsed.subject || "Draft email",
-      textBody,
-      source: "agent",
-    },
-  };
-}
-
-function buildPendingMailboxDraftSave(
-  draftText: string,
-  parsed: { subject: string | null; body: string },
-): PendingMailboxDraftSave {
-  const nowMs = Date.now();
-  return {
-    capabilityId: "core.mailbox.draft",
-    status: "active",
-    missingField: "toAddress",
-    threadId: null,
-    draftText: draftText.trim(),
-    subject: parsed.subject,
-    textBody: parsed.body.trim(),
-    createdAt: new Date(nowMs).toISOString(),
-    expiresAt: new Date(nowMs + PENDING_MAILBOX_DRAFT_SAVE_TTL_MS).toISOString(),
-  };
-}
-
-async function loadPendingMailboxDraftSave(
-  storage: StorageLike,
-  input: Pick<AgentSandboxDispatchInput, "userId" | "threadId">,
-): Promise<PendingMailboxDraftSave | null> {
-  try {
-    const key = pendingMailboxDraftSaveStorageKey(input);
-    const pending = normalizePendingMailboxDraftSave(await storage.get(key));
-    if (!pending) return null;
-    if (!isActivePendingMailboxDraftSave(pending)) {
-      await storage.put(key, {
-        ...pending,
-        status: "expired",
-        expiresAt: new Date().toISOString(),
-      });
-      return null;
-    }
-    return pending;
-  } catch {
-    return null;
-  }
-}
-
-async function savePendingMailboxDraftSave(
-  storage: StorageLike,
-  input: Pick<AgentSandboxDispatchInput, "userId" | "threadId">,
-  pending: PendingMailboxDraftSave,
-): Promise<void> {
-  try {
-    const threadId = normalizePendingMailboxDraftThreadId(input.threadId);
-    await storage.put(pendingMailboxDraftSaveStorageKey(input), {
-      ...pending,
-      status: "active",
-      threadId,
-    });
-  } catch {
-    // Pending clarification state should improve follow-up routing, not fail chat.
-  }
-}
-
-async function resolvePendingMailboxDraftSave(
-  storage: StorageLike,
-  input: Pick<AgentSandboxDispatchInput, "userId" | "threadId">,
-): Promise<void> {
-  try {
-    const key = pendingMailboxDraftSaveStorageKey(input);
-    const pending = normalizePendingMailboxDraftSave(await storage.get(key));
-    if (!pending) return;
-    await storage.put(key, {
-      ...pending,
-      status: "resolved",
-      expiresAt: new Date().toISOString(),
-    });
-  } catch {
-    // Draft persistence has already succeeded; stale pending state can expire.
-  }
-}
-
-function pendingMailboxDraftSaveStorageKey(
-  input: Pick<AgentSandboxDispatchInput, "userId" | "threadId">,
-): string {
-  const threadKey = normalizePendingMailboxDraftThreadId(input.threadId) || "__global__";
-  return `agent-chat:pending:core.mailbox.draft:${encodeURIComponent(input.userId)}:${encodeURIComponent(threadKey)}`;
-}
-
-function normalizePendingMailboxDraftThreadId(value: unknown): string | null {
-  return normalizeNullableText(value);
-}
-
-function normalizePendingMailboxDraftSave(value: unknown): PendingMailboxDraftSave | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Partial<PendingMailboxDraftSave>;
-  if (candidate.capabilityId !== "core.mailbox.draft") return null;
-  if (
-    candidate.status !== "active" &&
-    candidate.status !== "resolved" &&
-    candidate.status !== "expired"
-  ) {
-    return null;
-  }
-  if (candidate.status !== "active") return null;
-  if (candidate.missingField !== "toAddress") return null;
-  const draftText = normalizeNullableText(candidate.draftText);
-  const textBody = normalizeNullableText(candidate.textBody);
-  const expiresAt = normalizeNullableText(candidate.expiresAt);
-  const createdAt = normalizeNullableText(candidate.createdAt);
-  if (!draftText || !textBody || !expiresAt || !createdAt) return null;
-  return {
-    capabilityId: "core.mailbox.draft",
-    status: "active",
-    missingField: "toAddress",
-    threadId: normalizePendingMailboxDraftThreadId(candidate.threadId),
-    draftText,
-    subject: normalizeNullableText(candidate.subject),
-    textBody,
-    createdAt,
-    expiresAt,
-  };
-}
-
-function isActivePendingMailboxDraftSave(pending: PendingMailboxDraftSave): boolean {
-  const expiresAtMs = Date.parse(pending.expiresAt);
-  return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now();
-}
-
-function latestAssistantEmailDraft(
-  recent: Array<{ role: "user" | "assistant"; content: string }>,
-) {
-  return [...recent]
-    .reverse()
-    .find((message) => message.role === "assistant" && looksLikeEmailDraft(message.content));
-}
-
-function looksLikeEmailDraft(text: string): boolean {
-  return /\b(subject|subject line|to:|hi|hello|dear)\b/i.test(text) &&
-    /\b(save this|save it|draft|send|recipient|to:|subject:|regards|thanks|best)\b/i.test(text);
-}
-
-function parseDraftText(text: string): { subject: string | null; body: string } {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
-  const subjectMatch = normalized.match(
-    /^\s*(?:\*\*)?\s*(?:subject|subject line)\s*:?\s*(?:\*\*)?\s*(.+)$/im,
-  );
-  const subject = stripSimpleMarkdown(subjectMatch?.[1] || "").trim() || null;
-  let body = stripAgentDraftWrapperText(normalized)
-    .replace(/^\s*[-–—]{3,}\s*$/gm, "")
-    .replace(/^\s*(?:\*\*)?\s*(?:subject|subject line)\s*:?\s*(?:\*\*)?\s*.+$/im, "")
-    .replace(/^\s*(?:\*\*)?\s*(?:to|recipient)\s*:?\s*(?:\*\*)?\s*.+$/im, "")
-    .trim();
-  const savePromptIndex = body.search(
-    /\n\s*(?:[-–—]\s*)?(?:this is a chat draft only|if you want|if you(?:'|’)d like|if you(?:'|’)re happy|want me to|would you like|send me|I can save)/i,
-  );
-  if (savePromptIndex >= 0) body = body.slice(0, savePromptIndex).trim();
-  return { subject, body: stripSimpleMarkdown(body).trim() };
-}
-
 function stripAgentDraftWrapperText(text: string): string {
   let body = text.replace(/\r\n/g, "\n").trim();
   const paragraphMarker = body.match(DRAFT_WRAPPER_INTRO_PARAGRAPH_PATTERN);
@@ -4860,91 +3290,6 @@ function draftWrapperParagraphIncludesEmailBody(paragraph: string): boolean {
   return /^\s*(?:[-–—]{3,}|(?:\*\*)?\s*(?:to|recipient|subject|subject line)\s*:|(?:hi|hello|dear)\b)/im.test(
     rest,
   );
-}
-
-function stripSimpleMarkdown(text: string): string {
-  return text
-    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
-    .replace(/\*([^*\n]+)\*/g, "$1");
-}
-
-function extractEmailAddress(text: string): string | null {
-  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match?.[0]?.trim().toLowerCase() || null;
-}
-
-async function resolveDraftRecipientFromContacts(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-  messageText: string,
-  draftText: string,
-): Promise<string | null> {
-  const name = extractDraftRecipientName(messageText) || extractDraftRecipientName(draftText);
-  const needle = normalizeContactLookupName(name);
-  if (!needle) return null;
-  const { contacts } = await listAgentContacts(env, userId);
-  const match = contacts.find(
-    (contact) =>
-      contact.status !== "archived" &&
-      Boolean(contact.email) &&
-      contactMatchesDraftRecipientName(contact, needle),
-  );
-  return normalizeEmail(match?.email);
-}
-
-function extractDraftRecipientName(text: string): string | null {
-  const match = text.match(/\bto\s+["'“”]?([^"'“”,.!?;\n]+)["'“”]?/iu);
-  const phrase = match?.[1]
-    ?.replace(/\b(?:about|regarding|re|subject|saying|with)\b[\s\S]*$/i, "")
-    .trim();
-  return phrase || null;
-}
-
-function contactMatchesDraftRecipientName(contact: AgentContact, needle: string): boolean {
-  return contactDraftRecipientNames(contact).some((candidate) => {
-    const normalized = normalizeContactLookupName(candidate);
-    if (!normalized) return false;
-    return normalized === needle || normalized.split(" ")[0] === needle;
-  });
-}
-
-function contactDraftRecipientNames(contact: AgentContact): string[] {
-  const metadata = contact.metadata || {};
-  const aliases = Array.isArray(metadata.aliases)
-    ? metadata.aliases.filter((alias): alias is string => typeof alias === "string")
-    : [];
-  return [contact.name, ...aliases, ...contact.tags];
-}
-
-function normalizeContactLookupName(value: unknown): string {
-  return typeof value === "string"
-    ? value
-        .replace(/^["'“”]+|["'“”]+$/g, "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-    : "";
-}
-
-async function listPendingAgentReminders(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  userId: string,
-): Promise<AgentReminder[]> {
-  try {
-    const rows = await env.DB.prepare(
-      `SELECT id, title, notes, remind_at, timezone, recurrence_rule, context_type,
-              context_id, context_label, status, delivered_at, dismissed_at, created_at
-       FROM user_reminders
-       WHERE user_id = ? AND status IN ('pending', 'failed')
-       ORDER BY remind_at ASC
-       LIMIT 8`,
-    )
-      .bind(userId)
-      .all<DbReminderRow>();
-    return (rows.results || []).map(serializeAgentReminder);
-  } catch {
-    return [];
-  }
 }
 
 async function listUpcomingBookings(
@@ -5005,31 +3350,6 @@ function addDaysToDate(date: string, days: number): string {
   const [year, month, day] = date.split("-").map(Number);
   const next = new Date(Date.UTC(year, month - 1, day + days, 12, 0, 0));
   return next.toISOString().slice(0, 10);
-}
-
-function parseReminderRecurrenceRule(recurrence: unknown, date: string): string | null {
-  const normalized =
-    typeof recurrence === "string" ? recurrence.trim().toLowerCase() : recurrence;
-  if (normalized == null || normalized === "" || normalized === "none") return null;
-  if (normalized === "daily") return "daily";
-
-  const [year, month, day] = date.split("-").map(Number);
-  if (!year || !month || !day) return null;
-  const weekday =
-    ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][
-      new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).getUTCDay()
-    ];
-
-  if (normalized === "weekly") return `weekly:${weekday}`;
-  if (normalized === "monthly") return `monthly:${day}`;
-  return null;
-}
-
-function hasExplicitReminderRecurrence(recurrence: unknown): boolean {
-  if (recurrence == null) return false;
-  if (typeof recurrence !== "string") return true;
-  const normalized = recurrence.trim().toLowerCase();
-  return normalized !== "" && normalized !== "none";
 }
 
 async function getAgentContact(
@@ -6509,19 +4829,33 @@ function buildAgentTurnTrace(
     : response.source === "fallback"
       ? "fallback"
       : "model";
+  const runtimeCapability = isCoreRuntimeToolSpecialist(response.specialist)
+      ? getCoreChatCapability(response.specialist as CoreChatCapabilityId)
+      : null;
   return {
     turnId: input.input.turnId,
     planner: input.plannerDecision,
     route: {
       path: routePath,
-      capabilityId: input.plannerDecision.capabilityId,
-      ownerFacingLabel: input.plannerDecision.ownerFacingLabel,
-      handlerRoute: input.plannerDecision.handlerRoute,
-      reason: input.plannerDecision.reason,
-      setupChecks: input.plannerDecision.requiredSetupChecks,
-      approvalRequired: input.plannerDecision.approvalRequired,
-      sideEffectLevel: input.plannerDecision.sideEffectLevel,
-      auditEventKind: input.plannerDecision.auditEventKind,
+      capabilityId: runtimeCapability?.id || input.plannerDecision.capabilityId,
+      ownerFacingLabel:
+        runtimeCapability?.ownerFacingLabel || input.plannerDecision.ownerFacingLabel,
+      handlerRoute:
+        runtimeCapability?.handler.route || input.plannerDecision.handlerRoute,
+      reason: runtimeCapability
+        ? "The provider-neutral Runtime v2 executed this typed capability."
+        : input.plannerDecision.reason,
+      setupChecks:
+        runtimeCapability
+          ? [...runtimeCapability.requiresSetup]
+          : input.plannerDecision.requiredSetupChecks,
+      approvalRequired: runtimeCapability
+        ? isCoreChatCapabilityApprovalRequired(runtimeCapability)
+        : input.plannerDecision.approvalRequired,
+      sideEffectLevel:
+        runtimeCapability?.chat.sideEffectLevel || input.plannerDecision.sideEffectLevel,
+      auditEventKind:
+        runtimeCapability?.auditEventKind || input.plannerDecision.auditEventKind,
     },
     selectedModel: input.route
       ? {
@@ -6643,9 +4977,18 @@ function toolResultTraceStatus(
   response: AgentSandboxDispatchResponse,
   plannerDecision: CoreChatToolPlannerDecision,
 ): AgentChatTurnTrace["toolResult"]["status"] {
+  if (isCoreRuntimeToolSpecialist(response.specialist)) return "succeeded";
   if (response.source !== "tool") return "not_attempted";
   if (plannerDecision.kind === "clarify") return "clarified";
   return response.fallbackReason ? "failed" : "succeeded";
+}
+
+function isCoreRuntimeToolSpecialist(specialist: string | null): boolean {
+  return Boolean(
+    specialist?.startsWith("core.reminders.") ||
+      specialist?.startsWith("core.mission.task.") ||
+      specialist?.startsWith("core.mailbox."),
+  );
 }
 
 function isAgentChatTraceEnabled(env: CoreAgentChatEnv): boolean {

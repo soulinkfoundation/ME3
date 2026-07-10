@@ -208,6 +208,9 @@ importers:
       '@me3-core/plugin-calendar':
         specifier: workspace:*
         version: link:../calendar
+      '@me3-core/plugin-mission-control':
+        specifier: workspace:*
+        version: link:../mission-control
       '@me3-core/plugin-social-publishing':
         specifier: workspace:*
         version: link:../social-publishing

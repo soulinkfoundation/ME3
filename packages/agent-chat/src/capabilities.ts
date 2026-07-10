@@ -55,6 +55,77 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.mailbox.search",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Search mailbox",
+    summary: "Search the owner's mailbox and return scoped message summaries with stable IDs.",
+    category: "email",
+    handler: {
+      surface: "chat",
+      route: "core.mailbox.search",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["mailbox"],
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Optional subject, sender, recipient, or body search." },
+        direction: {
+          type: "string",
+          description: "Optional message direction.",
+          enum: ["inbound", "outbound"],
+        },
+        folder: { type: "string", description: "Optional mailbox folder." },
+        unread: { type: "boolean", description: "Whether to return only unread inbound mail." },
+        limit: { type: "integer", description: "Maximum summaries to return, from 1 to 20." },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_mailbox_searched",
+    examples: {
+      positive: ["Find the latest email from Ada about the launch."],
+      negative: ["Draft an email to Ada."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.mailbox.read",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Read mailbox message",
+    summary: "Read one owner-scoped mailbox message using its stable message ID.",
+    category: "email",
+    handler: {
+      surface: "chat",
+      route: "core.mailbox.read",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["mailbox"],
+    inputSchema: {
+      type: "object",
+      required: ["messageId"],
+      properties: {
+        messageId: { type: "string", description: "Stable mailbox message ID from search results." },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_mailbox_message_read",
+    examples: {
+      positive: ["Read the full email you found from Ada."],
+      negative: ["Search my mailbox for Ada."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.mailbox.draft",
     owner: "core",
     pluginId: null,
@@ -75,6 +146,10 @@ export const CORE_CHAT_CAPABILITIES = [
         to: { type: "string", description: "Recipient email address.", format: "email" },
         subject: { type: "string", description: "Draft email subject." },
         body: { type: "string", description: "Plain-text email body." },
+        replyToMessageId: {
+          type: "string",
+          description: "Optional stable mailbox message ID when drafting a reply.",
+        },
       },
       additionalProperties: false,
     },
@@ -616,6 +691,14 @@ export const CORE_CHAT_CAPABILITIES = [
           type: "string",
           description: "Optional YYYY-MM-DD due date.",
           format: "date",
+        },
+        clearDescription: {
+          type: "boolean",
+          description: "Set true only when the owner explicitly asks to clear the description.",
+        },
+        clearDueAt: {
+          type: "boolean",
+          description: "Set true only when the owner explicitly asks to clear the due date.",
         },
       },
       additionalProperties: false,

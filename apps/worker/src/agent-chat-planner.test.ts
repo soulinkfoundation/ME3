@@ -11,9 +11,6 @@ import {
 type PlannerScenario = {
   name: string;
   messageText: string;
-  hasRecentAssistantEmailDraft?: boolean;
-  hasPendingMailboxDraftRecipient?: boolean;
-  hasPendingReminderCreate?: boolean;
   kind: CoreChatPlannerIntentKind;
   capabilityId: CoreChatCapabilityId;
   sideEffectLevel: CoreChatSideEffectLevel;
@@ -85,14 +82,6 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "none",
   },
   {
-    name: "pending reminder timing continuation becomes a write action",
-    messageText: "tomorrow at 9am",
-    hasPendingReminderCreate: true,
-    kind: "write_action",
-    capabilityId: "core.reminders.create",
-    sideEffectLevel: "write",
-  },
-  {
     name: "upcoming booking lookup becomes a read action",
     messageText: "Can you check my upcoming bookings this week?",
     kind: "read_action",
@@ -110,15 +99,6 @@ const plannerScenarios: PlannerScenario[] = [
   {
     name: "mailbox draft save follow-up becomes a write action",
     messageText: "Save that draft to ada@example.com",
-    hasRecentAssistantEmailDraft: true,
-    kind: "write_action",
-    capabilityId: "core.mailbox.draft",
-    sideEffectLevel: "write",
-  },
-  {
-    name: "pending mailbox draft recipient continuation becomes a write action",
-    messageText: "ada@example.com",
-    hasPendingMailboxDraftRecipient: true,
     kind: "write_action",
     capabilityId: "core.mailbox.draft",
     sideEffectLevel: "write",
@@ -355,9 +335,6 @@ describe("Core chat tool planner", () => {
   it.each(plannerScenarios)("$name", (scenario) => {
     const decision = planCoreChatToolTurn({
       messageText: scenario.messageText,
-      hasRecentAssistantEmailDraft: scenario.hasRecentAssistantEmailDraft,
-      hasPendingMailboxDraftRecipient: scenario.hasPendingMailboxDraftRecipient,
-      hasPendingReminderCreate: scenario.hasPendingReminderCreate,
     });
 
     expect(decision).toMatchObject({
@@ -387,8 +364,9 @@ describe("Core chat tool planner", () => {
       expect(capability.examples.negative.length).toBeGreaterThan(0);
 
       if (
-        capability.id === "core.reminders.update" ||
-        capability.id === "core.reminders.cancel"
+        capability.id.startsWith("core.reminders.") ||
+        capability.id.startsWith("core.mission.task.") ||
+        capability.id.startsWith("core.mailbox.")
       ) {
         // Runtime v2 tools are model-routed; do not grow the regex planner
         // while the replacement path is cutting over.
@@ -396,10 +374,7 @@ describe("Core chat tool planner", () => {
       }
 
       for (const prompt of capability.examples.positive) {
-        const decision = planCoreChatToolTurn({
-          messageText: prompt,
-          hasRecentAssistantEmailDraft: true,
-        });
+        const decision = planCoreChatToolTurn({ messageText: prompt });
         expect(decision.capabilityId, prompt).toBe(capability.id);
         expect(decision.ownerFacingLabel).toBe(capability.ownerFacingLabel);
         expect(decision.handlerRoute).toBe(capability.handler.route);
