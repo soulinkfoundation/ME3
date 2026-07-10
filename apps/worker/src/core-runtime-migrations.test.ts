@@ -19,6 +19,8 @@ describe("Core runtime migrations", () => {
     expect(db.columns.get("mission_tasks")?.has("pinned_at")).toBe(true);
     expect(db.columns.get("commerce_settings")?.has("default_currency")).toBe(true);
     expect(db.tables.has("ai_usage_events")).toBe(true);
+    expect(db.tables.has("agent_turn_results")).toBe(true);
+    expect(db.tables.has("agent_tool_executions")).toBe(true);
     expect(db.columns.get("financial_entries")?.has("project_id")).toBe(true);
     expect(db.migrations.get("0002_mission_task_pins")).toBe(
       "2026-06-24-mission-task-pins-v1",
@@ -31,6 +33,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0011_financial_entry_projects")).toBe(
       "2026-06-24-financial-entry-projects-v1",
+    );
+    expect(db.migrations.get("0015_agent_runtime_idempotency")).toBe(
+      "2026-07-09-agent-runtime-idempotency-v2",
     );
   });
 
@@ -91,6 +96,7 @@ class RuntimeMigrationDb {
     "commerce_settings",
     "financial_entries",
     "mission_tasks",
+    "mailbox_messages",
     "owner_profile",
     "mission_projects",
   ]);
@@ -109,6 +115,7 @@ class RuntimeMigrationDb {
       ]),
     ],
     ["mission_tasks", new Set(["id", "user_id", "title", "status", "priority"])],
+    ["mailbox_messages", new Set(["id", "mailbox_id", "message_kind"])],
   ]);
   readonly migrations = new Map<string, string>();
   readonly statements: string[] = [];
@@ -182,6 +189,14 @@ class RuntimeMigrationStatement {
       this.db.tables.add("ai_usage_events");
       return { success: true };
     }
+    if (this.sql.includes("CREATE TABLE IF NOT EXISTS agent_turn_results")) {
+      this.db.tables.add("agent_turn_results");
+      return { success: true };
+    }
+    if (this.sql.includes("CREATE TABLE IF NOT EXISTS agent_tool_executions")) {
+      this.db.tables.add("agent_tool_executions");
+      return { success: true };
+    }
     if (this.sql.includes("ALTER TABLE mission_tasks")) {
       const columns = this.db.columns.get("mission_tasks");
       if (columns?.has("pinned_at")) throw new Error("duplicate column name: pinned_at");
@@ -209,6 +224,14 @@ class RuntimeMigrationStatement {
       const columns = this.db.columns.get("financial_entries");
       if (columns?.has("project_id")) throw new Error("duplicate column name: project_id");
       columns?.add("project_id");
+      return { success: true };
+    }
+    if (this.sql.includes("ALTER TABLE mailbox_messages")) {
+      const columns = this.db.columns.get("mailbox_messages");
+      if (columns?.has("agent_idempotency_key")) {
+        throw new Error("duplicate column name: agent_idempotency_key");
+      }
+      columns?.add("agent_idempotency_key");
       return { success: true };
     }
     if (this.sql.includes("INSERT INTO core_runtime_migrations")) {

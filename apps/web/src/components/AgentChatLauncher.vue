@@ -168,6 +168,7 @@ async function sendMessage() {
 
   try {
     const result = await api.post<AgentSandboxResponse>("/assistant/chat/turn", {
+      requestId: crypto.randomUUID(),
       messageText: text,
     });
 

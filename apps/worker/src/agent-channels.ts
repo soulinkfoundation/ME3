@@ -108,6 +108,7 @@ export async function dispatchAgentChannelTurn(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       userId: input.userId,
+      requestId: input.sourceEventId,
       connectionId: input.connectionId,
       sourceEventId: input.sourceEventId,
       turnId: input.turnId,

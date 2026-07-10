@@ -45,11 +45,15 @@ type FakeDbState = {
 function createStorage() {
   const values = new Map<string, unknown>();
   return {
+    values,
     async get<T = unknown>(key: string): Promise<T | undefined> {
       return values.get(key) as T | undefined;
     },
     async put<T = unknown>(key: string, value: T): Promise<void> {
       values.set(key, value);
+    },
+    async delete(key: string | string[]): Promise<void> {
+      for (const item of Array.isArray(key) ? key : [key]) values.delete(item);
     },
   };
 }
@@ -215,6 +219,13 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             return (dbState.wheelSnapshots.find((snapshot) => snapshot.user_id === values[0]) || null) as T;
           }
           if (sql.includes("FROM mailbox_messages")) {
+            if (sql.includes("agent_idempotency_key = ?")) {
+              return (dbState.mailboxMessages.find(
+                (message) =>
+                  message.mailbox_id === values[0] &&
+                  message.agent_idempotency_key === values[1],
+              ) || null) as T;
+            }
             if (sql.includes("WHERE id = ? AND mailbox_id = ?")) {
               return (dbState.mailboxMessages.find(
                 (message) => message.id === values[0] && message.mailbox_id === values[1],
@@ -222,6 +233,13 @@ function createEnv(state: Partial<FakeDbState> = {}) {
             }
             return (dbState.mailboxMessages.find(
               (message) => message.mailbox_id === values[0],
+            ) || null) as T;
+          }
+          if (sql.includes("FROM user_reminders")) {
+            return (dbState.reminders.find(
+              (reminder) =>
+                reminder.user_id === values[0] &&
+                reminder.source_dispatch_id === values[1],
             ) || null) as T;
           }
           return null;
@@ -333,8 +351,14 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               created_at: values[6],
             });
           }
-          if (sql.includes("INSERT INTO user_reminders")) {
-            dbState.reminders.push({
+          if (sql.includes("INTO user_reminders")) {
+            const duplicate = dbState.reminders.some(
+              (reminder) =>
+                values[7] &&
+                reminder.user_id === values[1] &&
+                reminder.source_dispatch_id === values[7],
+            );
+            if (!duplicate) dbState.reminders.push({
               id: values[0],
               user_id: values[1],
               title: values[2],
@@ -342,12 +366,19 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               remind_at: values[4],
               timezone: values[5],
               recurrence_rule: values[6],
+              source_dispatch_id: values[7],
               status: "pending",
               created_at: new Date().toISOString(),
             });
           }
-          if (sql.includes("INSERT INTO mailbox_messages")) {
-            dbState.mailboxMessages.push({
+          if (sql.includes("INTO mailbox_messages")) {
+            const duplicate = dbState.mailboxMessages.some(
+              (message) =>
+                values[9] &&
+                message.mailbox_id === values[1] &&
+                message.agent_idempotency_key === values[9],
+            );
+            if (!duplicate) dbState.mailboxMessages.push({
               id: values[0],
               mailbox_id: values[1],
               direction: "outbound",
@@ -364,23 +395,30 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               raw_headers_json: null,
               raw_message: null,
               metadata_json: values[8],
-              source_id: values[9],
+              agent_idempotency_key: values[9],
+              source_id: values[10],
               folder: "drafts",
               read_at: null,
               agent_summary: null,
               agent_labels_json: null,
               forwarded_to: null,
               error_message: null,
-              created_by: values[10],
+              created_by: values[11],
               approved_by_user_id: null,
               received_at: null,
               approved_at: null,
               sent_at: null,
-              created_at: values[11],
+              created_at: values[12],
             });
           }
-          if (sql.includes("INSERT INTO mission_tasks")) {
-            dbState.tasks.push({
+          if (sql.includes("INTO mission_tasks")) {
+            const duplicate = dbState.tasks.some(
+              (task) =>
+                values[7] &&
+                task.user_id === values[1] &&
+                task.source_ref === values[7],
+            );
+            if (!duplicate) dbState.tasks.push({
               id: values[0],
               user_id: values[1],
               project_id: values[2],
@@ -391,8 +429,8 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               priority: 3,
               due_at: values[6],
               scheduled_for: null,
-              source_kind: "agent_chat",
-              source_ref: null,
+              source_kind: "agent",
+              source_ref: values[7],
               approval_id: null,
               metadata_json: null,
               created_at: new Date().toISOString(),
@@ -494,6 +532,7 @@ afterEach(() => {
 function dispatchInput(messageText: string) {
   return {
     userId: "owner",
+    requestId: crypto.randomUUID(),
     connectionId: "connection-1",
     sourceEventId: "event-1",
     turnId: crypto.randomUUID(),
@@ -502,6 +541,29 @@ function dispatchInput(messageText: string) {
 }
 
 describe("Core chat native context", () => {
+  it("keeps only the 32 most recent turn results in Durable Object storage", async () => {
+    const storage = createStorage();
+    const env = createEnv();
+
+    for (let index = 0; index < 33; index += 1) {
+      await dispatchAgentSandboxTurn(
+        env,
+        storage,
+        {
+          ...dispatchInput(`Turn ${index}`),
+          requestId: `request-${index}`,
+        },
+      );
+    }
+
+    const resultKeys = [...storage.values.keys()].filter((key) =>
+      key.startsWith("agent-chat:sandbox:result:"),
+    );
+    expect(resultKeys).toHaveLength(32);
+    expect(resultKeys).not.toContain("agent-chat:sandbox:result:request-0");
+    expect(resultKeys).toContain("agent-chat:sandbox:result:request-32");
+  });
+
   it("adds source-labeled native context to model prompts", async () => {
     const aiRun = vi.fn(async (_model: string, _input: unknown) => ({
       response: "Context-aware reply.",
@@ -1629,6 +1691,62 @@ describe("Core chat native context", () => {
         },
       ],
     });
+  });
+
+  it("does not duplicate a reminder when its write result is lost and retried", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-31T12:00:00Z"));
+    const env = createEnv();
+    const input = {
+      ...dispatchInput("Remind me to follow up with Sam tomorrow at 9am"),
+      requestId: "retry-reminder",
+    };
+
+    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
+    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
+
+    expect(env.state.reminders).toHaveLength(1);
+    expect(env.state.reminders[0]?.source_dispatch_id).toBe("retry-reminder");
+  });
+
+  it("does not duplicate a Mission task when its write result is lost and retried", async () => {
+    const env = createEnv({
+      projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
+    });
+    const input = {
+      ...dispatchInput("Add a task to project ME3 Launch to follow up with Sam tomorrow"),
+      requestId: "retry-task",
+    };
+
+    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
+    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
+
+    expect(env.state.tasks).toHaveLength(1);
+    expect(env.state.tasks[0]?.source_ref).toBe("retry-task");
+  });
+
+  it("does not duplicate a mailbox draft when its write result is lost and retried", async () => {
+    const env = createEnv({
+      recentMessages: [
+        {
+          role: "assistant",
+          content: "Subject: Hello\n\nHi Ada,\n\nA quick update.\n\nThanks,\nKieran",
+        },
+      ],
+      mailboxAliases: [mailboxAliasRow("mailbox-owner", "owner")],
+    });
+    const input = {
+      ...dispatchInput("Save that draft to ada@example.com"),
+      requestId: "retry-draft",
+    };
+
+    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
+    await dispatchAgentSandboxTurn(env as never, createStorage(), input);
+
+    expect(countMailboxDrafts(env.state.mailboxMessages)).toBe(1);
+    expect(env.state.mailboxMessages[0]?.agent_idempotency_key).toBe(
+      "retry-draft",
+    );
   });
 
   it("creates a pending reminder when the owner follows up with the missing time", async () => {

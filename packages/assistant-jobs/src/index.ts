@@ -743,9 +743,13 @@ export const ASSISTANT_JOB_CAPABILITIES = [
       type: "object",
       required: ["prompt"],
       properties: {
-        projectPolicyId: "Local Executor project policy id.",
-        prompt: "Bounded task prompt for the local runner.",
+        projectPolicyId: {
+          type: "string",
+          description: "Local Executor project policy id.",
+        },
+        prompt: { type: "string", description: "Bounded task prompt for the local runner." },
       },
+      additionalProperties: false,
     },
     userFacingReadSummary:
       "Reads the configured project policy and the owner-provided task.",

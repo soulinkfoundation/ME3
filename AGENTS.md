@@ -8,6 +8,13 @@
 - Run the narrow quality gate for the change. For web app work, run `pnpm build`.
 - Verify git scope before staging so install-local or unrelated user work is not hidden or reverted.
 
+## Ecosystem Source Of Truth
+
+- Canonical high-level ecosystem docs live at `/Users/kieranbutler/Coding/docs`.
+- Read `/Users/kieranbutler/Coding/docs/ecosystem.md` and `/Users/kieranbutler/Coding/docs/projects/me3.md` before strategic or cross-app work.
+- Shared UI guidance lives at `/Users/kieranbutler/Coding/design-system/AGENTS.md`.
+- Durable architecture belongs in the shared docs. Actionable plans, acceptance criteria, and execution history belong in beads.
+
 ## Worker API Structure
 
 - Keep `apps/worker/src/index.ts` as Worker composition/runtime wiring only: Hono app setup, global middleware, route registration, and Cloudflare `fetch`/`email`/`scheduled`/`queue` handlers.

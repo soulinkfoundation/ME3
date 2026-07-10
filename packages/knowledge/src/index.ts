@@ -207,10 +207,23 @@ export type Me3AgentCapabilityCategory =
   | "accounts"
   | "provider";
 
+export type Me3AgentCapabilitySchemaProperty = {
+  type:
+    | "string"
+    | "number"
+    | "integer"
+    | "boolean"
+    | readonly ("string" | "number" | "integer" | "boolean" | "null")[];
+  description: string;
+  enum?: readonly (string | number | boolean | null)[];
+  format?: string;
+};
+
 export type Me3AgentCapabilitySchema = {
   type: "object";
   required?: readonly string[];
-  properties?: Readonly<Record<string, string>>;
+  properties: Readonly<Record<string, Me3AgentCapabilitySchemaProperty>>;
+  additionalProperties: false;
 };
 
 export type Me3AgentCapabilityHandler = {
@@ -249,6 +262,8 @@ export type Me3AgentCapabilityContractIssue = {
 
 export const ME3_EMPTY_AGENT_CAPABILITY_SCHEMA = {
   type: "object",
+  properties: {},
+  additionalProperties: false,
 } as const satisfies Me3AgentCapabilitySchema;
 
 const ME3_AGENT_CAPABILITY_APPROVAL_MODE_WEIGHT: Record<
@@ -313,6 +328,37 @@ export function validateMe3AgentCapabilityContract(
       field: "handler",
       message: "Capabilities must name a handler route.",
     });
+  }
+
+  for (const [field, schema] of [
+    ["inputSchema", capability.inputSchema],
+    ["outputSchema", capability.outputSchema],
+  ] as const) {
+    if (schema.additionalProperties !== false) {
+      issues.push({
+        capabilityId: capability.id || "(missing)",
+        field,
+        message: `${field} must reject undeclared properties.`,
+      });
+    }
+    for (const required of schema.required ?? []) {
+      if (!schema.properties[required]) {
+        issues.push({
+          capabilityId: capability.id || "(missing)",
+          field,
+          message: `${field} requires undeclared property ${required}.`,
+        });
+      }
+    }
+    for (const [name, property] of Object.entries(schema.properties)) {
+      if (!property.description.trim()) {
+        issues.push({
+          capabilityId: capability.id || "(missing)",
+          field,
+          message: `${field} property ${name} needs a description.`,
+        });
+      }
+    }
   }
 
   if (!capability.examples.positive.length) {

@@ -386,6 +386,15 @@ describe("Core chat tool planner", () => {
       expect(capability.examples.positive.length).toBeGreaterThan(0);
       expect(capability.examples.negative.length).toBeGreaterThan(0);
 
+      if (
+        capability.id === "core.reminders.update" ||
+        capability.id === "core.reminders.cancel"
+      ) {
+        // Runtime v2 tools are model-routed; do not grow the regex planner
+        // while the replacement path is cutting over.
+        continue;
+      }
+
       for (const prompt of capability.examples.positive) {
         const decision = planCoreChatToolTurn({
           messageText: prompt,

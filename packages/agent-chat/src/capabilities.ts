@@ -72,10 +72,11 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["to", "subject", "body"],
       properties: {
-        to: "Recipient email address.",
-        subject: "Draft email subject.",
-        body: "Plain-text email body.",
+        to: { type: "string", description: "Recipient email address.", format: "email" },
+        subject: { type: "string", description: "Draft email subject." },
+        body: { type: "string", description: "Plain-text email body." },
       },
+      additionalProperties: false,
     },
     auditEventKind: "core_mailbox_draft_saved",
     examples: {
@@ -129,15 +130,101 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["title", "remindAt"],
       properties: {
-        title: "Reminder title.",
-        remindAt: "ISO timestamp for when to remind the owner.",
-        timezone: "Owner timezone.",
+        title: { type: "string", description: "Reminder title." },
+        notes: { type: "string", description: "Optional reminder notes." },
+        remindAt: {
+          type: "string",
+          description: "ISO timestamp for when to remind the owner.",
+          format: "date-time",
+        },
+        timezone: { type: "string", description: "Owner timezone." },
+        recurrence: {
+          type: "string",
+          description: "Optional daily, weekly, monthly, yearly, or custom recurrence.",
+        },
       },
+      additionalProperties: false,
     },
     auditEventKind: "core_reminder_created",
     examples: {
       positive: ["Remind me tomorrow at 9 to follow up with Sam."],
       negative: ["What reminder tools can you use?"],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.reminders.update",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Update reminder",
+    summary: "Update a pending Core reminder using its stable identifier.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.reminders.update",
+    },
+    sideEffect: "write_internal_active",
+    approvalMode: "none",
+    requiresSetup: ["calendar.reminders"],
+    inputSchema: {
+      type: "object",
+      required: ["reminderId", "title", "remindAt"],
+      properties: {
+        reminderId: { type: "string", description: "Stable reminder identifier." },
+        title: { type: "string", description: "Updated reminder title." },
+        notes: { type: "string", description: "Optional updated reminder notes." },
+        remindAt: {
+          type: "string",
+          description: "Updated ISO timestamp for the reminder.",
+          format: "date-time",
+        },
+        timezone: { type: "string", description: "Owner timezone." },
+        recurrence: {
+          type: "string",
+          description: "Optional updated recurrence.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_reminder_updated",
+    examples: {
+      positive: ["Move that reminder to tomorrow at 10."],
+      negative: ["What reminders are pending?"],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.reminders.cancel",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Cancel reminder",
+    summary: "Cancel a pending Core reminder using its stable identifier.",
+    category: "calendar",
+    handler: {
+      surface: "chat",
+      route: "core.reminders.cancel",
+    },
+    sideEffect: "write_internal_active",
+    approvalMode: "none",
+    requiresSetup: ["calendar.reminders"],
+    inputSchema: {
+      type: "object",
+      required: ["reminderId"],
+      properties: {
+        reminderId: { type: "string", description: "Stable reminder identifier." },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "core_reminder_cancelled",
+    examples: {
+      positive: ["Cancel the reminder to call Sam."],
+      negative: ["List my reminders."],
     },
     chat: {
       intentKind: "write_action",
@@ -213,9 +300,13 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["post"],
       properties: {
-        site: "Optional site username, domain, or profile name.",
-        post: "Blog post title, slug, file path, or alias.",
+        site: {
+          type: "string",
+          description: "Optional site username, domain, or profile name.",
+        },
+        post: { type: "string", description: "Blog post title, slug, file path, or alias." },
       },
+      additionalProperties: false,
     },
     auditEventKind: "site_blog_post_read",
     examples: {
@@ -245,13 +336,17 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["title"],
       properties: {
-        site: "Optional site username, domain, or profile name.",
-        title: "Blog post title.",
-        slug: "Optional slug.",
-        excerpt: "Optional excerpt.",
-        bodyMarkdown: "Optional markdown body.",
-        draft: "Whether the post should remain a draft.",
+        site: {
+          type: "string",
+          description: "Optional site username, domain, or profile name.",
+        },
+        title: { type: "string", description: "Blog post title." },
+        slug: { type: "string", description: "Optional slug." },
+        excerpt: { type: "string", description: "Optional excerpt." },
+        bodyMarkdown: { type: "string", description: "Optional markdown body." },
+        draft: { type: "boolean", description: "Whether the post should remain a draft." },
       },
+      additionalProperties: false,
     },
     auditEventKind: "site_blog_post_created",
     examples: {
@@ -281,15 +376,23 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["post"],
       properties: {
-        site: "Optional site username, domain, or profile name.",
-        post: "Blog post title, slug, file path, or alias.",
-        title: "Optional replacement title.",
-        slug: "Optional replacement slug.",
-        excerpt: "Optional replacement excerpt.",
-        bodyMarkdown: "Optional replacement markdown body.",
-        draft: "Optional draft/published state.",
-        publishedAt: "Optional YYYY-MM-DD publish date.",
+        site: {
+          type: "string",
+          description: "Optional site username, domain, or profile name.",
+        },
+        post: { type: "string", description: "Blog post title, slug, file path, or alias." },
+        title: { type: "string", description: "Optional replacement title." },
+        slug: { type: "string", description: "Optional replacement slug." },
+        excerpt: { type: "string", description: "Optional replacement excerpt." },
+        bodyMarkdown: { type: "string", description: "Optional replacement markdown body." },
+        draft: { type: "boolean", description: "Optional draft/published state." },
+        publishedAt: {
+          type: "string",
+          description: "Optional YYYY-MM-DD publish date.",
+          format: "date",
+        },
       },
+      additionalProperties: false,
     },
     auditEventKind: "site_blog_post_updated",
     examples: {
@@ -319,9 +422,13 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["post"],
       properties: {
-        site: "Optional site username, domain, or profile name.",
-        post: "Blog post title, slug, file path, or alias.",
+        site: {
+          type: "string",
+          description: "Optional site username, domain, or profile name.",
+        },
+        post: { type: "string", description: "Blog post title, slug, file path, or alias." },
       },
+      additionalProperties: false,
     },
     auditEventKind: "site_blog_post_archived",
     examples: {
@@ -351,11 +458,19 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["title"],
       properties: {
-        title: "Task title.",
-        description: "Optional task description, notes, details, or body.",
-        projectId: "Mission Control project ID.",
-        dueAt: "Optional YYYY-MM-DD due date.",
+        title: { type: "string", description: "Task title." },
+        description: {
+          type: "string",
+          description: "Optional task description, notes, details, or body.",
+        },
+        projectId: { type: "string", description: "Mission Control project ID." },
+        dueAt: {
+          type: "string",
+          description: "Optional YYYY-MM-DD due date.",
+          format: "date",
+        },
       },
+      additionalProperties: false,
     },
     auditEventKind: "mission_task_created",
     examples: {
@@ -384,9 +499,14 @@ export const CORE_CHAT_CAPABILITIES = [
     inputSchema: {
       type: "object",
       properties: {
-        projectId: "Optional Mission Control project ID.",
-        status: "Optional task status.",
+        projectId: { type: "string", description: "Optional Mission Control project ID." },
+        status: {
+          type: "string",
+          description: "Optional task status.",
+          enum: ["backlog", "in_progress", "review", "done"],
+        },
       },
+      additionalProperties: false,
     },
     auditEventKind: "mission_task_read",
     examples: {
@@ -416,8 +536,9 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["taskId"],
       properties: {
-        taskId: "Mission Control task ID.",
+        taskId: { type: "string", description: "Mission Control task ID." },
       },
+      additionalProperties: false,
     },
     auditEventKind: "mission_task_read",
     examples: {
@@ -446,9 +567,10 @@ export const CORE_CHAT_CAPABILITIES = [
     inputSchema: {
       type: "object",
       properties: {
-        projectId: "Optional Mission Control project ID.",
-        includeTasks: "Whether to include linked tasks.",
+        projectId: { type: "string", description: "Optional Mission Control project ID." },
+        includeTasks: { type: "boolean", description: "Whether to include linked tasks." },
       },
+      additionalProperties: false,
     },
     auditEventKind: "mission_context_read",
     examples: {
@@ -478,13 +600,25 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["taskId"],
       properties: {
-        taskId: "Mission Control task ID.",
-        title: "Optional replacement task title.",
-        description: "Optional replacement task description, notes, details, or body.",
-        projectId: "Optional destination project ID.",
-        status: "Optional task status.",
-        dueAt: "Optional YYYY-MM-DD due date.",
+        taskId: { type: "string", description: "Mission Control task ID." },
+        title: { type: "string", description: "Optional replacement task title." },
+        description: {
+          type: "string",
+          description: "Optional replacement task description, notes, details, or body.",
+        },
+        projectId: { type: "string", description: "Optional destination project ID." },
+        status: {
+          type: "string",
+          description: "Optional task status.",
+          enum: ["backlog", "in_progress", "review", "done"],
+        },
+        dueAt: {
+          type: "string",
+          description: "Optional YYYY-MM-DD due date.",
+          format: "date",
+        },
       },
+      additionalProperties: false,
     },
     auditEventKind: "mission_task_updated",
     examples: {
@@ -514,8 +648,9 @@ export const CORE_CHAT_CAPABILITIES = [
       type: "object",
       required: ["taskId"],
       properties: {
-        taskId: "Mission Control task ID.",
+        taskId: { type: "string", description: "Mission Control task ID." },
       },
+      additionalProperties: false,
     },
     auditEventKind: "mission_task_archived",
     examples: {

@@ -1209,7 +1209,7 @@ function createEnv(): Env & {
               }
 
               if (
-                sql.includes("INSERT INTO mailbox_messages") &&
+                sql.includes("INTO mailbox_messages") &&
                 sql.includes("'inbound'")
               ) {
                 state.mailboxMessages.push({
@@ -1247,10 +1247,16 @@ function createEnv(): Env & {
               }
 
               if (
-                sql.includes("INSERT INTO mailbox_messages") &&
+                sql.includes("INTO mailbox_messages") &&
                 sql.includes("'outbound'")
               ) {
-                state.mailboxMessages.push({
+                const duplicate = state.mailboxMessages.some(
+                  (message) =>
+                    values[9] &&
+                    message.mailbox_id === values[1] &&
+                    message.agent_idempotency_key === values[9],
+                );
+                if (!duplicate) state.mailboxMessages.push({
                   id: values[0] as string,
                   mailbox_id: values[1] as string,
                   direction: "outbound",
@@ -1267,20 +1273,21 @@ function createEnv(): Env & {
                   raw_headers_json: null,
                   raw_message: null,
                   metadata_json: values[8] as string,
-                  source_id: values[9] as string | null,
+                  agent_idempotency_key: values[9] as string | null,
+                  source_id: values[10] as string | null,
                   folder: "drafts",
                   read_at: null,
                   agent_summary: null,
                   agent_labels_json: null,
                   forwarded_to: null,
                   error_message: null,
-                  created_by: values[10] as string,
+                  created_by: values[11] as string,
                   approved_by_user_id: null,
                   received_at: null,
                   approved_at: null,
                   sent_at: null,
-                  created_at: values[11] as string,
-                  updated_at: values[12] as string,
+                  created_at: values[12] as string,
+                  updated_at: values[13] as string,
                 });
               }
 
@@ -1308,8 +1315,14 @@ function createEnv(): Env & {
                 };
               }
 
-              if (sql.includes("INSERT INTO user_reminders")) {
-                state.reminders.push({
+              if (sql.includes("INTO user_reminders")) {
+                const duplicate = state.reminders.some(
+                  (reminder) =>
+                    values[7] &&
+                    reminder.user_id === values[1] &&
+                    reminder.source_dispatch_id === values[7],
+                );
+                if (!duplicate) state.reminders.push({
                   id: values[0] as string,
                   user_id: values[1] as string,
                   title: values[2] as string,
@@ -1317,6 +1330,7 @@ function createEnv(): Env & {
                   remind_at: values[4] as string,
                   timezone: values[5] as string | null,
                   recurrence_rule: values[6] as string | null,
+                  source_dispatch_id: values[7] as string | null,
                   context_type: null,
                   context_id: null,
                   context_label: null,
@@ -1888,21 +1902,28 @@ function createEnv(): Env & {
                 }
               }
 
-              if (sql.includes("INSERT INTO agent_channel_events")) {
+              if (sql.includes("INTO agent_channel_events")) {
                 if (sql.includes("'sandbox'")) {
-                  state.agentEvents.push({
-                    id: values[0] as string,
-                    connection_id: values[1] as string,
-                    channel: "sandbox",
-                    direction: "inbound",
-                    event_type: "message",
-                    status: "received",
-                    provider_event_id: null,
-                    provider_message_id: null,
-                    reply_to_message_id: values[2] as string | null,
-                    text_body: values[3] as string | null,
-                    raw_json: values[4] as string | null,
-                  });
+                  const duplicate = state.agentEvents.some(
+                    (event) =>
+                      event.connection_id === values[1] &&
+                      event.provider_event_id === values[2],
+                  );
+                  if (!duplicate) {
+                    state.agentEvents.push({
+                      id: values[0] as string,
+                      connection_id: values[1] as string,
+                      channel: "sandbox",
+                      direction: "inbound",
+                      event_type: "message",
+                      status: "received",
+                      provider_event_id: values[2] as string,
+                      provider_message_id: null,
+                      reply_to_message_id: values[3] as string | null,
+                      text_body: values[4] as string | null,
+                      raw_json: values[5] as string | null,
+                    });
+                  }
                 } else if (!sql.includes("'telegram'")) {
                   state.agentEvents.push({
                     id: values[0] as string,
@@ -2065,10 +2086,28 @@ function createEnv(): Env & {
                 ) as T | null;
               }
               if (sql.includes("FROM mailbox_messages")) {
+                if (sql.includes("agent_idempotency_key = ?")) {
+                  return (
+                    state.mailboxMessages.find(
+                      (message) =>
+                        message.mailbox_id === values[0] &&
+                        message.agent_idempotency_key === values[1],
+                    ) || null
+                  ) as T | null;
+                }
                 return (
                   state.mailboxMessages.find(
                     (message) =>
                       message.id === values[0] && message.mailbox_id === values[1],
+                  ) || null
+                ) as T | null;
+              }
+              if (sql.includes("FROM user_reminders")) {
+                return (
+                  state.reminders.find(
+                    (reminder) =>
+                      reminder.user_id === values[0] &&
+                      reminder.source_dispatch_id === values[1],
                   ) || null
                 ) as T | null;
               }
@@ -5179,6 +5218,63 @@ describe("ME3 Core Worker auth", () => {
     expect(runtimeBody.attachmentTextContext).not.toContain(
       "do not audit raw attachment text",
     );
+  });
+
+  it("reuses the same sandbox turn for a repeated client request id", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const runtimeBodies: Array<Record<string, unknown>> = [];
+    const runtimeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      runtimeBodies.push(body);
+      return Response.json({
+        ok: true,
+        auditId: null,
+        turnId: body.turnId,
+        specialist: "core.agent-chat",
+        replyText: "Recorded once.",
+        model: "test-model",
+        source: "fallback",
+        fallbackReason: null,
+        debugError: null,
+        emailAction: null,
+        reminderAction: null,
+        contentAction: null,
+        contactsChanged: false,
+      });
+    });
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const send = (threadId?: string) =>
+      app.fetch(
+        new Request("http://localhost/api/assistant/chat/turn", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({
+            requestId: "client-request-1",
+            messageText: "Record this once",
+            ...(threadId ? { threadId } : {}),
+          }),
+        }),
+        env,
+      );
+
+    const first = await send();
+    const firstPayload = (await first.json()) as Record<string, unknown>;
+    const second = await send(String(firstPayload.threadId));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(env.agentEvents).toHaveLength(1);
+    expect(env.agentEvents[0]).toMatchObject({
+      provider_event_id: "client-request-1",
+    });
+    expect(runtimeBodies).toHaveLength(2);
+    expect(runtimeBodies[0]).toMatchObject({ requestId: "client-request-1" });
+    expect(runtimeBodies[1]?.turnId).toBe(runtimeBodies[0]?.turnId);
   });
 
   it("keeps generic blog drafting prompts in agent chat", async () => {

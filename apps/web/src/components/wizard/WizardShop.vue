@@ -624,6 +624,7 @@ async function suggestBusinessPositioning() {
     const response = await api.post<{ replyText?: string; error?: string }>(
       "/assistant/chat/turn",
       {
+        requestId: crypto.randomUUID(),
         messageText: buildSuggestionPrompt(),
       },
     );
@@ -659,6 +660,7 @@ async function saveBusinessDetails() {
     const response = await api.post<{ replyText?: string; error?: string }>(
       "/assistant/chat/turn",
       {
+        requestId: crypto.randomUUID(),
         messageText: buildBusinessInferencePrompt(),
       },
     );

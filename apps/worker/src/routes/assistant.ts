@@ -12,6 +12,7 @@ import {
 } from "../ai-providers";
 import {
   createAgentSandboxTurnRecord,
+  getAgentSandboxTurnResult,
   planCoreChatToolTurn,
   type AgentChatActionCard,
   type AgentChatImageAction,
@@ -79,6 +80,7 @@ type AssistantRouteDeps = {
 type ChatBody = { message?: string };
 type AssistantChatTurnBody = {
   messageText?: unknown;
+  requestId?: unknown;
   threadId?: unknown;
   projectId?: unknown;
   replyToMessageId?: unknown;
@@ -669,6 +671,22 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const trimmed = value.trim();
     if (!trimmed || trimmed.length > 160) return null;
     return trimmed;
+  }
+
+  function resolveAssistantRequestId(
+    value: unknown,
+  ): { requestId: string } | { error: string } {
+    if (value === undefined || value === null) {
+      return { requestId: crypto.randomUUID() };
+    }
+    if (typeof value !== "string") {
+      return { error: "Request id must be a string" };
+    }
+    const requestId = value.trim();
+    if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(requestId)) {
+      return { error: "Request id must be 1-128 safe characters" };
+    }
+    return { requestId };
   }
 
   function assistantThreadTitleFromMessage(messageText: string) {
@@ -2946,6 +2964,13 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (!displayMessageText) {
       return c.json({ ok: false, error: "Message text is required" }, 400);
     }
+    const request = resolveAssistantRequestId(body.requestId);
+    if ("error" in request) {
+      return c.json({ ok: false, error: request.error }, 400);
+    }
+    const requestId = request.requestId;
+    const replay = await getAgentSandboxTurnResult(c.env, ownerId, requestId);
+    if (replay) return c.json(replay);
     const siteToolsEnabled = assistantSiteToolsEnabled(c.env);
     const scopeParse = siteToolsEnabled
       ? parseAssistantScopes(displayMessageText, body.scopes)
@@ -3079,11 +3104,13 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
     const turn = await createAgentSandboxTurnRecord(c.env, {
       userId: ownerId,
+      requestId,
       messageText,
       replyToMessageId,
       metadata: {
         surface: "assistant",
         route: c.req.path,
+        requestId,
         threadId: thread.id,
         requestedThreadId,
         requestedProjectId,
@@ -3108,6 +3135,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: ownerId,
+          requestId,
           connectionId: turn.connection.id,
           sourceEventId: turn.sourceEvent.id,
           turnId: turn.turnId,
@@ -3161,6 +3189,11 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (!displayMessageText) {
       return c.json({ ok: false, error: "Message text is required" }, 400);
     }
+    const request = resolveAssistantRequestId(body.requestId);
+    if ("error" in request) {
+      return c.json({ ok: false, error: request.error }, 400);
+    }
+    const requestId = request.requestId;
     const siteToolsEnabled = assistantSiteToolsEnabled(c.env);
     const scopeParse = siteToolsEnabled
       ? parseAssistantScopes(displayMessageText, body.scopes)
@@ -3205,6 +3238,17 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
         try {
           send("status", { state: "started" });
+          const replay = await getAgentSandboxTurnResult(
+            c.env,
+            ownerId,
+            requestId,
+          );
+          if (replay) {
+            if (replay.threadId) send("thread", { threadId: replay.threadId });
+            await sendAssistantStreamText(send, replay.replyText || "");
+            send("done", replay as unknown as Record<string, unknown>);
+            return;
+          }
           const thread = await resolveAssistantThreadForTurn(
             c.env,
             ownerId,
@@ -3326,12 +3370,14 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
 
           const turn = await createAgentSandboxTurnRecord(c.env, {
             userId: ownerId,
+            requestId,
             messageText,
             replyToMessageId,
             metadata: {
               surface: "assistant",
               route: c.req.path,
               stream: true,
+              requestId,
               threadId: thread.id,
               requestedThreadId,
               requestedProjectId,
@@ -3363,6 +3409,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               signal: c.req.raw.signal,
               body: JSON.stringify({
                 userId: ownerId,
+                requestId,
                 connectionId: turn.connection.id,
                 sourceEventId: turn.sourceEvent.id,
                 turnId: turn.turnId,

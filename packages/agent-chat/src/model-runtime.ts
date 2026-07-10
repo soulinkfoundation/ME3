@@ -373,7 +373,7 @@ function attachImagesToLastUserMessage<
   );
 }
 
-function externalProviderGatewayUrl(
+export function externalProviderGatewayUrl(
   route: AgentChatAiRoute,
   provider: "openai" | "anthropic",
   path: string,

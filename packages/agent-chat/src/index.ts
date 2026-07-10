@@ -51,6 +51,13 @@ import {
   type PendingReminderCreate,
 } from "./reminders";
 import { maybeHandleSiteBlogPostToolTurn } from "./site-blog";
+import {
+  agentTurnResultStorageKey,
+  cacheAgentTurnResult,
+  getPersistedAgentTurnResult,
+  persistAgentTurnResult,
+  recordAgentSandboxRequest,
+} from "./turn-idempotency";
 
 export {
   isCoreChatBookingLookupRequest,
@@ -84,6 +91,38 @@ export {
   type CoreChatCapabilityContract,
   type CoreChatCapabilitySideEffect,
 } from "./capabilities";
+
+export {
+  CORE_CHAT_TOOLS,
+  coreChatToolName,
+  getCoreChatToolByName,
+  validateCoreChatToolDefinitions,
+  type CoreChatToolDefinition,
+  type CoreChatToolDefinitionIssue,
+} from "./tools";
+
+export {
+  MAX_AGENT_TOOL_MODEL_STEPS,
+  fromAnthropicToolResponse,
+  fromOpenAiToolResponse,
+  fromWorkersAiToolResponse,
+  runAgentToolLoop,
+  toAnthropicToolRequest,
+  toOpenAiToolRequest,
+  toWorkersAiToolRequest,
+  type AgentToolCall,
+  type AgentToolDefinition,
+  type AgentToolExecutor,
+  type AgentToolLoopResult,
+  type AgentToolMessage,
+  type AgentToolModel,
+  type AgentToolModelResponse,
+} from "./tool-runtime";
+
+export {
+  executeIdempotentAgentTool,
+  type AgentToolExecutionContext,
+} from "./tool-idempotency";
 
 export {
   classifyAssistantImageIntent,
@@ -143,6 +182,7 @@ export type AgentChatSource =
 
 export type AgentSandboxDispatchInput = {
   userId: string;
+  requestId: string;
   connectionId: string;
   sourceEventId: string;
   turnId: string;
@@ -358,6 +398,7 @@ export type AgentChatTurnTrace = {
 export type AgentReminderInput = {
   title?: unknown;
   notes?: unknown;
+  remindAt?: unknown;
   date?: unknown;
   time?: unknown;
   timezone?: unknown;
@@ -590,6 +631,7 @@ type AgentSandboxSourceEvent = {
 export type AgentSandboxTurnRecord = {
   connection: AgentSandboxConnection;
   sourceEvent: AgentSandboxSourceEvent;
+  requestId: string;
   turnId: string;
   messageText: string;
   replyToMessageId: string | number | null;
@@ -598,6 +640,7 @@ export type AgentSandboxTurnRecord = {
 type StorageLike = {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T = unknown>(key: string, value: T): Promise<void>;
+  delete?(key: string | string[]): Promise<unknown>;
 };
 
 type CoreChatToolTurnPlan = {
@@ -782,6 +825,7 @@ type DbMailboxMessageRow = {
   raw_headers_json: string | null;
   raw_message: string | null;
   metadata_json: string | null;
+  agent_idempotency_key?: string | null;
   source_id: string | null;
   folder: "inbox" | "drafts" | "sent" | "archive" | "trash";
   read_at: string | null;
@@ -852,6 +896,7 @@ type AgentMissionTask = {
   projectName: string;
   dueAt: string | null;
   status: string;
+  sourceRef?: string | null;
 };
 
 const AGENT_MISSION_TASK_SINGLE_DESCRIPTION_LIMIT = 4000;
@@ -1005,6 +1050,7 @@ export function isAgentSandboxDispatchInput(
   const input = value as Partial<AgentSandboxDispatchInput>;
   return (
     typeof input.userId === "string" &&
+    typeof input.requestId === "string" &&
     typeof input.connectionId === "string" &&
     typeof input.sourceEventId === "string" &&
     typeof input.turnId === "string" &&
@@ -1039,10 +1085,35 @@ export function parseAgentReminderInput(
 ): AgentReminderParseResult {
   const title = normalizeNullableText(input?.title);
   const notes = normalizeNullableText(input?.notes);
+  const directRemindAt = normalizeNullableText(input?.remindAt);
   const date = typeof input?.date === "string" ? input.date.trim() : "";
   const time = typeof input?.time === "string" ? input.time.trim() : "";
 
   if (!title) return { error: "Title is required" };
+  if (directRemindAt) {
+    if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(directRemindAt)) {
+      return { error: "Reminder timestamp must include a timezone offset" };
+    }
+    const parsedRemindAt = Date.parse(directRemindAt);
+    if (!Number.isFinite(parsedRemindAt)) {
+      return { error: "Reminder timestamp must be a valid ISO date-time" };
+    }
+    const timezone = normalizeTimeZone(input?.timezone) || "UTC";
+    const recurrenceRule = parseReminderRecurrenceRule(
+      input?.recurrence,
+      new Date(parsedRemindAt).toISOString().slice(0, 10),
+    );
+    if (hasExplicitReminderRecurrence(input?.recurrence) && !recurrenceRule) {
+      return { error: "Invalid recurrence value" };
+    }
+    return {
+      title,
+      notes,
+      remindAt: new Date(parsedRemindAt).toISOString(),
+      timezone,
+      recurrenceRule,
+    };
+  }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return { error: "Date must be in YYYY-MM-DD format" };
   }
@@ -1594,6 +1665,7 @@ export async function createAgentMailboxDraft(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
   input: AgentMailboxDraftInput,
+  options: { idempotencyKey?: string | null } = {},
 ): Promise<{ draft: AgentMailboxMessage } | { error: string; status: number }> {
   const mailbox = await getAgentMailboxRow(env, userId);
   if (!mailbox) return { error: "Mailbox not found", status: 404 };
@@ -1601,7 +1673,12 @@ export async function createAgentMailboxDraft(
   const normalized = await normalizeAgentMailboxDraftInput(env, mailbox, input);
   if ("error" in normalized) return normalized;
 
-  const draft = await insertAgentMailboxDraft(env, mailbox, normalized);
+  const draft = await insertAgentMailboxDraft(
+    env,
+    mailbox,
+    normalized,
+    normalizeNullableText(options.idempotencyKey),
+  );
   return { draft: serializeAgentMailboxMessage(draft) };
 }
 
@@ -1818,15 +1895,27 @@ export async function createAgentReminder(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
   input: AgentReminderInput,
+  options: { idempotencyKey?: string | null } = {},
 ): Promise<AgentReminder | { error: string }> {
   const parsed = parseAgentReminderInput(input);
   if ("error" in parsed) return parsed;
 
+  const idempotencyKey = normalizeNullableText(options.idempotencyKey);
+  if (idempotencyKey) {
+    const existing = await getAgentReminderByDispatchId(
+      env,
+      userId,
+      idempotencyKey,
+    );
+    if (existing) return serializeAgentReminder(existing);
+  }
+
   const id = crypto.randomUUID();
   await env.DB.prepare(
-    `INSERT INTO user_reminders
-       (id, user_id, title, notes, remind_at, timezone, recurrence_rule, status, created_via)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'agent')`,
+    `INSERT ${idempotencyKey ? "OR IGNORE " : ""}INTO user_reminders
+       (id, user_id, title, notes, remind_at, timezone, recurrence_rule,
+        status, source_dispatch_id, created_via)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'agent')`,
   )
     .bind(
       id,
@@ -1836,8 +1925,15 @@ export async function createAgentReminder(
       parsed.remindAt,
       parsed.timezone,
       parsed.recurrenceRule,
+      idempotencyKey,
     )
     .run();
+
+  if (idempotencyKey) {
+    const stored = await getAgentReminderByDispatchId(env, userId, idempotencyKey);
+    if (!stored) return { error: "Reminder could not be recorded." };
+    return serializeAgentReminder(stored);
+  }
 
   return {
     id,
@@ -1848,6 +1944,22 @@ export async function createAgentReminder(
     recurrenceRule: parsed.recurrenceRule,
     status: "pending",
   };
+}
+
+async function getAgentReminderByDispatchId(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  sourceDispatchId: string,
+): Promise<DbReminderRow | null> {
+  return env.DB.prepare(
+    `SELECT id, title, notes, remind_at, timezone, recurrence_rule, context_type,
+            context_id, context_label, status, delivered_at, dismissed_at, created_at
+     FROM user_reminders
+     WHERE user_id = ? AND source_dispatch_id = ?
+     LIMIT 1`,
+  )
+    .bind(userId, sourceDispatchId)
+    .first<DbReminderRow>();
 }
 
 export async function updateAgentReminder(
@@ -1959,6 +2071,7 @@ export async function createAgentSandboxTurnRecord(
   env: Pick<CoreAgentChatEnv, "DB">,
   input: {
     userId: string;
+    requestId: string;
     messageText: string;
     replyToMessageId?: string | number | null;
     metadata?: Record<string, unknown> | null;
@@ -1971,10 +2084,11 @@ export async function createAgentSandboxTurnRecord(
       ? input.replyToMessageId
       : null;
   const connection = await upsertSandboxConnection(env, input.userId);
-  const turnId = crypto.randomUUID();
-  const sourceEvent = await insertSandboxEvent(env, {
+  const stored = await recordAgentSandboxRequest(env.DB, {
+    eventId: crypto.randomUUID(),
     connectionId: connection.id,
-    turnId,
+    requestId: input.requestId,
+    turnId: crypto.randomUUID(),
     messageText,
     replyToMessageId,
     metadata: input.metadata,
@@ -1982,8 +2096,9 @@ export async function createAgentSandboxTurnRecord(
 
   return {
     connection,
-    sourceEvent,
-    turnId,
+    sourceEvent: { id: stored.eventId },
+    requestId: input.requestId,
+    turnId: stored.turnId,
     messageText,
     replyToMessageId,
   };
@@ -1994,9 +2109,19 @@ export async function dispatchAgentSandboxTurn(
   storage: StorageLike,
   input: AgentSandboxDispatchInput,
 ): Promise<AgentSandboxDispatchResponse> {
-  const resultKey = `agent-chat:sandbox:${input.turnId}`;
+  const resultKey = agentTurnResultStorageKey(input.requestId);
   const existing = await storage.get<AgentSandboxDispatchResponse>(resultKey);
   if (existing) return applyAgentTurnTracePolicy(env, { ...existing, ok: true });
+  const persisted = await getPersistedAgentTurnResult<AgentSandboxDispatchResponse>(
+    env.DB,
+    input.userId,
+    input.requestId,
+    input.turnId,
+  );
+  if (persisted) {
+    await cacheAgentTurnResult(storage, resultKey, persisted);
+    return applyAgentTurnTracePolicy(env, { ...persisted, ok: true });
+  }
 
   await storage.put("userId", input.userId);
   await storage.put("lastSandboxConnectionId", input.connectionId);
@@ -2036,7 +2161,7 @@ export async function dispatchAgentSandboxTurn(
       route: null,
       context: null,
     });
-    await storage.put(resultKey, response);
+    await persistAgentTurnResult(env.DB, storage, input, resultKey, response);
     return response;
   }
 
@@ -2087,7 +2212,7 @@ export async function dispatchAgentSandboxTurn(
       route: imageTurn.route,
       context: null,
     });
-    await storage.put(resultKey, response);
+    await persistAgentTurnResult(env.DB, storage, input, resultKey, response);
     return response;
   }
 
@@ -2201,8 +2326,20 @@ export async function dispatchAgentSandboxTurn(
     context: agentContext,
   });
 
-  await storage.put(resultKey, response);
+  await persistAgentTurnResult(env.DB, storage, input, resultKey, response);
   return response;
+}
+
+export async function getAgentSandboxTurnResult(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  requestId: string,
+): Promise<AgentSandboxDispatchResponse | null> {
+  return getPersistedAgentTurnResult<AgentSandboxDispatchResponse>(
+    env.DB,
+    userId,
+    requestId,
+  );
 }
 
 function appendAgentAttachmentReferenceContext(
@@ -2957,7 +3094,9 @@ async function maybeHandleCoreToolTurn(
       );
     }
 
-    const draft = await createAgentMailboxDraft(env, input.userId, draftPlan.input);
+    const draft = await createAgentMailboxDraft(env, input.userId, draftPlan.input, {
+      idempotencyKey: input.requestId,
+    });
     if ("error" in draft) {
       return toolResponse(input.turnId, "core.mailbox.draft", draft.error, {
         fallbackReason: "Mailbox draft could not be saved",
@@ -3026,7 +3165,9 @@ async function maybeHandleCoreToolTurn(
       );
     }
 
-    const reminder = await createAgentReminder(env, input.userId, reminderPlan.input);
+    const reminder = await createAgentReminder(env, input.userId, reminderPlan.input, {
+      idempotencyKey: input.requestId,
+    });
     if ("error" in reminder) {
       return toolResponse(input.turnId, "core.reminders.create", reminder.error, {
         fallbackReason: "Reminder could not be created",
@@ -3077,7 +3218,10 @@ async function maybeHandleCoreToolTurn(
       );
     }
 
-    const task = await createAgentMissionTask(env, input.userId, taskPlan.input);
+    const task = await createAgentMissionTask(env, input.userId, {
+      ...taskPlan.input,
+      idempotencyKey: input.requestId,
+    });
     if ("error" in task) {
       return toolResponse(input.turnId, "core.mission.task.create", task.error, {
         fallbackReason: "Mission task could not be created",
@@ -3527,8 +3671,16 @@ async function createAgentMissionTask(
     projectId: string;
     projectName: string;
     dueAt: string | null;
+    idempotencyKey?: string | null;
   },
 ): Promise<AgentMissionTask | { error: string }> {
+  const idempotencyKey = normalizeNullableText(input.idempotencyKey);
+  if (idempotencyKey) {
+    const existing = (await loadAgentMissionTasks(env, userId)).find(
+      (task) => task.sourceRef === idempotencyKey,
+    );
+    if (existing) return existing;
+  }
   const id = crypto.randomUUID();
   const status = "backlog";
   const columnId = `${input.projectId}:${status}`;
@@ -3545,16 +3697,34 @@ async function createAgentMissionTask(
       .catch(() => null);
 
     await env.DB.prepare(
-      `INSERT INTO mission_tasks
-         (id, user_id, project_id, column_id, title, description, status, priority, due_at, source_kind)
-       VALUES (?, ?, ?, ?, ?, ?, 'backlog', 3, ?, 'agent_chat')`,
+      `INSERT ${idempotencyKey ? "OR IGNORE " : ""}INTO mission_tasks
+         (id, user_id, project_id, column_id, title, description, status,
+          priority, due_at, source_kind, source_ref)
+       VALUES (?, ?, ?, ?, ?, ?, 'backlog', 3, ?, 'agent', ?)`,
     )
-      .bind(id, userId, input.projectId, columnId, input.title, input.description, input.dueAt)
+      .bind(
+        id,
+        userId,
+        input.projectId,
+        columnId,
+        input.title,
+        input.description,
+        input.dueAt,
+        idempotencyKey,
+      )
       .run();
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : "Mission task could not be created.",
     };
+  }
+
+  if (idempotencyKey) {
+    const stored = (await loadAgentMissionTasks(env, userId)).find(
+      (task) => task.sourceRef === idempotencyKey,
+    );
+    if (!stored) return { error: "Mission task could not be recorded." };
+    return stored;
   }
 
   return {
@@ -3865,6 +4035,7 @@ async function loadAgentMissionTasks(
 ): Promise<AgentMissionTask[]> {
   const rows = await env.DB.prepare(
     `SELECT t.id, t.title, t.description, t.project_id, t.status, t.due_at, t.scheduled_for,
+            t.source_ref,
             p.name AS project_name
      FROM mission_tasks t
      LEFT JOIN mission_projects p
@@ -3882,6 +4053,7 @@ async function loadAgentMissionTasks(
       status: string;
       due_at: string | null;
       scheduled_for: string | null;
+      source_ref: string | null;
       project_name: string | null;
     }>();
 
@@ -3896,6 +4068,7 @@ async function loadAgentMissionTasks(
         projectName: row.project_name || "Mission Control",
         dueAt: row.due_at || row.scheduled_for || null,
         status: row.status,
+        sourceRef: row.source_ref,
       },
     ];
   });
@@ -5000,7 +5173,8 @@ function serializeAgentMailboxDefaultSource(row: DbMailboxAliasRow) {
 function agentMailboxMessageSelectSql(): string {
   return `SELECT id, direction, message_kind, status, thread_key, from_address,
                  provider_id, provider_message_id, to_address, subject, text_body,
-                 html_body, raw_headers_json, raw_message, metadata_json, source_id, folder, read_at,
+                 html_body, raw_headers_json, raw_message, metadata_json,
+                 agent_idempotency_key, source_id, folder, read_at,
                  agent_summary, agent_labels_json, forwarded_to, error_message,
                  created_by, approved_by_user_id, received_at, approved_at,
                  sent_at, created_at
@@ -5256,16 +5430,27 @@ async function insertAgentMailboxDraft(
   env: Pick<CoreAgentChatEnv, "DB">,
   mailbox: DbMailboxAliasRow,
   input: NormalizedMailboxDraftInput,
+  idempotencyKey: string | null,
 ): Promise<DbMailboxMessageRow> {
+  if (idempotencyKey) {
+    const existing = await getAgentMailboxDraftByIdempotencyKey(
+      env,
+      mailbox.id,
+      idempotencyKey,
+    );
+    if (existing) return existing;
+  }
+
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await env.DB.prepare(
-    `INSERT INTO mailbox_messages (
+    `INSERT ${idempotencyKey ? "OR IGNORE " : ""}INTO mailbox_messages (
        id, mailbox_id, direction, message_kind, status, thread_key,
        from_address, to_address, subject, text_body, html_body,
-       metadata_json, source_id, folder, created_by, created_at, updated_at
+       metadata_json, agent_idempotency_key, source_id, folder, created_by,
+       created_at, updated_at
      )
-     VALUES (?, ?, 'outbound', 'draft', 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, 'drafts', ?, ?, ?)`,
+     VALUES (?, ?, 'outbound', 'draft', 'pending_approval', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'drafts', ?, ?, ?)`,
   )
     .bind(
       id,
@@ -5277,6 +5462,7 @@ async function insertAgentMailboxDraft(
       input.textBody,
       input.htmlBody,
       JSON.stringify(createDraftMetadata(input)),
+      idempotencyKey,
       input.sourceId,
       input.createdBy,
       now,
@@ -5284,9 +5470,29 @@ async function insertAgentMailboxDraft(
     )
     .run();
 
-  const draft = await getAgentMailboxMessageById(env, mailbox.id, id);
+  const draft = idempotencyKey
+    ? await getAgentMailboxDraftByIdempotencyKey(
+        env,
+        mailbox.id,
+        idempotencyKey,
+      )
+    : await getAgentMailboxMessageById(env, mailbox.id, id);
   if (!draft) throw new Error("Inserted draft could not be loaded");
   return draft;
+}
+
+async function getAgentMailboxDraftByIdempotencyKey(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  mailboxId: string,
+  idempotencyKey: string,
+): Promise<DbMailboxMessageRow | null> {
+  return env.DB.prepare(
+    `${agentMailboxMessageSelectSql()}
+     WHERE mailbox_id = ? AND message_kind = 'draft' AND agent_idempotency_key = ?
+     LIMIT 1`,
+  )
+    .bind(mailboxId, idempotencyKey)
+    .first<DbMailboxMessageRow>();
 }
 
 async function updateAgentMailboxDraftRow(
@@ -5798,40 +6004,6 @@ async function upsertSandboxConnection(
      VALUES (?, ?, 'sandbox', 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
   )
     .bind(id, ownerId, crypto.randomUUID())
-    .run();
-
-  return { id };
-}
-
-async function insertSandboxEvent(
-  env: Pick<CoreAgentChatEnv, "DB">,
-  input: {
-    connectionId: string;
-    turnId: string;
-    messageText: string;
-    replyToMessageId: string | number | null;
-    metadata?: Record<string, unknown> | null;
-  },
-): Promise<AgentSandboxSourceEvent> {
-  const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT INTO agent_channel_events
-       (id, connection_id, channel, direction, event_type, status,
-        reply_to_message_id, text_body, raw_json, created_at, updated_at)
-     VALUES (?, ?, 'sandbox', 'inbound', 'message', 'received',
-        ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-  )
-    .bind(
-      id,
-      input.connectionId,
-      input.replyToMessageId === null ? null : String(input.replyToMessageId),
-      input.messageText,
-      JSON.stringify({
-        runtime: "sandbox",
-        turnId: input.turnId,
-        ...(input.metadata || {}),
-      }),
-    )
     .run();
 
   return { id };

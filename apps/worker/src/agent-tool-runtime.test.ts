@@ -1,0 +1,306 @@
+import { describe, expect, it } from "vitest";
+import {
+  MAX_AGENT_TOOL_MODEL_STEPS,
+  fromAnthropicToolResponse,
+  fromOpenAiToolResponse,
+  fromWorkersAiToolResponse,
+  runAgentToolLoop,
+  toAnthropicToolRequest,
+  toOpenAiToolRequest,
+  toWorkersAiToolRequest,
+  type AgentToolDefinition,
+  type AgentToolMessage,
+} from "./agent-chat";
+
+const TOOLS: readonly AgentToolDefinition[] = [
+  {
+    name: "reminders_create",
+    description: "Create a reminder.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Reminder title." },
+        note: {
+          type: "string",
+          description: "Optional note.",
+          enum: ["brief", "full"],
+        },
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+  },
+];
+
+describe("provider-neutral agent tool loop", () => {
+  it("executes tool calls sequentially and returns the model's final reply", async () => {
+    const executionOrder: string[] = [];
+    let modelCalls = 0;
+
+    const result = await runAgentToolLoop({
+      messages: [{ role: "user", content: "Set both reminders" }],
+      tools: TOOLS,
+      model: async (messages) => {
+        modelCalls += 1;
+        if (modelCalls === 2) {
+          expect(messages.filter((message) => message.role === "tool")).toHaveLength(
+            2,
+          );
+          return { text: "Both reminders are set.", toolCalls: [] };
+        }
+        return {
+          text: "",
+          toolCalls: [
+            { id: "call-1", name: "reminders_create", arguments: { title: "A" } },
+            { id: "call-2", name: "reminders_create", arguments: { title: "B" } },
+          ],
+        };
+      },
+      executeTool: async (call) => {
+        executionOrder.push(`start:${call.id}`);
+        await Promise.resolve();
+        executionOrder.push(`end:${call.id}`);
+        return { ok: true };
+      },
+    });
+
+    expect(result.text).toBe("Both reminders are set.");
+    expect(result.modelSteps).toBe(2);
+    expect(result.executedToolCalls).toBe(2);
+    expect(executionOrder).toEqual([
+      "start:call-1",
+      "end:call-1",
+      "start:call-2",
+      "end:call-2",
+    ]);
+  });
+
+  it("returns unknown tools to the model as errors without executing them", async () => {
+    let modelCalls = 0;
+    let executions = 0;
+    const result = await runAgentToolLoop({
+      messages: [{ role: "user", content: "Do something" }],
+      tools: TOOLS,
+      model: async (messages) => {
+        modelCalls += 1;
+        if (modelCalls === 1) {
+          return {
+            text: "",
+            toolCalls: [{ id: "bad", name: "missing", arguments: {} }],
+          };
+        }
+        const error = messages[messages.length - 1];
+        expect(error).toMatchObject({ role: "tool", isError: true });
+        expect(error.content).toContain("Unknown tool");
+        return { text: "That action is unavailable.", toolCalls: [] };
+      },
+      executeTool: async () => {
+        executions += 1;
+      },
+    });
+
+    expect(result.text).toBe("That action is unavailable.");
+    expect(executions).toBe(0);
+  });
+
+  it("never exceeds four model steps", async () => {
+    let modelCalls = 0;
+    await expect(
+      runAgentToolLoop({
+        messages: [{ role: "user", content: "Loop" }],
+        tools: TOOLS,
+        maxModelSteps: 99,
+        model: async () => ({
+          text: "",
+          toolCalls: [
+            {
+              id: `call-${++modelCalls}`,
+              name: "reminders_create",
+              arguments: { title: "Again" },
+            },
+          ],
+        }),
+        executeTool: async () => ({ ok: true }),
+      }),
+    ).rejects.toThrow("4-step limit");
+    expect(modelCalls).toBe(MAX_AGENT_TOOL_MODEL_STEPS);
+  });
+});
+
+describe("agent tool provider adapters", () => {
+  const transcript: readonly AgentToolMessage[] = [
+    { role: "system", content: "Be useful." },
+    { role: "user", content: "Remind me." },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "call-1",
+          name: "reminders_create",
+          arguments: { title: "Call Mum" },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      toolCallId: "call-1",
+      name: "reminders_create",
+      content: '{"ok":true}',
+      isError: false,
+    },
+  ];
+
+  it("maps OpenAI strict tools and tool messages", () => {
+    const request = toOpenAiToolRequest(transcript, TOOLS) as {
+      messages: Array<Record<string, unknown>>;
+      tools: Array<{
+        function: {
+          strict: boolean;
+          parameters: {
+            required: string[];
+            properties: Record<string, { type: string[]; enum?: unknown[] }>;
+          };
+        };
+      }>;
+      parallel_tool_calls: boolean;
+    };
+
+    expect(request.parallel_tool_calls).toBe(false);
+    expect(request.messages[2]).toMatchObject({ role: "assistant" });
+    expect(request.messages[3]).toMatchObject({
+      role: "tool",
+      tool_call_id: "call-1",
+    });
+    expect(request.tools[0].function.strict).toBe(true);
+    expect(request.tools[0].function.parameters.required).toEqual([
+      "title",
+      "note",
+    ]);
+    expect(request.tools[0].function.parameters.properties.note.type).toEqual([
+      "string",
+      "null",
+    ]);
+    expect(request.tools[0].function.parameters.properties.note.enum).toEqual([
+      "brief",
+      "full",
+      null,
+    ]);
+
+    expect(
+      fromOpenAiToolResponse({
+        choices: [
+          {
+            message: {
+              content: null,
+              tool_calls: [
+                {
+                  id: "oa-1",
+                  function: {
+                    name: "reminders_create",
+                    arguments: '{"title":"Call Mum"}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      text: "",
+      toolCalls: [
+        {
+          id: "oa-1",
+          name: "reminders_create",
+          arguments: { title: "Call Mum" },
+        },
+      ],
+    });
+    expect(() =>
+      fromOpenAiToolResponse({ error: { message: "Rate limit exceeded" } }),
+    ).toThrow("OpenAI: Rate limit exceeded");
+  });
+
+  it("maps Anthropic tool-use and grouped tool-result blocks", () => {
+    const request = toAnthropicToolRequest(transcript, TOOLS) as {
+      system: string;
+      messages: Array<{ role: string; content: unknown }>;
+      tools: Array<{ strict: boolean; input_schema: unknown }>;
+    };
+
+    expect(request.system).toBe("Be useful.");
+    expect(request.messages[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "call-1" }],
+    });
+    expect(request.messages[2]).toMatchObject({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "call-1" }],
+    });
+    expect(request.tools[0]).toMatchObject({
+      strict: true,
+      input_schema: TOOLS[0].parameters,
+    });
+
+    expect(
+      fromAnthropicToolResponse({
+        content: [
+          { type: "text", text: "Checking." },
+          {
+            type: "tool_use",
+            id: "ant-1",
+            name: "reminders_create",
+            input: { title: "Call Mum" },
+          },
+        ],
+      }),
+    ).toEqual({
+      text: "Checking.",
+      toolCalls: [
+        {
+          id: "ant-1",
+          name: "reminders_create",
+          arguments: { title: "Call Mum" },
+        },
+      ],
+    });
+  });
+
+  it("maps Workers AI's native traditional function-calling shape", () => {
+    const request = toWorkersAiToolRequest(transcript, TOOLS) as {
+      messages: Array<{ role: string; content: string }>;
+      tools: Array<Record<string, unknown>>;
+    };
+
+    expect(request.messages[2]).toEqual({
+      role: "assistant",
+      content: '{"name":"reminders_create","arguments":{"title":"Call Mum"}}',
+    });
+    expect(request.messages[3]).toEqual({
+      role: "tool",
+      content: '{"ok":true}',
+    });
+    expect(request.tools[0]).toMatchObject({
+      name: "reminders_create",
+      parameters: TOOLS[0].parameters,
+    });
+
+    expect(
+      fromWorkersAiToolResponse({
+        response: "",
+        tool_calls: [
+          { name: "reminders_create", arguments: { title: "Call Mum" } },
+        ],
+      }),
+    ).toEqual({
+      text: "",
+      toolCalls: [
+        {
+          id: "workers_ai_call_1",
+          name: "reminders_create",
+          arguments: { title: "Call Mum" },
+        },
+      ],
+    });
+  });
+});

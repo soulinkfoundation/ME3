@@ -2747,6 +2747,7 @@ async function submitAssistantText(
     await api.streamEvents(
       "/assistant/chat/turn/stream",
       {
+        requestId: crypto.randomUUID(),
         messageText: normalized,
         threadId: assistantThreadId.value,
         projectId: assistantThreadId.value ? undefined : routeProjectId(),

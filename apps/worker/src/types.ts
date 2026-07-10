@@ -182,6 +182,7 @@ export interface DbUserReminder {
   remind_at: string;
   timezone: string | null;
   recurrence_rule: string | null;
+  source_dispatch_id?: string | null;
   context_type: "contact" | "booking" | null;
   context_id: string | null;
   context_label: string | null;
@@ -334,6 +335,7 @@ export interface DbMailboxMessage {
   raw_headers_json: string | null;
   raw_message: string | null;
   metadata_json: string | null;
+  agent_idempotency_key?: string | null;
   source_id: string | null;
   folder: "inbox" | "drafts" | "sent" | "archive" | "trash";
   read_at: string | null;
