@@ -47,6 +47,14 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0016_social_content_packages")).toBe(
       "2026-07-10-social-content-packages-v1",
     );
+    expect(db.migrations.get("0018_social_publication_idempotency")).toBe(
+      "2026-07-10-social-publication-idempotency-v1",
+    );
+    expect(
+      db.statements.some((sql) =>
+        sql.includes("idx_social_publications_one_active_variant"),
+      ),
+    ).toBe(true);
   });
 
   it("records already-applied schema without repeating destructive operations", async () => {

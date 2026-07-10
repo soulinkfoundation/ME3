@@ -1,10 +1,18 @@
 import { adapterFor } from "./adapters";
 
 export {
+  adapterFor,
+  type SocialPublishAdapter,
+  type SocialPublishAdapterResult,
+  type SocialPublishFailureClass,
+} from "./adapters";
+
+export {
   SOCIAL_CONTENT_SOURCE_TYPES,
   SocialContentPackageInputError,
   createSocialContentPackage,
   getSocialContentPackage,
+  listSocialContentPackages,
   updateSocialAccountVariant,
   type CreateSocialContentPackageInput,
   type SocialAccountVariant,
@@ -305,6 +313,18 @@ export type SocialPublishQueueMessage = {
   publicationId: string;
 };
 
+export type SocialVariantPublication = {
+  id: string;
+  variantId: string;
+  status: "queued" | "publishing" | "published" | "failed" | "cancelled";
+  platformPostId: string | null;
+  platformPostUrl: string | null;
+  publishedAt: string | null;
+  failureClass: import("./adapters").SocialPublishFailureClass | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
 type D1StatementLike = {
   bind(...values: unknown[]): {
     first<T = unknown>(): Promise<T | null>;
@@ -404,6 +424,59 @@ export async function listSocialPublishingAccounts(
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+export async function disconnectSocialPublishingAccount(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  accountIdInput: unknown,
+): Promise<boolean> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) throw new SocialPublishingGateError(gate);
+  const accountId = normalizeId(accountIdInput);
+  if (!accountId) throw new SocialPublishingInputError("Social account id is required");
+  const account = await env.DB.prepare(
+    `SELECT id FROM social_accounts
+     WHERE id = ? AND user_id = ?`,
+  )
+    .bind(accountId, ownerId)
+    .first<{ id: string }>();
+  if (!account) return false;
+
+  const pending = await env.DB.prepare(
+    `SELECT pub.id AS publication_id, pub.variant_id, pub.status
+     FROM social_publications pub
+     JOIN social_variants v ON v.id = pub.variant_id
+     WHERE v.target_account_id = ? AND pub.status IN ('queued', 'publishing')`,
+  )
+    .bind(accountId)
+    .all<{ publication_id: string; variant_id: string; status: "queued" | "publishing" }>();
+
+  await env.DB.prepare(
+    `UPDATE social_accounts
+     SET status = 'revoked', access_token_ciphertext = '', refresh_token_ciphertext = NULL,
+         token_expires_at = NULL, updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(accountId)
+    .run();
+
+  for (const publication of pending.results || []) {
+    const outcomeUnknown = publication.status === "publishing";
+    await failContentPublication(
+      env,
+      publication,
+      outcomeUnknown
+        ? "outcome_unknown:account_disconnected_during_publish"
+        : "reconnect_required:account_disconnected",
+      outcomeUnknown
+        ? "The account was disconnected while publishing. Check the provider before retrying."
+        : "Reconnect the selected account before publishing.",
+      undefined,
+      outcomeUnknown,
+    );
+  }
+  return true;
 }
 
 export async function listSocialProviderSettings(
@@ -1107,6 +1180,104 @@ export async function createQueuedContentPublicationAndEnqueue(
   return { item: serializeContentItem(updated), publicationIds };
 }
 
+export async function createQueuedSocialVariantPublicationAndEnqueue(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  variantIdInput: unknown,
+  fetcher: typeof fetch = fetch,
+): Promise<SocialVariantPublication | null> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) throw new SocialPublishingGateError(gate);
+  const variantId = normalizeId(variantIdInput);
+  if (!variantId) throw new SocialPublishingInputError("Social variant id is required");
+
+  const variant = await env.DB.prepare(
+    `SELECT v.id, v.platform, v.target_account_id, v.approval_status, p.site_id
+     FROM social_variants v
+     JOIN social_packages p ON p.id = v.package_id
+     JOIN sites s ON s.id = p.site_id
+     WHERE v.id = ? AND s.user_id = ?`,
+  )
+    .bind(variantId, ownerId)
+    .first<{
+      id: string;
+      platform: SocialPlatform;
+      target_account_id: string | null;
+      approval_status: string;
+      site_id: string;
+    }>();
+  if (!variant) return null;
+  if (variant.platform !== "linkedin") {
+    throw new SocialPublishingInputError("LinkedIn is the only enabled variant publisher for now");
+  }
+  if (variant.approval_status !== "approved") {
+    throw new SocialPublishingInputError("Approve this exact LinkedIn variant before publishing", 403);
+  }
+  if (!variant.target_account_id) {
+    throw new SocialPublishingInputError("Choose a connected LinkedIn account before publishing", 424);
+  }
+  const account = await env.DB.prepare(
+    `SELECT id FROM social_accounts
+     WHERE id = ? AND user_id = ? AND site_id = ? AND platform = ? AND status = 'active'`,
+  )
+    .bind(variant.target_account_id, ownerId, variant.site_id, variant.platform)
+    .first<{ id: string }>();
+  if (!account) {
+    throw new SocialPublishingInputError("Reconnect the selected LinkedIn account before publishing", 424);
+  }
+
+  const existing = await latestSocialVariantPublication(env, variantId, [
+    "queued",
+    "publishing",
+    "published",
+  ]);
+  if (existing) {
+    await env.DB.prepare(
+      "UPDATE social_variants SET scheduled_for = NULL, timezone = NULL WHERE id = ?",
+    )
+      .bind(variant.id)
+      .run();
+    return existing;
+  }
+
+  const publicationId = randomToken("socpub");
+  try {
+    await env.DB.prepare(
+      `INSERT INTO social_publications (
+         id, variant_id, site_id, platform, status, queued_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'queued', ?, datetime('now'), datetime('now'))`,
+    )
+      .bind(publicationId, variant.id, variant.site_id, variant.platform, new Date().toISOString())
+      .run();
+  } catch (error) {
+    const concurrent = await latestSocialVariantPublication(env, variantId, [
+      "queued",
+      "publishing",
+      "published",
+    ]);
+    if (concurrent) return concurrent;
+    throw error;
+  }
+  await env.DB.prepare(
+    "UPDATE social_variants SET scheduled_for = NULL, timezone = NULL, updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(variant.id)
+    .run();
+  await insertSocialPublicationEvent(env, {
+    publicationId,
+    variantId: variant.id,
+    eventType: "queued",
+    payload: { platform: variant.platform, targetAccountId: variant.target_account_id },
+  });
+
+  if (env.SOCIAL_PUBLISH_QUEUE) {
+    await env.SOCIAL_PUBLISH_QUEUE.send({ publicationId });
+  } else {
+    await publishQueuedContentPublication(env, publicationId, fetcher);
+  }
+  return latestSocialVariantPublication(env, variantId);
+}
+
 export async function dispatchDueSocialPublications(
   env: SocialPublishingEnv,
 ): Promise<{ queued: number; skipped: number }> {
@@ -1133,6 +1304,32 @@ export async function dispatchDueSocialPublications(
     try {
       const result = await createQueuedContentPublicationAndEnqueue(env, row.user_id, row.id);
       queued += result?.publicationIds.length || 0;
+    } catch {
+      skipped += 1;
+    }
+  }
+  const variants = await env.DB.prepare(
+    `SELECT v.id, s.user_id
+     FROM social_variants v
+     JOIN social_packages p ON p.id = v.package_id
+     JOIN sites s ON s.id = p.site_id
+     WHERE v.platform = 'linkedin'
+       AND v.approval_status = 'approved'
+       AND v.scheduled_for IS NOT NULL
+       AND datetime(v.scheduled_for) <= datetime('now')
+     ORDER BY v.scheduled_for ASC
+     LIMIT 20`,
+  )
+    .bind()
+    .all<{ id: string; user_id: string }>();
+  for (const variant of variants.results || []) {
+    try {
+      const publication = await createQueuedSocialVariantPublicationAndEnqueue(
+        env,
+        variant.user_id,
+        variant.id,
+      );
+      queued += publication ? 1 : 0;
     } catch {
       skipped += 1;
     }
@@ -1241,13 +1438,22 @@ export async function publishQueuedContentPublication(
   });
 
   if (!result.ok) {
+    const failureClass = result.failureClass || "rejected";
     await failContentPublication(
       env,
       row,
-      result.errorCode || "provider_failed",
+      `${failureClass}:${result.errorCode || "provider_failed"}`,
       result.errorMessage || "Social provider publish failed.",
       result.providerResponse,
+      failureClass === "outcome_unknown",
     );
+    if (failureClass === "reconnect_required" && row.account_id) {
+      await env.DB.prepare(
+        "UPDATE social_accounts SET status = 'expired', updated_at = datetime('now') WHERE id = ?",
+      )
+        .bind(row.account_id)
+        .run();
+    }
     return;
   }
 
@@ -1618,27 +1824,78 @@ async function getQueuedPublicationRow(
             pub.site_id,
             pub.platform,
             pub.status AS pub_status,
-            c.body,
-            c.media_manifest_json,
-            c.platforms_json,
-            c.approved_by_human,
-            c.user_id,
+            COALESCE(v.body_text, c.body) AS body,
+            COALESCE(v.asset_manifest_json, c.media_manifest_json, '[]') AS media_manifest_json,
+            COALESCE(c.platforms_json, '[]') AS platforms_json,
+            CASE
+              WHEN v.id IS NOT NULL AND v.approval_status = 'approved' THEN 1
+              WHEN v.id IS NOT NULL THEN 0
+              ELSE c.approved_by_human
+            END AS approved_by_human,
+            COALESCE(c.user_id, s.user_id) AS user_id,
             acct.id AS account_id,
             acct.platform_account_id,
             acct.access_token_ciphertext,
             acct.token_expires_at,
             acct.status AS account_status
      FROM social_publications pub
-     JOIN content_bank_items c ON c.id = pub.variant_id
+     LEFT JOIN content_bank_items c ON c.id = pub.variant_id
+     LEFT JOIN social_variants v ON v.id = pub.variant_id
+     LEFT JOIN social_packages p ON p.id = v.package_id
+     LEFT JOIN sites s ON s.id = p.site_id
      LEFT JOIN social_accounts acct
        ON acct.site_id = pub.site_id
       AND acct.platform = pub.platform
       AND acct.status = 'active'
+      AND (v.id IS NULL OR acct.id = v.target_account_id)
      WHERE pub.id = ?
+       AND (c.id IS NOT NULL OR v.id IS NOT NULL)
      LIMIT 1`,
   )
     .bind(publicationId)
     .first<SocialPublicationRow>();
+}
+
+async function latestSocialVariantPublication(
+  env: SocialPublishingEnv,
+  variantId: string,
+  statuses?: SocialVariantPublication["status"][],
+): Promise<SocialVariantPublication | null> {
+  const statusFilter = statuses?.length
+    ? ` AND status IN (${statuses.map(() => "?").join(", ")})`
+    : "";
+  const row = await env.DB.prepare(
+    `SELECT id, variant_id, status, platform_post_id, platform_post_url, published_at,
+            error_code, error_message
+     FROM social_publications
+     WHERE variant_id = ?${statusFilter}
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  )
+    .bind(variantId, ...(statuses || []))
+    .first<{
+      id: string;
+      variant_id: string;
+      status: SocialVariantPublication["status"];
+      platform_post_id: string | null;
+      platform_post_url: string | null;
+      published_at: string | null;
+      error_code: string | null;
+      error_message: string | null;
+    }>();
+  return row
+    ? {
+        id: row.id,
+        variantId: row.variant_id,
+        status: row.status,
+        platformPostId: row.platform_post_id,
+        platformPostUrl: row.platform_post_url,
+        publishedAt: row.published_at,
+        failureClass: parseFailureClass(row.error_code),
+        errorCode: row.error_code,
+        errorMessage: row.error_message,
+      }
+    : null;
 }
 
 async function insertSocialPublicationEvent(
@@ -1672,10 +1929,11 @@ async function failContentPublication(
   code: string,
   message: string,
   providerResponse?: unknown,
+  outcomeUnknown = false,
 ): Promise<void> {
   await env.DB.prepare(
     `UPDATE social_publications
-     SET status = 'failed',
+     SET status = ?,
          error_code = ?,
          error_message = ?,
          provider_response_json = ?,
@@ -1683,6 +1941,7 @@ async function failContentPublication(
      WHERE id = ?`,
   )
     .bind(
+      outcomeUnknown ? "publishing" : "failed",
       code,
       message,
       providerResponse === undefined ? null : JSON.stringify(providerResponse),
@@ -1698,10 +1957,33 @@ async function failContentPublication(
   await syncContentItemStatusFromPublications(env, row.variant_id);
 }
 
+function parseFailureClass(
+  code: string | null,
+): import("./adapters").SocialPublishFailureClass | null {
+  const value = code?.split(":", 1)[0];
+  return value === "retryable" ||
+      value === "reconnect_required" ||
+      value === "rejected" ||
+      value === "unsupported" ||
+      value === "outcome_unknown"
+    ? value
+    : null;
+}
+
 async function syncContentItemStatusFromPublications(
   env: SocialPublishingEnv,
   contentItemId: string,
 ): Promise<void> {
+  const variant = await env.DB.prepare(
+    "SELECT package_id FROM social_variants WHERE id = ?",
+  )
+    .bind(contentItemId)
+    .first<{ package_id: string }>();
+  if (variant) {
+    await syncSocialVariantStatusFromPublications(env, contentItemId, variant.package_id);
+    return;
+  }
+
   const rows = await env.DB.prepare(
     `SELECT status, published_at
      FROM social_publications
@@ -1752,6 +2034,64 @@ async function syncContentItemStatusFromPublications(
        WHERE id = ?`,
     )
       .bind(contentItemId)
+      .run();
+  }
+}
+
+async function syncSocialVariantStatusFromPublications(
+  env: SocialPublishingEnv,
+  variantId: string,
+  packageId: string,
+): Promise<void> {
+  const rows = await env.DB.prepare(
+    `SELECT id, status
+     FROM social_publications
+     WHERE variant_id = ?
+     ORDER BY created_at DESC`,
+  )
+    .bind(variantId)
+    .all<{ id: string; status: string }>();
+  const publications = rows.results || [];
+  if (publications.some((row) => row.status === "queued" || row.status === "publishing")) return;
+
+  const published = publications.find((row) => row.status === "published");
+  if (published) {
+    await env.DB.prepare(
+      `UPDATE social_variants
+       SET scheduled_for = NULL, timezone = NULL, published_variant_id = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+      .bind(published.id, variantId)
+      .run();
+    const counts = await env.DB.prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN EXISTS (
+                SELECT 1 FROM social_publications pub
+                WHERE pub.variant_id = v.id AND pub.status = 'published'
+              ) THEN 1 ELSE 0 END) AS published_count
+       FROM social_variants v
+       WHERE v.package_id = ?`,
+    )
+      .bind(packageId)
+      .first<{ total: number; published_count: number }>();
+    await env.DB.prepare(
+      "UPDATE social_packages SET status = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+      .bind(
+        counts && counts.total > 0 && counts.published_count === counts.total
+          ? "published"
+          : "partially_published",
+        packageId,
+      )
+      .run();
+    return;
+  }
+
+  if (publications.some((row) => row.status === "failed")) {
+    await env.DB.prepare(
+      "UPDATE social_packages SET status = 'failed', updated_at = datetime('now') WHERE id = ?",
+    )
+      .bind(packageId)
       .run();
   }
 }

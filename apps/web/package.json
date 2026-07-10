@@ -18,6 +18,7 @@
     "@me3-core/plugin-journal": "workspace:*",
     "@me3-core/plugin-landing-pages": "workspace:*",
     "@me3-core/plugin-mission-control": "workspace:*",
+    "@me3-core/site-renderer": "workspace:*",
     "@tanstack/vue-table": "^8.21.3",
     "@tiptap/core": "^3.19.0",
     "@tiptap/extension-horizontal-rule": "^3.19.0",

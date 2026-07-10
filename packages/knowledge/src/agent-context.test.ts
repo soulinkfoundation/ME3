@@ -571,7 +571,7 @@ describe("ME3 agent context resolvers", () => {
       generatedAt: "2026-05-16T10:00:00.000Z",
       ownerId: "owner",
       purpose: "assistant_job",
-      requestText: "Run the review.",
+      requestText: "Run the project review.",
       activeScope: {
         emailThreadId: "thread-active",
         projectId: "project-active",
@@ -599,7 +599,7 @@ describe("ME3 agent context resolvers", () => {
       ],
       candidateProjects: [
         project("project-active", "Client Review"),
-        project("project-other", "Other Review"),
+        project("project-other", "Compiler Project"),
       ],
       candidateTasks: [
         task("task-active", "Prepare active review", "project-active"),

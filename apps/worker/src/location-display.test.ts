@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatPublicLocation } from "./location-display";
+import { formatPublicLocation } from "@me3-core/site-renderer";
 
 describe("formatPublicLocation", () => {
   it("shortens verbose lookup labels with country codes", () => {

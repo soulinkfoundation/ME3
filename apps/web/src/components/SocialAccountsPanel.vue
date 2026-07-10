@@ -131,6 +131,10 @@ const modalProviderSetting = computed(() =>
   ),
 );
 
+const modalAccount = computed(() =>
+  connectModalPlatform.value ? accountByPlatform.value[connectModalPlatform.value] : null,
+);
+
 const hostedOAuthAvailable = computed(() => {
   const platform = connectModalPlatform.value;
   if (!platform || platform === "x") return false;
@@ -267,7 +271,27 @@ async function continueWithOwnApp() {
 }
 
 function isConnected(platform: SupportedPlatform): boolean {
-  return !!accountByPlatform.value[platform];
+  return accountByPlatform.value[platform]?.status === "active";
+}
+
+async function disconnectCurrentAccount() {
+  const account = modalAccount.value;
+  if (!account || busyPlatform.value) return;
+  if (!window.confirm(`Disconnect ${modalPlatformLabel.value}? Scheduled posts will pause until you reconnect.`)) {
+    return;
+  }
+  busyPlatform.value = connectModalPlatform.value;
+  localError.value = null;
+  try {
+    await social.disconnectSocialAccount(account.id);
+    await reloadAccounts();
+    connectModalPlatform.value = null;
+  } catch (error) {
+    social.setErrorFromApi(error, "Could not disconnect social account");
+    localError.value = social.error;
+  } finally {
+    busyPlatform.value = null;
+  }
 }
 
 onMounted(() => {
@@ -444,6 +468,9 @@ watch(
         </div>
 
         <p class="social-connect-modal__summary">{{ modalSummary }}</p>
+        <p v-if="modalAccount && modalAccount.status !== 'active'" class="social-connect-modal__status" role="status">
+          This account needs to be reconnected before publishing.
+        </p>
 
         <div
           v-if="hostedOAuthAvailable"
@@ -508,6 +535,15 @@ watch(
             }}
           </button>
         </div>
+        <button
+          v-if="modalAccount && modalAccount.status === 'active'"
+          type="button"
+          class="social-connect-modal__disconnect"
+          :disabled="busyPlatform !== null || savingProvider"
+          @click="disconnectCurrentAccount"
+        >
+          Disconnect account
+        </button>
       </section>
     </div>
   </section>
@@ -645,6 +681,24 @@ watch(
 
 .social-connect-btn--connected {
   border-color: #15803d;
+}
+
+.social-connect-modal__status {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-muted);
+  font-size: 0.9rem;
+}
+
+.social-connect-modal__disconnect {
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 :root[data-theme="dark"] .social-connect-btn--connected {

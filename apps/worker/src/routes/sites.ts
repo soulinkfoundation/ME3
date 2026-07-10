@@ -6,7 +6,7 @@ import {
   renderLandingPageHtml,
 } from "@me3-core/plugin-landing-pages";
 import { isCorePluginEnabled } from "../plugins";
-import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "../site-generator";
+import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
 import {
   bookingDetailsFromBooking,
   getOwnerContact,

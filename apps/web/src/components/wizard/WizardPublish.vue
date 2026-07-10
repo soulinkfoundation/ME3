@@ -13,7 +13,7 @@ import { useAuthStore } from "../../stores/auth";
 import { usePublish } from "../../composables/usePublish";
 import { useAppToast } from "../../composables/useAppToast";
 import { useRouter } from "vue-router";
-import ProfilePreview from "../ProfilePreview.vue";
+import GeneratedSitePreview from "../GeneratedSitePreview.vue";
 import UiIcon from "../UiIcon.vue";
 import {
   vibes,
@@ -579,22 +579,8 @@ function closeFooterModal() {
 
     <!-- Preview -->
     <div class="publish-preview">
-      <ProfilePreview
-        :profile="wizard.profile"
-        :pages="wizard.pages"
-        :posts="wizard.posts"
-        :blogEnabled="wizard.blogEnabled"
-        :blogTitle="wizard.blogTitle"
-        :products="wizard.products"
-        :shopEnabled="wizard.shopEnabled"
-        :shopTitle="wizard.shopTitle"
-        :testimonials="wizard.testimonials"
-        :testimonialsEnabled="wizard.testimonialsEnabled"
-        :testimonialsPlacement="wizard.testimonialsPlacement"
-        :testimonialsTitle="wizard.testimonialsTitle"
-        :vibe="wizard.vibe"
-        :isPro="canCustomizeFooter"
-        :accentOverride="wizard.accentOverride"
+      <GeneratedSitePreview
+        :editable-footer="canCustomizeFooter"
         @edit-footer="openFooterModal"
       />
     </div>

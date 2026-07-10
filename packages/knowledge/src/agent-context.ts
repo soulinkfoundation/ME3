@@ -365,8 +365,10 @@ export function resolveMe3AgentContextPacket(
     warnings,
   });
   const projectIds = new Set(projects.map((project) => project.id));
-  for (const thread of emailThreads) {
-    if (thread.projectId) projectIds.add(thread.projectId);
+  if (!input.activeScope?.projectId) {
+    for (const thread of emailThreads) {
+      if (thread.projectId) projectIds.add(thread.projectId);
+    }
   }
 
   const tasks = resolveTasks({
@@ -917,6 +919,12 @@ function resolveProjects(input: {
   maxProjects: number;
   warnings: string[];
 }): readonly Me3AgentContextProject[] {
+  if (input.activeProjectId) {
+    return input.projects
+      .filter((project) => project.id === input.activeProjectId)
+      .slice(0, input.maxProjects)
+      .map((project) => withSourceReason(project, "Active project scope."));
+  }
   const requestText = normalizeText(input.requestText);
   const emailProjectIds = new Set(
     input.emailThreads

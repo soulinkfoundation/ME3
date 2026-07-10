@@ -57,6 +57,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-10-social-content-packages-v1",
     apply: applySocialContentPackagesMigration,
   },
+  {
+    id: "0018_social_publication_idempotency",
+    checksum: "2026-07-10-social-publication-idempotency-v1",
+    apply: applySocialPublicationIdempotencyMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -519,6 +524,17 @@ async function applySocialContentPackagesMigration(db: D1Database): Promise<void
     .prepare(
       `CREATE INDEX IF NOT EXISTS idx_social_variants_target_account
        ON social_variants(target_account_id, approval_status, scheduled_for)`,
+    )
+    .run();
+}
+
+async function applySocialPublicationIdempotencyMigration(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_social_publications_one_active_variant
+       ON social_publications(variant_id)
+       WHERE variant_id LIKE 'social-variant-%'
+         AND status IN ('queued', 'publishing', 'published')`,
     )
     .run();
 }

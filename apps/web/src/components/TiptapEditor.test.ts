@@ -10,8 +10,6 @@ const mockUnsetLink = vi.fn(() => ({ run: vi.fn() }));
 const mockToggleBulletList = vi.fn(() => ({ run: vi.fn() }));
 const mockToggleOrderedList = vi.fn(() => ({ run: vi.fn() }));
 const mockToggleTaskList = vi.fn(() => ({ run: vi.fn() }));
-const mockSinkListItem = vi.fn(() => ({ run: vi.fn() }));
-const mockLiftListItem = vi.fn(() => ({ run: vi.fn() }));
 
 const mockEditor = {
   getHTML: vi.fn(() => "<p>Test content</p>"),
@@ -38,8 +36,6 @@ const mockEditor = {
       toggleBulletList: mockToggleBulletList,
       toggleOrderedList: mockToggleOrderedList,
       toggleTaskList: mockToggleTaskList,
-      sinkListItem: mockSinkListItem,
-      liftListItem: mockLiftListItem,
       toggleBlockquote: vi.fn(() => ({ run: vi.fn() })),
       setHorizontalRule: vi.fn(() => ({ run: vi.fn() })),
       undo: vi.fn(() => ({ run: vi.fn() })),
@@ -168,8 +164,6 @@ describe("TiptapEditor", () => {
     mockToggleBulletList.mockClear();
     mockToggleOrderedList.mockClear();
     mockToggleTaskList.mockClear();
-    mockSinkListItem.mockClear();
-    mockLiftListItem.mockClear();
   });
 
   it("should render the editor with default props", () => {
@@ -228,8 +222,6 @@ describe("TiptapEditor", () => {
     expect(wrapper.find('[title="Bullet list"]').exists()).toBe(true);
     expect(wrapper.find('[title="Numbered list"]').exists()).toBe(true);
     expect(wrapper.find('[title="Task list"]').exists()).toBe(true);
-    expect(wrapper.find('[title="Decrease list indent"]').exists()).toBe(true);
-    expect(wrapper.find('[title="Increase list indent"]').exists()).toBe(true);
     expect(wrapper.find('[title="Quote"]').exists()).toBe(true);
     expect(wrapper.find('[title="Divider"]').exists()).toBe(true);
     expect(wrapper.find('[title="Link"]').exists()).toBe(true);
@@ -327,7 +319,7 @@ describe("TiptapEditor", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("should run list and indent commands from toolbar buttons", async () => {
+  it("should run list commands from toolbar buttons", async () => {
     const wrapper = mount(TiptapEditor, {
       props: {
         modelValue: "",
@@ -337,14 +329,10 @@ describe("TiptapEditor", () => {
     await wrapper.find('[title="Bullet list"]').trigger("click");
     await wrapper.find('[title="Numbered list"]').trigger("click");
     await wrapper.find('[title="Task list"]').trigger("click");
-    await wrapper.find('[title="Increase list indent"]').trigger("click");
-    await wrapper.find('[title="Decrease list indent"]').trigger("click");
 
     expect(mockToggleBulletList).toHaveBeenCalled();
     expect(mockToggleOrderedList).toHaveBeenCalled();
     expect(mockToggleTaskList).toHaveBeenCalled();
-    expect(mockSinkListItem).toHaveBeenCalledWith("listItem");
-    expect(mockLiftListItem).toHaveBeenCalledWith("listItem");
   });
 
   it("should accept and display custom placeholder", () => {

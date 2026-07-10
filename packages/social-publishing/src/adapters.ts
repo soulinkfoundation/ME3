@@ -7,7 +7,15 @@ export type SocialPublishAdapterResult = {
   providerResponse?: unknown;
   errorCode?: string;
   errorMessage?: string;
+  failureClass?: SocialPublishFailureClass;
 };
+
+export type SocialPublishFailureClass =
+  | "retryable"
+  | "reconnect_required"
+  | "rejected"
+  | "unsupported"
+  | "outcome_unknown";
 
 export type SocialPublishAdapter = {
   validateDraft(input: {
@@ -25,7 +33,7 @@ export type SocialPublishAdapter = {
 
 const X_CHAR_LIMIT = 280;
 const LINKEDIN_MAX_CHARS = 3000;
-const LINKEDIN_VERSION = "202510";
+const LINKEDIN_VERSION = "202606";
 const INSTAGRAM_MAX_CHARS = 2200;
 
 export function adapterFor(platform: SocialPlatform): SocialPublishAdapter {
@@ -38,8 +46,16 @@ function providerError(
   errorCode: string,
   errorMessage: string,
   providerResponse?: unknown,
+  failureClass: SocialPublishFailureClass = "rejected",
 ): SocialPublishAdapterResult {
-  return { ok: false, errorCode, errorMessage, providerResponse };
+  return { ok: false, errorCode, errorMessage, providerResponse, failureClass };
+}
+
+function failureClassForStatus(status: number): SocialPublishFailureClass {
+  if (status === 401 || status === 403) return "reconnect_required";
+  if (status === 409 || status === 429 || status >= 500) return "retryable";
+  if (status === 400 || status === 422) return "rejected";
+  return "unsupported";
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -65,6 +81,12 @@ const linkedInAdapter: SocialPublishAdapter = {
         error: `This LinkedIn draft is too long (max ${LINKEDIN_MAX_CHARS} characters).`,
       };
     }
+    if (input.assets.some((asset) => asset.kind === "video")) {
+      return { ok: false, error: "LinkedIn publishing currently supports text and one image." };
+    }
+    if (input.assets.length > 1) {
+      return { ok: false, error: "LinkedIn publishing currently supports one image per post." };
+    }
     return { ok: true };
   },
 
@@ -77,6 +99,7 @@ const linkedInAdapter: SocialPublishAdapter = {
         "linkedin_userinfo",
         "Your LinkedIn connection may have expired.",
         await userinfoResponse.text().catch(() => ""),
+        failureClassForStatus(userinfoResponse.status),
       );
     }
 
@@ -87,28 +110,91 @@ const linkedInAdapter: SocialPublishAdapter = {
     }
 
     const author = sub.startsWith("urn:li:") ? sub : `urn:li:person:${sub}`;
-    const postResponse = await input.fetcher("https://api.linkedin.com/rest/posts", {
-      method: "POST",
-      headers: linkedInHeaders(input.accessToken),
-      body: JSON.stringify({
-        author,
-        commentary: input.bodyText,
-        visibility: "PUBLIC",
-        distribution: {
-          feedDistribution: "MAIN_FEED",
-          targetEntities: [],
-          thirdPartyDistributionChannels: [],
+    let content: { media: { id: string } } | undefined;
+    const asset = input.assets[0];
+    if (asset) {
+      const imageResponse = await input.fetcher(asset.url);
+      if (!imageResponse.ok) {
+        return providerError(
+          "linkedin_image_fetch",
+          "Could not load the LinkedIn image.",
+          undefined,
+          failureClassForStatus(imageResponse.status),
+        );
+      }
+      const initializeResponse = await input.fetcher(
+        "https://api.linkedin.com/rest/images?action=initializeUpload",
+        {
+          method: "POST",
+          headers: linkedInHeaders(input.accessToken),
+          body: JSON.stringify({ initializeUploadRequest: { owner: author } }),
         },
-        lifecycleState: "PUBLISHED",
-        isReshareDisabledByAuthor: false,
-      }),
-    });
+      );
+      const initialized = await readJson<{
+        value?: { uploadUrl?: string; image?: string };
+        message?: string;
+      }>(initializeResponse);
+      if (!initializeResponse.ok || !initialized.value?.uploadUrl || !initialized.value.image) {
+        return providerError(
+          "linkedin_image_initialize",
+          initialized.message || "LinkedIn could not initialize the image upload.",
+          initialized,
+          failureClassForStatus(initializeResponse.status),
+        );
+      }
+      const uploadResponse = await input.fetcher(initialized.value.uploadUrl, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          "Content-Type": asset.mimeType || imageResponse.headers.get("content-type") || "application/octet-stream",
+        },
+        body: await imageResponse.arrayBuffer(),
+      });
+      if (!uploadResponse.ok) {
+        return providerError(
+          "linkedin_image_upload",
+          "LinkedIn could not upload the image.",
+          await uploadResponse.text().catch(() => ""),
+          failureClassForStatus(uploadResponse.status),
+        );
+      }
+      content = { media: { id: initialized.value.image } };
+    }
+
+    let postResponse: Response;
+    try {
+      postResponse = await input.fetcher("https://api.linkedin.com/rest/posts", {
+        method: "POST",
+        headers: linkedInHeaders(input.accessToken),
+        body: JSON.stringify({
+          author,
+          commentary: input.bodyText,
+          visibility: "PUBLIC",
+          distribution: {
+            feedDistribution: "MAIN_FEED",
+            targetEntities: [],
+            thirdPartyDistributionChannels: [],
+          },
+          lifecycleState: "PUBLISHED",
+          isReshareDisabledByAuthor: false,
+          ...(content ? { content } : {}),
+        }),
+      });
+    } catch (error) {
+      return providerError(
+        "linkedin_outcome_unknown",
+        "LinkedIn did not confirm whether the post was published. Check LinkedIn before trying again.",
+        { message: error instanceof Error ? error.message : String(error) },
+        "outcome_unknown",
+      );
+    }
     const json = await readJson<Record<string, unknown>>(postResponse);
     if (!postResponse.ok) {
       return providerError(
         "linkedin_post_error",
         (json.message as string) || (json.error as string) || `LinkedIn API error (${postResponse.status})`,
         json,
+        failureClassForStatus(postResponse.status),
       );
     }
 
@@ -116,10 +202,18 @@ const linkedInAdapter: SocialPublishAdapter = {
       (json.id as string | undefined) ||
       postResponse.headers.get("x-restli-id") ||
       undefined;
+    if (!id) {
+      return providerError(
+        "linkedin_missing_post_id",
+        "LinkedIn accepted the request but did not return a post id. Check LinkedIn before trying again.",
+        json,
+        "outcome_unknown",
+      );
+    }
     return {
       ok: true,
       platformPostId: id,
-      platformPostUrl: id ? `https://www.linkedin.com/feed/update/${id}` : undefined,
+      platformPostUrl: `https://www.linkedin.com/feed/update/${id}`,
       providerResponse: json,
     };
   },
@@ -160,7 +254,7 @@ const xAdapter: SocialPublishAdapter = {
         json.detail ||
         json.title ||
         `X API error (${response.status})`;
-      return providerError("x_api_error", message, json);
+      return providerError("x_api_error", message, json, failureClassForStatus(response.status));
     }
     const id = json.data?.id;
     if (!id) return providerError("x_missing_id", "X did not return a post id.", json);
@@ -223,6 +317,7 @@ const instagramAdapter: SocialPublishAdapter = {
         "instagram_media_create",
         createJson.error?.message || `Instagram media creation failed (${createResponse.status}).`,
         createJson,
+        failureClassForStatus(createResponse.status),
       );
     }
 
@@ -243,6 +338,7 @@ const instagramAdapter: SocialPublishAdapter = {
         "instagram_media_publish",
         publishJson.error?.message || `Instagram publish failed (${publishResponse.status}).`,
         publishJson,
+        failureClassForStatus(publishResponse.status),
       );
     }
 

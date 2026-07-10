@@ -33,6 +33,7 @@ type FakeDbState = {
   assistantMessageAssets: Array<Record<string, unknown>>;
   aiUsageEvents: Array<Record<string, unknown>>;
   agentToolExecutions: Array<Record<string, unknown>>;
+  queries: string[];
   persistedMessages: Array<{
     id: string;
     ownerId: string;
@@ -139,12 +140,14 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     assistantMessageAssets: [],
     aiUsageEvents: [],
     agentToolExecutions: [],
+    queries: [],
     persistedMessages: [],
     ...state,
   };
 
   const db = {
     prepare(sql: string) {
+      dbState.queries.push(sql);
       const boundStatement = (values: unknown[]) => ({
         async first<T>() {
           if (sql.includes("FROM owner_profile")) {
@@ -516,9 +519,9 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("INTO mission_tasks")) {
             const duplicate = dbState.tasks.some(
               (task) =>
-                values[7] &&
+                values[8] &&
                 task.user_id === values[1] &&
-                task.source_ref === values[7],
+                task.source_ref === values[8],
             );
             if (!duplicate) dbState.tasks.push({
               id: values[0],
@@ -528,11 +531,11 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               title: values[4],
               description: values[5],
               status: "backlog",
-              priority: 3,
-              due_at: values[6],
+              priority: values[6],
+              due_at: values[7],
               scheduled_for: null,
               source_kind: "agent",
-              source_ref: values[7],
+              source_ref: values[8],
               approval_id: null,
               metadata_json: null,
               created_at: new Date().toISOString(),
@@ -542,7 +545,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           }
           if (sql.includes("UPDATE mission_tasks") && sql.includes("SET project_id = ?")) {
             const task = dbState.tasks.find(
-              (item) => item.id === values[6] && item.user_id === values[7],
+              (item) => item.id === values[7] && item.user_id === values[8],
             );
             if (task) {
               task.project_id = values[0];
@@ -550,7 +553,8 @@ function createEnv(state: Partial<FakeDbState> = {}) {
               task.title = values[2];
               task.description = values[3];
               task.status = values[4];
-              task.due_at = values[5];
+              task.priority = values[5];
+              task.due_at = values[6];
               task.updated_at = new Date().toISOString();
             }
           }
@@ -724,7 +728,7 @@ describe("Core chat native context", () => {
     });
 
     const response = await dispatchAgentSandboxTurn(
-      { ...env, AI: { run: aiRun } } as never,
+      { ...env, AI: { run: aiRun }, ME3_ASSISTANT_DEBUG_TRACE: "true" } as never,
       createStorage(),
       dispatchInput("Help me reply to Ada about the workflow notes."),
     );
@@ -754,6 +758,15 @@ describe("Core chat native context", () => {
     expect(system).toContain("contact:contact-ada");
     expect(system).not.toContain("Grace Hopper");
     expect(system).not.toContain("Compiler Notes");
+    expect(response.trace?.context).toMatchObject({
+      status: "loaded",
+      characterCount: expect.any(Number),
+      loadDurationMs: expect.any(Number),
+    });
+    expect(response.trace?.context.characterCount).toBeGreaterThan(0);
+    expect(env.state.queries.some((sql) => sql.includes("FROM assistant_jobs"))).toBe(false);
+    expect(env.state.queries.some((sql) => sql.includes("FROM calendar_sources"))).toBe(false);
+    expect(env.state.queries.some((sql) => sql.includes("FROM plugin_installations"))).toBe(false);
   });
 
   it("falls back to current chat behavior when context lookup fails", async () => {
@@ -1531,6 +1544,9 @@ describe("Core chat native context", () => {
     );
     expect(modelInput.messages[0]?.content).toContain("Wheel of Life snapshot:");
     expect(modelInput.messages[0]?.content).toContain("Offer 2-4 useful test prompts");
+    expect(
+      env.state.queries.filter((sql) => sql.includes("FROM plugin_installations")),
+    ).toHaveLength(1);
   });
 
   it("orients first-run setup prompts even before an AI provider is configured", async () => {
@@ -1617,6 +1633,8 @@ describe("Core chat native context", () => {
       },
       context: {
         status: "loaded",
+        characterCount: expect.any(Number),
+        loadDurationMs: expect.any(Number),
         packetId: "agent-context:owner:chat_reply",
       },
       modelCall: {
@@ -1675,7 +1693,9 @@ describe("Core chat native context", () => {
         configured: true,
       },
       context: {
-        status: "loaded",
+        status: "not_attempted",
+        characterCount: 0,
+        loadDurationMs: null,
       },
       modelCall: {
         status: "succeeded",
@@ -1904,7 +1924,7 @@ describe("Core chat native context", () => {
     const response = await dispatchAgentSandboxTurn(
       { ...env, AI: { run: aiRun }, ME3_ASSISTANT_DEBUG_TRACE: "true" } as never,
       createStorage(),
-      dispatchInput("Add Follow up with Sam to the ME3 Launch project by 15 July"),
+      dispatchInput("Add a task called Follow up with Sam to the ME3 Launch project by 15 July"),
     );
 
     expect(response).toMatchObject({
@@ -1917,6 +1937,11 @@ describe("Core chat native context", () => {
         }),
       ],
       trace: {
+        context: {
+          status: "not_attempted",
+          characterCount: 0,
+          loadDurationMs: null,
+        },
         route: { path: "model", capabilityId: "core.mission.task.create" },
         modelCall: { status: "succeeded" },
         toolResult: {
@@ -1931,6 +1956,8 @@ describe("Core chat native context", () => {
       project_id: "project-launch",
       due_at: "2026-07-15",
     });
+    expect(env.state.queries.some((sql) => sql.includes("FROM contacts"))).toBe(false);
+    expect(env.state.queries.some((sql) => sql.includes("FROM assistant_jobs"))).toBe(false);
   });
 
   it("saves structured mailbox drafts through the shared model loop", async () => {

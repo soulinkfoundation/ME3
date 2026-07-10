@@ -31,7 +31,7 @@ import {
   verifySoulinkDispatchAuth,
 } from "../agent-channels";
 import { isCorePluginEnabled } from "../plugins";
-import { generateSiteHtml, type Me3SiteProfile } from "../site-generator";
+import { generateSiteHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
 import {
   createEmptyPublishManifest,
   deleteSiteFile,

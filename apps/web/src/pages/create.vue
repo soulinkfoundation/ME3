@@ -4,7 +4,7 @@ import { computed, onMounted, ref, watch, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useWizardStore, type WizardStepId } from "../stores/wizard";
 import { usePublish } from "../composables/usePublish";
-import ProfilePreview from "../components/ProfilePreview.vue";
+import GeneratedSitePreview from "../components/GeneratedSitePreview.vue";
 
 // Step components
 import WizardBasics from "../components/wizard/WizardBasics.vue";
@@ -416,21 +416,8 @@ watch(() => wizard.currentStepId, syncRouteStep);
 
       <!-- Preview panel -->
       <div v-if="showPreview" class="preview-panel">
-        <ProfilePreview
-          :profile="wizard.profile"
-          :pages="wizard.pages"
-          :posts="wizard.posts"
-          :products="wizard.products"
-          :testimonials="wizard.testimonials"
-          :blogEnabled="wizard.blogEnabled"
-          :blogTitle="wizard.blogTitle"
-          :shopEnabled="wizard.shopEnabled"
-          :shopTitle="wizard.shopTitle"
-          :testimonialsEnabled="wizard.testimonialsEnabled"
-          :testimonialsPlacement="wizard.testimonialsPlacement"
-          :testimonialsTitle="wizard.testimonialsTitle"
-          :vibe="wizard.vibe"
-          :activeView="previewActiveView || undefined"
+        <GeneratedSitePreview
+          :active-view="previewActiveView || undefined"
           compact
         />
       </div>

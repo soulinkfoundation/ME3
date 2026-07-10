@@ -397,6 +397,8 @@ export type AgentChatTurnTrace = {
     status: "not_attempted" | "loaded" | "failed";
     packetId: string | null;
     summary: string | null;
+    characterCount: number;
+    loadDurationMs: number | null;
     sourceCount: number;
     sources: Array<{
       id: string;
@@ -904,11 +906,14 @@ type CoreChatAgentContextResult = {
   prompt: string | null;
   manifest: Me3AgentContextManifest | null;
   summary: string | null;
+  characterCount: number;
+  loadDurationMs: number;
   error: string | null;
 };
 
 type CoreChatSetupReadiness = {
   prompt: string;
+  pluginInstallations: DbPluginInstallationRow[];
 };
 
 type NormalizedMailboxDraftInput = {
@@ -1980,19 +1985,31 @@ export async function dispatchAgentSandboxTurn(
     input.attachmentTextContext,
   );
   const recent = toolPlan.recent;
-  const knowledgeContext = await loadMe3KnowledgeRuntimeContext(env, route.configured);
-  const setupReadiness = await loadCoreChatSetupReadiness(
-    env,
-    input.userId,
-    route.configured,
-    owner,
-  );
-  const agentContext = await loadCoreChatAgentContext(env, {
-    ownerId: input.userId,
-    owner,
-    recent,
-    messageText: runtimeMessageText,
-  });
+  const orientationTurn = isCoreChatOrientationTurn(toolPlan.decision);
+  const [setupReadiness, agentContext] = await Promise.all([
+    orientationTurn
+      ? loadCoreChatSetupReadiness(
+          env,
+          input.userId,
+          route.configured,
+          owner,
+        )
+      : Promise.resolve({ prompt: "", pluginInstallations: [] }),
+    toolPlan.decision.kind === "conversation"
+      ? loadCoreChatAgentContext(env, {
+          ownerId: input.userId,
+          owner,
+          recent,
+          messageText: runtimeMessageText,
+        })
+      : Promise.resolve(null),
+  ]);
+  const knowledgeContext = orientationTurn && route.configured
+    ? buildMe3KnowledgeRuntimeContext(
+        route.configured,
+        setupReadiness.pluginInstallations,
+      )
+    : "";
   const messages = buildChatMessages(
     owner,
     recent,
@@ -4925,6 +4942,8 @@ function buildAgentTraceContext(
       status: "not_attempted",
       packetId: null,
       summary: null,
+      characterCount: 0,
+      loadDurationMs: null,
       sourceCount: 0,
       sources: [],
       error: null,
@@ -4935,6 +4954,8 @@ function buildAgentTraceContext(
       status: "failed",
       packetId: null,
       summary: null,
+      characterCount: context.characterCount,
+      loadDurationMs: context.loadDurationMs,
       sourceCount: 0,
       sources: [],
       error: context.error,
@@ -4946,6 +4967,8 @@ function buildAgentTraceContext(
     status: "loaded",
     packetId: context.manifest?.packetId ?? null,
     summary: context.summary,
+    characterCount: context.characterCount,
+    loadDurationMs: context.loadDurationMs,
     sourceCount: sources.length,
     sources: sources.slice(0, 12).map((source) => ({
       id: source.id,
@@ -5020,10 +5043,12 @@ async function loadCoreChatAgentContext(
     messageText: string;
   },
 ): Promise<CoreChatAgentContextResult> {
+  const startedAt = performance.now();
   try {
     const activeDate = localDateForTimezone(input.owner?.timezone || null);
-    const contacts = await loadCoreContextContacts(env, input.ownerId);
+    const contactsPromise = loadCoreContextContacts(env, input.ownerId);
     const [
+      contacts,
       emailThreads,
       projects,
       tasks,
@@ -5035,7 +5060,10 @@ async function loadCoreChatAgentContext(
       skills,
     ] =
       await Promise.all([
-        loadCoreContextEmailThreads(env, input.ownerId, contacts),
+        contactsPromise,
+        contactsPromise.then((contacts) =>
+          loadCoreContextEmailThreads(env, input.ownerId, contacts)
+        ),
         loadCoreContextProjects(env, input.ownerId),
         loadCoreContextTasks(env, input.ownerId),
         loadCoreContextCalendarEvents(env, input.ownerId),
@@ -5089,6 +5117,8 @@ async function loadCoreChatAgentContext(
       prompt: prompt.text,
       manifest,
       summary: summarizeMe3AgentContextManifest(manifest),
+      characterCount: prompt.text.length,
+      loadDurationMs: Number((performance.now() - startedAt).toFixed(2)),
       error: null,
     };
   } catch (error) {
@@ -5097,6 +5127,8 @@ async function loadCoreChatAgentContext(
       prompt: null,
       manifest: null,
       summary: null,
+      characterCount: 0,
+      loadDurationMs: Number((performance.now() - startedAt).toFixed(2)),
       error: error instanceof Error ? error.message : "Agent context lookup failed",
     };
   }
@@ -5612,7 +5644,7 @@ async function loadCoreChatSetupReadiness(
   const [
     mailbox,
     profileSite,
-    plugins,
+    pluginInstallations,
     jobs,
     hasCalendarSource,
     hasSoulink,
@@ -5621,7 +5653,7 @@ async function loadCoreChatSetupReadiness(
   ] = await Promise.all([
     loadCoreSetupMailboxReadiness(env, ownerId),
     loadCoreSetupProfileSiteReadiness(env, ownerId),
-    loadCoreSetupPluginReadiness(env),
+    loadCorePluginInstallations(env),
     loadCoreSetupJobsReadiness(env, ownerId),
     hasCoreSetupRow(
       env,
@@ -5650,6 +5682,7 @@ async function loadCoreChatSetupReadiness(
       ownerId,
     ),
   ]);
+  const plugins = summarizeCoreSetupPlugins(pluginInstallations);
 
   const mailboxLine = mailbox
     ? mailbox.status === "active"
@@ -5685,6 +5718,7 @@ async function loadCoreChatSetupReadiness(
       "- Updates: release/version metadata is available through the Updates flow; check updates before upgrading this installation.",
       `- Local daemon: ${localDaemonText}.`,
     ].join("\n"),
+    pluginInstallations: pluginInstallations || [],
   };
 }
 
@@ -5709,9 +5743,9 @@ async function loadCoreSetupProfileSiteReadiness(
   }
 }
 
-async function loadCoreSetupPluginReadiness(
+async function loadCorePluginInstallations(
   env: Pick<CoreAgentChatEnv, "DB">,
-): Promise<CoreSetupPluginReadiness | null> {
+): Promise<DbPluginInstallationRow[] | null> {
   try {
     const rows = await env.DB.prepare(
       `SELECT plugin_id, enabled, status
@@ -5720,20 +5754,26 @@ async function loadCoreSetupPluginReadiness(
     )
       .bind()
       .all<DbPluginInstallationRow>();
-    const plugins = rows.results || [];
-    return {
-      total: plugins.length,
-      enabled: plugins.filter((plugin) => plugin.enabled !== 0 && plugin.status === "installed")
-        .length,
-      setupRequired: plugins.filter(
-        (plugin) => plugin.enabled !== 0 && plugin.status === "setup_required",
-      ).length,
-      disabled: plugins.filter((plugin) => plugin.enabled === 0 || plugin.status === "disabled")
-        .length,
-    };
+    return rows.results || [];
   } catch {
     return null;
   }
+}
+
+function summarizeCoreSetupPlugins(
+  plugins: DbPluginInstallationRow[] | null,
+): CoreSetupPluginReadiness | null {
+  if (!plugins) return null;
+  return {
+    total: plugins.length,
+    enabled: plugins.filter((plugin) => plugin.enabled !== 0 && plugin.status === "installed")
+      .length,
+    setupRequired: plugins.filter(
+      (plugin) => plugin.enabled !== 0 && plugin.status === "setup_required",
+    ).length,
+    disabled: plugins.filter((plugin) => plugin.enabled === 0 || plugin.status === "disabled")
+      .length,
+  };
 }
 
 async function loadCoreSetupJobsReadiness(
@@ -5850,10 +5890,10 @@ async function hasCoreSetupRow(
   }
 }
 
-async function loadMe3KnowledgeRuntimeContext(
-  env: CoreAgentChatEnv,
+function buildMe3KnowledgeRuntimeContext(
   aiRouteConfigured: boolean,
-): Promise<string> {
+  installations: readonly DbPluginInstallationRow[],
+): string {
   const context: Me3KnowledgeRuntimeContext = {
     surface: "core",
     chatRuntime: "conversation_only",
@@ -5861,27 +5901,16 @@ async function loadMe3KnowledgeRuntimeContext(
     missingFeatureIds: aiRouteConfigured ? [] : ["ai.chat_provider"],
   };
 
-  try {
-    const rows = await env.DB.prepare(
-      `SELECT plugin_id, enabled, status
-       FROM plugin_installations
-       ORDER BY plugin_id`,
-    ).bind().all<DbPluginInstallationRow>();
-    const installations = rows.results || [];
-    context.installedPluginIds = installations.map((row) => row.plugin_id);
-    context.enabledPluginIds = installations
-      .filter((row) => row.enabled !== 0 && row.status === "installed")
-      .map((row) => row.plugin_id);
-    context.setupRequiredPluginIds = installations
-      .filter((row) => row.enabled !== 0 && row.status === "setup_required")
-      .map((row) => row.plugin_id);
-    context.disabledPluginIds = installations
-      .filter((row) => row.enabled === 0 || row.status === "disabled")
-      .map((row) => row.plugin_id);
-  } catch {
-    // Knowledge context should improve answers, not break chat when plugin state
-    // has not been migrated yet.
-  }
+  context.installedPluginIds = installations.map((row) => row.plugin_id);
+  context.enabledPluginIds = installations
+    .filter((row) => row.enabled !== 0 && row.status === "installed")
+    .map((row) => row.plugin_id);
+  context.setupRequiredPluginIds = installations
+    .filter((row) => row.enabled !== 0 && row.status === "setup_required")
+    .map((row) => row.plugin_id);
+  context.disabledPluginIds = installations
+    .filter((row) => row.enabled === 0 || row.status === "disabled")
+    .map((row) => row.plugin_id);
 
   return buildMe3CapabilityContext(context);
 }

@@ -109,6 +109,8 @@ import {
 } from "./routes/mailbox";
 import { registerMissionControlRoutes } from "./routes/mission-control";
 import { registerSchedulingRoutes } from "./routes/scheduling";
+import { registerSocialContentRoutes } from "./routes/social-content";
+import { registerSocialAccountRoutes } from "./routes/social-accounts";
 import { registerPublicSiteRoutes, registerSiteRoutes } from "./routes/sites";
 import { registerUsernameRoutes } from "./routes/usernames";
 import {
@@ -196,7 +198,7 @@ import {
   titleFromSlug,
   type PublishManifest,
 } from "./sites";
-import { generateSiteHtml, type Me3SiteProfile } from "./site-generator";
+import { generateSiteHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
 import type {
   AssistantJobEventQueueMessage,
   BookingReminderQueueMessage,
@@ -831,6 +833,8 @@ registerJournalRoutes(app, { requireOwner, unauthorized });
 registerMissionControlRoutes(app, { requireOwner, unauthorized });
 registerLocalExecutorRoutes(app, { requireOwner, unauthorized, getCoreApiOrigin });
 registerMobileRoutes(app, { requireOwner, unauthorized, getCoreApiOrigin, getCoreWebOrigin });
+registerSocialContentRoutes(app, { requireOwner, unauthorized });
+registerSocialAccountRoutes(app, { requireOwner, unauthorized });
 app.get("/api/social/status", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);

@@ -223,7 +223,7 @@ function saveTestimonial() {
   }
 
   // If the avatar is a blob: URL stored on the testimonial, do not revoke it here.
-  // closeForm() would revoke the same URL and break ProfilePreview / the list.
+  // closeForm() would revoke the same URL and break the generated preview / list.
   const keptBlobObjectUrl = Boolean(
     avatarBlobPending.value &&
       avatarObjectUrl.value &&

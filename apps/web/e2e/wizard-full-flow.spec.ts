@@ -72,6 +72,10 @@ test.describe("Wizard Full Flow", () => {
     await wizard.expectStepName("Additional Features");
     await wizard.nextStep();
 
+    // Step 8: Offerings
+    await wizard.expectStepName("Offerings");
+    await wizard.nextStep();
+
     // Final step: Publish
     await wizard.expectStepName("Publish");
 
@@ -170,6 +174,8 @@ test.describe("Wizard Full Flow", () => {
     await wizard.nextStep();
     await wizard.expectStepName("Additional Features");
     await wizard.nextStep();
+    await wizard.expectStepName("Offerings");
+    await wizard.nextStep();
     await wizard.expectStepName("Publish");
   });
 
@@ -212,7 +218,7 @@ test.describe("Wizard Full Flow", () => {
     page.once("dialog", (dialog) => dialog.accept());
     await page.click(".exit-btn");
 
-    // Should navigate away to app home (or finish on root during mocked flows)
-    await page.waitForURL(/\/home(\/|\?|$)/, { timeout: 3000 });
+    // The mocked site list is empty, so the site route resolves to setup.
+    await page.waitForURL(/\/(?:start|calendar)(?:\/|\?|$)/, { timeout: 3000 });
   });
 });

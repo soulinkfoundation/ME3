@@ -12,6 +12,11 @@ import { useAppToast } from "../composables/useAppToast";
 import { useInboxDraftCount } from "../composables/useInboxDraftCount";
 import { useAuthStore } from "../stores/auth";
 import { useContactsStore, type Contact } from "../stores/contacts";
+import {
+  mailboxCacheScope,
+  useMailboxCacheStore,
+  type MailboxListRequest,
+} from "../stores/mailbox";
 import type { UiIconName } from "../utils/icons";
 import { decodeMimeHeaderValue } from "../../../../shared/email-headers";
 
@@ -190,6 +195,7 @@ type TelegramChatBubble = {
 };
 
 const loading = ref(false);
+const messagesLoaded = ref(false);
 const error = ref("");
 const messages = ref<InboxMessage[]>([]);
 const total = ref(0);
@@ -236,13 +242,12 @@ const offset = ref(0);
 const limit = 50;
 const TELEGRAM_PAGE_LIMIT = 50;
 const {
-  loadInboxDraftCount,
-  refreshInboxDraftCount,
   setInboxDraftCount,
 } =
   useInboxDraftCount();
 const { toastFromUnknown, toastSuccess } = useAppToast();
 const auth = useAuthStore();
+const mailboxCache = useMailboxCacheStore();
 const route = useRoute();
 const router = useRouter();
 const contactsStore = useContactsStore();
@@ -264,6 +269,7 @@ const telegramMoreError = ref("");
 const telegramNotice = ref("");
 const turns = ref<AgentTurn[]>([]);
 const telegramTotal = ref(0);
+let messageRequestId = 0;
 
 function isInternalMailboxAddress(address: string | null | undefined) {
   return Boolean(address?.trim().toLowerCase().endsWith("@me3.local"));
@@ -611,7 +617,7 @@ function setFolderCount(tab: EmailTab, count: number | null) {
 async function loadFolderCounts() {
   if (!isEmailTab(activeTab.value)) return;
   const entries = await Promise.all(
-    emailTabOrder.map(async (tab) => {
+    emailTabOrder.filter((tab) => tab !== activeTab.value).map(async (tab) => {
       try {
         const data = await api.get<MessagesResponse>(buildFolderCountUrl(tab));
         return [tab, data.total] as const;
@@ -803,26 +809,69 @@ function removeMessageLocally(id: string) {
   syncSelectedMessages(messages.value);
 }
 
+function mailboxListRequest(tab: EmailTab): MailboxListRequest {
+  const config = emailTabConfig[tab];
+  return {
+    folder: config.folderParam,
+    status: config.statusParam,
+    direction: config.directionParam,
+    search: searchQuery.value.trim() || undefined,
+    limit,
+    offset: offset.value,
+  };
+}
+
+function cacheActiveMessages() {
+  if (!isEmailTab(activeTab.value) || !messagesLoaded.value) return;
+  mailboxCache.setList(mailboxCacheScope(auth.user?.id), mailboxListRequest(activeTab.value), {
+    messages: messages.value,
+    total: total.value,
+  });
+}
+
+function ignorePendingMessageResponses() {
+  messageRequestId += 1;
+}
+
 async function loadMessages() {
   if (!isEmailTab(activeTab.value)) return;
   const tab = activeTab.value;
-  loading.value = true;
+  const requestId = ++messageRequestId;
+  const request = mailboxListRequest(tab);
+  const scope = mailboxCacheScope(auth.user?.id);
+  const cached = mailboxCache.getList<InboxMessage>(scope, request);
+  if (cached) {
+    loading.value = false;
+    messages.value = cached.messages;
+    total.value = cached.total;
+    messagesLoaded.value = true;
+    setFolderCount(tab, cached.total);
+    syncSelectedMessages(cached.messages);
+    selectFirstMessageOnDesktop();
+  } else {
+    loading.value = true;
+    messagesLoaded.value = false;
+    messages.value = [];
+    total.value = 0;
+  }
   error.value = "";
   mobileThreadOpen.value = false;
   try {
-    const config = emailTabConfig[tab];
     const params = new URLSearchParams();
-    params.set("folder", config.folderParam);
-    if (config.statusParam) params.set("status", config.statusParam);
-    params.set("direction", config.directionParam);
-    if (searchQuery.value.trim()) params.set("q", searchQuery.value.trim());
-    params.set("limit", String(limit));
-    params.set("offset", String(offset.value));
+    params.set("folder", request.folder);
+    if (request.status) params.set("status", request.status);
+    params.set("direction", request.direction);
+    if (request.search) params.set("q", request.search);
+    params.set("limit", String(request.limit));
+    params.set("offset", String(request.offset));
     const data = await api.get<MessagesResponse>(
       `/mailbox/messages?${params.toString()}`,
     );
+    if (requestId !== messageRequestId) return;
+    mailboxCache.setList(scope, request, data);
     messages.value = data.messages;
     total.value = data.total;
+    messagesLoaded.value = true;
     setFolderCount(tab, data.total);
     syncSelectedMessages(data.messages);
     selectFirstMessageOnDesktop();
@@ -839,7 +888,7 @@ async function loadMessages() {
         err instanceof Error ? err.message : "Failed to load messages";
     }
   } finally {
-    loading.value = false;
+    if (requestId === messageRequestId) loading.value = false;
   }
 }
 
@@ -1054,12 +1103,13 @@ async function refreshMessagesPage() {
   if (activeTab.value === "telegram") {
     await loadTelegramHistory();
   } else {
-    await loadChannelHealth();
     await loadMessages();
+    await Promise.all([
+      loadChannelHealth(),
+      loadFolderCounts(),
+      contactsStore.fetchContacts(),
+    ]);
   }
-  await refreshInboxDraftCount();
-  await loadFolderCounts();
-  await contactsStore.fetchContacts();
 }
 
 function selectMessage(id: string) {
@@ -1074,15 +1124,17 @@ async function approveMessage(msg: InboxMessage) {
   error.value = "";
   const previousMessages = messages.value;
   const previousTotal = total.value;
+  ignorePendingMessageResponses();
   removeMessageLocally(msg.id);
+  cacheActiveMessages();
   try {
     await runDraftAction(msg.id, "approve");
-    await refreshInboxDraftCount();
-    await loadFolderCounts();
+    void loadFolderCounts();
   } catch (err) {
     messages.value = previousMessages;
     total.value = previousTotal;
     syncSelectedMessages(previousMessages);
+    cacheActiveMessages();
     error.value = err instanceof Error ? err.message : "Failed to approve";
   } finally {
     actionPending.value = null;
@@ -1095,15 +1147,17 @@ async function rejectMessage(msg: InboxMessage) {
   error.value = "";
   const previousMessages = messages.value;
   const previousTotal = total.value;
+  ignorePendingMessageResponses();
   removeMessageLocally(msg.id);
+  cacheActiveMessages();
   try {
     await runDraftAction(msg.id, "reject");
-    await refreshInboxDraftCount();
-    await loadFolderCounts();
+    void loadFolderCounts();
   } catch (err) {
     messages.value = previousMessages;
     total.value = previousTotal;
     syncSelectedMessages(previousMessages);
+    cacheActiveMessages();
     error.value = err instanceof Error ? err.message : "Failed to reject";
   } finally {
     actionPending.value = null;
@@ -1127,6 +1181,7 @@ async function moveMessage(
       ? msg.readAt || new Date().toISOString()
       : msg.readAt;
 
+  ignorePendingMessageResponses();
   messages.value = targetIsCurrentTab
     ? messages.value.map((message) =>
         message.id === msg.id
@@ -1142,15 +1197,16 @@ async function moveMessage(
     }
   }
   syncSelectedMessages(messages.value);
+  cacheActiveMessages();
 
   try {
     await api.post(`/mailbox/messages/${msg.id}/move`, { folder });
-    void refreshInboxDraftCount();
     void loadFolderCounts();
   } catch (err) {
     messages.value = previousMessages;
     total.value = previousTotal;
     syncSelectedMessages(previousMessages);
+    cacheActiveMessages();
     error.value = err instanceof Error ? err.message : "Failed to move message";
   } finally {
     deletePending.value = null;
@@ -1169,6 +1225,7 @@ async function moveSelectedMessages(folder: "inbox" | "archive" | "trash") {
     emailTabConfig[activeTab.value].folderParam === folder;
   const readAt = new Date().toISOString();
 
+  ignorePendingMessageResponses();
   messages.value = targetIsCurrentTab
     ? messages.value.map((message) =>
         ids.has(message.id)
@@ -1192,6 +1249,7 @@ async function moveSelectedMessages(folder: "inbox" | "archive" | "trash") {
   }
   clearSelectedMessages();
   syncSelectedMessages(messages.value);
+  cacheActiveMessages();
 
   try {
     await Promise.all(
@@ -1199,12 +1257,12 @@ async function moveSelectedMessages(folder: "inbox" | "archive" | "trash") {
         api.post(`/mailbox/messages/${id}/move`, { folder }),
       ),
     );
-    void refreshInboxDraftCount();
     void loadFolderCounts();
   } catch (err) {
     messages.value = previousMessages;
     total.value = previousTotal;
     syncSelectedMessages(previousMessages);
+    cacheActiveMessages();
     error.value =
       err instanceof Error ? err.message : "Failed to move selected messages";
   } finally {
@@ -1226,21 +1284,23 @@ async function deleteSelectedMessagesPermanently() {
   const previousMessages = messages.value;
   const previousTotal = total.value;
   const ids = new Set(selectedMessages.value.map((message) => message.id));
+  ignorePendingMessageResponses();
   messages.value = messages.value.filter((message) => !ids.has(message.id));
   total.value = Math.max(0, total.value - ids.size);
   clearSelectedMessages();
   syncSelectedMessages(messages.value);
+  cacheActiveMessages();
 
   try {
     await Promise.all(
       [...ids].map((id) => api.delete(`/mailbox/messages/${id}`)),
     );
-    void refreshInboxDraftCount();
     void loadFolderCounts();
   } catch (err) {
     messages.value = previousMessages;
     total.value = previousTotal;
     syncSelectedMessages(previousMessages);
+    cacheActiveMessages();
     error.value =
       err instanceof Error
         ? err.message
@@ -1523,7 +1583,6 @@ async function saveDraft(sendNow = false) {
       mobileThreadOpen.value = false;
       toastSuccess("Email sent.");
     }
-    await refreshInboxDraftCount();
     await loadFolderCounts();
   } catch (err) {
     composeError.value =
@@ -1874,11 +1933,10 @@ onMounted(() => {
   if (emailTabOrder.includes(routeTab as EmailTab)) {
     activeTab.value = routeTab as EmailTab;
   }
-  void loadChannelHealth();
-  void loadMessages();
-  void loadInboxDraftCount();
-  void loadFolderCounts();
-  void contactsStore.fetchContacts();
+  void (async () => {
+    await loadMessages();
+    void Promise.all([loadChannelHealth(), loadFolderCounts(), contactsStore.fetchContacts()]);
+  })();
 });
 
 onBeforeUnmount(() => {
@@ -2234,7 +2292,10 @@ onBeforeUnmount(() => {
                   </article>
                   </div>
                 </template>
-                <div v-else class="empty-state empty-state--inline">
+                <div
+                  v-else-if="messagesLoaded"
+                  class="empty-state empty-state--inline"
+                >
                   <div class="empty-state__stack">
                     <template v-if="activeTab === 'inbox'">
                       <p>No inbound email yet.</p>
@@ -2279,6 +2340,9 @@ onBeforeUnmount(() => {
                       </p>
                     </template>
                   </div>
+                </div>
+                <div v-else class="state-card state-card--error">
+                  {{ error || "Unable to load messages." }}
                 </div>
 
                 <div

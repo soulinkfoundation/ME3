@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   SocialContentPackageInputError,
+  createQueuedSocialVariantPublicationAndEnqueue,
   createSocialContentPackage,
+  listSocialContentPackages,
   updateSocialAccountVariant,
   type SocialContentPackageEnv,
 } from "@me3-core/plugin-social-publishing";
@@ -29,10 +31,13 @@ function createEnv() {
   const packages: Row[] = [];
   const variants: Row[] = [];
   const events: Row[] = [];
+  const publications: Row[] = [];
+  const queueMessages: Array<{ publicationId: string }> = [];
+  const state = { sites, accounts, packages, variants, events, publications };
 
   const db = {
     prepare(sql: string) {
-      return new Statement(sql, { sites, accounts, packages, variants, events });
+      return new Statement(sql, state);
     },
     async batch(statements: Statement[]) {
       for (const statement of statements) await statement.run();
@@ -42,9 +47,19 @@ function createEnv() {
 
   return {
     env: { DB: db } as unknown as SocialContentPackageEnv,
+    publishingEnv: {
+      DB: db,
+      SOCIAL_PUBLISH_QUEUE: {
+        async send(message: { publicationId: string }) {
+          queueMessages.push(message);
+        },
+      },
+    },
     packages,
     variants,
     events,
+    publications,
+    queueMessages,
   };
 }
 
@@ -95,6 +110,21 @@ describe("Social content packages", () => {
     });
     expect(approved?.approvedAt).toBeTruthy();
 
+    const scheduled = await updateSocialAccountVariant(env, "owner", linkedin!.id, {
+      scheduledFor: "2099-07-11T08:30:00.000Z",
+      timezone: "Europe/Dublin",
+    });
+    expect(scheduled).toMatchObject({
+      approvalStatus: "approved",
+      approvedAt: approved?.approvedAt,
+      scheduledFor: "2099-07-11T08:30:00.000Z",
+      timezone: "Europe/Dublin",
+    });
+
+    const packages = await listSocialContentPackages(env, "owner", "site-1");
+    expect(packages).toHaveLength(1);
+    expect(packages[0]?.variants).toHaveLength(2);
+
     const edited = await updateSocialAccountVariant(env, "owner", linkedin!.id, {
       bodyText: "A smaller, sharper version.",
     });
@@ -103,6 +133,8 @@ describe("Social content packages", () => {
       approvalStatus: "draft",
       approvedAt: null,
       approvedByUserId: null,
+      scheduledFor: null,
+      timezone: null,
     });
   });
 
@@ -121,6 +153,41 @@ describe("Social content packages", () => {
       }),
     ).rejects.toBeInstanceOf(SocialContentPackageInputError);
   });
+
+  it("queues an approved LinkedIn variant only once", async () => {
+    const { env, publishingEnv, publications, queueMessages } = createEnv();
+    const created = await createSocialContentPackage(env, "owner", {
+      siteId: "site-1",
+      sourceType: "original",
+      ideaText: "One exact LinkedIn variant",
+      variants: [{
+        platform: "linkedin",
+        targetAccountId: "linkedin-1",
+        bodyText: "Publish this once.",
+      }],
+    });
+    const variant = await updateSocialAccountVariant(env, "owner", created.variants[0]!.id, {
+      approvalStatus: "approved",
+    });
+
+    const [first, replay] = await Promise.all([
+      createQueuedSocialVariantPublicationAndEnqueue(
+        publishingEnv as never,
+        "owner",
+        variant!.id,
+      ),
+      createQueuedSocialVariantPublicationAndEnqueue(
+        publishingEnv as never,
+        "owner",
+        variant!.id,
+      ),
+    ]);
+
+    expect(first).toMatchObject({ status: "queued", variantId: variant!.id });
+    expect(replay?.id).toBe(first?.id);
+    expect(publications).toHaveLength(1);
+    expect(queueMessages).toEqual([{ publicationId: first?.id }]);
+  });
 });
 
 class Statement {
@@ -134,6 +201,7 @@ class Statement {
       packages: Row[];
       variants: Row[];
       events: Row[];
+      publications: Row[];
     },
   ) {}
 
@@ -143,6 +211,18 @@ class Statement {
   }
 
   async first<T>() {
+    if (this.sql.includes("FROM plugin_installations")) {
+      return { enabled: 1, status: "installed" } as T;
+    }
+    if (this.sql.includes("FROM social_publications") && this.sql.includes("variant_id = ?")) {
+      const [variantId, ...statuses] = this.values;
+      const matches = this.state.publications.filter(
+        (row) =>
+          row.variant_id === variantId &&
+          (statuses.length === 0 || statuses.includes(row.status)),
+      );
+      return (matches.at(-1) || null) as T | null;
+    }
     if (this.sql.includes("SELECT id FROM sites")) {
       const [id, userId] = this.values;
       return (this.state.sites.find(
@@ -185,6 +265,17 @@ class Statement {
   }
 
   async all<T>() {
+    if (this.sql.includes("FROM social_packages p")) {
+      const [userId, siteId] = this.values;
+      return {
+        results: this.state.packages.filter((pkg) => {
+          const site = this.state.sites.find(
+            (row) => row.id === pkg.site_id && row.user_id === userId,
+          );
+          return site && (!siteId || pkg.site_id === siteId) && pkg.status !== "archived";
+        }) as T[],
+      };
+    }
     if (this.sql.includes("FROM social_variants")) {
       const [packageId] = this.values;
       return {
@@ -257,9 +348,57 @@ class Statement {
         created_at: createdAt,
         updated_at: updatedAt,
       });
+    } else if (this.sql.includes("INSERT INTO social_publications")) {
+      const [id, variantId, siteId, platform, queuedAt] = this.values;
+      if (
+        this.state.publications.some(
+          (row) =>
+            row.variant_id === variantId &&
+            ["queued", "publishing", "published"].includes(String(row.status)),
+        )
+      ) {
+        throw new Error("UNIQUE constraint failed: social_publications.variant_id");
+      }
+      this.state.publications.push({
+        id,
+        variant_id: variantId,
+        site_id: siteId,
+        platform,
+        status: "queued",
+        platform_post_id: null,
+        platform_post_url: null,
+        queued_at: queuedAt,
+        published_at: null,
+        created_at: queuedAt,
+        updated_at: queuedAt,
+      });
     } else if (this.sql.includes("INSERT INTO social_publication_events")) {
-      const [id, variantId, payload, createdAt] = this.values;
-      this.state.events.push({ id, variant_id: variantId, payload_json: payload, created_at: createdAt });
+      const usesBoundEventType = this.values.length === 5;
+      const [id] = this.values;
+      const variantId = usesBoundEventType ? this.values[2] : this.values[1];
+      const payload = usesBoundEventType ? this.values[4] : this.values[2];
+      const createdAt = usesBoundEventType ? new Date().toISOString() : this.values[3];
+      this.state.events.push({
+        id,
+        variant_id: variantId,
+        event_type: usesBoundEventType
+          ? this.values[3]
+          : this.sql.includes("'approved'")
+            ? "approved"
+            : "generated",
+        payload_json: payload,
+        created_at: createdAt,
+      });
+    } else if (
+      this.sql.includes("UPDATE social_variants") &&
+      this.sql.includes("scheduled_for = NULL")
+    ) {
+      const variantId = this.values.at(-1);
+      const variant = this.state.variants.find((row) => row.id === variantId);
+      if (variant) {
+        variant.scheduled_for = null;
+        variant.timezone = null;
+      }
     } else if (this.sql.includes("UPDATE social_variants")) {
       const [
         targetAccountId,
@@ -269,6 +408,8 @@ class Statement {
         approvalStatus,
         approvedAt,
         approvedByUserId,
+        scheduledFor,
+        timezone,
         updatedAt,
         variantId,
       ] = this.values;
@@ -282,6 +423,8 @@ class Statement {
           approval_status: approvalStatus,
           approved_at: approvedAt,
           approved_by_user_id: approvedByUserId,
+          scheduled_for: scheduledFor,
+          timezone,
           updated_at: updatedAt,
         });
       }

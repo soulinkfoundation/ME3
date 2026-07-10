@@ -2,7 +2,7 @@ import Stripe from "stripe";
 import { getUtcMsForLocalTime, resolveTimeZone } from "./calendar";
 import { scheduleBookingRemindersForBooking } from "./booking-reminders";
 import { getStripeSecretKey } from "./commerce-settings";
-import type { Me3SiteProfile } from "./site-generator";
+import type { Me3SiteProfile } from "@me3-core/site-renderer";
 import type { DbBooking, DbSite, Env } from "./types";
 
 export type PaidBookingCheckoutBody = {

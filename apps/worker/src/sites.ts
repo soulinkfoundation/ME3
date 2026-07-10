@@ -6,7 +6,7 @@ import {
 } from "@me3-core/plugin-landing-pages";
 import { getOrCreateInstallSessionSecret } from "./install-secrets";
 import type { AppContext } from "./http/types";
-import type { Me3SiteProfile } from "./site-generator";
+import type { Me3SiteProfile } from "@me3-core/site-renderer";
 import type { DbSite, Env, OwnerProfile } from "./types";
 
 const ME3_CLOUD_OWNER_SECRET_NAME = "ME3_CLOUD_OWNER_ID";

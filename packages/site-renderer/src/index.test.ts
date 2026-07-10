@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateSiteHtml } from "./site-generator";
+import { generateSiteHtml } from "./index";
 
 describe("site generator", () => {
   it("generates me3 profile pages from me.json and markdown sources", async () => {
@@ -267,9 +267,13 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain("Coaching call");
     expect(files["index.html"]).toContain("From €75");
     expect(files["index.html"]).toContain("Choose an offer");
+    expect(files["index.html"]).toContain('<button type="button" class="booking-card active" aria-pressed="true">');
+    expect(files["index.html"]).not.toContain("data-booking-selection");
     expect(files["index.html"]).toContain('type="date"');
     expect(files["index.html"]).toContain("data-booking-date-wrap");
     expect(files["index.html"]).toContain("showPicker");
+    expect(files["index.html"]).toContain("if(!dateInput.value) dateInput.value=today");
+    expect(files["index.html"]).toContain("populateSlots();");
     expect(files["index.html"]).toContain("cursor:pointer");
     expect(files["index.html"]).toContain('pattern="[^\\s@]+@[^\\s@]+\\.[^\\s@]+"');
     expect(files["index.html"]).toContain("setCustomValidity(hasInvalidEmail?'Enter a valid email address.':'')");
@@ -324,18 +328,22 @@ describe("site generator", () => {
     );
 
     expect(files["index.html"]).toContain('body data-vibe="me3"');
+    expect(files["index.html"]).toContain('<main class="main no-banner">');
+    expect(files["index.html"]).toContain(".main.no-banner .profile-header{margin-top:0}");
     expect(files["index.html"]).toContain("--accent:#3d9b7c");
     expect(files["index.html"]).toContain(".cta-button.primary{background:var(--accent);color:#ffffff}");
-    expect(files["index.html"]).toContain(".cta-button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:12px 16px;border-radius:var(--radius-md)");
+    expect(files["index.html"]).toContain(".cta-button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:6px 16px;box-sizing:border-box;border-radius:var(--radius-md)");
     expect(files["index.html"]).toContain(".link-item{width:56px;height:56px;border-radius:999px");
     expect(files["index.html"]).toContain(".testimonials,.booking,.newsletter{margin:32px 0;padding:40px 48px;border-radius:24px;background:var(--border)}");
     expect(files["index.html"]).toContain(".content{margin:32px 0;padding:0 32px 32px;background:transparent;border-radius:0}");
     expect(files["index.html"]).toContain(".content h1{font-size:2.2rem;line-height:1.1;margin-top:0}");
-    expect(files["index.html"]).toContain(".booking-card{border:0;border-radius:16px");
+    expect(files["index.html"]).toContain(".booking-card{font:inherit;color:inherit;width:100%;border:0;border-radius:16px");
+    expect(files["index.html"]).toContain(".booking-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px");
+    expect(files["index.html"]).toContain(".booking-slots{grid-template-columns:repeat(2,minmax(0,1fr))}");
     expect(files["index.html"]).toContain(".booking-back,.booking-submit{font:inherit;font-weight:800;border:0;border-radius:18px");
     expect(files["index.html"]).toContain("Confirm Booking");
     expect(files["index.html"]).toContain("placeholder=\"Your name\"");
-    expect(files["index.html"]).toContain(".newsletter button{font:inherit;font-weight:800;border:0;border-radius:var(--radius-md);background:var(--accent);color:#ffffff");
+    expect(files["index.html"]).toContain(".newsletter button{font:inherit;font-weight:800;min-height:48px;border:0;border-radius:var(--radius-md);background:var(--accent);color:#ffffff;padding:12px 22px");
   });
 
   it("uses title-derived blog and offerings paths in generated navigation", async () => {

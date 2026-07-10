@@ -54,6 +54,11 @@ export type SocialAccountVariant = {
   approvedByUserId: string | null;
   scheduledFor: string | null;
   timezone: string | null;
+  publicationStatus: "queued" | "publishing" | "published" | "failed" | "cancelled" | null;
+  platformPostUrl: string | null;
+  publishedAt: string | null;
+  failureClass: import("./adapters").SocialPublishFailureClass | null;
+  errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -86,6 +91,8 @@ export type UpdateSocialAccountVariantInput = {
   bodyText?: string;
   assetManifest?: ContentMediaAsset[];
   approvalStatus?: SocialContentApprovalStatus;
+  scheduledFor?: string | null;
+  timezone?: string | null;
 };
 
 type PackageRow = {
@@ -117,6 +124,11 @@ type VariantRow = {
   approved_by_user_id: string | null;
   scheduled_for: string | null;
   timezone: string | null;
+  publication_status?: SocialAccountVariant["publicationStatus"];
+  platform_post_url?: string | null;
+  published_at?: string | null;
+  publication_error_code?: string | null;
+  publication_error_message?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -261,21 +273,64 @@ export async function getSocialContentPackage(
     .first<PackageRow>();
   if (!row) return null;
 
-  const variants = await env.DB.prepare(
-    `SELECT id, package_id, platform, target_account_id, format, body_text,
-            asset_manifest_json, source_excerpt, approval_status, approved_at,
-            approved_by_user_id, scheduled_for, timezone, created_at, updated_at
-     FROM social_variants
-     WHERE package_id = ?
-     ORDER BY created_at ASC`,
-  )
-    .bind(packageId)
-    .all<VariantRow>();
+  const variants = await listPackageVariants(env, packageId);
 
   return {
     package: serializePackage(row),
-    variants: (variants.results || []).map(serializeVariant),
+    variants,
   };
+}
+
+export async function listSocialContentPackages(
+  env: SocialContentPackageEnv,
+  ownerId: string,
+  siteIdInput?: string | null,
+): Promise<SocialContentPackageDetail[]> {
+  const siteId = optionalText(siteIdInput);
+  const rows = await env.DB.prepare(
+    `SELECT p.id, p.site_id, p.source_type, p.source_ref, p.source_snapshot,
+            p.idea_text, p.goal, p.status, p.created_by, p.created_at, p.updated_at
+     FROM social_packages p
+     JOIN sites s ON s.id = p.site_id
+     WHERE s.user_id = ? AND (? IS NULL OR p.site_id = ?)
+       AND p.status != 'archived'
+     ORDER BY p.updated_at DESC
+     LIMIT 100`,
+  )
+    .bind(ownerId, siteId, siteId)
+    .all<PackageRow>();
+
+  return Promise.all((rows.results || []).map(async (row) => ({
+    package: serializePackage(row),
+    variants: await listPackageVariants(env, row.id),
+  })));
+}
+
+async function listPackageVariants(
+  env: SocialContentPackageEnv,
+  packageId: string,
+): Promise<SocialAccountVariant[]> {
+  const variants = await env.DB.prepare(
+    `SELECT v.id, v.package_id, v.platform, v.target_account_id, v.format, v.body_text,
+            v.asset_manifest_json, v.source_excerpt, v.approval_status, v.approved_at,
+            v.approved_by_user_id, v.scheduled_for, v.timezone, v.created_at, v.updated_at,
+            (SELECT pub.status FROM social_publications pub
+             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS publication_status,
+            (SELECT pub.platform_post_url FROM social_publications pub
+             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS platform_post_url,
+            (SELECT pub.published_at FROM social_publications pub
+             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS published_at,
+            (SELECT pub.error_code FROM social_publications pub
+             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS publication_error_code,
+            (SELECT pub.error_message FROM social_publications pub
+             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS publication_error_message
+     FROM social_variants v
+     WHERE v.package_id = ?
+     ORDER BY v.created_at ASC`,
+  )
+    .bind(packageId)
+    .all<VariantRow>();
+  return (variants.results || []).map(serializeVariant);
 }
 
 export async function updateSocialAccountVariant(
@@ -332,15 +387,40 @@ export async function updateSocialAccountVariant(
     );
   }
 
+  let scheduledFor = existing.scheduled_for;
+  let timezone = existing.timezone;
+  if (contentChanged || approvalStatus !== "approved") {
+    scheduledFor = null;
+    timezone = null;
+  } else if (input.scheduledFor !== undefined) {
+    if (input.scheduledFor === null || !input.scheduledFor.trim()) {
+      scheduledFor = null;
+      timezone = null;
+    } else {
+      const timestamp = Date.parse(input.scheduledFor);
+      if (!Number.isFinite(timestamp) || timestamp <= Date.now()) {
+        throw new SocialContentPackageInputError("Schedule time must be in the future");
+      }
+      scheduledFor = new Date(timestamp).toISOString();
+      timezone = validTimezone(input.timezone || existing.timezone || "UTC");
+    }
+  }
+
   const now = new Date().toISOString();
-  const approvedAt = approvalStatus === "approved" ? now : null;
-  const approvedByUserId = approvalStatus === "approved" ? ownerId : null;
+  const newlyApproved = approvalStatus === "approved" &&
+    (existing.approval_status !== "approved" || contentChanged);
+  const approvedAt = approvalStatus === "approved"
+    ? newlyApproved ? now : existing.approved_at
+    : null;
+  const approvedByUserId = approvalStatus === "approved"
+    ? newlyApproved ? ownerId : existing.approved_by_user_id
+    : null;
   const statements: Statement[] = [
     env.DB.prepare(
       `UPDATE social_variants
        SET target_account_id = ?, format = ?, body_text = ?, asset_manifest_json = ?,
            approval_status = ?, approved_at = ?, approved_by_user_id = ?,
-           updated_at = ?
+           scheduled_for = ?, timezone = ?, updated_at = ?
        WHERE id = ?`,
     ).bind(
       targetAccountId,
@@ -350,13 +430,15 @@ export async function updateSocialAccountVariant(
       approvalStatus,
       approvedAt,
       approvedByUserId,
+      scheduledFor,
+      timezone,
       now,
       variantId,
     ),
   ];
   if (
     approvalStatus === "approved" &&
-    (existing.approval_status !== "approved" || contentChanged)
+    newlyApproved
   ) {
     statements.push(
       env.DB.prepare(
@@ -367,6 +449,20 @@ export async function updateSocialAccountVariant(
         `social-event-${crypto.randomUUID()}`,
         variantId,
         JSON.stringify({ platform: existing.platform, targetAccountId, ownerId }),
+        now,
+      ),
+    );
+  }
+  if (scheduledFor && scheduledFor !== existing.scheduled_for) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO social_publication_events (
+           id, publication_id, variant_id, event_type, payload_json, created_at
+         ) VALUES (?, NULL, ?, 'queued', ?, ?)`,
+      ).bind(
+        `social-event-${crypto.randomUUID()}`,
+        variantId,
+        JSON.stringify({ platform: existing.platform, targetAccountId, scheduledFor, timezone }),
         now,
       ),
     );
@@ -433,9 +529,27 @@ function serializeVariant(row: VariantRow): SocialAccountVariant {
     approvedByUserId: row.approved_by_user_id,
     scheduledFor: row.scheduled_for,
     timezone: row.timezone,
+    publicationStatus: row.publication_status || null,
+    platformPostUrl: row.platform_post_url || null,
+    publishedAt: row.published_at || null,
+    failureClass: parseFailureClass(row.publication_error_code),
+    errorMessage: row.publication_error_message || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function parseFailureClass(
+  code: string | null | undefined,
+): SocialAccountVariant["failureClass"] {
+  const value = code?.split(":", 1)[0];
+  return value === "retryable" ||
+      value === "reconnect_required" ||
+      value === "rejected" ||
+      value === "unsupported" ||
+      value === "outcome_unknown"
+    ? value
+    : null;
 }
 
 function parseAssets(value: string): ContentMediaAsset[] {
@@ -455,6 +569,15 @@ function requiredText(value: unknown, message: string): string {
 
 function optionalText(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;
+}
+
+function validTimezone(value: string): string {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return value;
+  } catch {
+    throw new SocialContentPackageInputError("A valid scheduling timezone is required");
+  }
 }
 
 async function sha256(value: string): Promise<string> {

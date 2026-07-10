@@ -4,7 +4,8 @@ export class WizardPage {
   constructor(private page: Page) {}
 
   async goto() {
-    await this.page.goto("/create");
+    await this.page.goto("/create?step=basics");
+    await this.page.locator("#name").waitFor({ state: "visible" });
   }
 
   async fillBasics(name: string, handle: string, bio?: string) {
