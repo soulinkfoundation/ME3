@@ -17,7 +17,7 @@ import {
   type Me3AgentCapabilitySideEffect,
 } from "@me3/knowledge";
 
-export const CORE_PLUGIN_CATALOG_VERSION = "2026-06-11.v1";
+export const CORE_PLUGIN_CATALOG_VERSION = "2026-07-10.v1";
 const PUBLIC_BASELINE_MIGRATION_PATH =
   "./apps/worker/migrations/0001_initial_public_schema.sql";
 
@@ -83,6 +83,7 @@ export type CorePluginManifestSummary = {
   distribution: "workspace_package" | "npm_package" | "remote_bundle";
   installMode: "enabled_by_owner_config";
   defaultEnabled?: boolean;
+  showInPluginList?: boolean;
   releaseStage?: "available" | "coming_soon";
   activationAllowed?: boolean;
   implementationStatus: "catalog_only" | "bundled";
@@ -136,6 +137,7 @@ export type DbPluginInstallation = {
 };
 
 export type CorePluginRecord = CorePluginManifestSummary & {
+  showInPluginList: boolean;
   status: CorePluginStatus;
   statusLabel: string;
   installed: boolean;
@@ -165,6 +167,7 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
+  showInPluginList: false,
   implementationStatus: SOCIAL_PUBLISHING_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["content.social_assistant"],
   permissions: [
@@ -305,6 +308,7 @@ const MISSION_CONTROL_PLUGIN: CorePluginManifestSummary = {
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
   defaultEnabled: true,
+  showInPluginList: false,
   implementationStatus: MISSION_CONTROL_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: [
     "workspace.mission_control",
@@ -593,6 +597,7 @@ const CALENDAR_PLUGIN: CorePluginManifestSummary = {
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
   defaultEnabled: true,
+  showInPluginList: false,
   implementationStatus: CALENDAR_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["workspace.calendar"],
   permissions: [
@@ -843,6 +848,7 @@ const AGENT_CHAT_PLUGIN: CorePluginManifestSummary = {
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
   defaultEnabled: true,
+  showInPluginList: false,
   implementationStatus: AGENT_CHAT_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["chat.core_reply"],
   permissions: [
@@ -1142,6 +1148,7 @@ const JOURNAL_PLUGIN: CorePluginManifestSummary = {
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
   defaultEnabled: true,
+  showInPluginList: false,
   implementationStatus: JOURNAL_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["workspace.journal", "journal.entries.manage"],
   permissions: [
@@ -1464,6 +1471,7 @@ function serializePluginRecord(
 
   return {
     ...plugin,
+    showInPluginList: plugin.showInPluginList !== false,
     releaseStage: plugin.releaseStage || "available",
     activationAllowed,
     status,

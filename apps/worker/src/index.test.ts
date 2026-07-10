@@ -8840,6 +8840,7 @@ describe("ME3 Core Worker auth", () => {
         installed: boolean;
         enabled: boolean;
         implementationStatus: string;
+        showInPluginList: boolean;
         releaseStage: string;
         activationAllowed: boolean;
         agentTools: Array<{ id: string; approvalMode: string }>;
@@ -8853,21 +8854,25 @@ describe("ME3 Core Worker auth", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "me3.agent-chat",
+          showInPluginList: false,
           status: "installed",
           implementationStatus: "bundled",
         }),
         expect.objectContaining({
           id: "me3.calendar",
+          showInPluginList: false,
           status: "installed",
           implementationStatus: "bundled",
         }),
         expect.objectContaining({
           id: "me3.journal",
+          showInPluginList: false,
           status: "installed",
           implementationStatus: "bundled",
         }),
         expect.objectContaining({
           id: "me3.social-publishing",
+          showInPluginList: false,
           status: "available",
           implementationStatus: "bundled",
         }),
@@ -8888,6 +8893,17 @@ describe("ME3 Core Worker auth", () => {
         }),
       ]),
     );
+    expect(
+      body.plugins
+        .filter((plugin) => plugin.showInPluginList === false)
+        .map((plugin) => plugin.id),
+    ).toEqual([
+      "me3.agent-chat",
+      "me3.mission-control",
+      "me3.journal",
+      "me3.calendar",
+      "me3.social-publishing",
+    ]);
     const socialPlugin = body.plugins.find(
       (plugin) => plugin.id === "me3.social-publishing",
     );

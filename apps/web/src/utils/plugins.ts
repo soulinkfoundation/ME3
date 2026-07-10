@@ -22,6 +22,7 @@ export type PluginRecord = {
   trustTier: "first_party" | "third_party";
   distribution: "workspace_package" | "npm_package" | "remote_bundle";
   implementationStatus: "catalog_only" | "bundled";
+  showInPluginList?: boolean;
   releaseStage: "available" | "coming_soon";
   activationAllowed: boolean;
   status: PluginStatus;
@@ -84,9 +85,6 @@ const fixedCorePluginIds = new Set<string>([
   "me3.journal",
 ]);
 
-const hiddenPluginListIds = new Set<string>(["me3.journal"]);
-const comingSoonPluginListIds = new Set<string>(["me3.social-publishing"]);
-
 const pluginDisplayRank = new Map(
   pluginDisplayOrder.map((pluginId, index) => [pluginId, index]),
 );
@@ -110,7 +108,6 @@ export function pluginInfoText(plugin: PluginRecord) {
 
 export function isPluginComingSoon(plugin: PluginRecord) {
   return (
-    comingSoonPluginListIds.has(plugin.id) ||
     plugin.status === "coming_soon" ||
     plugin.releaseStage === "coming_soon" ||
     plugin.activationAllowed === false
@@ -118,7 +115,7 @@ export function isPluginComingSoon(plugin: PluginRecord) {
 }
 
 export function isPluginHiddenFromList(plugin: PluginRecord) {
-  return hiddenPluginListIds.has(plugin.id);
+  return plugin.showInPluginList === false;
 }
 
 export function isFixedCorePlugin(plugin: PluginRecord) {

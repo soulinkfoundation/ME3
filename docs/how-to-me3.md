@@ -170,7 +170,7 @@ pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --config wrangler.toml
 
 ## Core Plugins
 
-Core plugins are first-party capability packs returned by `/api/plugins` and managed in Account -> Plugins.
+ME3 exposes its first-party capability catalog through `/api/plugins`. Account -> Plugins lists owner-manageable optional plugins; foundational Agent Chat, Mission Control, Calendar, and Journal capabilities remain in the catalog for runtime discovery but are hidden from plugin management.
 
 | Plugin | Current status | Purpose |
 | --- | --- | --- |

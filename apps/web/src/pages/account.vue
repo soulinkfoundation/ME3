@@ -25,7 +25,6 @@ import {
   type AiAgentModelOption,
 } from "../utils/aiModelCatalog";
 import {
-  isPluginComingSoon,
   isPluginHiddenFromList,
   isPluginEnabled,
   type PluginRecord,
@@ -591,11 +590,7 @@ const telegramStatusClass = computed(() => {
 });
 
 const visibleAccountPlugins = computed(() =>
-  plugins.value.filter(
-    (plugin) =>
-      !isPluginHiddenFromList(plugin) &&
-      (!isPluginComingSoon(plugin) || plugin.id === "me3.social-publishing"),
-  ),
+  plugins.value.filter((plugin) => !isPluginHiddenFromList(plugin)),
 );
 
 const pluginBusyIds = computed(() =>
