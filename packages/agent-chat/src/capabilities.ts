@@ -644,6 +644,11 @@ export const CORE_CHAT_CAPABILITIES = [
           description: "Optional YYYY-MM-DD due date.",
           format: "date",
         },
+        priority: {
+          type: "number",
+          description: "Optional priority from 1 (highest) to 5 (lowest).",
+          enum: [1, 2, 3, 4, 5],
+        },
       },
       additionalProperties: false,
     },
@@ -685,8 +690,11 @@ export const CORE_CHAT_CAPABILITIES = [
     },
     auditEventKind: "mission_task_read",
     examples: {
-      positive: ["Show backlog tasks for project ME3 Launch."],
-      negative: ["Help me prioritise my Mission Control tasks."],
+      positive: [
+        "Show backlog tasks for project ME3 Launch.",
+        "Help me prioritise my Mission Control tasks.",
+      ],
+      negative: ["Explain how task statuses work."],
     },
     chat: {
       intentKind: "read_action",
@@ -791,6 +799,11 @@ export const CORE_CHAT_CAPABILITIES = [
           type: "string",
           description: "Optional YYYY-MM-DD due date.",
           format: "date",
+        },
+        priority: {
+          type: "number",
+          description: "Optional priority from 1 (highest) to 5 (lowest).",
+          enum: [1, 2, 3, 4, 5],
         },
         clearDescription: {
           type: "boolean",

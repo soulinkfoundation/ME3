@@ -6,12 +6,11 @@ import Button from "../components/Button.vue";
 import IconPicker from "../components/IconPicker.vue";
 import PageLoading from "../components/PageLoading.vue";
 import LifeWheelChart from "../components/mission-control/LifeWheelChart.vue";
-import { projectBoardStatuses } from "../components/mission-control/projectWorkspace";
+import { formatShortDate } from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
 import { useSitesStore } from "../stores/sites";
 import { resolveUiIconName, type UiIconName } from "../utils/icons";
-import type { ProjectBoardStatus } from "../components/mission-control/projectWorkspace";
 
 definePage({
   meta: {
@@ -133,16 +132,23 @@ type AiUsageCardData = {
   error: string | null;
 };
 
-type ProjectDashboardSummary = {
+type ProjectDashboardTask = {
   id: string;
-  label: string;
-  total: number;
-  counts: Record<ProjectBoardStatus, number>;
+  projectId: string;
+  projectName: string;
+  title: string;
+  status: "backlog" | "in_progress";
+  priority: number;
+  pinnedAt: string | null;
+  dueAt: string | null;
+  scheduledFor: string | null;
 };
 
 type ProjectsSummaryResponse = {
-  summaries: ProjectDashboardSummary[];
+  tasks: ProjectDashboardTask[];
 };
+
+type ProjectDashboardMode = "now" | "backlog";
 
 type MissionDashboardResponse = {
   cards: DashboardCardInstance[];
@@ -200,7 +206,9 @@ const draggedCardId = ref("");
 const draggedQuickActionId = ref("");
 const cardPickerOpen = ref(false);
 const quickActionPickerOpen = ref(false);
-const projectSummaries = ref<ProjectDashboardSummary[]>([]);
+const projectTasks = ref<ProjectDashboardTask[]>([]);
+const projectTaskMode = ref<ProjectDashboardMode>("now");
+const projectTaskProjectId = ref("");
 const projectsSummaryLoading = ref(false);
 const projectsSummaryError = ref("");
 const aiUsage = ref<AiUsageCardData | null>(null);
@@ -294,8 +302,23 @@ const setupProfilePath = computed(() => {
     ? `/sites/${encodeURIComponent(profileSite.username)}`
     : "/create";
 });
-const visibleProjectStatuses = computed(() =>
-  projectBoardStatuses.filter((status) => status.id !== "done"),
+const projectTaskProjects = computed(() =>
+  Array.from(
+    new Map(
+      projectTasks.value.map((task) => [task.projectId, task.projectName]),
+    ),
+  )
+    .map(([id, label]) => ({ id, label }))
+    .sort((a, b) => a.label.localeCompare(b.label)),
+);
+const visibleProjectTasks = computed(() =>
+  projectTasks.value
+    .filter(
+      (task) =>
+        task.status === (projectTaskMode.value === "now" ? "in_progress" : "backlog") &&
+        (!projectTaskProjectId.value || task.projectId === projectTaskProjectId.value),
+    )
+    .slice(0, 4),
 );
 const aiUsageTopModels = computed(() =>
   (aiUsage.value?.models || []).slice(0, 3),
@@ -375,20 +398,19 @@ function mainGoalDisplayText(): string {
   );
 }
 
-function projectStatusCountLabel(
-  summary: ProjectDashboardSummary,
-  status: ProjectBoardStatus,
-): string {
-  const count = summary.counts[status];
-  const label =
-    projectBoardStatuses.find((item) => item.id === status)?.label || status;
-  return `${label} ${count}`;
+function projectTaskCount(mode: ProjectDashboardMode): number {
+  const status = mode === "now" ? "in_progress" : "backlog";
+  return projectTasks.value.filter(
+    (task) =>
+      task.status === status &&
+      (!projectTaskProjectId.value || task.projectId === projectTaskProjectId.value),
+  ).length;
 }
 
-function projectSummaryPath(summary: ProjectDashboardSummary): string {
-  return summary.id === "personal"
+function projectTaskPath(task: ProjectDashboardTask): string {
+  return task.projectId === "personal"
     ? "/mission-control/projects"
-    : `/mission-control/projects?project=${encodeURIComponent(summary.id)}`;
+    : `/mission-control/projects?project=${encodeURIComponent(task.projectId)}`;
 }
 
 function visibleCardEnabled(cardId: string): boolean {
@@ -647,11 +669,11 @@ async function loadProjectsSummary() {
     const response = await api.get<ProjectsSummaryResponse>(
       "/mission-control/dashboard/cards/mission.projects-summary",
     );
-    projectSummaries.value = response.summaries || [];
+    projectTasks.value = response.tasks || [];
   } catch (err) {
     projectsSummaryError.value =
       err instanceof Error ? err.message : "Project stats could not load.";
-    projectSummaries.value = [];
+    projectTasks.value = [];
   } finally {
     projectsSummaryLoading.value = false;
   }
@@ -1250,7 +1272,7 @@ onMounted(() => {
               </div>
             </header>
             <div v-if="projectsSummaryLoading" class="dashboard-empty">
-              <p>Loading project stats...</p>
+              <p>Loading project tasks...</p>
             </div>
             <div v-else-if="projectsSummaryError" class="dashboard-empty">
               <p>{{ projectsSummaryError }}</p>
@@ -1263,39 +1285,71 @@ onMounted(() => {
                 Open Projects
               </Button>
             </div>
-            <div v-else-if="projectSummaries.length" class="project-summary">
-              <div
-                v-for="summary in projectSummaries"
-                :key="summary.id"
-                class="project-summary__row"
-              >
-                <div class="project-summary__main">
-                  <RouterLink :to="projectSummaryPath(summary)">
-                    {{ summary.label }}:
-                  </RouterLink>
-                  <div class="project-summary__stats">
-                    <RouterLink
-                      v-for="status in visibleProjectStatuses"
-                      :key="status.id"
-                      :to="projectSummaryPath(summary)"
-                      :class="{ 'is-empty': summary.counts[status.id] === 0 }"
-                    >
-                      {{ projectStatusCountLabel(summary, status.id) }}
-                    </RouterLink>
-                  </div>
+            <div v-else class="project-focus">
+              <div class="project-focus__controls">
+                <div class="project-focus__tabs" aria-label="Project task view">
+                  <button
+                    type="button"
+                    :class="{ 'is-active': projectTaskMode === 'now' }"
+                    @click="projectTaskMode = 'now'"
+                  >
+                    Now {{ projectTaskCount("now") }}
+                  </button>
+                  <button
+                    type="button"
+                    :class="{ 'is-active': projectTaskMode === 'backlog' }"
+                    @click="projectTaskMode = 'backlog'"
+                  >
+                    Backlog {{ projectTaskCount("backlog") }}
+                  </button>
                 </div>
+                <select
+                  v-model="projectTaskProjectId"
+                  aria-label="Filter project tasks"
+                >
+                  <option value="">All projects</option>
+                  <option
+                    v-for="project in projectTaskProjects"
+                    :key="project.id"
+                    :value="project.id"
+                  >
+                    {{ project.label }}
+                  </option>
+                </select>
               </div>
-            </div>
-            <div v-else class="dashboard-empty">
-              <p>No open project tasks yet.</p>
-              <Button
-                color="outline"
-                shape="soft"
-                size="compact"
-                to="/mission-control/projects"
-              >
-                Open Projects
-              </Button>
+
+              <div v-if="visibleProjectTasks.length" class="project-focus__list">
+                <RouterLink
+                  v-for="task in visibleProjectTasks"
+                  :key="task.id"
+                  :to="projectTaskPath(task)"
+                  class="project-focus__row"
+                >
+                  <UiIcon
+                    :name="task.priority === 1 || task.pinnedAt ? 'Star' : 'Circle'"
+                    :size="14"
+                  />
+                  <span class="project-focus__body">
+                    <strong>{{ task.title }}</strong>
+                    <span>
+                      {{ task.projectName }}
+                      <template v-if="task.dueAt || task.scheduledFor">
+                        · {{ formatShortDate(task.dueAt || task.scheduledFor) }}
+                      </template>
+                    </span>
+                  </span>
+                  <UiIcon name="ChevronRight" :size="15" />
+                </RouterLink>
+              </div>
+              <div v-else class="dashboard-empty project-focus__empty">
+                <p>
+                  {{
+                    projectTaskMode === "now"
+                      ? "Nothing is in Now. Choose a small commitment from the backlog."
+                      : "No backlog tasks for this project."
+                  }}
+                </p>
+              </div>
             </div>
           </template>
           <template
@@ -2249,92 +2303,105 @@ onMounted(() => {
   text-decoration: underline;
 }
 
-.project-summary {
+.project-focus {
   display: grid;
-  gap: 11px;
-  justify-items: start;
+  gap: 12px;
   max-height: 244px;
-  overflow: auto;
-  padding-right: 4px;
 }
 
-.project-summary__row {
-  display: grid;
-  width: 100%;
-  min-width: 0;
+.project-focus__controls,
+.project-focus__tabs {
+  display: flex;
+  align-items: center;
   gap: 6px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--ui-border);
 }
 
-.project-summary__row:last-of-type {
-  padding-bottom: 0;
+.project-focus__controls {
+  justify-content: space-between;
+}
+
+.project-focus__tabs button,
+.project-focus__controls select {
+  min-height: 30px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ui-text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.project-focus__tabs button {
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.project-focus__tabs button.is-active {
+  border-color: color-mix(in oklab, var(--ui-accent), transparent 55%);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+}
+
+.project-focus__controls select {
+  max-width: 132px;
+  padding: 0 26px 0 10px;
+}
+
+.project-focus__list {
+  display: grid;
+  overflow: auto;
+}
+
+.project-focus__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-text);
+  text-decoration: none;
+}
+
+.project-focus__row:last-child {
   border-bottom: 0;
 }
 
-.project-summary__main {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
+.project-focus__row > svg:first-child {
+  color: var(--ui-accent);
 }
 
-.project-summary__main a {
-  flex: 0 0 auto;
-  max-width: 100%;
+.project-focus__row:hover strong,
+.project-focus__row:focus-visible strong {
+  color: var(--ui-accent-strong);
+}
+
+.project-focus__body {
+  display: grid;
   min-width: 0;
+  gap: 3px;
+}
+
+.project-focus__body strong,
+.project-focus__body span {
   overflow: hidden;
-  color: var(--ui-text);
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.project-summary__main a:hover {
-  color: var(--ui-accent);
+.project-focus__body strong {
+  font-size: 13px;
 }
 
-.project-summary__stats {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.project-summary__stats a {
-  display: inline-flex;
-  min-height: 22px;
-  align-items: center;
-  border: 1px solid var(--ui-border);
-  border-radius: 999px;
-  padding: 0 8px;
+.project-focus__body span {
   color: var(--ui-text-muted);
   font-size: 11px;
-  font-weight: 650;
-  text-decoration: none;
 }
 
-.project-summary__stats a:not(.is-empty) {
-  border-color: color-mix(in oklab, var(--ui-accent), transparent 70%);
-  color: var(--ui-text);
-}
-
-.project-summary__stats a:hover,
-.project-summary__stats a:focus-visible {
-  border-color: var(--ui-accent);
-  color: var(--ui-accent);
-}
-
-.project-summary__stats a:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--ui-accent), transparent 70%);
-  outline-offset: 2px;
-}
-
-.project-summary__stats a.is-empty {
-  opacity: 0.56;
+.project-focus__empty {
+  min-height: 92px;
 }
 
 .dashboard-add-card {

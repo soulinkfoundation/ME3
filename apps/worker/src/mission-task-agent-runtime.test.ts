@@ -20,6 +20,7 @@ type TaskRow = {
   title: string;
   description: string | null;
   status: string;
+  priority: number;
   due_at: string | null;
   scheduled_for: string | null;
   source_ref: string | null;
@@ -58,6 +59,7 @@ describe("Mission Control Agent Runtime v2", () => {
           description: "Confirm the launch checklist is ready.",
           projectId: "project-launch",
           dueAt: "2026-07-15",
+          priority: 1,
         }),
         providerText(providerId, "Added Follow up with Sam to ME3 Launch."),
       ]);
@@ -91,6 +93,7 @@ describe("Mission Control Agent Runtime v2", () => {
         project_id: "project-launch",
         due_at: "2026-07-15",
         status: "backlog",
+        priority: 1,
       });
       expect(database.executions.map((row) => row.status)).toEqual([
         "succeeded",
@@ -118,6 +121,7 @@ describe("Mission Control Agent Runtime v2", () => {
       providerToolCall("workers-ai", "update-1", "core_mission_task_update", {
         taskId: "task-1",
         status: "done",
+        priority: 1,
         clearDescription: true,
         clearDueAt: true,
       }),
@@ -139,6 +143,7 @@ describe("Mission Control Agent Runtime v2", () => {
       actionCards: [expect.objectContaining({ kind: "mission.task_updated" })],
     });
     expect(database.tasks.find((task) => task.id === "task-1")?.status).toBe("done");
+    expect(database.tasks.find((task) => task.id === "task-1")?.priority).toBe(1);
     expect(database.tasks.find((task) => task.id === "task-1")?.description).toBeNull();
     expect(database.tasks.find((task) => task.id === "task-1")?.due_at).toBeNull();
     expect(database.tasks.find((task) => task.id === "task-2")?.status).toBe("backlog");
@@ -312,6 +317,7 @@ function taskRow(id: string, title: string, projectId: string): TaskRow {
     title,
     description: null,
     status: "backlog",
+    priority: 3,
     due_at: null,
     scheduled_for: null,
     source_ref: null,
@@ -405,7 +411,7 @@ function createMissionDb(input: { projects?: ProjectRow[]; tasks?: TaskRow[] } =
                 }
               }
               if (sql.includes("INTO mission_tasks")) {
-                if (!tasks.some((row) => row.source_ref && row.source_ref === values[7])) {
+                if (!tasks.some((row) => row.source_ref && row.source_ref === values[8])) {
                   tasks.push({
                     id: values[0] as string,
                     user_id: values[1] as string,
@@ -413,23 +419,25 @@ function createMissionDb(input: { projects?: ProjectRow[]; tasks?: TaskRow[] } =
                     title: values[4] as string,
                     description: values[5] as string | null,
                     status: "backlog",
-                    due_at: values[6] as string | null,
+                    priority: values[6] as number,
+                    due_at: values[7] as string | null,
                     scheduled_for: null,
-                    source_ref: values[7] as string | null,
+                    source_ref: values[8] as string | null,
                     archived_at: null,
                   });
                 }
               }
               if (sql.includes("UPDATE mission_tasks") && sql.includes("SET project_id = ?")) {
                 const task = tasks.find(
-                  (row) => row.id === values[6] && row.user_id === values[7] && !row.archived_at,
+                  (row) => row.id === values[7] && row.user_id === values[8] && !row.archived_at,
                 );
                 if (task) {
                   task.project_id = values[0] as string;
                   task.title = values[2] as string;
                   task.description = values[3] as string | null;
                   task.status = values[4] as string;
-                  task.due_at = values[5] as string | null;
+                  task.priority = values[5] as number;
+                  task.due_at = values[6] as string | null;
                 }
                 return { meta: { changes: task ? 1 : 0 } };
               }

@@ -263,6 +263,19 @@ describe("Mission Control dashboard settings", () => {
           count: 4,
         },
       ],
+      projectTaskRows: [
+        {
+          id: "task-now",
+          project_id: "project-a",
+          project_name: "Alpha",
+          title: "Ship the focused dashboard",
+          status: "in_progress",
+          priority: 1,
+          pinned_at: "2026-07-10 09:00:00",
+          due_at: "2026-07-11",
+          scheduled_for: null,
+        },
+      ],
     });
 
     await expect(getMissionProjectsSummary(env, "owner")).resolves.toEqual({
@@ -278,6 +291,19 @@ describe("Mission Control dashboard settings", () => {
           label: "Alpha",
           total: 3,
           counts: { backlog: 2, in_progress: 1, review: 0, done: 0 },
+        },
+      ],
+      tasks: [
+        {
+          id: "task-now",
+          projectId: "project-a",
+          projectName: "Alpha",
+          title: "Ship the focused dashboard",
+          status: "in_progress",
+          priority: 1,
+          pinnedAt: "2026-07-10T09:00:00Z",
+          dueAt: "2026-07-11",
+          scheduledFor: null,
         },
       ],
     });
@@ -375,6 +401,17 @@ function createDashboardEnv(options: {
     status: "backlog" | "in_progress" | "review";
     count: number;
   }>;
+  projectTaskRows?: Array<{
+    id: string;
+    project_id: string | null;
+    project_name: string;
+    title: string;
+    status: "backlog" | "in_progress";
+    priority: number;
+    pinned_at: string | null;
+    due_at: string | null;
+    scheduled_for: string | null;
+  }>;
   dashboardSettings?: Partial<DashboardSettingsRow>;
 } = {}) {
   const settings = new Map<string, DashboardSettingsRow>();
@@ -384,6 +421,7 @@ function createDashboardEnv(options: {
   const enabledPlugins = new Set(options.enabledPlugins || []);
   const activity = options.activity || [];
   const projectSummaryRows = options.projectSummaryRows || [];
+  const projectTaskRows = options.projectTaskRows || [];
   const pluginInstallations = new Map<string, PluginInstallationRow>(
     Array.from(enabledPlugins).map((pluginId) => [
       pluginId,
@@ -448,6 +486,12 @@ function createDashboardEnv(options: {
                 sql.includes("FROM mission_tasks t")
               ) {
                 return { results: projectSummaryRows as T[] };
+              }
+              if (
+                sql.includes("t.title, t.status, t.priority") &&
+                sql.includes("FROM mission_tasks t")
+              ) {
+                return { results: projectTaskRows as T[] };
               }
               if (sql.includes("plugin_installations")) {
                 return {

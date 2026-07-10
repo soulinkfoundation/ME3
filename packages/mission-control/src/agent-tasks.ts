@@ -14,6 +14,7 @@ export type AgentMissionTask = {
   projectName: string;
   dueAt: string | null;
   status: string;
+  priority: number;
   sourceRef?: string | null;
 };
 
@@ -23,6 +24,7 @@ type MissionTaskRow = {
   description: string | null;
   project_id: string | null;
   status: string;
+  priority: number;
   due_at: string | null;
   scheduled_for: string | null;
   source_ref: string | null;
@@ -46,6 +48,7 @@ export type CreateAgentMissionTaskInput = {
   description?: string | null;
   projectId?: string | null;
   dueAt?: string | null;
+  priority?: number | null;
   idempotencyKey?: string | null;
 };
 
@@ -56,6 +59,7 @@ export type UpdateAgentMissionTaskInput = {
   projectId?: string;
   status?: string;
   dueAt?: string | null;
+  priority?: number;
 };
 
 export type AgentMissionTaskError = {
@@ -85,7 +89,7 @@ export async function listAgentMissionTasks(
   userId: string,
 ): Promise<AgentMissionTask[]> {
   const rows = await env.DB.prepare(
-    `SELECT t.id, t.title, t.description, t.project_id, t.status, t.due_at,
+    `SELECT t.id, t.title, t.description, t.project_id, t.status, t.priority, t.due_at,
             t.scheduled_for, t.source_ref, p.name AS project_name
      FROM mission_tasks t
      LEFT JOIN mission_projects p
@@ -105,7 +109,7 @@ export async function getAgentMissionTask(
   taskId: string,
 ): Promise<AgentMissionTask | null> {
   const row = await env.DB.prepare(
-    `SELECT t.id, t.title, t.description, t.project_id, t.status, t.due_at,
+    `SELECT t.id, t.title, t.description, t.project_id, t.status, t.priority, t.due_at,
             t.scheduled_for, t.source_ref, p.name AS project_name
      FROM mission_tasks t
      LEFT JOIN mission_projects p
@@ -127,6 +131,8 @@ export async function createAgentMissionTask(
   if (!title) return { error: "Task title is required.", status: 400 };
   const dueAt = normalizeDueDate(input.dueAt);
   if (dueAt === undefined) return { error: "Task dueAt must be a valid YYYY-MM-DD date.", status: 400 };
+  const priority = normalizePriority(input.priority);
+  if (priority === undefined) return { error: "Task priority must be between 1 and 5.", status: 400 };
 
   const projects = await listAgentMissionProjects(env, userId);
   const project = resolveCreateProject(projects, input.projectId);
@@ -146,7 +152,7 @@ export async function createAgentMissionTask(
     `INSERT ${idempotencyKey ? "OR IGNORE " : ""}INTO mission_tasks
        (id, user_id, project_id, column_id, title, description, status,
         priority, due_at, source_kind, source_ref)
-     VALUES (?, ?, ?, ?, ?, ?, 'backlog', 3, ?, 'agent', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, 'backlog', ?, ?, 'agent', ?)`,
   )
     .bind(
       id,
@@ -155,6 +161,7 @@ export async function createAgentMissionTask(
       columnId,
       title,
       optionalText(input.description),
+      priority,
       dueAt,
       idempotencyKey,
     )
@@ -174,6 +181,7 @@ export async function createAgentMissionTask(
     projectName: project.name,
     dueAt,
     status,
+    priority,
     sourceRef: null,
   };
 }
@@ -203,12 +211,16 @@ export async function updateAgentMissionTask(
   const description = input.description === undefined
     ? existing.description
     : optionalText(input.description);
+  const priority = input.priority === undefined
+    ? existing.priority
+    : normalizePriority(input.priority);
+  if (priority === undefined) return { error: "Task priority must be between 1 and 5.", status: 400 };
 
   await ensureMissionTaskColumn(env, userId, project.id, status);
   const result = await env.DB.prepare(
     `UPDATE mission_tasks
      SET project_id = ?, column_id = ?, title = ?, description = ?, status = ?,
-         due_at = ?, updated_at = datetime('now')
+         priority = ?, due_at = ?, updated_at = datetime('now')
      WHERE id = ? AND user_id = ? AND archived_at IS NULL`,
   )
     .bind(
@@ -217,6 +229,7 @@ export async function updateAgentMissionTask(
       title,
       description,
       status,
+      priority,
       dueAt,
       taskId,
       userId,
@@ -234,6 +247,7 @@ export async function updateAgentMissionTask(
     projectName: project.name,
     dueAt,
     status,
+    priority,
   };
 }
 
@@ -266,7 +280,7 @@ async function getAgentMissionTaskBySourceRef(
   sourceRef: string,
 ): Promise<AgentMissionTask | null> {
   const row = await env.DB.prepare(
-    `SELECT t.id, t.title, t.description, t.project_id, t.status, t.due_at,
+    `SELECT t.id, t.title, t.description, t.project_id, t.status, t.priority, t.due_at,
             t.scheduled_for, t.source_ref, p.name AS project_name
      FROM mission_tasks t
      LEFT JOIN mission_projects p
@@ -330,8 +344,16 @@ function serializeMissionTaskRow(row: MissionTaskRow): AgentMissionTask[] {
     projectName: row.project_name || "Mission Control",
     dueAt: row.due_at || row.scheduled_for || null,
     status: row.status,
+    priority: row.priority,
     sourceRef: row.source_ref,
   }];
+}
+
+function normalizePriority(value: unknown): number | undefined {
+  if (value == null) return 3;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 5) return undefined;
+  return parsed;
 }
 
 function normalizeDueDate(value: unknown): string | null | undefined {

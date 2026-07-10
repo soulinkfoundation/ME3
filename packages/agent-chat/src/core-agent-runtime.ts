@@ -367,6 +367,7 @@ async function executeMissionTaskToolCall(input: {
         description: optionalToolString(args.description),
         projectId: optionalToolString(args.projectId),
         dueAt: optionalToolString(args.dueAt),
+        priority: optionalToolNumber(args.priority),
         idempotencyKey: input.idempotencyKey,
       },
     );
@@ -401,6 +402,7 @@ async function executeMissionTaskToolCall(input: {
     dueAt: optionalToolBoolean(args.clearDueAt)
       ? null
       : optionalToolString(args.dueAt),
+    priority: optionalToolNumber(args.priority),
   };
   if (!Object.values(updates).some((value) => value !== undefined)) {
     throw new Error("Task update requires at least one field to change.");
@@ -457,6 +459,7 @@ export function buildMissionTaskActionCard(
       { label: "Task", value: task.title },
       { label: "Project", value: task.projectName },
       ...(task.dueAt ? [{ label: "Due", value: task.dueAt }] : []),
+      { label: "Priority", value: String(task.priority) },
       { label: "Status", value: action === "archived" ? "archived" : task.status },
     ],
     records: [{ kind: "mission_task", id: task.id }],
@@ -757,6 +760,8 @@ function withCoreToolInstructions(
     "- List tasks before read/update/archive unless a stable task ID is already present. Task list results also contain stable project IDs.",
     "- Never invent a taskId or projectId. If multiple records could match, ask one concise clarification question and do not write.",
     "- For create, use the project ID selected by the owner. Omit projectId only when the owner did not name a project and the host can choose an unambiguous default.",
+    "- When asked to prioritise, list the matching tasks first and recommend a small Now set. Only update status or priority after the owner clearly confirms.",
+    "- Priority is 1 (highest) through 5 (lowest). Use in_progress for the owner's small Now commitment list.",
     "- Convert relative due dates such as today or tomorrow to YYYY-MM-DD in the owner's timezone using the current-time context above.",
     "- For update, send only fields the owner asked to change. Null optional fields mean no change.",
     "- Set clearDescription or clearDueAt only when the owner explicitly asks to remove that value.",
@@ -1011,6 +1016,7 @@ function formatMissionTask(task: AgentMissionTask): string {
     `Project: ${task.projectName}`,
     `Status: ${task.status}`,
     task.dueAt ? `Due: ${task.dueAt}` : null,
+    `Priority: ${task.priority}`,
     task.description ? `Description: ${task.description}` : null,
     `ID: ${task.id}`,
   ].filter(Boolean).join("\n");
@@ -1021,7 +1027,7 @@ function formatMissionTaskList(tasks: AgentMissionTask[]): string {
   return [
     `Found ${tasks.length} Mission Control task${tasks.length === 1 ? "" : "s"}:`,
     ...tasks.map(
-      (task) => `- ${task.title} — ${task.projectName} — ${task.status} (ID: ${task.id})`,
+      (task) => `- ${task.title} — ${task.projectName} — ${task.status} — priority ${task.priority} (ID: ${task.id})`,
     ),
   ].join("\n");
 }

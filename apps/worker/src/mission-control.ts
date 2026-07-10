@@ -1493,22 +1493,57 @@ type MissionProjectSummaryRow = {
   count: number;
 };
 
+type MissionProjectDashboardTaskRow = {
+  id: string;
+  project_id: string | null;
+  project_name: string;
+  title: string;
+  status: "backlog" | "in_progress";
+  priority: number;
+  pinned_at: string | null;
+  due_at: string | null;
+  scheduled_for: string | null;
+};
+
 export async function getMissionProjectsSummary(env: Env, userId: string) {
-  const rows = await env.DB.prepare(
-    `SELECT CASE WHEN p.status = 'active' THEN p.id ELSE NULL END AS project_id,
-            CASE WHEN p.status = 'active' THEN p.name ELSE 'Personal' END AS project_name,
-            t.status,
-            COUNT(*) AS count
-     FROM mission_tasks t
-     LEFT JOIN mission_projects p
-       ON p.id = t.project_id AND p.user_id = t.user_id
-     WHERE t.user_id = ?
-       AND t.archived_at IS NULL
-       AND t.status IN ('backlog', 'in_progress', 'review')
-     GROUP BY project_id, project_name, t.status`,
-  )
-    .bind(userId)
-    .all<MissionProjectSummaryRow>();
+  const [rows, taskRows] = await Promise.all([
+    env.DB.prepare(
+      `SELECT CASE WHEN p.status = 'active' THEN p.id ELSE NULL END AS project_id,
+              CASE WHEN p.status = 'active' THEN p.name ELSE 'Personal' END AS project_name,
+              t.status,
+              COUNT(*) AS count
+       FROM mission_tasks t
+       LEFT JOIN mission_projects p
+         ON p.id = t.project_id AND p.user_id = t.user_id
+       WHERE t.user_id = ?
+         AND t.archived_at IS NULL
+         AND t.status IN ('backlog', 'in_progress', 'review')
+       GROUP BY project_id, project_name, t.status`,
+    )
+      .bind(userId)
+      .all<MissionProjectSummaryRow>(),
+    env.DB.prepare(
+      `SELECT t.id,
+              CASE WHEN p.status = 'active' THEN p.id ELSE NULL END AS project_id,
+              CASE WHEN p.status = 'active' THEN p.name ELSE 'Personal' END AS project_name,
+              t.title, t.status, t.priority, t.pinned_at, t.due_at, t.scheduled_for
+       FROM mission_tasks t
+       LEFT JOIN mission_projects p
+         ON p.id = t.project_id AND p.user_id = t.user_id
+       WHERE t.user_id = ?
+         AND t.archived_at IS NULL
+         AND t.status IN ('backlog', 'in_progress')
+       ORDER BY CASE WHEN t.pinned_at IS NULL THEN 1 ELSE 0 END,
+                t.pinned_at DESC,
+                t.priority ASC,
+                t.position ASC,
+                COALESCE(t.due_at, t.scheduled_for, t.updated_at) ASC,
+                t.id ASC
+       LIMIT 100`,
+    )
+      .bind(userId)
+      .all<MissionProjectDashboardTaskRow>(),
+  ]);
 
   const summaries = new Map<
     string,
@@ -1536,6 +1571,17 @@ export async function getMissionProjectsSummary(env: Env, userId: string) {
     summaries: Array.from(summaries.values())
       .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
       .slice(0, 4),
+    tasks: (taskRows.results || []).map((task) => ({
+      id: task.id,
+      projectId: task.project_id || "personal",
+      projectName: task.project_name,
+      title: task.title,
+      status: task.status,
+      priority: task.priority,
+      pinnedAt: normalizeDbDateTime(task.pinned_at),
+      dueAt: task.due_at,
+      scheduledFor: task.scheduled_for,
+    })),
   };
 }
 
