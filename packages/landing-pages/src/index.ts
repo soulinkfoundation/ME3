@@ -1,23 +1,31 @@
 export const LANDING_PAGES_PLUGIN_ID = "me3.landing-pages";
 
 export const LANDING_PAGE_TEMPLATE_IDS = ["event", "service", "waitlist"] as const;
-export const LANDING_PAGE_RECIPE_IDS = ["event-invite", "launch-waitlist"] as const;
+export const LANDING_PAGE_RECIPE_IDS = [
+  "service-offer",
+  "event-invite",
+  "launch-waitlist",
+] as const;
 
 export type LandingPageTemplateId = (typeof LANDING_PAGE_TEMPLATE_IDS)[number];
 export type LandingPageRecipeId = (typeof LANDING_PAGE_RECIPE_IDS)[number];
 export type LandingPageIntent = "event" | "waitlist" | "service";
-export type LandingPageThemeId = "editorial-event" | "signal-waitlist";
+export type LandingPageThemeId =
+  | "quiet-service"
+  | "editorial-event"
+  | "signal-waitlist";
 
 export const LANDING_PAGES_RUNTIME = {
   id: LANDING_PAGES_PLUGIN_ID,
   packageName: "@me3-core/plugin-landing-pages",
   bundled: true,
   runtimeStatus: "landing_pages_runtime",
-  documentVersions: [1, 2],
+  documentVersions: [1, 2, 3],
   templateIds: LANDING_PAGE_TEMPLATE_IDS,
   recipeIds: LANDING_PAGE_RECIPE_IDS,
   routes: [
     "/api/sites/:username/landing-page",
+    "/api/sites/:username/pages",
     "/api/agent/landing-pages/generate",
   ],
   notes: [
@@ -244,7 +252,57 @@ export interface LandingPageDocumentV2 {
   updatedAt?: string;
 }
 
-export type LandingPageDocument = LandingPageDocumentV1 | LandingPageDocumentV2;
+export type LandingPageActionKind =
+  | "link"
+  | "subscribe"
+  | "booking"
+  | "product";
+
+export type LandingPageAction = {
+  id: string;
+  kind: LandingPageActionKind;
+  label: string;
+  href?: string;
+  resourceId?: string;
+};
+
+export type LandingPageV3Section =
+  | Exclude<LandingPageV2Section, { type: "signup" | "final-cta" }>
+  | {
+      id: string;
+      type: "action";
+      heading: string;
+      body: string;
+      actionId: string;
+    };
+
+export interface LandingPageDocumentV3 {
+  version: 3;
+  intent: LandingPageDocumentV2["intent"];
+  recipe: LandingPageDocumentV2["recipe"];
+  brief: string;
+  seo: LandingPageDocumentV2["seo"];
+  hero: {
+    headline: string;
+    subheadline: string;
+    image?: string | null;
+    primaryActionId: string;
+    secondaryActionId?: string;
+    metadata?: Array<{ label: string; value: string }>;
+  };
+  content: {
+    sections: LandingPageV3Section[];
+  };
+  actions: LandingPageAction[];
+  design: LandingPageDocumentV2["design"];
+  assets: LandingPageDocumentV2["assets"];
+  updatedAt?: string;
+}
+
+export type LandingPageDocument =
+  | LandingPageDocumentV1
+  | LandingPageDocumentV2
+  | LandingPageDocumentV3;
 
 export interface LandingPageTemplateDefinition {
   id: LandingPageTemplateId;
@@ -266,7 +324,8 @@ export interface LandingPageRecipeDefinition {
   defaultCta: string;
   theme: LandingPageThemeId;
   requiredFields: string[];
-  sectionOrder: LandingPageV2Section["type"][];
+  sectionOrder: Array<LandingPageV2Section["type"] | LandingPageV3Section["type"]>;
+  defaultAction: LandingPageActionKind;
   qualityChecks: string[];
   sourceNotes: string[];
 }
@@ -329,6 +388,30 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
 
 export const LANDING_PAGE_RECIPES: LandingPageRecipeDefinition[] = [
   {
+    id: "service-offer",
+    template: "service",
+    name: "Service Offer",
+    shortName: "Service",
+    intent: "service",
+    description:
+      "A focused offer page that explains the outcome, fit, process, and next step.",
+    bestFor: "Coaching, consulting, creative services, packages, and focused offers.",
+    defaultCta: "Book a Call",
+    defaultAction: "booking",
+    theme: "quiet-service",
+    requiredFields: ["offer name", "audience", "outcome", "process", "primary CTA"],
+    sectionOrder: ["story", "feature-list", "steps", "profile", "faq", "action"],
+    qualityChecks: [
+      "The outcome and ideal customer are clear in the first screen.",
+      "The process feels specific enough to trust.",
+      "The primary action is repeated after the offer is explained.",
+    ],
+    sourceNotes: [
+      "Built from ME3-owned service-page patterns and shared design tokens.",
+      "No third-party template code or image assets are copied into the package.",
+    ],
+  },
+  {
     id: "event-invite",
     template: "event",
     name: "Event Invitation",
@@ -338,6 +421,7 @@ export const LANDING_PAGE_RECIPES: LandingPageRecipeDefinition[] = [
       "A warm invitation page for workshops, retreats, ceremonies, launches, and intimate gatherings.",
     bestFor: "Events with a date, setting, story, logistics, and a clear RSVP or booking action.",
     defaultCta: "Reserve Your Spot",
+    defaultAction: "booking",
     theme: "editorial-event",
     requiredFields: ["event name", "audience", "date or timing", "location", "primary CTA"],
     sectionOrder: ["story", "details", "feature-list", "steps", "profile", "faq", "final-cta"],
@@ -361,6 +445,7 @@ export const LANDING_PAGE_RECIPES: LandingPageRecipeDefinition[] = [
       "A focused launch page that explains what is coming, who it helps, and why joining early matters.",
     bestFor: "Courses, products, communities, apps, newsletters, and pre-launch offers.",
     defaultCta: "Join the Waitlist",
+    defaultAction: "subscribe",
     theme: "signal-waitlist",
     requiredFields: ["launch name", "audience", "promise", "why now", "email CTA"],
     sectionOrder: ["story", "feature-list", "steps", "signup", "profile", "faq", "final-cta"],
@@ -377,6 +462,15 @@ export const LANDING_PAGE_RECIPES: LandingPageRecipeDefinition[] = [
 ];
 
 export const LANDING_PAGE_CREATION_PURPOSES: LandingPageCreationPurpose[] = [
+  {
+    id: "service-offer",
+    template: "service",
+    label: "Service or offer",
+    description: "Explain a focused offer and lead people to a booking or purchase.",
+    examplePrompt:
+      "A four-week positioning sprint for independent consultants who need a clearer offer, stronger sales page, and a practical launch plan.",
+    defaultSlugSuffix: "offer",
+  },
   {
     id: "event-invite",
     template: "event",
@@ -460,7 +554,49 @@ export function normalizeLandingPageDocument(
   value: unknown,
 ): LandingPageDocument | null {
   if (!value || typeof value !== "object") return null;
-  const raw = value as Partial<LandingPageDocumentV1> | Partial<LandingPageDocumentV2>;
+  const raw = value as
+    | Partial<LandingPageDocumentV1>
+    | Partial<LandingPageDocumentV2>
+    | Partial<LandingPageDocumentV3>;
+
+  if (raw.version === 3) {
+    const page = raw as Partial<LandingPageDocumentV3>;
+    if (
+      !page.intent ||
+      !page.recipe ||
+      !normalizeLandingTemplate(page.recipe.template) ||
+      !normalizeLandingRecipe(page.recipe.id) ||
+      typeof page.brief !== "string" ||
+      !page.seo ||
+      !page.hero ||
+      typeof page.hero.primaryActionId !== "string" ||
+      !page.content ||
+      !Array.isArray(page.content.sections) ||
+      !Array.isArray(page.actions) ||
+      !page.design ||
+      !page.assets
+    ) {
+      return null;
+    }
+    const actionIds = new Set(
+      page.actions
+        .filter(
+          (action): action is LandingPageAction =>
+            !!action &&
+            typeof action.id === "string" &&
+            typeof action.label === "string" &&
+            ["link", "subscribe", "booking", "product"].includes(action.kind),
+        )
+        .map((action) => action.id),
+    );
+    if (
+      actionIds.size !== page.actions.length ||
+      !actionIds.has(page.hero.primaryActionId)
+    ) {
+      return null;
+    }
+    return page as LandingPageDocumentV3;
+  }
 
   if (raw.version === 2) {
     if (
@@ -499,7 +635,7 @@ export function normalizeLandingPageDocument(
 export function getLandingPageTemplateId(
   page: LandingPageDocument,
 ): LandingPageTemplateId {
-  return page.version === 2 ? page.recipe.template : page.template;
+  return page.version === 1 ? page.template : page.recipe.template;
 }
 
 export function getLandingPageBrief(page: LandingPageDocument): string {
@@ -507,17 +643,29 @@ export function getLandingPageBrief(page: LandingPageDocument): string {
 }
 
 export function getLandingPageTitle(page: LandingPageDocument): string {
-  return page.version === 2 ? page.seo.title : page.title;
+  return page.version === 1 ? page.title : page.seo.title;
 }
 
 export function getLandingPageDescription(page: LandingPageDocument): string {
-  return page.version === 2 ? page.seo.description : page.meta.description;
+  return page.version === 1 ? page.meta.description : page.seo.description;
 }
 
 export function getLandingPageHero(
   page: LandingPageDocument,
 ): LandingPageDocumentV1["hero"] {
-  return page.hero;
+  if (page.version !== 3) return page.hero;
+  const action = page.actions.find(
+    (candidate) => candidate.id === page.hero.primaryActionId,
+  );
+  return {
+    headline: page.hero.headline,
+    subheadline: page.hero.subheadline,
+    image: page.hero.image,
+    cta: {
+      label: action?.label || "Learn more",
+      href: action?.kind === "link" ? action.href || "#" : `#${page.hero.primaryActionId}`,
+    },
+  };
 }
 
 export function getLandingPageSections(
@@ -525,6 +673,9 @@ export function getLandingPageSections(
 ): LandingPageSection[] {
   if (page.version === 1) return page.sections;
   return page.content.sections.flatMap((section): LandingPageSection[] => {
+    if (section.type === "action") {
+      return [{ type: "text", heading: section.heading, body: section.body }];
+    }
     if (section.type === "story") {
       return [{ type: "text", heading: section.heading, body: section.body }];
     }
@@ -598,7 +749,7 @@ export function getLandingPageSectionImage(
   page: LandingPageDocument | null,
 ): string | null {
   if (!page) return null;
-  if (page.version === 2) return page.assets.sectionImage || null;
+  if (page.version !== 1) return page.assets.sectionImage || null;
   const imageSection = page.sections.find(
     (section): section is Extract<LandingPageSection, { type: "image" }> =>
       section.type === "image",
@@ -606,104 +757,369 @@ export function getLandingPageSectionImage(
   return imageSection?.image || null;
 }
 
+export function getLandingPageActions(
+  page: LandingPageDocument,
+): LandingPageAction[] {
+  return page.version === 3 ? page.actions : upgradeLandingPageDocument(page).actions;
+}
+
+export function getLandingPageValidationErrors(
+  page: LandingPageDocumentV3,
+): string[] {
+  const errors: string[] = [];
+  const actionIds = new Set(page.actions.map((action) => action.id));
+  if (!page.seo.title.trim()) errors.push("Add a page title.");
+  if (!page.seo.description.trim()) errors.push("Add a page description.");
+  if (!page.hero.headline.trim()) errors.push("Add a headline.");
+  if (!actionIds.has(page.hero.primaryActionId)) {
+    errors.push("Choose a valid primary action.");
+  }
+  for (const action of page.actions) {
+    if (!action.id.trim() || !action.label.trim()) {
+      errors.push("Every action needs an ID and label.");
+    }
+    if (action.kind === "link" && !action.href?.trim()) {
+      errors.push(`Add a destination for ${action.label || "the link action"}.`);
+    }
+    if (
+      (action.kind === "booking" || action.kind === "product") &&
+      !action.resourceId?.trim()
+    ) {
+      errors.push(`Choose a ${action.kind} for ${action.label || "the action"}.`);
+    }
+  }
+  for (const section of page.content.sections) {
+    if (section.type === "action" && !actionIds.has(section.actionId)) {
+      errors.push(`Section ${section.heading || section.id} has a missing action.`);
+    }
+  }
+  return [...new Set(errors)];
+}
+
+export function upgradeLandingPageDocument(
+  page: LandingPageDocument,
+): LandingPageDocumentV3 {
+  if (page.version === 3) return page;
+  const template = getLandingPageTemplateId(page);
+  const recipe = getDefaultLandingPageRecipe(template) || LANDING_PAGE_RECIPES[0];
+  const legacyHero = getLandingPageHero(page);
+  const legacyHref = legacyHero.cta.href;
+  const primaryAction: LandingPageAction =
+    template === "waitlist"
+      ? { id: "primary-action", kind: "subscribe", label: legacyHero.cta.label }
+      : {
+          id: "primary-action",
+          kind: "link",
+          label: legacyHero.cta.label,
+          href: legacyHref && !legacyHref.startsWith("#") ? legacyHref : "#contact",
+        };
+  const sections: LandingPageV3Section[] = getLandingPageSections(page).flatMap(
+    (section, index): LandingPageV3Section[] => {
+      const id = `section-${index + 1}`;
+      if (section.type === "text") {
+        return [{ id, type: "story", heading: section.heading, body: section.body }];
+      }
+      if (section.type === "list") {
+        return [
+          {
+            id,
+            type: "feature-list",
+            heading: section.heading,
+            items: section.items.map((item) => ({ title: item, body: "" })),
+          },
+        ];
+      }
+      if (section.type === "steps") {
+        return [
+          {
+            id,
+            type: "steps",
+            heading: section.heading,
+            items: section.items.map((item) => ({ title: item, body: "" })),
+          },
+        ];
+      }
+      if (section.type === "profile") {
+        return [{ id, ...section }];
+      }
+      if (section.type === "faq") {
+        return [{ id, ...section }];
+      }
+      if (section.type === "signup") {
+        return [
+          {
+            id,
+            type: "action",
+            heading: section.heading,
+            body: section.body,
+            actionId: primaryAction.id,
+          },
+        ];
+      }
+      return [];
+    },
+  );
+  if (!sections.some((section) => section.type === "action")) {
+    sections.push({
+      id: "action",
+      type: "action",
+      heading: template === "waitlist" ? "Join the list" : "Ready for the next step?",
+      body: "Take the next step when you are ready.",
+      actionId: primaryAction.id,
+    });
+  }
+  return {
+    version: 3,
+    intent: {
+      type: template,
+      audience: page.version === 2 ? page.intent.audience : "",
+      goal: page.version === 2 ? page.intent.goal : getLandingPageDescription(page),
+      offerName: getLandingPageTitle(page),
+    },
+    recipe: {
+      id: recipe.id,
+      template,
+      name: recipe.name,
+    },
+    brief: page.brief,
+    seo: {
+      title: getLandingPageTitle(page),
+      description: getLandingPageDescription(page),
+      socialImage:
+        page.version === 2 ? page.seo.socialImage : page.meta.ogImage || null,
+    },
+    hero: {
+      headline: legacyHero.headline,
+      subheadline: legacyHero.subheadline,
+      image: legacyHero.image || null,
+      primaryActionId: primaryAction.id,
+      metadata: page.version === 2 ? page.hero.metadata : undefined,
+    },
+    content: { sections },
+    actions: [primaryAction],
+    design:
+      page.version === 2
+        ? page.design
+        : {
+            theme:
+              template === "event"
+                ? "editorial-event"
+                : template === "waitlist"
+                  ? "signal-waitlist"
+                  : "quiet-service",
+            accentColor: page.style.accentColor,
+            backgroundColor: template === "waitlist" ? "#101312" : "#f8f1eb",
+            textColor: template === "waitlist" ? "#f7fbf7" : "#233d35",
+          },
+    assets: {
+      heroImage: legacyHero.image || null,
+      sectionImage: getLandingPageSectionImage(page),
+    },
+    updatedAt: page.updatedAt || new Date().toISOString(),
+  };
+}
+
 export function buildLandingPageDocument(
   input: LandingPageBuildInput,
 ): LandingPageDocument {
-  const recipe = getDefaultLandingPageRecipe(input.template);
-  if (recipe) return buildLandingPageDocumentV2(input, recipe);
+  const recipe = getDefaultLandingPageRecipe(input.template) || LANDING_PAGE_RECIPES[0];
+  return buildLandingPageDocumentV3(input, recipe);
+}
 
-  const template = getLandingPageTemplate(input.template);
+function buildLandingPageDocumentV3(
+  input: LandingPageBuildInput,
+  recipe: LandingPageRecipeDefinition,
+): LandingPageDocumentV3 {
   const combined = [input.brief, input.feedback || ""].filter(Boolean).join("\n\n");
-  const title = extractLandingTitle(combined, input.template);
+  const title = extractLandingTitle(combined, recipe.template);
   const description =
-    firstSentence(combined) || "A focused landing page built with ME3 Core.";
-  const ctaLabel = extractCta(input.feedback) || template.defaultCta;
-  const sections: LandingPageSection[] = [
+    firstSentence(combined) ||
+    (recipe.intent === "event"
+      ? "A thoughtful event for the people this invitation was made for."
+      : recipe.intent === "waitlist"
+        ? "A focused launch for people who want to hear first."
+        : "A focused offer for people ready to make meaningful progress.");
+  const ctaLabel = extractCta(input.feedback) || recipe.defaultCta;
+  const items = deriveLandingItems(combined);
+  const profileName = input.profile.name || input.username;
+  const primaryAction: LandingPageAction = {
+    id: "primary-action",
+    kind: recipe.defaultAction,
+    label: ctaLabel,
+  };
+  const commonSections: LandingPageV3Section[] = [
     {
-      type: "text",
+      id: "story",
+      type: "story",
       heading:
-        input.template === "event"
-          ? "Why This Matters"
-          : input.template === "waitlist"
-            ? "What's Coming"
-            : "The Offer",
+        recipe.intent === "service"
+          ? "The outcome"
+          : recipe.intent === "event"
+            ? "Why this gathering matters"
+            : "The promise",
       body: description,
     },
     {
-      type: "list",
-      heading: input.template === "service" ? "What's Included" : "Highlights",
-      items: deriveLandingItems(combined),
+      id: "highlights",
+      type: "feature-list",
+      heading:
+        recipe.intent === "service"
+          ? "What is included"
+          : recipe.intent === "event"
+            ? "What to expect"
+            : "Why join early",
+      items: items.map((item, index) => ({
+        title:
+          recipe.intent === "service"
+            ? ["Clarity", "A practical plan", "Focused support"][index] || `Part ${index + 1}`
+            : recipe.intent === "event"
+              ? eventFeatureTitle(index)
+              : waitlistFeatureTitle(index),
+        body: item,
+      })),
     },
-    ...(input.sectionImage
-      ? [
-          {
-            type: "image",
-            heading: "Preview",
-            image: input.sectionImage,
-            caption: description,
-          } satisfies LandingPageSection,
-        ]
-      : []),
     {
-      type: input.template === "waitlist" ? "signup" : "profile",
-      ...(input.template === "waitlist"
-        ? {
-            heading: "Join the List",
-            body: "Leave your email and you'll hear first when there is news.",
-            buttonLabel: ctaLabel,
-            placeholder: "you@example.com",
-          }
-        : {
-            heading: "About",
-            body:
-              input.profile.bio ||
-              `${input.profile.name || input.username} is the host behind this page.`,
-            profileName: input.profile.name || input.username,
-            profileImage: input.profile.avatar,
-            profileLink: input.profile.profileUrl,
-          }),
-    } as LandingPageSection,
+      id: "steps",
+      type: "steps",
+      heading:
+        recipe.intent === "service"
+          ? "How we work"
+          : recipe.intent === "event"
+            ? "A simple rhythm"
+            : "How the launch unfolds",
+      items:
+        recipe.intent === "service"
+          ? [
+              { title: "Start with the real need", body: "Clarify the outcome, constraints, and best next move." },
+              { title: "Do the focused work", body: "Move through a practical process without unnecessary ceremony." },
+              { title: "Leave with momentum", body: "Finish with clear decisions and an executable next step." },
+            ]
+          : recipe.intent === "event"
+            ? [
+                { title: "Arrive", body: "Settle in and get oriented to the room." },
+                { title: "Experience", body: "Move through the main session, workshop, or gathering." },
+                { title: "Continue", body: "Take the next step while the momentum is fresh." },
+              ]
+            : [
+                { title: "Join the private list", body: "Leave your email for the first invitation." },
+                { title: "Get the preview", body: "Receive the early details before the public launch." },
+                { title: "Choose when it opens", body: "Decide whether the first release is right for you." },
+              ],
+    },
   ];
 
+  if (recipe.intent === "event") {
+    commonSections.splice(1, 0, {
+      id: "details",
+      type: "details",
+      heading: "Event details",
+      items: [
+        { label: "When", value: extractEventDetail(combined, "when") },
+        { label: "Where", value: extractEventDetail(combined, "where") },
+        { label: "For", value: "People this invitation was made for" },
+      ],
+    });
+  }
+
+  commonSections.push(
+    {
+      id: "profile",
+      type: "profile",
+      heading: recipe.intent === "event" ? "Hosted by" : "From the person behind it",
+      body: input.profile.bio || `${profileName} created this page with ME3.`,
+      profileName,
+      profileImage: input.profile.avatar,
+      profileLink: input.profile.profileUrl,
+    },
+    {
+      id: "questions",
+      type: "faq",
+      heading: "Good to know",
+      items: [
+        {
+          question: "Who is this for?",
+          answer: "It is for the people who recognize the need and outcome described on this page.",
+        },
+        {
+          question: "What happens next?",
+          answer: `Use the ${ctaLabel} action and follow the next step shown here.`,
+        },
+      ],
+    },
+    {
+      id: "action",
+      type: "action",
+      heading:
+        recipe.intent === "waitlist"
+          ? "Be first to hear"
+          : recipe.intent === "event"
+            ? "Save your place"
+            : "Ready to take the next step?",
+      body:
+        recipe.intent === "waitlist"
+          ? "Join the list and hear when the first invitation is ready."
+          : "Choose the next step that feels right for you.",
+      actionId: primaryAction.id,
+    },
+  );
+
   return {
-    version: 1,
-    template: input.template,
-    title,
+    version: 3,
+    intent: {
+      type: recipe.intent,
+      audience:
+        recipe.intent === "waitlist"
+          ? "Early supporters"
+          : recipe.intent === "event"
+            ? "Invited guests"
+            : "People who need this outcome",
+      goal:
+        recipe.intent === "waitlist"
+          ? "Collect qualified early interest."
+          : recipe.intent === "event"
+            ? "Help the right people understand the event and reserve a place."
+            : "Help the right people understand the offer and take the next step.",
+      offerName: title,
+    },
+    recipe: { id: recipe.id, template: recipe.template, name: recipe.name },
     brief: input.brief.trim(),
-    meta: { description, ogImage: input.heroImage || null },
+    seo: { title, description, socialImage: input.heroImage || null },
     hero: {
-      eyebrow: template.shortName,
       headline: title,
       subheadline: description,
       image: input.heroImage || null,
-      cta: {
-        label: ctaLabel,
-        href: input.template === "waitlist" ? "#signup" : "#contact",
-      },
+      primaryActionId: primaryAction.id,
+      metadata:
+        recipe.intent === "event"
+          ? [
+              { label: "When", value: extractEventDetail(combined, "when") },
+              { label: "Where", value: extractEventDetail(combined, "where") },
+            ]
+          : undefined,
     },
-    sections,
-    footer: {
-      cta: {
-        label: ctaLabel,
-        href: input.template === "waitlist" ? "#signup" : "#contact",
-      },
-      note: "Built with ME3 Core.",
-      profileLink: input.profile.profileUrl,
+    content: { sections: commonSections },
+    actions: [primaryAction],
+    design: {
+      theme: recipe.theme,
+      accentColor:
+        recipe.intent === "waitlist"
+          ? "#49de80"
+          : recipe.intent === "event"
+            ? "#f2664a"
+            : "#0f766e",
+      backgroundColor: recipe.intent === "waitlist" ? "#101312" : "#f8f1eb",
+      textColor: recipe.intent === "waitlist" ? "#f7fbf7" : "#233d35",
     },
-    style: {
-      vibe:
-        input.template === "event"
-          ? "warm"
-          : input.template === "waitlist"
-            ? "tech"
-            : "minimal",
-      accentColor: input.template === "waitlist" ? "#2d4cff" : "#0f766e",
+    assets: {
+      heroImage: input.heroImage || null,
+      sectionImage: input.sectionImage || null,
     },
     updatedAt: new Date().toISOString(),
   };
 }
 
-function buildLandingPageDocumentV2(
+/** @deprecated Existing v2 drafts are supported for migration only. */
+export function buildLandingPageDocumentV2(
   input: LandingPageBuildInput,
   recipe: LandingPageRecipeDefinition,
 ): LandingPageDocumentV2 {
@@ -965,9 +1381,104 @@ function buildLandingPageDocumentV2(
 export function renderLandingPageHtml(
   page: LandingPageDocument,
   username: string,
+  context: LandingPageRenderContext = {},
 ): string {
+  if (page.version === 3) return renderLandingPageHtmlV3(page, username, context);
   if (page.version === 2) return renderLandingPageHtmlV2(page, username);
   return renderLandingPageHtmlV1(page, username);
+}
+
+export type LandingPageRenderContext = {
+  pageId?: string;
+  slug?: string;
+  campaign?: string;
+  actionUsername?: string;
+};
+
+function renderLandingPageHtmlV3(
+  page: LandingPageDocumentV3,
+  username: string,
+  context: LandingPageRenderContext,
+): string {
+  const theme = getThemeTokens(page);
+  const actionUsername = context.actionUsername || username;
+  const primaryAction =
+    page.actions.find((action) => action.id === page.hero.primaryActionId) ||
+    page.actions[0];
+  const secondaryAction = page.hero.secondaryActionId
+    ? page.actions.find((action) => action.id === page.hero.secondaryActionId)
+    : null;
+  const actionHref = (action: LandingPageAction | null | undefined) =>
+    action?.kind === "link" ? action.href || "#" : action ? `#action-${action.id}` : "#main";
+  const heroImage = page.hero.image || page.assets.sectionImage;
+  const heroVisual = heroImage
+    ? `<img src="${escapeHtml(heroImage)}" alt="" loading="eager" decoding="async">`
+    : renderGeneratedVisual(page);
+  const metadata = (page.hero.metadata || [])
+    .map(
+      (item) =>
+        `<div class="meta-item"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div>`,
+    )
+    .join("");
+  const actions = new Map(page.actions.map((action) => [action.id, action]));
+  const sections = page.content.sections
+    .map((section) =>
+      section.type === "action"
+        ? renderLandingActionSection(
+            section,
+            actions.get(section.actionId),
+            actionUsername,
+            context,
+          )
+        : renderLandingSectionV2(section),
+    )
+    .join("");
+  const socialImage = page.seo.socialImage
+    ? `<meta property="og:image" content="${escapeHtml(page.seo.socialImage)}">`
+    : "";
+
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(page.seo.title)}</title><meta name="description" content="${escapeHtml(page.seo.description)}"><meta property="og:title" content="${escapeHtml(page.seo.title)}"><meta property="og:description" content="${escapeHtml(page.seo.description)}">${socialImage}<style>${renderLandingPageCssV2(theme)}${renderActionCss()}</style></head><body data-theme="${escapeHtml(page.design.theme)}"><a href="#main" class="skip-link">Skip to content</a><header class="site-top"><div class="shell site-top-inner"><strong>${escapeHtml(username)}</strong>${primaryAction ? `<a class="top-action" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}</div></header><main id="main"><section class="hero"><div class="shell hero-grid"><div class="hero-copy">${metadata ? `<div class="meta-grid">${metadata}</div>` : ""}<h1>${escapeHtml(page.hero.headline)}</h1><p>${escapeHtml(page.hero.subheadline)}</p><div class="hero-actions">${primaryAction ? `<a class="button primary" href="${escapeHtml(actionHref(primaryAction))}">${escapeHtml(primaryAction.label)}</a>` : ""}${secondaryAction ? `<a class="button secondary" href="${escapeHtml(actionHref(secondaryAction))}">${escapeHtml(secondaryAction.label)}</a>` : ""}</div></div><div class="hero-visual">${heroVisual}</div></div></section>${sections}</main><script>${landingActionScript()}</script></body></html>`;
+}
+
+function renderLandingActionSection(
+  section: Extract<LandingPageV3Section, { type: "action" }>,
+  action: LandingPageAction | undefined,
+  username: string,
+  context: LandingPageRenderContext,
+): string {
+  const widget = action
+    ? renderLandingAction(action, username, context)
+    : `<p class="action-error" role="alert">This action is no longer available.</p>`;
+  return `<section id="action-${escapeHtml(section.actionId)}" class="section section-band page-action"><div class="shell section-grid"><div><h2>${escapeHtml(section.heading)}</h2><p>${escapeHtml(section.body)}</p></div><div>${widget}</div></div></section>`;
+}
+
+function renderLandingAction(
+  action: LandingPageAction,
+  username: string,
+  context: LandingPageRenderContext,
+): string {
+  if (action.kind === "link") {
+    return `<a class="button primary" href="${escapeHtml(action.href || "#")}">${escapeHtml(action.label)}</a>`;
+  }
+  const attribution = `<input type="hidden" name="pageId" value="${escapeHtml(context.pageId || "")}"><input type="hidden" name="actionId" value="${escapeHtml(action.id)}"><input type="hidden" name="campaign" value="${escapeHtml(context.campaign || context.slug || "")}">`;
+  if (action.kind === "subscribe") {
+    return `<form class="page-action-form" data-subscribe-form action="/api/sites/${encodeURIComponent(username)}/subscribe">${attribution}<label>Email address<input type="email" name="email" autocomplete="email" placeholder="you@example.com" required></label><label class="honeypot" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label><button class="button primary" type="submit">${escapeHtml(action.label)}</button><p class="action-status" role="status" aria-live="polite"></p></form>`;
+  }
+  if (!action.resourceId) {
+    return `<p class="action-error" role="alert">Choose a ${escapeHtml(action.kind)} before publishing this page.</p>`;
+  }
+  if (action.kind === "product") {
+    return `<form class="page-action-form" data-product-form data-username="${escapeHtml(username)}" data-product="${escapeHtml(action.resourceId)}">${attribution}<label>Your name<input name="buyerName" autocomplete="name" required></label><label>Email address<input type="email" name="buyerEmail" autocomplete="email" required></label><label>Note <span>(optional)</span><textarea name="buyerNote" rows="3"></textarea></label><button class="button primary" type="submit">${escapeHtml(action.label)}</button><p class="action-status" role="status" aria-live="polite"></p></form>`;
+  }
+  return `<div class="booking-action" data-booking-action data-username="${escapeHtml(username)}" data-offer="${escapeHtml(action.resourceId)}" data-page-id="${escapeHtml(context.pageId || "")}" data-action-id="${escapeHtml(action.id)}" data-campaign="${escapeHtml(context.campaign || context.slug || "")}"><label>Choose a date<input type="date" data-booking-date required></label><div class="booking-slots" data-booking-slots aria-live="polite"></div><form class="page-action-form" data-booking-form hidden><label>Your name<input name="guestName" autocomplete="name" required></label><label>Email address<input type="email" name="guestEmail" autocomplete="email" required></label><label>Anything we should know? <span>(optional)</span><textarea name="notes" rows="3"></textarea></label><button class="button primary" type="submit">${escapeHtml(action.label)}</button></form><p class="action-status" role="status" aria-live="polite"></p></div>`;
+}
+
+function renderActionCss(): string {
+  return `.page-action-form,.booking-action{display:grid;gap:14px;max-width:520px}.page-action-form label,.booking-action>label{display:grid;gap:7px;font-weight:700}.page-action-form label span{font-weight:400;color:var(--text-muted)}.page-action-form input,.page-action-form textarea,.booking-action input{width:100%;min-height:48px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:#111;padding:12px 14px;font:inherit}.page-action-form textarea{resize:vertical}.page-action-form .button{width:fit-content;border:0;cursor:pointer}.action-status{min-height:1.5em;margin:0;color:var(--text-muted)}.action-status.is-error,.action-error{color:#b42318}.honeypot{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important}.booking-slots{display:flex;flex-wrap:wrap;gap:8px}.booking-slot{min-height:44px;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--text);padding:0 14px;font:inherit;cursor:pointer}.booking-slot[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-contrast)}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 72%,white);outline-offset:3px}@media(max-width:640px){.page-action .section-grid{gap:22px}.page-action-form .button{width:100%}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}}`;
+}
+
+function landingActionScript(): string {
+  return `(()=>{const status=(root,message,error=false)=>{const el=root.querySelector('.action-status');if(!el)return;el.textContent=message;el.classList.toggle('is-error',error)};document.querySelectorAll('[data-subscribe-form]').forEach(form=>form.addEventListener('submit',async event=>{event.preventDefault();status(form,'Joining…');try{const response=await fetch(form.action,{method:'POST',body:new FormData(form)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not join the list.');form.reset();status(form,data.message||'You are on the list.')}catch(error){status(form,error.message||'Could not join the list.',true)}}));document.querySelectorAll('[data-booking-action]').forEach(root=>{const username=root.dataset.username;const offerId=root.dataset.offer;const date=root.querySelector('[data-booking-date]');const slots=root.querySelector('[data-booking-slots]');const form=root.querySelector('[data-booking-form]');let selected=null;date.addEventListener('change',async()=>{selected=null;form.hidden=true;slots.textContent='Loading times…';try{const response=await fetch('/api/book/'+encodeURIComponent(username)+'/slots?date='+encodeURIComponent(date.value)+'&offerId='+encodeURIComponent(offerId));const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load times.');slots.textContent='';if(!data.slots.length){slots.textContent='No times available on this date.';return}data.slots.forEach(slot=>{const button=document.createElement('button');button.type='button';button.className='booking-slot';button.textContent=slot.localTime;button.setAttribute('aria-pressed','false');button.addEventListener('click',()=>{selected=slot;slots.querySelectorAll('button').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));form.hidden=false;form.querySelector('input')?.focus()});slots.appendChild(button)})}catch(error){slots.textContent='';status(root,error.message||'Could not load times.',true)}});form.addEventListener('submit',async event=>{event.preventDefault();if(!selected)return;status(root,'Confirming…');const values=Object.fromEntries(new FormData(form));const payload={offerId,slotStart:selected.slotStart,slotEnd:selected.slotEnd,guestName:values.guestName,guestEmail:values.guestEmail,notes:values.notes,pageId:root.dataset.pageId,actionId:root.dataset.actionId,campaign:root.dataset.campaign};try{let response=await fetch('/api/book/'+encodeURIComponent(username)+'/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});let data=await response.json();if(response.status===402){response=await fetch('/api/book/'+encodeURIComponent(username)+'/checkout-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,localDate:selected.localDate,localTime:selected.localTime,returnUrl:location.href})});data=await response.json();if(!response.ok)throw new Error(data.error||'Could not start checkout.');location.href=data.url;return}if(!response.ok)throw new Error(data.error||'Could not confirm the booking.');form.reset();form.hidden=true;slots.textContent='';date.value='';status(root,'Your booking is confirmed.')}catch(error){status(root,error.message||'Could not confirm the booking.',true)}});const params=new URLSearchParams(location.search);if(params.get('booking')==='success'&&params.get('session_id')){status(root,'Confirming your payment…');fetch('/api/book/'+encodeURIComponent(username)+'/complete-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:params.get('session_id')})}).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not confirm payment.');status(root,'Payment received. Your booking is confirmed.')}).catch(error=>status(root,error.message||'Could not confirm payment.',true))}});document.querySelectorAll('[data-product-form]').forEach(form=>{form.addEventListener('submit',async event=>{event.preventDefault();status(form,'Opening secure checkout…');const values=Object.fromEntries(new FormData(form));try{const response=await fetch('/api/shop/'+encodeURIComponent(form.dataset.username)+'/'+encodeURIComponent(form.dataset.product)+'/checkout-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...values,returnUrl:location.href})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not start checkout.');location.href=data.url}catch(error){status(form,error.message||'Could not start checkout.',true)}});const params=new URLSearchParams(location.search);if(params.get('purchase')==='success'&&params.get('session_id')){status(form,'Confirming your payment…');fetch('/api/shop/'+encodeURIComponent(form.dataset.username)+'/complete-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:params.get('session_id')})}).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not confirm payment.');status(form,'Payment received. Thank you for your purchase.')}).catch(error=>status(form,error.message||'Could not confirm payment.',true))}})})();`;
 }
 
 function renderLandingPageHtmlV1(
@@ -1077,7 +1588,9 @@ type LandingPageThemeTokens = {
   border: string;
 };
 
-function getThemeTokens(page: LandingPageDocumentV2): LandingPageThemeTokens {
+function getThemeTokens(
+  page: LandingPageDocumentV2 | LandingPageDocumentV3,
+): LandingPageThemeTokens {
   if (page.design.theme === "signal-waitlist") {
     return {
       bg: page.design.backgroundColor || "#101312",
@@ -1107,7 +1620,9 @@ function renderLandingPageCssV2(theme: LandingPageThemeTokens): string {
   return `:root{color-scheme:light;--bg:${theme.bg};--bg-muted:${theme.bgMuted};--surface:${theme.surface};--text:${theme.text};--text-muted:${theme.textMuted};--accent:${theme.accent};--accent-contrast:${theme.accentContrast};--border:${theme.border};font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text)}a{color:inherit}.skip-link{position:absolute;left:16px;top:-48px;background:var(--accent);color:var(--accent-contrast);padding:10px 14px;border-radius:999px;z-index:10}.skip-link:focus{top:16px}.shell{width:min(1120px,calc(100vw - 32px));margin:0 auto}.site-top{border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--bg) 86%,transparent);position:sticky;top:0;z-index:2;backdrop-filter:blur(18px)}.site-top-inner{min-height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px}.site-top strong{font-size:15px}.top-action{display:inline-flex;align-items:center;min-height:38px;padding:0 14px;border:1px solid var(--border);border-radius:999px;text-decoration:none;font-weight:700}.hero{padding:56px 0 40px}.hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.86fr);gap:32px;align-items:center}.hero-copy h1{font-size:clamp(3rem,8vw,6.6rem);line-height:.96;margin:22px 0 18px;letter-spacing:0;max-width:10ch}.hero-copy p{font-size:clamp(1.05rem,2vw,1.32rem);line-height:1.55;color:var(--text-muted);max-width:680px}.meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;max-width:560px}.meta-item{border-top:1px solid var(--border);padding-top:10px}.meta-item span{display:block;color:var(--text-muted);font-size:13px}.meta-item strong{display:block;margin-top:3px;font-size:15px}.hero-actions,.section-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}.button{display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 18px;border-radius:999px;text-decoration:none;font-weight:800;border:1px solid var(--border)}.button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-contrast)}.button.secondary{background:transparent;color:var(--text)}.hero-visual{min-height:420px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface);display:grid;place-items:center}.hero-visual img{width:100%;height:100%;object-fit:cover;display:block}.generated-visual{width:100%;height:100%;min-height:420px;display:grid;grid-template-rows:1fr auto;background:linear-gradient(180deg,var(--surface),var(--bg-muted))}.generated-visual-lines{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;padding:28px}.generated-visual-lines span{display:block;border-radius:999px;background:var(--accent);opacity:.22}.generated-visual-lines span:nth-child(2n){opacity:.4}.generated-visual-caption{padding:24px 28px;border-top:1px solid var(--border);font-size:clamp(1.2rem,3vw,2.2rem);line-height:1.08}.section{padding:42px 0}.section-band{background:var(--bg-muted);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}.section-grid{display:grid;grid-template-columns:minmax(0,.72fr) minmax(0,1fr);gap:36px;align-items:start}.section h2{font-size:clamp(2rem,4vw,4rem);line-height:1;margin:0;letter-spacing:0}.section p,.section li{color:var(--text-muted);line-height:1.65}.section-body{font-size:1.16rem;margin:0}.feature-grid,.faq-grid,.details-grid,.steps-grid{display:grid;gap:14px}.feature-grid{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}.faq-grid,.details-grid{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}.feature-card,.faq-card,.detail-card,.step-card{border:1px solid var(--border);border-radius:8px;padding:18px;background:color-mix(in srgb,var(--surface) 70%,transparent)}.feature-card strong,.faq-card strong,.detail-card strong,.step-card strong{display:block;font-size:1.02rem}.detail-card span{display:block;color:var(--text-muted);font-size:13px;margin-bottom:6px}.step-card{display:grid;grid-template-columns:auto 1fr;gap:14px}.step-number{width:34px;height:34px;border-radius:999px;display:grid;place-items:center;background:var(--accent);color:var(--accent-contrast);font-weight:800}.signup-form{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}.signup-form input{min-height:48px;min-width:min(100%,280px);flex:1;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:#111;padding:0 16px;font:inherit}.final-cta{text-align:center}.final-cta h2{margin-inline:auto;max-width:760px}.final-cta p{max-width:640px;margin:18px auto 0}@media(max-width:820px){.hero-grid,.section-grid{grid-template-columns:1fr}.hero-copy h1{max-width:11ch}.hero-visual{min-height:300px}.generated-visual{min-height:300px}.site-top{position:static}}`;
 }
 
-function renderGeneratedVisual(page: LandingPageDocumentV2): string {
+function renderGeneratedVisual(
+  page: LandingPageDocumentV2 | LandingPageDocumentV3,
+): string {
   const words = page.recipe.id === "event-invite" ? "Save the date" : "First access";
   return `<div class="generated-visual" aria-hidden="true"><div class="generated-visual-lines">${Array.from({ length: 21 })
     .map((_, index) => `<span style="min-height:${48 + (index % 5) * 28}px"></span>`)

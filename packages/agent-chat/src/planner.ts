@@ -88,6 +88,22 @@ export function planCoreChatToolTurn(
     });
   }
 
+  if (isCoreChatSocialSourceReadRequest(messageText)) {
+    return capabilityDecision("core.social.source.read", {
+      kind: "read_action",
+      confidence: 0.9,
+      reason: "The owner asked to read a Journal or Mission Control source for social content.",
+    });
+  }
+
+  if (isCoreChatSocialDraftCreateRequest(messageText)) {
+    return capabilityDecision("core.social.draft.create", {
+      kind: "write_action",
+      confidence: 0.9,
+      reason: "The owner asked to create reviewable social post drafts.",
+    });
+  }
+
   if (isCoreChatSiteBlogPostArchiveRequest(messageText)) {
     return capabilityDecision("core.sites.blog_post.archive", {
       kind: "write_action",
@@ -371,6 +387,22 @@ function isLikelySocialPostRequest(messageText: string): boolean {
   return /\b(?:social|linkedin|twitter|x\.com|instagram|tiktok|facebook|mastodon|bluesky)\b/i.test(
     messageText,
   );
+}
+
+export function isCoreChatSocialSourceReadRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  return (
+    /\b(?:read|open|load|inspect)\b/i.test(messageText) &&
+    /\b(?:journal|mission\s+control|task)\b/i.test(messageText) &&
+    /\b(?:social|post|draft|linkedin|twitter|x\.com|instagram)\b/i.test(messageText)
+  );
+}
+
+export function isCoreChatSocialDraftCreateRequest(messageText: string): boolean {
+  if (isCoreChatCapabilityExplorationRequest(messageText)) return false;
+  if (/\b(?:ideas?|brainstorm|strategy|calendar)\b/i.test(messageText)) return false;
+  if (!isLikelySocialPostRequest(messageText)) return false;
+  return /\b(?:create|write|draft|make|turn|adapt|repurpose|use)\b/i.test(messageText);
 }
 
 function isLikelyMissionTaskRequest(messageText: string): boolean {

@@ -516,6 +516,106 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.social.source.read",
+    owner: "plugin",
+    pluginId: "me3.social-publishing",
+    ownerFacingLabel: "Read social post source",
+    summary: "Read one Journal entry or Mission Control task as the source for a social draft.",
+    category: "content",
+    handler: {
+      surface: "chat",
+      route: "core.social.source.read",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: ["social-publishing"],
+    inputSchema: {
+      type: "object",
+      required: ["sourceType", "sourceId"],
+      properties: {
+        sourceType: {
+          type: "string",
+          description: "Source kind for the social draft.",
+          enum: ["journal", "mission_task"],
+        },
+        sourceId: {
+          type: "string",
+          description: "Journal entry ID/date (or today), or stable Mission Control task ID.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "social_content_source_read",
+    examples: {
+      positive: ["Read today's journal as the source for a social draft."],
+      negative: ["Read the blog post about agent context."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
+    id: "core.social.draft.create",
+    owner: "plugin",
+    pluginId: "me3.social-publishing",
+    ownerFacingLabel: "Save social post drafts",
+    summary: "Save source-backed LinkedIn, X, and Instagram variants as one reviewable social content package.",
+    category: "content",
+    handler: {
+      surface: "chat",
+      route: "core.social.draft.create",
+    },
+    sideEffect: "write_internal_draft",
+    approvalMode: "none",
+    requiresSetup: ["social-publishing"],
+    inputSchema: {
+      type: "object",
+      required: ["sourceType", "sourceId", "ideaText"],
+      properties: {
+        sourceType: {
+          type: "string",
+          description: "Source kind already read with the social source tool.",
+          enum: ["journal", "mission_task"],
+        },
+        sourceId: {
+          type: "string",
+          description: "The exact source ID/date used with the social source tool.",
+        },
+        siteId: {
+          type: "string",
+          description: "Optional owner site ID. Omit to use the primary profile site.",
+        },
+        ideaText: {
+          type: "string",
+          description: "A concise description of the post angle or key idea.",
+        },
+        linkedinBody: {
+          type: "string",
+          description: "Optional LinkedIn-native draft body with a strong opening and useful detail.",
+        },
+        xBody: {
+          type: "string",
+          description: "Optional concise X post draft body.",
+        },
+        instagramBody: {
+          type: "string",
+          description: "Optional Instagram-native caption with an opening hook and readable rhythm.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "social_content_draft_saved",
+    examples: {
+      positive: ["Turn today's journal into LinkedIn, X, and Instagram drafts."],
+      negative: ["Brainstorm social post ideas with me."],
+    },
+    chat: {
+      intentKind: "write_action",
+      sideEffectLevel: "write",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.mission.task.create",
     owner: "core",
     pluginId: "me3.mission-control",

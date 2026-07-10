@@ -938,15 +938,15 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
   schemaVersion: CORE_PLUGIN_CATALOG_VERSION,
   id: "me3.landing-pages",
   name: "ME3 Landing Pages",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
     "First-party landing-page package for draft generation, template metadata, document validation, and static HTML rendering.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
   defaultEnabled: false,
-  releaseStage: "coming_soon",
-  activationAllowed: false,
+  releaseStage: "available",
+  activationAllowed: true,
   implementationStatus: LANDING_PAGES_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["sites.landing_pages", "agent.landing_page_generation"],
   permissions: [
@@ -970,6 +970,12 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
       id: "sites.landing-page.save.api",
       path: "/api/sites/:username/landing-page",
       methods: ["PUT"],
+      auth: "owner",
+    },
+    {
+      id: "sites.pages.api",
+      path: "/api/sites/:username/pages/*",
+      methods: ["GET", "POST", "PUT", "DELETE"],
       auth: "owner",
     },
     {
@@ -1020,13 +1026,21 @@ const LANDING_PAGES_PLUGIN: CorePluginManifestSummary = {
     }),
   ],
   secrets: [],
-  migrations: [],
+  migrations: [
+    {
+      id: "landing-pages.site-pages-v3",
+      path: "./apps/worker/migrations/0017_site_pages_and_commerce.sql",
+      destructive: false,
+      description:
+        "Versioned site pages, conversion attribution, and owner-scoped commerce orders.",
+    },
+  ],
   queuesAndCrons: [],
   notes: [
     "Bundled through @me3-core/plugin-landing-pages as a first-party optional Core package.",
-    "The package owns template metadata, v1 document normalization, deterministic draft generation, and HTML rendering.",
-    "Worker routes retain owner auth, site lookup, file persistence, and publish behavior.",
-    "Hosted ME3 should keep Pro gating, me3.app URL defaults, quotas, and billing copy outside this shared package.",
+    "The package owns page document v3, v1/v2 upgrades, recipes, validation, action widgets, and HTML rendering.",
+    "Worker routes retain owner auth, page revisions, resource validation, file persistence, and publish behavior.",
+    "ME3 Cloud may provide managed AI, domains, quotas, and a Stripe Connect bridge without storing owner page content.",
   ],
 };
 

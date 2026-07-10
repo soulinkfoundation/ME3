@@ -36,6 +36,7 @@ declare module 'vue-router/auto-routes' {
     '/sites/[username]': RouteRecordInfo<'/sites/[username]', '/sites/:username', { username: ParamValue<true> }, { username: ParamValue<false> }>,
     '/sites/[username]/build': RouteRecordInfo<'/sites/[username]/build', '/sites/:username/build', { username: ParamValue<true> }, { username: ParamValue<false> }>,
     '/sites/[username]/landing-pages/new': RouteRecordInfo<'/sites/[username]/landing-pages/new', '/sites/:username/landing-pages/new', { username: ParamValue<true> }, { username: ParamValue<false> }>,
+    '/sites/[username]/pages/[pageId]': RouteRecordInfo<'/sites/[username]/pages/[pageId]', '/sites/:username/pages/:pageId', { username: ParamValue<true>, pageId: ParamValue<true> }, { username: ParamValue<false>, pageId: ParamValue<false> }>,
     '/social': RouteRecordInfo<'/social', '/social', Record<never, never>, Record<never, never>>,
     '/start': RouteRecordInfo<'/start', '/start', Record<never, never>, Record<never, never>>,
   }

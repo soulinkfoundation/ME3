@@ -616,4 +616,66 @@ describe("sites store", () => {
       expect(result).toBeNull();
     });
   });
+
+  describe("site pages", () => {
+    const page = {
+      id: "page-1",
+      siteId: "site-1",
+      slug: "offer",
+      kind: "landing_page" as const,
+      title: "A focused offer",
+      templateId: "service" as const,
+      document: {
+        version: 3 as const,
+        intent: { type: "service" as const, audience: "Consultants", goal: "Book", offerName: "Offer" },
+        recipe: { id: "service-offer" as const, template: "service" as const, name: "Service Offer" },
+        brief: "A focused offer",
+        seo: { title: "A focused offer", description: "A clear offer" },
+        hero: { headline: "A focused offer", subheadline: "A clear offer", primaryActionId: "primary-action" },
+        content: { sections: [{ id: "action", type: "action" as const, heading: "Book", body: "Choose a time", actionId: "primary-action" }] },
+        actions: [{ id: "primary-action", kind: "booking" as const, label: "Book", resourceId: "call" }],
+        design: { theme: "quiet-service" as const, accentColor: "#0f766e", backgroundColor: "#fff", textColor: "#111" },
+        assets: {},
+      },
+      publishedRevisionId: null,
+      createdAt: "2026-07-10T12:00:00Z",
+      updatedAt: "2026-07-10T12:00:00Z",
+      publishedAt: null,
+    };
+
+    it("creates a page inside the existing site", async () => {
+      vi.mocked(api.post).mockResolvedValue({ page });
+      const store = useSitesStore();
+
+      const result = await store.createSitePage("owner", {
+        slug: "offer",
+        brief: "A focused offer",
+        templateId: "service",
+      });
+
+      expect(result).toEqual(page);
+      expect(store.sitePages).toEqual([page]);
+      expect(api.post).toHaveBeenCalledWith("/sites/owner/pages", {
+        slug: "offer",
+        brief: "A focused offer",
+        templateId: "service",
+      });
+    });
+
+    it("updates page state after publishing", async () => {
+      const published = {
+        ...page,
+        publishedRevisionId: "revision-1",
+        publishedAt: "2026-07-10T12:05:00Z",
+      };
+      vi.mocked(api.post).mockResolvedValue({ page: published });
+      const store = useSitesStore();
+      store.sitePages = [page];
+
+      const result = await store.publishSitePage("owner", page.id);
+
+      expect(result?.publishedRevisionId).toBe("revision-1");
+      expect(store.sitePages[0].publishedAt).toBe("2026-07-10T12:05:00Z");
+    });
+  });
 });

@@ -38,6 +38,13 @@ import {
   CORE_CHAT_TOOLS,
   type CoreChatToolDefinition,
 } from "./tools";
+import {
+  agentSocialSourceKey,
+  createAgentSocialDraft,
+  readAgentSocialSource,
+  type AgentSocialSource,
+  type AgentSocialSourceType,
+} from "./social-content";
 
 type CoreAgentDb = {
   prepare(sql: string): {
@@ -47,6 +54,7 @@ type CoreAgentDb = {
       run(): Promise<{ meta?: { changes?: number } }>;
     };
   };
+  batch?: unknown;
 };
 
 type CoreToolOutcome = {
@@ -55,6 +63,7 @@ type CoreToolOutcome = {
   fallbackReply: string;
   reminderAction: AgentSandboxDispatchResponse["reminderAction"];
   emailAction?: AgentSandboxDispatchResponse["emailAction"];
+  contentAction?: AgentSandboxDispatchResponse["contentAction"];
   actionCards: AgentChatActionCard[];
 };
 
@@ -75,7 +84,8 @@ const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
     tool.capabilityId.startsWith("core.reminders.") ||
     tool.capabilityId.startsWith("core.mission.task.") ||
-    tool.capabilityId.startsWith("core.mailbox."),
+    tool.capabilityId.startsWith("core.mailbox.") ||
+    tool.capabilityId.startsWith("core.social."),
 );
 const MISSION_TASK_STATUSES = new Set(["backlog", "in_progress", "review", "done"]);
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
@@ -95,6 +105,7 @@ export async function runCoreAgentToolTurn(input: {
     input.ownerTimezone,
   );
   const outcomes: CoreToolOutcome[] = [];
+  const socialSources = new Map<string, AgentSocialSource>();
   const modelAttempts: AgentChatModelAttemptTrace[] = [];
   const tools = input.mailboxServices
     ? ACTIVE_CORE_TOOLS
@@ -138,8 +149,10 @@ export async function runCoreAgentToolTurn(input: {
                 call,
                 tool: tool as CoreChatToolDefinition,
                 mailboxServices: input.mailboxServices,
+                socialSources,
               }),
           );
+          cacheSocialSourceOutcome(outcome, socialSources);
           outcomes.push(outcome);
           return outcome.result;
         },
@@ -192,12 +205,16 @@ function executeCoreToolCall(input: {
   call: AgentToolCall;
   tool: CoreChatToolDefinition;
   mailboxServices?: CoreMailboxToolServices;
+  socialSources: Map<string, AgentSocialSource>;
 }): Promise<CoreToolOutcome> {
   if (input.tool.capabilityId.startsWith("core.reminders.")) {
     return executeReminderToolCall(input);
   }
   if (input.tool.capabilityId.startsWith("core.mission.task.")) {
     return executeMissionTaskToolCall(input);
+  }
+  if (input.tool.capabilityId.startsWith("core.social.")) {
+    return executeSocialToolCall(input);
   }
   return executeMailboxToolCall(input);
 }
@@ -448,6 +465,104 @@ export function buildMissionTaskActionCard(
   };
 }
 
+async function executeSocialToolCall(input: {
+  db: CoreAgentDb;
+  userId: string;
+  ownerTimezone: string | null | undefined;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+  socialSources: Map<string, AgentSocialSource>;
+}): Promise<CoreToolOutcome> {
+  enforceSocialToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const args = input.call.arguments;
+  const sourceType = socialSourceType(args.sourceType);
+  const sourceId = requiredToolString(args.sourceId, "Social sourceId");
+
+  if (input.tool.capabilityId === "core.social.source.read") {
+    const source = await readAgentSocialSource(
+      input.db,
+      input.userId,
+      sourceType,
+      sourceId,
+      input.ownerTimezone,
+    );
+    cacheSocialSource(source, input.socialSources);
+    return {
+      capabilityId: "core.social.source.read",
+      result: { ok: true, source },
+      fallbackReply: `Read the social post source: ${source.title}.`,
+      reminderAction: null,
+      actionCards: [],
+    };
+  }
+
+  const source = input.socialSources.get(agentSocialSourceKey(sourceType, sourceId));
+  if (!source) {
+    throw new Error(
+      "Read this exact Journal entry or Mission Control task with core_social_source_read before creating its social drafts.",
+    );
+  }
+  const detail = await createAgentSocialDraft(input.db, input.userId, source, {
+    siteId: optionalToolString(args.siteId),
+    ideaText: requiredToolString(args.ideaText, "Social draft ideaText"),
+    linkedinBody: optionalToolString(args.linkedinBody),
+    xBody: optionalToolString(args.xBody),
+    instagramBody: optionalToolString(args.instagramBody),
+  });
+  const platforms = detail.variants.map((variant) => variant.platform);
+  return {
+    capabilityId: "core.social.draft.create",
+    result: {
+      ok: true,
+      package: detail.package,
+      variants: detail.variants,
+      approved: false,
+      published: false,
+    },
+    fallbackReply: `Saved ${platforms.length} social draft${platforms.length === 1 ? "" : "s"} from ${source.title} for review. Nothing was approved or published.`,
+    reminderAction: null,
+    contentAction: {
+      kind: "saved",
+      itemId: detail.package.id,
+      packageId: detail.package.id,
+      platforms,
+    },
+    actionCards: [buildSocialDraftActionCard(detail, source)],
+  };
+}
+
+function buildSocialDraftActionCard(
+  detail: Awaited<ReturnType<typeof createAgentSocialDraft>>,
+  source: AgentSocialSource,
+): AgentChatActionCard {
+  const platformLabels = detail.variants.map((variant) =>
+    variant.platform === "x"
+      ? "X"
+      : variant.platform === "linkedin"
+        ? "LinkedIn"
+        : "Instagram"
+  );
+  return {
+    id: `social-package:${detail.package.id}`,
+    kind: "social.draft_saved",
+    capabilityId: "core.social.draft.create",
+    title: "Social drafts saved",
+    summary: detail.package.ideaText,
+    status: "pending_approval",
+    statusLabel: "Needs review",
+    changed: [
+      { label: "Source", value: source.title },
+      { label: "Platforms", value: platformLabels.join(", ") },
+      { label: "Approval", value: "Not approved" },
+      { label: "Publishing", value: "Not published" },
+    ],
+    records: [{ kind: "social_package", id: detail.package.id }],
+    primaryAction: { label: "Review drafts", href: "/social" },
+    secondaryActions: [],
+  };
+}
+
 async function executeMailboxToolCall(input: {
   idempotencyKey: string;
   call: AgentToolCall;
@@ -651,6 +766,12 @@ function withCoreToolInstructions(
     "- If several messages or recipients could match, ask one concise clarification question and do not create a draft.",
     "- Draft requires a complete recipient, subject, and plain-text body. Use replyToMessageId only after reading that exact message.",
     "- Draft creation saves a reviewable mailbox draft only. Never claim the email was sent; sending is not an available tool.",
+    "Social publishing tool rules:",
+    "- Use social tools when the owner asks to turn a Journal entry or Mission Control task into social posts.",
+    "- For Mission Control, list tasks first unless a stable task ID is already present. For Journal, use an entry ID, YYYY-MM-DD date, or today. Never invent a source ID.",
+    "- Read the exact source with core_social_source_read before calling core_social_draft_create. Build every draft from that returned source, not from assumptions or a summary invented by the model.",
+    "- Write platform-native variants: a strong practical opening for LinkedIn, concise copy for X, and a hook plus readable caption rhythm for Instagram. Do not copy identical text across platforms.",
+    "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
     "- A tool result is the source of truth. Do not claim an action succeeded unless its result says ok=true.",
   ].join("\n");
   return messages.map((message, index) =>
@@ -691,6 +812,53 @@ function enforceMailboxToolPolicy(tool: CoreChatToolDefinition): void {
   ) {
     throw new Error(`Tool "${tool.name}" is not allowed by the mailbox runtime policy.`);
   }
+}
+
+function enforceSocialToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    !tool.capabilityId.startsWith("core.social.") ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.some((check) => check !== "social-publishing")
+  ) {
+    throw new Error(`Tool "${tool.name}" is not allowed by the social draft runtime policy.`);
+  }
+}
+
+function socialSourceType(value: unknown): AgentSocialSourceType {
+  if (value === "journal" || value === "mission_task") return value;
+  throw new Error('Social sourceType must be "journal" or "mission_task".');
+}
+
+function cacheSocialSourceOutcome(
+  outcome: CoreToolOutcome,
+  sources: Map<string, AgentSocialSource>,
+): void {
+  if (outcome.capabilityId !== "core.social.source.read") return;
+  const source = outcome.result.source;
+  if (!isAgentSocialSource(source)) return;
+  cacheSocialSource(source, sources);
+}
+
+function cacheSocialSource(
+  source: AgentSocialSource,
+  sources: Map<string, AgentSocialSource>,
+): void {
+  sources.set(agentSocialSourceKey(source.sourceType, source.requestedRef), source);
+  sources.set(agentSocialSourceKey(source.sourceType, source.id), source);
+}
+
+function isAgentSocialSource(value: unknown): value is AgentSocialSource {
+  if (!value || typeof value !== "object") return false;
+  const source = value as Partial<AgentSocialSource>;
+  return (
+    (source.sourceType === "journal" || source.sourceType === "mission_task") &&
+    typeof source.requestedRef === "string" &&
+    typeof source.id === "string" &&
+    typeof source.title === "string" &&
+    typeof source.content === "string" &&
+    typeof source.snapshot === "string"
+  );
 }
 
 function assertOnlyDeclaredArguments(
@@ -775,7 +943,7 @@ function successfulResponse(
     emailAction: outcome?.emailAction || null,
     reminderAction: outcome?.reminderAction || null,
     actionCards: outcome?.actionCards.length ? outcome.actionCards : null,
-    contentAction: null,
+    contentAction: outcome?.contentAction || null,
     contactsChanged: false,
     modelAttempts,
   };
@@ -817,7 +985,7 @@ function fallbackResponse(
     emailAction: outcome?.emailAction || null,
     reminderAction: outcome?.reminderAction || null,
     actionCards: outcome?.actionCards.length ? outcome.actionCards : null,
-    contentAction: null,
+    contentAction: outcome?.contentAction || null,
     contactsChanged: false,
     modelAttempts,
   };

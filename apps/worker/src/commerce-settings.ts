@@ -19,10 +19,10 @@ export type CommerceSettingsResponse = {
   defaultCurrency: string;
   stripe: {
     configured: boolean;
-    source: "environment" | "stored" | "not_configured";
+    source: "environment" | "stored" | "managed" | "not_configured";
     keyHint: string | null;
     keyUpdatedAt: string | null;
-    mode: "direct";
+    mode: "direct" | "managed";
   };
 };
 
@@ -47,18 +47,27 @@ export async function getCommerceSettings(
   const envKey = normalizeSecret(env.STRIPE_SECRET_KEY);
   const hasEnvKey = Boolean(envKey);
   const hasStoredKey = Boolean(row?.encrypted_stripe_secret_key);
+  const hasManagedBridge = Boolean(
+    env.ME3_COMMERCE_BRIDGE_ORIGIN && env.ME3_COMMERCE_BRIDGE_TOKEN,
+  );
 
   return {
     encryptionConfigured: await hasInstallEncryptionKey(env),
     defaultCurrency: await resolveDefaultCurrency(env, ownerId, row),
     stripe: {
-      configured: hasEnvKey || hasStoredKey,
-      source: hasEnvKey ? "environment" : hasStoredKey ? "stored" : "not_configured",
+      configured: hasEnvKey || hasStoredKey || hasManagedBridge,
+      source: hasEnvKey
+        ? "environment"
+        : hasStoredKey
+          ? "stored"
+          : hasManagedBridge
+            ? "managed"
+            : "not_configured",
       keyHint: hasEnvKey
         ? getSecretHint(envKey)
         : row?.stripe_key_hint || null,
       keyUpdatedAt: hasEnvKey ? null : row?.stripe_key_updated_at || null,
-      mode: "direct",
+      mode: hasEnvKey || hasStoredKey ? "direct" : hasManagedBridge ? "managed" : "direct",
     },
   };
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createMissionWheelSnapshot,
   getMissionDashboard,
+  getMissionProjectsSummary,
   getMissionWheel,
   listMissionContextSources,
   updateMissionDashboard,
@@ -240,6 +241,48 @@ describe("Mission Control dashboard settings", () => {
     });
   });
 
+  it("returns the four busiest active project summaries from one aggregate", async () => {
+    const env = createDashboardEnv({
+      projectSummaryRows: [
+        {
+          project_id: "project-a",
+          project_name: "Alpha",
+          status: "backlog",
+          count: 2,
+        },
+        {
+          project_id: "project-a",
+          project_name: "Alpha",
+          status: "in_progress",
+          count: 1,
+        },
+        {
+          project_id: null,
+          project_name: "Personal",
+          status: "review",
+          count: 4,
+        },
+      ],
+    });
+
+    await expect(getMissionProjectsSummary(env, "owner")).resolves.toEqual({
+      summaries: [
+        {
+          id: "personal",
+          label: "Personal",
+          total: 4,
+          counts: { backlog: 0, in_progress: 0, review: 4, done: 0 },
+        },
+        {
+          id: "project-a",
+          label: "Alpha",
+          total: 3,
+          counts: { backlog: 2, in_progress: 1, review: 0, done: 0 },
+        },
+      ],
+    });
+  });
+
   it("preserves inactive plugin dashboard settings while marking them unavailable", async () => {
     const env = createDashboardEnv({
       dashboardSettings: {
@@ -326,6 +369,12 @@ describe("Mission Control dashboard settings", () => {
 function createDashboardEnv(options: {
   enabledPlugins?: string[];
   activity?: Array<Record<string, unknown> & { id: string; user_id: string }>;
+  projectSummaryRows?: Array<{
+    project_id: string | null;
+    project_name: string;
+    status: "backlog" | "in_progress" | "review";
+    count: number;
+  }>;
   dashboardSettings?: Partial<DashboardSettingsRow>;
 } = {}) {
   const settings = new Map<string, DashboardSettingsRow>();
@@ -334,6 +383,7 @@ function createDashboardEnv(options: {
   const contextSources = new Map<string, ContextSourceRow>();
   const enabledPlugins = new Set(options.enabledPlugins || []);
   const activity = options.activity || [];
+  const projectSummaryRows = options.projectSummaryRows || [];
   const pluginInstallations = new Map<string, PluginInstallationRow>(
     Array.from(enabledPlugins).map((pluginId) => [
       pluginId,
@@ -393,6 +443,12 @@ function createDashboardEnv(options: {
               return null;
             },
             async all<T>() {
+              if (
+                sql.includes("COUNT(*) AS count") &&
+                sql.includes("FROM mission_tasks t")
+              ) {
+                return { results: projectSummaryRows as T[] };
+              }
               if (sql.includes("plugin_installations")) {
                 return {
                   results: Array.from(pluginInstallations.values()) as T[],

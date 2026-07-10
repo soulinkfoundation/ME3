@@ -503,11 +503,18 @@ export async function listMissionProjects(env: Env, userId: string) {
   )
     .bind(userId)
     .all<MissionProjectRow>();
-  return Promise.all(
-    (rows.results || []).map(async (project) => {
-      const columns = await listMissionProjectColumns(env, userId, project.id);
-      return serializeProject(project, columns);
-    }),
+  const projects = rows.results || [];
+  const columnsByProject = await listMissionProjectColumnsForProjects(
+    env,
+    userId,
+    projects.map((project) => project.id),
+  );
+  return projects.map((project) =>
+    serializeProject(
+      project,
+      columnsByProject.get(project.id) ||
+        defaultMissionProjectColumns(userId, project.id),
+    ),
   );
 }
 
@@ -1249,6 +1256,26 @@ export async function listJournalProjectLinks(
   return { links: (rows.results || []).map(serializeJournalProjectLink) };
 }
 
+export async function listAllJournalProjectLinks(env: Env, userId: string) {
+  const rows = await env.DB.prepare(
+    `SELECT l.id, l.user_id, l.journal_entry_id, l.project_id, l.source_text,
+            l.created_task_id, l.created_reminder_id, l.created_at,
+            e.entry_date, e.title AS entry_title, t.title AS task_title
+     FROM journal_project_links l
+     INNER JOIN journal_entries e
+       ON e.id = l.journal_entry_id AND e.user_id = l.user_id
+     LEFT JOIN mission_tasks t
+       ON t.id = l.created_task_id AND t.user_id = l.user_id
+     WHERE l.user_id = ? AND e.archived_at IS NULL
+     ORDER BY l.created_at DESC
+     LIMIT 100`,
+  )
+    .bind(userId)
+    .all<JournalProjectLinkRow>();
+
+  return { links: (rows.results || []).map(serializeJournalProjectLink) };
+}
+
 export async function listJournalEntryLinks(
   env: Env,
   userId: string,
@@ -1456,6 +1483,59 @@ export async function getMissionDashboard(env: Env, userId: string) {
       },
     },
     updatedAt: normalizeDbDateTime(row.updated_at),
+  };
+}
+
+type MissionProjectSummaryRow = {
+  project_id: string | null;
+  project_name: string;
+  status: Exclude<MissionTaskStatus, "done" | "cancelled">;
+  count: number;
+};
+
+export async function getMissionProjectsSummary(env: Env, userId: string) {
+  const rows = await env.DB.prepare(
+    `SELECT CASE WHEN p.status = 'active' THEN p.id ELSE NULL END AS project_id,
+            CASE WHEN p.status = 'active' THEN p.name ELSE 'Personal' END AS project_name,
+            t.status,
+            COUNT(*) AS count
+     FROM mission_tasks t
+     LEFT JOIN mission_projects p
+       ON p.id = t.project_id AND p.user_id = t.user_id
+     WHERE t.user_id = ?
+       AND t.archived_at IS NULL
+       AND t.status IN ('backlog', 'in_progress', 'review')
+     GROUP BY project_id, project_name, t.status`,
+  )
+    .bind(userId)
+    .all<MissionProjectSummaryRow>();
+
+  const summaries = new Map<
+    string,
+    {
+      id: string;
+      label: string;
+      total: number;
+      counts: Record<Exclude<MissionTaskStatus, "cancelled">, number>;
+    }
+  >();
+  for (const row of rows.results || []) {
+    const id = row.project_id || "personal";
+    const summary = summaries.get(id) || {
+      id,
+      label: row.project_name,
+      total: 0,
+      counts: { backlog: 0, in_progress: 0, review: 0, done: 0 },
+    };
+    summary.counts[row.status] = Number(row.count) || 0;
+    summary.total += Number(row.count) || 0;
+    summaries.set(id, summary);
+  }
+
+  return {
+    summaries: Array.from(summaries.values())
+      .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
+      .slice(0, 4),
   };
 }
 
@@ -2345,6 +2425,40 @@ async function listMissionProjectColumns(
 ) {
   const columns = await listMissionProjectColumnRows(env, userId, projectId);
   if (columns.length) return columns.map(serializeProjectColumn);
+  return defaultMissionProjectColumns(userId, projectId);
+}
+
+async function listMissionProjectColumnsForProjects(
+  env: Env,
+  userId: string,
+  projectIds: string[],
+) {
+  if (!projectIds.length) {
+    return new Map<string, ReturnType<typeof serializeProjectColumn>[]>();
+  }
+  const rows = await env.DB.prepare(
+    `SELECT id, user_id, project_id, name, status, position, archived_at,
+            created_at, updated_at
+     FROM mission_project_columns
+     WHERE user_id = ? AND project_id IN (${projectIds.map(() => "?").join(", ")})
+       AND archived_at IS NULL
+     ORDER BY project_id ASC, position ASC, id ASC`,
+  )
+    .bind(userId, ...projectIds)
+    .all<MissionProjectColumnRow>();
+  const columnsByProject = new Map<
+    string,
+    ReturnType<typeof serializeProjectColumn>[]
+  >();
+  for (const row of rows.results || []) {
+    const columns = columnsByProject.get(row.project_id) || [];
+    columns.push(serializeProjectColumn(row));
+    columnsByProject.set(row.project_id, columns);
+  }
+  return columnsByProject;
+}
+
+function defaultMissionProjectColumns(userId: string, projectId: string) {
   return DEFAULT_PROJECT_COLUMNS.map((column) =>
     serializeProjectColumn({
       id: `${projectId}:${column.status}`,
@@ -2365,7 +2479,6 @@ async function listMissionProjectColumnRows(
   userId: string,
   projectId: string,
 ) {
-  await ensureDefaultProjectColumns(env, userId, projectId);
   const rows = await env.DB.prepare(
     `SELECT id, user_id, project_id, name, status, position, archived_at,
             created_at, updated_at
@@ -2659,7 +2772,6 @@ async function ensurePersonalProject(env: Env, userId: string) {
     .bind(userId)
     .first<MissionProjectRow>();
   if (existing) {
-    await ensureDefaultProjectColumns(env, userId, existing.id);
     return existing;
   }
 

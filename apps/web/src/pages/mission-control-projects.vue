@@ -668,6 +668,7 @@ const accountsFormDisabled = computed(
 async function loadMissionControlWorkspace() {
   loading.value = true;
   error.value = "";
+  const projectTasksLoad = loadProjectTasks();
   try {
     const response = await api.get<{ projects: MissionProject[] }>(
       "/mission-control/projects",
@@ -682,11 +683,12 @@ async function loadMissionControlWorkspace() {
     ) {
       selectedProjectDetailId.value = "";
     }
-    await Promise.all([loadProjectTasks(), loadLocalExecutorStatus()]);
+    if (projects.value.some(isLocalProject)) void loadLocalExecutorStatus();
   } catch (e) {
     error.value =
       e instanceof ApiError ? e.message : "Mission Control could not load";
   } finally {
+    await projectTasksLoad;
     loading.value = false;
   }
 }
@@ -1105,19 +1107,13 @@ async function loadProjectJournalLinks(projectId = selectedProjectTaskScopeId.va
       return;
     }
 
-    const responses = await Promise.allSettled(
-      projects.value.map((project) =>
-        api.get<{ links: JournalProjectLink[] }>(
-          `/mission-control/projects/${encodeURIComponent(project.id)}/journal-links`,
-        ),
-      ),
+    const response = await api.get<{ links: JournalProjectLink[] }>(
+      "/mission-control/journal/links",
     );
     if (selectedProjectTaskScopeId.value !== scopeId) return;
-    projectJournalLinks.value = responses
-      .flatMap((response) =>
-        response.status === "fulfilled" ? response.value.links || [] : [],
-      )
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    projectJournalLinks.value = (response.links || []).sort((a, b) =>
+      b.createdAt.localeCompare(a.createdAt),
+    );
   } catch (e) {
     projectJournalLinksError.value =
       e instanceof ApiError && e.status === 404
@@ -2746,17 +2742,32 @@ onBeforeUnmount(() => {
     :class="{ 'mission-control--accounts-route': isAccountsRoute }"
   >
     <header v-if="!isAccountsRoute" class="mission-control__topbar">
-      <MissionProjectPicker
+      <div
         v-if="activeSection === 'projects'"
-        :open="projectPickerOpen"
-        :projects="projects"
-        :selected-project="selectedProjectDetail"
-        :selected-project-label="selectedProjectDetailLabel"
-        :selected-project-is-local="selectedProjectIsLocal"
-        @toggle="toggleProjectPicker"
-        @select="selectProjectDetail"
-        @add-project="openProjectModal"
-      />
+        class="mission-control__project-nav"
+      >
+        <MissionProjectPicker
+          :open="projectPickerOpen"
+          :projects="projects"
+          :selected-project="selectedProjectDetail"
+          :selected-project-label="selectedProjectDetailLabel"
+          :selected-project-is-local="selectedProjectIsLocal"
+          @toggle="toggleProjectPicker"
+          @select="selectProjectDetail"
+          @add-project="openProjectModal"
+        />
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          type="button"
+          aria-label="Add project"
+          @click="openProjectModal"
+        >
+          <UiIcon name="Plus" :size="15" />
+          <span>Add project</span>
+        </Button>
+      </div>
       <div v-if="activeSection !== 'projects'" class="mission-control__section-title">
         {{ sectionLabels[activeSection] }}
       </div>
@@ -4041,12 +4052,18 @@ onBeforeUnmount(() => {
   color: var(--ui-accent);
 }
 
-.mission-control__project-switcher,
+.mission-control__project-nav,
 .mission-control__section-title {
   grid-column: 1;
   grid-row: 1;
   justify-self: center;
   min-width: 0;
+}
+
+.mission-control__project-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .mission-control__assistant-link {
@@ -4938,7 +4955,7 @@ onBeforeUnmount(() => {
     padding-left: var(--app-shell-mobile-nav-leading-padding);
   }
 
-  .mission-control__project-switcher,
+  .mission-control__project-nav,
   .mission-control__section-title {
     justify-self: stretch;
   }

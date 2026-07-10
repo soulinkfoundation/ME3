@@ -25,7 +25,7 @@ const router = useRouter();
 const sites = useSitesStore();
 
 const profileUsername = computed(() => route.params.username as string);
-const selectedPurposeId = ref<LandingPageRecipeId>("event-invite");
+const selectedPurposeId = ref<LandingPageRecipeId>("service-offer");
 const pageUsername = ref("");
 const brief = ref("");
 const creating = ref(false);
@@ -42,13 +42,13 @@ function slugify(value: string): string {
   return value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 30);
 }
 
-function uniqueUsername(base: string): string {
-  const existing = new Set(sites.sites.map((site) => site.username));
+function uniquePageSlug(base: string): string {
+  const existing = new Set(sites.sitePages.map((page) => page.slug));
   const root = slugify(base) || "landing-page";
   if (!existing.has(root)) return root;
   for (let index = 2; index < 100; index += 1) {
@@ -60,9 +60,7 @@ function uniqueUsername(base: string): string {
 }
 
 function resetDefaultsForPurpose() {
-  pageUsername.value = uniqueUsername(
-    `${profileUsername.value}-${selectedPurpose.value.defaultSlugSuffix}`,
-  );
+  pageUsername.value = uniquePageSlug(selectedPurpose.value.defaultSlugSuffix);
   brief.value = selectedPurpose.value.examplePrompt;
 }
 
@@ -81,35 +79,26 @@ async function createLandingPage() {
   creating.value = true;
   error.value = "";
   try {
-    const site = await sites.claimUsername(username, {
-      siteType: "landing_page",
+    const page = await sites.createSitePage(profileUsername.value, {
+      slug: username,
       templateId: selectedPurpose.value.template,
+      brief: brief.value,
     });
-    if (!site) {
+    if (!page) {
       error.value = sites.error || "Could not create the landing page.";
       return;
     }
-
-    const page = await sites.generateLandingPage(site.username, {
-      brief: brief.value,
-      templateId: selectedPurpose.value.template,
-    });
-    if (!page) {
-      error.value = sites.error || "Created the page, but could not generate the first draft.";
-      return;
-    }
-
-    await sites.fetchSites();
-    router.replace(`/sites/${site.username}/build`);
+    router.replace(`/sites/${profileUsername.value}/pages/${page.id}`);
   } finally {
     creating.value = false;
   }
 }
 
 onMounted(async () => {
-  if (sites.sites.length === 0) {
-    await sites.fetchSites();
-  }
+  await Promise.all([
+    sites.sites.length === 0 ? sites.fetchSites() : Promise.resolve(),
+    sites.fetchSitePages(profileUsername.value),
+  ]);
   resetDefaultsForPurpose();
 });
 
@@ -125,7 +114,7 @@ watch(selectedPurposeId, resetDefaultsForPurpose);
       </router-link>
       <div>
         <h1>Add Landing Page</h1>
-        <p>{{ profileUsername }}.example.com</p>
+        <p>/me/{{ pageUsername || "new-page" }}</p>
       </div>
     </header>
 
@@ -155,9 +144,9 @@ watch(selectedPurposeId, resetDefaultsForPurpose);
         </div>
 
         <label class="field-group">
-          <span>Landing page URL</span>
+          <span>Page path</span>
           <input v-model="pageUsername" class="input" spellcheck="false" />
-          <small>{{ pageUsername || "landing-page" }}.example.com</small>
+          <small>/me/{{ pageUsername || "landing-page" }}</small>
         </label>
 
         <label class="field-group">
@@ -188,7 +177,7 @@ watch(selectedPurposeId, resetDefaultsForPurpose);
           </div>
           <div>
             <dt>First URL</dt>
-            <dd>{{ pageUsername || "landing-page" }}.example.com</dd>
+            <dd>/me/{{ pageUsername || "landing-page" }}</dd>
           </div>
         </dl>
       </aside>

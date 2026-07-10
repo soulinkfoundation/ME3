@@ -64,6 +64,8 @@ export interface Env {
   CLOUDFLARE_API_TOKEN?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  ME3_COMMERCE_BRIDGE_ORIGIN?: string;
+  ME3_COMMERCE_BRIDGE_TOKEN?: string;
 }
 
 export type AssistantJobIngressEventQueueMessage = {
@@ -116,6 +118,28 @@ export interface DbSite {
   published_at: string | null;
 }
 
+export interface DbSitePage {
+  id: string;
+  site_id: string;
+  slug: string;
+  kind: "landing_page" | "standard";
+  title: string;
+  template_id: string | null;
+  draft_json: string;
+  published_revision_id: string | null;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+}
+
+export interface DbSitePageRevision {
+  id: string;
+  page_id: string;
+  document_json: string;
+  rendered_html: string;
+  created_at: string;
+}
+
 export interface DbSubscriber {
   id: number;
   site_id: string;
@@ -126,6 +150,9 @@ export interface DbSubscriber {
   subscribed_at: string;
   unsubscribed_at: string | null;
   ip_hash: string | null;
+  page_id?: string | null;
+  action_id?: string | null;
+  campaign?: string | null;
 }
 
 export interface DbBooking {
@@ -150,6 +177,31 @@ export interface DbBooking {
   payment_status: "pending" | "succeeded" | "failed" | "not_required" | null;
   is_free_booking: number;
   paid_at: string | null;
+  page_id?: string | null;
+  action_id?: string | null;
+  campaign?: string | null;
+}
+
+export interface DbCommerceOrder {
+  id: string;
+  site_id: string;
+  page_id: string | null;
+  action_id: string | null;
+  campaign: string | null;
+  product_slug: string;
+  product_title: string;
+  buyer_name: string;
+  buyer_email: string;
+  buyer_note: string | null;
+  amount_paid: number | null;
+  currency: string | null;
+  status: "pending" | "paid" | "failed" | "refunded";
+  provider: "stripe_direct" | "me3_cloud";
+  checkout_session_id: string | null;
+  payment_intent_id: string | null;
+  paid_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DbBookingReminder {

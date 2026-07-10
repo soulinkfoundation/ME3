@@ -101,6 +101,8 @@ export {
   isCoreChatMissionTaskUpdateRequest,
   isCoreChatReminderCreateRequest,
   isCoreChatReminderListRequest,
+  isCoreChatSocialDraftCreateRequest,
+  isCoreChatSocialSourceReadRequest,
   isCoreChatWeeklyReviewRequest,
   planCoreChatToolTurn,
   type CoreChatCapabilityId,
@@ -259,7 +261,7 @@ export type AgentChatActionCardLink = {
 };
 
 export type AgentChatActionCardRecord = {
-  kind: "mailbox_draft" | "reminder" | "mission_task";
+  kind: "mailbox_draft" | "reminder" | "mission_task" | "social_package";
   id: string;
 };
 
@@ -272,7 +274,8 @@ export type AgentChatActionCard = {
     | "reminder.cancelled"
     | "mission.task_created"
     | "mission.task_updated"
-    | "mission.task_archived";
+    | "mission.task_archived"
+    | "social.draft_saved";
   capabilityId: string;
   title: string;
   summary: string | null;
@@ -310,7 +313,12 @@ export type AgentSandboxDispatchResponse = {
   } | null;
   actionCards?: AgentChatActionCard[] | null;
   imageAction?: AgentChatImageAction | null;
-  contentAction?: null;
+  contentAction?: {
+    kind: "saved";
+    itemId: string;
+    packageId: string;
+    platforms: Array<"x" | "linkedin" | "instagram" | "instagram_business">;
+  } | null;
   contactsChanged?: boolean;
   modelAttempts?: AgentChatModelAttemptTrace[] | null;
   trace?: AgentChatTurnTrace | null;

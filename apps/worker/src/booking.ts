@@ -14,6 +14,9 @@ export type PaidBookingCheckoutBody = {
   notes?: unknown;
   amount?: unknown;
   returnUrl?: unknown;
+  pageId?: unknown;
+  actionId?: unknown;
+  campaign?: unknown;
 };
 export type FreeBookingBody = Omit<PaidBookingCheckoutBody, "amount" | "returnUrl">;
 export type PublicBookingConfirmBody = {
@@ -24,6 +27,9 @@ export type PublicBookingConfirmBody = {
   guestEmail?: unknown;
   notes?: unknown;
   paymentIntentId?: unknown;
+  pageId?: unknown;
+  actionId?: unknown;
+  campaign?: unknown;
 };
 export type PaidBookingCompletionBody = {
   sessionId?: unknown;
@@ -550,6 +556,9 @@ export async function createConfirmedFreeOneToOneBooking(
     guestEmail: string;
     notes: string;
     slot: { startsAt: string; endsAt: string };
+    pageId?: string;
+    actionId?: string;
+    campaign?: string;
   },
 ): Promise<DbBooking | null> {
   const bookingId = crypto.randomUUID();
@@ -557,9 +566,10 @@ export async function createConfirmedFreeOneToOneBooking(
     `INSERT INTO bookings
      (id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
       duration_minutes, status, notes, created_at, payment_intent_id, amount_paid,
-      suggested_amount, currency, payment_status, is_free_booking, paid_at)
+      suggested_amount, currency, payment_status, is_free_booking, paid_at,
+      page_id, action_id, campaign)
      VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
-             NULL, NULL, NULL, NULL, 'not_required', 1, NULL)`,
+             NULL, NULL, NULL, NULL, 'not_required', 1, NULL, ?, ?, ?)`,
   )
     .bind(
       bookingId,
@@ -571,6 +581,9 @@ export async function createConfirmedFreeOneToOneBooking(
       input.slot.endsAt,
       input.offer.duration,
       input.notes || null,
+      input.pageId || null,
+      input.actionId || null,
+      input.campaign || null,
     )
     .run();
 

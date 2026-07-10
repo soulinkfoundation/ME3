@@ -46,7 +46,9 @@ const { toastError } = useAppToast();
 const isNestedSitesTool = computed(
   () =>
     route.path.startsWith("/sites/") &&
-    (route.path.endsWith("/build") || route.path.includes("/landing-pages/")),
+    (route.path.endsWith("/build") ||
+      route.path.includes("/landing-pages/") ||
+      route.path.includes("/pages/")),
 );
 
 const username = computed(() => route.params.username as string);
@@ -61,8 +63,15 @@ const newLandingPageRoute = computed(
   () => `/sites/${username.value}/landing-pages/new`,
 );
 const landingPageSites = computed(() =>
-  sites.sites.filter((entry) => (entry.site_type || "profile") === "landing_page"),
+  sites.sitePages,
 );
+const legacyLandingSites = computed(() => {
+  const migrated = new Set(sites.sitePages.map((page) => page.slug));
+  return sites.sites.filter(
+    (entry) =>
+      entry.site_type === "landing_page" && !migrated.has(entry.username),
+  );
+});
 const showLandingPageTools = computed(
   () => isProfileSite.value && landingPagesFeatureEnabled.value,
 );
@@ -152,6 +161,9 @@ onMounted(async () => {
   await syncSiteUrl();
 
   await syncLandingPagesFeature();
+  if (landingPagesFeatureEnabled.value && isProfileSite.value) {
+    await sites.fetchSitePages(username.value);
+  }
   window.addEventListener("me3:plugins-changed", handlePluginsChanged);
 
   if (!site.value) {
@@ -232,6 +244,19 @@ async function writePost() {
   await loadWizardContent();
   wizard.goToStepId("blog", { enableOptional: true });
   router.push({ path: "/create", query: { step: "blog" } });
+}
+
+async function importLegacyLandingPages() {
+  publishBusy.value = true;
+  publishError.value = "";
+  const migrated = await sites.migrateLegacySitePages(username.value);
+  publishBusy.value = false;
+  if (sites.error) {
+    publishError.value = sites.error;
+    return;
+  }
+  await sites.fetchSitePages(username.value);
+  if (migrated === 0) publishError.value = "No legacy pages needed importing.";
 }
 
 // Advanced upload functions
@@ -798,7 +823,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
             </span>
             <div class="action-content">
               <strong>Add Landing Page</strong>
-              <p>Create an event or waitlist page</p>
+              <p>Create a service, event, or waitlist page</p>
             </div>
           </router-link>
 
@@ -878,22 +903,32 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           </router-link>
         </div>
 
+        <div v-if="legacyLandingSites.length" class="legacy-page-notice">
+          <div>
+            <strong>Older landing pages found</strong>
+            <p>Bring them into this site as editable pages. The old records remain untouched.</p>
+          </div>
+          <button class="button secondary" type="button" :disabled="publishBusy" @click="importLegacyLandingPages">
+            {{ publishBusy ? "Importing…" : `Import ${legacyLandingSites.length}` }}
+          </button>
+        </div>
+
         <div v-if="landingPageSites.length > 0" class="landing-page-list">
           <router-link
             v-for="landing in landingPageSites"
             :key="landing.id"
             class="landing-page-row"
-            :to="`/sites/${landing.username}/build`"
+            :to="`/sites/${username}/pages/${landing.id}`"
           >
             <span>
-              <strong>{{ landing.username }}</strong>
-              <small>{{ landingTemplateLabel(landing.template_id) }}</small>
+              <strong>/{{ landing.slug }}</strong>
+              <small>{{ landingTemplateLabel(landing.templateId) }}</small>
             </span>
             <span
               class="status"
-              :class="landing.published_at ? 'published' : 'draft'"
+              :class="landing.publishedAt ? 'published' : 'draft'"
             >
-              {{ landing.published_at ? "Published" : "Draft" }}
+              {{ landing.publishedAt ? "Published" : "Draft" }}
             </span>
           </router-link>
         </div>
@@ -1487,6 +1522,24 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 .landing-pages-head p,
 .landing-empty p {
+  margin: 4px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+}
+
+.legacy-page-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.legacy-page-notice p {
   margin: 4px 0 0;
   color: var(--ui-text-muted, var(--color-text-muted));
   font-size: 13px;

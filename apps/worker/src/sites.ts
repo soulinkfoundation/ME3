@@ -893,6 +893,16 @@ export async function pruneGeneratedPublicFiles(
   generatedFiles: Record<string, string>,
 ): Promise<void> {
   const keep = new Set(Object.keys(generatedFiles).map(normalizeSiteFileName));
+  try {
+    const pages = await env.DB.prepare(
+      "SELECT slug FROM site_pages WHERE site_id = ? AND published_at IS NOT NULL",
+    )
+      .bind(siteId)
+      .all<{ slug: string }>();
+    for (const page of pages.results || []) keep.add(`${page.slug}/index.html`);
+  } catch (error) {
+    if (!/site_pages.*(?:no such table|does not exist)/i.test(String(error))) throw error;
+  }
   const files = await listSiteFiles(env, siteId, "public/");
   for (const file of files) {
     if (file.path.startsWith("public/files/") || file.path === "public/favicon.png") {
@@ -1126,16 +1136,38 @@ export async function parseSubscriberBody(c: AppContext): Promise<{
   firstName?: string;
   lastName?: string;
   honeypot?: string;
+  pageId?: string;
+  actionId?: string;
+  campaign?: string;
 }> {
   const contentType = c.req.header("content-type") || "";
   if (contentType.includes("application/json")) {
     const body = await c.req
-      .json<{ email?: unknown; firstName?: unknown; lastName?: unknown }>()
-      .catch((): { email?: unknown; firstName?: unknown; lastName?: unknown } => ({}));
+      .json<{
+        email?: unknown;
+        firstName?: unknown;
+        lastName?: unknown;
+        pageId?: unknown;
+        actionId?: unknown;
+        campaign?: unknown;
+      }>()
+      .catch(
+        (): {
+          email?: unknown;
+          firstName?: unknown;
+          lastName?: unknown;
+          pageId?: unknown;
+          actionId?: unknown;
+          campaign?: unknown;
+        } => ({}),
+      );
     return {
       email: typeof body.email === "string" ? body.email : undefined,
       firstName: typeof body.firstName === "string" ? body.firstName : undefined,
       lastName: typeof body.lastName === "string" ? body.lastName : undefined,
+      pageId: typeof body.pageId === "string" ? body.pageId : undefined,
+      actionId: typeof body.actionId === "string" ? body.actionId : undefined,
+      campaign: typeof body.campaign === "string" ? body.campaign : undefined,
     };
   }
 
@@ -1146,6 +1178,9 @@ export async function parseSubscriberBody(c: AppContext): Promise<{
       firstName: form.get("firstName")?.toString(),
       lastName: form.get("lastName")?.toString(),
       honeypot: form.get("website")?.toString(),
+      pageId: form.get("pageId")?.toString(),
+      actionId: form.get("actionId")?.toString(),
+      campaign: form.get("campaign")?.toString(),
     };
   }
 

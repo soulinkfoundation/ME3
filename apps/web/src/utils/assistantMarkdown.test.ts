@@ -45,4 +45,10 @@ describe("renderAssistantMarkdown", () => {
       "<pre><code>const x = &#39;&lt;tag&gt;&#39;;</code></pre>",
     );
   });
+
+  it("renders rich-text HTML embedded in Mission Control task results", () => {
+    expect(renderAssistantMarkdown("- Order a nuc of bees: <p>Ask donough</p>")).toBe(
+      "<ul><li>Order a nuc of bees: Ask donough</li></ul>",
+    );
+  });
 });

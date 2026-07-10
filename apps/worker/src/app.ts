@@ -90,6 +90,7 @@ import { verifyMe3CloudJwt } from "./me3-cloud-jwt";
 import { registerAccountsRoutes } from "./routes/accounts";
 import { registerAssistantRoutes } from "./routes/assistant";
 import { registerBookingRoutes } from "./routes/booking";
+import { registerCommerceRoutes } from "./routes/commerce";
 import { registerCalendarRoutes } from "./routes/calendar";
 import { registerCalendarSourceRoutes } from "./routes/calendar-sources";
 import { registerChannelRoutes } from "./routes/channels";
@@ -490,6 +491,7 @@ app.put("/api/commerce/settings", async (c) => {
 });
 
 registerBookingRoutes(app);
+registerCommerceRoutes(app);
 registerUsernameRoutes(app);
 
 app.post("/api/auth/me3/start", async (c) => {

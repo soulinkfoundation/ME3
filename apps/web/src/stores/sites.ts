@@ -6,6 +6,7 @@ import type { Me3Profile } from "me3-protocol";
 import type { SiteUploadFile } from "../utils/siteUpload";
 import type {
   LandingPageDocument,
+  LandingPageDocumentV3,
   LandingPageTemplateId,
   SiteType,
 } from "@me3-core/plugin-landing-pages";
@@ -227,6 +228,26 @@ export interface LandingPageDraftResponse {
   page: LandingPageDocument | null;
 }
 
+export interface SitePage {
+  id: string;
+  siteId: string;
+  slug: string;
+  kind: "landing_page" | "standard";
+  title: string;
+  templateId: LandingPageTemplateId | null;
+  document: LandingPageDocumentV3;
+  publishedRevisionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt: string | null;
+}
+
+export interface SitePageRevision {
+  id: string;
+  createdAt: string;
+  document: LandingPageDocumentV3;
+}
+
 export interface WebsiteImportDraft {
   ok: boolean;
   sourceUrl: string;
@@ -256,6 +277,9 @@ export interface Subscriber {
   last_name: string | null;
   source: string;
   subscribed_at: string;
+  page_id?: string | null;
+  action_id?: string | null;
+  campaign?: string | null;
 }
 
 export interface SubscriberList {
@@ -306,6 +330,7 @@ export interface BookingConfirmationTestResponse {
 
 export const useSitesStore = defineStore("sites", () => {
   const sites = ref<Site[]>([]);
+  const sitePages = ref<SitePage[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
   const hasProfileSite = computed(() =>
@@ -314,6 +339,7 @@ export const useSitesStore = defineStore("sites", () => {
 
   function resetSessionState() {
     sites.value = [];
+    sitePages.value = [];
     loading.value = false;
     error.value = null;
   }
@@ -907,6 +933,211 @@ export const useSitesStore = defineStore("sites", () => {
     }
   }
 
+  async function fetchSitePages(username: string): Promise<SitePage[]> {
+    try {
+      const response = await api.get<{ pages: SitePage[] }>(
+        `/sites/${username}/pages`,
+      );
+      sitePages.value = response.pages;
+      return response.pages;
+    } catch (e: any) {
+      error.value = e.message || "Failed to load pages";
+      return [];
+    }
+  }
+
+  async function createSitePage(
+    username: string,
+    payload: {
+      slug: string;
+      brief: string;
+      templateId: LandingPageTemplateId;
+    },
+  ): Promise<SitePage | null> {
+    loading.value = true;
+    error.value = null;
+    try {
+      const response = await api.post<{ page: SitePage }>(
+        `/sites/${username}/pages`,
+        payload,
+      );
+      sitePages.value = [response.page, ...sitePages.value];
+      return response.page;
+    } catch (e: any) {
+      error.value = e.message || "Failed to create page";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function migrateLegacySitePages(username: string): Promise<number> {
+    loading.value = true;
+    error.value = null;
+    try {
+      const response = await api.post<{ migrated: number; pages: SitePage[] }>(
+        `/sites/${username}/pages/migrate-legacy`,
+        {},
+      );
+      for (const page of response.pages) replaceSitePage(page);
+      return response.migrated;
+    } catch (e: any) {
+      error.value = e.message || "Failed to import legacy pages";
+      return 0;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function getSitePage(
+    username: string,
+    pageId: string,
+  ): Promise<SitePage | null> {
+    try {
+      const response = await api.get<{ page: SitePage }>(
+        `/sites/${username}/pages/${pageId}`,
+      );
+      const index = sitePages.value.findIndex((page) => page.id === pageId);
+      if (index >= 0) sitePages.value[index] = response.page;
+      else sitePages.value.push(response.page);
+      return response.page;
+    } catch (e: any) {
+      error.value = e.message || "Failed to load page";
+      return null;
+    }
+  }
+
+  async function saveSitePage(
+    username: string,
+    pageId: string,
+    document: LandingPageDocumentV3,
+  ): Promise<SitePage | null> {
+    loading.value = true;
+    error.value = null;
+    try {
+      const response = await api.put<{ page: SitePage }>(
+        `/sites/${username}/pages/${pageId}`,
+        { document },
+      );
+      replaceSitePage(response.page);
+      return response.page;
+    } catch (e: any) {
+      error.value = e.message || "Failed to save page";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function fetchSitePagePreview(
+    username: string,
+    pageId: string,
+  ): Promise<string | null> {
+    try {
+      const response = await fetch(
+        `${API_BASE}/sites/${username}/pages/${pageId}/preview-html`,
+        { credentials: "include" },
+      );
+      if (!response.ok) throw new ApiError("Failed to load preview", response.status);
+      return response.text();
+    } catch (e: any) {
+      error.value = e.message || "Failed to load preview";
+      return null;
+    }
+  }
+
+  async function publishSitePage(
+    username: string,
+    pageId: string,
+  ): Promise<SitePage | null> {
+    loading.value = true;
+    error.value = null;
+    try {
+      const response = await api.post<{ page: SitePage }>(
+        `/sites/${username}/pages/${pageId}/publish`,
+        {},
+      );
+      replaceSitePage(response.page);
+      return response.page;
+    } catch (e: any) {
+      error.value = e.message || "Failed to publish page";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function unpublishSitePage(
+    username: string,
+    pageId: string,
+  ): Promise<SitePage | null> {
+    loading.value = true;
+    error.value = null;
+    try {
+      const response = await api.post<{ page: SitePage }>(
+        `/sites/${username}/pages/${pageId}/unpublish`,
+        {},
+      );
+      replaceSitePage(response.page);
+      return response.page;
+    } catch (e: any) {
+      error.value = e.message || "Failed to unpublish page";
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function getSitePageRevisions(
+    username: string,
+    pageId: string,
+  ): Promise<SitePageRevision[]> {
+    try {
+      const response = await api.get<{ revisions: SitePageRevision[] }>(
+        `/sites/${username}/pages/${pageId}/revisions`,
+      );
+      return response.revisions;
+    } catch (e: any) {
+      error.value = e.message || "Failed to load page history";
+      return [];
+    }
+  }
+
+  async function restoreSitePageRevision(
+    username: string,
+    pageId: string,
+    revisionId: string,
+  ): Promise<SitePage | null> {
+    try {
+      const response = await api.post<{ page: SitePage }>(
+        `/sites/${username}/pages/${pageId}/revisions/${revisionId}/restore`,
+        {},
+      );
+      replaceSitePage(response.page);
+      return response.page;
+    } catch (e: any) {
+      error.value = e.message || "Failed to restore page version";
+      return null;
+    }
+  }
+
+  async function deleteSitePage(username: string, pageId: string): Promise<boolean> {
+    try {
+      await api.delete(`/sites/${username}/pages/${pageId}`);
+      sitePages.value = sitePages.value.filter((page) => page.id !== pageId);
+      return true;
+    } catch (e: any) {
+      error.value = e.message || "Failed to delete page";
+      return false;
+    }
+  }
+
+  function replaceSitePage(page: SitePage) {
+    const index = sitePages.value.findIndex((candidate) => candidate.id === page.id);
+    if (index >= 0) sitePages.value[index] = page;
+    else sitePages.value.unshift(page);
+  }
+
   async function importWebsite(
     username: string,
     url: string,
@@ -1092,6 +1323,7 @@ export const useSitesStore = defineStore("sites", () => {
 
   return {
     sites,
+    sitePages,
     loading,
     error,
     hasProfileSite,
@@ -1124,6 +1356,17 @@ export const useSitesStore = defineStore("sites", () => {
     fetchPreviewHtml,
     publishLandingPage,
     unpublishLandingPage,
+    fetchSitePages,
+    createSitePage,
+    migrateLegacySitePages,
+    getSitePage,
+    saveSitePage,
+    fetchSitePagePreview,
+    publishSitePage,
+    unpublishSitePage,
+    getSitePageRevisions,
+    restoreSitePageRevision,
+    deleteSitePage,
     importWebsite,
     // Site quota
     getSiteQuota,

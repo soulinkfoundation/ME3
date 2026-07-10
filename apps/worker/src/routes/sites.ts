@@ -3,6 +3,7 @@ import {
   buildLandingPageDocument,
   normalizeLandingPageDocument,
   normalizeLandingTemplate,
+  renderLandingPageHtml,
 } from "@me3-core/plugin-landing-pages";
 import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "../site-generator";
@@ -14,6 +15,21 @@ import {
 } from "../transactional-emails";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 import type { DbBooking, DbSite, DbSubscriber } from "../types";
+import {
+  SitePageInputError,
+  createSitePage,
+  deleteSitePage,
+  getSitePage,
+  listSitePageRevisions,
+  listSitePages,
+  migrateLegacyLandingPages,
+  parsePageDocument,
+  publishSitePage,
+  restoreSitePageRevision,
+  saveSitePageDraft,
+  serializeSitePage,
+  unpublishSitePage,
+} from "../site-pages";
 import {
   applyPurchaseEmailTokens,
   productSendsPurchaseConfirmation,
@@ -273,7 +289,8 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (!site) return c.json({ error: "Site not found" }, 404);
 
     try {
-      const { email, firstName, lastName, honeypot } = await parseSubscriberBody(c);
+      const { email, firstName, lastName, honeypot, pageId, actionId, campaign } =
+        await parseSubscriberBody(c);
       if (honeypot) return c.json({ ok: true, message: "Subscribed successfully" });
       if (!email) return c.json({ error: "Email is required" }, 400);
 
@@ -291,9 +308,17 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       if (existing) {
         if (existing.unsubscribed_at) {
           await c.env.DB.prepare(
-            "UPDATE subscribers SET unsubscribed_at = NULL, subscribed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            `UPDATE subscribers
+             SET unsubscribed_at = NULL, subscribed_at = CURRENT_TIMESTAMP,
+                 page_id = ?, action_id = ?, campaign = ?
+             WHERE id = ?`,
           )
-            .bind(existing.id)
+            .bind(
+              normalizeNullableText(pageId),
+              normalizeNullableText(actionId),
+              normalizeNullableText(campaign),
+              existing.id,
+            )
             .run();
           return c.json({ ok: true, message: "Welcome back! You've been re-subscribed." });
         }
@@ -301,10 +326,20 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
       }
 
       await c.env.DB.prepare(
-        `INSERT INTO subscribers (site_id, email, first_name, last_name, source, ip_hash)
-         VALUES (?, ?, ?, ?, 'me3', ?)`,
+        `INSERT INTO subscribers
+         (site_id, email, first_name, last_name, source, ip_hash, page_id, action_id, campaign)
+         VALUES (?, ?, ?, ?, 'me3', ?, ?, ?, ?)`,
       )
-        .bind(site.id, normalizedEmail, normalizeNullableText(firstName), normalizeNullableText(lastName), ipHash)
+        .bind(
+          site.id,
+          normalizedEmail,
+          normalizeNullableText(firstName),
+          normalizeNullableText(lastName),
+          ipHash,
+          normalizeNullableText(pageId),
+          normalizeNullableText(actionId),
+          normalizeNullableText(campaign),
+        )
         .run();
 
       return c.json({ ok: true, message: "Subscribed successfully!" });
@@ -377,14 +412,23 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
 
     try {
       const result = await c.env.DB.prepare(
-        `SELECT email, first_name, last_name, source, subscribed_at
+        `SELECT email, first_name, last_name, source, page_id, action_id, campaign, subscribed_at
          FROM subscribers
          WHERE site_id = ? AND unsubscribed_at IS NULL
          ORDER BY subscribed_at DESC`,
       )
         .bind(site.id)
         .all<DbSubscriber>();
-      const rows = [["email", "first_name", "last_name", "source", "subscribed_at"].join(",")];
+      const rows = [[
+        "email",
+        "first_name",
+        "last_name",
+        "source",
+        "page_id",
+        "action_id",
+        "campaign",
+        "subscribed_at",
+      ].join(",")];
       for (const subscriber of result.results || []) {
         rows.push(
           [
@@ -392,6 +436,9 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
             escapeCsv(subscriber.first_name || ""),
             escapeCsv(subscriber.last_name || ""),
             escapeCsv(subscriber.source),
+            escapeCsv(subscriber.page_id || ""),
+            escapeCsv(subscriber.action_id || ""),
+            escapeCsv(subscriber.campaign || ""),
             escapeCsv(subscriber.subscribed_at),
           ].join(","),
         );
@@ -429,7 +476,7 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         .first<{ count: number | string | null }>();
       const total = Number(countResult?.count || 0);
       const result = await c.env.DB.prepare(
-        `SELECT id, email, first_name, last_name, source, subscribed_at
+        `SELECT id, email, first_name, last_name, source, page_id, action_id, campaign, subscribed_at
          FROM subscribers
          WHERE site_id = ? AND unsubscribed_at IS NULL
          ORDER BY subscribed_at DESC
@@ -607,11 +654,14 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if (cloudUsernameError) return c.json({ error: cloudUsernameError }, 409);
 
     const siteType = body.siteType === "landing_page" ? "landing_page" : "profile";
-    if (
-      siteType === "landing_page" &&
-      !(await isCorePluginEnabled(c.env, LANDING_PAGES_PLUGIN_ID))
-    ) {
-      return c.json({ error: "ME3 Landing Pages is coming soon" }, 403);
+    if (siteType === "landing_page") {
+      return c.json(
+        {
+          error: "Create landing pages inside an existing site.",
+          action: "createSitePage",
+        },
+        409,
+      );
     }
     const id = crypto.randomUUID();
 
@@ -1030,6 +1080,187 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     return c.html(injectBaseHref(html, `/preview/${site.username}/`));
   });
 
+  app.get("/api/sites/:username/pages", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    if (!(await isCorePluginEnabled(c.env, LANDING_PAGES_PLUGIN_ID))) {
+      return c.json({ error: "Activate ME3 Landing Pages first" }, 403);
+    }
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    return c.json({ pages: (await listSitePages(c.env, site.id)).map(serializeSitePage) });
+  });
+
+  app.post("/api/sites/:username/pages", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    if (!(await isCorePluginEnabled(c.env, LANDING_PAGES_PLUGIN_ID))) {
+      return c.json({ error: "Activate ME3 Landing Pages first" }, 403);
+    }
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    const body = await c.req
+      .json<{ slug?: unknown; brief?: unknown; templateId?: unknown }>()
+      .catch(() => null);
+    if (!body || typeof body.brief !== "string" || !body.brief.trim()) {
+      return c.json({ error: "Brief is required" }, 400);
+    }
+    const template = normalizeLandingTemplate(body.templateId) || "service";
+    const owner = await getOwnerProfile(c.env, ownerId);
+    try {
+      const page = await createSitePage(c.env, site, {
+        username: site.username,
+        slug: typeof body.slug === "string" ? body.slug : template,
+        brief: body.brief,
+        template,
+        profile: {
+          name: owner?.name || site.username,
+          bio: owner?.bio || null,
+          avatar: owner?.avatar_url || null,
+          profileUrl: `${getCoreWebOrigin(c.env, c.req.url)}/sites/${site.username}`,
+        },
+      });
+      return c.json({ page: serializeSitePage(page) }, 201);
+    } catch (error) {
+      return sitePageErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/sites/:username/pages/migrate-legacy", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    const pages = await migrateLegacyLandingPages(c.env, ownerId, site);
+    return c.json({ migrated: pages.length, pages: pages.map(serializeSitePage) });
+  });
+
+  app.get("/api/sites/:username/pages/:pageId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    const page = await getSitePage(c.env, site.id, c.req.param("pageId"));
+    if (!page) return c.json({ error: "Page not found" }, 404);
+    return c.json({ page: serializeSitePage(page) });
+  });
+
+  app.put("/api/sites/:username/pages/:pageId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    const body = await c.req.json<{ document?: unknown }>().catch(() => null);
+    try {
+      const page = await saveSitePageDraft(
+        c.env,
+        site,
+        c.req.param("pageId"),
+        body?.document,
+      );
+      return c.json({ page: serializeSitePage(page) });
+    } catch (error) {
+      return sitePageErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/sites/:username/pages/:pageId/preview-html", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    const page = await getSitePage(c.env, site.id, c.req.param("pageId"));
+    const document = page ? parsePageDocument(page.draft_json) : null;
+    if (!page || !document) return c.json({ error: "Page not found" }, 404);
+    return c.html(
+      renderLandingPageHtml(document, site.username, {
+        pageId: page.id,
+        slug: page.slug,
+        campaign: page.slug,
+      }),
+    );
+  });
+
+  app.post("/api/sites/:username/pages/:pageId/publish", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    try {
+      const result = await publishSitePage(c.env, site, c.req.param("pageId"));
+      return c.json({
+        page: serializeSitePage(result.page),
+        revisionId: result.revision.id,
+      });
+    } catch (error) {
+      return sitePageErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/sites/:username/pages/:pageId/unpublish", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    try {
+      return c.json({
+        page: serializeSitePage(
+          await unpublishSitePage(c.env, site, c.req.param("pageId")),
+        ),
+      });
+    } catch (error) {
+      return sitePageErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/sites/:username/pages/:pageId/revisions", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    const page = await getSitePage(c.env, site.id, c.req.param("pageId"));
+    if (!page) return c.json({ error: "Page not found" }, 404);
+    const revisions = await listSitePageRevisions(c.env, page.id);
+    return c.json({
+      revisions: revisions.map((revision) => ({
+        id: revision.id,
+        createdAt: revision.created_at,
+        document: parsePageDocument(revision.document_json),
+      })),
+    });
+  });
+
+  app.post("/api/sites/:username/pages/:pageId/revisions/:revisionId/restore", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    try {
+      const page = await restoreSitePageRevision(
+        c.env,
+        site,
+        c.req.param("pageId"),
+        c.req.param("revisionId"),
+      );
+      return c.json({ page: serializeSitePage(page) });
+    } catch (error) {
+      return sitePageErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/sites/:username/pages/:pageId", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const site = await getSiteForOwner(c.env, ownerId, c.req.param("username"));
+    if (!site) return c.json({ error: "Site not found" }, 404);
+    try {
+      await deleteSitePage(c.env, site, c.req.param("pageId"));
+      return c.json({ ok: true });
+    } catch (error) {
+      return sitePageErrorResponse(c, error);
+    }
+  });
+
   app.get("/api/sites/:username/landing-page", async (c) => {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
@@ -1243,6 +1474,13 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue) || numberValue <= 0) return fallback;
   return Math.round(numberValue);
+}
+
+function sitePageErrorResponse(c: AppContext, error: unknown) {
+  if (error instanceof SitePageInputError) {
+    return c.json({ error: error.message }, error.status as 400);
+  }
+  throw error;
 }
 
 function buildSecurityTxt(requestUrl: string): string {

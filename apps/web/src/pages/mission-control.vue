@@ -5,21 +5,13 @@ import { api } from "../api";
 import Button from "../components/Button.vue";
 import IconPicker from "../components/IconPicker.vue";
 import PageLoading from "../components/PageLoading.vue";
-import {
-  activeProjectTaskStatuses,
-  missionTasksUrl,
-  projectBoardStatusesForProject,
-  projectBoardStatuses,
-} from "../components/mission-control/projectWorkspace";
+import LifeWheelChart from "../components/mission-control/LifeWheelChart.vue";
+import { projectBoardStatuses } from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
 import { useSitesStore } from "../stores/sites";
 import { resolveUiIconName, type UiIconName } from "../utils/icons";
-import type {
-  MissionProject,
-  MissionTask,
-  ProjectBoardStatus,
-} from "../components/mission-control/projectWorkspace";
+import type { ProjectBoardStatus } from "../components/mission-control/projectWorkspace";
 
 definePage({
   meta: {
@@ -87,7 +79,14 @@ type WheelSnapshotCardData = {
   snapshot: null | {
     id: string;
     createdAt: string;
-    segments?: Array<{ label: string; value: number }>;
+    segments: Array<{
+      id: string;
+      label: string;
+      helper: string;
+      color: string;
+      emoji?: string;
+      value: number | null;
+    }>;
   };
   source: string;
 };
@@ -134,18 +133,15 @@ type AiUsageCardData = {
   error: string | null;
 };
 
-type MissionTasksResponse = {
-  tasks: MissionTask[];
-  nextCursor: string | null;
-  limit: number;
-};
-
 type ProjectDashboardSummary = {
   id: string;
   label: string;
-  project: MissionProject | null;
   total: number;
   counts: Record<ProjectBoardStatus, number>;
+};
+
+type ProjectsSummaryResponse = {
+  summaries: ProjectDashboardSummary[];
 };
 
 type MissionDashboardResponse = {
@@ -204,8 +200,7 @@ const draggedCardId = ref("");
 const draggedQuickActionId = ref("");
 const cardPickerOpen = ref(false);
 const quickActionPickerOpen = ref(false);
-const dashboardProjects = ref<MissionProject[]>([]);
-const dashboardProjectTasks = ref<MissionTask[]>([]);
+const projectSummaries = ref<ProjectDashboardSummary[]>([]);
 const projectsSummaryLoading = ref(false);
 const projectsSummaryError = ref("");
 const aiUsage = ref<AiUsageCardData | null>(null);
@@ -291,14 +286,6 @@ const missionStatement = computed(
 const wheelSnapshot = computed(
   () => dashboard.value?.data["mission.wheel-latest-snapshot"] || null,
 );
-const wheelSegments = computed(
-  () => wheelSnapshot.value?.snapshot?.segments || [],
-);
-const activeDashboardProjectTasks = computed(() =>
-  dashboardProjectTasks.value.filter((task) =>
-    activeProjectTaskStatuses.includes(task.status as ProjectBoardStatus),
-  ),
-);
 const setupProfilePath = computed(() => {
   const profileSite = sites.sites.find(
     (site) => (site.site_type || "profile") === "profile",
@@ -306,52 +293,6 @@ const setupProfilePath = computed(() => {
   return profileSite?.username
     ? `/sites/${encodeURIComponent(profileSite.username)}`
     : "/create";
-});
-const projectSummaries = computed<ProjectDashboardSummary[]>(() => {
-  const activeProjects = dashboardProjects.value.filter(
-    (project) => project.status === "active",
-  );
-  const projectIds = new Set(activeProjects.map((project) => project.id));
-  const createCounts = (): Record<ProjectBoardStatus, number> =>
-    Object.fromEntries(
-      projectBoardStatuses.map((status) => [status.id, 0]),
-    ) as Record<ProjectBoardStatus, number>;
-  const summaries = activeProjects.map((project) => ({
-    id: project.id,
-    label: project.name,
-    project,
-    total: 0,
-    counts: createCounts(),
-  })) satisfies ProjectDashboardSummary[];
-  const summaryById = new Map(
-    summaries.map((summary) => [summary.id, summary]),
-  );
-  const personalSummary: ProjectDashboardSummary = {
-    id: "personal",
-    label: "Personal",
-    project: null,
-    total: 0,
-    counts: createCounts(),
-  };
-
-  for (const task of activeDashboardProjectTasks.value) {
-    const summary =
-      task.projectId && projectIds.has(task.projectId)
-        ? summaryById.get(task.projectId)
-        : personalSummary;
-    if (!summary) continue;
-    const status = task.status as ProjectBoardStatus;
-    summary.total += 1;
-    summary.counts[status] += 1;
-  }
-
-  const next: ProjectDashboardSummary[] = summaries.filter(
-    (summary) => summary.total > 0,
-  );
-  if (personalSummary.total > 0) next.push(personalSummary);
-  return next
-    .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
-    .slice(0, 4);
 });
 const visibleProjectStatuses = computed(() =>
   projectBoardStatuses.filter((status) => status.id !== "done"),
@@ -440,9 +381,7 @@ function projectStatusCountLabel(
 ): string {
   const count = summary.counts[status];
   const label =
-    projectBoardStatusesForProject(summary.project).find(
-      (item) => item.id === status,
-    )?.label || status;
+    projectBoardStatuses.find((item) => item.id === status)?.label || status;
   return `${label} ${count}`;
 }
 
@@ -669,6 +608,9 @@ async function loadDashboard() {
     if (visibleCardEnabled("mission.ai-usage")) {
       void loadAiUsage();
     }
+    if (visibleCardEnabled("mission.projects-summary")) {
+      void loadProjectsSummary();
+    }
   } catch (err) {
     error.value =
       err instanceof Error ? err.message : "Mission Control could not load.";
@@ -698,29 +640,18 @@ async function loadAiUsage() {
 }
 
 async function loadProjectsSummary() {
+  if (projectsSummaryLoading.value) return;
   projectsSummaryLoading.value = true;
   projectsSummaryError.value = "";
   try {
-    const projectsResponse = await api.get<{ projects: MissionProject[] }>(
-      "/mission-control/projects",
+    const response = await api.get<ProjectsSummaryResponse>(
+      "/mission-control/dashboard/cards/mission.projects-summary",
     );
-    const tasks: MissionTask[] = [];
-    let cursor: string | null = null;
-    for (let page = 0; page < 4; page += 1) {
-      const tasksResponse: MissionTasksResponse = await api.get(
-        missionTasksUrl({ active: true, cursor }),
-      );
-      tasks.push(...(tasksResponse.tasks || []));
-      cursor = tasksResponse.nextCursor || null;
-      if (!cursor) break;
-    }
-    dashboardProjects.value = projectsResponse.projects || [];
-    dashboardProjectTasks.value = tasks;
+    projectSummaries.value = response.summaries || [];
   } catch (err) {
     projectsSummaryError.value =
       err instanceof Error ? err.message : "Project stats could not load.";
-    dashboardProjects.value = [];
-    dashboardProjectTasks.value = [];
+    projectSummaries.value = [];
   } finally {
     projectsSummaryLoading.value = false;
   }
@@ -780,6 +711,9 @@ async function saveDashboardLayout() {
     if (visibleCardEnabled("mission.ai-usage")) {
       void loadAiUsage();
     }
+    if (visibleCardEnabled("mission.projects-summary")) {
+      void loadProjectsSummary();
+    }
     toastSuccess("Dashboard saved");
   } catch (err) {
     toastFromUnknown(err, "Dashboard could not be saved");
@@ -791,7 +725,6 @@ async function saveDashboardLayout() {
 onMounted(() => {
   void sites.fetchSites();
   void loadDashboard();
-  void loadProjectsSummary();
 });
 </script>
 
@@ -1151,15 +1084,16 @@ onMounted(() => {
                 </div>
               </div>
             </header>
-            <div v-if="wheelSnapshot?.snapshot" class="wheel-summary">
-              <div
-                v-for="segment in wheelSegments"
-                :key="segment.label"
-                class="wheel-summary__row"
-              >
-                <span>{{ segment.label }}</span>
-                <meter min="0" max="10" :value="segment.value" />
-              </div>
+            <div
+              v-if="wheelSnapshot?.snapshot"
+              class="wheel-summary"
+            >
+              <LifeWheelChart
+                :segments="wheelSnapshot.snapshot.segments"
+                :interactive="false"
+                compact
+                aria-label="Latest Wheel of Life snapshot"
+              />
             </div>
             <div v-else class="dashboard-empty">
               <p>Save a Wheel of Life snapshot to see it here.</p>
@@ -2152,21 +2086,11 @@ onMounted(() => {
 }
 
 .wheel-summary {
-  display: grid;
-  gap: 8px;
+  display: block;
 }
 
-.wheel-summary__row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 110px;
-  align-items: center;
-  gap: 10px;
-  color: var(--ui-text-muted);
-  font-size: 12px;
-}
-
-.wheel-summary__row meter {
-  width: 100%;
+.wheel-summary :deep(.life-wheel-chart) {
+  width: min(100%, 360px);
 }
 
 .ai-usage-summary {
@@ -2738,10 +2662,6 @@ onMounted(() => {
 
   .dashboard-card--wide {
     grid-column: auto;
-  }
-
-  .wheel-summary__row {
-    grid-template-columns: 1fr;
   }
 
   .dashboard-modal__row,

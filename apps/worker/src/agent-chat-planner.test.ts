@@ -323,11 +323,25 @@ const plannerScenarios: PlannerScenario[] = [
     sideEffectLevel: "none",
   },
   {
-    name: "social post prompt stays conversational",
+    name: "social source read becomes a read action",
+    messageText: "Read today's journal as the source for a social draft.",
+    kind: "read_action",
+    capabilityId: "core.social.source.read",
+    sideEffectLevel: "read",
+  },
+  {
+    name: "social post prompt becomes a draft write action",
     messageText: "Write a social post for LinkedIn.",
-    kind: "conversation",
-    capabilityId: "core.agent-chat.conversation",
-    sideEffectLevel: "none",
+    kind: "write_action",
+    capabilityId: "core.social.draft.create",
+    sideEffectLevel: "write",
+  },
+  {
+    name: "Mission Control source social post becomes a draft write action",
+    messageText: "Use Mission Control task task-1 for a LinkedIn post.",
+    kind: "write_action",
+    capabilityId: "core.social.draft.create",
+    sideEffectLevel: "write",
   },
 ];
 

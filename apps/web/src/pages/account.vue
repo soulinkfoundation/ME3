@@ -297,10 +297,10 @@ type CommerceSettingsResponse = {
   defaultCurrency: string;
   stripe: {
     configured: boolean;
-    source: "environment" | "stored" | "not_configured";
+    source: "environment" | "stored" | "managed" | "not_configured";
     keyHint: string | null;
     keyUpdatedAt: string | null;
-    mode: "direct";
+    mode: "direct" | "managed";
   };
 };
 
@@ -3037,7 +3037,10 @@ onBeforeUnmount(() => {
                   </label>
 
                   <div
-                    v-if="!commerceSettings?.stripe.keyHint"
+                    v-if="
+                      !commerceSettings?.stripe.keyHint &&
+                      commerceSettings?.stripe.source !== 'managed'
+                    "
                     class="field commerce-settings-row__field commerce-settings-row__field--secret payment-key-field"
                   >
                     <label for="stripe-secret-key-input">
@@ -3083,6 +3086,13 @@ onBeforeUnmount(() => {
                     {{ commerceSaving ? "Saving..." : "Save settings" }}
                   </Button>
                 </div>
+
+                <p
+                  v-if="commerceSettings?.stripe.source === 'managed'"
+                  class="field-hint"
+                >
+                  Payments are connected through the managed ME3 commerce service.
+                </p>
 
                 <p
                   v-if="

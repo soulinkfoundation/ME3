@@ -4,6 +4,7 @@ const SAFE_HREF_PATTERN =
   /^(?:https?:\/\/|mailto:|tel:|\/(?!\/)|#|[A-Za-z0-9._~!$&'()*+,;=@%-]+(?:\/|$))/i;
 
 export function renderAssistantMarkdown(text: string): string {
+  text = normalizeAssistantHtml(text);
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const html: string[] = [];
   let paragraphLines: string[] = [];
@@ -113,6 +114,48 @@ export function renderAssistantMarkdown(text: string): string {
 
   flushBlocks();
   return html.join("");
+}
+
+function normalizeAssistantHtml(text: string): string {
+  if (!/<\s*(?:p|div|br|h[1-6]|ul|ol|li|strong|b|em|i|del|s|a|pre|code)(?:\s|\/?>)/i.test(text)) {
+    return text;
+  }
+
+  const document = new DOMParser().parseFromString(`<body>${text}</body>`, "text/html");
+  const body = document.body;
+
+  function visit(node: Node, inPre = false, inListItem = false): string {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || "";
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+
+    const element = node as HTMLElement;
+    const tag = element.tagName.toLowerCase();
+    if (tag === "script" || tag === "style") return "";
+    if (tag === "br") return "\n";
+    if (tag === "pre") return `\n\n\`\`\`\n${visitChildren(element, true).trim()}\n\`\`\`\n\n`;
+    if (tag === "li") return `\n- ${visitChildren(element, false, true).trim()}\n`;
+
+    const content = visitChildren(element, inPre, inListItem);
+    if (tag === "strong" || tag === "b") return `**${content}**`;
+    if (tag === "em" || tag === "i") return `_${content}_`;
+    if (tag === "del" || tag === "s") return `~~${content}~~`;
+    if (tag === "code" && !inPre) return `\`${content}\``;
+    if (tag === "a") {
+      const href = element.getAttribute("href") || "";
+      return `[${content}](${href})`;
+    }
+    if (/^h[1-6]$/.test(tag)) return `\n${"#".repeat(Number(tag[1]))} ${content.trim()}\n\n`;
+    if (tag === "p") return `${content.trim()} `;
+    if (tag === "div" && inListItem) return content;
+    if (["p", "div", "ul", "ol"].includes(tag)) return `\n${content.trim()}\n\n`;
+    return content;
+  }
+
+  function visitChildren(element: Element, inPre = false, inListItem = false): string {
+    return Array.from(element.childNodes).map((child) => visit(child, inPre, inListItem)).join("");
+  }
+
+  return visitChildren(body).replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function renderInlineMarkdown(text: string): string {

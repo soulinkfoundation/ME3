@@ -8880,10 +8880,10 @@ describe("ME3 Core Worker auth", () => {
         }),
         expect.objectContaining({
           id: "me3.landing-pages",
-          status: "coming_soon",
+          status: "available",
           implementationStatus: "bundled",
-          releaseStage: "coming_soon",
-          activationAllowed: false,
+          releaseStage: "available",
+          activationAllowed: true,
           enabled: false,
         }),
       ]),
@@ -10139,7 +10139,7 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(404);
   });
 
-  it("rejects activation for coming-soon plugins", async () => {
+  it("activates the landing-pages plugin", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
 
@@ -10150,13 +10150,19 @@ describe("ME3 Core Worker auth", () => {
       }),
       env,
     );
-    const body = (await response.json()) as { error: string };
+    const body = (await response.json()) as {
+      plugin: { id: string; status: string; enabled: boolean };
+    };
 
-    expect(response.status).toBe(400);
-    expect(body.error).toContain("coming soon");
+    expect(response.status).toBe(200);
+    expect(body.plugin).toMatchObject({
+      id: "me3.landing-pages",
+      status: "installed",
+      enabled: true,
+    });
   });
 
-  it("rejects landing-page site creation while the plugin is coming soon", async () => {
+  it("keeps landing pages inside an existing site", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
 
@@ -10175,10 +10181,13 @@ describe("ME3 Core Worker auth", () => {
       }),
       env,
     );
-    const body = (await response.json()) as { error: string };
+    const body = (await response.json()) as { error: string; action: string };
 
-    expect(response.status).toBe(403);
-    expect(body.error).toContain("coming soon");
+    expect(response.status).toBe(409);
+    expect(body).toMatchObject({
+      error: "Create landing pages inside an existing site.",
+      action: "createSitePage",
+    });
   });
 
   it("loads AI provider settings for the signed-in owner", async () => {

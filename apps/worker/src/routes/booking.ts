@@ -40,6 +40,7 @@ import {
   sendBookingConfirmationEmails,
 } from "../transactional-emails";
 import type { DbBooking, DbSite, Env } from "../types";
+import { finalizeStripeProductCheckout } from "../commerce-orders";
 
 export function registerBookingRoutes(app: AppHono) {
   app.get("/api/book/:username/slots", async (c) => {
@@ -89,6 +90,9 @@ export function registerBookingRoutes(app: AppHono) {
     const guestName = normalizeShortText(body.guestName, 120);
     const guestEmail = normalizeEmail(body.guestEmail);
     const notes = normalizeLongText(body.notes, 2000);
+    const pageId = normalizeShortText(body.pageId, 100);
+    const actionId = normalizeShortText(body.actionId, 100);
+    const campaign = normalizeShortText(body.campaign, 160);
     const slotStart = normalizeShortText(body.slotStart, 80);
     const slotEnd = normalizeShortText(body.slotEnd, 80);
 
@@ -167,6 +171,9 @@ export function registerBookingRoutes(app: AppHono) {
       guestEmail,
       notes,
       slot,
+      pageId,
+      actionId,
+      campaign,
     });
 
     if (booking) {
@@ -192,6 +199,9 @@ export function registerBookingRoutes(app: AppHono) {
     const guestName = normalizeShortText(body.guestName, 120);
     const guestEmail = normalizeEmail(body.guestEmail);
     const notes = normalizeLongText(body.notes, 2000);
+    const pageId = normalizeShortText(body.pageId, 100);
+    const actionId = normalizeShortText(body.actionId, 100);
+    const campaign = normalizeShortText(body.campaign, 160);
     const localDate = normalizeShortText(body.localDate, 20);
     const localTime = normalizeShortText(body.localTime, 20);
 
@@ -254,9 +264,10 @@ export function registerBookingRoutes(app: AppHono) {
       `INSERT INTO bookings
        (id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
         duration_minutes, status, notes, created_at, payment_intent_id, amount_paid,
-        suggested_amount, currency, payment_status, is_free_booking, paid_at)
+        suggested_amount, currency, payment_status, is_free_booking, paid_at,
+        page_id, action_id, campaign)
        VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
-               NULL, NULL, NULL, NULL, 'not_required', 1, NULL)`,
+               NULL, NULL, NULL, NULL, 'not_required', 1, NULL, ?, ?, ?)`,
     )
       .bind(
         bookingId,
@@ -268,6 +279,9 @@ export function registerBookingRoutes(app: AppHono) {
         slot.endsAt,
         offer.duration,
         notes || null,
+        pageId || null,
+        actionId || null,
+        campaign || null,
       )
       .run();
 
@@ -308,7 +322,12 @@ export function registerBookingRoutes(app: AppHono) {
     if (!site) return c.json({ error: "Site not found" }, 404);
 
     const stripe = await getStripe(c.env, site.user_id);
-    if (!stripe) return c.json({ error: "Stripe is not configured for this ME3 Core install" }, 503);
+    const managedCommerce = Boolean(
+      c.env.ME3_COMMERCE_BRIDGE_ORIGIN && c.env.ME3_COMMERCE_BRIDGE_TOKEN,
+    );
+    if (!stripe && !managedCommerce) {
+      return c.json({ error: "Stripe is not configured for this ME3 install" }, 503);
+    }
 
     const body = await c.req.json<PaidBookingCheckoutBody>().catch(() => null);
     if (!body) return c.json({ error: "Invalid request body" }, 400);
@@ -316,6 +335,9 @@ export function registerBookingRoutes(app: AppHono) {
     const guestName = normalizeShortText(body.guestName, 120);
     const guestEmail = normalizeEmail(body.guestEmail);
     const notes = normalizeLongText(body.notes, 2000);
+    const pageId = normalizeShortText(body.pageId, 100);
+    const actionId = normalizeShortText(body.actionId, 100);
+    const campaign = normalizeShortText(body.campaign, 160);
     const localDate = normalizeShortText(body.localDate, 20);
     const localTime = normalizeShortText(body.localTime, 20);
 
@@ -394,54 +416,55 @@ export function registerBookingRoutes(app: AppHono) {
     const cancelUrl = appendQueryParams(returnUrl, { booking: "cancelled" });
 
     try {
-      const session = await stripe.checkout.sessions.create({
-        mode: "payment",
-        customer_email: guestEmail,
-        line_items: [
-          {
-            price_data: {
-              currency: amount.currency,
-              product_data: {
-                name: offer.title,
-                description: `${localDate} ${localTime} (${offer.duration} minutes)`,
+      const metadata = {
+        purchase_kind: "booking",
+        site_id: site.id,
+        offer_id: offer.id,
+        booking_type: "one_to_one",
+        hold_token: holdToken,
+        guest_name: guestName,
+        guest_email: guestEmail,
+        notes,
+        starts_at: slot.startsAt,
+        ends_at: slot.endsAt,
+        duration_minutes: String(offer.duration),
+        page_id: pageId,
+        action_id: actionId,
+        campaign,
+      };
+      const session = stripe
+        ? await stripe.checkout.sessions.create({
+            mode: "payment",
+            customer_email: guestEmail,
+            line_items: [
+              {
+                price_data: {
+                  currency: amount.currency,
+                  product_data: {
+                    name: offer.title,
+                    description: `${localDate} ${localTime} (${offer.duration} minutes)`,
+                  },
+                  unit_amount: amount.amountCents,
+                },
+                quantity: 1,
               },
-              unit_amount: amount.amountCents,
-            },
-            quantity: 1,
-          },
-        ],
-        payment_intent_data: {
-          metadata: {
-            purchase_kind: "booking",
-            site_id: site.id,
-            offer_id: offer.id,
-            booking_type: "one_to_one",
-            hold_token: holdToken,
-            guest_name: guestName,
-            guest_email: guestEmail,
-            notes,
-            starts_at: slot.startsAt,
-            ends_at: slot.endsAt,
-            duration_minutes: String(offer.duration),
-          },
-        },
-        metadata: {
-          purchase_kind: "booking",
-          site_id: site.id,
-          offer_id: offer.id,
-          booking_type: "one_to_one",
-          hold_token: holdToken,
-          guest_name: guestName,
-          guest_email: guestEmail,
-          notes,
-          starts_at: slot.startsAt,
-          ends_at: slot.endsAt,
-          duration_minutes: String(offer.duration),
-        },
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-        expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
-      });
+            ],
+            payment_intent_data: { metadata },
+            metadata,
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+            expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
+          })
+        : await createManagedBookingCheckout(c.env, {
+            site,
+            offerTitle: offer.title,
+            amount: amount.amountCents,
+            currency: amount.currency,
+            customerName: guestName,
+            customerEmail: guestEmail,
+            metadata,
+            returnUrl,
+          });
 
       return c.json({ url: session.url, sessionId: session.id });
     } catch (error) {
@@ -455,17 +478,21 @@ export function registerBookingRoutes(app: AppHono) {
     if (!site) return c.json({ error: "Site not found" }, 404);
 
     const stripe = await getStripe(c.env, site.user_id);
-    if (!stripe) return c.json({ error: "Stripe is not configured for this ME3 Core install" }, 503);
+    const managedCommerce = Boolean(
+      c.env.ME3_COMMERCE_BRIDGE_ORIGIN && c.env.ME3_COMMERCE_BRIDGE_TOKEN,
+    );
+    if (!stripe && !managedCommerce) {
+      return c.json({ error: "Stripe is not configured for this ME3 install" }, 503);
+    }
 
     const body = await c.req.json<PaidBookingCompletionBody>().catch(() => null);
     const sessionId = normalizeShortText(body?.sessionId, 200);
     if (!sessionId) return c.json({ error: "Missing Stripe Checkout session ID" }, 400);
 
-    const result = await finalizePaidBookingCheckout(
-      c.env,
-      site,
-      await stripe.checkout.sessions.retrieve(sessionId),
-    );
+    const session = stripe
+      ? await stripe.checkout.sessions.retrieve(sessionId)
+      : await retrieveManagedBookingCheckout(c.env, sessionId);
+    const result = await finalizePaidBookingCheckout(c.env, site, session);
     if ("error" in result) return c.json({ error: result.error }, result.status as any);
     return c.json(result);
   });
@@ -492,12 +519,21 @@ export function registerBookingRoutes(app: AppHono) {
     }
 
     const session = event.data.object as Stripe.Checkout.Session;
+    const site = await getSiteById(c.env, session.metadata?.site_id || "");
+    if (!site) return c.json({ received: true, error: "site_not_found" });
+
+    if (session.metadata?.purchase_kind === "product") {
+      try {
+        const result = await finalizeStripeProductCheckout(c.env, site, session);
+        return c.json({ received: true, order: result.order });
+      } catch (error) {
+        console.error("Stripe product webhook failed:", error);
+        return c.json({ received: true, error: "product_checkout_failed" });
+      }
+    }
     if (session.metadata?.purchase_kind !== "booking") {
       return c.json({ received: true });
     }
-
-    const site = await getSiteById(c.env, session.metadata.site_id || "");
-    if (!site) return c.json({ received: true, error: "site_not_found" });
 
     const result = await finalizePaidBookingCheckout(c.env, site, session);
     if ("error" in result) {
@@ -579,9 +615,10 @@ async function finalizePaidBookingCheckout(
     `INSERT INTO bookings
      (id, site_id, offer_id, booking_type, guest_name, guest_email, starts_at, ends_at,
       duration_minutes, status, notes, created_at, payment_intent_id, amount_paid,
-      suggested_amount, currency, payment_status, is_free_booking, paid_at)
+      suggested_amount, currency, payment_status, is_free_booking, paid_at,
+      page_id, action_id, campaign)
      VALUES (?, ?, ?, 'one_to_one', ?, ?, ?, ?, ?, 'confirmed', ?, datetime('now'),
-             ?, ?, ?, ?, 'succeeded', 0, datetime('now'))`,
+             ?, ?, ?, ?, 'succeeded', 0, datetime('now'), ?, ?, ?)`,
   )
     .bind(
       bookingId,
@@ -597,6 +634,9 @@ async function finalizePaidBookingCheckout(
       session.amount_total || null,
       session.amount_subtotal || session.amount_total || null,
       session.currency || null,
+      metadata.page_id || null,
+      metadata.action_id || null,
+      metadata.campaign || null,
     )
     .run();
 
@@ -662,6 +702,86 @@ async function sendConfirmationEmailsForBooking(
   if (result.guest.status === "failed" || result.host.status === "failed") {
     console.error("Booking confirmation email issue:", result);
   }
+}
+
+async function createManagedBookingCheckout(
+  env: Env,
+  input: {
+    site: DbSite;
+    offerTitle: string;
+    amount: number;
+    currency: string;
+    customerName: string;
+    customerEmail: string;
+    metadata: Record<string, string>;
+    returnUrl: string;
+  },
+): Promise<{ id: string; url: string | null }> {
+  const response = await fetch(
+    `${env.ME3_COMMERCE_BRIDGE_ORIGIN!.replace(/\/+$/, "")}/v1/commerce/checkout-sessions`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.ME3_COMMERCE_BRIDGE_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        referenceId: input.metadata.hold_token,
+        kind: "booking",
+        siteId: input.site.id,
+        ownerId: input.site.user_id,
+        product: {
+          id: input.metadata.offer_id,
+          name: input.offerTitle,
+          amount: input.amount,
+          currency: input.currency,
+        },
+        customer: { name: input.customerName, email: input.customerEmail },
+        metadata: input.metadata,
+        returnUrl: input.returnUrl,
+      }),
+    },
+  );
+  const data = (await response.json()) as {
+    url?: string;
+    sessionId?: string;
+    error?: string;
+  };
+  if (!response.ok || !data.url || !data.sessionId) {
+    throw new Error(data.error || "Managed booking checkout is unavailable.");
+  }
+  return { id: data.sessionId, url: data.url };
+}
+
+async function retrieveManagedBookingCheckout(
+  env: Env,
+  sessionId: string,
+): Promise<Stripe.Checkout.Session> {
+  const response = await fetch(
+    `${env.ME3_COMMERCE_BRIDGE_ORIGIN!.replace(/\/+$/, "")}/v1/commerce/checkout-sessions/${encodeURIComponent(sessionId)}`,
+    { headers: { Authorization: `Bearer ${env.ME3_COMMERCE_BRIDGE_TOKEN}` } },
+  );
+  const data = (await response.json()) as {
+    paymentStatus?: string;
+    paymentIntentId?: string | null;
+    amountTotal?: number | null;
+    currency?: string | null;
+    metadata?: Record<string, string>;
+    error?: string;
+  };
+  if (!response.ok || !data.metadata) {
+    throw new Error(data.error || "Managed booking checkout could not be verified.");
+  }
+  return {
+    id: sessionId,
+    object: "checkout.session",
+    payment_status: data.paymentStatus === "paid" ? "paid" : "unpaid",
+    payment_intent: data.paymentIntentId || null,
+    amount_total: data.amountTotal || null,
+    amount_subtotal: data.amountTotal || null,
+    currency: data.currency || null,
+    metadata: data.metadata,
+  } as Stripe.Checkout.Session;
 }
 
 async function getSiteById(env: Env, siteId: string): Promise<DbSite | null> {
