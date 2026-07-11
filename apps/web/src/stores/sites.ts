@@ -2,7 +2,6 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { useWizardStore } from "./wizard";
 import { API_BASE, ApiError, api } from "../api";
-import type { Me3Profile } from "me3-protocol";
 import type { SiteUploadFile } from "../utils/siteUpload";
 import type {
   LandingPageDocument,
@@ -163,13 +162,9 @@ export interface OnboardingJobStatus {
 
 export interface SiteContent {
   ok: boolean;
-  profile:
-    | (Me3Profile & {
-        blogTitle?: string;
-        shopTitle?: string;
-        testimonialsTitle?: string;
-      })
-    | null;
+  profile: Parameters<
+    ReturnType<typeof useWizardStore>["loadFromSiteContent"]
+  >[0] | null;
   pages: Array<{ slug: string; title: string; content: string }>;
   posts: Array<{
     slug: string;

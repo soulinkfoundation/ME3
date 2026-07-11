@@ -378,6 +378,10 @@ app.use("*", async (c, next) => {
   }
 
   await next();
+  if (isPublicMeJsonPath(requestUrl.pathname)) {
+    c.res.headers.set("Access-Control-Allow-Origin", "*");
+    c.res.headers.delete("Access-Control-Allow-Credentials");
+  }
 });
 
 app.use(
@@ -1499,6 +1503,10 @@ function isPublicDiscoveryPath(pathname: string): boolean {
     pathname === "/security.txt" ||
     pathname === "/.well-known/security.txt"
   );
+}
+
+function isPublicMeJsonPath(pathname: string): boolean {
+  return pathname === "/me.json" || pathname === "/.well-known/me.json";
 }
 
 function isOwnerSurfaceRequest(c: AppContext, pathname: string): boolean {

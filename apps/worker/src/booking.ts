@@ -206,8 +206,8 @@ export async function loadSiteProfileForCommerce(
   site: DbSite,
 ): Promise<Me3SiteProfile | null> {
   const meJson =
-    (await getSiteFileText(env, site.id, "public/me.json")) ||
-    (await getSiteFileText(env, site.id, "src/me.json"));
+    (await getSiteFileText(env, site.id, "src/me.json")) ||
+    (await getSiteFileText(env, site.id, "public/me.json"));
   return meJson ? parseSiteProfile(meJson, site.username) : null;
 }
 

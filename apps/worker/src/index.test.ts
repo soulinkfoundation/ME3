@@ -3321,10 +3321,19 @@ describe("ME3 Core Worker auth", () => {
     env.ME3_SITE_USERNAME = "owner";
 
     const response = await app.fetch(new Request("https://kieranbutler.com/me.json"), env);
-    const body = (await response.json()) as { name: string; handle: string };
+    const body = (await response.json()) as {
+      version: string;
+      kind: string;
+      name: string;
+      handle: string;
+    };
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/json");
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(response.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    expect(body.version).toBe("0.2");
+    expect(body.kind).toBe("person");
     expect(body.name).toBe("Booking Owner");
     expect(body.handle).toBe("owner");
   });
@@ -3456,15 +3465,17 @@ describe("ME3 Core Worker auth", () => {
 
     const response = await app.fetch(new Request("https://me3.example/me.json"), env);
     const body = (await response.json()) as {
+      version: string;
+      kind: string;
       name: string;
-      username: string;
-      intents: { chat: string };
+      handle: string;
     };
 
     expect(response.status).toBe(200);
+    expect(body.version).toBe("0.2");
+    expect(body.kind).toBe("person");
     expect(body.name).toBe("ME3 Core Owner");
-    expect(body.username).toBe("owner");
-    expect(body.intents.chat).toBe("http://localhost:8787/api/assistant/chat");
+    expect(body.handle).toBe("owner");
   });
 
   it("serves a public-site 404 on the root domain inferred from the admin host", async () => {

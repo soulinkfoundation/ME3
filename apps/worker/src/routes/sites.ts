@@ -7,6 +7,7 @@ import {
 } from "@me3-core/plugin-landing-pages";
 import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, markdownToHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
+import { buildPublicMe3Profile } from "../public-me-profile";
 import {
   bookingDetailsFromBooking,
   getOwnerContact,
@@ -48,6 +49,7 @@ import {
   getCoreDomainInstructions,
   getCoreDomainState,
   getCoreWebOrigin,
+  getPublicSiteOrigin,
   getGeneratedSiteContentType,
   getMe3CloudUsernamePublishBlockReason,
   getSiteByUsername,
@@ -878,6 +880,11 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
         const generatedFiles = await generateSiteHtml(
           profile,
           Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
+        );
+        generatedFiles["me.json"] = JSON.stringify(
+          buildPublicMe3Profile(profile, getPublicSiteOrigin(c.env, site)),
+          null,
+          2,
         );
         for (const [name, content] of Object.entries(generatedFiles)) {
           await putSiteFile(

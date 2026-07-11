@@ -32,6 +32,7 @@ import {
 } from "../agent-channels";
 import { isCorePluginEnabled } from "../plugins";
 import { generateSiteHtml, type Me3SiteProfile } from "@me3-core/site-renderer";
+import { buildPublicMe3Profile } from "../public-me-profile";
 import {
   createEmptyPublishManifest,
   deleteSiteFile,
@@ -40,6 +41,7 @@ import {
   getGeneratedSiteContentType,
   getMe3CloudUsernamePublishBlockReason,
   getOwnerProfile,
+  getPublicSiteOrigin,
   getSiteFileText,
   loadPublishManifest,
   loadSiteSourceFiles,
@@ -2309,6 +2311,11 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     const generatedFiles = await generateSiteHtml(
       profile,
       Array.from(sourceFiles.entries()).map(([name, content]) => ({ name, content })),
+    );
+    generatedFiles["me.json"] = JSON.stringify(
+      buildPublicMe3Profile(profile, getPublicSiteOrigin(env, site)),
+      null,
+      2,
     );
     for (const [name, content] of Object.entries(generatedFiles)) {
       await putSiteFile(

@@ -368,8 +368,8 @@ async function validatePageResources(
     return [];
   }
   const raw =
-    (await getSiteFileText(env, site.id, "public/me.json")) ||
-    (await getSiteFileText(env, site.id, "src/me.json"));
+    (await getSiteFileText(env, site.id, "src/me.json")) ||
+    (await getSiteFileText(env, site.id, "public/me.json"));
   if (!raw) return ["Publish the main site before using booking or product actions."];
   const profile = parseSiteProfile(raw, site.username);
   const bookingIds = new Map<string, boolean>();

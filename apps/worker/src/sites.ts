@@ -7,6 +7,8 @@ import {
 import { getOrCreateInstallSessionSecret } from "./install-secrets";
 import type { AppContext } from "./http/types";
 import type { Me3SiteProfile } from "@me3-core/site-renderer";
+import { parseMe3Json, type Me3Profile } from "me3-protocol";
+import { buildPublicMe3Profile } from "./public-me-profile";
 import type { DbSite, Env, OwnerProfile } from "./types";
 
 const ME3_CLOUD_OWNER_SECRET_NAME = "ME3_CLOUD_OWNER_ID";
@@ -183,6 +185,11 @@ export function getApiHost(env: Env, requestUrl?: string): string {
 
 export function getSiteHost(env: Env, publicDomain?: string | null): string {
   return normalizeHost(env.ME3_SITE_HOST) || normalizeHost(publicDomain) || prefixedHost("www", getRootCustomDomain(env));
+}
+
+export function getPublicSiteOrigin(env: Env, site: Pick<DbSite, "custom_domain">): string {
+  const host = getSiteHost(env, site.custom_domain);
+  return host ? `https://${host}` : "";
 }
 
 export function getCoreWebOrigin(env: Env, requestUrl?: string): string {
@@ -529,30 +536,42 @@ export async function serveDefaultPublicSitePath(
 export async function serveMeJsonResponse(env: Env, request: Request): Promise<Response> {
   const site = await getPublicSiteForHost(env, new URL(request.url).hostname);
   if (site?.published_at) {
-    const siteResponse = await serveSiteFileResponse(env, site, "me.json", true);
-    if (siteResponse.ok) return siteResponse;
+    const storedPublic = await getSiteFileText(env, site.id, "public/me.json");
+    if (storedPublic) {
+      const parsed = parseMe3Json(storedPublic);
+      if (parsed.valid && parsed.profile) return publicMeJsonResponse(parsed.profile);
+    }
+
+    const legacySource = await getSiteFileText(env, site.id, "src/me.json");
+    if (legacySource || storedPublic) {
+      const profile = parseSiteProfile(legacySource || storedPublic || "{}", site.username);
+      return publicMeJsonResponse(buildPublicMe3Profile(profile, new URL(request.url).origin));
+    }
   }
 
   const owner = await getOwnerProfile(env, "owner");
-  const apiOrigin = getCoreApiOrigin(env, request.url);
-  const webOrigin = getCoreWebOrigin(env, request.url);
-
-  return new Response(
-    JSON.stringify({
-      id: apiOrigin,
-      type: "Person",
-      name: owner?.name ?? "ME3 Core Owner",
-      username: owner?.username ?? "owner",
-      bio: owner?.bio ?? "Personal AI assistant powered by ME3 Core.",
-      url: webOrigin,
-      intents: {
-        chat: `${apiOrigin}/api/assistant/chat`,
+  return publicMeJsonResponse(
+    buildPublicMe3Profile(
+      {
+        version: "0.1",
+        name: owner?.name ?? "ME3 Core Owner",
+        handle: owner?.username ?? "owner",
+        bio: owner?.bio ?? "Personal AI assistant powered by ME3 Core.",
+        ...(owner?.avatar_url ? { avatar: owner.avatar_url } : {}),
       },
-    }),
-    {
-      headers: { "Content-Type": "application/json" },
-    },
+      new URL(request.url).origin,
+    ),
   );
+}
+
+function publicMeJsonResponse(profile: Me3Profile): Response {
+  return new Response(JSON.stringify(profile, null, 2), {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "public, max-age=60, must-revalidate",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
 }
 
 export async function getPublicSiteForHost(env: Env, rawHost: string): Promise<DbSite | null> {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { generateSiteHtml } from "./index";
 
 describe("site generator", () => {
-  it("generates me3 profile pages from me.json and markdown sources", async () => {
+  it("generates profile HTML without publishing the private source document", async () => {
     const files = await generateSiteHtml(
       {
         version: "0.1",
@@ -22,7 +22,7 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain('src="./files/avatar.jpg"');
     expect(files["index.html"]).toContain("Join my course");
     expect(files["about.html"]).toContain("Generated from markdown.");
-    expect(files["me.json"]).toContain('"handle": "test"');
+    expect(files["me.json"]).toBeUndefined();
   });
 
   it("renders concise public locations from structured location data", async () => {

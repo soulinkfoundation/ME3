@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import draggable from "vuedraggable";
-import { useWizardStore } from "../../stores/wizard";
-import type { Me3Button } from "me3-protocol";
+import { useWizardStore, type Me3Button } from "../../stores/wizard";
 import UiIcon from "../UiIcon.vue";
 import IconPicker from "../IconPicker.vue";
 import { isUiIconName, type UiIconName } from "../../utils/icons";

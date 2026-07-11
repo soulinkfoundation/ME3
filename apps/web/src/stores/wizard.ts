@@ -1,14 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
-import type {
-  Me3Profile,
-  Me3Button,
-  Me3IntentSubscribe,
-  Me3IntentBook,
-  Me3ActionDefinition,
-  Me3Service,
-  Me3BusinessContext,
-} from "me3-protocol";
+import type { Me3SiteProfile } from "@me3-core/site-renderer";
 import { productSendsPurchaseConfirmation } from "../../../../shared/product-purchase-confirmation";
 import { API_BASE } from "../api";
 import { type VibeId, defaultVibe, vibeIds } from "../styles/vibes";
@@ -19,6 +11,41 @@ import {
   TESTIMONIAL_PLACEMENT_LINK_KEY,
   type TestimonialPlacement,
 } from "../utils/site-sections";
+
+export type Me3Button = {
+  text: string;
+  url: string;
+  style?: "primary" | "secondary" | "outline";
+  icon?: string;
+};
+
+type Me3IntentSubscribe = NonNullable<
+  NonNullable<Me3SiteProfile["intents"]>["subscribe"]
+>;
+type Me3IntentBook = NonNullable<
+  NonNullable<Me3SiteProfile["intents"]>["book"]
+>;
+type Me3ActionDefinition = {
+  method: "GET" | "POST";
+  url: string;
+  requires?: string[];
+  description?: string;
+};
+type Me3Service = {
+  id: string;
+  title: string;
+  description?: string;
+  sessionType?: string;
+  duration?: number;
+  price?: number;
+  currency?: WizardBookingPricing["currency"];
+  availabilityMode?: "calendar" | "native" | "external" | "manual";
+  status?: "active" | "paused" | "draft";
+};
+type Me3BusinessContext = Partial<WizardBusinessConfig>;
+type SiteSourceProduct = NonNullable<Me3SiteProfile["products"]>[number] & {
+  confirmationEmail?: WizardProductConfirmationEmail;
+};
 
 export interface WizardProfile {
   name: string;
@@ -406,8 +433,12 @@ export interface WizardTestimonial {
   profileUrl?: string;
 }
 
-type ExtendedMe3Profile = Omit<Me3Profile, "testimonialDisplay"> & {
+type ExtendedMe3Profile = Omit<
+  Me3SiteProfile,
+  "locationData" | "products" | "business"
+> & {
   locationData?: WizardLocationData;
+  products?: SiteSourceProduct[];
   blogEnabled?: boolean;
   blogTitle?: string;
   shopTitle?: string;
@@ -3056,9 +3087,7 @@ export const useWizardStore = defineStore("wizard", () => {
 
     if (shopEnabled.value && products.value.length > 0) {
       me3.products = products.value.map((p) => {
-          const product: import("me3-protocol").Me3Product & {
-            confirmationEmail?: WizardProductConfirmationEmail;
-          } = {
+          const product: SiteSourceProduct = {
             slug: p.slug,
             title: p.title,
             file: `shop/${p.slug}.md`,
@@ -3082,7 +3111,7 @@ export const useWizardStore = defineStore("wizard", () => {
             };
           }
           return product;
-        }) as import("me3-protocol").Me3Product[];
+        }) as SiteSourceProduct[];
       const cleanedShopTitle = shopTitle.value.trim();
       if (cleanedShopTitle && cleanedShopTitle !== DEFAULT_SHOP_TITLE) {
         me3.shopTitle = cleanedShopTitle;
@@ -3501,7 +3530,7 @@ export const useWizardStore = defineStore("wizard", () => {
     }
 
     if (Object.keys(intents).length > 0) {
-      me3.intents = intents as Me3Profile["intents"];
+      me3.intents = intents as Me3SiteProfile["intents"];
     }
 
     const handle = me3.handle?.trim();

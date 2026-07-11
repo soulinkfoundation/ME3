@@ -27,17 +27,19 @@ type Me3Post = Me3Page & {
   excerpt?: string;
   draft?: boolean;
   type?: string;
-  media?: { url?: string; thumbnail?: string };
+  media?: { url?: string; duration?: number; thumbnail?: string };
 };
 
 type Me3Product = Me3Page & {
   price?: number;
   currency?: string;
+  images?: string[];
   excerpt?: string;
   available?: boolean;
+  publishedAt?: string;
 };
 
-type SiteSectionPaths = {
+export type SiteSectionPaths = {
   blog: string;
   shop: string;
 };
@@ -95,6 +97,10 @@ type BookingType = {
   availability?: { timezone?: string; windows?: Record<string, string[]> };
 };
 
+/**
+ * Private site-authoring source consumed by the renderer.
+ * This is intentionally separate from the public me3-protocol profile.
+ */
 export type Me3SiteProfile = {
   version?: string;
   name?: string;
@@ -116,6 +122,14 @@ export type Me3SiteProfile = {
   testimonialsTitle?: string;
   testimonialDisplay?: string;
   footer?: false | { text?: string; link?: { text?: string; url?: string } };
+  business?: {
+    positioningStatement?: string;
+    audience?: string;
+    primaryProblem?: string;
+    solution?: string;
+    targetMarket?: string;
+    primaryOutcome?: string;
+  };
   intents?: {
     subscribe?: { enabled?: boolean; title?: string; description?: string };
     book?: {
@@ -232,7 +246,6 @@ export async function generateSiteHtml(
     }
   }
 
-  output["me.json"] = JSON.stringify(profile, null, 2);
   return output;
 }
 
@@ -1310,7 +1323,7 @@ function stripHtmlTags(value: string): string {
     .replace(/<[^>]+>/g, " ");
 }
 
-function resolveSiteSectionPaths(profile: Me3SiteProfile): SiteSectionPaths {
+export function resolveSiteSectionPaths(profile: Me3SiteProfile): SiteSectionPaths {
   const taken = new Set(
     (profile.pages || [])
       .map((page) => page.slug?.trim())
