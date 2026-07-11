@@ -745,7 +745,9 @@ describe("Core chat native context", () => {
     );
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
+      tools?: unknown[];
     };
+    expect(modelInput.tools).toBeUndefined();
     const system = modelInput.messages[0]?.content || "";
 
     expect(system).toContain("ME3 agent context packet:");
@@ -1632,9 +1634,9 @@ describe("Core chat native context", () => {
         responseModel: "@cf/zai-org/glm-4.7-flash",
       },
       context: {
-        status: "not_attempted",
-        characterCount: 0,
-        loadDurationMs: null,
+        status: "loaded",
+        characterCount: expect.any(Number),
+        loadDurationMs: expect.any(Number),
         packetId: "agent-context:owner:chat_reply",
       },
       modelCall: {
@@ -1693,9 +1695,9 @@ describe("Core chat native context", () => {
         configured: true,
       },
       context: {
-        status: "loaded",
-        characterCount: expect.any(Number),
-        loadDurationMs: expect.any(Number),
+        status: "not_attempted",
+        characterCount: 0,
+        loadDurationMs: null,
       },
       modelCall: {
         status: "succeeded",
@@ -1956,7 +1958,7 @@ describe("Core chat native context", () => {
       project_id: "project-launch",
       due_at: "2026-07-15",
     });
-    expect(env.state.queries.some((sql) => sql.includes("FROM contacts"))).toBe(true);
+    expect(env.state.queries.some((sql) => sql.includes("FROM contacts"))).toBe(false);
     expect(env.state.queries.some((sql) => sql.includes("FROM assistant_jobs"))).toBe(false);
   });
 
