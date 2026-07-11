@@ -799,13 +799,8 @@ describe("assistant jobs persistence", () => {
     expect(created.job.triggerSummary).toBe("When site.booking.confirmed happens");
   });
 
-  it("sends daily briefing notifications through the connected owner channel", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: true, messageId: "stream-message-1" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  it("keeps Daily Briefing delivery out of connected messaging channels", async () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const env = createAssistantJobsEnv({
       channelConnections: [soulinkConnectionRow()],
@@ -822,44 +817,25 @@ describe("assistant jobs persistence", () => {
       expect.objectContaining({
         actionId: "notify-owner",
         capabilityId: "message.owner.notify",
-        status: "succeeded",
+        status: "skipped",
       }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://soulink.test/api/me3/assistant-channel/notify",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer dispatch-token",
-          "Content-Type": "application/json",
-        }),
-      }),
-    );
-    const notifyRequest = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1];
-    const notifyBody = JSON.parse(notifyRequest?.body as string);
-    expect(notifyBody).toMatchObject({
-      streamChannelType: "messaging",
-      streamChannelId: "assistant-channel",
-    });
-    expect(notifyBody.messageText).toContain("☀️ Good morning, Kieran.");
-    expect(notifyBody.messageText).toContain("Your calendar is clear");
-    expect(env.__state.channelEvents).toHaveLength(1);
-    expect(env.__state.channelEvents[0]).toMatchObject({
-      connection_id: "soulink-connection",
-      channel: "soulink",
-      direction: "outbound",
-      event_type: "send",
-      status: "sent",
-      provider_message_id: "stream-message-1",
-    });
-    expect(env.__state.channelEvents[0]?.text_body).toContain("☀️ Good morning, Kieran.");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(env.__state.channelEvents).toHaveLength(0);
     expect(env.__state.pluginActivities[0]).toMatchObject({
       activity_type: "assistant_job.review_packet",
       title: expect.stringContaining("Daily Briefing"),
     });
     expect(JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)).toMatchObject({
       dailyBriefing: {
+        version: 1,
         message: expect.stringContaining("☀️ Good morning, Kieran."),
+        plainText: expect.stringContaining("☀️ Good morning, Kieran."),
+        sections: [
+          expect.objectContaining({ kind: "calendar", title: "Calendar" }),
+          expect.objectContaining({ kind: "reminders", title: "Reminders" }),
+          expect.objectContaining({ kind: "tasks", title: "Mission Control" }),
+        ],
       },
     });
   });
@@ -927,12 +903,7 @@ describe("assistant jobs persistence", () => {
   it("customizes the daily briefing notification template", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-24T07:00:00.000Z"));
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: true, messageId: "stream-message-1" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const env = createAssistantJobsEnv({
       channelConnections: [soulinkConnectionRow()],
@@ -960,8 +931,9 @@ describe("assistant jobs persistence", () => {
 
     await runAssistantJobNow(env, "owner", updated.job.id);
 
-    const notifyRequest = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1];
-    const messageText = JSON.parse(notifyRequest?.body as string).messageText;
+    expect(fetchMock).not.toHaveBeenCalled();
+    const messageText = JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)
+      .dailyBriefing.plainText;
     expect(messageText).toContain("Morning Kieran.");
     expect(messageText).toContain("Booking with Ada Lovelace");
   });

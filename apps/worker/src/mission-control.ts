@@ -1422,6 +1422,22 @@ export async function listMissionPluginActivity(env: Env, userId: string, limitI
   return (rows.results || []).map(serializePluginActivity);
 }
 
+export async function getMissionDailyBriefing(env: Env, userId: string, briefingId: string) {
+  const row = await env.DB.prepare(
+    `SELECT id, user_id, plugin_id, activity_type, title, summary, status,
+            related_id, metadata_json, created_at
+     FROM mission_plugin_activity
+     WHERE id = ? AND user_id = ? AND activity_type = 'assistant_job.review_packet'
+     LIMIT 1`,
+  )
+    .bind(briefingId, userId)
+    .first<MissionPluginActivityRow>();
+  if (!row) throw new MissionControlInputError("Daily Briefing not found", 404);
+  const briefing = serializeDailyBriefing(row);
+  if (!briefing) throw new MissionControlInputError("Daily Briefing not found", 404);
+  return { briefing };
+}
+
 export async function getMissionDashboard(env: Env, userId: string) {
   const [row, pluginRecords, latestDailyBriefing, latestWheelSnapshot] = await Promise.all([
     getOrCreateMissionDashboardSettingsRow(env, userId),
@@ -1773,8 +1789,11 @@ async function getMissionControlDailyBriefing(env: Env, userId: string, date: st
   return {
     id: activity.id,
     title: activity.title,
-    message: briefing.message,
+    version: briefing.version,
+    message: briefing.plainText,
+    plainText: briefing.plainText,
     date: briefing.date,
+    sections: briefing.sections,
     createdAt: activity.createdAt,
     showInJournal: !soulinkConnection,
     deliveryHint: soulinkConnection ? "soulink" : "mission_control",
@@ -3028,21 +3047,29 @@ async function getLatestMissionDailyBriefing(env: Env, userId: string) {
     .catch(() => ({ results: [] as MissionPluginActivityRow[] }));
 
   for (const row of rows.results || []) {
-    const activity = serializePluginActivity(row);
-    const briefing = parseDailyBriefingMetadata(activity.metadata);
-    if (!briefing) continue;
-    return {
-      id: activity.id,
-      title: activity.title,
-      message: briefing.message,
-      date: briefing.date,
-      createdAt: activity.createdAt,
-      status: activity.status,
-      relatedId: activity.relatedId,
-    };
+    const briefing = serializeDailyBriefing(row);
+    if (briefing) return briefing;
   }
 
   return null;
+}
+
+function serializeDailyBriefing(row: MissionPluginActivityRow) {
+  const activity = serializePluginActivity(row);
+  const briefing = parseDailyBriefingMetadata(activity.metadata);
+  if (!briefing) return null;
+  return {
+    id: activity.id,
+    title: activity.title,
+    version: briefing.version,
+    message: briefing.plainText,
+    plainText: briefing.plainText,
+    date: briefing.date,
+    sections: briefing.sections,
+    createdAt: activity.createdAt,
+    status: activity.status,
+    relatedId: activity.relatedId,
+  };
 }
 
 function availableDashboardCardContributions(
@@ -3961,10 +3988,33 @@ function parseJsonRecord(raw: string | null): Record<string, unknown> {
 function parseDailyBriefingMetadata(metadata: Record<string, unknown>) {
   const dailyBriefing = metadata.dailyBriefing;
   if (!isRecord(dailyBriefing)) return null;
-  const message = typeof dailyBriefing.message === "string" ? dailyBriefing.message : null;
+  const message = typeof dailyBriefing.plainText === "string"
+    ? dailyBriefing.plainText
+    : typeof dailyBriefing.message === "string"
+      ? dailyBriefing.message
+      : null;
   const date = typeof dailyBriefing.date === "string" ? dailyBriefing.date : null;
   if (!message || !date) return null;
-  return { message, date };
+  const sections = Array.isArray(dailyBriefing.sections)
+    ? dailyBriefing.sections.filter(isRecord).map((section) => ({
+        kind: typeof section.kind === "string" ? section.kind : "summary",
+        title: typeof section.title === "string" ? section.title : "",
+        summary: typeof section.summary === "string" ? section.summary : "",
+        items: Array.isArray(section.items)
+          ? section.items.filter(isRecord).map((item, index) => ({
+              id: typeof item.id === "string" ? item.id : `item-${index}`,
+              title: typeof item.title === "string" ? item.title : "",
+              detail: typeof item.detail === "string" ? item.detail : null,
+            }))
+          : [],
+      }))
+    : [];
+  return {
+    version: typeof dailyBriefing.version === "number" ? dailyBriefing.version : 1,
+    plainText: message,
+    date,
+    sections,
+  };
 }
 
 function parseWeeklyReviewResult(value: unknown) {

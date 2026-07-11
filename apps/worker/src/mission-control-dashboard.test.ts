@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createMissionWheelSnapshot,
+  getMissionDailyBriefing,
   getMissionDashboard,
   getMissionProjectsSummary,
   getMissionWheel,
@@ -79,8 +80,18 @@ describe("Mission Control dashboard settings", () => {
           related_id: "run-1",
           metadata_json: JSON.stringify({
             dailyBriefing: {
+              version: 1,
               date: "2026-06-04",
               message: "A calm operational day.",
+              plainText: "A calm operational day.",
+              sections: [
+                {
+                  kind: "calendar",
+                  title: "Calendar",
+                  summary: "Your calendar is clear.",
+                  items: [],
+                },
+              ],
             },
           }),
           created_at: "2026-06-04 08:15:00",
@@ -121,7 +132,17 @@ describe("Mission Control dashboard settings", () => {
     expect(dashboard.missionStatement).toContain("I am here to help");
     expect(dashboard.data["mission.daily-briefing"]).toMatchObject({
       message: "A calm operational day.",
+      plainText: "A calm operational day.",
+      sections: [expect.objectContaining({ kind: "calendar" })],
       createdAt: "2026-06-04T08:15:00Z",
+    });
+
+    await expect(getMissionDailyBriefing(env, "owner", "activity-1")).resolves.toEqual({
+      briefing: expect.objectContaining({
+        id: "activity-1",
+        plainText: "A calm operational day.",
+        sections: [expect.objectContaining({ kind: "calendar" })],
+      }),
     });
   });
 
@@ -477,6 +498,11 @@ function createDashboardEnv(options: {
               }
               if (sql.includes("plugin_installations")) {
                 return (pluginInstallations.get(String(values[0])) || null) as T | null;
+              }
+              if (sql.includes("mission_plugin_activity")) {
+                return (activity.find(
+                  (row) => row.id === values[0] && row.user_id === values[1],
+                ) || null) as T | null;
               }
               return null;
             },

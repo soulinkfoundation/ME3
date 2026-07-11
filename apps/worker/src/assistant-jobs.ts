@@ -44,6 +44,7 @@ import { isCorePluginEnabled } from "./plugins";
 import { decodeMimeHeaderValue } from "../../../shared/email-headers";
 import { ensureDefaultCategories, getOrCreateCategoryByName } from "./accounts";
 import { getDefaultCommerceCurrency } from "./commerce-settings";
+import { notifyDailyBriefingReady } from "./push-notifications";
 
 export class AssistantJobsInputError extends Error {
   constructor(
@@ -318,6 +319,18 @@ type DailyBriefingRenderContext = {
   calendarEvents: string;
   calendarReminders: string;
   missionTasks: string;
+  sections: DailyBriefingSection[];
+};
+
+type DailyBriefingSection = {
+  kind: "calendar" | "reminders" | "tasks";
+  title: string;
+  summary: string;
+  items: Array<{
+    id: string;
+    title: string;
+    detail: string | null;
+  }>;
 };
 
 type OwnerProfileContextRow = {
@@ -2071,18 +2084,25 @@ async function createAssistantJobOwnerNotification(
     idempotencyKey: string;
   },
 ) {
+  if (input.job.recipe_id === "daily-briefing" || input.draft.recipeId === "daily-briefing") {
+    const reviewAction = input.draft.actions.find(
+      (action) => action.capabilityId === "mission.review_packet.create",
+    );
+    const briefingId = missionOutputId(input.run, reviewAction || input.action, "activity");
+    const delivery = await notifyDailyBriefingReady(env, briefingId);
+    return insertAssistantJobActionResult(env, {
+      runId: input.run.id,
+      actionId: input.action.id,
+      capabilityId: input.capability.id,
+      idempotencyKey: input.idempotencyKey,
+      status: delivery.ok ? "succeeded" : "skipped",
+      externalRef: briefingId,
+      errorMessage: delivery.ok ? null : "Native Daily Briefing notification is not available.",
+    });
+  }
+
   const connection = await getActiveOwnerNotificationConnection(env, input.userId);
   if (!connection) {
-    if (input.job.recipe_id === "daily-briefing" || input.draft.recipeId === "daily-briefing") {
-      return insertAssistantJobActionResult(env, {
-        runId: input.run.id,
-        actionId: input.action.id,
-        capabilityId: input.capability.id,
-        idempotencyKey: input.idempotencyKey,
-        status: "skipped",
-        errorMessage: "Soulink is not connected; Daily Briefing remains available in Mission Control.",
-      });
-    }
     return insertAssistantJobActionResult(env, {
       runId: input.run.id,
       actionId: input.action.id,
@@ -2566,10 +2586,12 @@ async function buildGeneratedMissionActivity(
       summary: message,
       metadata: {
         dailyBriefing: {
+          version: 1,
           date: context.dateKey,
           message,
+          plainText: message,
+          sections: context.sections,
           template,
-          soulinkPrimary: true,
         },
       },
     };
@@ -3887,7 +3909,65 @@ async function buildDailyBriefingRenderContext(
     calendarEvents: formatDailyCalendarEvents(calendarEvents, timezone),
     calendarReminders: formatDailyReminders(reminders, timezone),
     missionTasks: formatDailyTasks(tasks, dateKey),
+    sections: buildDailyBriefingSections(
+      calendarEvents,
+      reminders,
+      tasks,
+      dateKey,
+      dateLabel,
+      timezone,
+    ),
   };
+}
+
+function buildDailyBriefingSections(
+  events: CalendarEventContextRow[],
+  reminders: DailyBriefingReminderRow[],
+  tasks: Me3AgentContextTask[],
+  dateKey: string,
+  dateLabel: string,
+  fallbackTimezone: string,
+): DailyBriefingSection[] {
+  const dueTasks = tasks.filter((task) => task.dueAt?.slice(0, 10) === dateKey);
+  return [
+    {
+      kind: "calendar",
+      title: "Calendar",
+      summary: formatDailyCalendarSummary(events, dateLabel),
+      items: events.slice(0, 4).map((event) => ({
+        id: event.id,
+        title: event.title,
+        detail: formatTimeInTimezone(event.starts_at, event.timezone || fallbackTimezone),
+      })),
+    },
+    {
+      kind: "reminders",
+      title: "Reminders",
+      summary: reminders.length === 0
+        ? "No reminders due today."
+        : `${reminders.length} reminder${reminders.length === 1 ? "" : "s"} due today.`,
+      items: reminders.slice(0, 4).map((reminder) => ({
+        id: reminder.id,
+        title: reminder.title,
+        detail: formatTimeInTimezone(
+          reminder.remind_at,
+          reminder.timezone || fallbackTimezone,
+        ),
+      })),
+    },
+    {
+      kind: "tasks",
+      title: "Mission Control",
+      summary: dueTasks.length === 0
+        ? "No tasks due today."
+        : `${dueTasks.length} task${dueTasks.length === 1 ? "" : "s"} due today.`,
+      items: dueTasks.slice(0, 4).map((task) => ({
+        id: task.id,
+        title: task.title,
+        detail: null,
+      })),
+    },
+  ];
 }
 
 function renderDailyBriefingMessage(context: DailyBriefingRenderContext, template: string) {

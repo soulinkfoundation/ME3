@@ -22,6 +22,7 @@ import {
   deleteMissionMemory,
   getMissionDaemonStatus,
   getMissionDashboard,
+  getMissionDailyBriefing,
   getMissionProjectsSummary,
   getMissionSetup,
   getMissionTaskDetail,
@@ -75,6 +76,19 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
 
     try {
       return c.json(await getMissionDashboard(c.env, ownerId));
+    } catch (error) {
+      return missionControlErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/mission-control/briefings/:id", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const blocked = await requireMissionControlPlugin(c);
+    if (blocked) return blocked;
+
+    try {
+      return c.json(await getMissionDailyBriefing(c.env, ownerId, c.req.param("id")));
     } catch (error) {
       return missionControlErrorResponse(c, error);
     }

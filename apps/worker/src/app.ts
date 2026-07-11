@@ -102,6 +102,7 @@ import { registerFilesRoutes } from "./routes/files";
 import { registerJournalRoutes } from "./routes/journal";
 import { registerLocalExecutorRoutes } from "./routes/local-executor";
 import { registerMobileRoutes } from "./routes/mobile";
+import { registerPushNotificationRoutes } from "./routes/push-notifications";
 import {
   handleInboundEmail,
   registerMailboxRoutes,
@@ -837,6 +838,7 @@ registerJournalRoutes(app, { requireOwner, unauthorized });
 registerMissionControlRoutes(app, { requireOwner, unauthorized });
 registerLocalExecutorRoutes(app, { requireOwner, unauthorized, getCoreApiOrigin });
 registerMobileRoutes(app, { requireOwner, unauthorized, getCoreApiOrigin, getCoreWebOrigin });
+registerPushNotificationRoutes(app, { requireOwner, unauthorized });
 registerSocialContentRoutes(app, { requireOwner, unauthorized });
 registerSocialAccountRoutes(app, { requireOwner, unauthorized });
 app.get("/api/social/status", async (c) => {
