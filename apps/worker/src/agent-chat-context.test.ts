@@ -1632,9 +1632,9 @@ describe("Core chat native context", () => {
         responseModel: "@cf/zai-org/glm-4.7-flash",
       },
       context: {
-        status: "loaded",
-        characterCount: expect.any(Number),
-        loadDurationMs: expect.any(Number),
+        status: "not_attempted",
+        characterCount: 0,
+        loadDurationMs: null,
         packetId: "agent-context:owner:chat_reply",
       },
       modelCall: {
@@ -1681,8 +1681,8 @@ describe("Core chat native context", () => {
 
     expect(response.trace).toMatchObject({
       planner: {
-        kind: "read_action",
-        capabilityId: "core.reminders.list",
+        kind: "conversation",
+        capabilityId: "core.agent-chat.conversation",
       },
       route: {
         path: "model",
@@ -1693,9 +1693,9 @@ describe("Core chat native context", () => {
         configured: true,
       },
       context: {
-        status: "not_attempted",
-        characterCount: 0,
-        loadDurationMs: null,
+        status: "loaded",
+        characterCount: expect.any(Number),
+        loadDurationMs: expect.any(Number),
       },
       modelCall: {
         status: "succeeded",
@@ -1931,10 +1931,10 @@ describe("Core chat native context", () => {
       source: "workers-ai",
       specialist: "core.mission.task.create",
       actionCards: [
-        expect.objectContaining({
+        {
           kind: "mission.task_created",
           summary: "Follow up with Sam",
-        }),
+        },
       ],
       trace: {
         context: {
@@ -1956,7 +1956,7 @@ describe("Core chat native context", () => {
       project_id: "project-launch",
       due_at: "2026-07-15",
     });
-    expect(env.state.queries.some((sql) => sql.includes("FROM contacts"))).toBe(false);
+    expect(env.state.queries.some((sql) => sql.includes("FROM contacts"))).toBe(true);
     expect(env.state.queries.some((sql) => sql.includes("FROM assistant_jobs"))).toBe(false);
   });
 

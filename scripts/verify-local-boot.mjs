@@ -94,8 +94,9 @@ async function main() {
   assert(typeof chat.reply === "string" && chat.reply.length > 0, "Assistant reply was empty");
 
   const profile = await fetchJson(`${workerOrigin}/.well-known/me.json`);
-  assert(profile.username === "owner", "me.json did not return bootstrapped owner");
-  assert(profile.intents?.chat, "me.json did not expose chat intent");
+  assert(profile.version === "0.2", "me.json did not use the current protocol version");
+  assert(profile.kind === "person", "me.json did not return a person profile");
+  assert(typeof profile.handle === "string" && profile.handle, "me.json handle was empty");
 
   console.log("ME3 Core local boot verification passed.");
 }

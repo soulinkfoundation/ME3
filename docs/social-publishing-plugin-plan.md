@@ -1,7 +1,7 @@
 ---
 title: Social Publishing plugin working plan
-status: brainstorm
-updated: 2026-07-10
+status: linkedin_beta_gate
+updated: 2026-07-11
 tracking: me3-1dr, me3-1dr.4
 ---
 
@@ -18,7 +18,7 @@ This is lightweight context for the next Social Publishing product-planning sess
 - Approval remains mandatory before external publishing.
 - The plugin remains hidden from plugin management until the launch workflow and provider readiness are confirmed.
 
-The content workflow, account setup, encrypted provider settings, OAuth callbacks, content bank, queue dispatch, audit, and provider adapter boundaries already have substantial implementation and test coverage. Scheduling and retry foundations exist but are not yet a complete owner-facing workflow. Launch readiness still needs a deliberate provider order, production OAuth verification, failure/reconnect behavior, and a focused end-to-end experience.
+The LinkedIn-first workflow, account setup, encrypted provider settings, managed/BYO OAuth paths, source-backed variants, exact approval, scheduling, queue dispatch, audit, bounded retries, and owner-facing recovery are implemented with automated coverage. The plugin remains hidden while `me3-1dr.4.6` runs the production-like provider, scheduling, responsive UI, and operational checks recorded in `docs/social-publishing-beta-gate.md`.
 
 ## Product direction
 
@@ -126,6 +126,8 @@ The existing variant `format` and asset manifest can carry the first carousel im
 - Prevent duplicate dispatch with an internal idempotency boundary and a manual check state for ambiguous provider outcomes.
 - Keep all drafts, source snapshots, schedules, user tokens, and publication history in the installation. ME3 Cloud only owns managed provider application credentials, OAuth operations, and unavoidable shared-service telemetry.
 
+Managed OAuth refresh uses the same narrow broker boundary as connection handoff: Core decrypts the installation-stored refresh token only for the request and sends it with the provider id over TLS to `POST /api/social/oauth/refresh`; the broker returns only the rotated access token, optional rotated refresh token, and expiry. Self-hosted BYO refresh happens locally with the owner-provided app credentials. If LinkedIn did not issue a refresh token—which is expected unless the app has approved Marketing Developer Platform access—ME3 marks the account reconnect-required instead of attempting an unsafe or unsupported refresh.
+
 ## Release criteria
 
 - The journal/task-to-LinkedIn workflow works through the ME3 agent and the Social Publishing workspace.
@@ -146,6 +148,6 @@ The existing variant `format` and asset manifest can carry the first carousel im
 - Teams, approval chains, agencies, and many-account organisation models.
 - Final managed quotas until Pro pricing and real publishing costs are reviewed.
 
-## Next planning session
+## Current execution
 
-The next session should choose the launch workflow and provider order, test the managed LinkedIn/Instagram bridge assumptions, decide the X boundary, define reconnect/retry/support expectations, and turn the result into ordered implementation beads. Existing implementation work is tracked under `me3-1dr`; the planning continuation is `me3-1dr.4`.
+Run the LinkedIn live beta gate before exposing the plugin. Instagram professional feed publishing follows in `me3-1dr.4.7`; carousel generation remains the later `me3-1dr.4.8` media track; X BYO hardening remains `me3-1dr.4.9`.

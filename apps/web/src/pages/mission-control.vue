@@ -2140,11 +2140,12 @@ onMounted(() => {
 }
 
 .wheel-summary {
-  display: block;
+  display: flex;
+  justify-content: center;
 }
 
 .wheel-summary :deep(.life-wheel-chart) {
-  width: min(100%, 360px);
+  width: min(100%, 640px);
 }
 
 .ai-usage-summary {

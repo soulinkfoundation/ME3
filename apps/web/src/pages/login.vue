@@ -106,7 +106,6 @@ const passwordRequirementText = computed(() => {
 
 const canSubmit = computed(() => {
   if (loading.value || configLoading.value) return false;
-  if (missingOwnerSecrets.value) return false;
   if (email.value.trim().length === 0 || password.value.length === 0)
     return false;
 

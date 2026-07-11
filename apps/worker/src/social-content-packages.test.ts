@@ -3,6 +3,7 @@ import {
   SocialContentPackageInputError,
   createQueuedSocialVariantPublicationAndEnqueue,
   createSocialContentPackage,
+  dispatchDueSocialPublications,
   listSocialContentPackages,
   updateSocialAccountVariant,
   type SocialContentPackageEnv,
@@ -188,6 +189,35 @@ describe("Social content packages", () => {
     expect(publications).toHaveLength(1);
     expect(queueMessages).toEqual([{ publicationId: first?.id }]);
   });
+
+  it("dispatches an approved LinkedIn variant once when its schedule becomes due", async () => {
+    const { env, publishingEnv, variants, publications, queueMessages } = createEnv();
+    const created = await createSocialContentPackage(env, "owner", {
+      siteId: "site-1",
+      sourceType: "mission_task",
+      sourceRef: "mission-task:due-1",
+      sourceSnapshot: "A completed task worth sharing.",
+      ideaText: "Share the completed task",
+      variants: [{
+        platform: "linkedin",
+        targetAccountId: "linkedin-1",
+        bodyText: "A completed task worth sharing.",
+      }],
+    });
+    await updateSocialAccountVariant(env, "owner", created.variants[0]!.id, {
+      approvalStatus: "approved",
+    });
+    const stored = variants.find((row) => row.id === created.variants[0]!.id)!;
+    stored.scheduled_for = "2020-01-01T00:00:00.000Z";
+    stored.timezone = "Europe/Dublin";
+
+    const result = await dispatchDueSocialPublications(publishingEnv as never);
+
+    expect(result).toEqual({ queued: 1, skipped: 0 });
+    expect(publications).toHaveLength(1);
+    expect(queueMessages).toHaveLength(1);
+    expect(stored).toMatchObject({ scheduled_for: null, timezone: null });
+  });
 });
 
 class Statement {
@@ -277,6 +307,19 @@ class Statement {
       };
     }
     if (this.sql.includes("FROM social_variants")) {
+      if (this.sql.includes("WHERE v.platform = 'linkedin'")) {
+        return {
+          results: this.state.variants
+            .filter(
+              (row) =>
+                row.platform === "linkedin" &&
+                row.approval_status === "approved" &&
+                typeof row.scheduled_for === "string" &&
+                Date.parse(row.scheduled_for) <= Date.now(),
+            )
+            .map((row) => ({ id: row.id, user_id: "owner" })) as T[],
+        };
+      }
       const [packageId] = this.values;
       return {
         results: this.state.variants.filter((row) => row.package_id === packageId) as T[],

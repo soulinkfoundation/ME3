@@ -24,6 +24,7 @@ export {
   publishQueuedContentPublication,
   queueContentItem,
   reorderContentQueue,
+  resolveSocialVariantPublicationOutcome,
   startSocialOAuth,
   unqueueContentItem,
   updateSocialProviderSettings,

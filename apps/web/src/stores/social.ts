@@ -157,6 +157,18 @@ export const useSocialStore = defineStore("social", () => {
     return data.publication;
   }
 
+  async function resolveContentVariantOutcome(
+    variantId: string,
+    outcome: "published" | "not_published",
+    platformPostUrl?: string,
+  ): Promise<void> {
+    error.value = null;
+    await api.post(`/social/variants/${encodeURIComponent(variantId)}/resolve`, {
+      outcome,
+      platformPostUrl: platformPostUrl || null,
+    });
+  }
+
   async function updateProviderSetting(payload: {
     id: SocialProviderSetting["providerId"];
     clientId: string;
@@ -212,6 +224,7 @@ export const useSocialStore = defineStore("social", () => {
     fetchContentPackages,
     updateContentVariant,
     publishContentVariant,
+    resolveContentVariantOutcome,
     updateProviderSetting,
     startSocialOAuth,
     disconnectSocialAccount,

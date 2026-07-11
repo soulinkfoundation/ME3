@@ -823,7 +823,7 @@ const coreGithubRunUrl = computed(
 
 const coreGithubDescription = computed(() => {
   if (!coreGithubStatus.value?.me3AppConnected) {
-    return "Update me3 core.";
+    return "Connect ME3.app to configure the ME3 Updater.";
   }
   if (coreGithubConnection.value?.connected) {
     return coreGithubUpdateAvailable.value
@@ -2051,7 +2051,6 @@ onBeforeUnmount(() => {
 
       <template v-else>
         <section
-          v-if="coreGithubUpdateAvailable"
           class="core-update-callout"
           aria-labelledby="core-update-title"
           aria-live="polite"
@@ -2064,7 +2063,13 @@ onBeforeUnmount(() => {
                 :size="17"
                 aria-hidden="true"
               />
-              <h2 id="core-update-title">ME3 Core update available</h2>
+              <h2 id="core-update-title">
+                {{
+                  coreGithubUpdateAvailable
+                    ? "ME3 Core update available"
+                    : "ME3 Core updater"
+                }}
+              </h2>
               <StatusBadge :tone="coreGithubStatusClass">
                 {{ coreGithubStatusLabel }}
               </StatusBadge>

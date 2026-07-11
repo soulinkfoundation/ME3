@@ -5,9 +5,11 @@ import type {
   AgentMailboxDraftInput,
   AgentMailboxMessage,
   AgentMailboxMessageListOptions,
+  AgentChatRuntimeStreamOptions,
   AgentSandboxDispatchResponse,
 } from "./index";
 import { runAgentToolModelStep } from "./model-tool-runtime";
+import { runAgentToolModelStreamStep } from "./model-tool-stream-runtime";
 import { modelErrorMessage, type AgentChatAiRoute } from "./model-runtime";
 import {
   archiveAgentMissionTask,
@@ -99,7 +101,21 @@ export async function runCoreAgentToolTurn(input: {
   route: AgentChatAiRoute;
   messages: readonly AgentToolMessage[];
   mailboxServices?: CoreMailboxToolServices;
+  streamOptions?: AgentChatRuntimeStreamOptions;
 }): Promise<AgentSandboxDispatchResponse> {
+  const startedAt = performance.now();
+  let firstTokenAt: number | null = null;
+  let deltaCount = 0;
+  let modelStep = 0;
+  const emit = async (event: Parameters<AgentChatRuntimeStreamOptions["onEvent"]>[0]) => {
+    await input.streamOptions?.onEvent(event);
+  };
+  const emitDelta = async (text: string) => {
+    if (!text) return;
+    firstTokenAt ??= performance.now();
+    deltaCount += 1;
+    await emit({ event: "delta", data: { text } });
+  };
   const messages = withCoreToolInstructions(
     input.messages,
     input.ownerTimezone,
@@ -123,38 +139,86 @@ export async function runCoreAgentToolTurn(input: {
       const result = await runAgentToolLoop({
         messages,
         tools,
-        model: (turnMessages, tools) =>
-          runAgentToolModelStep(
-            { ...input.route, model },
-            turnMessages,
-            tools,
-          ),
+        model: async (turnMessages, tools) => {
+          throwIfStreamAborted(input.streamOptions?.signal);
+          modelStep += 1;
+          await emit({
+            event: "status",
+            data: { state: "model_started", modelStep, model },
+          });
+          return input.streamOptions
+            ? runAgentToolModelStreamStep(
+                { ...input.route, model },
+                turnMessages,
+                tools,
+                emitDelta,
+                input.streamOptions.signal,
+              )
+            : runAgentToolModelStep(
+                { ...input.route, model },
+                turnMessages,
+                tools,
+              );
+        },
         executeTool: async (call, tool) => {
+          throwIfStreamAborted(input.streamOptions?.signal);
+          await emit({
+            event: "tool",
+            data: {
+              state: "started",
+              toolCallId: call.id,
+              toolName: call.name,
+              capabilityId: (tool as CoreChatToolDefinition).capabilityId,
+              clearText: true,
+            },
+          });
           const occurrence = (callCounts.get(call.id) || 0) + 1;
           callCounts.set(call.id, occurrence);
-          const outcome = await executeIdempotentAgentTool(
-            input.db,
-            {
-              userId: input.userId,
-              requestId: input.requestId,
-              toolCallId: `${call.id}:${occurrence}`,
-              toolName: call.name,
-            },
-            ({ idempotencyKey }) =>
-              executeCoreToolCall({
-                db: input.db,
+          try {
+            const outcome = await executeIdempotentAgentTool(
+              input.db,
+              {
                 userId: input.userId,
-                ownerTimezone: input.ownerTimezone,
-                idempotencyKey,
-                call,
-                tool: tool as CoreChatToolDefinition,
-                mailboxServices: input.mailboxServices,
-                socialSources,
-              }),
-          );
-          cacheSocialSourceOutcome(outcome, socialSources);
-          outcomes.push(outcome);
-          return outcome.result;
+                requestId: input.requestId,
+                toolCallId: `${call.id}:${occurrence}`,
+                toolName: call.name,
+              },
+              ({ idempotencyKey }) =>
+                executeCoreToolCall({
+                  db: input.db,
+                  userId: input.userId,
+                  ownerTimezone: input.ownerTimezone,
+                  idempotencyKey,
+                  call,
+                  tool: tool as CoreChatToolDefinition,
+                  mailboxServices: input.mailboxServices,
+                  socialSources,
+                }),
+            );
+            cacheSocialSourceOutcome(outcome, socialSources);
+            outcomes.push(outcome);
+            await emit({
+              event: "tool",
+              data: {
+                state: "completed",
+                toolCallId: call.id,
+                toolName: call.name,
+                capabilityId: outcome.capabilityId,
+              },
+            });
+            return outcome.result;
+          } catch (error) {
+            await emit({
+              event: "tool",
+              data: {
+                state: "failed",
+                toolCallId: call.id,
+                toolName: call.name,
+                error: modelErrorMessage(error) || "Tool execution failed.",
+              },
+            });
+            throw error;
+          }
         },
       });
       modelAttempts.push({
@@ -163,13 +227,19 @@ export async function runCoreAgentToolTurn(input: {
         status: "succeeded",
         error: null,
       });
-      return successfulResponse(
-        input.turnId,
-        input.route,
-        model,
-        result.text,
-        outcomes.at(-1) || null,
-        modelAttempts,
+      return attachStreamMetrics(
+        successfulResponse(
+          input.turnId,
+          input.route,
+          model,
+          result.text,
+          outcomes.at(-1) || null,
+          modelAttempts,
+        ),
+        input.streamOptions,
+        startedAt,
+        firstTokenAt,
+        deltaCount,
       );
     } catch (error) {
       lastError = error;
@@ -188,13 +258,44 @@ export async function runCoreAgentToolTurn(input: {
     }
   }
 
-  return fallbackResponse(
-    input.turnId,
-    input.route,
-    outcomes.at(-1) || null,
-    modelAttempts,
-    lastError,
+  return attachStreamMetrics(
+    fallbackResponse(
+      input.turnId,
+      input.route,
+      outcomes.at(-1) || null,
+      modelAttempts,
+      lastError,
+    ),
+    input.streamOptions,
+    startedAt,
+    firstTokenAt,
+    deltaCount,
   );
+}
+
+function attachStreamMetrics(
+  response: AgentSandboxDispatchResponse,
+  streamOptions: AgentChatRuntimeStreamOptions | undefined,
+  startedAt: number,
+  firstTokenAt: number | null,
+  deltaCount: number,
+): AgentSandboxDispatchResponse {
+  if (!streamOptions) return response;
+  return {
+    ...response,
+    streamMetrics: {
+      timeToFirstTokenMs: firstTokenAt === null
+        ? null
+        : Number((firstTokenAt - startedAt).toFixed(2)),
+      totalDurationMs: Number((performance.now() - startedAt).toFixed(2)),
+      deltaCount,
+    },
+  };
+}
+
+function throwIfStreamAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw new DOMException("The operation was aborted.", "AbortError");
 }
 
 function executeCoreToolCall(input: {

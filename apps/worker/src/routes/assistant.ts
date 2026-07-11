@@ -13,7 +13,7 @@ import {
 import {
   createAgentSandboxTurnRecord,
   getAgentSandboxTurnResult,
-  planCoreChatToolTurn,
+  planLegacyNativeToolTurn,
   type AgentChatActionCard,
   type AgentChatImageAction,
 } from "../agent-chat";
@@ -70,7 +70,6 @@ const MAX_ASSISTANT_ATTACHMENT_UPLOAD_COUNT = 4;
 const MAX_ASSISTANT_EXTRACTED_TEXT_CHARS = 48_000;
 const DEFAULT_ASSISTANT_NAME = "ME3";
 const MAX_ASSISTANT_NAME_LENGTH = 48;
-const ASSISTANT_STREAM_CHUNK_DELAY_MS = 16;
 
 type AssistantRouteDeps = {
   requireOwner(c: AppContext): Promise<string | null>;
@@ -98,6 +97,7 @@ type AssistantChatTurnModelSelection = {
 type AssistantChatTurnStreamEvent =
   | "status"
   | "thread"
+  | "tool"
   | "delta"
   | "done"
   | "error";
@@ -190,7 +190,7 @@ function assistantSiteToolsEnabled(env: Env): boolean {
 }
 
 function isNativeSiteBlogPostToolIntent(messageText: string): boolean {
-  return planCoreChatToolTurn({ messageText }).capabilityId.startsWith("core.sites.blog_post.");
+  return planLegacyNativeToolTurn({ messageText }).capabilityId.startsWith("core.sites.blog_post.");
 }
 
 async function getAssistantSettings(env: Env, ownerId: string) {
@@ -3409,7 +3409,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           const id = runtime.idFromName(ownerId);
           const stub = runtime.get(id);
           const response = await stub.fetch(
-            "https://me3-core-user-agent.internal/dispatch/sandbox",
+            "https://me3-core-user-agent.internal/dispatch/sandbox/stream",
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -3429,6 +3429,35 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               }),
             },
           );
+
+          if (
+            response.ok &&
+            response.body &&
+            response.headers.get("content-type")?.includes("text/event-stream")
+          ) {
+            const runtimeStream = await forwardAssistantRuntimeStream(
+              response.body,
+              controller,
+              c.req.raw.signal,
+            );
+            await touchAssistantThread(c.env, ownerId, thread.id);
+            await insertAssistantChatStreamAuditEvent(c.env, {
+              ownerId,
+              connectionId: turn.connection.id,
+              sourceEventId: turn.sourceEvent.id,
+              turnId: turn.turnId,
+              threadId: thread.id,
+              route: c.req.path,
+              outcome: runtimeStream.completed ? "completed" : "failed",
+              selectedModel: selectedModel || null,
+              attachmentCount,
+              attachmentManifest,
+              error: runtimeStream.completed
+                ? null
+                : "Agent runtime stream ended without a successful done event.",
+            });
+            return;
+          }
 
           const payload = (await response.json().catch(() => null)) as
             | Record<string, unknown>
@@ -3738,29 +3767,51 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
   }
 
-  function splitAssistantStreamText(text: string) {
-    const normalized = text || "";
-    if (!normalized) return [""];
-    const chunks: string[] = [];
-    for (let cursor = 0; cursor < normalized.length; cursor += 80) {
-      chunks.push(normalized.slice(cursor, cursor + 80));
+  async function forwardAssistantRuntimeStream(
+    stream: ReadableStream<Uint8Array>,
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    signal: AbortSignal,
+  ): Promise<{ completed: boolean }> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    const abort = () => void reader.cancel("aborted");
+    signal.addEventListener("abort", abort, { once: true });
+    let buffer = "";
+    let sawDone = false;
+    let sawError = false;
+    try {
+      while (true) {
+        if (signal.aborted) {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        controller.enqueue(chunk.value);
+        buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, "\n");
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary >= 0) {
+          const event = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          sawDone ||= /(?:^|\n)event:\s*done\s*$/m.test(event);
+          sawError ||= /(?:^|\n)event:\s*error\s*$/m.test(event);
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+      buffer += decoder.decode();
+      sawDone ||= /(?:^|\n)event:\s*done\s*$/m.test(buffer);
+      sawError ||= /(?:^|\n)event:\s*error\s*$/m.test(buffer);
+      return { completed: sawDone && !sawError };
+    } finally {
+      signal.removeEventListener("abort", abort);
+      reader.releaseLock();
     }
-    return chunks;
   }
 
-  async function sendAssistantStreamText(
+  function sendAssistantStreamText(
     send: AssistantChatTurnStreamSend,
     text: string,
   ) {
-    const chunks = splitAssistantStreamText(text);
-    for (const [index, chunk] of chunks.entries()) {
-      send("delta", { text: chunk });
-      if (index < chunks.length - 1) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, ASSISTANT_STREAM_CHUNK_DELAY_MS),
-        );
-      }
-    }
+    send("delta", { text: text || "" });
   }
 
   app.post("/api/assistant/chat/turn", handleAssistantChatTurn);

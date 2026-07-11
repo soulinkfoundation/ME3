@@ -2772,6 +2772,37 @@ async function submitAssistantText(
           return;
         }
 
+        if (event.event === "status") {
+          if (data.replaceText === true || data.clearText === true) {
+            const message = chatMessages.value.find(
+              (item) => item.id === assistantMessageId,
+            );
+            if (message) message.text = "";
+          }
+          if (data.state === "model_started") {
+            assistantTurnStatusText.value = `Thinking with ${assistantDisplayName.value}…`;
+          } else if (data.state === "finalizing") {
+            assistantTurnStatusText.value = "Finishing the response…";
+          }
+          return;
+        }
+
+        if (event.event === "tool") {
+          if (data.clearText === true) {
+            const message = chatMessages.value.find(
+              (item) => item.id === assistantMessageId,
+            );
+            if (message) message.text = "";
+          }
+          const label = typeof data.capabilityId === "string"
+            ? data.capabilityId.replace(/^core\./, "").split(".").join(" ")
+            : "ME3 tool";
+          assistantTurnStatusText.value = data.state === "started"
+            ? `Using ${label}…`
+            : "Finishing the response…";
+          return;
+        }
+
         if (event.event === "delta") {
           ensureAssistantMessage();
           const message = chatMessages.value.find(

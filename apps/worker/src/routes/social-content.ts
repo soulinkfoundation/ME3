@@ -6,6 +6,7 @@ import {
   getSocialContentPackage,
   getSocialPublishingRuntimeStatus,
   listSocialContentPackages,
+  resolveSocialVariantPublicationOutcome,
   updateSocialAccountVariant,
   type UpdateSocialAccountVariantInput,
 } from "../social-publishing";
@@ -70,6 +71,26 @@ export function registerSocialContentRoutes(app: AppHono, deps: OwnerRouteDeps) 
         c.env,
         ownerId,
         c.req.param("id"),
+      );
+      if (!publication) return c.json({ ok: false, error: "Social variant not found" }, 404);
+      return c.json({ ok: true, publication });
+    } catch (error) {
+      return socialContentErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/social/variants/:id/resolve", async (c) => {
+    const ownerId = await deps.requireOwner(c);
+    if (!ownerId) return deps.unauthorized(c);
+    const body = await c.req.json<unknown>().catch((): unknown => ({}));
+    try {
+      const publication = await resolveSocialVariantPublicationOutcome(
+        c.env,
+        ownerId,
+        c.req.param("id"),
+        body && typeof body === "object"
+          ? body as { outcome?: unknown; platformPostUrl?: unknown }
+          : {},
       );
       if (!publication) return c.json({ ok: false, error: "Social variant not found" }, 404);
       return c.json({ ok: true, publication });

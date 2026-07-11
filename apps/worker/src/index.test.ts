@@ -859,6 +859,18 @@ function createEnv(): Env & {
                 }
               }
 
+              if (sql.includes("UPDATE social_accounts") && sql.includes("access_token_ciphertext = ?")) {
+                const account = state.socialAccounts.find((entry) => entry.id === values[5]);
+                if (account) {
+                  account.access_token_ciphertext = values[0] as string;
+                  account.refresh_token_ciphertext = values[1] as string | null;
+                  account.token_expires_at = values[2] as string | null;
+                  account.status = "active";
+                  account.last_verified_at = values[3] as string;
+                  account.updated_at = values[4] as string;
+                }
+              }
+
               if (sql.includes("INSERT INTO content_bank_items")) {
                 state.contentItems.push({
                   id: values[0] as string,
@@ -940,6 +952,12 @@ function createEnv(): Env & {
                     publication.error_code = values[0] as string | null;
                     publication.error_message = values[1] as string | null;
                     publication.provider_response_json = values[2] as string | null;
+                  }
+                  if (sql.includes("SET status = ?")) {
+                    publication.status = values[0] as StoredSocialPublication["status"];
+                    publication.error_code = values[1] as string | null;
+                    publication.error_message = values[2] as string | null;
+                    publication.provider_response_json = values[3] as string | null;
                   }
                   publication.updated_at = "2026-05-12T09:10:00Z";
                 }
@@ -2230,6 +2248,7 @@ function createEnv(): Env & {
                     account_id: account?.id || null,
                     platform_account_id: account?.platform_account_id || null,
                     access_token_ciphertext: account?.access_token_ciphertext || null,
+                    refresh_token_ciphertext: account?.refresh_token_ciphertext || null,
                     token_expires_at: account?.token_expires_at || null,
                     account_status: account?.status || null,
                   } as T;
@@ -6251,11 +6270,13 @@ describe("ME3 Core Worker auth", () => {
   it("streams owner assistant chat turns through server-sent events", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
-    const runtimeFetch = vi.fn(async () =>
-      Response.json({
+    const runtimeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body || "{}")) as { threadId?: string };
+      const done = {
         ok: true,
         auditId: null,
         turnId: "turn-1",
+        threadId: input.threadId,
         specialist: "core.agent-chat",
         replyText: "Hello from the streaming route.",
         model: "test-model",
@@ -6266,8 +6287,17 @@ describe("ME3 Core Worker auth", () => {
         reminderAction: null,
         contentAction: null,
         contactsChanged: false,
-      }),
-    );
+      };
+      return new Response([
+        'event: status\ndata: {"state":"model_started"}\n\n',
+        'event: tool\ndata: {"state":"started","capabilityId":"core.reminders.list"}\n\n',
+        'event: delta\ndata: {"text":"Hello from "}\n\n',
+        'event: delta\ndata: {"text":"the streaming route."}\n\n',
+        `event: done\ndata: ${JSON.stringify(done)}\n\n`,
+      ].join(""), {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    });
 
     env.ME3_USER_AGENT = {
       idFromName: vi.fn((name: string) => name),
@@ -6295,9 +6325,11 @@ describe("ME3 Core Worker auth", () => {
     expect(streamText).toContain("event: status");
     expect(streamText).toContain("event: thread");
     expect(streamText).toContain("event: delta");
+    expect(streamText).toContain("event: tool");
     expect(streamText).toContain("Hello from the streaming route.");
     expect(streamText).toContain("event: done");
     expect(streamText).toContain(env.assistantThreads[0]?.id);
+    expect(runtimeFetch.mock.calls[0]?.[0]).toContain("/dispatch/sandbox/stream");
     expect(JSON.parse(env.agentEvents[0]?.raw_json || "{}")).toMatchObject({
       route: "/api/assistant/chat/turn/stream",
       stream: true,
@@ -9790,12 +9822,21 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const publishBody = (await publishResponse.json()) as { publicationIds: string[] };
+    env.socialAccounts[0].token_expires_at = "2020-01-01T00:00:00.000Z";
+    let refreshedAccessToken = false;
 
     await publishQueuedContentPublication(
       env,
       publishBody.publicationIds[0],
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
+        if (url.includes("accessToken")) {
+          refreshedAccessToken = true;
+          return Response.json({
+            access_token: "linkedin-refreshed-access-token",
+            expires_in: 3600,
+          });
+        }
         if (url.includes("userinfo")) return Response.json({ sub: "linkedin-owner" });
         return Response.json({ message: "Provider rejected the post" }, { status: 400 });
       }) as typeof fetch,
@@ -9803,10 +9844,13 @@ describe("ME3 Core Worker auth", () => {
 
     expect(env.socialPublications[0]).toMatchObject({
       status: "failed",
-      error_code: "linkedin_post_error",
+      error_code: "rejected:linkedin_post_error",
       error_message: "Provider rejected the post",
     });
     expect(env.contentItems[0].status).toBe("failed");
+    expect(refreshedAccessToken).toBe(true);
+    expect(env.socialAccounts[0]).toMatchObject({ status: "active" });
+    expect(Date.parse(env.socialAccounts[0].token_expires_at || "")).toBeGreaterThan(Date.now());
     expect(env.socialPublicationEvents.map((event) => event.event_type)).toEqual([
       "queued",
       "publishing",

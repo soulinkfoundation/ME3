@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runCoreAgentToolTurn,
+  type AgentChatRuntimeStreamEvent,
   type AgentToolMessage,
 } from "@me3-core/plugin-agent-chat";
 
@@ -236,6 +237,71 @@ describe("Core Agent Runtime v2 reminders", () => {
     expect(database.executions[0]?.status).toBe("succeeded");
   });
 
+  it("streams model and tool lifecycle events with TTFT metrics", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));
+    const database = createReminderDb();
+    const events: AgentChatRuntimeStreamEvent[] = [];
+    const route = providerRoute("workers-ai", [
+      sseStream([
+        streamEvent({ choices: [{ delta: { tool_calls: [{
+          index: 0,
+          id: "create-stream",
+          function: {
+            name: "core_reminders_create",
+            arguments: JSON.stringify({
+              title: "Call Sam",
+              remindAt: "2026-07-11T09:00:00+01:00",
+              timezone: "Europe/Dublin",
+            }),
+          },
+        }] } }] }),
+        "data: [DONE]\n\n",
+      ]),
+      sseStream([
+        streamEvent({ choices: [{ delta: { content: "Reminder " } }] }),
+        streamEvent({ choices: [{ delta: { content: "created." } }] }),
+        "data: [DONE]\n\n",
+      ]),
+    ]);
+
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "request-stream",
+      turnId: "turn-stream",
+      ownerTimezone: "Europe/Dublin",
+      route: route as never,
+      messages: baseMessages("Remind me to call Sam on 11 July at 9am."),
+      streamOptions: {
+        onEvent: (event) => {
+          events.push(event);
+        },
+      },
+    });
+
+    expect(response.replyText).toBe("Reminder created.");
+    expect(response.streamMetrics).toMatchObject({
+      timeToFirstTokenMs: expect.any(Number),
+      totalDurationMs: expect.any(Number),
+      deltaCount: 2,
+    });
+    expect(events.map((event) => `${event.event}:${String(event.data.state || "delta")}`))
+      .toEqual([
+        "status:model_started",
+        "tool:started",
+        "tool:completed",
+        "status:model_started",
+        "delta:delta",
+        "delta:delta",
+      ]);
+    expect(events.find((event) => event.event === "tool")?.data).toMatchObject({
+      clearText: true,
+      capabilityId: "core.reminders.create",
+    });
+    expect(database.reminders).toHaveLength(1);
+  });
+
   it("returns invalid and past timestamps to the model without writing", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));
@@ -343,6 +409,20 @@ function providerText(
   if (providerId === "openai") return { choices: [{ message: { content: text } }] };
   if (providerId === "anthropic") return { content: [{ type: "text", text }] };
   return { response: text };
+}
+
+function streamEvent(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+function sseStream(events: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const event of events) controller.enqueue(encoder.encode(event));
+      controller.close();
+    },
+  });
 }
 
 function reminderRow(id: string, title: string, remindAt: string): ReminderRow {

@@ -305,13 +305,22 @@ type SocialPublicationRow = {
   account_id: string | null;
   platform_account_id: string | null;
   access_token_ciphertext: string | null;
+  refresh_token_ciphertext: string | null;
   token_expires_at: string | null;
   account_status: string | null;
+  account_metadata_json: string | null;
 };
 
 export type SocialPublishQueueMessage = {
   publicationId: string;
 };
+
+class SocialPublishRetrySignal extends Error {
+  constructor(public readonly delaySeconds: number) {
+    super("Social publication scheduled for retry");
+    this.name = "SocialPublishRetrySignal";
+  }
+}
 
 export type SocialVariantPublication = {
   id: string;
@@ -345,6 +354,7 @@ type SocialPublishingEnv = {
   ME3_API_HOST?: string;
   ME3_SITE_HOST?: string;
   ME3_CUSTOM_DOMAIN?: string;
+  ME3_SOCIAL_OAUTH_ORIGIN?: string;
   TOKEN_ENCRYPTION_KEY?: string;
 };
 
@@ -1278,6 +1288,71 @@ export async function createQueuedSocialVariantPublicationAndEnqueue(
   return latestSocialVariantPublication(env, variantId);
 }
 
+export async function resolveSocialVariantPublicationOutcome(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  variantIdInput: unknown,
+  input: { outcome?: unknown; platformPostUrl?: unknown },
+): Promise<SocialVariantPublication | null> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) throw new SocialPublishingGateError(gate);
+  const variantId = normalizeId(variantIdInput);
+  if (!variantId) throw new SocialPublishingInputError("Social variant id is required");
+  const owned = await env.DB.prepare(
+    `SELECT v.id
+     FROM social_variants v
+     JOIN social_packages p ON p.id = v.package_id
+     JOIN sites s ON s.id = p.site_id
+     WHERE v.id = ? AND s.user_id = ?`,
+  )
+    .bind(variantId, ownerId)
+    .first<{ id: string }>();
+  if (!owned) return null;
+  const publication = await env.DB.prepare(
+    `SELECT id, error_code
+     FROM social_publications
+     WHERE variant_id = ? AND status = 'publishing'
+     ORDER BY created_at DESC LIMIT 1`,
+  )
+    .bind(variantId)
+    .first<{ id: string; error_code: string | null }>();
+  if (!publication || parseFailureClass(publication.error_code) !== "outcome_unknown") {
+    throw new SocialPublishingInputError("This publication does not need outcome resolution", 409);
+  }
+
+  if (input.outcome === "published") {
+    const platformPostUrl = normalizeId(input.platformPostUrl);
+    if (!platformPostUrl || !isHttpsUrl(platformPostUrl)) {
+      throw new SocialPublishingInputError("Paste the published post URL to confirm the outcome");
+    }
+    await env.DB.prepare(
+      `UPDATE social_publications
+       SET status = 'published', platform_post_url = ?, published_at = datetime('now'),
+           error_code = NULL, error_message = NULL, updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+      .bind(platformPostUrl, publication.id)
+      .run();
+    await insertSocialPublicationEvent(env, {
+      publicationId: publication.id,
+      variantId,
+      eventType: "published",
+      payload: { resolution: "owner_confirmed", platformPostUrl, ownerId },
+    });
+  } else if (input.outcome === "not_published") {
+    await failContentPublication(
+      env,
+      { publication_id: publication.id, variant_id: variantId },
+      "retryable:owner_confirmed_not_published",
+      "The owner confirmed that no provider post was created.",
+    );
+  } else {
+    throw new SocialPublishingInputError("Choose published or not_published");
+  }
+  await syncContentItemStatusFromPublications(env, variantId);
+  return latestSocialVariantPublication(env, variantId);
+}
+
 export async function dispatchDueSocialPublications(
   env: SocialPublishingEnv,
 ): Promise<{ queued: number; skipped: number }> {
@@ -1342,7 +1417,7 @@ export async function processSocialPublishBatch(
     messages: ReadonlyArray<{
       body: SocialPublishQueueMessage;
       ack(): void;
-      retry(): void;
+      retry(options?: { delaySeconds?: number }): void;
     }>;
   },
   env: SocialPublishingEnv,
@@ -1352,6 +1427,10 @@ export async function processSocialPublishBatch(
       await publishQueuedContentPublication(env, message.body.publicationId, fetch);
       message.ack();
     } catch (error) {
+      if (error instanceof SocialPublishRetrySignal) {
+        message.retry({ delaySeconds: error.delaySeconds });
+        continue;
+      }
       console.error("social publish job failed", message.body.publicationId, error);
       message.retry();
     }
@@ -1369,7 +1448,22 @@ export async function publishQueuedContentPublication(
 
   const row = await getQueuedPublicationRow(env, publicationId);
   if (!row) return;
-  if (row.pub_status === "published" || row.pub_status === "cancelled") return;
+  if (
+    row.pub_status === "published" ||
+    row.pub_status === "cancelled" ||
+    row.pub_status === "failed"
+  ) return;
+  if (row.pub_status === "publishing") {
+    await failContentPublication(
+      env,
+      row,
+      "outcome_unknown:delivery_interrupted",
+      "A previous publishing attempt did not finish cleanly. Check the provider before retrying.",
+      undefined,
+      true,
+    );
+    return;
+  }
 
   if (!gate.ready) {
     await failContentPublication(env, row, gate.status, gateErrorMessage(gate));
@@ -1390,18 +1484,34 @@ export async function publishQueuedContentPublication(
     await failContentPublication(
       env,
       row,
-      "no_account",
+      "reconnect_required:no_account",
       `Connect ${platformLabel(row.platform)} before publishing.`,
     );
     return;
   }
 
-  if (row.account_status !== "active" || tokenLooksExpired(row.token_expires_at)) {
+  if (row.account_status !== "active" && row.account_status !== "expired") {
     await failContentPublication(
       env,
       row,
-      "account_not_ready",
+      "reconnect_required:account_not_ready",
       `${platformLabel(row.platform)} connection is not ready.`,
+    );
+    return;
+  }
+
+  const accessToken = await resolvePublishingAccessToken(env, row, fetcher);
+  if (!accessToken) {
+    await env.DB.prepare(
+      "UPDATE social_accounts SET status = 'expired', updated_at = datetime('now') WHERE id = ?",
+    )
+      .bind(row.account_id)
+      .run();
+    await failContentPublication(
+      env,
+      row,
+      "reconnect_required:token_expired",
+      `Reconnect ${platformLabel(row.platform)} before publishing.`,
     );
     return;
   }
@@ -1410,7 +1520,16 @@ export async function publishQueuedContentPublication(
   const adapter = adapterFor(row.platform);
   const validation = adapter.validateDraft({ bodyText: row.body, assets });
   if (!validation.ok) {
-    await failContentPublication(env, row, "validation_failed", validation.error);
+    const failureClass = validation.error.includes("currently supports")
+      ? "unsupported"
+      : "rejected";
+    await failContentPublication(
+      env,
+      row,
+      `${failureClass}:validation_failed`,
+      validation.error,
+    );
+    await revokeSocialVariantApproval(env, row.variant_id);
     return;
   }
 
@@ -1421,14 +1540,14 @@ export async function publishQueuedContentPublication(
   )
     .bind(row.publication_id)
     .run();
+  const attempt = await publicationAttemptNumber(env, row.publication_id);
   await insertSocialPublicationEvent(env, {
     publicationId: row.publication_id,
     variantId: row.variant_id,
     eventType: "publishing",
-    payload: { platform: row.platform, contentItemId: row.variant_id },
+    payload: { platform: row.platform, contentItemId: row.variant_id, attempt },
   });
 
-  const accessToken = await decryptSecret(row.access_token_ciphertext, await resolveInstallKey(env));
   const result = await adapter.publish({
     accessToken,
     accountId: row.platform_account_id,
@@ -1439,6 +1558,29 @@ export async function publishQueuedContentPublication(
 
   if (!result.ok) {
     const failureClass = result.failureClass || "rejected";
+    if (failureClass === "retryable" && env.SOCIAL_PUBLISH_QUEUE && attempt < 3) {
+      const delaySeconds = attempt === 1 ? 60 : 300;
+      await env.DB.prepare(
+        `UPDATE social_publications
+         SET status = 'queued', error_code = ?, error_message = ?, provider_response_json = ?,
+             updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+        .bind(
+          `retryable:${result.errorCode || "provider_failed"}`,
+          result.errorMessage || "Social provider publish failed.",
+          result.providerResponse === undefined ? null : JSON.stringify(result.providerResponse),
+          row.publication_id,
+        )
+        .run();
+      await insertSocialPublicationEvent(env, {
+        publicationId: row.publication_id,
+        variantId: row.variant_id,
+        eventType: "retried",
+        payload: { attempt, nextAttempt: attempt + 1, delaySeconds },
+      });
+      throw new SocialPublishRetrySignal(delaySeconds);
+    }
     await failContentPublication(
       env,
       row,
@@ -1447,6 +1589,9 @@ export async function publishQueuedContentPublication(
       result.providerResponse,
       failureClass === "outcome_unknown",
     );
+    if (failureClass === "rejected" || failureClass === "unsupported") {
+      await revokeSocialVariantApproval(env, row.variant_id);
+    }
     if (failureClass === "reconnect_required" && row.account_id) {
       await env.DB.prepare(
         "UPDATE social_accounts SET status = 'expired', updated_at = datetime('now') WHERE id = ?",
@@ -1489,6 +1634,20 @@ export async function publishQueuedContentPublication(
     },
   });
   await syncContentItemStatusFromPublications(env, row.variant_id);
+}
+
+async function publicationAttemptNumber(
+  env: SocialPublishingEnv,
+  publicationId: string,
+): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS count
+     FROM social_publication_events
+     WHERE publication_id = ? AND event_type = 'publishing'`,
+  )
+    .bind(publicationId)
+    .first<{ count: number }>();
+  return Number(row?.count || 0) + 1;
 }
 
 export async function reorderContentQueue(
@@ -1836,8 +1995,10 @@ async function getQueuedPublicationRow(
             acct.id AS account_id,
             acct.platform_account_id,
             acct.access_token_ciphertext,
+            acct.refresh_token_ciphertext,
             acct.token_expires_at,
-            acct.status AS account_status
+            acct.status AS account_status,
+            acct.metadata_json AS account_metadata_json
      FROM social_publications pub
      LEFT JOIN content_bank_items c ON c.id = pub.variant_id
      LEFT JOIN social_variants v ON v.id = pub.variant_id
@@ -2119,7 +2280,143 @@ function getPublicAssetOrigin(env: SocialPublishingEnv): string | null {
 function tokenLooksExpired(expiresAt: string | null): boolean {
   if (!expiresAt) return false;
   const time = Date.parse(expiresAt);
-  return Number.isFinite(time) && time < Date.now() - 60_000;
+  return Number.isFinite(time) && time < Date.now() + 60_000;
+}
+
+async function revokeSocialVariantApproval(
+  env: SocialPublishingEnv,
+  variantId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE social_variants
+     SET approval_status = 'draft', approved_at = NULL, approved_by_user_id = NULL,
+         scheduled_for = NULL, timezone = NULL, updated_at = datetime('now')
+     WHERE id = ?`,
+  )
+    .bind(variantId)
+    .run();
+}
+
+async function resolvePublishingAccessToken(
+  env: SocialPublishingEnv,
+  row: SocialPublicationRow,
+  fetcher: typeof fetch,
+): Promise<string | null> {
+  if (!row.access_token_ciphertext) return null;
+  const installKey = await resolveInstallKey(env);
+  if (row.account_status === "active" && !tokenLooksExpired(row.token_expires_at)) {
+    return decryptSecret(row.access_token_ciphertext, installKey);
+  }
+  if (!row.account_id || !row.refresh_token_ciphertext) return null;
+  if (row.platform !== "linkedin" && row.platform !== "x") return null;
+
+  const setting = await getProviderSettingRow(env, row.user_id, row.platform);
+  try {
+    const refreshToken = await decryptSecret(row.refresh_token_ciphertext, installKey);
+    const metadata = parseJsonObject(row.account_metadata_json);
+    const token = metadata.credentialSource === "hosted_oauth"
+      ? await refreshHostedProviderToken(env, row.platform, refreshToken, fetcher)
+      : setting?.enabled && setting.client_id && setting.encrypted_client_secret
+        ? await refreshProviderToken(
+            row.platform,
+            refreshToken,
+            setting.client_id,
+            await decryptSecret(setting.encrypted_client_secret, installKey),
+            fetcher,
+          )
+        : null;
+    if (!token) return null;
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE social_accounts
+       SET access_token_ciphertext = ?, refresh_token_ciphertext = ?, token_expires_at = ?,
+           status = 'active', last_verified_at = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+      .bind(
+        await encryptSecret(token.accessToken, installKey),
+        await encryptSecret(token.refreshToken || refreshToken, installKey),
+        token.expiresAt,
+        now,
+        now,
+        row.account_id,
+      )
+      .run();
+    return token.accessToken;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshHostedProviderToken(
+  env: SocialPublishingEnv,
+  platform: "linkedin" | "x",
+  refreshToken: string,
+  fetcher: typeof fetch,
+): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null } | null> {
+  const origin = env.ME3_SOCIAL_OAUTH_ORIGIN?.replace(/\/$/, "");
+  if (!origin) return null;
+  const response = await fetcher(`${origin}/api/social/oauth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ platform, refreshToken }),
+  });
+  if (!response.ok) throw new Error(`Hosted token refresh failed (${response.status})`);
+  const body = await response.json() as {
+    accessToken?: string;
+    refreshToken?: string | null;
+    expiresAt?: string | null;
+  };
+  if (!body.accessToken) throw new Error("Hosted token refresh response was invalid");
+  return {
+    accessToken: body.accessToken,
+    refreshToken: body.refreshToken || null,
+    expiresAt: body.expiresAt || null,
+  };
+}
+
+async function refreshProviderToken(
+  platform: "linkedin" | "x",
+  refreshToken: string,
+  clientId: string,
+  clientSecret: string,
+  fetcher: typeof fetch,
+): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null }> {
+  const response = await fetcher(
+    platform === "linkedin"
+      ? "https://www.linkedin.com/oauth/v2/accessToken"
+      : "https://api.twitter.com/2/oauth2/token",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...(platform === "x"
+          ? { Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}` }
+          : {}),
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        ...(platform === "linkedin"
+          ? { client_id: clientId, client_secret: clientSecret }
+          : {}),
+      }),
+    },
+  );
+  if (!response.ok) throw new Error(`Token refresh failed (${response.status})`);
+  const body = await response.json() as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  };
+  if (!body.access_token) throw new Error("Token refresh response was invalid");
+  return {
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token || null,
+    expiresAt: body.expires_in
+      ? new Date(Date.now() + body.expires_in * 1000).toISOString()
+      : null,
+  };
 }
 
 async function resolveInstallKey(env: SocialPublishingEnv): Promise<string> {
@@ -2332,6 +2629,24 @@ function parseJsonArray(value: string | null | undefined): unknown[] {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
   }
 }
 

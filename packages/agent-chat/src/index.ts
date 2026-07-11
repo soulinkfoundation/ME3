@@ -1,9 +1,9 @@
 import { normalizeTimeZone } from "@me3-core/plugin-calendar";
 import {
-  planCoreChatToolTurn,
+  planLegacyNativeToolTurn,
   type CoreChatCapabilityId,
   type CoreChatToolPlannerDecision,
-} from "./planner";
+} from "./legacy-native-router";
 import {
   getCoreChatCapability,
   isCoreChatCapabilityApprovalRequired,
@@ -92,25 +92,13 @@ import {
 export {
   isCoreChatBookingLookupRequest,
   isCoreChatCapabilityExplorationRequest,
-  isCoreChatMailboxDraftSaveRequest,
-  isCoreChatMissionTaskArchiveRequest,
-  isCoreChatMissionTaskCreateRequest,
-  isCoreChatMissionContextReadRequest,
-  isCoreChatMissionTaskListRequest,
-  isCoreChatMissionTaskReadRequest,
-  isCoreChatMissionTaskUpdateRequest,
-  isCoreChatReminderCreateRequest,
-  isCoreChatReminderListRequest,
-  isCoreChatSocialDraftCreateRequest,
-  isCoreChatSocialSourceReadRequest,
-  isCoreChatWeeklyReviewRequest,
-  planCoreChatToolTurn,
+  planLegacyNativeToolTurn,
   type CoreChatCapabilityId,
   type CoreChatPlannerIntentKind,
   type CoreChatSideEffectLevel,
   type CoreChatToolPlannerDecision,
   type CoreChatToolPlannerInput,
-} from "./planner";
+} from "./legacy-native-router";
 
 export {
   CORE_CHAT_CAPABILITIES,
@@ -287,6 +275,22 @@ export type AgentChatActionCard = {
   secondaryActions: AgentChatActionCardLink[];
 };
 
+export type AgentChatStreamMetrics = {
+  timeToFirstTokenMs: number | null;
+  totalDurationMs: number;
+  deltaCount: number;
+};
+
+export type AgentChatRuntimeStreamEvent = {
+  event: "status" | "tool" | "delta";
+  data: Record<string, unknown>;
+};
+
+export type AgentChatRuntimeStreamOptions = {
+  signal?: AbortSignal;
+  onEvent(event: AgentChatRuntimeStreamEvent): void | Promise<void>;
+};
+
 export type AgentSandboxDispatchResponse = {
   ok: boolean;
   auditId: string | null;
@@ -321,6 +325,7 @@ export type AgentSandboxDispatchResponse = {
   } | null;
   contactsChanged?: boolean;
   modelAttempts?: AgentChatModelAttemptTrace[] | null;
+  streamMetrics?: AgentChatStreamMetrics | null;
   trace?: AgentChatTurnTrace | null;
   error?: string;
 };
@@ -417,6 +422,7 @@ export type AgentChatTurnTrace = {
     debugError: string | null;
     attempts: AgentChatModelAttemptTrace[];
   };
+  streaming: AgentChatStreamMetrics | null;
   imageGeneration?: {
     intent: "generate" | "edit";
     status: "blocked" | "started" | "succeeded" | "failed";
@@ -1861,6 +1867,7 @@ export async function dispatchAgentSandboxTurn(
   env: CoreAgentChatEnv,
   storage: StorageLike,
   input: AgentSandboxDispatchInput,
+  streamOptions?: AgentChatRuntimeStreamOptions,
 ): Promise<AgentSandboxDispatchResponse> {
   const resultKey = agentTurnResultStorageKey(input.requestId);
   const existing = await storage.get<AgentSandboxDispatchResponse>(resultKey);
@@ -1995,7 +2002,7 @@ export async function dispatchAgentSandboxTurn(
           owner,
         )
       : Promise.resolve({ prompt: "", pluginInstallations: [] }),
-    toolPlan.decision.kind === "conversation"
+    shouldLoadCoreChatAgentContext(runtimeMessageText, toolPlan.decision)
       ? loadCoreChatAgentContext(env, {
           ownerId: input.userId,
           owner,
@@ -2081,6 +2088,7 @@ export async function dispatchAgentSandboxTurn(
             createDraft: (draft, idempotencyKey) =>
               createAgentMailboxDraft(env, input.userId, draft, { idempotencyKey }),
           },
+          streamOptions,
         })
       : await runModelTurn(route, messages, input.turnId, imageInputs);
   }
@@ -2821,7 +2829,7 @@ async function loadCoreChatToolTurnPlan(
   const recent = await loadRecentMessages(env, input.userId, input.threadId);
   return {
     recent,
-    decision: planCoreChatToolTurn({
+    decision: planLegacyNativeToolTurn({
       messageText: input.messageText.trim(),
     }),
   };
@@ -4752,6 +4760,30 @@ function isCoreChatOrientationTurn(decision: CoreChatToolPlannerDecision): boole
   );
 }
 
+function shouldLoadCoreChatAgentContext(
+  messageText: string,
+  decision: CoreChatToolPlannerDecision,
+): boolean {
+  if (decision.kind !== "conversation") return false;
+  if (isCoreChatOrientationTurn(decision)) return true;
+
+  const asksForAdvice = /\b(?:brainstorm|prioriti[sz]e|strategy|plan with me|help me think|what should)\b/i
+    .test(messageText);
+  if (asksForAdvice) return true;
+
+  // This is only a context-loading hint. Runtime v2 still chooses and executes
+  // every action through model tool calls and executable schemas.
+  const reminderAction = /\b(?:reminders?|nudges?)\b/i.test(messageText) ||
+    /\bremind\s+me\b/i.test(messageText);
+  const taskAction = /\b(?:mission\s+control|tasks?|todos?|projects?)\b/i.test(messageText) &&
+    /\b(?:add|archive|create|delete|list|mark|move|open|read|show|update)\b/i.test(messageText);
+  const mailboxToolAction = /\b(?:mailbox|inbox|emails?|drafts?)\b/i.test(messageText) &&
+    /\b(?:check|find|keep|latest|list|open|read|save|search|show|store)\b/i.test(messageText);
+  const socialAction = /\b(?:social|linkedin|twitter|instagram)\b/i.test(messageText) &&
+    /\b(?:create|draft|read|repurpose|use|write)\b/i.test(messageText);
+  return !(reminderAction || taskAction || mailboxToolAction || socialAction);
+}
+
 function buildCoreChatOrientationPrompt(
   decision: CoreChatToolPlannerDecision,
   setupReadiness: CoreChatSetupReadiness,
@@ -4836,7 +4868,12 @@ function applyAgentTurnTracePolicy(
 function removeAgentTurnTrace(
   response: AgentSandboxDispatchResponse,
 ): AgentSandboxDispatchResponse {
-  const { trace: _trace, modelAttempts: _modelAttempts, ...withoutTrace } = response;
+  const {
+    trace: _trace,
+    modelAttempts: _modelAttempts,
+    streamMetrics: _streamMetrics,
+    ...withoutTrace
+  } = response;
   return withoutTrace;
 }
 
@@ -4900,6 +4937,7 @@ function buildAgentTurnTrace(
       debugError: response.debugError ?? null,
       attempts: response.modelAttempts ?? [],
     },
+    streaming: response.streamMetrics ?? null,
     imageGeneration: buildAgentTraceImageGeneration(response),
     toolResult: {
       status: toolResultTraceStatus(response, input.plannerDecision),

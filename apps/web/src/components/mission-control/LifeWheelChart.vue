@@ -12,11 +12,10 @@ type LifeWheelChartSegment = {
   value: number | null;
 };
 
-const OUTER_RADIUS = 108;
+const OUTER_RADIUS = 116;
 const VIEWBOX_MIN = -154;
 const VIEWBOX_SIZE = 308;
 const WHEEL_CENTER = VIEWBOX_MIN + VIEWBOX_SIZE / 2;
-const LABEL_RADIUS_PERCENT = 27;
 
 const props = withDefaults(
   defineProps<{
@@ -100,9 +99,10 @@ function sectorPath(radius: number, startAngle: number, endAngle: number) {
 function labelPositionStyle(midAngle: number) {
   const angle = ((midAngle - 90) * Math.PI) / 180;
   const cos = Math.cos(angle);
-  const x = 50 + cos * LABEL_RADIUS_PERCENT;
-  const y = 50 + Math.sin(angle) * LABEL_RADIUS_PERCENT;
-  const mobileNudge = cos > 0.7 ? "-18%" : cos < -0.7 ? "18%" : "0%";
+  const labelRadiusPercent = props.compact ? 46 : 48;
+  const x = 50 + cos * labelRadiusPercent;
+  const y = 50 + Math.sin(angle) * labelRadiusPercent;
+  const mobileNudge = cos > 0.7 ? "-4%" : cos < -0.7 ? "4%" : "0%";
   return {
     left: `${x}%`,
     top: `${y}%`,
@@ -362,16 +362,16 @@ function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: clamp(68px, 10vw, 90px);
-  max-width: 18%;
+  width: clamp(68px, 14%, 108px);
+  max-width: 24%;
   gap: 2px;
-  padding: 5px 6px;
+  padding: 4px 5px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface);
   color: var(--ui-text);
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1.05;
   text-align: center;
@@ -394,15 +394,14 @@ function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
 .life-wheel-chart__label-score {
   display: block;
   width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .life-wheel-chart__label-name {
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .life-wheel-chart__label-score {
+  white-space: nowrap;
   max-height: 0;
   opacity: 0;
   transform: translateY(-2px);
@@ -431,21 +430,22 @@ function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
 
 .life-wheel-chart__label-emoji {
   flex: 0 0 auto;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
 }
 
 .life-wheel-chart--compact {
-  width: min(560px, 100%);
+  width: min(640px, 100%);
 }
 
 .life-wheel-chart--compact .life-wheel-chart__svg {
-  max-width: 520px;
+  max-width: 640px;
 }
 
 .life-wheel-chart--compact .life-wheel-chart__label {
-  width: clamp(62px, 12vw, 82px);
-  font-size: 11px;
+  width: clamp(64px, 14%, 96px);
+  padding: 3px 4px;
+  font-size: 10px;
 }
 
 @media (max-width: 959px) {
@@ -464,21 +464,21 @@ function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
   }
 
   .life-wheel-chart__svg {
-    width: 80%;
+    width: 100%;
   }
 
   .life-wheel-chart__label {
     --life-wheel-label-active-nudge: var(--life-wheel-label-mobile-nudge, 0%);
-    width: 66px;
-    max-width: 22%;
+    width: 64px;
+    max-width: 28%;
     gap: 1px;
-    padding: 3px 2px;
+    padding: 3px 4px;
     background: var(--ui-surface);
-    font-size: 9px;
+    font-size: 9.5px;
   }
 
   .life-wheel-chart__label-emoji {
-    font-size: 15px;
+    font-size: 14px;
   }
 }
 </style>

@@ -108,6 +108,7 @@ const canSchedule = computed(() =>
 const canPublish = computed(() =>
   selectedVariant.value?.platform === "linkedin" &&
   selectedVariant.value.approvalStatus === "approved" &&
+  matchingAccounts.value.some((account) => account.id === editorAccountId.value) &&
   !editorDirty.value &&
   selectedVariant.value.publicationStatus !== "queued" &&
   selectedVariant.value.publicationStatus !== "publishing" &&
@@ -348,6 +349,34 @@ async function publishVariant() {
   }
 }
 
+async function resolveUnknownOutcome(outcome: "published" | "not_published") {
+  const variant = selectedVariant.value;
+  if (!variant || variant.failureClass !== "outcome_unknown") return;
+  let platformPostUrl: string | undefined;
+  if (outcome === "published") {
+    const value = window.prompt("Paste the LinkedIn post URL so ME3 can attach it to the history:");
+    if (!value?.trim()) return;
+    platformPostUrl = value.trim();
+  } else if (!window.confirm("Confirm that you checked LinkedIn and no post was created?")) {
+    return;
+  }
+  saving.value = true;
+  error.value = "";
+  try {
+    await social.resolveContentVariantOutcome(variant.id, outcome, platformPostUrl);
+    activeMode.value = outcome === "published" ? "published" : "drafts";
+    await loadWorkspace();
+    notice.value = outcome === "published"
+      ? "Published LinkedIn post attached to the history."
+      : "Outcome cleared. This approved variant can now be published again.";
+  } catch (value) {
+    social.setErrorFromApi(value, "Could not resolve the publication outcome");
+    error.value = social.error || "Could not resolve the publication outcome";
+  } finally {
+    saving.value = false;
+  }
+}
+
 watch(activeMode, ensureVisibleSelection);
 watch(selectedSiteId, loadWorkspace);
 
@@ -480,6 +509,14 @@ onMounted(async () => {
               <strong>Publishing needs attention</strong>
               <span>{{ publicationRecovery.message || publicationRecovery.guidance }}</span>
               <small v-if="publicationRecovery.message">{{ publicationRecovery.guidance }}</small>
+              <div v-if="selectedVariant.failureClass === 'outcome_unknown'" class="recovery-actions">
+                <button type="button" class="button button--secondary" :disabled="saving" @click="resolveUnknownOutcome('published')">
+                  I found the post
+                </button>
+                <button type="button" class="button button--secondary" :disabled="saving" @click="resolveUnknownOutcome('not_published')">
+                  No post was created
+                </button>
+              </div>
             </div>
             <label class="field">
               <span>Publishing account</span>
@@ -725,6 +762,8 @@ summary:focus-visible {
 .recovery-banner { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--ui-border-strong, var(--color-text)); border-radius: var(--ui-radius-md, 10px); background: var(--ui-surface-muted, var(--color-bg-subtle)); font-size: 0.82rem; }
 .recovery-banner span,
 .recovery-banner small { color: var(--ui-text-muted, var(--color-text-muted)); }
+.recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.recovery-actions .button { min-height: 36px; }
 
 .mode-tabs {
   position: sticky;
