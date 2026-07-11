@@ -745,9 +745,7 @@ describe("Core chat native context", () => {
     );
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
-      tools?: unknown[];
     };
-    expect(modelInput.tools).toBeUndefined();
     const system = modelInput.messages[0]?.content || "";
 
     expect(system).toContain("ME3 agent context packet:");
@@ -1515,7 +1513,9 @@ describe("Core chat native context", () => {
     expect(aiRun).toHaveBeenCalledOnce();
     const modelInput = aiRun.mock.calls[0]?.[1] as unknown as {
       messages: Array<{ role: string; content: string }>;
+      tools?: unknown[];
     };
+    expect(modelInput.tools).toBeUndefined();
     expect(modelInput.messages[0]?.content).toContain(
       "When the owner is setting up ME3, testing the assistant, or asking what you can do",
     );

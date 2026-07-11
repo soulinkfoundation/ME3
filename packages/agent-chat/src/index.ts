@@ -1891,10 +1891,13 @@ export async function dispatchAgentSandboxTurn(
   const owner = await getOwnerProfile(env, input.userId);
   const toolPlan = await loadCoreChatToolTurnPlan(env, input);
   const route = await resolveAiRoute(env, input.userId, input.selectedModel);
-  const useCoreToolRuntime = route.configured && !input.attachments?.some(
-    (attachment) =>
-      attachment.kind === "image" || attachment.mimeType?.startsWith("image/"),
-  );
+  const useCoreToolRuntime =
+    route.configured &&
+    !isCoreChatOrientationTurn(toolPlan.decision) &&
+    !input.attachments?.some(
+      (attachment) =>
+        attachment.kind === "image" || attachment.mimeType?.startsWith("image/"),
+    );
   const toolResponse = await maybeHandleCoreToolTurn(
     env,
     input,

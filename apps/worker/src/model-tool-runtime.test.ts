@@ -32,7 +32,13 @@ describe("live agent tool model adapters", () => {
       "test-model",
       expect.objectContaining({
         messages: [{ role: "user", content: "List reminders" }],
-        tools: [expect.objectContaining({ name: "core_reminders_list" })],
+        tools: [{
+          type: "function",
+          function: expect.objectContaining({
+            name: "core_reminders_list",
+            parameters: expect.any(Object),
+          }),
+        }],
       }),
     );
     expect(result.toolCalls[0]).toMatchObject({ name: "core_reminders_list" });

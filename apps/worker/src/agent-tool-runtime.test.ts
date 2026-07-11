@@ -266,23 +266,34 @@ describe("agent tool provider adapters", () => {
     });
   });
 
-  it("maps Workers AI's native traditional function-calling shape", () => {
+  it("maps Workers AI's OpenAI-compatible function-calling shape", () => {
     const request = toWorkersAiToolRequest(transcript, TOOLS) as {
-      messages: Array<{ role: string; content: string }>;
-      tools: Array<Record<string, unknown>>;
+      messages: Array<Record<string, unknown>>;
+      tools: Array<{ type: string; function: Record<string, unknown> }>;
     };
 
-    expect(request.messages[2]).toEqual({
+    expect(request.messages[2]).toMatchObject({
       role: "assistant",
-      content: '{"name":"reminders_create","arguments":{"title":"Call Mum"}}',
+      tool_calls: [{
+        id: "call-1",
+        type: "function",
+        function: {
+          name: "reminders_create",
+          arguments: '{"title":"Call Mum"}',
+        },
+      }],
     });
-    expect(request.messages[3]).toEqual({
+    expect(request.messages[3]).toMatchObject({
       role: "tool",
+      tool_call_id: "call-1",
       content: '{"ok":true}',
     });
     expect(request.tools[0]).toMatchObject({
-      name: "reminders_create",
-      parameters: TOOLS[0].parameters,
+      type: "function",
+      function: {
+        name: "reminders_create",
+        parameters: expect.any(Object),
+      },
     });
 
     expect(

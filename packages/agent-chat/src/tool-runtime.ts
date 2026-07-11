@@ -285,31 +285,7 @@ export function toWorkersAiToolRequest(
   messages: readonly AgentToolMessage[],
   tools: readonly AgentToolDefinition[],
 ): Record<string, unknown> {
-  return {
-    messages: messages.map((message) => {
-      if (message.role === "tool") {
-        return { role: "tool", content: message.content };
-      }
-      if (message.toolCalls) {
-        const selections = message.toolCalls.map((call) => ({
-          name: call.name,
-          arguments: call.arguments,
-        }));
-        return {
-          role: "assistant",
-          content: JSON.stringify(
-            selections.length === 1 ? selections[0] : selections,
-          ),
-        };
-      }
-      return { role: message.role, content: message.content };
-    }),
-    tools: tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    })),
-  };
+  return toOpenAiToolRequest(messages, tools);
 }
 
 export function fromWorkersAiToolResponse(
