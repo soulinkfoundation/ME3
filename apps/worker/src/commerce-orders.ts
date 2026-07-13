@@ -18,6 +18,7 @@ import {
   productSendsPurchaseConfirmation,
   type ProductPurchaseConfirmationEmail,
 } from "../../../shared/product-purchase-confirmation";
+import { getManagedCommerceBridgeConfig } from "./commerce-bridge";
 
 type ProductCheckoutBody = {
   buyerName?: unknown;
@@ -70,9 +71,7 @@ export async function createProductCheckout(
     throw new CommerceOrderInputError("Product price is not ready for checkout.", 409);
   }
   const stripe = await getStripe(env, site.user_id);
-  const managed = Boolean(
-    env.ME3_COMMERCE_BRIDGE_ORIGIN && env.ME3_COMMERCE_BRIDGE_TOKEN,
-  );
+  const managed = Boolean(await getManagedCommerceBridgeConfig(env));
   if (!stripe && !managed) {
     throw new CommerceOrderInputError("Connect Stripe before using paid product actions.", 503);
   }
@@ -331,12 +330,16 @@ async function createManagedCheckout(
   env: Env,
   input: CheckoutInput,
 ): Promise<{ url: string; sessionId: string }> {
+  const bridge = await getManagedCommerceBridgeConfig(env);
+  if (!bridge) {
+    throw new CommerceOrderInputError("Managed commerce bridge is not configured.", 503);
+  }
   const response = await fetch(
-    `${env.ME3_COMMERCE_BRIDGE_ORIGIN!.replace(/\/+$/, "")}/v1/commerce/checkout-sessions`,
+    `${bridge.origin.replace(/\/+$/, "")}/v1/commerce/checkout-sessions`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.ME3_COMMERCE_BRIDGE_TOKEN}`,
+        ...bridge.headers,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -377,12 +380,13 @@ async function createManagedCheckout(
 }
 
 async function retrieveManagedCheckout(env: Env, sessionId: string) {
-  if (!env.ME3_COMMERCE_BRIDGE_ORIGIN || !env.ME3_COMMERCE_BRIDGE_TOKEN) {
+  const bridge = await getManagedCommerceBridgeConfig(env);
+  if (!bridge) {
     throw new CommerceOrderInputError("Managed commerce bridge is not configured.", 503);
   }
   const response = await fetch(
-    `${env.ME3_COMMERCE_BRIDGE_ORIGIN.replace(/\/+$/, "")}/v1/commerce/checkout-sessions/${encodeURIComponent(sessionId)}`,
-    { headers: { Authorization: `Bearer ${env.ME3_COMMERCE_BRIDGE_TOKEN}` } },
+    `${bridge.origin.replace(/\/+$/, "")}/v1/commerce/checkout-sessions/${encodeURIComponent(sessionId)}`,
+    { headers: bridge.headers },
   );
   const data = (await response.json()) as {
     paymentStatus?: string;

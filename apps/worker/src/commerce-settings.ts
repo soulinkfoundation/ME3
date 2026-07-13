@@ -3,6 +3,7 @@ import {
   getOrCreateInstallEncryptionKey,
   hasInstallEncryptionKey,
 } from "./install-secrets";
+import { getManagedCommerceBridgeConfig } from "./commerce-bridge";
 
 type CommerceSettingsRow = {
   user_id: string;
@@ -47,9 +48,7 @@ export async function getCommerceSettings(
   const envKey = normalizeSecret(env.STRIPE_SECRET_KEY);
   const hasEnvKey = Boolean(envKey);
   const hasStoredKey = Boolean(row?.encrypted_stripe_secret_key);
-  const hasManagedBridge = Boolean(
-    env.ME3_COMMERCE_BRIDGE_ORIGIN && env.ME3_COMMERCE_BRIDGE_TOKEN,
-  );
+  const hasManagedBridge = Boolean(await getManagedCommerceBridgeConfig(env));
 
   return {
     encryptionConfigured: await hasInstallEncryptionKey(env),

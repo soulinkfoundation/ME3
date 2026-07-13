@@ -11,6 +11,7 @@ import {
 } from "@me3-core/plugin-landing-pages";
 import type { DbSite, DbSitePage, DbSitePageRevision, Env } from "./types";
 import { getStripeSecretKey } from "./commerce-settings";
+import { hasManagedCommerceBridge } from "./commerce-bridge";
 import {
   deleteSiteFile,
   getR2SiteFile,
@@ -392,7 +393,7 @@ async function validatePageResources(
   const productIds = new Set((profile.products || []).map((product) => product.slug));
   const paymentsReady = Boolean(
     (await getStripeSecretKey(env, site.user_id)) ||
-      (env.ME3_COMMERCE_BRIDGE_ORIGIN && env.ME3_COMMERCE_BRIDGE_TOKEN),
+      (await hasManagedCommerceBridge(env)),
   );
   const errors: string[] = [];
   for (const action of page.actions) {

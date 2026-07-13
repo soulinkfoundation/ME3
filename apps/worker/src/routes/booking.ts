@@ -41,6 +41,7 @@ import {
 } from "../transactional-emails";
 import type { DbBooking, DbSite, Env } from "../types";
 import { finalizeStripeProductCheckout } from "../commerce-orders";
+import { getManagedCommerceBridgeConfig } from "../commerce-bridge";
 
 export function registerBookingRoutes(app: AppHono) {
   app.get("/api/book/:username/slots", async (c) => {
@@ -322,9 +323,7 @@ export function registerBookingRoutes(app: AppHono) {
     if (!site) return c.json({ error: "Site not found" }, 404);
 
     const stripe = await getStripe(c.env, site.user_id);
-    const managedCommerce = Boolean(
-      c.env.ME3_COMMERCE_BRIDGE_ORIGIN && c.env.ME3_COMMERCE_BRIDGE_TOKEN,
-    );
+    const managedCommerce = Boolean(await getManagedCommerceBridgeConfig(c.env));
     if (!stripe && !managedCommerce) {
       return c.json({ error: "Stripe is not configured for this ME3 install" }, 503);
     }
@@ -478,9 +477,7 @@ export function registerBookingRoutes(app: AppHono) {
     if (!site) return c.json({ error: "Site not found" }, 404);
 
     const stripe = await getStripe(c.env, site.user_id);
-    const managedCommerce = Boolean(
-      c.env.ME3_COMMERCE_BRIDGE_ORIGIN && c.env.ME3_COMMERCE_BRIDGE_TOKEN,
-    );
+    const managedCommerce = Boolean(await getManagedCommerceBridgeConfig(c.env));
     if (!stripe && !managedCommerce) {
       return c.json({ error: "Stripe is not configured for this ME3 install" }, 503);
     }
@@ -717,12 +714,14 @@ async function createManagedBookingCheckout(
     returnUrl: string;
   },
 ): Promise<{ id: string; url: string | null }> {
+  const bridge = await getManagedCommerceBridgeConfig(env);
+  if (!bridge) throw new Error("Managed commerce bridge is not configured.");
   const response = await fetch(
-    `${env.ME3_COMMERCE_BRIDGE_ORIGIN!.replace(/\/+$/, "")}/v1/commerce/checkout-sessions`,
+    `${bridge.origin.replace(/\/+$/, "")}/v1/commerce/checkout-sessions`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${env.ME3_COMMERCE_BRIDGE_TOKEN}`,
+        ...bridge.headers,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -757,9 +756,11 @@ async function retrieveManagedBookingCheckout(
   env: Env,
   sessionId: string,
 ): Promise<Stripe.Checkout.Session> {
+  const bridge = await getManagedCommerceBridgeConfig(env);
+  if (!bridge) throw new Error("Managed commerce bridge is not configured.");
   const response = await fetch(
-    `${env.ME3_COMMERCE_BRIDGE_ORIGIN!.replace(/\/+$/, "")}/v1/commerce/checkout-sessions/${encodeURIComponent(sessionId)}`,
-    { headers: { Authorization: `Bearer ${env.ME3_COMMERCE_BRIDGE_TOKEN}` } },
+    `${bridge.origin.replace(/\/+$/, "")}/v1/commerce/checkout-sessions/${encodeURIComponent(sessionId)}`,
+    { headers: bridge.headers },
   );
   const data = (await response.json()) as {
     paymentStatus?: string;
