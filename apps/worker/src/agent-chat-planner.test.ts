@@ -26,9 +26,18 @@ describe("legacy native tool compatibility router", () => {
     "Save an email draft to ada@example.com",
     "Write a social post for LinkedIn",
     "What tools can you access here?",
+    "Using the reminder tool, tell me how many pending reminders I have.",
   ])("leaves Runtime v2 action routing to the model: %s", (messageText) => {
     expect(planLegacyNativeToolTurn({ messageText }).capabilityId)
       .toBe("core.agent-chat.conversation");
+  });
+
+  it("does not treat an explicit tool-use request as setup exploration", () => {
+    expect(
+      planLegacyNativeToolTurn({
+        messageText: "Using the reminder tool, tell me how many pending reminders I have.",
+      }).confidence,
+    ).toBeLessThan(0.9);
   });
 
   it("keeps capability contracts valid independently of routing", () => {

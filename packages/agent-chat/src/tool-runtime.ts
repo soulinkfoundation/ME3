@@ -163,7 +163,9 @@ export function toOpenAiToolRequest(
         strict: true,
       },
     })),
-    parallel_tool_calls: false,
+    // Providers may select several calls together; ME3 still executes them
+    // sequentially through the policy and idempotency layer below.
+    parallel_tool_calls: true,
   };
 }
 

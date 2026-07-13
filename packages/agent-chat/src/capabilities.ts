@@ -679,10 +679,17 @@ export const CORE_CHAT_CAPABILITIES = [
     inputSchema: {
       type: "object",
       properties: {
-        projectId: { type: "string", description: "Optional Mission Control project ID." },
+        projectId: {
+          type: "string",
+          description: "Stable Mission Control project ID, or null to list across all projects.",
+        },
+        projectName: {
+          type: "string",
+          description: "Exact Mission Control project name or slug, or null when not filtering by project.",
+        },
         status: {
           type: "string",
-          description: "Optional task status.",
+          description: "Task status to filter, or null for every status.",
           enum: ["backlog", "in_progress", "review", "done"],
         },
       },

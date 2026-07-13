@@ -115,6 +115,7 @@ export type SocialAuthorizeInput = {
   platform?: unknown;
   siteId?: unknown;
   returnPath?: unknown;
+  credentialSource?: unknown;
 };
 
 export type SocialAuthorizeOptions = {
@@ -585,13 +586,20 @@ export async function startSocialOAuth(
   if (!platform) throw new SocialPublishingInputError("Unsupported social platform");
   const siteId = normalizeId(input.siteId);
   if (!siteId) throw new SocialPublishingInputError("siteId is required");
+  const credentialSource = normalizeCredentialSource(input.credentialSource);
 
   const site = await env.DB.prepare("SELECT id, user_id FROM sites WHERE id = ? AND user_id = ?")
     .bind(siteId, ownerId)
     .first<SiteRow>();
   if (!site) throw new SocialPublishingInputError("Site not found", 404);
 
-  if (options.hostedOAuthOrigin) {
+  const useHostedOAuth =
+    credentialSource === "managed" ||
+    (credentialSource === null && Boolean(options.hostedOAuthOrigin));
+  if (useHostedOAuth) {
+    if (!options.hostedOAuthOrigin) {
+      throw new SocialPublishingInputError("ME3 managed OAuth is not configured", 424);
+    }
     const id = randomToken("socst");
     const state = randomToken(`soc_${platform}`);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
@@ -636,6 +644,12 @@ export async function startSocialOAuth(
     platform,
     url: await buildAuthorizeUrl(platform, setting.client_id, state, codeVerifier, options.apiOrigin),
   };
+}
+
+function normalizeCredentialSource(value: unknown): "managed" | "byo" | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (value === "managed" || value === "byo") return value;
+  throw new SocialPublishingInputError("Unknown social credential source");
 }
 
 function buildHostedAuthorizeUrl(

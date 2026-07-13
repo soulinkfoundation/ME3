@@ -9559,7 +9559,11 @@ describe("ME3 Core Worker auth", () => {
       new Request("http://localhost/api/social/linkedin/authorize", {
         method: "POST",
         headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({ siteId: "site-1", returnPath: "/social" }),
+        body: JSON.stringify({
+          siteId: "site-1",
+          returnPath: "/social",
+          credentialSource: "byo",
+        }),
       }),
       env,
     );
@@ -9991,7 +9995,11 @@ describe("ME3 Core Worker auth", () => {
           "Content-Type": "application/json",
           Cookie: session,
         },
-        body: JSON.stringify({ siteId: "site-1", returnPath: "/social" }),
+        body: JSON.stringify({
+          siteId: "site-1",
+          returnPath: "/social",
+          credentialSource: "managed",
+        }),
       }),
       env,
     );
@@ -10005,6 +10013,53 @@ describe("ME3 Core Worker auth", () => {
       "http://localhost:8787/api/social/linkedin/callback",
     );
     expect(env.socialOauthStates).toHaveLength(1);
+  });
+
+  it("allows explicit BYO OAuth when the hosted bridge is configured", async () => {
+    const env = createEnv();
+    env.ME3_SOCIAL_OAUTH_ORIGIN = "https://social-oauth.example";
+    const session = cookieHeader(await bootstrap(env));
+    await app.fetch(
+      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
+        method: "POST",
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    await app.fetch(
+      new Request("http://localhost/api/social/provider-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          providers: [{
+            id: "linkedin",
+            clientId: "owner-linkedin-client",
+            clientSecret: "owner-linkedin-secret",
+            enabled: true,
+          }],
+        }),
+      }),
+      env,
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/social/linkedin/authorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          siteId: "site-1",
+          returnPath: "/social",
+          credentialSource: "byo",
+        }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { url: string };
+    const url = new URL(body.url);
+
+    expect(response.status).toBe(200);
+    expect(url.origin).toBe("https://www.linkedin.com");
+    expect(url.searchParams.get("client_id")).toBe("owner-linkedin-client");
   });
 
   it("gates Social Publishing OAuth start when disabled", async () => {

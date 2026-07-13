@@ -149,6 +149,43 @@ describe("Mission Control Agent Runtime v2", () => {
     expect(database.tasks.find((task) => task.id === "task-2")?.status).toBe("backlog");
   });
 
+  it("lists tasks by an exact project name without requiring its stable ID", async () => {
+    const database = createMissionDb({
+      projects: [
+        projectRow("project-me3", "ME3", "me3"),
+        projectRow("project-personal", "Personal", "personal"),
+      ],
+      tasks: [
+        { ...taskRow("task-me3", "Ship runtime fix", "project-me3"), status: "in_progress" },
+        { ...taskRow("task-personal", "Wash car", "project-personal"), status: "in_progress" },
+      ],
+    });
+    const route = providerRoute("workers-ai", [
+      providerToolCall("workers-ai", "list-me3", "core_mission_task_list", {
+        projectName: "ME3",
+        status: "in_progress",
+      }),
+      { response: "Ship runtime fix" },
+    ]);
+
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "list-project-name",
+      turnId: "turn-list-project-name",
+      ownerTimezone: "Europe/Dublin",
+      route: route as never,
+      messages: baseMessages("List in-progress tasks in the ME3 project"),
+    });
+
+    expect(response).toMatchObject({
+      specialist: "core.mission.task.list",
+      replyText: "Ship runtime fix",
+    });
+    expect(database.executions[0]?.result_json).toContain("Ship runtime fix");
+    expect(database.executions[0]?.result_json).not.toContain("Wash car");
+  });
+
   it("clarifies ambiguous task names without mutating either task", async () => {
     const database = createMissionDb({
       projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],

@@ -399,6 +399,7 @@ const DEFAULT_OWNER_TIMEZONE = "UTC";
 const ACTIVE_TASK_STATUSES: MissionTaskStatus[] = ["backlog", "in_progress", "review"];
 const DEFAULT_MISSION_STATEMENT =
   "I am here to help [who/what] become [desired change] by being [way of being] and creating [work/service], guided by [values].";
+const DEFAULT_SETUP_CHECKLIST_DISMISSED = true;
 const MISSION_WHEEL_MIN_SEGMENTS = 6;
 const MISSION_WHEEL_MAX_SEGMENTS = 8;
 const DEFAULT_MISSION_WHEEL_SEGMENTS: MissionWheelSegment[] = [
@@ -3296,7 +3297,7 @@ function normalizeDashboardQuickLink(
     id,
     label: normalizeNullableText(value.label) || contribution?.label || id,
     icon: normalizeDashboardIcon(value.icon) || contribution?.icon || "Circle",
-    enabled: value.enabled === undefined ? contribution?.defaultEnabled !== false : value.enabled === true,
+    enabled: value.enabled === undefined ? contribution?.defaultEnabled === true : value.enabled === true,
     sortOrder: normalizeSortOrder(value.sortOrder),
     destinationId,
     requiresPluginId: destination.requiresPluginId,
@@ -3798,7 +3799,10 @@ function normalizeDashboardSettings(value: Record<string, unknown>) {
   return {
     kanbanEnabled: value.kanbanEnabled === true,
     mainGoal: normalizeMainGoal(value.mainGoal),
-    setupChecklistDismissed: value.setupChecklistDismissed === true,
+    setupChecklistDismissed:
+      value.setupChecklistDismissed === undefined
+        ? DEFAULT_SETUP_CHECKLIST_DISMISSED
+        : value.setupChecklistDismissed === true,
   };
 }
 

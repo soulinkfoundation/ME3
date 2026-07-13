@@ -72,7 +72,7 @@ describe("live agent tool model adapters", () => {
 
     expect(body).toMatchObject({
       model: "test-model",
-      parallel_tool_calls: false,
+      parallel_tool_calls: true,
       tools: [{ type: "function", function: { strict: true } }],
     });
     expect(result.toolCalls[0]).toMatchObject({ id: "openai-1" });

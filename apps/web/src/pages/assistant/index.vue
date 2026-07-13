@@ -650,8 +650,8 @@ const recipes = ref<AssistantJobRecipe[]>([]);
 const chatMessages = agentChat.messages;
 const selectedJobId = ref<string | null>(null);
 const selectedDetail = ref<AssistantJobDetail | null>(null);
-const loadingJobs = ref(false);
-const loadingRecipes = ref(false);
+const loadingJobs = ref(true);
+const loadingRecipes = ref(true);
 const loadingDetail = ref(false);
 const pageError = ref("");
 const configureJobsModalOpen = ref(false);
@@ -734,7 +734,7 @@ const storedAssistantModelId = getStoredAssistantModelId();
 const initialAssistantModelId = storedAssistantModelId || "workers-glm-4-7-flash";
 const selectedModelId = ref(initialAssistantModelId);
 const selectedModelTouched = ref(Boolean(storedAssistantModelId));
-const aiSettingsLoading = ref(false);
+const aiSettingsLoading = ref(true);
 const aiSettingsError = ref("");
 const aiProviders = ref<AiProviderRecord[]>([]);
 const {
@@ -1029,7 +1029,13 @@ const selectedModelSetup = computed(() =>
 );
 
 const showConfigureStarterPrompt = computed(() => {
-  if (loadingJobs.value || loadingRecipes.value) return true;
+  if (
+    loadingJobs.value ||
+    loadingRecipes.value ||
+    aiSettingsLoading.value
+  ) {
+    return false;
+  }
   if (pageError.value || aiSettingsError.value || assistantSettingsError.value)
     return true;
   if (!selectedModelSetup.value.configured) return true;
@@ -1046,7 +1052,7 @@ const assistantMessageLabel = computed(
   () => `Message ${assistantDisplayName.value}`,
 );
 const assistantThinkingLabel = computed(
-  () => `${assistantDisplayName.value} is thinking`,
+  () => `${assistantDisplayName.value} is thinking...`,
 );
 const assistantPlaceholder = computed(() =>
   (
@@ -2734,7 +2740,6 @@ async function submitAssistantText(
     const ensureAssistantMessage = () => {
       if (assistantMessageStarted) return;
       assistantMessageStarted = true;
-      assistantAwaitingResponse.value = false;
       agentChat.appendMessage({
         id: assistantMessageId,
         role: "assistant",
@@ -2778,9 +2783,10 @@ async function submitAssistantText(
               (item) => item.id === assistantMessageId,
             );
             if (message) message.text = "";
+            assistantAwaitingResponse.value = true;
           }
           if (data.state === "model_started") {
-            assistantTurnStatusText.value = `Thinking with ${assistantDisplayName.value}…`;
+            assistantTurnStatusText.value = assistantThinkingLabel.value;
           } else if (data.state === "finalizing") {
             assistantTurnStatusText.value = "Finishing the response…";
           }
@@ -2793,6 +2799,7 @@ async function submitAssistantText(
               (item) => item.id === assistantMessageId,
             );
             if (message) message.text = "";
+            assistantAwaitingResponse.value = true;
           }
           const label = typeof data.capabilityId === "string"
             ? data.capabilityId.replace(/^core\./, "").split(".").join(" ")
@@ -2810,12 +2817,14 @@ async function submitAssistantText(
           );
           if (message && typeof data.text === "string") {
             message.text += data.text;
+            if (data.text) assistantAwaitingResponse.value = false;
           }
           return;
         }
 
         if (event.event === "done") {
           ensureAssistantMessage();
+          assistantAwaitingResponse.value = false;
           result = data as unknown as AgentSandboxResponse;
           applyAssistantResultToMessage(assistantMessageId, result);
           return;
@@ -5673,14 +5682,8 @@ function messageFromUnknown(err: unknown, fallback: string) {
             <div
               class="assistant-message__bubble assistant-message__bubble--pending"
             >
-              <span class="assistant-message__pending-main">
-                {{ assistantThinkingLabel }}
-              </span>
-              <span
-                v-if="assistantTurnStatusText"
-                class="assistant-message__pending-detail"
-              >
-                {{ assistantTurnStatusText }}
+              <span class="assistant-message__pending-detail">
+                {{ assistantTurnStatusText || assistantThinkingLabel }}
               </span>
               <span class="assistant-typing" aria-hidden="true">
                 <span />
@@ -8053,10 +8056,6 @@ function messageFromUnknown(err: unknown, fallback: string) {
   align-items: center;
   gap: 4px 8px;
   color: var(--ui-text-muted);
-}
-
-.assistant-message__pending-main {
-  color: var(--ui-text);
 }
 
 .assistant-message__pending-detail {

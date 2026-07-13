@@ -107,8 +107,6 @@ describe("Mission Control dashboard settings", () => {
       "mission.daily-briefing",
       "mission.mission-statement",
       "mission.wheel-latest-snapshot",
-      "mission.quick-task-add",
-      "mission.ai-usage",
     ]);
     expect(dashboard.availableCards.map((card) => card.id)).toEqual(
       expect.arrayContaining([
@@ -117,16 +115,19 @@ describe("Mission Control dashboard settings", () => {
         "social.queue-summary",
       ]),
     );
-    expect(dashboard.quickLinks.map((link) => link.destinationId)).toEqual([
-      "mission.projects",
-      "assistant.chat",
-      "journal.today",
-      "social.schedule",
-    ]);
+    expect(dashboard.quickLinks.filter((link) => link.enabled)).toEqual([]);
+    expect(dashboard.quickLinks.map((link) => link.destinationId)).toEqual(
+      expect.arrayContaining([
+        "mission.projects",
+        "assistant.chat",
+        "journal.today",
+        "social.schedule",
+      ]),
+    );
     expect(dashboard.settings).toEqual({
       kanbanEnabled: false,
       mainGoal: "",
-      setupChecklistDismissed: false,
+      setupChecklistDismissed: true,
     });
     expect(dashboard.mainGoal).toBe("");
     expect(dashboard.missionStatement).toContain("I am here to help");

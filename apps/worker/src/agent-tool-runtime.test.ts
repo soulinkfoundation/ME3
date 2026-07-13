@@ -166,7 +166,7 @@ describe("agent tool provider adapters", () => {
       parallel_tool_calls: boolean;
     };
 
-    expect(request.parallel_tool_calls).toBe(false);
+    expect(request.parallel_tool_calls).toBe(true);
     expect(request.messages[2]).toMatchObject({ role: "assistant" });
     expect(request.messages[3]).toMatchObject({
       role: "tool",

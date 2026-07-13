@@ -1678,7 +1678,7 @@ describe("Core chat native context", () => {
     const response = await dispatchAgentSandboxTurn(
       { ...env, AI: { run: aiRun }, ME3_ASSISTANT_DEBUG_TRACE: "true" } as never,
       createStorage(),
-      dispatchInput("Do I have any pending reminders?"),
+      dispatchInput("Using the reminder tool, tell me how many pending reminders I have."),
     );
 
     expect(response.trace).toMatchObject({

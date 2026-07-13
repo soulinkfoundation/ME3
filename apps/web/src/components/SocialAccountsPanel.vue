@@ -152,12 +152,12 @@ const modalSummary = computed(() => {
   }
   if (connectModalPlatform.value === "instagram") {
     return hostedOAuthAvailable.value
-      ? "Use the ME3 managed Meta app to connect an Instagram professional account, or use your own Meta app credentials."
+      ? "Connect through ME3 without creating a developer app."
       : "Connect Instagram with your own Meta app credentials. Publishing requires a professional account that can use Meta content publishing.";
   }
   if (connectModalPlatform.value === "linkedin") {
     return hostedOAuthAvailable.value
-      ? "Use the ME3 managed LinkedIn app for the simplest connection, or use your own LinkedIn app credentials."
+      ? "Connect through ME3 without creating a LinkedIn developer app."
       : "Connect LinkedIn with your own app credentials. The app needs Share on LinkedIn access.";
   }
   return "";
@@ -194,7 +194,10 @@ function buildReturnPath(): string {
   return router.resolve({ path: route.path, query }).fullPath;
 }
 
-async function connect(platform: SupportedPlatform) {
+async function connect(
+  platform: SupportedPlatform,
+  credentialSource: "managed" | "byo",
+) {
   if (busyPlatform.value) return;
   localError.value = null;
   busyPlatform.value = platform;
@@ -203,6 +206,7 @@ async function connect(platform: SupportedPlatform) {
       platform,
       props.siteId,
       buildReturnPath(),
+      credentialSource,
     );
     window.location.href = url;
   } catch (error) {
@@ -232,7 +236,7 @@ function closeConnectModal() {
 
 async function continueWithManagedApp() {
   if (!connectModalPlatform.value) return;
-  await connect(connectModalPlatform.value);
+  await connect(connectModalPlatform.value, "managed");
 }
 
 async function continueWithOwnApp() {
@@ -260,7 +264,7 @@ async function continueWithOwnApp() {
       ...(clientSecret ? { clientSecret } : {}),
       enabled: true,
     });
-    await connect(platform);
+    await connect(platform, "byo");
   } catch (error) {
     social.setErrorFromApi(error, "Could not configure social app");
     localError.value = social.error;
@@ -450,12 +454,9 @@ watch(
         :aria-labelledby="`social-connect-title-${connectModalPlatform}`"
       >
         <div class="social-connect-modal__header">
-          <div>
-            <p class="social-connect-modal__eyebrow">Connect account</p>
-            <h3 :id="`social-connect-title-${connectModalPlatform}`">
-              {{ modalPlatformLabel }}
-            </h3>
-          </div>
+          <h3 :id="`social-connect-title-${connectModalPlatform}`">
+            Connect {{ modalPlatformLabel }}
+          </h3>
           <button
             type="button"
             class="social-connect-modal__close"
@@ -477,8 +478,8 @@ watch(
           class="social-connect-option social-connect-option--managed"
         >
           <div>
-            <strong>ME3 managed app</strong>
-            <p>Connect without creating a developer app.</p>
+            <strong>Connect with ME3</strong>
+            <p>Recommended. No developer credentials required.</p>
           </div>
           <button
             type="button"
@@ -486,15 +487,15 @@ watch(
             :disabled="busyPlatform !== null || savingProvider"
             @click="continueWithManagedApp"
           >
-            {{ busyPlatform === connectModalPlatform ? "Opening..." : "Continue" }}
+            {{ busyPlatform === connectModalPlatform ? "Opening..." : "Connect" }}
           </button>
         </div>
 
-        <div class="social-own-app">
-          <div class="social-own-app__heading">
-            <strong>{{ hostedOAuthAvailable ? "Use my own app" : "App credentials" }}</strong>
+        <details class="social-own-app" :open="!hostedOAuthAvailable">
+          <summary class="social-own-app__heading">
+            <strong>{{ hostedOAuthAvailable ? "Advanced: use my own app" : "App credentials" }}</strong>
             <span v-if="ownAppReady">Configured</span>
-          </div>
+          </summary>
           <label>
             <span>Client ID</span>
             <input
@@ -534,7 +535,7 @@ watch(
                   : "Save & connect"
             }}
           </button>
-        </div>
+        </details>
         <button
           v-if="modalAccount && modalAccount.status === 'active'"
           type="button"
@@ -813,14 +814,6 @@ watch(
   padding: 20px 20px 0;
 }
 
-.social-connect-modal__eyebrow {
-  margin: 0 0 4px;
-  color: var(--color-text-muted);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
 .social-connect-modal h3 {
   margin: 0;
   font-size: 22px;
@@ -899,8 +892,6 @@ watch(
 }
 
 .social-own-app {
-  display: grid;
-  gap: 12px;
   padding: 14px;
 }
 
@@ -909,6 +900,11 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  cursor: pointer;
+}
+
+.social-own-app[open] .social-own-app__heading {
+  margin-bottom: 12px;
 }
 
 .social-own-app__heading span {
@@ -924,6 +920,7 @@ watch(
 .social-own-app label {
   display: grid;
   gap: 6px;
+  margin-top: 12px;
   font-size: 13px;
   font-weight: 650;
 }
@@ -945,7 +942,8 @@ watch(
 }
 
 .social-own-app__button {
-  justify-self: end;
+  display: block;
+  margin: 12px 0 0 auto;
 }
 
 @media (max-width: 520px) {

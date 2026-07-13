@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { api } from "../api";
-import BrandLogo from "./BrandLogo.vue";
 import UiIcon from "./UiIcon.vue";
 import { useSitesStore } from "../stores/sites";
 import {
@@ -174,7 +173,11 @@ watch(navDrawerOpen, (isOpen) => {
         aria-label="ME3"
         @click="closeNavDrawer"
       >
-        <BrandLogo class="app-side-nav__logo-img" />
+        <img
+          src="/me3-logo-light.png"
+          alt="ME3"
+          class="app-side-nav__logo-img"
+        />
       </RouterLink>
 
       <nav class="app-side-nav__links" aria-label="Primary">
@@ -429,7 +432,15 @@ watch(navDrawerOpen, (isOpen) => {
 }
 
 .app-side-nav__logo {
-  display: none;
+  display: block;
+  width: 68px;
+  margin: 0 auto 14px;
+}
+
+.app-side-nav__logo-img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .app-side-nav__links {

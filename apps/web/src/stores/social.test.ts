@@ -49,4 +49,21 @@ describe("social store package workflow", () => {
       approvalStatus: "approved",
     });
   });
+
+  it("sends the selected OAuth credential source", async () => {
+    vi.mocked(api.post).mockResolvedValue({ url: "https://linkedin.example/oauth" });
+
+    await useSocialStore().startSocialOAuth(
+      "linkedin",
+      "site-1",
+      "/social",
+      "byo",
+    );
+
+    expect(api.post).toHaveBeenCalledWith("/social/linkedin/authorize", {
+      siteId: "site-1",
+      returnPath: "/social",
+      credentialSource: "byo",
+    });
+  });
 });

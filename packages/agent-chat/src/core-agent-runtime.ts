@@ -17,7 +17,9 @@ import {
   getAgentMissionTask,
   listAgentMissionProjects,
   listAgentMissionTasks,
+  slugifyMissionProjectName,
   updateAgentMissionTask,
+  type AgentMissionProject,
   type AgentMissionTask,
 } from "@me3-core/plugin-mission-control";
 import {
@@ -424,11 +426,12 @@ async function executeMissionTaskToolCall(input: {
       listAgentMissionTasks({ DB: input.db }, input.userId),
       listAgentMissionProjects({ DB: input.db }, input.userId),
     ]);
-    const projectId = optionalToolString(args.projectId);
+    const projectId = resolveMissionTaskProjectId(
+      projects,
+      optionalToolString(args.projectId),
+      optionalToolString(args.projectName),
+    );
     const status = optionalToolString(args.status);
-    if (projectId && !projects.some((project) => project.id === projectId)) {
-      throw new Error("Mission Control project not found. Use a stable project ID from the task list result.");
-    }
     if (status && !MISSION_TASK_STATUSES.has(status)) {
       throw new Error(`Invalid Mission task status "${status}".`);
     }
@@ -859,6 +862,7 @@ function withCoreToolInstructions(
     "Mission Control task tool rules:",
     "- Use task tools only when the owner clearly asks to list, read, create, update, move, complete, or archive Mission Control tasks.",
     "- List tasks before read/update/archive unless a stable task ID is already present. Task list results also contain stable project IDs.",
+    "- Task list accepts an exact projectName directly. Use projectId=null and projectName=null to list across all projects; never claim a project ID is required for a read.",
     "- Never invent a taskId or projectId. If multiple records could match, ask one concise clarification question and do not write.",
     "- For create, use the project ID selected by the owner. Omit projectId only when the owner did not name a project and the host can choose an unambiguous default.",
     "- When asked to prioritise, list the matching tasks first and recommend a small Now set. Only update status or priority after the owner clearly confirms.",
@@ -879,6 +883,8 @@ function withCoreToolInstructions(
     "- Write platform-native variants: a strong practical opening for LinkedIn, concise copy for X, and a hook plus readable caption rhythm for Instagram. Do not copy identical text across platforms.",
     "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
     "- A tool result is the source of truth. Do not claim an action succeeded unless its result says ok=true.",
+    "- For current ME3 data, call the relevant tool in this turn instead of answering from earlier conversation or context alone.",
+    "- When the owner confirms several independent actions and their stable IDs are known, return all tool calls together. ME3 executes them sequentially with policy and idempotency checks.",
   ].join("\n");
   return messages.map((message, index) =>
     index === 0 && message.role === "system"
@@ -1018,6 +1024,40 @@ function requiredToolString(value: unknown, label: string): string {
 
 function optionalToolString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveMissionTaskProjectId(
+  projects: readonly AgentMissionProject[],
+  projectId: string | undefined,
+  projectName: string | undefined,
+): string | undefined {
+  const byId = projectId
+    ? projects.find((project) => project.id === projectId)
+    : undefined;
+  if (projectId && !byId) {
+    throw new Error("Mission Control project not found. List tasks or use an exact project name.");
+  }
+  if (!projectName) return byId?.id;
+
+  const normalizedName = projectName.toLowerCase();
+  const normalizedSlug = slugifyMissionProjectName(projectName);
+  const matches = projects.filter(
+    (project) =>
+      project.name.toLowerCase() === normalizedName ||
+      project.slug.toLowerCase() === normalizedName ||
+      project.slug === normalizedSlug,
+  );
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length
+        ? `Multiple Mission Control projects match "${projectName}". Use a stable project ID.`
+        : `Mission Control project "${projectName}" was not found.`,
+    );
+  }
+  if (byId && byId.id !== matches[0].id) {
+    throw new Error("Mission Control projectId and projectName refer to different projects.");
+  }
+  return matches[0].id;
 }
 
 function optionalToolBoolean(value: unknown): boolean | undefined {

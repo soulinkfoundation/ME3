@@ -192,11 +192,12 @@ export const useSocialStore = defineStore("social", () => {
       | "youtube",
     siteId: string,
     returnPath?: string,
+    credentialSource?: "managed" | "byo",
   ): Promise<string> {
     error.value = null;
     const data = await api.post<{ url: string }>(
       `/social/${platform}/authorize`,
-      { siteId, returnPath: returnPath || null },
+      { siteId, returnPath: returnPath || null, credentialSource },
     );
     if (!data.url) throw new Error("No OAuth URL");
     return data.url;
