@@ -51,7 +51,11 @@ const APP_FEATURE_MATCHERS: AppFeatureMatcher[] = [
   },
   { id: "social", matches: (path) => matchesPathPrefix(path, "/social") },
   { id: "accounts", matches: (path) => matchesPathPrefix(path, "/accounts") },
-  { id: "account", matches: (path) => matchesPathPrefix(path, "/account") },
+  {
+    id: "account",
+    matches: (path) =>
+      matchesPathPrefix(path, "/account") || matchesPathPrefix(path, "/settings"),
+  },
 ];
 
 export function appFeatureForPath(path: string): AppFeatureId | null {

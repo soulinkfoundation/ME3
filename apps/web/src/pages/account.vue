@@ -32,10 +32,11 @@ import {
 } from "../utils/plugins";
 
 definePage({
+  alias: ["/settings"],
   meta: {
     requiresAuth: true,
-    title: "Account | ME3",
-    description: "Manage your local ME3 Core account settings.",
+    title: "Settings | ME3",
+    description: "Manage your local ME3 settings.",
     robots: "noindex,follow",
   },
 });

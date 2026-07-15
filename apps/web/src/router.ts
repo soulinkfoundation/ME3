@@ -258,7 +258,7 @@ router.beforeEach(async (to, _from, next) => {
     try {
       if (!(await isPluginEnabled(to.meta.requiresPlugin))) {
         next({
-          path: "/account",
+          path: "/settings",
           query: { section: "plugins", blocked: to.meta.requiresPlugin },
           replace: true,
         });
@@ -266,7 +266,7 @@ router.beforeEach(async (to, _from, next) => {
       }
     } catch {
       next({
-        path: "/account",
+        path: "/settings",
         query: { section: "plugins", blocked: to.meta.requiresPlugin },
         replace: true,
       });

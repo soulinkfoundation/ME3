@@ -24,6 +24,7 @@ describe("app feature utilities", () => {
   it("keeps account and accounts routes distinct", () => {
     expect(appFeatureForPath("/account")).toBe("account");
     expect(appFeatureForPath("/account/plugins")).toBe("account");
+    expect(appFeatureForPath("/settings")).toBe("account");
     expect(appFeatureForPath("/accounts")).toBe("accounts");
     expect(appFeatureForPath("/accounts/reports")).toBe("accounts");
   });

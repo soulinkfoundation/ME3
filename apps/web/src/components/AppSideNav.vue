@@ -27,7 +27,6 @@ const navDrawerOpen = ref(false);
 const navDrawerId = "app-side-nav-drawer";
 const missionControlInstalled = ref(false);
 const journalInstalled = ref(false);
-const accountsInstalled = ref(false);
 const calendarInstalled = ref(false);
 const socialPublishingInstalled = ref(false);
 const pluginChangedEvent = "me3:plugins-changed";
@@ -99,16 +98,9 @@ async function loadInstalledPluginNav() {
         plugin.enabled &&
         plugin.status === "installed",
     );
-    accountsInstalled.value = response.plugins.some(
-      (plugin) =>
-        plugin.id === "me3.accounts" &&
-        plugin.enabled &&
-        plugin.status === "installed",
-    );
   } catch {
     missionControlInstalled.value = false;
     journalInstalled.value = false;
-    accountsInstalled.value = false;
     calendarInstalled.value = false;
     socialPublishingInstalled.value = false;
   }
@@ -161,26 +153,22 @@ watch(navDrawerOpen, (isOpen) => {
       :inert="!navDrawerOpen"
       aria-label="App navigation"
     >
-      <RouterLink
-        :to="
-          missionControlInstalled
-            ? '/mission-control'
-            : calendarInstalled
-              ? '/calendar'
-              : '/assistant'
-        "
-        class="app-side-nav__logo"
-        aria-label="ME3"
-        @click="closeNavDrawer"
-      >
-        <img
-          src="/me3-logo-light.png"
-          alt="ME3"
-          class="app-side-nav__logo-img"
-        />
-      </RouterLink>
-
       <nav class="app-side-nav__links" aria-label="Primary">
+        <RouterLink
+          v-if="missionControlInstalled"
+          to="/mission-control"
+          class="app-side-nav__row app-side-nav-control"
+          :class="{ 'app-side-nav__row--active': rowActive('mission-control') }"
+          aria-label="Mission Control"
+          title="Mission Control"
+          @click="closeNavDrawer"
+        >
+          <span class="app-side-nav__emoji" aria-hidden="true">{{
+            APP_FEATURE_ICONS["mission-control"]
+          }}</span>
+          <span class="sr-only">Mission Control</span>
+        </RouterLink>
+
         <RouterLink
           to="/assistant"
           class="app-side-nav__row app-side-nav-control"
@@ -196,18 +184,18 @@ watch(navDrawerOpen, (isOpen) => {
         </RouterLink>
 
         <RouterLink
-          v-if="missionControlInstalled"
-          to="/mission-control"
+          v-if="calendarInstalled"
+          to="/calendar"
           class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('mission-control') }"
-          aria-label="Mission Control"
-          title="Mission Control"
+          :class="{ 'app-side-nav__row--active': rowActive('calendar') }"
+          aria-label="Calendar"
+          title="Calendar"
           @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS["mission-control"]
+            APP_FEATURE_ICONS.calendar
           }}</span>
-          <span class="sr-only">Mission Control</span>
+          <span class="sr-only">Calendar</span>
         </RouterLink>
 
         <RouterLink
@@ -226,18 +214,18 @@ watch(navDrawerOpen, (isOpen) => {
         </RouterLink>
 
         <RouterLink
-          v-if="calendarInstalled"
-          to="/calendar"
+          v-if="socialPublishingInstalled"
+          to="/social"
           class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('calendar') }"
-          aria-label="Calendar"
-          title="Calendar"
+          :class="{ 'app-side-nav__row--active': rowActive('social') }"
+          aria-label="Socials"
+          title="Socials"
           @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.calendar
+            APP_FEATURE_ICONS.social
           }}</span>
-          <span class="sr-only">Calendar</span>
+          <span class="sr-only">Socials</span>
         </RouterLink>
 
         <RouterLink
@@ -272,48 +260,18 @@ watch(navDrawerOpen, (isOpen) => {
           :to="sitesPath"
           class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('sites') }"
-          aria-label="Site builder"
-          title="Site builder"
+          aria-label="Sites"
+          title="Sites"
           @click="closeNavDrawer"
         >
           <span class="app-side-nav__emoji" aria-hidden="true">{{
             APP_FEATURE_ICONS.sites
           }}</span>
-          <span class="sr-only">Site builder</span>
+          <span class="sr-only">Sites</span>
         </RouterLink>
 
         <RouterLink
-          v-if="socialPublishingInstalled"
-          to="/social"
-          class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('social') }"
-          aria-label="Social publishing"
-          title="Social publishing"
-          @click="closeNavDrawer"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.social
-          }}</span>
-          <span class="sr-only">Social publishing</span>
-        </RouterLink>
-
-        <RouterLink
-          v-if="accountsInstalled"
-          to="/accounts"
-          class="app-side-nav__row app-side-nav-control"
-          :class="{ 'app-side-nav__row--active': rowActive('accounts') }"
-          aria-label="Accounts"
-          title="Accounts"
-          @click="closeNavDrawer"
-        >
-          <span class="app-side-nav__emoji" aria-hidden="true">{{
-            APP_FEATURE_ICONS.accounts
-          }}</span>
-          <span class="sr-only">Accounts</span>
-        </RouterLink>
-
-        <RouterLink
-          to="/account"
+          to="/settings"
           class="app-side-nav__row app-side-nav-control"
           :class="{ 'app-side-nav__row--active': rowActive('account') }"
           aria-label="Settings"
@@ -429,18 +387,6 @@ watch(navDrawerOpen, (isOpen) => {
   transition:
     transform 0.18s ease,
     visibility 0s linear 0s;
-}
-
-.app-side-nav__logo {
-  display: block;
-  width: 68px;
-  margin: 0 auto 14px;
-}
-
-.app-side-nav__logo-img {
-  display: block;
-  width: 100%;
-  height: auto;
 }
 
 .app-side-nav__links {
