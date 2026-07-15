@@ -901,9 +901,12 @@ function isImportedBirthdayCandidate(event: CalendarEventRow): boolean {
 }
 
 const siteOptions = computed<CalendarSiteOption[]>(() => {
-  const bookingUsernames = new Set(bookings.value.map((booking) => booking.username));
+  const bookingUsernames = new Set(
+    bookings.value.map((booking) => booking.username),
+  );
   const bookingSites = sites.sites.filter(
-    (site) => site.bookings_enabled === true || bookingUsernames.has(site.username),
+    (site) =>
+      site.bookings_enabled === true || bookingUsernames.has(site.username),
   );
   const showBookingSiteName = bookingSites.length > 1;
 
