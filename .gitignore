@@ -14,6 +14,9 @@ dist/
 # Local issue tracker state
 .beads/
 
+# Owner-private portability staging
+.me3-portable/
+
 # Logs
 *.log
 logs/

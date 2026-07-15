@@ -188,6 +188,137 @@ The default candidates are Gemma 4 26B and GLM 4.7 Flash for Everyday plus GLM 5
 The optional existing Anthropic Sonnet candidate also requires
 `ME3_MODEL_EVAL_ANTHROPIC_API_KEY` and explicit inclusion in `ME3_MODEL_EVAL_CANDIDATES`.
 
+## Portable Snapshot And Clean Restore
+
+`me3-portable-v1` is the Core-owned, owner-portable D1/R2 snapshot format. It is a
+quiescent snapshot and restore proof, not a live transfer system: stop writes while the source D1
+and R2 material are captured. This version does not implement a maintenance write barrier,
+dual-write, provisioning, DNS cutover, billing, or managed fleet orchestration.
+
+The archive is a directory with this versioned shape:
+
+```text
+manifest.json
+data/d1-sanitized.sql.gz
+objects/r2-manifest.ndjson
+objects/blobs/...
+config/install.json
+config/provider-connections.json
+secrets/portable-secrets.enc
+checksums.sha256
+README.txt
+```
+
+The manifest records the exact Core version/tag/commit, D1 and runtime migration levels, logical
+installation ID, classified per-table row counts/checksums, R2 object counts/checksums, and restore
+requirements. The secret envelope uses a fresh AES-256-GCM data key wrapped with an owner
+passphrase through scrypt and authenticates a binding over the manifest's D1, R2, configuration,
+identity, version, and migration checksums. The passphrase is never written into the archive.
+
+Platform and managed-only credentials are not portable. The snapshot excludes active sessions,
+mobile tokens, pairing/claim/OAuth state, rate limits, ephemeral idempotency state, Cloudflare AI
+Gateway credentials, ME3 Cloud update/bridge credentials, Telegram/channel/daemon/local-executor
+pairings, and host-bound Cloudflare IDs. The local password hash and approved owner-encrypted
+provider credentials remain portable. Restore creates a fresh JWT secret, leaves device credentials
+empty, and requires clients to pair again.
+
+Installation-owned bookings, commerce orders, and Accounts ledger entries remain owner data and
+are portable. ME3 Managed subscription entitlements and control-plane billing records are
+hosted-only, do not belong in Core D1, and are never included.
+
+### Reproducible Local Proof
+
+The proof creates two fresh local D1 installations from the real migration chain, seeds
+representative owner data and five R2 objects, exports, restores into the clean target, verifies all
+counts/checksums and the logical identity, confirms old credentials are absent, and issues a fresh
+proof client credential after re-pair:
+
+```bash
+pnpm portable:test
+pnpm portable:proof
+```
+
+Add `-- --keep` to keep the temporary archive and databases for inspection. No network calls or
+Cloudflare/GitHub mutations occur.
+
+### Owner-Scoped Export And Restore
+
+The CLI consumes a materialized D1 SQLite file and an optional directory containing the objects
+from that installation's dedicated R2 bucket. Use credentials scoped to the owner's own account;
+Core does not receive fleet-level credentials.
+
+Set the passphrase without putting it in shell history:
+
+```bash
+read -rs ME3_PORTABLE_PASSPHRASE
+export ME3_PORTABLE_PASSPHRASE
+```
+
+During a quiescent window, materialize D1 with Wrangler and materialize the dedicated R2 bucket
+with an owner-configured S3-compatible client:
+
+```bash
+mkdir -p .me3-portable
+pnpm exec wrangler d1 export DB --remote --config wrangler.toml --output .me3-portable/source.sql
+sqlite3 .me3-portable/source.sqlite < .me3-portable/source.sql
+pnpm portable:export -- \
+  --db .me3-portable/source.sqlite \
+  --r2-dir .me3-portable/source-r2 \
+  --output .me3-portable/source.me3-portable
+pnpm portable:verify -- --archive .me3-portable/source.me3-portable
+```
+
+Omit `--r2-dir` only when the installation has no R2 binding or objects. Export fails closed for an
+unknown table, unclassified credential field or `install_secrets` name, incomplete runtime
+migrations, unsafe secret material, or invalid logical installation ID.
+
+Prepare a clean target from the exact recorded Core tag/commit, apply D1 migrations, and let Core
+finish its runtime migrations. Materialize that empty target D1 as SQLite, then restore locally:
+
+```bash
+pnpm portable:restore -- \
+  --archive .me3-portable/source.me3-portable \
+  --target-db .me3-portable/target.sqlite \
+  --target-r2-dir .me3-portable/target-r2 \
+  --sql-output .me3-portable/target-import.sql
+```
+
+Restore verifies the archive before mutation, requires an empty target, stages D1 and R2, verifies
+the staged counts/checksums/foreign keys/identity, and only then replaces the local target. The
+optional import SQL is mode `0600` and contains freshly generated installation credentials; treat
+it as a temporary secret and never commit or retain it as evidence.
+
+### Explicitly Opt-In Cloudflare Drill
+
+The CLI never provisions resources or applies changes remotely. After the local restore passes,
+an owner may separately approve applying the generated transaction to an already-provisioned clean
+target D1 and syncing the restored object directory to its empty dedicated R2 bucket:
+
+```bash
+pnpm exec wrangler d1 execute DB --remote --config wrangler.toml \
+  --file .me3-portable/target-import.sql
+```
+
+The R2 upload uses the owner's S3-compatible client and target bucket; keep bucket/account names and
+credentials outside the repository. Delete the sensitive import SQL after D1 succeeds. Start the
+target Worker, sign in with the preserved local owner password, and pair each client again. Do not
+perform these remote steps without explicit approval of the target resources.
+
+To verify the live drill, re-export the restored D1/R2 through the same quiescent procedure and
+compare the two portable archives:
+
+```bash
+pnpm portable:compare -- \
+  --source .me3-portable/source.me3-portable \
+  --restored .me3-portable/restored.me3-portable
+```
+
+Keep `manifest.json`, the JSON output from `portable:restore`, `portable:verify`, and
+`portable:compare`, plus the drill timestamp as evidence. Those records contain versions, logical
+identity, counts, and checksums without passphrases or credential values. Never retain raw D1/R2
+data, the secret envelope plaintext, Cloudflare tokens, or the generated import SQL as shared
+evidence.
+
 ## Core Plugins
 
 ME3 exposes its first-party capability catalog through `/api/plugins`. Account -> Plugins lists owner-manageable optional plugins; foundational Agent Chat, Mission Control, Calendar, and Journal capabilities remain in the catalog for runtime discovery but are hidden from plugin management.
