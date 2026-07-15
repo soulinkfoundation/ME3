@@ -756,6 +756,7 @@ function mapBookingToCalendarEvent(
     title: booking.guest_name || "Unnamed booking",
     siteKey: booking.username,
     siteLabel: `${booking.username}.example.com`,
+    color: siteDotColor(booking.username),
     startsAt: booking.starts_at,
     endsAt: booking.ends_at,
     summary: booking.guest_email,
@@ -780,6 +781,7 @@ function mapReminderToCalendarEvent(
     title: reminder.title,
     siteKey: REMINDERS_KEY,
     siteLabel: "Agent reminders",
+    color: siteDotColor(REMINDERS_KEY),
     startsAt: reminder.remindAt,
     endsAt: reminder.remindAt,
     summary: reminder.recurrenceRule
@@ -812,7 +814,7 @@ function mapTaskToCalendarEvent(task: CalendarTaskRow): CalendarAgendaEvent {
     startsAt: task.startsAt,
     endsAt: task.endsAt,
     allDay: task.allDay,
-    color: task.projectColor,
+    color: siteDotColor(PROJECT_TASKS_KEY),
     summary: formatTaskStatus(task),
     detailLines: [
       { label: "Project", value: task.projectName || "Personal" },
@@ -844,6 +846,7 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
     title: event.title || "Untitled event",
     siteKey,
     siteLabel: isBirthday ? "Birthdays" : event.sourceName,
+    color: siteDotColor(siteKey),
     startsAt: event.startsAt,
     endsAt: event.endsAt,
     allDay: event.allDay,
@@ -1249,7 +1252,7 @@ const SITE_DOT_PALETTE = [
 
 function siteDotColor(key: string): string {
   if (key === REMINDERS_KEY) return "#9aa0a6";
-  if (key === PERSONAL_EVENTS_KEY) return "#111111";
+  if (key === PERSONAL_EVENTS_KEY) return "#fdd663";
   if (key === BIRTHDAYS_KEY) return "#81c995";
   let h = 0;
   for (let i = 0; i < key.length; i += 1) {
@@ -2527,17 +2530,18 @@ onBeforeUnmount(() => {
           <div class="cal-create-wrap">
             <Button
               id="calendar-desktop-create"
-              color="primary"
+              color="ghost"
               shape="soft"
               size="compact"
+              icon-only
+              class="cal-toolbar-icon-btn"
+              aria-label="Create calendar item"
+              title="Create calendar item"
               type="button"
               :aria-expanded="showCreateMenu"
               @click="toggleCreateMenu"
             >
-              <template #icon>
-                <UiIcon name="Plus" :size="16" aria-hidden="true" />
-              </template>
-              Create
+              <UiIcon name="Plus" :size="18" aria-hidden="true" />
             </Button>
             <div
               v-if="showCreateMenu"
@@ -4299,6 +4303,13 @@ onBeforeUnmount(() => {
     padding: 8px 0;
     background: var(--ui-bg, var(--color-bg));
     border-bottom: 1px solid var(--ui-border, var(--color-border));
+  }
+
+  .cal-toolbar-left {
+    padding-inline-start: calc(
+      var(--app-shell-mobile-nav-leading-padding) -
+        var(--workspace-topbar-padding-inline) + 8px
+    );
   }
 }
 
