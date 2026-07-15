@@ -16,9 +16,11 @@ const props = withDefaults(
     tabs: WorkspaceTab[];
     modelValue: string;
     ariaLabel?: string;
+    semantics?: "tabs" | "navigation";
   }>(),
   {
     ariaLabel: "Tabs",
+    semantics: "tabs",
   },
 );
 
@@ -35,15 +37,26 @@ function selectTab(tab: WorkspaceTab) {
 </script>
 
 <template>
-  <nav class="workspace-tabs" role="tablist" :aria-label="ariaLabel">
+  <nav
+    class="workspace-tabs"
+    :role="semantics === 'tabs' ? 'tablist' : undefined"
+    :aria-label="ariaLabel"
+  >
     <button
       v-for="tab in tabs"
       :key="tab.id"
       type="button"
-      role="tab"
+      :role="semantics === 'tabs' ? 'tab' : undefined"
       class="workspace-tabs__tab"
       :class="{ 'workspace-tabs__tab--active': modelValue === tab.id }"
-      :aria-selected="modelValue === tab.id"
+      :aria-selected="
+        semantics === 'tabs' ? modelValue === tab.id : undefined
+      "
+      :aria-current="
+        semantics === 'navigation' && modelValue === tab.id
+          ? 'page'
+          : undefined
+      "
       :aria-label="tab.ariaLabel || tab.label"
       :disabled="tab.disabled"
       @click="selectTab(tab)"

@@ -1693,6 +1693,33 @@ function createEnv(): Env & {
 
               if (
                 sql.includes("UPDATE mailbox_messages") &&
+                sql.includes("SET status = 'approved'")
+              ) {
+                const eligible = state.mailboxMessages.some(
+                  (message) =>
+                    message.id === values[3] &&
+                    message.mailbox_id === values[4] &&
+                    message.message_kind === "draft" &&
+                    (message.status === "pending_approval" || message.status === "failed"),
+                );
+                if (!eligible) return { success: true, meta: { changes: 0 } };
+                state.mailboxMessages = state.mailboxMessages.map((message) =>
+                  message.id === values[3] && message.mailbox_id === values[4]
+                    ? {
+                        ...message,
+                        status: "approved",
+                        error_message: null,
+                        approved_by_user_id: values[0] as string,
+                        approved_at: values[1] as string,
+                        updated_at: values[2] as string,
+                      }
+                    : message,
+                );
+                return { success: true, meta: { changes: 1 } };
+              }
+
+              if (
+                sql.includes("UPDATE mailbox_messages") &&
                 sql.includes("message_kind = 'email'")
               ) {
                 state.mailboxMessages = state.mailboxMessages.map((message) =>

@@ -8,11 +8,13 @@ const props = withDefaults(
     month: number;
     events: CalendarAgendaEvent[];
     selectedEventId?: string;
+    highlightedEventId?: string;
     todayDayKey: string;
     maxVisiblePerCell?: number;
   }>(),
   {
     selectedEventId: "",
+    highlightedEventId: "",
     maxVisiblePerCell: 4,
   },
 );
@@ -20,6 +22,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "select-event", id: string): void;
   (e: "select-day", dayKey: string): void;
+  (e: "show-day", dayKey: string): void;
 }>();
 
 const resolvedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -71,6 +74,16 @@ function timeLabel(ev: CalendarAgendaEvent): string {
   if (ev.allDay) return "all day";
   const t = timeFmt.value.format(new Date(ev.startsAt));
   return t.replace(":00 ", " ").toLowerCase();
+}
+
+function dateLabel(dayKey: string): string {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(year, month - 1, day));
 }
 
 function eventStartKey(ev: CalendarAgendaEvent): string {
@@ -198,25 +211,23 @@ function weekSegments(week: Cell[]): WeekSegment[] {
 </script>
 
 <template>
-  <div class="board" role="application" aria-label="Month calendar">
-    <div class="board-weekdays" role="row">
+  <div class="board" aria-label="Month calendar">
+    <div class="board-weekdays">
       <div
         v-for="w in weekdayLabels"
         :key="w"
         class="board-weekday"
-        role="columnheader"
       >
         {{ w }}
       </div>
     </div>
 
-    <div class="board-weeks" role="grid">
+    <div class="board-weeks">
       <div
         v-for="(week, wi) in weeks"
         :key="wi"
         class="board-week"
         :style="{ '--span-rows': String(Math.max(1, weekSegments(week).length)) }"
-        role="row"
       >
         <div
           v-for="cell in week"
@@ -226,13 +237,13 @@ function weekSegments(week: Cell[]): WeekSegment[] {
             'board-cell--fade': !cell.inMonth,
             'board-cell--today': cell.dayKey === todayDayKey,
           }"
-          role="gridcell"
           @click.self="emit('select-day', cell.dayKey)"
         >
           <button
             type="button"
             class="board-daynum"
             :class="{ 'is-today': cell.dayKey === todayDayKey }"
+            :aria-label="`Create event on ${dateLabel(cell.dayKey)}`"
             @click="emit('select-day', cell.dayKey)"
           >
             {{ cell.dayNum }}
@@ -244,7 +255,10 @@ function weekSegments(week: Cell[]): WeekSegment[] {
               :key="ev.id"
               type="button"
               class="board-event"
-              :class="{ 'is-active': ev.id === selectedEventId }"
+              :class="{
+                'is-active': ev.id === selectedEventId,
+                'is-highlighted': ev.id === highlightedEventId,
+              }"
               :title="`${ev.title} · ${ev.siteLabel}`"
               @click.stop="emit('select-event', ev.id)"
             >
@@ -260,7 +274,8 @@ function weekSegments(week: Cell[]): WeekSegment[] {
               v-if="cellEvents(cell.dayKey).length > maxVisiblePerCell"
               type="button"
               class="board-more"
-              @click.stop="emit('select-day', cell.dayKey)"
+              :aria-label="`Show all events on ${dateLabel(cell.dayKey)}`"
+              @click.stop="emit('show-day', cell.dayKey)"
             >
               +{{ cellEvents(cell.dayKey).length - maxVisiblePerCell }} more
             </button>
@@ -272,7 +287,10 @@ function weekSegments(week: Cell[]): WeekSegment[] {
             :key="`${segment.event.id}-${segment.startIndex}-${segment.span}`"
             type="button"
             class="board-span-event"
-            :class="{ 'is-active': segment.event.id === selectedEventId }"
+            :class="{
+              'is-active': segment.event.id === selectedEventId,
+              'is-highlighted': segment.event.id === highlightedEventId,
+            }"
             :style="{
               gridColumn: `${segment.startIndex + 1} / span ${segment.span}`,
               gridRow: `${segment.row + 1}`,
@@ -369,8 +387,8 @@ function weekSegments(week: Cell[]): WeekSegment[] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 28px;
+  min-width: 36px;
+  height: 36px;
   margin-bottom: 4px;
   padding: 0;
   border: 0;
@@ -449,12 +467,19 @@ function weekSegments(week: Cell[]): WeekSegment[] {
   outline-offset: 1px;
 }
 
+.board-span-event.is-highlighted,
+.board-event.is-highlighted {
+  outline: 2px solid var(--ui-accent, var(--color-accent));
+  outline-offset: 1px;
+}
+
 .board-event {
   display: flex;
   align-items: baseline;
   gap: 4px;
   width: 100%;
   min-width: 0;
+  min-height: 24px;
   padding: 3px 5px;
   border: 0;
   border-radius: 4px;
@@ -514,6 +539,14 @@ function weekSegments(week: Cell[]): WeekSegment[] {
 .board-more:hover {
   color: var(--color-text);
   text-decoration: underline;
+}
+
+.board-daynum:focus-visible,
+.board-event:focus-visible,
+.board-span-event:focus-visible,
+.board-more:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-accent));
+  outline-offset: 2px;
 }
 
 @media (max-width: 900px) {

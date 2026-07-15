@@ -17,6 +17,7 @@ export {
   createAgentSandboxTurnRecord,
   createAgentContact,
   createAgentReminder,
+  deleteAgentMailboxMessage,
   deleteAgentContentItem,
   deleteAgentContact,
   dispatchAgentSandboxTurn,

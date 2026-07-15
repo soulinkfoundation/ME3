@@ -37,6 +37,16 @@ const cells = computed(() => {
 });
 
 const weekdays = ["M", "T", "W", "T", "F", "S", "S"];
+
+function dateLabel(dayKey: string): string {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(year, month - 1, day));
+}
 </script>
 
 <template>
@@ -45,7 +55,7 @@ const weekdays = ["M", "T", "W", "T", "F", "S", "S"];
     <div class="mini-weekdays">
       <span v-for="(d, i) in weekdays" :key="i" class="mini-wd">{{ d }}</span>
     </div>
-    <div class="mini-grid" role="grid">
+    <div class="mini-grid">
       <button
         v-for="(c, idx) in cells"
         :key="idx"
@@ -56,6 +66,8 @@ const weekdays = ["M", "T", "W", "T", "F", "S", "S"];
           'mini-cell--today': c.dayKey === todayDayKey,
           'mini-cell--picked': c.dayKey === selectedDayKey,
         }"
+        :aria-label="dateLabel(c.dayKey)"
+        :aria-current="c.dayKey === todayDayKey ? 'date' : undefined"
         :disabled="!c.inMonth"
         @click="emit('pick-day', c.dayKey)"
       >
@@ -116,6 +128,11 @@ const weekdays = ["M", "T", "W", "T", "F", "S", "S"];
 
 .mini-cell:hover:not(:disabled) {
   background: var(--cal-hover, color-mix(in oklab, var(--color-text) 8%, transparent));
+}
+
+.mini-cell:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-accent));
+  outline-offset: 1px;
 }
 
 .mini-cell--off {

@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRoute, useRouter } from "vue-router";
+import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
 import PageLoading from "../components/PageLoading.vue";
 import UiIcon from "../components/UiIcon.vue";
@@ -217,6 +218,7 @@ const unsubscribePending = ref<string | null>(null);
 const bulkActionPending = ref(false);
 const selectedMessageIds = ref<Set<string>>(new Set());
 const emailFrameHeights = ref<Record<string, number>>({});
+const externalContentAllowedIds = ref<Set<string>>(new Set());
 const emailFrameObservers = new WeakMap<HTMLIFrameElement, ResizeObserver>();
 const activeEmailFrameObservers = new Set<ResizeObserver>();
 const composeOpen = ref(false);
@@ -232,6 +234,8 @@ const composeUploadingAttachments = ref(false);
 const composeToFocused = ref(false);
 const composeToHasTyped = ref(false);
 const composeToActiveIndex = ref(0);
+const composeInitialSnapshot = ref("");
+const composeDiscardConfirmOpen = ref(false);
 const composeForm = ref({
   fromAddress: "",
   to: "",
@@ -245,13 +249,17 @@ const {
   setInboxDraftCount,
 } =
   useInboxDraftCount();
-const { toastFromUnknown, toastSuccess } = useAppToast();
+const { toastFromUnknown, toastSuccess, toast } = useAppToast();
 const auth = useAuthStore();
 const mailboxCache = useMailboxCacheStore();
 const route = useRoute();
 const router = useRouter();
 const contactsStore = useContactsStore();
 const { contacts } = storeToRefs(contactsStore);
+const mobileFolderMore = ref<HTMLDetailsElement | null>(null);
+let contactsRequested = contacts.value.length > 0;
+let providerSettingsRequested = false;
+let telegramHealthRequested = false;
 
 const mailboxMeta = ref<FullMailboxResponse["mailbox"] | null>(null);
 const mailboxSources = ref<MailboxSource[]>([]);
@@ -368,7 +376,7 @@ const emailTabConfig: Record<
   drafts: {
     label: "Drafts",
     folderParam: "drafts",
-    statusParam: "pending_approval",
+    statusParam: "pending_approval,failed,approved",
     directionParam: "outbound",
   },
   sent: {
@@ -426,10 +434,27 @@ const mailFolderTabs = computed(() => {
   });
   return tabs;
 });
+const primaryMailFolderTabs = computed(() =>
+  mailFolderTabs.value.filter((tab) =>
+    ["inbox", "drafts", "sent"].includes(tab.id),
+  ),
+);
+const overflowMailFolderTabs = computed(() =>
+  mailFolderTabs.value.filter((tab) =>
+    ["archive", "trash", "contacts"].includes(tab.id),
+  ),
+);
 
 function isEmailTab(tab: Tab | "contacts"): tab is EmailTab {
   return tab !== "telegram" && tab !== "contacts";
 }
+
+const activeFolderLabel = computed(() =>
+  isEmailTab(activeTab.value)
+    ? emailTabConfig[activeTab.value].label
+    : "Mailbox",
+);
+const searchLabel = computed(() => `Search ${activeFolderLabel.value}`);
 
 /** Show setup hint in empty states (not the top status strip). */
 const mailNeedsSetupHint = computed(() => {
@@ -579,6 +604,20 @@ const selectedThreadIsUnread = computed(() =>
   selectedThreadMessages.value.some((message) => message.unread),
 );
 
+function isEditableDraft(message: InboxMessage): boolean {
+  return message.status === "pending_approval" || message.status === "failed";
+}
+
+function isDraftMessage(message: InboxMessage): boolean {
+  return message.kind === "draft";
+}
+
+function draftStatusLabel(message: InboxMessage): string {
+  if (message.status === "approved") return "Sending";
+  if (message.status === "failed") return "Failed";
+  return "Draft";
+}
+
 function buildFolderCountUrl(tab: EmailTab): string {
   const config = emailTabConfig[tab];
   const params = new URLSearchParams();
@@ -593,7 +632,6 @@ function buildFolderCountUrl(tab: EmailTab): string {
 }
 
 function getFolderCount(tab: EmailTab): number | null {
-  if (activeTab.value === tab) return total.value;
   return folderCounts.value[tab];
 }
 
@@ -604,20 +642,10 @@ function getVisibleFolderCount(tab: EmailTab): number | null {
   return count;
 }
 
-function setFolderCount(tab: EmailTab, count: number | null) {
-  folderCounts.value = {
-    ...folderCounts.value,
-    [tab]: count,
-  };
-  if (tab === "drafts") {
-    setInboxDraftCount(count);
-  }
-}
-
 async function loadFolderCounts() {
   if (!isEmailTab(activeTab.value)) return;
   const entries = await Promise.all(
-    emailTabOrder.filter((tab) => tab !== activeTab.value).map(async (tab) => {
+    (["inbox", "drafts"] as EmailTab[]).map(async (tab) => {
       try {
         const data = await api.get<MessagesResponse>(buildFolderCountUrl(tab));
         return [tab, data.total] as const;
@@ -727,12 +755,6 @@ function isDesktopMailLayout(): boolean {
   return window.matchMedia("(min-width: 641px)").matches;
 }
 
-function selectFirstMessageOnDesktop() {
-  if (expandedId.value || !messages.value.length || !isDesktopMailLayout()) return;
-  expandedId.value = messages.value[0].id;
-  mobileThreadOpen.value = false;
-}
-
 function getMessageAttachments(message: InboxMessage): MailboxAttachment[] {
   return (message.metadata?.attachments || []).filter(
     (attachment) =>
@@ -809,6 +831,75 @@ function removeMessageLocally(id: string) {
   syncSelectedMessages(messages.value);
 }
 
+function selectNextMessageAfterRemoval(
+  previousMessages: InboxMessage[],
+  removedIds: Set<string>,
+) {
+  const selectedIndex = previousMessages.findIndex(
+    (message) => message.id === expandedId.value,
+  );
+  if (selectedIndex < 0 || !expandedId.value || !removedIds.has(expandedId.value)) {
+    return;
+  }
+
+  const next =
+    previousMessages
+      .slice(selectedIndex + 1)
+      .find((message) => !removedIds.has(message.id)) ||
+    [...previousMessages]
+      .slice(0, selectedIndex)
+      .reverse()
+      .find((message) => !removedIds.has(message.id));
+  expandedId.value = isDesktopMailLayout() ? next?.id || null : null;
+  mobileThreadOpen.value = false;
+}
+
+async function undoMessageMoves(
+  moves: Array<{ id: string; folder: NonNullable<InboxMessage["folder"]> }>,
+) {
+  const results = await Promise.allSettled(
+    moves.map(({ id, folder }) =>
+      api.post(`/mailbox/messages/${id}/move`, { folder }),
+    ),
+  );
+  await Promise.all([loadMessages(), loadFolderCounts()]);
+  const failedCount = results.filter(
+    (result) => result.status === "rejected",
+  ).length;
+  if (failedCount === 0) {
+    toastSuccess(moves.length === 1 ? "Move undone." : "Moves undone.");
+  } else {
+    toast.error(
+      `${failedCount} ${failedCount === 1 ? "move" : "moves"} could not be undone.`,
+    );
+  }
+}
+
+function showMoveToast(
+  folder: "inbox" | "archive" | "trash",
+  moves: Array<{ id: string; folder: NonNullable<InboxMessage["folder"]> }>,
+) {
+  const count = moves.length;
+  const label =
+    folder === "archive"
+      ? count === 1
+        ? "Message archived."
+        : `${count} messages archived.`
+      : folder === "trash"
+        ? count === 1
+          ? "Message moved to Trash."
+          : `${count} messages moved to Trash.`
+        : count === 1
+          ? "Message restored to Inbox."
+          : `${count} messages restored to Inbox.`;
+  toast.success(label, {
+    action: {
+      label: "Undo",
+      onClick: () => void undoMessageMoves(moves),
+    },
+  });
+}
+
 function mailboxListRequest(tab: EmailTab): MailboxListRequest {
   const config = emailTabConfig[tab];
   return {
@@ -845,9 +936,7 @@ async function loadMessages() {
     messages.value = cached.messages;
     total.value = cached.total;
     messagesLoaded.value = true;
-    setFolderCount(tab, cached.total);
     syncSelectedMessages(cached.messages);
-    selectFirstMessageOnDesktop();
   } else {
     loading.value = true;
     messagesLoaded.value = false;
@@ -872,10 +961,7 @@ async function loadMessages() {
     messages.value = data.messages;
     total.value = data.total;
     messagesLoaded.value = true;
-    setFolderCount(tab, data.total);
     syncSelectedMessages(data.messages);
-    selectFirstMessageOnDesktop();
-    void markVisibleThreadRead();
   } catch (err) {
     if (
       err instanceof Error &&
@@ -904,6 +990,12 @@ async function applyMobileSearch() {
   await applySearch();
 }
 
+async function clearSearch() {
+  if (!searchQuery.value) return;
+  searchQuery.value = "";
+  await applySearch();
+}
+
 function updateMessageLocally(id: string, patch: Partial<InboxMessage>) {
   messages.value = messages.value.map((message) =>
     message.id === id ? { ...message, ...patch } : message,
@@ -924,25 +1016,48 @@ async function markVisibleThreadRead() {
     });
   }
 
-  await Promise.allSettled(
+  const results = await Promise.allSettled(
     unread.map((message) =>
       api.post(`/mailbox/messages/${message.id}/read`, { read: true }),
     ),
   );
+  results.forEach((result, index) => {
+    if (result.status !== "rejected") return;
+    const message = unread[index];
+    updateMessageLocally(message.id, {
+      readAt: message.readAt,
+      unread: message.unread,
+    });
+  });
+  cacheActiveMessages();
+  void loadFolderCounts();
+  if (results.some((result) => result.status === "rejected")) {
+    toast.error("Some messages could not be marked as read.");
+  }
 }
 
-async function loadChannelHealth() {
+async function loadMailboxHealth() {
   try {
-    const [mailboxData, telegramData, providerData] = await Promise.all([
-      api.get<FullMailboxResponse>("/mailbox"),
-      api.get<TelegramStatusResponse>("/telegram/status"),
-      api
-        .get<EmailProviderSettingsResponse>("/email-provider-settings")
-        .catch(() => null),
-    ]);
+    const mailboxData = await api.get<FullMailboxResponse>(
+      "/mailbox?include_activity=0",
+    );
     mailboxAddress.value = mailboxData.mailbox?.aliasAddress || null;
     mailboxMeta.value = mailboxData.mailbox ?? null;
     mailboxSources.value = mailboxData.sources || [];
+  } catch {
+    mailboxAddress.value = null;
+    mailboxMeta.value = null;
+    mailboxSources.value = [];
+  }
+}
+
+async function loadProviderSettings() {
+  if (providerSettingsRequested) return;
+  providerSettingsRequested = true;
+  try {
+    const providerData = await api.get<EmailProviderSettingsResponse>(
+      "/email-provider-settings",
+    );
     const activeProvider = providerData?.providers.find(
       (provider) => provider.id === providerData.activeProviderId,
     );
@@ -950,17 +1065,31 @@ async function loadChannelHealth() {
     configuredEmailAddress.value = isPublicEmailAddress(activeFromAddress)
       ? activeFromAddress.trim().toLowerCase()
       : null;
+  } catch {
+    configuredEmailAddress.value = null;
+  }
+}
+
+async function loadTelegramHealth() {
+  if (telegramHealthRequested) return;
+  telegramHealthRequested = true;
+  try {
+    const telegramData = await api.get<TelegramStatusResponse>(
+      "/telegram/status",
+    );
     telegramHealth.value = {
       configured: telegramData.configured,
       connectionStatus: telegramData.connection?.status ?? null,
     };
   } catch {
-    mailboxAddress.value = null;
-    mailboxMeta.value = null;
-    mailboxSources.value = [];
-    configuredEmailAddress.value = null;
     telegramHealth.value = null;
   }
+}
+
+async function loadContactsForCompose() {
+  if (contactsRequested) return;
+  contactsRequested = true;
+  await contactsStore.fetchContacts();
 }
 
 function scrollTelegramToBottom() {
@@ -976,7 +1105,7 @@ async function loadTelegramHistory() {
   telegramMoreError.value = "";
   telegramNotice.value = "";
   try {
-    await loadChannelHealth();
+    await Promise.all([loadMailboxHealth(), loadTelegramHealth()]);
     const turnResponse = await api.get<AgentTurnsResponse>(
       `/agent/turns?channel=telegram&limit=${TELEGRAM_PAGE_LIMIT}&offset=0`,
     );
@@ -1085,6 +1214,7 @@ function switchTab(tab: Tab) {
 }
 
 function switchMailFolderTab(tabId: string) {
+  if (mobileFolderMore.value) mobileFolderMore.value.open = false;
   if (tabId === "contacts") {
     void router.push("/contacts");
     return;
@@ -1104,11 +1234,7 @@ async function refreshMessagesPage() {
     await loadTelegramHistory();
   } else {
     await loadMessages();
-    await Promise.all([
-      loadChannelHealth(),
-      loadFolderCounts(),
-      contactsStore.fetchContacts(),
-    ]);
+    await Promise.all([loadMailboxHealth(), loadFolderCounts()]);
   }
 }
 
@@ -1124,6 +1250,9 @@ async function approveMessage(msg: InboxMessage) {
   error.value = "";
   const previousMessages = messages.value;
   const previousTotal = total.value;
+  const previousExpandedId = expandedId.value;
+  const previousMobileThreadOpen = mobileThreadOpen.value;
+  selectNextMessageAfterRemoval(previousMessages, new Set([msg.id]));
   ignorePendingMessageResponses();
   removeMessageLocally(msg.id);
   cacheActiveMessages();
@@ -1133,6 +1262,8 @@ async function approveMessage(msg: InboxMessage) {
   } catch (err) {
     messages.value = previousMessages;
     total.value = previousTotal;
+    expandedId.value = previousExpandedId;
+    mobileThreadOpen.value = previousMobileThreadOpen;
     syncSelectedMessages(previousMessages);
     cacheActiveMessages();
     error.value = err instanceof Error ? err.message : "Failed to approve";
@@ -1147,6 +1278,9 @@ async function rejectMessage(msg: InboxMessage) {
   error.value = "";
   const previousMessages = messages.value;
   const previousTotal = total.value;
+  const previousExpandedId = expandedId.value;
+  const previousMobileThreadOpen = mobileThreadOpen.value;
+  selectNextMessageAfterRemoval(previousMessages, new Set([msg.id]));
   ignorePendingMessageResponses();
   removeMessageLocally(msg.id);
   cacheActiveMessages();
@@ -1156,6 +1290,8 @@ async function rejectMessage(msg: InboxMessage) {
   } catch (err) {
     messages.value = previousMessages;
     total.value = previousTotal;
+    expandedId.value = previousExpandedId;
+    mobileThreadOpen.value = previousMobileThreadOpen;
     syncSelectedMessages(previousMessages);
     cacheActiveMessages();
     error.value = err instanceof Error ? err.message : "Failed to reject";
@@ -1173,28 +1309,28 @@ async function moveMessage(
   error.value = "";
   const previousMessages = messages.value;
   const previousTotal = total.value;
+  const previousExpandedId = expandedId.value;
+  const previousMobileThreadOpen = mobileThreadOpen.value;
+  const previousSelectedMessageIds = new Set(selectedMessageIds.value);
+  const previousFolder =
+    msg.folder ||
+    (activeTab.value === "telegram"
+      ? "inbox"
+      : emailTabConfig[activeTab.value].folderParam);
   const targetIsCurrentTab =
     activeTab.value !== "telegram" &&
     emailTabConfig[activeTab.value].folderParam === folder;
-  const readAt =
-    folder === "archive" || folder === "trash"
-      ? msg.readAt || new Date().toISOString()
-      : msg.readAt;
-
   ignorePendingMessageResponses();
   messages.value = targetIsCurrentTab
     ? messages.value.map((message) =>
         message.id === msg.id
-          ? { ...message, folder, readAt, unread: false }
+          ? { ...message, folder }
           : message,
       )
     : messages.value.filter((message) => message.id !== msg.id);
   if (!targetIsCurrentTab) {
     total.value = Math.max(0, total.value - 1);
-    if (expandedId.value === msg.id) {
-      expandedId.value = null;
-      mobileThreadOpen.value = false;
-    }
+    selectNextMessageAfterRemoval(previousMessages, new Set([msg.id]));
   }
   syncSelectedMessages(messages.value);
   cacheActiveMessages();
@@ -1202,10 +1338,14 @@ async function moveMessage(
   try {
     await api.post(`/mailbox/messages/${msg.id}/move`, { folder });
     void loadFolderCounts();
+    showMoveToast(folder, [{ id: msg.id, folder: previousFolder }]);
   } catch (err) {
     messages.value = previousMessages;
     total.value = previousTotal;
+    expandedId.value = previousExpandedId;
+    mobileThreadOpen.value = previousMobileThreadOpen;
     syncSelectedMessages(previousMessages);
+    selectedMessageIds.value = previousSelectedMessageIds;
     cacheActiveMessages();
     error.value = err instanceof Error ? err.message : "Failed to move message";
   } finally {
@@ -1218,13 +1358,19 @@ async function moveSelectedMessages(folder: "inbox" | "archive" | "trash") {
   bulkActionPending.value = true;
   error.value = "";
   const previousMessages = messages.value;
-  const previousTotal = total.value;
-  const ids = new Set(selectedMessages.value.map((message) => message.id));
+  const selected = selectedMessages.value;
+  const ids = new Set(selected.map((message) => message.id));
+  const undoMoves = selected.map((message) => ({
+    id: message.id,
+    folder:
+      message.folder ||
+      (activeTab.value === "telegram"
+        ? ("inbox" as const)
+        : emailTabConfig[activeTab.value].folderParam),
+  }));
   const targetIsCurrentTab =
     activeTab.value !== "telegram" &&
     emailTabConfig[activeTab.value].folderParam === folder;
-  const readAt = new Date().toISOString();
-
   ignorePendingMessageResponses();
   messages.value = targetIsCurrentTab
     ? messages.value.map((message) =>
@@ -1232,42 +1378,36 @@ async function moveSelectedMessages(folder: "inbox" | "archive" | "trash") {
           ? {
               ...message,
               folder,
-              readAt:
-                folder === "archive" || folder === "trash"
-                  ? message.readAt || readAt
-                  : message.readAt,
-              unread:
-                folder === "archive" || folder === "trash"
-                  ? false
-                  : message.unread,
             }
           : message,
       )
     : messages.value.filter((message) => !ids.has(message.id));
   if (!targetIsCurrentTab) {
     total.value = Math.max(0, total.value - ids.size);
+    selectNextMessageAfterRemoval(previousMessages, ids);
   }
   clearSelectedMessages();
   syncSelectedMessages(messages.value);
   cacheActiveMessages();
 
-  try {
-    await Promise.all(
-      [...ids].map((id) =>
-        api.post(`/mailbox/messages/${id}/move`, { folder }),
-      ),
-    );
-    void loadFolderCounts();
-  } catch (err) {
-    messages.value = previousMessages;
-    total.value = previousTotal;
-    syncSelectedMessages(previousMessages);
-    cacheActiveMessages();
-    error.value =
-      err instanceof Error ? err.message : "Failed to move selected messages";
-  } finally {
-    bulkActionPending.value = false;
+  const results = await Promise.allSettled(
+    [...ids].map((id) =>
+      api.post(`/mailbox/messages/${id}/move`, { folder }),
+    ),
+  );
+  const successfulMoves = undoMoves.filter(
+    (_, index) => results[index]?.status === "fulfilled",
+  );
+  const failedCount = results.length - successfulMoves.length;
+  if (failedCount > 0) {
+    await loadMessages();
+    error.value = `${failedCount} ${
+      failedCount === 1 ? "message" : "messages"
+    } could not be moved. The folder was refreshed.`;
   }
+  await loadFolderCounts();
+  if (successfulMoves.length > 0) showMoveToast(folder, successfulMoves);
+  bulkActionPending.value = false;
 }
 
 async function deleteSelectedMessagesPermanently() {
@@ -1281,8 +1421,6 @@ async function deleteSelectedMessagesPermanently() {
 
   bulkActionPending.value = true;
   error.value = "";
-  const previousMessages = messages.value;
-  const previousTotal = total.value;
   const ids = new Set(selectedMessages.value.map((message) => message.id));
   ignorePendingMessageResponses();
   messages.value = messages.value.filter((message) => !ids.has(message.id));
@@ -1291,46 +1429,81 @@ async function deleteSelectedMessagesPermanently() {
   syncSelectedMessages(messages.value);
   cacheActiveMessages();
 
-  try {
-    await Promise.all(
-      [...ids].map((id) => api.delete(`/mailbox/messages/${id}`)),
-    );
-    void loadFolderCounts();
-  } catch (err) {
-    messages.value = previousMessages;
-    total.value = previousTotal;
-    syncSelectedMessages(previousMessages);
-    cacheActiveMessages();
-    error.value =
-      err instanceof Error
-        ? err.message
-        : "Failed to delete selected messages";
-  } finally {
-    bulkActionPending.value = false;
+  const results = await Promise.allSettled(
+    [...ids].map((id) => api.delete(`/mailbox/messages/${id}`)),
+  );
+  const failedCount = results.filter(
+    (result) => result.status === "rejected",
+  ).length;
+  if (failedCount > 0) {
+    await loadMessages();
+    error.value = `${failedCount} ${
+      failedCount === 1 ? "message" : "messages"
+    } could not be deleted. Trash was refreshed.`;
   }
+  await loadFolderCounts();
+  bulkActionPending.value = false;
+}
+
+type PreviousReadState = Pick<InboxMessage, "id" | "readAt" | "unread">;
+
+async function restoreMessageReadStates(states: PreviousReadState[]) {
+  if (inboxBusy.value || states.length === 0) return;
+  actionPending.value = states[0].id;
+  states.forEach((state) => updateMessageLocally(state.id, state));
+  const results = await Promise.allSettled(
+    states.map((state) =>
+      api.post(`/mailbox/messages/${state.id}/read`, { read: !state.unread }),
+    ),
+  );
+  if (results.some((result) => result.status === "rejected")) {
+    await loadMessages();
+    error.value = "Some read states could not be restored. The folder was refreshed.";
+  } else {
+    cacheActiveMessages();
+    toastSuccess("Read state restored.");
+  }
+  await loadFolderCounts();
+  actionPending.value = null;
 }
 
 async function markMessageRead(msg: InboxMessage, read = true) {
   if (inboxBusy.value) return;
   actionPending.value = msg.id;
   error.value = "";
-  const readAt = read ? msg.readAt || new Date().toISOString() : null;
-  updateMessageLocally(msg.id, {
+  const targets =
+    selectedMessage.value?.id === msg.id ? selectedThreadMessages.value : [msg];
+  const previousStates = targets.map(({ id, readAt, unread }) => ({
+    id,
     readAt,
-    unread: msg.direction === "inbound" && !read,
-  });
-  try {
-    await api.post(`/mailbox/messages/${msg.id}/read`, { read });
-  } catch (err) {
-    updateMessageLocally(msg.id, {
-      readAt: msg.readAt,
-      unread: msg.unread,
+    unread,
+  }));
+  const readAt = new Date().toISOString();
+  targets.forEach((target) => {
+    updateMessageLocally(target.id, {
+      readAt: read ? target.readAt || readAt : null,
+      unread: target.direction === "inbound" && !read,
     });
-    error.value =
-      err instanceof Error ? err.message : "Failed to update read state";
-  } finally {
-    actionPending.value = null;
+  });
+  const results = await Promise.allSettled(
+    targets.map((target) =>
+      api.post(`/mailbox/messages/${target.id}/read`, { read }),
+    ),
+  );
+  if (results.some((result) => result.status === "rejected")) {
+    await loadMessages();
+    error.value = "Some messages could not be updated. The folder was refreshed.";
+  } else {
+    cacheActiveMessages();
+    toast.success(read ? "Marked as read." : "Marked as unread.", {
+      action: {
+        label: "Undo",
+        onClick: () => void restoreMessageReadStates(previousStates),
+      },
+    });
   }
+  await loadFolderCounts();
+  actionPending.value = null;
 }
 
 async function unsubscribeFromMessage(message: InboxMessage) {
@@ -1367,10 +1540,48 @@ function getMessageTextBody(message: InboxMessage): string {
   return getDisplayText(message.body || message.preview);
 }
 
+function getComposeSnapshot(): string {
+  return JSON.stringify({
+    form: composeForm.value,
+    replyToMessageId: composeReplyToMessageId.value,
+    preservedAttachmentKeys: composePreservedAttachmentKeys.value,
+    uploadedAttachmentKeys: composeUploadedAttachments.value.map(
+      (attachment) => attachment.storageKey || attachment.filename || "",
+    ),
+  });
+}
+
+const composeHasUnsavedChanges = computed(
+  () => composeInitialSnapshot.value !== getComposeSnapshot(),
+);
+const composeCanSaveDraft = computed(
+  () =>
+    Boolean(composeDraftId.value) ||
+    Boolean(composeForm.value.to.trim()) ||
+    Boolean(composeForm.value.subject.trim()) ||
+    Boolean(composeForm.value.textBody.trim()) ||
+    composeVisibleAttachments.value.length > 0,
+);
+const composeCanSend = computed(
+  () =>
+    Boolean(composeForm.value.to.trim()) &&
+    Boolean(composeForm.value.subject.trim()) &&
+    Boolean(composeForm.value.textBody.trim()),
+);
+
+function showComposeDialog() {
+  composeInitialSnapshot.value = getComposeSnapshot();
+  composeOpen.value = true;
+  void nextTick(() => {
+    document.getElementById("compose-to")?.focus();
+  });
+}
+
 function openComposeModal(
   message?: InboxMessage,
   mode: "reply" | "forward" = "reply",
 ) {
+  void Promise.all([loadProviderSettings(), loadContactsForCompose()]);
   composeError.value = "";
   composeDraftId.value = null;
   composeReplyToMessageId.value = null;
@@ -1392,7 +1603,7 @@ function openComposeModal(
     "";
 
   if (message) {
-    if (message.status === "pending_approval") {
+    if (isEditableDraft(message)) {
       composeMode.value = "edit";
       composeDraftId.value = message.id;
       const existingAttachments = getForwardableAttachments(message);
@@ -1403,13 +1614,10 @@ function openComposeModal(
       composeForm.value = {
         fromAddress: message.fromAddress || defaultFromAddress,
         to: message.toAddress || "",
-        subject: getMessageSubject(message),
+        subject: getDisplayText(message.subject),
         textBody: getMessageTextBody(message),
       };
-      composeOpen.value = true;
-      void nextTick(() => {
-        document.getElementById("compose-to")?.focus();
-      });
+      showComposeDialog();
       return;
     }
 
@@ -1474,17 +1682,36 @@ function openComposeModal(
       textBody: "",
     };
   }
-  composeOpen.value = true;
-  void nextTick(() => {
-    document.getElementById("compose-to")?.focus();
-  });
+  showComposeDialog();
 }
 
-function closeComposeModal() {
-  if (composeSending.value) return;
+function forceCloseComposeModal() {
+  composeDiscardConfirmOpen.value = false;
   composeOpen.value = false;
   composeToFocused.value = false;
   composeToHasTyped.value = false;
+}
+
+function requestCloseComposeModal() {
+  if (composeSending.value) return;
+  if (composeHasUnsavedChanges.value) {
+    composeDiscardConfirmOpen.value = true;
+    return;
+  }
+  forceCloseComposeModal();
+}
+
+function handleComposeKeydown(event: KeyboardEvent) {
+  if (
+    event.key !== "Enter" ||
+    (!event.metaKey && !event.ctrlKey) ||
+    !composeCanSend.value ||
+    composeSending.value
+  ) {
+    return;
+  }
+  event.preventDefault();
+  void saveDraft(true);
 }
 
 function selectComposeRecipient(contact: { email: string }) {
@@ -1546,6 +1773,7 @@ async function saveDraft(sendNow = false) {
   if (composeSending.value) return;
   composeSending.value = true;
   composeError.value = "";
+  let draftSaved = false;
   try {
     const payload = {
       fromAddress: composeForm.value.fromAddress || undefined,
@@ -1557,36 +1785,50 @@ async function saveDraft(sendNow = false) {
       preservedAttachmentKeys: composePreservedAttachmentKeys.value,
       uploadedAttachments: composeUploadedAttachments.value,
     };
-    const response =
-      composeMode.value === "edit" && composeDraftId.value
+    let draftId = composeDraftId.value;
+    const draftNeedsSaving =
+      !draftId || !sendNow || composeHasUnsavedChanges.value;
+    if (draftNeedsSaving) {
+      const response = draftId
         ? await api.put<{ draft: InboxMessage | null }>(
-            `/mailbox/drafts/${composeDraftId.value}`,
+            `/mailbox/drafts/${draftId}`,
             payload,
           )
         : await api.post<{ draft: InboxMessage | null }>(
             "/mailbox/drafts",
             payload,
           );
-    const wasSent = sendNow && Boolean(response.draft);
-    if (wasSent && response.draft) {
-      await api.post(`/mailbox/drafts/${response.draft.id}/approve`);
+      if (!response.draft) {
+        throw new Error("The draft could not be saved.");
+      }
+      draftId = response.draft.id;
+      composeDraftId.value = draftId;
+      composeMode.value = "edit";
+      composeInitialSnapshot.value = getComposeSnapshot();
     }
-    composeOpen.value = false;
+    draftSaved = true;
+    if (sendNow) {
+      await api.post(`/mailbox/drafts/${draftId}/approve`);
+    }
+    forceCloseComposeModal();
     activeTab.value = sendNow ? "inbox" : "drafts";
     offset.value = 0;
-    expandedId.value = sendNow ? null : response.draft?.id || null;
+    expandedId.value = sendNow ? null : draftId;
     await loadMessages();
-    if (!sendNow && response.draft) {
-      expandedId.value = response.draft.id;
+    if (!sendNow) {
+      expandedId.value = draftId;
       mobileThreadOpen.value = true;
-    } else if (wasSent) {
+    } else if (sendNow) {
       mobileThreadOpen.value = false;
       toastSuccess("Email sent.");
     }
     await loadFolderCounts();
   } catch (err) {
+    const message = err instanceof Error ? err.message : "Something went wrong";
     composeError.value =
-      err instanceof Error ? err.message : "Failed to save draft";
+      sendNow && draftSaved
+        ? `Draft saved, but sending failed. ${message}`
+        : `Failed to save draft. ${message}`;
   } finally {
     composeSending.value = false;
   }
@@ -1755,11 +1997,20 @@ function renderMarkdownBody(value: string): string {
   return chunks.join("\n");
 }
 
+function getEmailFrameSecurityMeta(allowExternalContent = false): string {
+  const resourceSources = allowExternalContent
+    ? "https: http: data: blob:"
+    : "data: blob:";
+  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${resourceSources}; media-src ${resourceSources}; font-src ${resourceSources}; style-src 'unsafe-inline' ${allowExternalContent ? "https: http:" : ""}; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'">
+    <meta name="referrer" content="no-referrer">`;
+}
+
 function renderMarkdownMessageDocument(body: string): string {
   return `<!doctype html>
 <html>
   <head>
     <base target="_blank">
+    ${getEmailFrameSecurityMeta()}
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
@@ -1781,18 +2032,29 @@ function renderMarkdownMessageDocument(body: string): string {
 </html>`;
 }
 
-function renderRichEmailDocument(body: string): string {
+function renderRichEmailDocument(
+  body: string,
+  allowExternalContent: boolean,
+): string {
+  const safeBody = body.replace(
+    /<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/gi,
+    "",
+  );
   const frameStyle = `<base target="_blank">
+${getEmailFrameSecurityMeta(allowExternalContent)}
 <style>
 html, body { margin: 0; overflow: visible; background: #fff; }
 img { max-width: 100%; height: auto; }
 </style>`;
 
-  if (/<html[\s>]/i.test(body)) {
-    if (/<head[\s>]/i.test(body)) {
-      return body.replace(/<head([^>]*)>/i, `<head$1>${frameStyle}`);
+  if (/<html[\s>]/i.test(safeBody)) {
+    if (/<head[\s>]/i.test(safeBody)) {
+      return safeBody.replace(/<head([^>]*)>/i, `<head$1>${frameStyle}`);
     }
-    return body.replace(/<html([^>]*)>/i, `<html$1><head>${frameStyle}</head>`);
+    return safeBody.replace(
+      /<html([^>]*)>/i,
+      `<html$1><head>${frameStyle}</head>`,
+    );
   }
 
   return `<!doctype html>
@@ -1801,12 +2063,29 @@ img { max-width: 100%; height: auto; }
     ${frameStyle}
     <meta charset="utf-8">
   </head>
-  <body>${body}</body>
+  <body>${safeBody}</body>
 </html>`;
 }
 
 function renderEmailHtml(message: InboxMessage): string {
-  return renderRichEmailDocument(getDisplayText(message.htmlBody));
+  return renderRichEmailDocument(
+    getDisplayText(message.htmlBody),
+    externalContentAllowedIds.value.has(message.id),
+  );
+}
+
+function hasExternalEmailContent(message: InboxMessage): boolean {
+  const body = getDisplayText(message.htmlBody);
+  return /<(?:img|image|source|link|video|audio|object|embed|iframe)\b[^>]*(?:src|srcset|href|poster|data)\s*=\s*["']?\s*(?:https?:)?\/\//i.test(
+    body,
+  ) || /(?:background\s*=|url\()\s*["']?\s*(?:https?:)?\/\//i.test(body);
+}
+
+function allowExternalEmailContent(messageId: string) {
+  externalContentAllowedIds.value = new Set([
+    ...externalContentAllowedIds.value,
+    messageId,
+  ]);
 }
 
 function renderMarkdownEmailHtml(message: InboxMessage): string {
@@ -1911,6 +2190,10 @@ function formatChatRelativeTime(value: string): string {
 
 const totalPages = computed(() => Math.ceil(total.value / limit) || 1);
 const currentPage = computed(() => Math.floor(offset.value / limit) + 1);
+const pageRangeStart = computed(() => (total.value > 0 ? offset.value + 1 : 0));
+const pageRangeEnd = computed(() =>
+  Math.min(offset.value + messages.value.length, total.value),
+);
 
 function prevPage() {
   if (offset.value <= 0) return;
@@ -1935,7 +2218,7 @@ onMounted(() => {
   }
   void (async () => {
     await loadMessages();
-    void Promise.all([loadChannelHealth(), loadFolderCounts(), contactsStore.fetchContacts()]);
+    void Promise.all([loadMailboxHealth(), loadFolderCounts()]);
   })();
 });
 
@@ -1963,18 +2246,19 @@ onBeforeUnmount(() => {
           class="mail-search__label"
           for="mail-search-input-mobile-nav"
         >
-          Search mail
+          {{ searchLabel }}
         </label>
         <input
           id="mail-search-input-mobile-nav"
           v-model="searchQuery"
           class="mail-search__input"
           type="search"
-          placeholder="Search mail"
+          :placeholder="searchLabel"
+          @search="!searchQuery && applyMobileSearch()"
         />
         <Button color="ghost" shape="soft" size="compact" icon-only class="mail-mobile-icon-btn" type="submit"
           :disabled="loading"
-          aria-label="Search mail"
+          :aria-label="searchLabel"
           title="Search"
         >
           <UiIcon name="Search" :size="18" aria-hidden="true" />
@@ -2024,8 +2308,14 @@ onBeforeUnmount(() => {
         </div>
 
         <div
-          v-if="activeTab !== 'telegram' && error && error !== 'pro_required'"
+          v-if="
+            activeTab !== 'telegram' &&
+            messagesLoaded &&
+            error &&
+            error !== 'pro_required'
+          "
           class="state-card state-card--error"
+          role="alert"
         >
           {{ error }}
         </div>
@@ -2050,6 +2340,7 @@ onBeforeUnmount(() => {
             <div
               v-else-if="telegramError"
               class="state-card state-card--error panel-pad"
+              role="alert"
             >
               {{ telegramError }}
             </div>
@@ -2135,12 +2426,57 @@ onBeforeUnmount(() => {
             >
               <aside class="mail-rail">
                 <WorkspaceTabs
+                  class="mail-folder-tabs mail-folder-tabs--desktop"
                   :tabs="mailFolderTabs"
                   :model-value="activeTab"
                   aria-label="Mailbox folders"
+                  semantics="navigation"
                   @update:model-value="switchMailFolderTab"
                   @change="switchMailFolderTab"
                 />
+                <div class="mail-folder-tabs--mobile">
+                  <WorkspaceTabs
+                    class="mail-folder-tabs"
+                    :tabs="primaryMailFolderTabs"
+                    :model-value="activeTab"
+                    aria-label="Primary mailbox folders"
+                    semantics="navigation"
+                    @update:model-value="switchMailFolderTab"
+                    @change="switchMailFolderTab"
+                  />
+                  <details ref="mobileFolderMore" class="mail-folder-more">
+                    <summary
+                      :class="{
+                        'mail-folder-more__summary--active': [
+                          'archive',
+                          'trash',
+                        ].includes(activeTab),
+                      }"
+                    >
+                      <UiIcon name="Ellipsis" :size="16" aria-hidden="true" />
+                      <span>
+                        {{
+                          ['archive', 'trash'].includes(activeTab)
+                            ? activeFolderLabel
+                            : 'More'
+                        }}
+                      </span>
+                    </summary>
+                    <div class="mail-folder-more__menu">
+                      <button
+                        v-for="tab in overflowMailFolderTabs"
+                        :key="tab.id"
+                        type="button"
+                        :aria-current="activeTab === tab.id ? 'page' : undefined"
+                        @click="switchMailFolderTab(tab.id)"
+                      >
+                        <UiIcon :name="tab.icon" :size="16" aria-hidden="true" />
+                        <span>{{ tab.label }}</span>
+                        <small v-if="tab.count">{{ tab.count }}</small>
+                      </button>
+                    </div>
+                  </details>
+                </div>
               </aside>
 
               <section
@@ -2163,6 +2499,10 @@ onBeforeUnmount(() => {
                       <input
                         type="checkbox"
                         :checked="allMessagesOnPageSelected"
+                        :indeterminate="
+                          someMessagesOnPageSelected &&
+                          !allMessagesOnPageSelected
+                        "
                         :aria-checked="
                           allMessagesOnPageSelected
                             ? 'true'
@@ -2238,20 +2578,13 @@ onBeforeUnmount(() => {
                       'conversation-item--selected':
                         selectedMessageIds.has(message.id),
                     }"
-                    role="button"
-                    tabindex="0"
-                    @click="selectMessage(message.id)"
-                    @keydown.enter.prevent="selectMessage(message.id)"
-                    @keydown.space.prevent="selectMessage(message.id)"
                   >
-                    <label class="conversation-select" @click.stop>
+                    <label class="conversation-select">
                       <input
                         type="checkbox"
                         :checked="selectedMessageIds.has(message.id)"
                         :disabled="inboxBusy"
                         :aria-label="`Select ${getMessageSubject(message)}`"
-                        @click.stop
-                        @keydown.space.stop
                         @change="
                           toggleMessageSelected(
                             message.id,
@@ -2260,35 +2593,46 @@ onBeforeUnmount(() => {
                         "
                       />
                     </label>
-                    <div class="conversation-item__content">
-                      <div class="conversation-item__meta">
-                        <strong>{{ getCounterpartyAddress(message) }}</strong>
-                      </div>
-                      <p class="conversation-item__summary">
-                        <span class="conversation-item__subject">
-                          {{ getMessageSubject(message) }}
-                        </span>
-                        <span class="conversation-item__separator">-</span>
-                        <span
-                          v-if="message.direction === 'inbound' && message.toAddress"
-                          class="conversation-item__recipient"
-                        >
-                          To {{ message.toAddress }}
-                        </span>
-                        <span class="conversation-item__preview">
-                          {{ getMessagePreview(message) }}
-                        </span>
-                      </p>
-                    </div>
-                    <span
-                      v-if="message.status === 'pending_approval'"
-                      class="thread-count"
+                    <button
+                      type="button"
+                      class="conversation-open"
+                      @click="selectMessage(message.id)"
                     >
-                      Draft
-                    </span>
-                    <time class="conversation-item__date">
-                      {{ formatRelativeDate(message.createdAt) }}
-                    </time>
+                      <div class="conversation-item__content">
+                        <div class="conversation-item__meta">
+                          <strong>{{ getCounterpartyAddress(message) }}</strong>
+                        </div>
+                        <p class="conversation-item__summary">
+                          <span class="conversation-item__subject">
+                            {{ getMessageSubject(message) }}
+                          </span>
+                          <span class="conversation-item__separator">-</span>
+                          <span
+                            v-if="
+                              message.direction === 'inbound' &&
+                              message.toAddress
+                            "
+                            class="conversation-item__recipient"
+                          >
+                            To {{ message.toAddress }}
+                          </span>
+                          <span class="conversation-item__preview">
+                            {{ getMessagePreview(message) }}
+                          </span>
+                        </p>
+                      </div>
+                      <span class="conversation-item__trailing">
+                        <span
+                          v-if="isDraftMessage(message)"
+                          class="thread-count"
+                        >
+                          {{ draftStatusLabel(message) }}
+                        </span>
+                        <time class="conversation-item__date">
+                          {{ formatRelativeDate(message.createdAt) }}
+                        </time>
+                      </span>
+                    </button>
                   </article>
                   </div>
                 </template>
@@ -2297,7 +2641,23 @@ onBeforeUnmount(() => {
                   class="empty-state empty-state--inline"
                 >
                   <div class="empty-state__stack">
-                    <template v-if="activeTab === 'inbox'">
+                    <template v-if="searchQuery.trim()">
+                      <p>No results in {{ activeFolderLabel }}.</p>
+                      <p class="empty-state__sub">
+                        Search is limited to the current folder.
+                      </p>
+                      <Button
+                        color="outline"
+                        shape="soft"
+                        size="compact"
+                        type="button"
+                        class="empty-state__action"
+                        @click="clearSearch"
+                      >
+                        Clear search
+                      </Button>
+                    </template>
+                    <template v-else-if="activeTab === 'inbox'">
                       <p>No inbound email yet.</p>
                       <p v-if="mailNeedsSetupHint" class="empty-hint">
                         Mail needs a custom-domain address routed to this Worker.
@@ -2313,7 +2673,7 @@ onBeforeUnmount(() => {
                       </p>
                     </template>
                     <template v-else-if="activeTab === 'drafts'">
-                      <p>No pending drafts.</p>
+                      <p>No drafts awaiting action.</p>
                       <p class="empty-state__sub">
                         When the assistant composes an email it will appear
                         here.
@@ -2341,8 +2701,17 @@ onBeforeUnmount(() => {
                     </template>
                   </div>
                 </div>
-                <div v-else class="state-card state-card--error">
-                  {{ error || "Unable to load messages." }}
+                <div v-else class="state-card state-card--error" role="alert">
+                  <p>{{ error || "Unable to load messages." }}</p>
+                  <Button
+                    color="outline"
+                    shape="soft"
+                    size="compact"
+                    type="button"
+                    @click="loadMessages"
+                  >
+                    Try again
+                  </Button>
                 </div>
 
                 <div
@@ -2352,15 +2721,17 @@ onBeforeUnmount(() => {
                   <div class="pagination-nav">
                     <Button color="ghost" shape="soft" size="small" icon-only type="button"
                       :disabled="currentPage <= 1"
+                      aria-label="Previous page"
                       @click="prevPage"
                     >
                       ◂
                     </Button>
-                    <span class="page-label"
-                      >{{ currentPage }} of {{ totalPages }}</span
-                    >
+                    <span class="page-label">
+                      {{ pageRangeStart }}–{{ pageRangeEnd }} of {{ total }}
+                    </span>
                     <Button color="ghost" shape="soft" size="small" icon-only type="button"
                       :disabled="currentPage >= totalPages"
+                      aria-label="Next page"
                       @click="nextPage"
                     >
                       ▸
@@ -2391,9 +2762,10 @@ onBeforeUnmount(() => {
                   <div class="thread-actions">
                     <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       title="Reply"
+                      aria-label="Reply"
                       :disabled="
                         inboxBusy ||
-                        selectedMessage.status === 'pending_approval'
+                        isDraftMessage(selectedMessage)
                       "
                       @click="openComposeModal(selectedMessage)"
                     >
@@ -2401,9 +2773,10 @@ onBeforeUnmount(() => {
                     </Button>
                     <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       title="Forward"
+                      aria-label="Forward"
                       :disabled="
                         inboxBusy ||
-                        selectedMessage.status === 'pending_approval'
+                        isDraftMessage(selectedMessage)
                       "
                       @click="openComposeModal(selectedMessage, 'forward')"
                     >
@@ -2415,7 +2788,8 @@ onBeforeUnmount(() => {
                         selectedMessage.folder === 'trash'
                       "
                       title="Restore to inbox"
-                      :disabled="inboxBusy"
+                      aria-label="Restore to inbox"
+                      :disabled="inboxBusy || isDraftMessage(selectedMessage)"
                       @click="moveMessage(selectedMessage, 'inbox')"
                     >
                       <UiIcon name="Inbox" :size="16" aria-hidden="true" />
@@ -2423,7 +2797,8 @@ onBeforeUnmount(() => {
                     <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       v-else
                       title="Archive"
-                      :disabled="inboxBusy"
+                      aria-label="Archive"
+                      :disabled="inboxBusy || isDraftMessage(selectedMessage)"
                       @click="moveMessage(selectedMessage, 'archive')"
                     >
                       <UiIcon name="Archive" :size="16" aria-hidden="true" />
@@ -2432,7 +2807,10 @@ onBeforeUnmount(() => {
                       :title="
                         selectedThreadIsUnread ? 'Mark read' : 'Mark unread'
                       "
-                      :disabled="inboxBusy"
+                      :aria-label="
+                        selectedThreadIsUnread ? 'Mark read' : 'Mark unread'
+                      "
+                      :disabled="inboxBusy || isDraftMessage(selectedMessage)"
                       @click="
                         markMessageRead(selectedMessage, selectedThreadIsUnread)
                       "
@@ -2441,8 +2819,11 @@ onBeforeUnmount(() => {
                     </Button>
                     <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       title="Move to trash"
+                      aria-label="Move to trash"
                       :disabled="
-                        inboxBusy || selectedMessage.folder === 'trash'
+                        inboxBusy ||
+                        isDraftMessage(selectedMessage) ||
+                        selectedMessage.folder === 'trash'
                       "
                       @click="moveMessage(selectedMessage, 'trash')"
                     >
@@ -2471,7 +2852,7 @@ onBeforeUnmount(() => {
                     class="message-card"
                     :class="{
                       'message-card--draft':
-                        message.status === 'pending_approval',
+                        isDraftMessage(message),
                     }"
                   >
                     <div class="message-card__avatar">
@@ -2486,16 +2867,20 @@ onBeforeUnmount(() => {
                         <div>
                           <strong>
                             {{
-                              message.status === "pending_approval"
-                                ? "Draft reply"
+                              isDraftMessage(message)
+                                ? message.status === "approved"
+                                  ? "Sending draft"
+                                  : message.status === "failed"
+                                    ? "Failed draft"
+                                    : "Draft reply"
                                 : getCounterpartyAddress(message)
                             }}
                           </strong>
                           <span
-                            v-if="message.status === 'pending_approval'"
+                            v-if="isDraftMessage(message)"
                             class="status-pill"
                           >
-                            Draft
+                            {{ draftStatusLabel(message) }}
                           </span>
                           <p>
                             {{
@@ -2531,12 +2916,34 @@ onBeforeUnmount(() => {
                         </div>
                       </div>
 
+                      <div
+                        v-if="
+                          !isDraftMessage(message) &&
+                          message.htmlBody &&
+                          hasExternalEmailContent(message) &&
+                          !externalContentAllowedIds.has(message.id)
+                        "
+                        class="external-content-notice"
+                        role="status"
+                      >
+                        <span>External content is blocked for your privacy.</span>
+                        <Button
+                          color="outline"
+                          shape="soft"
+                          size="compact"
+                          type="button"
+                          @click="allowExternalEmailContent(message.id)"
+                        >
+                          Load external content
+                        </Button>
+                      </div>
                       <iframe
-                        v-if="message.status !== 'pending_approval'"
+                        v-if="!isDraftMessage(message)"
                         class="message-html-frame"
-                        title="Email body"
+                        :title="`Email body: ${getMessageSubject(message)}`"
                         scrolling="no"
                         sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+                        referrerpolicy="no-referrer"
                         :style="{ height: getEmailFrameHeight(message.id) }"
                         :srcdoc="
                           message.htmlBody
@@ -2582,7 +2989,7 @@ onBeforeUnmount(() => {
 
                       <div
                         v-if="
-                          message.status === 'pending_approval' &&
+                          isEditableDraft(message) &&
                           message.folder !== 'trash'
                         "
                         class="message-card__actions"
@@ -2626,21 +3033,23 @@ onBeforeUnmount(() => {
       </template>
     </main>
 
-    <div
-      v-if="composeOpen"
+    <AppDialog
+      :open="composeOpen"
       class="compose-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="compose-title"
-      @keydown.esc="closeComposeModal"
+      labelled-by="compose-title"
+      @close="requestCloseComposeModal"
     >
-      <form class="compose-modal__card" @submit.prevent="saveDraft(false)">
+      <form
+        class="compose-modal__card"
+        @submit.prevent="saveDraft(false)"
+        @keydown="handleComposeKeydown"
+      >
         <header class="compose-modal__head">
           <h2 id="compose-title">{{ getComposeTitle() }}</h2>
           <Button color="ghost" shape="soft" size="compact" icon-only type="button"
             aria-label="Close compose"
             :disabled="composeSending"
-            @click="closeComposeModal"
+            @click="requestCloseComposeModal"
           >
             <UiIcon name="X" :size="16" aria-hidden="true" />
           </Button>
@@ -2660,17 +3069,22 @@ onBeforeUnmount(() => {
             </option>
           </select>
         </label>
-        <label class="compose-field compose-field--recipient">
-          <span>To</span>
+        <div class="compose-field compose-field--recipient">
+          <label for="compose-to">To</label>
           <input
             id="compose-to"
             v-model="composeForm.to"
             type="email"
             autocomplete="email"
-            required
+            role="combobox"
             aria-autocomplete="list"
             aria-controls="compose-recipient-list"
             :aria-expanded="showComposeRecipientSuggestions"
+            :aria-activedescendant="
+              showComposeRecipientSuggestions
+                ? `compose-recipient-${composeToActiveIndex}`
+                : undefined
+            "
             @focus="composeToFocused = true"
             @input="handleComposeToInput"
             @blur="handleComposeToBlur"
@@ -2685,6 +3099,7 @@ onBeforeUnmount(() => {
             <button
               v-for="(contact, index) in composeRecipientSuggestions"
               :key="contact.id"
+              :id="`compose-recipient-${index}`"
               type="button"
               class="compose-recipient-option"
               :class="{ 'is-active': index === composeToActiveIndex }"
@@ -2700,19 +3115,18 @@ onBeforeUnmount(() => {
               </span>
             </button>
           </div>
-        </label>
+        </div>
         <label class="compose-field">
           <span>Subject</span>
           <input
             id="compose-subject"
             v-model="composeForm.subject"
             type="text"
-            required
           />
         </label>
         <label class="compose-field compose-field--body">
           <span>Message</span>
-          <textarea v-model="composeForm.textBody" rows="10" required />
+          <textarea v-model="composeForm.textBody" rows="10" />
         </label>
         <div class="compose-attachments">
           <div class="compose-attachments__head">
@@ -2781,7 +3195,7 @@ onBeforeUnmount(() => {
             </span>
           </div>
         </div>
-        <p v-if="composeError" class="compose-error">
+        <p v-if="composeError" class="compose-error" role="alert">
           {{ composeError }}
           <router-link
             v-if="composeNeedsStorage"
@@ -2793,16 +3207,14 @@ onBeforeUnmount(() => {
         <footer class="compose-modal__actions">
           <Button color="outline" shape="soft" size="compact" type="button"
             :disabled="composeSending"
-            @click="closeComposeModal"
+            @click="requestCloseComposeModal"
           >
             Cancel
           </Button>
           <Button color="outline" shape="soft" size="compact" type="button"
             :disabled="
               composeSending ||
-              !composeForm.to.trim() ||
-              !composeForm.subject.trim() ||
-              !composeForm.textBody.trim()
+              !composeCanSaveDraft
             "
             @click="saveDraft(false)"
           >
@@ -2815,10 +3227,9 @@ onBeforeUnmount(() => {
           <Button color="primary" shape="soft" size="compact" type="button"
             :disabled="
               composeSending ||
-              !composeForm.to.trim() ||
-              !composeForm.subject.trim() ||
-              !composeForm.textBody.trim()
+              !composeCanSend
             "
+            aria-keyshortcuts="Meta+Enter Control+Enter"
             @click="saveDraft(true)"
           >
             <UiIcon name="Send" :size="14" aria-hidden="true" />
@@ -2826,7 +3237,45 @@ onBeforeUnmount(() => {
           </Button>
         </footer>
       </form>
-    </div>
+    </AppDialog>
+
+    <AppDialog
+      :open="composeDiscardConfirmOpen"
+      class="confirm-modal"
+      labelled-by="discard-compose-title"
+      described-by="discard-compose-description"
+      :close-on-backdrop="false"
+      @close="composeDiscardConfirmOpen = false"
+    >
+      <section class="confirm-modal__card">
+        <h2 id="discard-compose-title" class="confirm-modal__title">
+          Discard unsaved changes?
+        </h2>
+        <p id="discard-compose-description" class="confirm-modal__body">
+          Your changes have not been saved as a draft.
+        </p>
+        <footer class="confirm-modal__actions">
+          <Button
+            color="outline"
+            shape="soft"
+            size="compact"
+            type="button"
+            @click="composeDiscardConfirmOpen = false"
+          >
+            Keep editing
+          </Button>
+          <Button
+            color="danger"
+            shape="soft"
+            size="compact"
+            type="button"
+            @click="forceCloseComposeModal"
+          >
+            Discard changes
+          </Button>
+        </footer>
+      </section>
+    </AppDialog>
   </div>
 </template>
 
@@ -2860,16 +3309,6 @@ onBeforeUnmount(() => {
 
 .panel-pad {
   padding: 18px;
-}
-
-.confirm-modal {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(17, 17, 17, 0.32);
-  z-index: 80;
 }
 
 .confirm-modal__card {
@@ -3177,18 +3616,18 @@ onBeforeUnmount(() => {
 }
 
 .mail-search--mobile-nav {
-  grid-template-columns: minmax(0, 1fr) 36px auto 36px;
+  grid-template-columns: minmax(0, 1fr) 44px auto 44px;
   width: 100%;
 }
 
 .mail-search--mobile-nav .mail-search__input {
-  height: 36px;
+  height: 44px;
 }
 
 .mail-search--mobile-nav .mail-mobile-icon-btn {
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   margin: 0;
   padding: 0;
 }
@@ -3210,7 +3649,7 @@ onBeforeUnmount(() => {
 .mail-search--mobile-nav .mail-mobile-compose-btn {
   flex: 0 0 auto;
   gap: 6px;
-  min-height: 36px;
+  min-height: 44px;
   padding-inline: 10px;
   font-size: 13px;
   font-weight: 600;
@@ -3437,6 +3876,10 @@ onBeforeUnmount(() => {
 }
 
 .mail-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.mail-folder-tabs--mobile {
   display: none;
 }
 
@@ -3688,7 +4131,7 @@ onBeforeUnmount(() => {
 .conversation-item {
   position: relative;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto;
+  grid-template-columns: 36px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -3699,6 +4142,34 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--color-border);
   background: transparent;
   cursor: pointer;
+}
+
+.conversation-open {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-open:focus-visible {
+  border-radius: var(--ui-radius-sm, 6px);
+  outline: 2px solid var(--ui-accent, var(--color-text));
+  outline-offset: 2px;
+}
+
+.conversation-item__trailing {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .conversation-item:hover,
@@ -3995,6 +4466,21 @@ onBeforeUnmount(() => {
   margin: 22px 0 0;
   border: none;
   background: #fff;
+}
+
+.external-content-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 18px;
+  padding: 9px 10px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 6px);
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
 }
 
 .message-attachments {
@@ -4436,6 +4922,12 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
+.pagination-nav :deep(.me3-btn--icon-only),
+.compose-modal__head :deep(.me3-btn--icon-only) {
+  min-width: 44px;
+  min-height: 44px;
+}
+
 .page-btn {
   display: inline-flex;
   align-items: center;
@@ -4526,14 +5018,8 @@ onBeforeUnmount(() => {
   margin-top: 8px;
 }
 
-.compose-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: rgba(17, 17, 17, 0.34);
+.empty-state__action {
+  margin-top: 14px;
 }
 
 .compose-modal__card {
@@ -4572,7 +5058,8 @@ onBeforeUnmount(() => {
   position: relative;
 }
 
-.compose-field span {
+.compose-field > span,
+.compose-field > label {
   font-size: 12px;
   font-weight: 700;
   color: var(--color-text-muted);
@@ -4830,6 +5317,114 @@ onBeforeUnmount(() => {
     height: auto;
   }
 
+  .mail-rail {
+    align-items: stretch;
+    padding: 4px 8px 0;
+    overflow: visible;
+  }
+
+  .mail-folder-tabs--desktop {
+    display: none;
+  }
+
+  .mail-folder-tabs--mobile {
+    display: flex;
+    align-items: flex-end;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .mail-folder-tabs--mobile .mail-folder-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .mail-folder-tabs--mobile :deep(.workspace-tabs__tab) {
+    min-height: 44px;
+  }
+
+  .mail-folder-more {
+    position: relative;
+    flex: 0 0 auto;
+  }
+
+  .mail-folder-more > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    box-sizing: border-box;
+    margin: 0 0 -1px 3px;
+    padding: 5px 10px;
+    list-style: none;
+    border: 1px solid var(--ui-border, var(--color-border));
+    border-radius: var(--ui-radius-sm, 6px) var(--ui-radius-sm, 6px) 0 0;
+    background: var(--ui-bg, var(--color-bg));
+    color: var(--ui-text-muted, var(--color-text-muted));
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mail-folder-more > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .mail-folder-more > summary:focus-visible {
+    outline: 2px solid var(--ui-accent, var(--color-text));
+    outline-offset: 2px;
+  }
+
+  .mail-folder-more > .mail-folder-more__summary--active,
+  .mail-folder-more[open] > summary {
+    border-bottom-color: transparent;
+    background: var(--ui-surface-muted, var(--color-bg-subtle));
+    color: var(--ui-text, var(--color-text));
+    font-weight: 750;
+  }
+
+  .mail-folder-more__menu {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 6px);
+    right: 0;
+    display: grid;
+    width: 190px;
+    padding: 5px;
+    border: 1px solid var(--ui-border, var(--color-border));
+    border-radius: var(--ui-radius-md, 8px);
+    background: var(--ui-surface, var(--color-bg));
+    box-shadow: var(--ui-shadow-md, 0 12px 32px rgba(0, 0, 0, 0.16));
+  }
+
+  .mail-folder-more__menu button {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--ui-radius-sm, 6px);
+    background: transparent;
+    color: var(--ui-text, var(--color-text));
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .mail-folder-more__menu button:hover,
+  .mail-folder-more__menu button:focus-visible,
+  .mail-folder-more__menu button[aria-current="page"] {
+    background: var(--ui-surface-muted, var(--color-bg-subtle));
+    outline: none;
+  }
+
+  .mail-folder-more__menu small {
+    color: var(--ui-text-muted, var(--color-text-muted));
+    font-size: 11px;
+  }
+
   .conversation-list__head {
     display: none;
   }
@@ -4864,6 +5459,15 @@ onBeforeUnmount(() => {
     gap: 6px;
     min-height: 54px;
     padding: 6px 12px 6px 4px;
+  }
+
+  .conversation-open {
+    gap: 6px;
+    min-height: 44px;
+  }
+
+  .conversation-item__trailing {
+    gap: 4px;
   }
 
   .conversation-select {
@@ -4910,6 +5514,11 @@ onBeforeUnmount(() => {
     top: 0;
     z-index: 2;
     background: var(--color-bg);
+  }
+
+  .thread-toolbar :deep(.me3-btn--icon-only) {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .thread-heading {

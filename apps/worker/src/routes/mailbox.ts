@@ -1,6 +1,7 @@
 import {
   activateAgentMailbox,
   createAgentMailboxDraft,
+  deleteAgentMailboxMessage,
   getAgentMailboxDraftForApproval,
   getAgentMailboxMessage,
   getAgentMailboxOutboundHeaders,
@@ -12,7 +13,6 @@ import {
   pauseAgentMailbox,
   rejectAgentMailboxDraft,
   setAgentMailboxMessageReadState,
-  trashAgentMailboxMessage,
   updateAgentMailboxDraft,
   upsertAgentMailbox,
   type AgentMailboxDraftInput,
@@ -61,7 +61,11 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
     if (!ownerId) return unauthorized(c);
 
     const owner = await getOwnerProfile(c.env, ownerId);
-    return c.json(await getAgentMailboxOverview(c.env, ownerId, owner || undefined));
+    return c.json(
+      await getAgentMailboxOverview(c.env, ownerId, owner || undefined, {
+        includeRecentActivity: c.req.query("include_activity") !== "0",
+      }),
+    );
   });
 
   app.put("/api/mailbox", async (c) => {
@@ -316,8 +320,16 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
     if (!ownerId) return unauthorized(c);
 
     const draftId = c.req.param("draftId");
-    const approval = await getAgentMailboxDraftForApproval(c.env, ownerId, draftId);
+    let approval = await getAgentMailboxDraftForApproval(c.env, ownerId, draftId);
+    if (
+      "error" in approval &&
+      approval.status === 409 &&
+      (await reconcileMailboxDraftFromAudit(c.env, ownerId, draftId))
+    ) {
+      approval = await getAgentMailboxDraftForApproval(c.env, ownerId, draftId);
+    }
     if ("error" in approval) return c.json({ error: approval.error }, approval.status as any);
+    if (approval.alreadySent) return c.json({ draft: approval.draft });
 
     try {
       const { mailbox, draft } = approval;
@@ -357,8 +369,10 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
       if ("error" in sent) return c.json({ error: sent.error }, sent.status as any);
       return c.json(sent);
     } catch (error) {
+      await markAgentMailboxDraftFailed(c.env, ownerId, draftId, {
+        errorMessage: error instanceof Error ? error.message : "Email send failed",
+      });
       if (error instanceof EmailProviderInputError) {
-        await markAgentMailboxDraftFailed(c.env, ownerId, draftId, { errorMessage: error.message });
         return c.json({ error: error.message }, error.status as any);
       }
       throw error;
@@ -394,10 +408,54 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
     const ownerId = await requireOwner(c);
     if (!ownerId) return unauthorized(c);
 
-    const result = await trashAgentMailboxMessage(c.env, ownerId, c.req.param("messageId"));
+    const result = await deleteAgentMailboxMessage(c.env, ownerId, c.req.param("messageId"));
     if ("error" in result) return c.json({ error: result.error }, result.status as any);
     return c.json(result);
   });
+}
+
+async function reconcileMailboxDraftFromAudit(
+  env: Env,
+  ownerId: string,
+  draftId: string,
+): Promise<boolean> {
+  let audit: {
+    provider_id: string;
+    provider_message_id: string | null;
+    status: "sent" | "failed";
+    error_message: string | null;
+    sent_at: string | null;
+  } | null = null;
+  try {
+    audit = await env.DB.prepare(
+      `SELECT provider_id, provider_message_id, status, error_message, sent_at
+       FROM email_send_audit
+       WHERE user_id = ? AND mailbox_message_id = ? AND status IN ('sent', 'failed')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+      .bind(ownerId, draftId)
+      .first();
+  } catch {
+    return false;
+  }
+  if (!audit) return false;
+
+  if (audit.status === "failed") {
+    await markAgentMailboxDraftFailed(env, ownerId, draftId, {
+      errorMessage: audit.error_message || "Email provider send failed",
+    });
+    return true;
+  }
+  if (!audit.sent_at) return false;
+
+  const result = await markAgentMailboxDraftSent(env, ownerId, draftId, {
+    providerId: audit.provider_id,
+    providerMessageId: audit.provider_message_id,
+    sentAt: audit.sent_at,
+    approvedByUserId: ownerId,
+  });
+  return !("error" in result) && result.draft?.status === "sent";
 }
 
 function parseJsonRecord(value: string | null): Record<string, unknown> {

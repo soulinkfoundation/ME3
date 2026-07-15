@@ -22,7 +22,10 @@ const props = withDefaults(
     focusDayKey?: string | null;
     todayDayKey?: string | null;
     preferSelectEventId?: string | null;
+    highlightedEventId?: string | null;
     cancellingBookingId?: string | null;
+    canLoadMore?: boolean;
+    loadingMore?: boolean;
     /** Sidebar-style layout: detail panel only (feed hidden). */
     variant?: "default" | "detail-only";
   }>(),
@@ -39,7 +42,10 @@ const props = withDefaults(
     focusDayKey: null,
     todayDayKey: null,
     preferSelectEventId: null,
+    highlightedEventId: null,
     cancellingBookingId: null,
+    canLoadMore: false,
+    loadingMore: false,
     variant: "default",
   },
 );
@@ -50,6 +56,7 @@ const emit = defineEmits<{
   (e: "clear-focus"): void;
   (e: "consumed-prefer-select"): void;
   (e: "cancel-booking", event: CalendarAgendaEvent): void;
+  (e: "load-more"): void;
 }>();
 
 type CalendarDayGroup = {
@@ -125,28 +132,30 @@ const dayGroups = computed<CalendarDayGroup[]>(() => {
     ];
   }
 
-  if (props.startDayKey && props.endDayKey) {
-    const start = dateFromDayKey(props.startDayKey);
-    const end = dateFromDayKey(props.endDayKey);
-    if (start && end && start < end) {
-      const groups: CalendarDayGroup[] = [];
-      let cursor = start;
-      while (cursor < end) {
-        const key = dateToDayKey(cursor);
-        groups.push(buildDayGroup(key, eventGroups.get(key) || []));
-        cursor = new Date(
-          cursor.getFullYear(),
-          cursor.getMonth(),
-          cursor.getDate() + 1,
-        );
-      }
-      return groups;
-    }
-  }
-
-  return Array.from(eventGroups.entries()).map(([key, items]) =>
+  const groups = Array.from(eventGroups.entries()).map(([key, items]) =>
     buildDayGroup(key, items),
   );
+  if (
+    props.rangeMode === "schedule" &&
+    props.todayDayKey &&
+    props.startDayKey &&
+    props.endDayKey &&
+    props.todayDayKey >= props.startDayKey &&
+    props.todayDayKey < props.endDayKey &&
+    !eventGroups.has(props.todayDayKey)
+  ) {
+    groups.push(buildDayGroup(props.todayDayKey, []));
+    groups.sort((a, b) => a.key.localeCompare(b.key));
+  }
+  return groups;
+});
+
+const emptyMessage = computed(() => {
+  if (props.focusDayKey) return `Nothing scheduled for ${focusDayLabel.value}.`;
+  if (props.rangeMode === "schedule") {
+    return "No upcoming items in this window. Your next events and reminders will appear here.";
+  }
+  return "Nothing is scheduled for this day.";
 });
 
 const selectedEvent = computed(() =>
@@ -168,6 +177,10 @@ function formatTimeRange(start: string, end: string, allDay = false) {
   return `${formatTime(start)} – ${formatTime(end)}`;
 }
 
+function eventAriaLabel(event: CalendarAgendaEvent): string {
+  return `${event.title}, ${formatTimeRange(event.startsAt, event.endsAt, event.allDay)}, ${event.siteLabel}`;
+}
+
 function kindIcon(sourceLabel: string): UiIconName | null {
   return CALENDAR_KIND_ICONS[sourceLabel] || null;
 }
@@ -176,12 +189,6 @@ function dateFromDayKey(dayKey: string): Date | null {
   const [year, month, day] = dayKey.split("-").map(Number);
   if (!year || !month || !day) return null;
   return new Date(year, month - 1, day);
-}
-
-function dateToDayKey(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 function buildDayGroup(
@@ -274,17 +281,32 @@ watch(
       </button>
     </div>
 
-    <div v-if="loading" class="calendar-state">Loading calendar…</div>
+    <div v-if="loading" class="calendar-state" role="status">
+      Loading calendar…
+    </div>
 
-    <div v-else-if="error" class="calendar-state calendar-state--error">
+    <div
+      v-else-if="error"
+      class="calendar-state calendar-state--error"
+      role="alert"
+    >
       {{ error }}
     </div>
 
     <div
-      v-else-if="variant === 'default' && dayGroups.length === 0"
+      v-else-if="variant === 'default' && focusFilteredEvents.length === 0"
       class="calendar-empty"
     >
-      <p>No days to show.</p>
+      <p>{{ emptyMessage }}</p>
+      <button
+        v-if="canLoadMore"
+        type="button"
+        class="calendar-load-more"
+        :disabled="loadingMore"
+        @click="emit('load-more')"
+      >
+        {{ loadingMore ? "Loading…" : "Look further ahead" }}
+      </button>
     </div>
 
     <div v-else-if="variant === 'detail-only' && selectedEvent" class="calendar-detail-solo-wrap">
@@ -363,13 +385,20 @@ watch(
               'is-today': group.key === todayDayKey,
             }"
             :data-calendar-day="group.key"
+            :aria-labelledby="`calendar-day-${group.key}`"
           >
-            <div class="calendar-day-head">
-              <div class="calendar-date-rail">
-                <span>{{ group.weekdayLabel }}</span>
+            <h3
+              :id="`calendar-day-${group.key}`"
+              class="calendar-day-head"
+            >
+              <span class="calendar-date-rail">
+                <span v-if="group.key === todayDayKey" class="calendar-today-label">
+                  Today
+                </span>
+                <span v-else>{{ group.weekdayLabel }}</span>
                 <strong>{{ group.dayNumber }}</strong>
-              </div>
-            </div>
+              </span>
+            </h3>
 
             <div class="calendar-items">
               <button
@@ -377,8 +406,12 @@ watch(
                 :key="event.id"
                 type="button"
                 class="calendar-item"
-                :class="{ 'is-active': selectedEventId === event.id }"
+                :class="{
+                  'is-active': selectedEventId === event.id,
+                  'is-highlighted': highlightedEventId === event.id,
+                }"
                 :aria-pressed="selectedEventId === event.id ? 'true' : 'false'"
+                :aria-label="eventAriaLabel(event)"
                 @click="selectedEventId = event.id"
               >
                 <div class="calendar-item-time">
@@ -394,7 +427,7 @@ watch(
                       <UiIcon
                         :name="kindIcon(event.sourceLabel) || 'CalendarClock'"
                         :size="14"
-                        :title="event.sourceLabel"
+                        aria-hidden="true"
                       />
                     </span>
                     <span v-else class="calendar-kind">
@@ -408,6 +441,16 @@ watch(
               </p>
             </div>
           </section>
+        </div>
+        <div v-if="canLoadMore" class="calendar-load-more-wrap">
+          <button
+            type="button"
+            class="calendar-load-more"
+            :disabled="loadingMore"
+            @click="emit('load-more')"
+          >
+            {{ loadingMore ? "Loading…" : "Load more" }}
+          </button>
         </div>
       </div>
 
@@ -554,6 +597,10 @@ watch(
   gap: 10px;
 }
 
+.calendar-empty p {
+  margin: 0;
+}
+
 .calendar-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -623,6 +670,13 @@ watch(
 
 .calendar-day-head {
   display: block;
+  position: sticky;
+  top: 8px;
+  z-index: 1;
+  align-self: start;
+  margin: 0;
+  padding: 2px 0;
+  background: var(--cal-surface, var(--color-bg));
 }
 
 .calendar-date-rail {
@@ -674,6 +728,47 @@ watch(
 
 .calendar-item.is-active {
   box-shadow: inset 0 0 0 1px var(--color-text);
+}
+
+.calendar-item.is-highlighted {
+  box-shadow: inset 0 0 0 2px var(--ui-accent, var(--color-accent));
+  background: var(--ui-accent-soft, var(--color-bg-subtle));
+}
+
+.calendar-item:focus-visible,
+.calendar-focus-clear:focus-visible,
+.calendar-load-more:focus-visible,
+.calendar-detail-action:focus-visible {
+  outline: 2px solid var(--ui-accent, var(--color-accent));
+  outline-offset: 2px;
+}
+
+.calendar-load-more-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 20px 0 4px;
+}
+
+.calendar-load-more {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface, var(--color-bg));
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.calendar-load-more:hover:not(:disabled) {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+}
+
+.calendar-load-more:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .calendar-day-empty {
@@ -798,7 +893,7 @@ watch(
 .calendar-detail-action {
   margin-top: 14px;
   width: 100%;
-  min-height: 40px;
+  min-height: 44px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-bg);

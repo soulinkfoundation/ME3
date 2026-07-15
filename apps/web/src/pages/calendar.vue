@@ -6,6 +6,7 @@ import CalendarAgenda from "../components/calendar/CalendarAgenda.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import CalendarMiniMonth from "../components/calendar/CalendarMiniMonth.vue";
 import CalendarMonthBoard from "../components/calendar/CalendarMonthBoard.vue";
+import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
 import PageLoading from "../components/PageLoading.vue";
 import UiIcon from "../components/UiIcon.vue";
@@ -138,6 +139,7 @@ interface CalendarTaskRow {
 interface CalendarSiteOption {
   value: string;
   label: string;
+  source?: CalendarSourceRow;
 }
 
 interface CalendarFeedResponse {
@@ -162,6 +164,9 @@ const PERSONAL_EVENTS_KEY = "__events__";
 const BIRTHDAYS_KEY = "__birthdays__";
 const REMINDERS_KEY = "__reminders__";
 const PROJECT_TASKS_KEY = "__project_tasks__";
+const CALENDAR_VISIBILITY_STORAGE_KEY = "me3:calendar:hidden-sources";
+const SCHEDULE_WINDOW_INCREMENT_DAYS = 60;
+const SCHEDULE_MAX_WINDOW_DAYS = 365;
 const QUICK_CREATE_MODES: QuickCreateMode[] = [
   "event",
   "birthday",
@@ -198,9 +203,12 @@ const CALENDAR_COMPACT_MAX_WIDTH_PX = 1100;
 const rangeMode = ref<CalendarRangeMode>("month");
 const monthCursor = ref(new Date());
 const dayCursor = ref(new Date());
+const scheduleWindowDays = ref(SCHEDULE_WINDOW_INCREMENT_DAYS);
 const activeCreateMode = ref<CreateMode>(null);
+const compactEventCreate = ref(false);
 const showCreateMenu = ref(false);
 const showSettingsMenu = ref(false);
+const calendarsDialogOpen = ref(false);
 const calendarPickerOpen = ref(false);
 const calendarPickerMonth = ref(monthKeyFromDate(new Date()));
 const quickCreateDayKey = ref<string | null>(null);
@@ -235,20 +243,15 @@ function monthGridWindow(from: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
-function monthWindow(from: Date): { start: Date; end: Date } {
-  const year = from.getFullYear();
-  const month = from.getMonth();
-  return {
-    start: new Date(year, month, 1),
-    end: new Date(year, month + 1, 1),
-  };
-}
-
 const focusedDayKey = ref<string | null>(null);
 const preferSelectEventId = ref<string | null>(null);
-const sidebarSiteFilter = ref<string>("all");
+const hiddenCalendarKeys = ref<string[]>([]);
 const boardHighlightId = ref("");
+const transientHighlightId = ref("");
+const isCompactCalendar = ref(false);
 let mobileMediaQuery: MediaQueryList | null = null;
+let transientHighlightTimer: ReturnType<typeof setTimeout> | null = null;
+let calendarVisibilityHydrated = false;
 
 const todayDayKey = computed(() => {
   const d = new Date();
@@ -365,9 +368,45 @@ const calendarWindow = computed(() => {
     return { start, end };
   }
   const c = monthCursor.value;
-  if (rangeMode.value === "schedule") return monthWindow(c);
+  if (rangeMode.value === "schedule") {
+    const start = new Date(c);
+    start.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (
+      start.getFullYear() === today.getFullYear() &&
+      start.getMonth() === today.getMonth() &&
+      start < today
+    ) {
+      start.setTime(today.getTime());
+    }
+    const end = new Date(start);
+    end.setDate(end.getDate() + scheduleWindowDays.value);
+    return { start, end };
+  }
   return monthGridWindow(c);
 });
+
+const scheduleToolbarTitle = computed(() => {
+  const { start, end } = calendarWindow.value;
+  const lastDay = new Date(end);
+  lastDay.setDate(lastDay.getDate() - 1);
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: start.getFullYear() === lastDay.getFullYear() ? undefined : "numeric",
+  });
+  const lastFormatter = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  return `${formatter.format(start)} – ${lastFormatter.format(lastDay)}`;
+});
+
+const canLoadMoreSchedule = computed(
+  () => scheduleWindowDays.value < SCHEDULE_MAX_WINDOW_DAYS,
+);
 
 const dayKeyFormatter = computed(
   () =>
@@ -409,7 +448,7 @@ const quickCreateHeading = computed(() => {
 });
 
 const activeToolbarTitle = computed(() => {
-  if (rangeMode.value === "schedule") return monthToolbarTitle.value;
+  if (rangeMode.value === "schedule") return scheduleToolbarTitle.value;
   if (rangeMode.value === "day") return dayToolbarTitle.value;
   return monthToolbarTitle.value;
 });
@@ -866,8 +905,68 @@ const siteOptions = computed<CalendarSiteOption[]>(() => [
   ...sources.value.map((source) => ({
     value: `import:${source.id}`,
     label: source.name,
+    source,
   })),
 ]);
+
+const allCalendarsVisible = computed(
+  () =>
+    siteOptions.value.length > 0 &&
+    siteOptions.value.every(
+      (option) => !hiddenCalendarKeys.value.includes(option.value),
+    ),
+);
+
+const someCalendarsVisible = computed(
+  () =>
+    !allCalendarsVisible.value &&
+    siteOptions.value.some(
+      (option) => !hiddenCalendarKeys.value.includes(option.value),
+    ),
+);
+
+function isCalendarVisible(key: string): boolean {
+  return !hiddenCalendarKeys.value.includes(key);
+}
+
+function setCalendarVisibility(key: string, visible: boolean) {
+  const next = new Set(hiddenCalendarKeys.value);
+  if (visible) next.delete(key);
+  else next.add(key);
+  hiddenCalendarKeys.value = [...next];
+}
+
+function onCalendarVisibilityChange(key: string, event: Event) {
+  setCalendarVisibility(
+    key,
+    (event.currentTarget as HTMLInputElement | null)?.checked === true,
+  );
+}
+
+function onAllCalendarsVisibilityChange(event: Event) {
+  const visible =
+    (event.currentTarget as HTMLInputElement | null)?.checked === true;
+  hiddenCalendarKeys.value = visible
+    ? []
+    : siteOptions.value.map((option) => option.value);
+}
+
+function ensureCalendarVisible(key: string) {
+  setCalendarVisibility(key, true);
+}
+
+function loadCalendarVisibility() {
+  try {
+    const stored = window.localStorage.getItem(CALENDAR_VISIBILITY_STORAGE_KEY);
+    const parsed = stored ? JSON.parse(stored) : [];
+    hiddenCalendarKeys.value = Array.isArray(parsed)
+      ? parsed.filter((key): key is string => typeof key === "string")
+      : [];
+  } catch {
+    hiddenCalendarKeys.value = [];
+  }
+  calendarVisibilityHydrated = true;
+}
 
 const mergedRangeEvents = computed(() =>
   [
@@ -882,9 +981,8 @@ const mergedRangeEvents = computed(() =>
 );
 
 const visibleEvents = computed(() => {
-  if (sidebarSiteFilter.value === "all") return mergedRangeEvents.value;
   return mergedRangeEvents.value.filter(
-    (event) => event.siteKey === sidebarSiteFilter.value,
+    (event) => !hiddenCalendarKeys.value.includes(event.siteKey),
   );
 });
 
@@ -1080,18 +1178,21 @@ async function removeImportedCalendarSource(source: CalendarSourceRow) {
   try {
     await api.delete(`/calendar/sources/${encodeURIComponent(source.id)}`);
     const sourceKey = `import:${source.id}`;
-    if (sidebarSiteFilter.value === sourceKey) {
-      sidebarSiteFilter.value = "all";
-    }
+    hiddenCalendarKeys.value = hiddenCalendarKeys.value.filter(
+      (key) => key !== sourceKey,
+    );
+    const removedEventIds = new Set(
+      importedEvents.value
+        .filter((event) => event.sourceId === source.id)
+        .map((event) => event.id),
+    );
     if (boardHighlightId.value) {
-      const removedEventIds = new Set(
-        importedEvents.value
-          .filter((event) => event.sourceId === source.id)
-          .map((event) => event.id),
-      );
       if (removedEventIds.has(boardHighlightId.value)) {
         boardHighlightId.value = "";
       }
+    }
+    if (removedEventIds.has(transientHighlightId.value)) {
+      transientHighlightId.value = "";
     }
     sources.value = sources.value.filter((item) => item.id !== source.id);
     importedEvents.value = importedEvents.value.filter(
@@ -1125,9 +1226,8 @@ async function addImportedEventToBirthdays(event: CalendarAgendaEvent) {
         notes: event.notes || undefined,
       },
     );
-    preferSelectEventId.value = response.event.id;
-    boardHighlightId.value = response.event.id;
-    sidebarSiteFilter.value = BIRTHDAYS_KEY;
+    ensureCalendarVisible(BIRTHDAYS_KEY);
+    highlightSavedCalendarItem(response.event.id);
     toastSuccess("Added to Birthdays.");
     await reloadCalendar();
   } catch (err) {
@@ -1249,7 +1349,8 @@ function isRealSiteUsername(value: string): boolean {
 }
 
 function preferredAvailabilitySiteUsername(): string {
-  if (isRealSiteUsername(sidebarSiteFilter.value)) return sidebarSiteFilter.value;
+  const visibleSite = sites.sites.find((site) => isCalendarVisible(site.username));
+  if (visibleSite) return visibleSite.username;
   if (isRealSiteUsername(newBookingForm.value.username)) {
     return newBookingForm.value.username;
   }
@@ -1343,12 +1444,23 @@ async function loadAvailabilitySettings() {
 }
 
 async function openAvailabilitySettings() {
+  focusCalendarHeaderTrigger("settings");
   showSettingsMenu.value = false;
   showCreateMenu.value = false;
   calendarPickerOpen.value = false;
   availabilityModalOpen.value = true;
   availabilitySiteUsername.value = preferredAvailabilitySiteUsername();
   await loadAvailabilitySettings();
+}
+
+function openCalendarsDialog() {
+  focusCalendarHeaderTrigger("settings");
+  closeCalendarHeaderMenus();
+  calendarsDialogOpen.value = true;
+}
+
+function closeCalendarsDialog() {
+  calendarsDialogOpen.value = false;
 }
 
 function closeAvailabilitySettings() {
@@ -1433,23 +1545,50 @@ async function saveAvailabilitySettings() {
 }
 
 function onRangeChange(mode: CalendarRangeMode) {
-  const previous = rangeMode.value;
+  const anchor =
+    rangeMode.value === "day" ? new Date(dayCursor.value) : new Date(monthCursor.value);
   rangeMode.value = mode;
   calendarPickerOpen.value = false;
   showSettingsMenu.value = false;
-  boardHighlightId.value = "";
-  if (mode === "day" && previous !== "day") {
-    dayCursor.value = new Date();
-    focusedDayKey.value = dayKeyFormatter.value.format(dayCursor.value);
+  if (mode === "day") {
+    dayCursor.value = anchor;
+    focusedDayKey.value = dayKeyFormatter.value.format(anchor);
+  } else {
+    monthCursor.value = anchor;
+    if (mode === "schedule") {
+      scheduleWindowDays.value = SCHEDULE_WINDOW_INCREMENT_DAYS;
+    }
   }
-  if (mode === "month" && previous !== "month") {
-    monthCursor.value = new Date();
+  void reloadCalendar();
+}
+
+function onCalendarToday() {
+  const today = new Date();
+  if (rangeMode.value === "day") {
+    dayCursor.value = today;
+    focusedDayKey.value = todayDayKey.value;
+  } else {
+    monthCursor.value = today;
     focusedDayKey.value = null;
   }
-  if (mode === "schedule" && previous !== "schedule") {
-    monthCursor.value = new Date();
-    focusedDayKey.value = null;
-  }
+  scheduleWindowDays.value = SCHEDULE_WINDOW_INCREMENT_DAYS;
+  void reloadCalendar();
+}
+
+function moveScheduleWindow(days: number) {
+  const next = new Date(monthCursor.value);
+  next.setDate(next.getDate() + days);
+  monthCursor.value = next;
+  focusedDayKey.value = null;
+  scheduleWindowDays.value = SCHEDULE_WINDOW_INCREMENT_DAYS;
+  void reloadCalendar();
+}
+
+function loadMoreSchedule() {
+  scheduleWindowDays.value = Math.min(
+    scheduleWindowDays.value + SCHEDULE_WINDOW_INCREMENT_DAYS,
+    SCHEDULE_MAX_WINDOW_DAYS,
+  );
   void reloadCalendar();
 }
 
@@ -1485,16 +1624,14 @@ function onNextMonth() {
 
 function onToolbarPrev() {
   if (rangeMode.value === "day") onPrevDay();
-  else if (rangeMode.value === "month" || rangeMode.value === "schedule") {
-    onPrevMonth();
-  }
+  else if (rangeMode.value === "schedule") moveScheduleWindow(-30);
+  else onPrevMonth();
 }
 
 function onToolbarNext() {
   if (rangeMode.value === "day") onNextDay();
-  else if (rangeMode.value === "month" || rangeMode.value === "schedule") {
-    onNextMonth();
-  }
+  else if (rangeMode.value === "schedule") moveScheduleWindow(30);
+  else onNextMonth();
 }
 
 watch(visibleEvents, (nextEvents) => {
@@ -1512,26 +1649,30 @@ watch(miniCalendarCursor, () => {
   }
 });
 
-watch(siteOptions, (nextOptions) => {
-  if (
-    sidebarSiteFilter.value !== "all" &&
-    !nextOptions.some((option) => option.value === sidebarSiteFilter.value)
-  ) {
-    sidebarSiteFilter.value = "all";
-  }
-});
+watch(
+  hiddenCalendarKeys,
+  (keys) => {
+    if (!calendarVisibilityHydrated) return;
+    try {
+      window.localStorage.setItem(
+        CALENDAR_VISIBILITY_STORAGE_KEY,
+        JSON.stringify(keys),
+      );
+    } catch {
+      // Calendar filters still work for this session when storage is unavailable.
+    }
+  },
+  { deep: true },
+);
 
-function applyCalendarViewportDefaults(matches: boolean) {
-  sidebarSiteFilter.value = "all";
-  rangeMode.value = matches ? "schedule" : "month";
-  monthCursor.value = new Date();
-  focusedDayKey.value = null;
-  boardHighlightId.value = "";
+function applyInitialCalendarViewport(matches: boolean) {
+  isCompactCalendar.value = matches;
+  if (matches) rangeMode.value = "schedule";
 }
 
 function onMobileCalendarChange(event: MediaQueryListEvent) {
-  applyCalendarViewportDefaults(event.matches);
-  void reloadCalendar();
+  isCompactCalendar.value = event.matches;
+  closeCalendarHeaderMenus();
 }
 
 function onBoardSelectEvent(id: string) {
@@ -1558,7 +1699,19 @@ function onBoardSelectDay(dayKey: string) {
   focusedDayKey.value = dayKey;
   boardHighlightId.value = "";
   preferSelectEventId.value = null;
-  openCreateMode("event", dayKey);
+  openCreateMode("event", dayKey, true);
+}
+
+function onBoardShowDay(dayKey: string) {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  if (!year || !month || !day) return;
+  dayCursor.value = new Date(year, month - 1, day);
+  focusedDayKey.value = dayKey;
+  boardHighlightId.value = "";
+  preferSelectEventId.value = null;
+  rangeMode.value = "day";
+  closeCalendarHeaderMenus();
+  void reloadCalendar();
 }
 
 function onMiniPick(dayKey: string) {
@@ -1569,8 +1722,12 @@ function onMiniPick(dayKey: string) {
       dayCursor.value = picked;
       focusedDayKey.value = dayKey;
       void reloadCalendar();
-    } else if (rangeMode.value === "month" || rangeMode.value === "schedule") {
+    } else if (rangeMode.value === "month") {
       monthCursor.value = new Date(year, month - 1, 1);
+      void reloadCalendar();
+    } else if (rangeMode.value === "schedule") {
+      monthCursor.value = picked;
+      scheduleWindowDays.value = SCHEDULE_WINDOW_INCREMENT_DAYS;
       void reloadCalendar();
     }
   }
@@ -1647,7 +1804,13 @@ function resetImportForm() {
   };
 }
 
-function openCreateMode(mode: Exclude<CreateMode, null>, dayKey?: string) {
+function openCreateMode(
+  mode: Exclude<CreateMode, null>,
+  dayKey?: string,
+  compact = false,
+) {
+  if (showCreateMenu.value) focusCalendarHeaderTrigger("create");
+  else if (showSettingsMenu.value) focusCalendarHeaderTrigger("settings");
   showCreateMenu.value = false;
   showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
@@ -1663,6 +1826,7 @@ function openCreateMode(mode: Exclude<CreateMode, null>, dayKey?: string) {
   if (mode === "birthday") resetBirthdayForm();
   if (mode === "import") resetImportForm();
 
+  compactEventCreate.value = mode === "event" && compact;
   activeCreateMode.value = mode;
 }
 
@@ -1672,6 +1836,7 @@ function switchQuickCreateMode(mode: QuickCreateMode) {
   if (mode === "reminder") resetReminderForm();
   if (mode === "event") resetEventForm();
   if (mode === "birthday") resetBirthdayForm();
+  compactEventCreate.value = false;
   activeCreateMode.value = mode;
 }
 
@@ -1747,12 +1912,24 @@ function isQuickCreateMode(mode: CreateMode): mode is QuickCreateMode {
 
 function closeCreateMode() {
   activeCreateMode.value = null;
+  compactEventCreate.value = false;
   showCreateMenu.value = false;
   showSettingsMenu.value = false;
   calendarPickerOpen.value = false;
   quickCreateDayKey.value = null;
   editingEventId.value = null;
   editingReminderId.value = null;
+}
+
+function highlightSavedCalendarItem(id: string) {
+  boardHighlightId.value = "";
+  preferSelectEventId.value = null;
+  transientHighlightId.value = id;
+  if (transientHighlightTimer) clearTimeout(transientHighlightTimer);
+  transientHighlightTimer = setTimeout(() => {
+    if (transientHighlightId.value === id) transientHighlightId.value = "";
+    transientHighlightTimer = null;
+  }, 4000);
 }
 
 async function submitNewBooking() {
@@ -1781,8 +1958,7 @@ async function submitNewBooking() {
         notes: form.notes.trim() || undefined,
       },
     );
-    preferSelectEventId.value = response.booking.id;
-    boardHighlightId.value = response.booking.id;
+    highlightSavedCalendarItem(response.booking.id);
     toastSuccess("Booking created.");
     closeCreateMode();
     await reloadCalendar();
@@ -1825,8 +2001,7 @@ async function submitNewReminder() {
           "/agent/reminders",
           payload,
         );
-    preferSelectEventId.value = response.reminder.id;
-    boardHighlightId.value = response.reminder.id;
+    highlightSavedCalendarItem(response.reminder.id);
     toastSuccess(
       editingReminderId.value
         ? "Reminder updated."
@@ -1887,8 +2062,7 @@ async function submitNewEvent() {
           "/calendar/events",
           payload,
     );
-    preferSelectEventId.value = response.event.id;
-    boardHighlightId.value = response.event.id;
+    highlightSavedCalendarItem(response.event.id);
     toastSuccess(
       editingEventId.value
         ? "Event updated."
@@ -1937,8 +2111,7 @@ async function submitNewBirthday() {
           "/calendar/events",
           payload,
     );
-    preferSelectEventId.value = response.event.id;
-    boardHighlightId.value = response.event.id;
+    highlightSavedCalendarItem(response.event.id);
     toastSuccess(
       editingEventId.value
         ? "Birthday updated."
@@ -2036,6 +2209,11 @@ function closeCalendarHeaderMenus() {
   showSettingsMenu.value = false;
 }
 
+function focusCalendarHeaderTrigger(kind: "create" | "settings") {
+  const prefix = isCompactCalendar.value ? "mobile" : "desktop";
+  document.getElementById(`calendar-${prefix}-${kind}`)?.focus();
+}
+
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     if (availabilityModalOpen.value) {
@@ -2051,10 +2229,11 @@ function handleWindowClick() {
 }
 
 onMounted(async () => {
+  loadCalendarVisibility();
   mobileMediaQuery = window.matchMedia(
     `(max-width: ${CALENDAR_COMPACT_MAX_WIDTH_PX}px)`,
   );
-  applyCalendarViewportDefaults(mobileMediaQuery.matches);
+  applyInitialCalendarViewport(mobileMediaQuery.matches);
   mobileMediaQuery.addEventListener("change", onMobileCalendarChange);
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener("click", handleWindowClick);
@@ -2066,6 +2245,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  if (transientHighlightTimer) clearTimeout(transientHighlightTimer);
   mobileMediaQuery?.removeEventListener("change", onMobileCalendarChange);
   window.removeEventListener("keydown", handleWindowKeydown);
   window.removeEventListener("click", handleWindowClick);
@@ -2076,7 +2256,7 @@ onBeforeUnmount(() => {
   <div class="ops-page calendar-spike">
     <Teleport to="#app-side-nav-mobile-page-controls">
       <div
-        v-if="!initialCalendarLoading && !showCalendarUnavailable"
+        v-if="isCompactCalendar && !initialCalendarLoading && !showCalendarUnavailable"
         class="cal-mobile-nav-controls"
         @click.stop
       >
@@ -2143,6 +2323,7 @@ onBeforeUnmount(() => {
         </Button>
         <div class="cal-mobile-settings-wrap">
           <Button
+            id="calendar-mobile-settings"
             color="ghost"
             shape="soft"
             size="compact"
@@ -2152,7 +2333,6 @@ onBeforeUnmount(() => {
             title="Calendar settings"
             type="button"
             :aria-expanded="showSettingsMenu"
-            aria-haspopup="menu"
             @click="toggleSettingsMenu"
           >
             <UiIcon name="Settings" :size="18" aria-hidden="true" />
@@ -2160,12 +2340,18 @@ onBeforeUnmount(() => {
           <div
             v-if="showSettingsMenu"
             class="cal-create-menu cal-settings-menu cal-settings-menu--mobile-nav"
-            role="menu"
           >
             <button
               type="button"
               class="cal-settings-menu-item"
-              role="menuitem"
+              @click="openCalendarsDialog"
+            >
+              <UiIcon name="CalendarDays" :size="16" aria-hidden="true" />
+              Calendars
+            </button>
+            <button
+              type="button"
+              class="cal-settings-menu-item"
               @click="openAvailabilitySettings"
             >
               <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
@@ -2174,7 +2360,6 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="cal-settings-menu-item"
-              role="menuitem"
               @click="openCreateMode('import')"
             >
               <UiIcon name="RefreshCw" :size="16" aria-hidden="true" />
@@ -2184,6 +2369,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="cal-mobile-create-wrap">
           <Button
+            id="calendar-mobile-create"
             color="ghost"
             shape="soft"
             size="compact"
@@ -2193,7 +2379,6 @@ onBeforeUnmount(() => {
             title="Create calendar item"
             type="button"
             :aria-expanded="showCreateMenu"
-            aria-haspopup="menu"
             @click="toggleCreateMenu"
           >
             <UiIcon name="Plus" :size="18" aria-hidden="true" />
@@ -2201,18 +2386,17 @@ onBeforeUnmount(() => {
           <div
             v-if="showCreateMenu"
             class="cal-create-menu cal-create-menu--mobile-nav"
-            role="menu"
           >
-            <button type="button" role="menuitem" @click="openCreateMode('booking')">
+            <button type="button" @click="openCreateMode('booking')">
               New booking
             </button>
-            <button type="button" role="menuitem" @click="openCreateMode('reminder')">
+            <button type="button" @click="openCreateMode('reminder')">
               New reminder
             </button>
-            <button type="button" role="menuitem" @click="openCreateMode('event')">
+            <button type="button" @click="openCreateMode('event')">
               New event
             </button>
-            <button type="button" role="menuitem" @click="openCreateMode('birthday')">
+            <button type="button" @click="openCreateMode('birthday')">
               New birthday
             </button>
           </div>
@@ -2227,6 +2411,15 @@ onBeforeUnmount(() => {
         @click.stop
       >
         <div class="cal-toolbar-left">
+          <Button
+            color="outline"
+            shape="soft"
+            size="compact"
+            type="button"
+            @click="onCalendarToday"
+          >
+            Today
+          </Button>
           <div class="cal-view-toggle" role="group" aria-label="Calendar range">
             <button
               type="button"
@@ -2295,6 +2488,7 @@ onBeforeUnmount(() => {
         <div class="cal-toolbar-actions">
           <div class="cal-create-wrap">
             <Button
+              id="calendar-desktop-settings"
               color="ghost"
               shape="soft"
               size="compact"
@@ -2304,7 +2498,6 @@ onBeforeUnmount(() => {
               title="Calendar settings"
               type="button"
               :aria-expanded="showSettingsMenu"
-              aria-haspopup="menu"
               @click="toggleSettingsMenu"
             >
               <UiIcon name="Settings" :size="18" aria-hidden="true" />
@@ -2312,12 +2505,10 @@ onBeforeUnmount(() => {
             <div
               v-if="showSettingsMenu"
               class="cal-create-menu cal-settings-menu cal-settings-menu--toolbar"
-              role="menu"
             >
               <button
                 type="button"
                 class="cal-settings-menu-item"
-                role="menuitem"
                 @click="openAvailabilitySettings"
               >
                 <UiIcon name="CalendarClock" :size="16" aria-hidden="true" />
@@ -2326,7 +2517,6 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="cal-settings-menu-item"
-                role="menuitem"
                 @click="openCreateMode('import')"
               >
                 <UiIcon name="RefreshCw" :size="16" aria-hidden="true" />
@@ -2336,12 +2526,12 @@ onBeforeUnmount(() => {
           </div>
           <div class="cal-create-wrap">
             <Button
+              id="calendar-desktop-create"
               color="primary"
               shape="soft"
               size="compact"
               type="button"
               :aria-expanded="showCreateMenu"
-              aria-haspopup="menu"
               @click="toggleCreateMenu"
             >
               <template #icon>
@@ -2352,18 +2542,17 @@ onBeforeUnmount(() => {
             <div
               v-if="showCreateMenu"
               class="cal-create-menu cal-create-menu--toolbar"
-              role="menu"
             >
-              <button type="button" role="menuitem" @click="openCreateMode('booking')">
+              <button type="button" @click="openCreateMode('booking')">
                 New booking
               </button>
-              <button type="button" role="menuitem" @click="openCreateMode('reminder')">
+              <button type="button" @click="openCreateMode('reminder')">
                 New reminder
               </button>
-              <button type="button" role="menuitem" @click="openCreateMode('event')">
+              <button type="button" @click="openCreateMode('event')">
                 New event
               </button>
-              <button type="button" role="menuitem" @click="openCreateMode('birthday')">
+              <button type="button" @click="openCreateMode('birthday')">
                 New birthday
               </button>
             </div>
@@ -2372,7 +2561,11 @@ onBeforeUnmount(() => {
       </div>
 
       <PageLoading v-if="initialCalendarLoading" label="Loading calendar..." />
-      <div v-else-if="showCalendarUnavailable" class="cal-error-banner">
+      <div
+        v-else-if="showCalendarUnavailable"
+        class="cal-error-banner"
+        role="alert"
+      >
         {{ error }}
       </div>
       <template v-else>
@@ -2408,10 +2601,11 @@ onBeforeUnmount(() => {
                 <h3 class="cal-filters-title">Calendars</h3>
                 <label class="cal-filter-row">
                   <input
-                    v-model="sidebarSiteFilter"
-                    type="radio"
+                    type="checkbox"
                     class="cal-filter-input"
-                    value="all"
+                    :checked="allCalendarsVisible"
+                    :indeterminate="someCalendarsVisible"
+                    @change="onAllCalendarsVisibilityChange"
                   />
                   <span
                     class="cal-swatch cal-swatch--neutral"
@@ -2419,115 +2613,49 @@ onBeforeUnmount(() => {
                   />
                   <span class="cal-filter-label">All calendars</span>
                 </label>
-                <label
-                  v-for="s in sites.sites"
-                  :key="s.username"
-                  class="cal-filter-row"
-                >
-                  <input
-                    v-model="sidebarSiteFilter"
-                    type="radio"
-                    class="cal-filter-input"
-                    :value="s.username"
-                  />
-                  <span
-                    class="cal-swatch"
-                    :style="{ background: siteDotColor(s.username) }"
-                    aria-hidden="true"
-                  />
-                  <span class="cal-filter-label">{{ s.username }}</span>
-                </label>
-                <label class="cal-filter-row">
-                  <input
-                    v-model="sidebarSiteFilter"
-                    type="radio"
-                    class="cal-filter-input"
-                    value="__reminders__"
-                  />
-                  <span
-                    class="cal-swatch cal-swatch--muted"
-                    aria-hidden="true"
-                  />
-                  <span class="cal-filter-label">Reminders</span>
-                </label>
-                <label class="cal-filter-row">
-                  <input
-                    v-model="sidebarSiteFilter"
-                    type="radio"
-                    class="cal-filter-input"
-                    :value="PERSONAL_EVENTS_KEY"
-                  />
-                  <span
-                    class="cal-swatch"
-                    :style="{ background: siteDotColor(PERSONAL_EVENTS_KEY) }"
-                    aria-hidden="true"
-                  />
-                  <span class="cal-filter-label">Personal events</span>
-                </label>
-                <label class="cal-filter-row">
-                  <input
-                    v-model="sidebarSiteFilter"
-                    type="radio"
-                    class="cal-filter-input"
-                    :value="BIRTHDAYS_KEY"
-                  />
-                  <span
-                    class="cal-swatch"
-                    :style="{ background: siteDotColor(BIRTHDAYS_KEY) }"
-                    aria-hidden="true"
-                  />
-                  <span class="cal-filter-label">Birthdays</span>
-                </label>
-                <label class="cal-filter-row">
-                  <input
-                    v-model="sidebarSiteFilter"
-                    type="radio"
-                    class="cal-filter-input"
-                    :value="PROJECT_TASKS_KEY"
-                  />
-                  <span
-                    class="cal-swatch"
-                    :style="{ background: siteDotColor(PROJECT_TASKS_KEY) }"
-                    aria-hidden="true"
-                  />
-                  <span class="cal-filter-label">Project tasks</span>
-                </label>
                 <div
-                  v-for="source in sources"
-                  :key="source.id"
+                  v-for="option in siteOptions"
+                  :key="option.value"
                   class="cal-filter-row cal-filter-row--with-action"
                 >
                   <label class="cal-filter-choice">
                     <input
-                      v-model="sidebarSiteFilter"
-                      type="radio"
+                      type="checkbox"
                       class="cal-filter-input"
-                      :value="`import:${source.id}`"
+                      :checked="isCalendarVisible(option.value)"
+                      @change="onCalendarVisibilityChange(option.value, $event)"
                     />
                     <span
                       class="cal-swatch"
-                      :style="{ background: siteDotColor(`import:${source.id}`) }"
+                      :style="{ background: siteDotColor(option.value) }"
                       aria-hidden="true"
                     />
                     <span class="cal-filter-label">
-                      {{ source.name }}
-                      <small v-if="source.lastSyncError" class="cal-filter-meta cal-filter-meta--error">
+                      {{ option.label }}
+                      <small
+                        v-if="option.source?.lastSyncError"
+                        class="cal-filter-meta cal-filter-meta--error"
+                      >
                         Sync failed
                       </small>
-                      <small v-else-if="source.kind === 'ics_url'" class="cal-filter-meta">
-                        {{ source.sourceUrlHint || "Subscribed" }}
+                      <small
+                        v-else-if="option.source?.kind === 'ics_url'"
+                        class="cal-filter-meta"
+                      >
+                        {{ option.source.sourceUrlHint || "Subscribed" }}
                       </small>
                     </span>
                   </label>
                   <button
+                    v-if="option.source"
                     type="button"
                     class="cal-filter-action"
-                    :disabled="removingSourceId === source.id"
-                    :aria-label="`Remove ${source.name}`"
-                    :title="`Remove ${source.name}`"
-                    @click="removeImportedCalendarSource(source)"
+                    :disabled="removingSourceId === option.source.id"
+                    :aria-label="`Remove ${option.source.name}`"
+                    :title="`Remove ${option.source.name}`"
+                    @click="removeImportedCalendarSource(option.source)"
                   >
-                    <UiIcon name="Trash2" :size="14" />
+                    <UiIcon name="Trash2" :size="14" aria-hidden="true" />
                   </button>
                 </div>
               </section>
@@ -2544,14 +2672,18 @@ onBeforeUnmount(() => {
                 :focus-day-key="focusedDayKey"
                 :today-day-key="todayDayKey"
                 :prefer-select-event-id="preferSelectEventId"
+                :highlighted-event-id="transientHighlightId"
                 :cancelling-booking-id="cancellingBookingId"
+                :can-load-more="canLoadMoreSchedule"
+                :loading-more="calendarRefreshing"
                 title="Schedule"
-                description="Scheduled items across your calendars."
+                description="Upcoming items across your visible calendars."
                 @clear-focus="focusedDayKey = null"
                 @consumed-prefer-select="preferSelectEventId = null"
                 @event-action="handleEventAction"
                 @event-danger-action="handleEventDangerAction"
                 @cancel-booking="handleCancelBooking"
+                @load-more="loadMoreSchedule"
               />
               <CalendarAgenda
                 v-else-if="rangeMode === 'day'"
@@ -2565,6 +2697,7 @@ onBeforeUnmount(() => {
                 :focus-day-key="focusedAgendaDayKey"
                 :today-day-key="todayDayKey"
                 :prefer-select-event-id="preferSelectEventId"
+                :highlighted-event-id="transientHighlightId"
                 :cancelling-booking-id="cancellingBookingId"
                 @event-action="handleEventAction"
                 @event-danger-action="handleEventDangerAction"
@@ -2578,9 +2711,11 @@ onBeforeUnmount(() => {
                   :month="monthCursor.getMonth()"
                   :events="visibleEvents"
                   :selected-event-id="boardHighlightId"
+                  :highlighted-event-id="transientHighlightId"
                   :today-day-key="todayDayKey"
                   @select-event="onBoardSelectEvent"
                   @select-day="onBoardSelectDay"
+                  @show-day="onBoardShowDay"
                 />
               </template>
             </div>
@@ -2589,20 +2724,18 @@ onBeforeUnmount(() => {
       </template>
     </main>
 
-    <div
-      v-if="selectedBoardEvent"
-      class="modal-overlay"
-      @click.self="boardHighlightId = ''"
+    <AppDialog
+      :open="Boolean(selectedBoardEvent)"
+      labelled-by="event-detail-title"
+      @close="boardHighlightId = ''"
     >
       <aside
+        v-if="selectedBoardEvent"
         class="modal-card event-detail-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="event-detail-title"
       >
         <div class="modal-header">
           <div>
-            <p class="modal-kicker">{{ selectedBoardEvent.sourceLabel }}</p>
+            <p class="event-detail-source">{{ selectedBoardEvent.sourceLabel }}</p>
             <h2 id="event-detail-title">{{ selectedBoardEvent.title }}</h2>
           </div>
           <button
@@ -2669,22 +2802,19 @@ onBeforeUnmount(() => {
           }}
         </button>
       </aside>
-    </div>
+    </AppDialog>
 
-    <div
-      v-if="isQuickCreateMode(activeCreateMode)"
-      class="modal-overlay"
-      @click.self="closeCreateMode"
+    <AppDialog
+      :open="isQuickCreateMode(activeCreateMode)"
+      labelled-by="quick-create-title"
+      @close="closeCreateMode"
     >
       <div
         class="modal-card quick-create-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="quick-create-title"
+        :class="{ 'quick-create-modal--compact': compactEventCreate }"
       >
         <div class="modal-header">
           <div>
-            <p class="modal-kicker">Quick create</p>
             <h2 id="quick-create-title">{{ quickCreateHeading }}</h2>
           </div>
           <button
@@ -2697,15 +2827,18 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <div class="create-tabs" role="tablist" aria-label="Create type">
+        <div
+          v-if="!compactEventCreate"
+          class="create-tabs"
+          role="group"
+          aria-label="Create type"
+        >
           <button
             v-for="mode in QUICK_CREATE_MODES"
             :id="`quick-create-tab-${mode}`"
             :key="mode"
             type="button"
-            role="tab"
-            :aria-selected="activeCreateMode === mode"
-            :aria-controls="`quick-create-panel-${mode}`"
+            :aria-pressed="activeCreateMode === mode"
             :class="{ active: activeCreateMode === mode }"
             @click="switchQuickCreateMode(mode)"
           >
@@ -2714,11 +2847,70 @@ onBeforeUnmount(() => {
         </div>
 
         <form
-          v-if="activeCreateMode === 'event'"
+          v-if="activeCreateMode === 'event' && compactEventCreate"
+          class="booking-form compact-event-form"
+          @submit.prevent="submitNewEvent"
+        >
+          <label>
+            <span>Title</span>
+            <input
+              v-model="newEventForm.title"
+              type="text"
+              placeholder="Add title"
+              required
+              autofocus
+            />
+          </label>
+
+          <div class="field-row">
+            <label>
+              <span>Date</span>
+              <input
+                v-model="newEventForm.startDate"
+                type="date"
+                required
+                @change="syncEventEndFromStart"
+              />
+            </label>
+            <label>
+              <span>Time</span>
+              <input
+                v-model="newEventForm.startTime"
+                type="time"
+                required
+                @change="syncEventEndFromStart"
+              />
+            </label>
+          </div>
+
+          <p v-if="newEventError" class="form-error" role="alert">
+            {{ newEventError }}
+          </p>
+
+          <div class="modal-actions">
+            <Button
+              size="small"
+              type="button"
+              color="outline"
+              @click="compactEventCreate = false"
+            >
+              More options
+            </Button>
+            <Button
+              size="small"
+              type="submit"
+              color="primary"
+              :disabled="newEventSubmitting"
+            >
+              {{ newEventSubmitting ? "Creating…" : "Create event" }}
+            </Button>
+          </div>
+        </form>
+
+        <form
+          v-else-if="activeCreateMode === 'event'"
           id="quick-create-panel-event"
           class="booking-form"
-          role="tabpanel"
-          aria-labelledby="quick-create-tab-event"
           @submit.prevent="submitNewEvent"
         >
           <p class="form-hint">
@@ -2732,7 +2924,6 @@ onBeforeUnmount(() => {
               v-model="newEventForm.title"
               type="text"
               required
-              autofocus
             />
           </label>
 
@@ -2847,7 +3038,9 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <p v-if="newEventError" class="form-error">{{ newEventError }}</p>
+          <p v-if="newEventError" class="form-error" role="alert">
+            {{ newEventError }}
+          </p>
 
           <div class="modal-actions">
             <Button
@@ -2881,8 +3074,6 @@ onBeforeUnmount(() => {
           v-else-if="activeCreateMode === 'birthday'"
           id="quick-create-panel-birthday"
           class="booking-form"
-          role="tabpanel"
-          aria-labelledby="quick-create-tab-birthday"
           @submit.prevent="submitNewBirthday"
         >
           <p class="form-hint">
@@ -2895,7 +3086,6 @@ onBeforeUnmount(() => {
               v-model="newBirthdayForm.name"
               type="text"
               required
-              autofocus
             />
           </label>
 
@@ -2914,7 +3104,9 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <p v-if="newEventError" class="form-error">{{ newEventError }}</p>
+          <p v-if="newEventError" class="form-error" role="alert">
+            {{ newEventError }}
+          </p>
 
           <div class="modal-actions">
             <Button
@@ -2948,8 +3140,6 @@ onBeforeUnmount(() => {
           v-else-if="activeCreateMode === 'reminder'"
           id="quick-create-panel-reminder"
           class="booking-form"
-          role="tabpanel"
-          aria-labelledby="quick-create-tab-reminder"
           @submit.prevent="submitNewReminder"
         >
           <p class="form-hint">
@@ -2963,7 +3153,6 @@ onBeforeUnmount(() => {
               v-model="newReminderForm.title"
               type="text"
               required
-              autofocus
             />
           </label>
 
@@ -3004,7 +3193,7 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <p v-if="newReminderError" class="form-error">
+          <p v-if="newReminderError" class="form-error" role="alert">
             {{ newReminderError }}
           </p>
 
@@ -3040,8 +3229,6 @@ onBeforeUnmount(() => {
           v-else
           id="quick-create-panel-booking"
           class="booking-form"
-          role="tabpanel"
-          aria-labelledby="quick-create-tab-booking"
           @submit.prevent="submitNewBooking"
         >
           <p class="form-hint">
@@ -3070,7 +3257,6 @@ onBeforeUnmount(() => {
               type="text"
               autocomplete="name"
               required
-              autofocus
             />
           </label>
 
@@ -3117,7 +3303,9 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <p v-if="newBookingError" class="form-error">{{ newBookingError }}</p>
+          <p v-if="newBookingError" class="form-error" role="alert">
+            {{ newBookingError }}
+          </p>
 
           <div class="modal-actions">
             <Button
@@ -3139,19 +3327,14 @@ onBeforeUnmount(() => {
           </div>
         </form>
       </div>
-    </div>
+    </AppDialog>
 
-    <div
-      v-if="activeCreateMode === 'import'"
-      class="modal-overlay"
-      @click.self="closeCreateMode"
+    <AppDialog
+      :open="activeCreateMode === 'import'"
+      labelled-by="import-calendar-title"
+      @close="closeCreateMode"
     >
-      <div
-        class="modal-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="import-calendar-title"
-      >
+      <div class="modal-card">
         <div class="modal-header">
           <h2 id="import-calendar-title">Sync calendar</h2>
           <button
@@ -3165,11 +3348,10 @@ onBeforeUnmount(() => {
         </div>
 
         <form class="booking-form" @submit.prevent="submitImport">
-          <div class="create-tabs" role="tablist" aria-label="Calendar sync method">
+          <div class="create-tabs" role="group" aria-label="Calendar sync method">
             <button
               type="button"
-              role="tab"
-              :aria-selected="importForm.mode === 'url'"
+              :aria-pressed="importForm.mode === 'url'"
               :class="{ active: importForm.mode === 'url' }"
               @click="importForm.mode = 'url'"
             >
@@ -3177,8 +3359,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              role="tab"
-              :aria-selected="importForm.mode === 'file'"
+              :aria-pressed="importForm.mode === 'file'"
               :class="{ active: importForm.mode === 'file' }"
               @click="importForm.mode = 'file'"
             >
@@ -3226,7 +3407,9 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <p v-if="importError" class="form-error">{{ importError }}</p>
+          <p v-if="importError" class="form-error" role="alert">
+            {{ importError }}
+          </p>
 
           <div class="modal-actions">
             <Button
@@ -3248,19 +3431,83 @@ onBeforeUnmount(() => {
           </div>
         </form>
       </div>
-    </div>
+    </AppDialog>
 
-    <div
-      v-if="availabilityModalOpen"
-      class="modal-overlay"
-      @click.self="closeAvailabilitySettings"
+    <AppDialog
+      :open="calendarsDialogOpen"
+      labelled-by="calendar-visibility-title"
+      @close="closeCalendarsDialog"
     >
-      <div
-        class="modal-card availability-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Booking availability"
-      >
+      <section class="modal-card calendars-modal">
+        <div class="modal-header">
+          <div>
+            <h2 id="calendar-visibility-title">Calendars</h2>
+            <p class="form-hint">Choose which calendars are visible.</p>
+          </div>
+          <button
+            type="button"
+            class="icon-close"
+            aria-label="Close calendars"
+            @click="closeCalendarsDialog"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="cal-mobile-filter-list">
+          <label class="cal-filter-row">
+            <input
+              type="checkbox"
+              class="cal-filter-input"
+              :checked="allCalendarsVisible"
+              :indeterminate="someCalendarsVisible"
+              @change="onAllCalendarsVisibilityChange"
+            />
+            <span
+              class="cal-swatch cal-swatch--neutral"
+              aria-hidden="true"
+            />
+            <span class="cal-filter-label">All calendars</span>
+          </label>
+          <label
+            v-for="option in siteOptions"
+            :key="option.value"
+            class="cal-filter-row"
+          >
+            <input
+              type="checkbox"
+              class="cal-filter-input"
+              :checked="isCalendarVisible(option.value)"
+              @change="onCalendarVisibilityChange(option.value, $event)"
+            />
+            <span
+              class="cal-swatch"
+              :style="{ background: siteDotColor(option.value) }"
+              aria-hidden="true"
+            />
+            <span class="cal-filter-label">{{ option.label }}</span>
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <Button
+            size="small"
+            type="button"
+            color="primary"
+            @click="closeCalendarsDialog"
+          >
+            Done
+          </Button>
+        </div>
+      </section>
+    </AppDialog>
+
+    <AppDialog
+      :open="availabilityModalOpen"
+      aria-label="Booking availability"
+      @close="closeAvailabilitySettings"
+    >
+      <div class="modal-card availability-modal">
         <div class="modal-header modal-header--actions-only">
           <button
             type="button"
@@ -3286,7 +3533,7 @@ onBeforeUnmount(() => {
             description="Set or update your availability here."
           />
 
-          <p v-if="availabilityError" class="form-error">
+          <p v-if="availabilityError" class="form-error" role="alert">
             {{ availabilityError }}
           </p>
 
@@ -3315,7 +3562,7 @@ onBeforeUnmount(() => {
           </div>
         </form>
       </div>
-    </div>
+    </AppDialog>
 
   </div>
 </template>
@@ -3356,7 +3603,7 @@ onBeforeUnmount(() => {
 
 .cal-mobile-nav-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px 36px 36px;
+  grid-template-columns: minmax(0, 1fr) 44px 44px 44px;
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -3364,7 +3611,7 @@ onBeforeUnmount(() => {
 }
 
 .cal-period-switcher--mobile {
-  grid-template-columns: 32px auto 32px;
+  grid-template-columns: 44px auto 44px;
   justify-self: start;
   width: max-content;
   max-width: 100%;
@@ -3372,14 +3619,14 @@ onBeforeUnmount(() => {
 }
 
 .cal-period-switcher--mobile .cal-arrow {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border: 0;
   background: transparent;
 }
 
 .cal-period-switcher--mobile .cal-period-title {
-  min-height: 32px;
+  min-height: 44px;
   max-width: min(220px, calc(100vw - 220px));
   padding-inline: 6px;
   font-size: 14px;
@@ -3408,12 +3655,13 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-self: start;
   min-width: 0;
+  gap: 10px;
 }
 
 .cal-period-switcher {
   position: relative;
   display: grid;
-  grid-template-columns: 36px minmax(148px, 240px) 36px;
+  grid-template-columns: 44px minmax(148px, 260px) 44px;
   align-items: center;
   justify-self: center;
   gap: 4px;
@@ -3458,7 +3706,7 @@ onBeforeUnmount(() => {
 }
 
 .cal-view-toggle button {
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px 12px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
@@ -3612,6 +3860,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
+  min-height: 44px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -3636,8 +3885,8 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   border: 1px solid transparent;
   border-radius: var(--ui-radius-sm);
   background: transparent;
@@ -3659,6 +3908,8 @@ onBeforeUnmount(() => {
 
 .cal-filter-input {
   accent-color: var(--color-text);
+  width: 18px;
+  height: 18px;
 }
 
 .cal-swatch {
@@ -3711,16 +3962,6 @@ onBeforeUnmount(() => {
   top: 12px;
 }
 
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.32);
-}
-
 .modal-card {
   width: min(100%, 480px);
   max-height: min(90vh, 720px);
@@ -3736,6 +3977,10 @@ onBeforeUnmount(() => {
   width: min(100%, 560px);
 }
 
+.quick-create-modal--compact {
+  width: min(100%, 440px);
+}
+
 .event-detail-modal {
   width: min(100%, 520px);
 }
@@ -3743,6 +3988,16 @@ onBeforeUnmount(() => {
 .availability-modal {
   position: relative;
   width: min(100%, 760px);
+}
+
+.calendars-modal {
+  width: min(100%, 440px);
+}
+
+.cal-mobile-filter-list {
+  display: grid;
+  max-height: min(55vh, 460px);
+  overflow: auto;
 }
 
 .modal-header {
@@ -3767,12 +4022,10 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
-.modal-kicker {
+.event-detail-source {
   margin: 0 0 4px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 650;
   color: var(--color-text-muted);
 }
 
@@ -3855,12 +4108,25 @@ onBeforeUnmount(() => {
 }
 
 .icon-close {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
   border: 0;
   background: transparent;
   font-size: 24px;
   line-height: 1;
   cursor: pointer;
   color: var(--color-text-muted);
+}
+
+.icon-close:focus-visible,
+.cal-period-title:focus-visible,
+.cal-view-toggle button:focus-visible,
+.cal-create-menu button:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
 }
 
 .create-tabs {
@@ -3947,6 +4213,18 @@ onBeforeUnmount(() => {
   font: inherit;
 }
 
+.booking-form input:not([type="checkbox"]),
+.booking-form select {
+  min-height: 44px;
+}
+
+.booking-form input:focus-visible,
+.booking-form select:focus-visible,
+.booking-form textarea:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+
 .field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3994,16 +4272,34 @@ onBeforeUnmount(() => {
 
 .cal-mobile-icon-btn {
   flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
 }
 
 .cal-toolbar-icon-btn {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
 }
 
 .cal-mobile-create-wrap,
 .cal-mobile-settings-wrap {
   position: relative;
+}
+
+@media (min-width: 1101px) {
+  .cal-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 12;
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) auto minmax(260px, 1fr);
+    align-items: center;
+    gap: 16px;
+    min-height: 60px;
+    padding: 8px 0;
+    background: var(--ui-bg, var(--color-bg));
+    border-bottom: 1px solid var(--ui-border, var(--color-border));
+  }
 }
 
 @media (max-width: 959px) {
@@ -4043,6 +4339,25 @@ onBeforeUnmount(() => {
     min-width: 0;
     flex: 1;
     padding-inline: 10px;
+  }
+}
+
+@media (max-width: 640px) {
+  .modal-card {
+    width: 100%;
+    max-height: 92dvh;
+    padding: 20px;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: var(--ui-radius-lg) var(--ui-radius-lg) 0 0;
+  }
+
+  .modal-actions {
+    position: sticky;
+    bottom: -20px;
+    padding: 12px 0 20px;
+    background: var(--ui-surface, var(--color-bg));
   }
 }
 </style>

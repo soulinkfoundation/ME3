@@ -1399,6 +1399,7 @@ export async function getAgentMailboxOverview(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
   ownerHint?: { username?: string | null; email?: string | null },
+  options: { includeRecentActivity?: boolean } = {},
 ): Promise<AgentMailboxOverview> {
   const mailbox = await getAgentMailboxRow(env, userId);
   const suggestedAliasLocalPart =
@@ -1413,7 +1414,10 @@ export async function getAgentMailboxOverview(
     suggestedAliasLocalPart,
     mailbox: mailbox ? serializeAgentMailbox(mailbox) : null,
     sources: mailbox ? [serializeAgentMailboxDefaultSource(mailbox)] : [],
-    recentActivity: mailbox ? await getAgentMailboxActivity(env, mailbox.id, 25, 0) : [],
+    recentActivity:
+      mailbox && options.includeRecentActivity !== false
+        ? await getAgentMailboxActivity(env, mailbox.id, 25, 0)
+        : [],
   };
 }
 
@@ -1641,11 +1645,15 @@ export async function updateAgentMailboxDraft(
   if (!existing || existing.message_kind !== "draft") {
     return { error: "Draft not found", status: 404 };
   }
+  if (existing.status !== "pending_approval" && existing.status !== "failed") {
+    return { error: "Draft is already being sent", status: 409 };
+  }
 
   const normalized = await normalizeAgentMailboxDraftInput(env, mailbox, input, existing);
   if ("error" in normalized) return normalized;
 
   const draft = await updateAgentMailboxDraftRow(env, mailbox.id, existing.id, normalized);
+  if (!draft) return { error: "Draft is already being sent", status: 409 };
   return { draft: draft ? serializeAgentMailboxMessage(draft) : null };
 }
 
@@ -1658,20 +1666,24 @@ export async function rejectAgentMailboxDraft(
   if (!mailbox) return { error: "Mailbox not found", status: 404 };
 
   const now = new Date().toISOString();
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     `UPDATE mailbox_messages
      SET status = 'rejected',
          folder = 'trash',
          approved_by_user_id = ?,
          approved_at = ?,
          updated_at = ?
-     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'`,
+     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'
+       AND status IN ('pending_approval', 'failed')`,
   )
     .bind(userId, now, now, draftId, mailbox.id)
     .run();
 
   const draft = await getAgentMailboxMessageById(env, mailbox.id, draftId);
   if (!draft) return { error: "Draft not found", status: 404 };
+  if ((result.meta?.changes || 0) === 0) {
+    return { error: "Draft is already being sent", status: 409 };
+  }
   return { draft: serializeAgentMailboxMessage(draft) };
 }
 
@@ -1679,21 +1691,67 @@ export async function getAgentMailboxDraftForApproval(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
   draftId: string,
-): Promise<{ mailbox: AgentMailbox; draft: AgentMailboxMessage } | { error: string; status: number }> {
+): Promise<
+  | { mailbox: AgentMailbox; draft: AgentMailboxMessage; alreadySent: boolean }
+  | { error: string; status: number }
+> {
   const mailbox = await getAgentMailboxRow(env, userId);
   if (!mailbox) return { error: "Mailbox not found", status: 404 };
 
-  const draft = await getAgentMailboxMessageById(env, mailbox.id, draftId);
-  if (!draft || draft.message_kind !== "draft") {
+  const existing = await getAgentMailboxMessageById(env, mailbox.id, draftId);
+  if (existing?.message_kind === "email" && existing.status === "sent") {
+    return {
+      mailbox: serializeAgentMailbox(mailbox),
+      draft: serializeAgentMailboxMessage(existing),
+      alreadySent: true,
+    };
+  }
+  if (!existing || existing.message_kind !== "draft") {
     return { error: "Draft not found", status: 404 };
   }
-  if (!draft.to_address || !isValidEmail(draft.to_address)) {
+  if (!existing.to_address) {
     return { error: "Draft recipient is required", status: 400 };
   }
+  if (!isValidEmail(existing.to_address)) {
+    return { error: "Draft recipient is invalid", status: 400 };
+  }
+
+  const now = new Date().toISOString();
+  const claimed = await env.DB.prepare(
+    `UPDATE mailbox_messages
+     SET status = 'approved',
+         error_message = NULL,
+         approved_by_user_id = ?,
+         approved_at = ?,
+         updated_at = ?
+     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'
+       AND status IN ('pending_approval', 'failed')`,
+  )
+    .bind(userId, now, now, draftId, mailbox.id)
+    .run();
+
+  if ((claimed.meta?.changes || 0) === 0) {
+    const latest = await getAgentMailboxMessageById(env, mailbox.id, draftId);
+    if (latest?.message_kind === "email" && latest.status === "sent") {
+      return {
+        mailbox: serializeAgentMailbox(mailbox),
+        draft: serializeAgentMailboxMessage(latest),
+        alreadySent: true,
+      };
+    }
+    if (latest?.message_kind === "draft" && latest.status === "approved") {
+      return { error: "Draft is already being sent", status: 409 };
+    }
+    return { error: "Draft is not ready to send", status: 409 };
+  }
+
+  const draft = await getAgentMailboxMessageById(env, mailbox.id, draftId);
+  if (!draft) return { error: "Draft not found", status: 404 };
 
   return {
     mailbox: serializeAgentMailbox(mailbox),
     draft: serializeAgentMailboxMessage(draft),
+    alreadySent: false,
   };
 }
 
@@ -1721,7 +1779,7 @@ export async function markAgentMailboxDraftSent(
   const mailbox = await getAgentMailboxRow(env, userId);
   if (!mailbox) return { error: "Mailbox not found", status: 404 };
 
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     `UPDATE mailbox_messages
      SET message_kind = 'email',
          status = 'sent',
@@ -1733,7 +1791,7 @@ export async function markAgentMailboxDraftSent(
          approved_at = ?,
          sent_at = ?,
          updated_at = ?
-     WHERE id = ? AND mailbox_id = ?`,
+     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft' AND status = 'approved'`,
   )
     .bind(
       input.providerId,
@@ -1748,6 +1806,12 @@ export async function markAgentMailboxDraftSent(
     .run();
 
   const sent = await getAgentMailboxMessageById(env, mailbox.id, draftId);
+  if ((result.meta?.changes || 0) === 0) {
+    if (!sent) return { error: "Draft not found", status: 404 };
+    if (sent.message_kind !== "email" || sent.status !== "sent") {
+      return { error: "Draft is not being sent", status: 409 };
+    }
+  }
   return { draft: sent ? serializeAgentMailboxMessage(sent) : null };
 }
 
@@ -1763,9 +1827,10 @@ export async function markAgentMailboxDraftFailed(
   await env.DB.prepare(
     `UPDATE mailbox_messages
      SET status = 'failed',
+         folder = 'drafts',
          error_message = ?,
          updated_at = ?
-     WHERE id = ? AND mailbox_id = ?`,
+     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft' AND status = 'approved'`,
   )
     .bind(input.errorMessage, new Date().toISOString(), draftId, mailbox.id)
     .run();
@@ -1834,6 +1899,47 @@ export async function trashAgentMailboxMessage(
     .run();
 
   if ((result.meta?.changes || 0) === 0) return { error: "Message not found", status: 404 };
+  return { ok: true };
+}
+
+export async function deleteAgentMailboxMessage(
+  env: Pick<CoreAgentChatEnv, "DB" | "SITE_ASSETS">,
+  userId: string,
+  messageId: string,
+): Promise<{ ok: true } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  const message = await getAgentMailboxMessageById(env, mailbox.id, messageId);
+  if (!message) return { error: "Message not found", status: 404 };
+
+  const result = await env.DB.prepare(
+    "DELETE FROM mailbox_messages WHERE id = ? AND mailbox_id = ?",
+  )
+    .bind(messageId, mailbox.id)
+    .run();
+  if ((result.meta?.changes || 0) === 0) return { error: "Message not found", status: 404 };
+
+  if (env.SITE_ASSETS) {
+    const storageKeys = getMailboxAttachmentMetadata(message)
+      .map((attachment) => attachment.storageKey || "")
+      .filter((key) => key.startsWith(`mailbox/${mailbox.id}/`));
+    const unreferenced: string[] = [];
+    for (const storageKey of new Set(storageKeys)) {
+      const reference = await env.DB.prepare(
+        `SELECT id FROM mailbox_messages
+         WHERE mailbox_id = ? AND instr(COALESCE(metadata_json, ''), ?) > 0
+         LIMIT 1`,
+      )
+        .bind(mailbox.id, storageKey)
+        .first<{ id: string }>();
+      if (!reference) unreferenced.push(storageKey);
+    }
+    if (unreferenced.length > 0) {
+      await env.SITE_ASSETS.delete(unreferenced).catch(() => undefined);
+    }
+  }
+
   return { ok: true };
 }
 
@@ -3588,7 +3694,7 @@ function serializeAgentMailboxDefaultSource(row: DbMailboxAliasRow) {
 function agentMailboxMessageSelectSql(): string {
   return `SELECT id, direction, message_kind, status, thread_key, from_address,
                  provider_id, provider_message_id, to_address, subject, text_body,
-                 html_body, raw_headers_json, raw_message, metadata_json,
+                 html_body, raw_headers_json, metadata_json,
                  agent_idempotency_key, source_id, folder, read_at,
                  agent_summary, agent_labels_json, forwarded_to, error_message,
                  created_by, approved_by_user_id, received_at, approved_at,
@@ -3780,12 +3886,13 @@ async function normalizeAgentMailboxDraftInput(
   existing?: DbMailboxMessageRow,
 ): Promise<NormalizedMailboxDraftInput | { error: string; status: number }> {
   const fromAddress = normalizeEmailText(body.fromAddress) || existing?.from_address || getAgentMailboxAddress(mailbox.alias_local_part);
-  const toAddress = normalizeEmailText(body.toAddress ?? body.to) || existing?.to_address || "";
+  const rawToAddress = body.toAddress === undefined ? body.to : body.toAddress;
+  const toAddress =
+    rawToAddress === undefined
+      ? existing?.to_address || ""
+      : normalizeEmailText(rawToAddress) || "";
   if (!isValidEmail(fromAddress)) {
     return { error: "Draft sender is invalid", status: 400 };
-  }
-  if (!isValidEmail(toAddress)) {
-    return { error: "Draft recipient is required", status: 400 };
   }
 
   const replyToMessageId = normalizeNullableText(body.replyToMessageId);
@@ -3803,7 +3910,10 @@ async function normalizeAgentMailboxDraftInput(
     existingHeaders.messageIdHeader || createMessageIdHeader(fromAddress);
   const source = normalizeNullableText(body.source);
   const createdBy = source === "agent" ? "agent" : "owner";
-  const normalizedTextBody = normalizeNullableText(body.textBody) || existing?.text_body || "";
+  const normalizedTextBody =
+    body.textBody === undefined
+      ? existing?.text_body || ""
+      : normalizeNullableText(body.textBody) || "";
   const allowedAttachmentSources = [replyTo, existing].filter(
     (row): row is DbMailboxMessageRow => Boolean(row),
   );
@@ -3819,7 +3929,10 @@ async function normalizeAgentMailboxDraftInput(
   return {
     fromAddress,
     toAddress,
-    subject: normalizeNullableText(body.subject) || existing?.subject || "",
+    subject:
+      body.subject === undefined
+        ? existing?.subject || ""
+        : normalizeNullableText(body.subject) || "",
     textBody:
       createdBy === "agent"
         ? stripAgentDraftWrapperText(normalizedTextBody)
@@ -3916,7 +4029,7 @@ async function updateAgentMailboxDraftRow(
   draftId: string,
   input: NormalizedMailboxDraftInput,
 ): Promise<DbMailboxMessageRow | null> {
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     `UPDATE mailbox_messages
      SET status = 'pending_approval',
          thread_key = ?,
@@ -3931,7 +4044,8 @@ async function updateAgentMailboxDraftRow(
          created_by = ?,
          error_message = NULL,
          updated_at = ?
-     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'`,
+     WHERE id = ? AND mailbox_id = ? AND message_kind = 'draft'
+       AND status IN ('pending_approval', 'failed')`,
   )
     .bind(
       input.threadKey,
@@ -3948,6 +4062,8 @@ async function updateAgentMailboxDraftRow(
       mailboxId,
     )
     .run();
+
+  if ((result.meta?.changes || 0) === 0) return null;
 
   return getAgentMailboxMessageById(env, mailboxId, draftId);
 }
