@@ -130,7 +130,72 @@ describe("Social content Agent Runtime v2", () => {
     });
   });
 
-  it("refuses to create drafts before the exact source is read", async () => {
+  it("revalidates a source selected in a previous turn before saving drafts", async () => {
+    const database = createSocialAgentDb({
+      tasks: [{
+        id: "task-cross-turn",
+        user_id: "owner",
+        title: "Eating our own AI cooking",
+        description: "The first source snapshot.",
+        status: "in_progress",
+        priority: 2,
+        due_at: null,
+        project_id: "project-me3",
+        project_name: "ME3",
+        updated_at: "2026-07-14T10:00:00Z",
+        archived_at: null,
+      }],
+    });
+    const selected = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "social-cross-turn-read",
+      turnId: "turn-social-cross-turn-read",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute([
+        toolCall("read-cross-turn", "core_social_source_read", {
+          sourceType: "mission_task",
+          sourceId: "task-cross-turn",
+        }),
+        { response: "I found and read the requested task." },
+      ]) as never,
+      messages: baseMessages("Use the task Eating our own AI cooking."),
+    });
+    const sourceReference = selected.replyText || "";
+    expect(sourceReference).toContain("Source: mission_task:task-cross-turn");
+
+    database.tasks[0]!.description = "The fresh source snapshot after selection.";
+    database.tasks[0]!.updated_at = "2026-07-15T10:00:00Z";
+    const drafted = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "social-cross-turn-draft",
+      turnId: "turn-social-cross-turn-draft",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute([
+        toolCall("save-cross-turn", "core_social_draft_create", {
+          sourceType: "mission_task",
+          sourceId: "task-cross-turn",
+          ideaText: "Use your own product to discover the rough edges.",
+          linkedinBody: "The fastest way to improve an AI product is to use it for your own real work.",
+        }),
+        { response: "Saved the selected source as a LinkedIn draft." },
+      ]) as never,
+      messages: [
+        ...baseMessages("Use the task Eating our own AI cooking."),
+        { role: "assistant" as const, content: sourceReference },
+        { role: "user", content: "Great, create the LinkedIn draft." },
+      ],
+    });
+
+    expect(drafted.contentAction?.platforms).toEqual(["linkedin"]);
+    expect(database.packages[0]?.source_snapshot).toContain(
+      "The fresh source snapshot after selection.",
+    );
+    expect(database.packages[0]?.source_snapshot).not.toContain("The first source snapshot.");
+  });
+
+  it("refuses to create drafts when the exact source cannot be revalidated", async () => {
     const database = createSocialAgentDb();
     const response = await runCoreAgentToolTurn({
       db: database.db,
@@ -155,7 +220,7 @@ describe("Social content Agent Runtime v2", () => {
     expect(database.packages).toHaveLength(0);
     expect(database.executions[0]).toMatchObject({
       status: "failed",
-      error_message: expect.stringContaining("before creating its social drafts"),
+      error_message: expect.stringContaining("No Journal entry was found"),
     });
   });
 });

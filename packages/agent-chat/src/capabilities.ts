@@ -516,6 +516,76 @@ export const CORE_CHAT_CAPABILITIES = [
     },
   }),
   defineCoreChatCapability({
+    id: "core.owner_content.search",
+    owner: "core",
+    pluginId: null,
+    ownerFacingLabel: "Search owner content",
+    summary: "Search the owner's Mission Control tasks and Journal entries by title or body, returning lightweight candidates with stable IDs.",
+    category: "assistant",
+    handler: {
+      surface: "chat",
+      route: "core.owner_content.search",
+    },
+    sideEffect: "read_private",
+    approvalMode: "none",
+    requiresSetup: [],
+    inputSchema: {
+      type: "object",
+      required: ["query"],
+      properties: {
+        query: {
+          type: "string",
+          description: "Remembered title words or content to find in tasks and Journal entries.",
+        },
+        sourceType: {
+          type: "string",
+          description: "Optional source kind, or all to search both tasks and Journal entries.",
+          enum: ["all", "journal", "mission_task"],
+        },
+        projectId: {
+          type: "string",
+          description: "Optional stable Mission Control project ID.",
+        },
+        projectName: {
+          type: "string",
+          description: "Optional exact Mission Control project name or slug.",
+        },
+        status: {
+          type: "string",
+          description: "Optional Mission Control task status.",
+          enum: ["backlog", "in_progress", "review", "done", "cancelled"],
+        },
+        dateFrom: {
+          type: "string",
+          description: "Optional earliest Journal date or Mission task due date, as YYYY-MM-DD.",
+          format: "date",
+        },
+        dateTo: {
+          type: "string",
+          description: "Optional latest Journal date or Mission task due date, as YYYY-MM-DD.",
+          format: "date",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum lightweight candidates to return, from 1 to 20.",
+        },
+      },
+      additionalProperties: false,
+    },
+    auditEventKind: "owner_content_searched",
+    examples: {
+      positive: [
+        "Find the task called Eating our own AI cooking.",
+        "Search my Journal for the note about resilient agent context.",
+      ],
+      negative: ["Show every task in my backlog."],
+    },
+    chat: {
+      intentKind: "read_action",
+      sideEffectLevel: "read",
+    },
+  }),
+  defineCoreChatCapability({
     id: "core.social.source.read",
     owner: "plugin",
     pluginId: "me3.social-publishing",

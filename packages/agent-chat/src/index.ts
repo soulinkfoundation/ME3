@@ -81,6 +81,13 @@ export {
   buildReminderActionCard,
   runCoreAgentToolTurn,
 } from "./core-agent-runtime";
+export {
+  searchAgentOwnerContent,
+  type AgentOwnerContentSearchInput,
+  type AgentOwnerContentSearchResponse,
+  type AgentOwnerContentSearchResult,
+  type AgentOwnerContentSourceType,
+} from "./owner-content-search";
 import {
   agentTurnResultStorageKey,
   cacheAgentTurnResult,

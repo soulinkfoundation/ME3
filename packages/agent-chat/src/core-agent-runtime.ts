@@ -49,6 +49,11 @@ import {
   type AgentSocialSource,
   type AgentSocialSourceType,
 } from "./social-content";
+import {
+  searchAgentOwnerContent,
+  type AgentOwnerContentSearchResult,
+  type AgentOwnerContentSourceType,
+} from "./owner-content-search";
 
 type CoreAgentDb = {
   prepare(sql: string): {
@@ -87,11 +92,13 @@ export type CoreMailboxToolServices = {
 const ACTIVE_CORE_TOOLS = CORE_CHAT_TOOLS.filter(
   (tool) =>
     tool.capabilityId.startsWith("core.reminders.") ||
+    tool.capabilityId === "core.owner_content.search" ||
     tool.capabilityId.startsWith("core.mission.task.") ||
     tool.capabilityId.startsWith("core.mailbox.") ||
     tool.capabilityId.startsWith("core.social."),
 );
 const MISSION_TASK_STATUSES = new Set(["backlog", "in_progress", "review", "done"]);
+const OWNER_CONTENT_SOURCE_TYPES = new Set(["all", "journal", "mission_task"]);
 const MAILBOX_FOLDERS = new Set(["inbox", "drafts", "sent", "archive", "trash"]);
 
 export async function runCoreAgentToolTurn(input: {
@@ -316,6 +323,9 @@ function executeCoreToolCall(input: {
   if (input.tool.capabilityId.startsWith("core.mission.task.")) {
     return executeMissionTaskToolCall(input);
   }
+  if (input.tool.capabilityId === "core.owner_content.search") {
+    return executeOwnerContentSearchToolCall(input);
+  }
   if (input.tool.capabilityId.startsWith("core.social.")) {
     return executeSocialToolCall(input);
   }
@@ -408,6 +418,46 @@ async function executeReminderToolCall(input: {
     );
   }
   return reminderWriteOutcome(reminder, "updated");
+}
+
+async function executeOwnerContentSearchToolCall(input: {
+  db: CoreAgentDb;
+  userId: string;
+  call: AgentToolCall;
+  tool: CoreChatToolDefinition;
+}): Promise<CoreToolOutcome> {
+  enforceOwnerContentSearchToolPolicy(input.tool);
+  assertOnlyDeclaredArguments(input.call.arguments, input.tool);
+  const args = input.call.arguments;
+  const sourceTypeValue = optionalToolString(args.sourceType) || "all";
+  if (!OWNER_CONTENT_SOURCE_TYPES.has(sourceTypeValue)) {
+    throw new Error(`Invalid owner content source type "${sourceTypeValue}".`);
+  }
+  const projectIdInput = optionalToolString(args.projectId);
+  const projectName = optionalToolString(args.projectName);
+  const projectId = projectIdInput || projectName
+    ? resolveMissionTaskProjectId(
+        await listAgentMissionProjects({ DB: input.db }, input.userId),
+        projectIdInput,
+        projectName,
+      )
+    : undefined;
+  const found = await searchAgentOwnerContent(input.db, input.userId, {
+    query: requiredToolString(args.query, "Owner content search query"),
+    sourceType: sourceTypeValue as AgentOwnerContentSourceType | "all",
+    projectId,
+    status: optionalToolString(args.status),
+    dateFrom: optionalToolString(args.dateFrom),
+    dateTo: optionalToolString(args.dateTo),
+    limit: optionalToolNumber(args.limit),
+  });
+  return {
+    capabilityId: "core.owner_content.search",
+    result: { ok: true, ...found },
+    fallbackReply: formatOwnerContentSearch(found.results, found.ambiguous),
+    reminderAction: null,
+    actionCards: [],
+  };
 }
 
 async function executeMissionTaskToolCall(input: {
@@ -598,17 +648,22 @@ async function executeSocialToolCall(input: {
     return {
       capabilityId: "core.social.source.read",
       result: { ok: true, source },
-      fallbackReply: `Read the social post source: ${source.title}.`,
+      fallbackReply: `Read the social post source: ${source.title}. Source: ${source.sourceType}:${source.id}.`,
       reminderAction: null,
       actionCards: [],
     };
   }
 
-  const source = input.socialSources.get(agentSocialSourceKey(sourceType, sourceId));
+  let source = input.socialSources.get(agentSocialSourceKey(sourceType, sourceId));
   if (!source) {
-    throw new Error(
-      "Read this exact Journal entry or Mission Control task with core_social_source_read before creating its social drafts.",
+    source = await readAgentSocialSource(
+      input.db,
+      input.userId,
+      sourceType,
+      sourceId,
+      input.ownerTimezone,
     );
+    cacheSocialSource(source, input.socialSources);
   }
   const detail = await createAgentSocialDraft(input.db, input.userId, source, {
     siteId: optionalToolString(args.siteId),
@@ -861,7 +916,8 @@ function withCoreToolInstructions(
     "- If multiple listed reminders could match, ask the owner which one they mean and do not write.",
     "Mission Control task tool rules:",
     "- Use task tools only when the owner clearly asks to list, read, create, update, move, complete, or archive Mission Control tasks.",
-    "- List tasks before read/update/archive unless a stable task ID is already present. Task list results also contain stable project IDs.",
+    "- When the owner remembers a task or Journal entry by title or content, use core_owner_content_search. Search returns lightweight candidates with stable source IDs; read the selected source before using its full body.",
+    "- Search before task read/update/archive when the owner names or describes a record but no stable task ID is present. Use task list for browsing a project or status, not title discovery.",
     "- Task list accepts an exact projectName directly. Use projectId=null and projectName=null to list across all projects; never claim a project ID is required for a read.",
     "- Never invent a taskId or projectId. If multiple records could match, ask one concise clarification question and do not write.",
     "- For create, use the project ID selected by the owner. Omit projectId only when the owner did not name a project and the host can choose an unambiguous default.",
@@ -878,8 +934,9 @@ function withCoreToolInstructions(
     "- Draft creation saves a reviewable mailbox draft only. Never claim the email was sent; sending is not an available tool.",
     "Social publishing tool rules:",
     "- Use social tools when the owner asks to turn a Journal entry or Mission Control task into social posts.",
-    "- For Mission Control, list tasks first unless a stable task ID is already present. For Journal, use an entry ID, YYYY-MM-DD date, or today. Never invent a source ID.",
+    "- Search owner content when the owner gives a remembered task or Journal title. For Journal, an entry ID, YYYY-MM-DD date, or today can also be used directly. Never invent a source ID.",
     "- Read the exact source with core_social_source_read before calling core_social_draft_create. Build every draft from that returned source, not from assumptions or a summary invented by the model.",
+    "- If source reading is the last action in a turn, preserve the returned sourceType and stable source ID in the reply. Draft creation revalidates that source ID so a confirmed selection remains safe across turns.",
     "- Write platform-native variants: a strong practical opening for LinkedIn, concise copy for X, and a hook plus readable caption rhythm for Instagram. Do not copy identical text across platforms.",
     "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
     "- A tool result is the source of truth. Do not claim an action succeeded unless its result says ok=true.",
@@ -891,6 +948,17 @@ function withCoreToolInstructions(
       ? { ...message, content: `${message.content}\n${instructions}` }
       : message,
   );
+}
+
+function enforceOwnerContentSearchToolPolicy(tool: CoreChatToolDefinition): void {
+  if (
+    tool.capabilityId !== "core.owner_content.search" ||
+    tool.handlerRoute !== tool.capabilityId ||
+    tool.approvalMode !== "none" ||
+    tool.requiredSetupChecks.length !== 0
+  ) {
+    throw new Error(`Tool "${tool.name}" is not allowed by the owner content search runtime policy.`);
+  }
 }
 
 function enforceReminderToolPolicy(tool: CoreChatToolDefinition): void {
@@ -1081,7 +1149,7 @@ function successfulResponse(
     auditId: null,
     turnId,
     specialist: outcome?.capabilityId || "core.agent-chat",
-    replyText,
+    replyText: withSocialSourceReference(replyText, outcome),
     model,
     source: route.providerId,
     fallbackReason: null,
@@ -1093,6 +1161,19 @@ function successfulResponse(
     contactsChanged: false,
     modelAttempts,
   };
+}
+
+function withSocialSourceReference(
+  replyText: string,
+  outcome: CoreToolOutcome | null,
+): string {
+  if (outcome?.capabilityId !== "core.social.source.read") return replyText;
+  const source = outcome.result.source;
+  if (!isAgentSocialSource(source)) return replyText;
+  const reference = `${source.sourceType}:${source.id}`;
+  return replyText.toLowerCase().includes(reference.toLowerCase())
+    ? replyText
+    : `${replyText}\n\nSource: ${reference}`;
 }
 
 function fallbackResponse(
@@ -1170,6 +1251,26 @@ function formatMissionTaskList(tasks: AgentMissionTask[]): string {
     ...tasks.map(
       (task) => `- ${task.title} — ${task.projectName} — ${task.status} — priority ${task.priority} (ID: ${task.id})`,
     ),
+  ].join("\n");
+}
+
+function formatOwnerContentSearch(
+  results: AgentOwnerContentSearchResult[],
+  ambiguous: boolean,
+): string {
+  if (results.length === 0) {
+    return "I could not find a matching Mission Control task or Journal entry.";
+  }
+  return [
+    ambiguous
+      ? "I found several similarly strong matches. Choose one by its stable source ID:"
+      : `Found ${results.length} matching owner-content source${results.length === 1 ? "" : "s"}:`,
+    ...results.map((result) => {
+      const context = result.sourceType === "mission_task"
+        ? [result.projectName, result.status].filter(Boolean).join(" — ")
+        : result.sourceDate;
+      return `- ${result.title}${context ? ` — ${context}` : ""} (Source: ${result.sourceType}:${result.sourceId})`;
+    }),
   ].join("\n");
 }
 

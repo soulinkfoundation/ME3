@@ -186,6 +186,43 @@ describe("Mission Control Agent Runtime v2", () => {
     expect(database.executions[0]?.result_json).not.toContain("Wash car");
   });
 
+  it("uses owner-content search to recover a mistyped task title", async () => {
+    const database = createMissionDb({
+      projects: [projectRow("project-me3", "ME3", "me3")],
+      tasks: [
+        ...Array.from({ length: 125 }, (_, index) =>
+          taskRow(`task-${index}`, `Routine backlog item ${index}`, "project-me3")
+        ),
+        {
+          ...taskRow("task-cooking", "Eating our own AI cooking", "project-me3"),
+          description: "Use ME3 on real ME3 work.",
+        },
+      ],
+    });
+    const response = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "search-mistyped-title",
+      turnId: "turn-search-mistyped-title",
+      ownerTimezone: "Europe/Dublin",
+      route: providerRoute("workers-ai", [
+        providerToolCall("workers-ai", "search-1", "core_owner_content_search", {
+          query: "Eting our own AI cooking",
+          sourceType: "mission_task",
+        }),
+        { response: "I found the task Eating our own AI cooking." },
+      ]) as never,
+      messages: baseMessages("Find the Eting our own AI cooking task."),
+    });
+
+    expect(response).toMatchObject({
+      specialist: "core.owner_content.search",
+      replyText: "I found the task Eating our own AI cooking.",
+    });
+    expect(database.executions[0]?.result_json).toContain("task-cooking");
+    expect(database.executions[0]?.result_json).not.toContain("Use ME3 on real ME3 work.");
+  });
+
   it("clarifies ambiguous task names without mutating either task", async () => {
     const database = createMissionDb({
       projects: [projectRow("project-launch", "ME3 Launch", "me3-launch")],
@@ -399,6 +436,24 @@ function createMissionDb(input: { projects?: ProjectRow[]; tasks?: TaskRow[] } =
               return null as T;
             },
             async all<T>() {
+              if (sql.includes("FROM owner_content_search")) {
+                if (sql.includes("MATCH")) return { results: [] as T[] };
+                return {
+                  results: tasks
+                    .filter((row) => row.user_id === values[0] && row.archived_at === null)
+                    .map((row) => ({
+                      source_type: "mission_task",
+                      source_id: row.id,
+                      title: row.title,
+                      snippet: null,
+                      project_id: row.project_id,
+                      project_name: projects.find((project) => project.id === row.project_id)?.name || null,
+                      status: row.status,
+                      source_date: row.due_at,
+                      updated_at: "2026-07-15T10:00:00Z",
+                    })) as T[],
+                };
+              }
               if (sql.includes("FROM mission_projects")) {
                 return {
                   results: projects.filter(

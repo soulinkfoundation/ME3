@@ -424,9 +424,13 @@ function createEnv(): Env & {
       }
       return results;
     },
+    async exec() {
+      return { count: 1, duration: 0 };
+    },
     prepare(sql: string) {
       const runtimeTableNames = new Set([
         "mission_tasks",
+        "journal_entries",
         "commerce_settings",
         "financial_entries",
         "social_packages",

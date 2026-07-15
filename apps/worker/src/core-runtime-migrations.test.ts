@@ -21,6 +21,7 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("ai_usage_events")).toBe(true);
     expect(db.tables.has("agent_turn_results")).toBe(true);
     expect(db.tables.has("agent_tool_executions")).toBe(true);
+    expect(db.tables.has("owner_content_search")).toBe(true);
     expect(db.columns.get("financial_entries")?.has("project_id")).toBe(true);
     expect(db.columns.get("social_packages")?.has("source_type")).toBe(true);
     expect(db.columns.get("social_packages")?.has("source_ref")).toBe(true);
@@ -49,6 +50,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0018_social_publication_idempotency")).toBe(
       "2026-07-10-social-publication-idempotency-v1",
+    );
+    expect(db.migrations.get("0019_owner_content_search")).toBe(
+      "2026-07-15-owner-content-search-v1",
     );
     expect(
       db.statements.some((sql) =>
@@ -113,6 +117,7 @@ class RuntimeMigrationDb {
   readonly tables = new Set([
     "commerce_settings",
     "financial_entries",
+    "journal_entries",
     "mission_tasks",
     "mailbox_messages",
     "owner_profile",
@@ -188,6 +193,14 @@ class RuntimeMigrationDb {
 
   prepare(sql: string) {
     return new RuntimeMigrationStatement(this, sql);
+  }
+
+  async exec(sql: string) {
+    this.statements.push(sql);
+    if (sql.includes("CREATE VIRTUAL TABLE IF NOT EXISTS owner_content_search")) {
+      this.tables.add("owner_content_search");
+    }
+    return { count: 1, duration: 0 };
   }
 }
 
