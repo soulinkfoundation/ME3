@@ -26,10 +26,18 @@ describe("site unsubscribe tokens", () => {
 describe("site booking capabilities", () => {
   it("uses the saved source profile to identify booking-enabled sites", async () => {
     const env = createBookingCapabilityEnv([
-      profileFile("active-public", "public/me.json", true),
-      profileFile("source-wins", "public/me.json", true),
-      profileFile("source-wins", "src/me.json", false),
-      profileFile("active-source", "src/me.json", true),
+      profileFile("active-public", "public/me.json", {
+        capabilities: { book: { action: "book" } },
+      }),
+      profileFile("source-wins", "public/me.json", {
+        capabilities: { book: { action: "book" } },
+      }),
+      profileFile("source-wins", "src/me.json", {
+        intents: { book: { enabled: false } },
+      }),
+      profileFile("active-source", "src/me.json", {
+        intents: { book: { enabled: true } },
+      }),
       profileFile("invalid", "src/me.json", "not json"),
     ]);
 
@@ -48,12 +56,10 @@ type BookingProfileFile = {
 function profileFile(
   siteId: string,
   path: BookingProfileFile["path"],
-  enabled: boolean | string,
+  profile: Record<string, unknown> | string,
 ): BookingProfileFile {
   const content =
-    typeof enabled === "boolean"
-      ? JSON.stringify({ intents: { book: { enabled } } })
-      : enabled;
+    typeof profile === "string" ? profile : JSON.stringify(profile);
   return {
     site_id: siteId,
     path,

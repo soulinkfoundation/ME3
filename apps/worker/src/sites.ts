@@ -1072,8 +1072,18 @@ export async function listBookingEnabledSiteIds(
     try {
       const profile = JSON.parse(
         new TextDecoder().decode(siteFileContentToBytes(file.content)),
-      ) as Me3SiteProfile;
-      if (profile.intents?.book?.enabled === true) enabledSiteIds.add(siteId);
+      ) as {
+        intents?: { book?: { enabled?: unknown } };
+        capabilities?: { book?: unknown };
+      };
+      const publicBookingCapability = profile.capabilities?.book;
+      if (
+        profile.intents?.book?.enabled === true ||
+        (typeof publicBookingCapability === "object" &&
+          publicBookingCapability !== null)
+      ) {
+        enabledSiteIds.add(siteId);
+      }
     } catch {
       // Invalid profiles are not booking-enabled.
     }
