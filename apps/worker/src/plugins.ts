@@ -167,7 +167,7 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
-  showInPluginList: false,
+  showInPluginList: true,
   implementationStatus: SOCIAL_PUBLISHING_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["content.social_assistant"],
   permissions: [
@@ -1054,6 +1054,7 @@ const LOCAL_EXECUTOR_PLUGIN: CorePluginManifestSummary = {
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
+  showInPluginList: false,
   defaultEnabled: false,
   implementationStatus: LOCAL_EXECUTOR_RUNTIME.bundled ? "bundled" : "catalog_only",
   capabilityIds: ["local_executor.run"],
