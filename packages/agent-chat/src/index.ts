@@ -176,6 +176,21 @@ export {
 export const AGENT_CHAT_PLUGIN_ID = "me3.agent-chat";
 export const CORE_MAILBOX_DAILY_INBOUND_LIMIT = 200;
 export const CORE_MAILBOX_DAILY_OUTBOUND_LIMIT = 200;
+export const AGENT_CHAT_MODES = ["everyday", "advanced", "owner"] as const;
+
+export type AgentChatMode = (typeof AGENT_CHAT_MODES)[number];
+
+export function allowsAgentChatRawModelSelection(env: {
+  ME3_DEPLOYMENT_MODE?: string;
+  ME3_AI_RAW_MODEL_SELECTION_ENABLED?: string;
+}): boolean {
+  return (
+    env.ME3_DEPLOYMENT_MODE?.trim().toLowerCase() !== "managed" ||
+    /^(1|true|yes)$/i.test(
+      env.ME3_AI_RAW_MODEL_SELECTION_ENABLED?.trim() || "",
+    )
+  );
+}
 
 export const AGENT_CHAT_RUNTIME = {
   id: AGENT_CHAT_PLUGIN_ID,
@@ -205,6 +220,7 @@ export type AgentSandboxDispatchInput = {
   connectionId: string;
   sourceEventId: string;
   turnId: string;
+  mode?: AgentChatMode;
   threadId?: string | null;
   messageText: string;
   attachmentTextContext?: string | null;
@@ -295,6 +311,7 @@ export type AgentSandboxDispatchResponse = {
   ok: boolean;
   auditId: string | null;
   turnId: string | null;
+  mode?: AgentChatMode;
   threadId?: string | null;
   specialist: string | null;
   replyText: string | null;
@@ -595,8 +612,12 @@ type CoreAgentChatEnv = {
   ME3_AI_CHAT_PROVIDER?: string;
   ME3_AI_CHAT_MODEL?: string;
   ME3_AI_CHAT_BACKUP_MODEL?: string;
+  ME3_AI_REASONING_PROVIDER?: string;
+  ME3_AI_REASONING_MODEL?: string;
   ME3_AI_IMAGE_GENERATION_PROVIDER?: string;
   ME3_AI_IMAGE_GENERATION_MODEL?: string;
+  ME3_DEPLOYMENT_MODE?: string;
+  ME3_AI_RAW_MODEL_SELECTION_ENABLED?: string;
   CORE_API_ORIGIN?: string;
   CORE_WEB_ORIGIN?: string;
 };
@@ -1017,10 +1038,27 @@ export function isAgentSandboxDispatchInput(
     typeof input.connectionId === "string" &&
     typeof input.sourceEventId === "string" &&
     typeof input.turnId === "string" &&
+    isValidAgentChatMode(input.mode) &&
     typeof input.messageText === "string" &&
     isValidAgentChatModelSelection(input.selectedModel) &&
     isValidAgentChatAttachments(input.attachments)
   );
+}
+
+function isValidAgentChatMode(
+  value: unknown,
+): value is AgentChatMode | null | undefined {
+  return (
+    value === undefined ||
+    value === null ||
+    AGENT_CHAT_MODES.includes(value as AgentChatMode)
+  );
+}
+
+function normalizeAgentChatMode(value: unknown): AgentChatMode {
+  return AGENT_CHAT_MODES.includes(value as AgentChatMode)
+    ? (value as AgentChatMode)
+    : "everyday";
 }
 
 function isValidAgentChatAttachments(
@@ -1869,9 +1907,16 @@ export async function dispatchAgentSandboxTurn(
   input: AgentSandboxDispatchInput,
   streamOptions?: AgentChatRuntimeStreamOptions,
 ): Promise<AgentSandboxDispatchResponse> {
+  const mode = normalizeAgentChatMode(input.mode);
   const resultKey = agentTurnResultStorageKey(input.requestId);
   const existing = await storage.get<AgentSandboxDispatchResponse>(resultKey);
-  if (existing) return applyAgentTurnTracePolicy(env, { ...existing, ok: true });
+  if (existing) {
+    return applyAgentTurnTracePolicy(env, {
+      ...existing,
+      ok: true,
+      mode: existing.mode || mode,
+    });
+  }
   const persisted = await getPersistedAgentTurnResult<AgentSandboxDispatchResponse>(
     env.DB,
     input.userId,
@@ -1880,7 +1925,11 @@ export async function dispatchAgentSandboxTurn(
   );
   if (persisted) {
     await cacheAgentTurnResult(storage, resultKey, persisted);
-    return applyAgentTurnTracePolicy(env, { ...persisted, ok: true });
+    return applyAgentTurnTracePolicy(env, {
+      ...persisted,
+      ok: true,
+      mode: persisted.mode || mode,
+    });
   }
 
   await storage.put("userId", input.userId);
@@ -1890,7 +1939,12 @@ export async function dispatchAgentSandboxTurn(
 
   const owner = await getOwnerProfile(env, input.userId);
   const toolPlan = await loadCoreChatToolTurnPlan(env, input);
-  const route = await resolveAiRoute(env, input.userId, input.selectedModel);
+  const route = await resolveAiRoute(
+    env,
+    input.userId,
+    mode,
+    input.selectedModel,
+  );
   const useCoreToolRuntime =
     route.configured &&
     !isCoreChatOrientationTurn(toolPlan.decision) &&
@@ -1925,6 +1979,7 @@ export async function dispatchAgentSandboxTurn(
     }
     let response: AgentSandboxDispatchResponse = {
       ...toolResponse,
+      mode,
       threadId: input.threadId ?? null,
     };
     await touchAssistantThread(env, input.userId, input.threadId);
@@ -1976,6 +2031,7 @@ export async function dispatchAgentSandboxTurn(
     }
     let response: AgentSandboxDispatchResponse = {
       ...imageTurn.response,
+      mode,
       threadId: input.threadId ?? null,
     };
     await touchAssistantThread(env, input.userId, input.threadId);
@@ -2115,6 +2171,7 @@ export async function dispatchAgentSandboxTurn(
     );
   }
   response.threadId = input.threadId ?? null;
+  response.mode = mode;
   await touchAssistantThread(env, input.userId, input.threadId);
   response = attachAgentTurnTrace(env, response, {
     input,
@@ -2290,12 +2347,14 @@ async function maybeHandleAssistantImageTurn(
     };
   }
 
-  const route = await resolveImageGenerationRoute(
-    env,
-    input.userId,
-    input.selectedModel,
-    intent.capability,
-  );
+  const route = normalizeAgentChatMode(input.mode) === "owner"
+    ? null
+    : await resolveImageGenerationRoute(
+        env,
+        input.userId,
+        input.selectedModel,
+        intent.capability,
+      );
 
   if (!route) {
     return {
@@ -4368,13 +4427,36 @@ async function upsertSandboxConnection(
 async function resolveAiRoute(
   env: CoreAgentChatEnv,
   ownerId: string,
+  mode: AgentChatMode,
   selectedModel?: AgentChatModelSelection | null,
 ): Promise<AiRoute> {
-  const stored = await getStoredChatDefault(env, ownerId);
-  const selectedProvider = normalizeProviderId(selectedModel?.providerId);
-  const selectedModelName = normalizeModel(selectedModel?.model);
-  const envProvider = normalizeProviderId(env.ME3_AI_CHAT_PROVIDER);
-  const envModel = normalizeModel(env.ME3_AI_CHAT_MODEL) || normalizeModel(env.ME3_AI_MODEL);
+  if (mode === "owner") {
+    return resolveOwnerAiRoute(env, ownerId, selectedModel);
+  }
+
+  const rawModelSelectionAllowed = allowsAgentChatRawModelSelection(env);
+  const stored = rawModelSelectionAllowed
+    ? await (mode === "advanced"
+        ? getStoredReasoningDefault(env, ownerId)
+        : getStoredChatDefault(env, ownerId))
+    : null;
+  const selectedProvider = rawModelSelectionAllowed
+    ? normalizeProviderId(selectedModel?.providerId)
+    : null;
+  const selectedModelName = rawModelSelectionAllowed
+    ? normalizeModel(selectedModel?.model)
+    : null;
+  const envProvider = normalizeProviderId(
+    mode === "advanced"
+      ? env.ME3_AI_REASONING_PROVIDER
+      : env.ME3_AI_CHAT_PROVIDER,
+  );
+  const envModel =
+    normalizeModel(
+      mode === "advanced"
+        ? env.ME3_AI_REASONING_MODEL
+        : env.ME3_AI_CHAT_MODEL,
+    ) || normalizeModel(env.ME3_AI_MODEL);
   const storedProvider = normalizeProviderId(stored?.provider_id);
   const providerId =
     selectedProvider ||
@@ -4396,9 +4478,15 @@ async function resolveAiRoute(
       : null;
   const apiKey =
     providerId === "openai"
-      ? env.OPENAI_API_KEY || (await getStoredApiKey(env, ownerId, providerId))
+      ? env.OPENAI_API_KEY ||
+        (rawModelSelectionAllowed
+          ? await getStoredApiKey(env, ownerId, providerId)
+          : null)
       : providerId === "anthropic"
-        ? env.ANTHROPIC_API_KEY || (await getStoredApiKey(env, ownerId, providerId))
+        ? env.ANTHROPIC_API_KEY ||
+          (rawModelSelectionAllowed
+            ? await getStoredApiKey(env, ownerId, providerId)
+            : null)
         : null;
   const aiGateway = await getAiGatewayRuntimeConfig(env, ownerId).catch(() => null);
 
@@ -4411,6 +4499,36 @@ async function resolveAiRoute(
     aiGateway,
     configured:
       providerId === "workers-ai" ? Boolean(env.AI && model) : Boolean(apiKey && model),
+  };
+}
+
+async function resolveOwnerAiRoute(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+  selectedModel?: AgentChatModelSelection | null,
+): Promise<AiRoute> {
+  const stored = await getStoredChatDefault(env, ownerId);
+  const selectedProvider = normalizeProviderId(selectedModel?.providerId);
+  const selectedModelName = normalizeModel(selectedModel?.model);
+  const storedProvider = normalizeProviderId(stored?.provider_id);
+  const providerId = selectedProvider || storedProvider || "workers-ai";
+  const model =
+    selectedModelName ||
+    normalizeModel(stored?.model) ||
+    defaultModelForProvider(providerId);
+  const apiKey =
+    providerId === "openai" || providerId === "anthropic"
+      ? await getStoredApiKey(env, ownerId, providerId)
+      : null;
+
+  return {
+    providerId,
+    model,
+    backupModel: null,
+    apiKey,
+    ai: null,
+    aiGateway: null,
+    configured: Boolean(apiKey && model),
   };
 }
 
@@ -4550,6 +4668,24 @@ async function getStoredChatDefault(
       `SELECT provider_id, model
        FROM ai_model_defaults
        WHERE user_id = ? AND use_case = 'chat'
+       LIMIT 1`,
+    )
+      .bind(ownerId)
+      .first<AiDefaultRow>();
+  } catch {
+    return null;
+  }
+}
+
+async function getStoredReasoningDefault(
+  env: CoreAgentChatEnv,
+  ownerId: string,
+): Promise<AiDefaultRow | null> {
+  try {
+    return env.DB.prepare(
+      `SELECT provider_id, model
+       FROM ai_model_defaults
+       WHERE user_id = ? AND use_case = 'reasoning'
        LIMIT 1`,
     )
       .bind(ownerId)

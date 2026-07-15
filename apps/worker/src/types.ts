@@ -9,6 +9,7 @@ export interface Env {
   SOCIAL_PUBLISH_QUEUE?: Queue<SocialPublishQueueMessage>;
 
   ENVIRONMENT?: string;
+  ME3_DEPLOYMENT_MODE?: string;
   CORE_WEB_ORIGIN?: string;
   CORE_API_ORIGIN?: string;
   ME3_CUSTOM_DOMAIN?: string;
@@ -29,6 +30,7 @@ export interface Env {
   ME3_ASSISTANT_DEBUG_TRACE?: string;
   ME3_ASSISTANT_TRACE?: string;
   ME3_ASSISTANT_SITE_TOOLS_ENABLED?: string;
+  ME3_AI_RAW_MODEL_SELECTION_ENABLED?: string;
   ME3_AI_MODEL?: string;
   ME3_AI_DEFAULT_PROVIDER?: string;
   ME3_AI_DEFAULT_MODEL?: string;

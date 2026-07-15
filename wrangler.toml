@@ -19,6 +19,7 @@ new_sqlite_classes = ["Me3UserAgent"]
 binding = "AI"
 
 [vars]
+ME3_DEPLOYMENT_MODE = "self_hosted"
 # Managed social OAuth is the zero-setup default. Owners can still select
 # "Use my own app" in ME3, which bypasses this bridge for that connection.
 ME3_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app"

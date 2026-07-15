@@ -1,4 +1,5 @@
 export {
+  AGENT_CHAT_MODES,
   AGENT_CHAT_PLUGIN_ID,
   AGENT_CHAT_RUNTIME,
   CORE_CHAT_CAPABILITIES,
@@ -7,6 +8,7 @@ export {
   DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
   MAX_AGENT_TOOL_MODEL_STEPS,
   activateAgentMailbox,
+  allowsAgentChatRawModelSelection,
   cancelAgentReminder,
   classifyAssistantImageIntent,
   convertAgentContactToClient,
@@ -67,6 +69,7 @@ export {
   validateCoreChatCapabilityContracts,
   validateCoreChatToolDefinitions,
   type AgentContact,
+  type AgentChatMode,
   type AgentContactInput,
   type AgentContentCreateInput,
   type AgentContentItem,

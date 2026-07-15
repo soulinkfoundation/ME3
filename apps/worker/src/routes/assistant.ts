@@ -11,9 +11,12 @@ import {
   type AiTextMessage,
 } from "../ai-providers";
 import {
+  AGENT_CHAT_MODES,
+  allowsAgentChatRawModelSelection,
   createAgentSandboxTurnRecord,
   getAgentSandboxTurnResult,
   planLegacyNativeToolTurn,
+  type AgentChatMode,
   type AgentChatActionCard,
   type AgentChatImageAction,
 } from "../agent-chat";
@@ -81,6 +84,7 @@ type AssistantRouteDeps = {
 type ChatBody = { message?: string };
 type AssistantChatTurnBody = {
   messageText?: unknown;
+  mode?: unknown;
   requestId?: unknown;
   threadId?: unknown;
   projectId?: unknown;
@@ -537,6 +541,35 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
 
     return { providerId, model, optionId };
+  }
+
+  function parseAssistantChatMode(
+    value: unknown,
+  ): AgentChatMode | { error: string } {
+    if (value === undefined || value === null) return "everyday";
+    if (
+      typeof value === "string" &&
+      AGENT_CHAT_MODES.includes(value as AgentChatMode)
+    ) {
+      return value as AgentChatMode;
+    }
+    return { error: "mode must be everyday, advanced, or owner" };
+  }
+
+  function managedAssistantModelOverrideError(
+    env: Env,
+    mode: AgentChatMode,
+    model: unknown,
+  ): string | null {
+    if (
+      model === undefined ||
+      model === null ||
+      mode === "owner" ||
+      allowsAgentChatRawModelSelection(env)
+    ) {
+      return null;
+    }
+    return "Raw model overrides are not allowed for managed everyday or advanced modes";
   }
 
   function serializeAssistantThread(row: AssistantThreadRow) {
@@ -2971,13 +3004,21 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     if (!displayMessageText) {
       return c.json({ ok: false, error: "Message text is required" }, 400);
     }
+    const mode = parseAssistantChatMode(body.mode);
+    if (typeof mode !== "string") {
+      return c.json({ ok: false, error: mode.error }, 400);
+    }
+    const modelOverrideError = managedAssistantModelOverrideError(c.env, mode, body.model);
+    if (modelOverrideError) {
+      return c.json({ ok: false, error: modelOverrideError }, 400);
+    }
     const request = resolveAssistantRequestId(body.requestId);
     if ("error" in request) {
       return c.json({ ok: false, error: request.error }, 400);
     }
     const requestId = request.requestId;
     const replay = await getAgentSandboxTurnResult(c.env, ownerId, requestId);
-    if (replay) return c.json(replay);
+    if (replay) return c.json({ mode, ...replay });
     const siteToolsEnabled = assistantSiteToolsEnabled(c.env);
     const scopeParse = siteToolsEnabled
       ? parseAssistantScopes(displayMessageText, body.scopes)
@@ -3033,6 +3074,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
         auditId: null,
         turnId: null,
         threadId: thread.id,
+        mode,
         specialist: "core.job-builder",
         replyText,
         model: null,
@@ -3067,10 +3109,13 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           userMessageMetadata,
         );
         await touchAssistantThread(c.env, ownerId, thread.id);
-        return c.json(buildAssistantScopeRequiredPayload(thread.id, scopeRequiredReply, scopeDecision));
+        return c.json({
+          ...buildAssistantScopeRequiredPayload(thread.id, scopeRequiredReply, scopeDecision),
+          mode,
+        });
       }
 
-      const siteAction = siteScopeAllowed
+      const siteAction = siteScopeAllowed && mode === "everyday"
         ? await maybeHandleAssistantSiteToolAction(
             c.env,
             ownerId,
@@ -3091,7 +3136,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           userMessageMetadata,
         );
         await touchAssistantThread(c.env, ownerId, thread.id);
-        return c.json(buildAssistantSiteToolPayload(thread.id, siteAction, scopeDecision));
+        return c.json({
+          ...buildAssistantSiteToolPayload(thread.id, siteAction, scopeDecision),
+          mode,
+        });
       }
     }
 
@@ -3117,6 +3165,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       metadata: {
         surface: "assistant",
         route: c.req.path,
+        mode,
         requestId,
         threadId: thread.id,
         requestedThreadId,
@@ -3148,6 +3197,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           turnId: turn.turnId,
           threadId: thread.id,
           messageText: turn.messageText,
+          mode,
           replyToMessageId: turn.replyToMessageId,
           selectedModel,
           attachments: attachmentManifest,
@@ -3174,7 +3224,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
     }
 
     await touchAssistantThread(c.env, ownerId, thread.id);
-    return c.json({ ...payload, threadId: thread.id });
+    return c.json({ ...payload, mode, threadId: thread.id });
   }
 
   async function handleAssistantChatTurnStream(c: Context<{ Bindings: Env }>) {
@@ -3195,6 +3245,14 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       typeof body.messageText === "string" ? body.messageText.trim() : "";
     if (!displayMessageText) {
       return c.json({ ok: false, error: "Message text is required" }, 400);
+    }
+    const mode = parseAssistantChatMode(body.mode);
+    if (typeof mode !== "string") {
+      return c.json({ ok: false, error: mode.error }, 400);
+    }
+    const modelOverrideError = managedAssistantModelOverrideError(c.env, mode, body.model);
+    if (modelOverrideError) {
+      return c.json({ ok: false, error: modelOverrideError }, 400);
     }
     const request = resolveAssistantRequestId(body.requestId);
     if ("error" in request) {
@@ -3253,7 +3311,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           if (replay) {
             if (replay.threadId) send("thread", { threadId: replay.threadId });
             await sendAssistantStreamText(send, replay.replyText || "");
-            send("done", replay as unknown as Record<string, unknown>);
+            send("done", { mode, ...replay } as unknown as Record<string, unknown>);
             return;
           }
           const thread = await resolveAssistantThreadForTurn(
@@ -3293,6 +3351,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               auditId: null,
               turnId: null,
               threadId: thread.id,
+              mode,
               specialist: "core.job-builder",
               replyText,
               model: null,
@@ -3331,12 +3390,19 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               await sendAssistantStreamText(send, scopeRequiredReply);
               send(
                 "done",
-                buildAssistantScopeRequiredPayload(thread.id, scopeRequiredReply, scopeDecision),
+                {
+                  ...buildAssistantScopeRequiredPayload(
+                    thread.id,
+                    scopeRequiredReply,
+                    scopeDecision,
+                  ),
+                  mode,
+                },
               );
               return;
             }
 
-            const siteAction = siteScopeAllowed
+            const siteAction = siteScopeAllowed && mode === "everyday"
               ? await maybeHandleAssistantSiteToolAction(
                   c.env,
                   ownerId,
@@ -3358,7 +3424,10 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               );
               await touchAssistantThread(c.env, ownerId, thread.id);
               await sendAssistantStreamText(send, siteAction.replyText);
-              send("done", buildAssistantSiteToolPayload(thread.id, siteAction, scopeDecision));
+              send("done", {
+                ...buildAssistantSiteToolPayload(thread.id, siteAction, scopeDecision),
+                mode,
+              });
               return;
             }
           }
@@ -3384,6 +3453,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               surface: "assistant",
               route: c.req.path,
               stream: true,
+              mode,
               requestId,
               threadId: thread.id,
               requestedThreadId,
@@ -3422,6 +3492,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
                 turnId: turn.turnId,
                 threadId: thread.id,
                 messageText: turn.messageText,
+                mode,
                 replyToMessageId: turn.replyToMessageId,
                 selectedModel,
                 attachments: attachmentManifest,
@@ -3449,6 +3520,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               threadId: thread.id,
               route: c.req.path,
               outcome: runtimeStream.completed ? "completed" : "failed",
+              mode,
               selectedModel: selectedModel || null,
               attachmentCount,
               attachmentManifest,
@@ -3472,6 +3544,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               threadId: thread.id,
               route: c.req.path,
               outcome: "failed",
+              mode,
               selectedModel: selectedModel || null,
               attachmentCount,
               attachmentManifest,
@@ -3501,12 +3574,13 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
             threadId: thread.id,
             route: c.req.path,
             outcome: "completed",
+            mode,
             selectedModel: selectedModel || null,
             attachmentCount,
             attachmentManifest,
             error: null,
           });
-          send("done", { ...payload, threadId: thread.id });
+          send("done", { ...payload, mode, threadId: thread.id });
         } catch (error) {
           if (c.req.raw.signal.aborted) {
             if (auditContext) {
@@ -3518,6 +3592,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
                 threadId: auditContext.threadId,
                 route: c.req.path,
                 outcome: "stopped",
+                mode,
                 selectedModel: selectedModel || null,
                 attachmentCount,
                 attachmentManifest,
@@ -3535,6 +3610,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
               threadId: auditContext.threadId,
               route: c.req.path,
               outcome: "failed",
+              mode,
               selectedModel: selectedModel || null,
               attachmentCount,
               attachmentManifest,
@@ -3724,6 +3800,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       threadId: string;
       route: string;
       outcome: "completed" | "failed" | "stopped";
+      mode: AgentChatMode;
       selectedModel: ReturnType<typeof parseAssistantChatTurnModelSelection> | null;
       attachmentCount: number;
       attachmentManifest: AssistantAttachmentAuditManifestItem[];
@@ -3752,6 +3829,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
           route: input.route,
           stream: true,
           streamOutcome: input.outcome,
+          mode: input.mode,
           turnId: input.turnId,
           threadId: input.threadId,
           ownerId: input.ownerId,

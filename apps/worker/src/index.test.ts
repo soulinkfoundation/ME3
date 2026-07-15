@@ -5093,6 +5093,7 @@ describe("ME3 Core Worker auth", () => {
 
   it("dispatches owner assistant chat turns through the agent runtime", async () => {
     const env = createEnv();
+    env.ME3_DEPLOYMENT_MODE = "self_hosted";
     const session = cookieHeader(await bootstrap(env));
     const runtimeCalls: Array<[string, RequestInit]> = [];
     const runtimeFetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -5169,6 +5170,7 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(200);
     expect(payload).toMatchObject({
       ok: true,
+      mode: "everyday",
       specialist: "core.agent-chat",
       replyText: "Hello from Core chat.",
     });
@@ -5191,6 +5193,7 @@ describe("ME3 Core Worker auth", () => {
       runtime: "sandbox",
       surface: "assistant",
       route: "/api/assistant/chat/turn",
+      mode: "everyday",
       threadId: env.assistantThreads[0]?.id,
       requestedThreadId: null,
       selectedModel: {
@@ -5225,6 +5228,7 @@ describe("ME3 Core Worker auth", () => {
       userId: "owner",
       threadId: env.assistantThreads[0]?.id,
       messageText: "Hello agent",
+      mode: "everyday",
       selectedModel: {
         providerId: "openai",
         model: "gpt-test",
@@ -5491,6 +5495,54 @@ describe("ME3 Core Worker auth", () => {
           file.path.startsWith("assistant/site-update-drafts/"),
       ),
     ).toBe(false);
+  });
+
+  it("does not intercept advanced site turns with the everyday chat generator", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    addAssistantEditableSite(env);
+    const runtimeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      return Response.json({
+        ok: true,
+        mode: input.mode,
+        specialist: "core.agent-chat",
+        replyText: "Advanced runtime reply.",
+      });
+    });
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+    const aiRun = vi.fn(async () => ({
+      response: JSON.stringify({ bio: "This should not be written." }),
+    }));
+    env.AI = { run: aiRun } as unknown as Ai;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          messageText: '@site Update my short bio to say "This should not be written."',
+          mode: "advanced",
+        }),
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      ok: true,
+      mode: "advanced",
+      specialist: "core.agent-chat",
+    });
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+    expect(aiRun).not.toHaveBeenCalled();
+    expect(siteFileText(env, "site-assistant", "src/me.json")).not.toContain(
+      "This should not be written.",
+    );
   });
 
   it("requires @site again before publishing a pending assistant site draft", async () => {
@@ -6271,12 +6323,16 @@ describe("ME3 Core Worker auth", () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
     const runtimeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
-      const input = JSON.parse(String(init?.body || "{}")) as { threadId?: string };
+      const input = JSON.parse(String(init?.body || "{}")) as {
+        threadId?: string;
+        mode?: string;
+      };
       const done = {
         ok: true,
         auditId: null,
         turnId: "turn-1",
         threadId: input.threadId,
+        mode: input.mode,
         specialist: "core.agent-chat",
         replyText: "Hello from the streaming route.",
         model: "test-model",
@@ -6313,6 +6369,7 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           messageText: "Stream this",
+          mode: "advanced",
           attachments: [{ id: "att-1", kind: "text" }],
         }),
       }),
@@ -6328,11 +6385,16 @@ describe("ME3 Core Worker auth", () => {
     expect(streamText).toContain("event: tool");
     expect(streamText).toContain("Hello from the streaming route.");
     expect(streamText).toContain("event: done");
+    expect(streamText).toContain('"mode":"advanced"');
     expect(streamText).toContain(env.assistantThreads[0]?.id);
     expect(runtimeFetch.mock.calls[0]?.[0]).toContain("/dispatch/sandbox/stream");
+    expect(JSON.parse(String(runtimeFetch.mock.calls[0]?.[1]?.body))).toMatchObject({
+      mode: "advanced",
+    });
     expect(JSON.parse(env.agentEvents[0]?.raw_json || "{}")).toMatchObject({
       route: "/api/assistant/chat/turn/stream",
       stream: true,
+      mode: "advanced",
       attachmentCount: 1,
       attachmentManifest: [
         {
@@ -6351,6 +6413,7 @@ describe("ME3 Core Worker auth", () => {
       route: "/api/assistant/chat/turn/stream",
       stream: true,
       streamOutcome: "completed",
+      mode: "advanced",
       attachmentCount: 1,
       attachmentManifest: [
         {
@@ -6933,6 +6996,166 @@ describe("ME3 Core Worker auth", () => {
     expect(env.messages.find((message) => message.id === "message-archived-2")?.content).toBe(
       "",
     );
+  });
+
+  it.each([
+    ["normal", "/api/assistant/chat/turn"],
+    ["streaming", "/api/assistant/chat/turn/stream"],
+  ])("rejects invalid assistant modes on the %s endpoint", async (_kind, path) => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const response = await app.fetch(
+      new Request(`http://localhost${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: session,
+        },
+        body: JSON.stringify({ messageText: "Hello agent", mode: "Everyday" }),
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload).toMatchObject({
+      ok: false,
+      error: "mode must be everyday, advanced, or owner",
+    });
+  });
+
+  it.each([
+    ["/api/assistant/chat/turn", "everyday"],
+    ["/api/assistant/chat/turn", "advanced"],
+    ["/api/assistant/chat/turn/stream", "everyday"],
+    ["/api/assistant/chat/turn/stream", "advanced"],
+  ])(
+    "rejects managed raw model overrides on %s in %s mode",
+    async (path, mode) => {
+      const env = createEnv();
+      env.ME3_DEPLOYMENT_MODE = "managed";
+      const session = cookieHeader(await bootstrap(env));
+
+      const response = await app.fetch(
+        new Request(`http://localhost${path}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: session,
+          },
+          body: JSON.stringify({
+            messageText: "Hello agent",
+            mode,
+            model: { providerId: "workers-ai", model: "@cf/example/model" },
+          }),
+        }),
+        env,
+      );
+      const payload = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(payload).toMatchObject({
+        ok: false,
+        error:
+          "Raw model overrides are not allowed for managed everyday or advanced modes",
+      });
+    },
+  );
+
+  it("retains raw model selection for explicitly enabled managed evaluation installs", async () => {
+    const env = createEnv();
+    env.ME3_DEPLOYMENT_MODE = "managed";
+    env.ME3_AI_RAW_MODEL_SELECTION_ENABLED = "yes";
+    const session = cookieHeader(await bootstrap(env));
+    const runtimeBodies: Array<Record<string, unknown>> = [];
+    const runtimeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      runtimeBodies.push(JSON.parse(String(init?.body || "{}")) as Record<string, unknown>);
+      return Response.json({
+        ok: true,
+        specialist: "core.agent-chat",
+        replyText: "Evaluation reply.",
+      });
+    });
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          messageText: "Evaluate this model",
+          mode: "advanced",
+          model: {
+            providerId: "workers-ai",
+            model: "@cf/evaluation/model",
+            optionId: "evaluation-model",
+          },
+        }),
+      }),
+      env,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({ ok: true, mode: "advanced" });
+    expect(runtimeBodies[0]).toMatchObject({
+      mode: "advanced",
+      selectedModel: {
+        providerId: "workers-ai",
+        model: "@cf/evaluation/model",
+        optionId: "evaluation-model",
+      },
+    });
+  });
+
+  it("allows managed owner mode to reach the runtime with its requested model", async () => {
+    const env = createEnv();
+    env.ME3_DEPLOYMENT_MODE = "managed";
+    const session = cookieHeader(await bootstrap(env));
+    const runtimeBodies: Array<Record<string, unknown>> = [];
+    const runtimeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      runtimeBodies.push(JSON.parse(String(init?.body || "{}")) as Record<string, unknown>);
+      return Response.json({
+        ok: true,
+        specialist: "core.agent-chat",
+        replyText: "Owner AI reply.",
+      });
+    });
+    env.ME3_USER_AGENT = {
+      idFromName: vi.fn((name: string) => name),
+      get: vi.fn(() => ({ fetch: runtimeFetch })),
+    } as unknown as DurableObjectNamespace;
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/assistant/chat/turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          messageText: "Use my provider",
+          mode: "owner",
+          model: {
+            providerId: "openai",
+            model: "gpt-owner",
+            optionId: "openai-owner",
+          },
+        }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(runtimeBodies[0]).toMatchObject({
+      mode: "owner",
+      selectedModel: {
+        providerId: "openai",
+        model: "gpt-owner",
+        optionId: "openai-owner",
+      },
+    });
   });
 
   it("rejects unsupported assistant chat model selections", async () => {

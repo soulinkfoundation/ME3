@@ -29,6 +29,7 @@ type FakeDbState = {
   reminders: Array<Record<string, unknown>>;
   bookings: Array<Record<string, unknown>>;
   aiDefaults: Array<Record<string, unknown>>;
+  aiCredentials: Array<Record<string, unknown>>;
   assistantAttachments: Array<Record<string, unknown>>;
   assistantMessageAssets: Array<Record<string, unknown>>;
   aiUsageEvents: Array<Record<string, unknown>>;
@@ -58,6 +59,37 @@ function createStorage() {
       for (const item of Array.isArray(key) ? key : [key]) values.delete(item);
     },
   };
+}
+
+async function encryptStoredProviderKey(
+  apiKey: string,
+  installKey: string,
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(installKey),
+  );
+  const key = await crypto.subtle.importKey(
+    "raw",
+    digest,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"],
+  );
+  const iv = new Uint8Array(12).fill(7);
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      new TextEncoder().encode(apiKey),
+    ),
+  );
+  const encode = (bytes: Uint8Array) =>
+    btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  return `v1.${encode(iv)}.${encode(ciphertext)}`;
 }
 
 function createR2Bucket() {
@@ -136,6 +168,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
     reminders: [],
     bookings: [],
     aiDefaults: [],
+    aiCredentials: [],
     assistantAttachments: [],
     assistantMessageAssets: [],
     aiUsageEvents: [],
@@ -156,12 +189,19 @@ function createEnv(state: Partial<FakeDbState> = {}) {
           if (sql.includes("FROM ai_model_defaults")) {
             const useCase = sql.includes("use_case = 'image_generation'")
               ? "image_generation"
+              : sql.includes("use_case = 'reasoning'")
+                ? "reasoning"
               : "chat";
             return (dbState.aiDefaults.find(
               (row) => row.user_id === values[0] && row.use_case === useCase,
             ) || null) as T;
           }
-          if (sql.includes("FROM ai_provider_credentials")) return null;
+          if (sql.includes("FROM ai_provider_credentials")) {
+            return (dbState.aiCredentials.find(
+              (row) =>
+                row.user_id === values[0] && row.provider_id === values[1],
+            ) || null) as T;
+          }
           if (sql.includes("FROM install_secrets")) return null;
           if (sql.includes("FROM mailbox_aliases")) {
             return (dbState.mailboxAliases.find((alias) => alias.user_id === values[0]) || null) as T;
@@ -893,10 +933,63 @@ describe("Core chat native context", () => {
     );
 
     expect(response).toMatchObject({
+      mode: "everyday",
       replyText: "Choice-shaped reply.",
       model: "@cf/zai-org/glm-4.7-flash",
       source: "workers-ai",
     });
+  });
+
+  it("resolves everyday through the configured chat route", async () => {
+    const aiRun = vi.fn(async () => ({ response: "Everyday reply." }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_AI_CHAT_MODEL: "@cf/example/everyday-model",
+        ME3_AI_REASONING_MODEL: "@cf/example/advanced-model",
+      } as never,
+      createStorage(),
+      { ...dispatchInput("Use Everyday."), mode: "everyday" },
+    );
+
+    expect(response).toMatchObject({
+      mode: "everyday",
+      model: "@cf/example/everyday-model",
+      replyText: "Everyday reply.",
+    });
+    expect(aiRun).toHaveBeenCalledWith(
+      "@cf/example/everyday-model",
+      expect.any(Object),
+    );
+  });
+
+  it("resolves advanced through the configured reasoning route", async () => {
+    const aiRun = vi.fn(async () => ({ response: "Advanced reply." }));
+    const env = createEnv();
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_AI_CHAT_MODEL: "@cf/example/everyday-model",
+        ME3_AI_REASONING_MODEL: "@cf/example/advanced-model",
+      } as never,
+      createStorage(),
+      { ...dispatchInput("Use Advanced."), mode: "advanced" },
+    );
+
+    expect(response).toMatchObject({
+      mode: "advanced",
+      model: "@cf/example/advanced-model",
+      replyText: "Advanced reply.",
+    });
+    expect(aiRun).toHaveBeenCalledWith(
+      "@cf/example/advanced-model",
+      expect.any(Object),
+    );
   });
 
   it("uses the selected Workers AI model when provided", async () => {
@@ -906,10 +999,15 @@ describe("Core chat native context", () => {
     const env = createEnv();
 
     const response = await dispatchAgentSandboxTurn(
-      { ...env, AI: { run: aiRun } } as never,
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_DEPLOYMENT_MODE: "self_hosted",
+      } as never,
       createStorage(),
       {
         ...dispatchInput("Use this model."),
+        mode: "everyday",
         selectedModel: {
           providerId: "workers-ai",
           model: "@cf/example/selected-model",
@@ -919,6 +1017,7 @@ describe("Core chat native context", () => {
     );
 
     expect(response).toMatchObject({
+      mode: "everyday",
       replyText: "Selected model reply.",
       model: "@cf/example/selected-model",
       source: "workers-ai",
@@ -927,6 +1026,137 @@ describe("Core chat native context", () => {
       "@cf/example/selected-model",
       expect.any(Object),
     );
+  });
+
+  it("ignores owner-controlled model choices for managed everyday turns", async () => {
+    const aiRun = vi.fn(async () => ({ response: "Managed Everyday reply." }));
+    const env = createEnv({
+      aiDefaults: [
+        {
+          user_id: "owner",
+          use_case: "chat",
+          provider_id: "workers-ai",
+          model: "@cf/example/stored-owner-model",
+        },
+      ],
+    });
+
+    const response = await dispatchAgentSandboxTurn(
+      {
+        ...env,
+        AI: { run: aiRun },
+        ME3_DEPLOYMENT_MODE: "managed",
+        ME3_AI_CHAT_PROVIDER: "workers-ai",
+        ME3_AI_CHAT_MODEL: "@cf/example/managed-everyday-model",
+      } as never,
+      createStorage(),
+      {
+        ...dispatchInput("Use managed Everyday."),
+        mode: "everyday",
+        selectedModel: {
+          providerId: "workers-ai",
+          model: "@cf/example/raw-client-model",
+        },
+      },
+    );
+
+    expect(response.model).toBe("@cf/example/managed-everyday-model");
+    expect(aiRun).toHaveBeenCalledWith(
+      "@cf/example/managed-everyday-model",
+      expect.any(Object),
+    );
+  });
+
+  it("uses only the stored owner credential for owner mode", async () => {
+    const installKey = "owner-mode-install-key";
+    const ownerApiKey = "sk-owner-stored";
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ choices: [{ message: { content: "Owner AI reply." } }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createEnv({
+      aiDefaults: [
+        {
+          user_id: "owner",
+          use_case: "chat",
+          provider_id: "openai",
+          model: "gpt-owner-model",
+        },
+      ],
+      aiCredentials: [
+        {
+          user_id: "owner",
+          provider_id: "openai",
+          encrypted_api_key: await encryptStoredProviderKey(ownerApiKey, installKey),
+        },
+      ],
+    });
+
+    try {
+      const response = await dispatchAgentSandboxTurn(
+        {
+          ...env,
+          TOKEN_ENCRYPTION_KEY: installKey,
+          OPENAI_API_KEY: "sk-managed-platform",
+          CLOUDFLARE_ACCOUNT_ID: "managed-account",
+          CLOUDFLARE_AI_GATEWAY_ID: "managed-gateway",
+          CLOUDFLARE_API_TOKEN: "managed-gateway-token",
+          ME3_DEPLOYMENT_MODE: "managed",
+        } as never,
+        createStorage(),
+        { ...dispatchInput("Use my AI."), mode: "owner" },
+      );
+      const [request, init] = fetchMock.mock.calls[0] as [
+        RequestInfo | URL,
+        RequestInit,
+      ];
+
+      expect(response).toMatchObject({
+        mode: "owner",
+        model: "gpt-owner-model",
+        source: "openai",
+        replyText: "Owner AI reply.",
+      });
+      expect(String(request)).toBe("https://api.openai.com/v1/chat/completions");
+      expect(init.headers).toMatchObject({
+        Authorization: `Bearer ${ownerApiKey}`,
+      });
+      expect(String(init.body)).not.toContain("sk-managed-platform");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not treat an environment provider key as owner BYOK", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const env = createEnv({
+      aiDefaults: [
+        {
+          user_id: "owner",
+          use_case: "chat",
+          provider_id: "openai",
+          model: "gpt-owner-model",
+        },
+      ],
+    });
+
+    try {
+      const response = await dispatchAgentSandboxTurn(
+        { ...env, OPENAI_API_KEY: "sk-managed-platform" } as never,
+        createStorage(),
+        { ...dispatchInput("Use my AI."), mode: "owner" },
+      );
+
+      expect(response).toMatchObject({
+        mode: "owner",
+        source: "fallback",
+        fallbackReason: "AI provider setup required",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("passes ready image attachments to selected Workers AI vision models", async () => {
