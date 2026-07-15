@@ -168,6 +168,26 @@ printf '%s\n' "your-gateway-id" | pnpm exec wrangler secret put CLOUDFLARE_AI_GA
 pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --config wrangler.toml
 ```
 
+#### Internal Live Model Evaluation
+
+The fixed 30-task evaluator is for explicitly internal evaluation only. It sends synthetic tasks
+through Core's existing provider-neutral model and tool runtime, can incur provider charges, and
+prints a metadata-only report without prompts, responses, tool arguments, owner context, or keys.
+Normal tests and builds never dispatch these live requests.
+
+Set Workers AI credentials in the shell, optionally select a comma-separated subset with
+`ME3_MODEL_EVAL_CANDIDATES`, then acknowledge the live provider cost before running:
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID="your-account-id"
+read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
+ME3_MODEL_EVAL_CONFIRM=I_UNDERSTAND_LIVE_PROVIDER_COSTS pnpm eval:models
+```
+
+The default candidates are Gemma 4 26B and GLM 4.7 Flash for Everyday plus GLM 5.2 for Advanced.
+The optional existing Anthropic Sonnet candidate also requires
+`ME3_MODEL_EVAL_ANTHROPIC_API_KEY` and explicit inclusion in `ME3_MODEL_EVAL_CANDIDATES`.
+
 ## Core Plugins
 
 ME3 exposes its first-party capability catalog through `/api/plugins`. Account -> Plugins lists owner-manageable optional plugins; foundational Agent Chat, Mission Control, Calendar, and Journal capabilities remain in the catalog for runtime discovery but are hidden from plugin management.

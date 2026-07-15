@@ -15,6 +15,7 @@ describe("AI model catalog", () => {
   it("keeps Workers AI visible and hides API-key providers until configured", () => {
     expect(visibleLabels([])).toEqual([
       "GLM 4.7 Flash",
+      "Gemma 4 26B",
       "GLM 5.2",
       "Qwen3",
       "GPT-OSS 120B",
@@ -24,5 +25,15 @@ describe("AI model catalog", () => {
 
     expect(visibleLabels(["openai"])).toContain("GPT-4o");
     expect(visibleLabels(["openai"])).not.toContain("Claude Sonnet 4.6");
+  });
+
+  it("describes Gemma 4 with the canonical Workers AI capabilities", () => {
+    expect(
+      AI_AGENT_MODEL_OPTIONS.find((option) => option.id === "workers-gemma-4-26b"),
+    ).toMatchObject({
+      providerId: "workers-ai",
+      model: "@cf/google/gemma-4-26b-a4b-it",
+      capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+    });
   });
 });

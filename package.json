@@ -13,6 +13,7 @@
     "uninstall:cloudflare": "node scripts/uninstall-cloudflare.mjs",
     "destroy:cloudflare": "node scripts/uninstall-cloudflare.mjs",
     "generate:llms": "node scripts/generate-llms.mjs",
+    "eval:models": "node scripts/evaluate-models.mjs",
     "update:check": "node scripts/check-updates.mjs",
     "update:core": "node scripts/update-core.mjs",
     "update:doctor": "node scripts/update-doctor.mjs",

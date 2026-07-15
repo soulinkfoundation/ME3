@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./model-capabilities": "./src/model-capabilities.ts",
+    "./model-evaluation": "./src/model-evaluation.ts"
   },
   "scripts": {
     "build": "node ../../scripts/check-agent-chat-index-size.mjs && tsc --noEmit",

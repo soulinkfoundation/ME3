@@ -36,6 +36,13 @@ export type AgentToolMessage =
 export type AgentToolModelResponse = {
   text: string;
   toolCalls: readonly AgentToolCall[];
+  usage?: AgentModelUsage;
+};
+
+export type AgentModelUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
 };
 
 export type AgentToolLoopResult = {
@@ -181,11 +188,13 @@ export function fromOpenAiToolResponse(payload: unknown): AgentToolModelResponse
   }
 
   const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const usage = parseAgentModelUsage(root || {});
   return {
     text: extractText(message.content) || extractText(message.refusal),
     toolCalls: rawCalls.map((value, index) =>
       parseOpenAiToolCall(value, index),
     ),
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -280,7 +289,12 @@ export function fromAnthropicToolResponse(
     }
   }
 
-  return { text: text.join("").trim(), toolCalls };
+  const usage = parseAgentModelUsage(root);
+  return {
+    text: text.join("").trim(),
+    toolCalls,
+    ...(usage ? { usage } : {}),
+  };
 }
 
 export function toWorkersAiToolRequest(
@@ -306,12 +320,41 @@ export function fromWorkersAiToolResponse(
       ? message.tool_calls
       : [];
 
+  const usage = parseAgentModelUsage(result);
   return {
     text: extractText(result.response) || extractText(message?.content),
     toolCalls: rawCalls.map((value, index) =>
       parseWorkersAiToolCall(value, index),
     ),
+    ...(usage ? { usage } : {}),
   };
+}
+
+function parseAgentModelUsage(root: Record<string, unknown>): AgentModelUsage | null {
+  const usage = asRecord(root.usage);
+  if (!usage) return null;
+  const inputTokens = nonNegativeNumber(usage.input_tokens ?? usage.prompt_tokens);
+  const outputTokens = nonNegativeNumber(
+    usage.output_tokens ?? usage.completion_tokens,
+  );
+  if (inputTokens === null && outputTokens === null) return null;
+  const promptDetails = asRecord(usage.prompt_tokens_details);
+  return {
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    cachedInputTokens:
+      nonNegativeNumber(
+        usage.cache_read_input_tokens ??
+          usage.cached_input_tokens ??
+          promptDetails?.cached_tokens,
+      ) ?? 0,
+  };
+}
+
+function nonNegativeNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
 }
 
 function strictOpenAiSchema(

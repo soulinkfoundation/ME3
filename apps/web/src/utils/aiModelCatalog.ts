@@ -76,6 +76,17 @@ export const AI_AGENT_MODEL_OPTIONS: AiAgentModelOption[] = [
       "Fast, efficient GLM model on Workers AI for dialogue, instruction following, and tool use.",
   },
   {
+    id: "workers-gemma-4-26b",
+    label: "Gemma 4 26B",
+    providerId: "workers-ai",
+    model: "@cf/google/gemma-4-26b-a4b-it",
+    runtimeLabel: "Cloudflare Workers AI",
+    costLabel: "Low cost",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+    description:
+      "Google Gemma 4 26B A4B on Workers AI for economical text, vision, reasoning, and tool use.",
+  },
+  {
     id: "workers-glm-5-2",
     label: "GLM 5.2",
     providerId: "workers-ai",

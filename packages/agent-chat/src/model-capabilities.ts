@@ -59,6 +59,11 @@ const AI_MODEL_CAPABILITY_RECORDS: readonly AiModelCapabilityRecord[] = [
   },
   {
     providerId: "workers-ai",
+    model: "@cf/google/gemma-4-26b-a4b-it",
+    capabilities: ["text", "image_input", "long-context", "reasoning", "tool-use"],
+  },
+  {
+    providerId: "workers-ai",
     model: DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
     capabilities: ["image_generation"],
     image: {
@@ -89,6 +94,13 @@ export function modelSupportsImageInput(
     record.capabilities.includes("image_input") ||
     record.capabilities.includes("vision")
   );
+}
+
+export function modelCapabilitiesFor(
+  providerId: AiAgentModelProviderId,
+  model: string,
+): readonly AiAgentModelCapability[] {
+  return findModelCapabilityRecord(providerId, model)?.capabilities ?? [];
 }
 
 function findModelCapabilityRecord(

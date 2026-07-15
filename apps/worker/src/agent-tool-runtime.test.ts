@@ -314,4 +314,33 @@ describe("agent tool provider adapters", () => {
       ],
     });
   });
+
+  it("keeps provider token usage as metadata", () => {
+    expect(
+      fromOpenAiToolResponse({
+        choices: [{ message: { content: "Done" } }],
+        usage: {
+          prompt_tokens: 120,
+          completion_tokens: 20,
+          prompt_tokens_details: { cached_tokens: 40 },
+        },
+      }).usage,
+    ).toEqual({ inputTokens: 120, outputTokens: 20, cachedInputTokens: 40 });
+    expect(
+      fromAnthropicToolResponse({
+        content: [{ type: "text", text: "Done" }],
+        usage: {
+          input_tokens: 90,
+          output_tokens: 15,
+          cache_read_input_tokens: 30,
+        },
+      }).usage,
+    ).toEqual({ inputTokens: 90, outputTokens: 15, cachedInputTokens: 30 });
+    expect(
+      fromWorkersAiToolResponse({
+        response: "Done",
+        usage: { prompt_tokens: 80, completion_tokens: 10 },
+      }).usage,
+    ).toEqual({ inputTokens: 80, outputTokens: 10, cachedInputTokens: 0 });
+  });
 });
