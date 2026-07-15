@@ -3990,6 +3990,41 @@ function renderDailyBriefingMessage(context: DailyBriefingRenderContext, templat
     .trim();
 }
 
+export async function getLiveDailyBriefing(env: Env, userId: string) {
+  const context = await buildDailyBriefingRenderContext(env, userId);
+  const job = await findExistingAssistantJobForRecipe(env, userId, "daily-briefing");
+  const version = job?.current_version_id
+    ? await env.DB.prepare("SELECT * FROM assistant_job_versions WHERE id = ? AND user_id = ?")
+        .bind(job.current_version_id, userId)
+        .first<AssistantJobVersionRow>()
+    : null;
+  const draft = job && version ? draftFromVersion(job, version) : null;
+  const notifyAction = draft?.actions.find(
+    (action) => action.capabilityId === "message.owner.notify",
+  );
+  const template = notifyAction
+    ? missionTextInput(notifyAction, "messageTemplate") ||
+      missionTextInput(notifyAction, "message") ||
+      DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE
+    : DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE;
+  const message = renderDailyBriefingMessage(
+    context,
+    template,
+  );
+  return {
+    id: `live:${context.dateKey}`,
+    title: `Daily Briefing: ${context.dateLabel}`,
+    version: 1,
+    message,
+    plainText: message,
+    date: context.dateKey,
+    sections: context.sections,
+    createdAt: new Date().toISOString(),
+    status: "live",
+    relatedId: null,
+  };
+}
+
 async function loadDailyBriefingEvents(
   env: Env,
   userId: string,

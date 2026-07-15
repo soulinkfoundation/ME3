@@ -8,6 +8,7 @@ import {
   ensureDefaultAssistantJobs,
   executeAssistantJobRun,
   getAssistantJob,
+  getLiveDailyBriefing,
   listAssistantJobIngressEvents,
   listAssistantJobRecipes,
   listAssistantJobs,
@@ -829,8 +830,8 @@ describe("assistant jobs persistence", () => {
     expect(JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)).toMatchObject({
       dailyBriefing: {
         version: 1,
-        message: expect.stringContaining("☀️ Good morning, Kieran."),
-        plainText: expect.stringContaining("☀️ Good morning, Kieran."),
+        message: expect.stringContaining("Your calendar is clear"),
+        plainText: expect.stringContaining("Your calendar is clear"),
         sections: [
           expect.objectContaining({ kind: "calendar", title: "Calendar" }),
           expect.objectContaining({ kind: "reminders", title: "Reminders" }),
@@ -867,9 +868,60 @@ describe("assistant jobs persistence", () => {
     });
     expect(JSON.parse(env.__state.pluginActivities[0]?.metadata_json as string)).toMatchObject({
       dailyBriefing: {
-        message: expect.stringContaining("☀️ Good morning, Kieran."),
+        message: expect.stringContaining("Your calendar is clear"),
       },
     });
+  });
+
+  it("renders a live daily briefing without creating a stored activity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-11T08:00:00.000Z"));
+    const env = createAssistantJobsEnv({
+      calendarEvents: [
+        {
+          id: "event-1",
+          user_id: "owner",
+          title: "Design review",
+          notes: null,
+          starts_at: "2026-07-11T09:00:00.000Z",
+          ends_at: "2026-07-11T09:30:00.000Z",
+          timezone: "Europe/Dublin",
+        },
+      ],
+      reminders: [
+        {
+          id: "reminder-1",
+          user_id: "owner",
+          title: "Call the dentist",
+          notes: null,
+          remind_at: "2026-07-11T10:00:00.000Z",
+          timezone: "Europe/Dublin",
+          status: "pending",
+        },
+      ],
+      tasks: [
+        {
+          ...taskRow("task-1", "Ship Mission Control", "project-1"),
+          due_at: "2026-07-11T12:00:00.000Z",
+        },
+      ],
+    });
+
+    const briefing = await getLiveDailyBriefing(env, "owner");
+
+    expect(briefing).toMatchObject({
+      id: "live:2026-07-11",
+      status: "live",
+      message: expect.stringContaining("Design review"),
+      sections: [
+        expect.objectContaining({ kind: "calendar" }),
+        expect.objectContaining({ kind: "reminders" }),
+        expect.objectContaining({ kind: "tasks" }),
+      ],
+    });
+    expect(briefing.message).toContain("Call the dentist");
+    expect(briefing.message).toContain("Ship Mission Control");
+    expect(env.__state.pluginActivities).toHaveLength(0);
   });
 
   it("renders rich Mission Control task descriptions as plain text in daily briefing", async () => {

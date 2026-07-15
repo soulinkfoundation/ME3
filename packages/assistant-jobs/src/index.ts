@@ -969,7 +969,7 @@ const dailySchedule: AssistantJobTrigger = {
 };
 
 export const DEFAULT_DAILY_BRIEFING_MESSAGE_TEMPLATE =
-  "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
+  "{{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
 
 const weeklySchedule: AssistantJobTrigger = {
   kind: "schedule",

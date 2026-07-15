@@ -1,5 +1,6 @@
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 import { getAiGatewayUsageSummary } from "../ai-gateway";
+import { getLiveDailyBriefing } from "../assistant-jobs";
 import { LocalExecutorInputError } from "../local-executor";
 import {
   MissionControlInputError,
@@ -125,6 +126,22 @@ export function registerMissionControlRoutes(app: AppHono, deps: OwnerRouteDeps)
       return missionControlErrorResponse(c, error);
     }
   });
+
+  app.get(
+    "/api/mission-control/dashboard/cards/mission.daily-briefing",
+    async (c) => {
+      const ownerId = await deps.requireOwner(c);
+      if (!ownerId) return deps.unauthorized(c);
+      const blocked = await requireMissionControlPlugin(c);
+      if (blocked) return blocked;
+
+      try {
+        return c.json(await getLiveDailyBriefing(c.env, ownerId));
+      } catch (error) {
+        return missionControlErrorResponse(c, error);
+      }
+    },
+  );
 
   app.get(
     "/api/mission-control/dashboard/cards/mission.projects-summary",

@@ -560,7 +560,7 @@ function formatTaskDateValue(value: string): string {
     sourceLabel: "Task",
     title: "Task",
     siteKey: PROJECT_TASKS_KEY,
-    siteLabel: "Project tasks",
+    siteLabel: "Tasks",
     startsAt: value,
     endsAt: value,
     summary: "",
@@ -780,7 +780,7 @@ function mapReminderToCalendarEvent(
     sourceLabel: "Reminder",
     title: reminder.title,
     siteKey: REMINDERS_KEY,
-    siteLabel: "Agent reminders",
+    siteLabel: "Reminders",
     color: siteDotColor(REMINDERS_KEY),
     startsAt: reminder.remindAt,
     endsAt: reminder.remindAt,
@@ -845,7 +845,11 @@ function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
     sourceLabel: isImported ? "Imported" : isBirthday ? "Birthday" : "Event",
     title: event.title || "Untitled event",
     siteKey,
-    siteLabel: isBirthday ? "Birthdays" : event.sourceName,
+    siteLabel: isImported
+      ? event.sourceName
+      : isBirthday
+        ? "Birthdays"
+        : "Events",
     color: siteDotColor(siteKey),
     startsAt: event.startsAt,
     endsAt: event.endsAt,
@@ -896,21 +900,31 @@ function isImportedBirthdayCandidate(event: CalendarEventRow): boolean {
   );
 }
 
-const siteOptions = computed<CalendarSiteOption[]>(() => [
-  ...sites.sites.map((site) => ({
-    value: site.username,
-    label: `${site.username}.example.com`,
-  })),
-  { value: PERSONAL_EVENTS_KEY, label: "Personal events" },
-  { value: BIRTHDAYS_KEY, label: "Birthdays" },
-  { value: REMINDERS_KEY, label: "Agent reminders" },
-  { value: PROJECT_TASKS_KEY, label: "Project tasks" },
-  ...sources.value.map((source) => ({
-    value: `import:${source.id}`,
-    label: source.name,
-    source,
-  })),
-]);
+const siteOptions = computed<CalendarSiteOption[]>(() => {
+  const bookingUsernames = new Set(bookings.value.map((booking) => booking.username));
+  const bookingSites = sites.sites.filter(
+    (site) => site.bookings_enabled === true || bookingUsernames.has(site.username),
+  );
+  const showBookingSiteName = bookingSites.length > 1;
+
+  return [
+    ...bookingSites.map((site) => ({
+      value: site.username,
+      label: showBookingSiteName
+        ? `Site bookings · ${site.username}`
+        : "Site bookings",
+    })),
+    { value: PERSONAL_EVENTS_KEY, label: "Events" },
+    { value: BIRTHDAYS_KEY, label: "Birthdays" },
+    { value: REMINDERS_KEY, label: "Reminders" },
+    { value: PROJECT_TASKS_KEY, label: "Tasks" },
+    ...sources.value.map((source) => ({
+      value: `import:${source.id}`,
+      label: source.name,
+      source,
+    })),
+  ];
+});
 
 const allCalendarsVisible = computed(
   () =>
@@ -3908,6 +3922,22 @@ onBeforeUnmount(() => {
 .cal-filter-action:disabled {
   cursor: wait;
   opacity: 0.5;
+}
+
+.cal-sidebar .cal-filter-row {
+  gap: 8px;
+  min-height: 36px;
+  margin-bottom: 0;
+}
+
+.cal-sidebar .cal-filter-choice {
+  align-self: stretch;
+  gap: 8px;
+}
+
+.cal-sidebar .cal-filter-action {
+  width: 36px;
+  height: 36px;
 }
 
 .cal-filter-input {

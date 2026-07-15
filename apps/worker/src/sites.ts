@@ -1041,6 +1041,46 @@ export function siteFileContentToBytes(content: SiteFileRecord["content"]): Uint
   throw new TypeError("Unsupported site file content format");
 }
 
+export async function listBookingEnabledSiteIds(
+  env: Env,
+  ownerId: string,
+): Promise<Set<string>> {
+  const files = await env.DB.prepare(
+    `SELECT sf.site_id, sf.path, sf.content
+     FROM site_files sf
+     JOIN sites s ON s.id = sf.site_id
+     WHERE s.user_id = ?
+       AND COALESCE(s.site_type, 'profile') = 'profile'
+       AND sf.path IN ('src/me.json', 'public/me.json')`,
+  )
+    .bind(ownerId)
+    .all<Pick<SiteFileRecord, "site_id" | "path" | "content">>();
+
+  const profiles = new Map<
+    string,
+    Pick<SiteFileRecord, "site_id" | "path" | "content">
+  >();
+  for (const file of files.results || []) {
+    const existing = profiles.get(file.site_id);
+    if (!existing || file.path === "src/me.json") {
+      profiles.set(file.site_id, file);
+    }
+  }
+
+  const enabledSiteIds = new Set<string>();
+  for (const [siteId, file] of profiles) {
+    try {
+      const profile = JSON.parse(
+        new TextDecoder().decode(siteFileContentToBytes(file.content)),
+      ) as Me3SiteProfile;
+      if (profile.intents?.book?.enabled === true) enabledSiteIds.add(siteId);
+    } catch {
+      // Invalid profiles are not booking-enabled.
+    }
+  }
+  return enabledSiteIds;
+}
+
 export function siteFileContentToArrayBuffer(content: SiteFileRecord["content"]): ArrayBuffer {
   const bytes = siteFileContentToBytes(content);
   const copy = new Uint8Array(bytes.byteLength);

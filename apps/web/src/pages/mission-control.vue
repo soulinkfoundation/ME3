@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { api } from "../api";
 import Button from "../components/Button.vue";
@@ -9,6 +9,7 @@ import LifeWheelChart from "../components/mission-control/LifeWheelChart.vue";
 import { formatShortDate } from "../components/mission-control/projectWorkspace";
 import UiIcon from "../components/UiIcon.vue";
 import { useAppToast } from "../composables/useAppToast";
+import { useAuthStore } from "../stores/auth";
 import { useSitesStore } from "../stores/sites";
 import { resolveUiIconName, type UiIconName } from "../utils/icons";
 
@@ -190,8 +191,11 @@ const dashboardCardRegistry = new Set([
 ]);
 
 const { toastFromUnknown, toastSuccess } = useAppToast();
+const auth = useAuthStore();
 const sites = useSitesStore();
 const dashboard = ref<MissionDashboardResponse | null>(null);
+const liveDailyBriefing = ref<DailyBriefingCardData>(null);
+const dailyBriefingLoading = ref(false);
 const loading = ref(true);
 const error = ref("");
 const missionStatementDraft = ref("");
@@ -286,8 +290,19 @@ const dashboardReady = computed(
   () => !loading.value && Boolean(dashboard.value),
 );
 const dailyBriefing = computed(
-  () => dashboard.value?.data["mission.daily-briefing"] || null,
+  () => liveDailyBriefing.value || dashboard.value?.data["mission.daily-briefing"] || null,
 );
+const greetingName = computed(() => {
+  const name = auth.user?.name?.trim() || "";
+  return /^ME3 Core Owner$/i.test(name) ? "" : name;
+});
+const greeting = computed(() =>
+  greetingName.value ? `Good morning ${greetingName.value}` : "Good morning",
+);
+
+function dailyBriefingBody(message: string): string {
+  return message.replace(/^☀️\s*Good morning[^.\n]*\.\s*/i, "");
+}
 const missionStatement = computed(
   () => dashboard.value?.data["mission.mission-statement"] || null,
 );
@@ -633,6 +648,9 @@ async function loadDashboard() {
     if (visibleCardEnabled("mission.projects-summary")) {
       void loadProjectsSummary();
     }
+    if (visibleCardEnabled("mission.daily-briefing")) {
+      void loadDailyBriefing();
+    }
   } catch (err) {
     error.value =
       err instanceof Error ? err.message : "Mission Control could not load.";
@@ -640,6 +658,31 @@ async function loadDashboard() {
     loading.value = false;
   }
 }
+
+async function loadDailyBriefing() {
+  if (dailyBriefingLoading.value) return;
+  dailyBriefingLoading.value = true;
+  try {
+    liveDailyBriefing.value = await api.get<NonNullable<DailyBriefingCardData>>(
+      "/mission-control/dashboard/cards/mission.daily-briefing",
+    );
+  } catch {
+    // Keep the latest stored briefing when a live refresh is unavailable.
+  } finally {
+    dailyBriefingLoading.value = false;
+  }
+}
+
+function refreshDailyBriefingWhenVisible() {
+  if (
+    document.visibilityState === "visible" &&
+    visibleCardEnabled("mission.daily-briefing")
+  ) {
+    void loadDailyBriefing();
+  }
+}
+
+let dailyBriefingRefreshTimer: number | undefined;
 
 async function loadAiUsage() {
   if (aiUsageLoading.value) return;
@@ -747,6 +790,18 @@ async function saveDashboardLayout() {
 onMounted(() => {
   void sites.fetchSites();
   void loadDashboard();
+  dailyBriefingRefreshTimer = window.setInterval(
+    refreshDailyBriefingWhenVisible,
+    60_000,
+  );
+  window.addEventListener("focus", refreshDailyBriefingWhenVisible);
+  document.addEventListener("visibilitychange", refreshDailyBriefingWhenVisible);
+});
+
+onBeforeUnmount(() => {
+  if (dailyBriefingRefreshTimer) window.clearInterval(dailyBriefingRefreshTimer);
+  window.removeEventListener("focus", refreshDailyBriefingWhenVisible);
+  document.removeEventListener("visibilitychange", refreshDailyBriefingWhenVisible);
 });
 </script>
 
@@ -839,7 +894,7 @@ onMounted(() => {
           "
         >
           <UiIcon
-            :name="dashboardEditing ? 'X' : 'SlidersHorizontal'"
+            :name="dashboardEditing ? 'X' : 'Settings'"
             :size="18"
           />
         </Button>
@@ -962,15 +1017,17 @@ onMounted(() => {
           <template v-if="cardComponentKey(card) === 'DailyBriefingCard'">
             <header class="dashboard-card__header">
               <h2 class="dashboard-card__title">
-                <UiIcon name="Sun" :size="16" />
-                <span>Daily Briefing</span>
+                <span>☀️ {{ greeting }}</span>
               </h2>
-              <span v-if="dailyBriefing?.createdAt">
+              <span
+                v-if="dailyBriefing?.createdAt"
+                class="dashboard-card__timestamp"
+              >
                 {{ formatDashboardDate(dailyBriefing.createdAt) }}
               </span>
             </header>
             <p v-if="dailyBriefing" class="dashboard-card__body">
-              {{ dailyBriefing.message }}
+              {{ dailyBriefingBody(dailyBriefing.message) }}
             </p>
             <div v-else class="dashboard-empty">
               <p>No Daily Briefing has landed yet.</p>
@@ -990,8 +1047,7 @@ onMounted(() => {
           >
             <header class="dashboard-card__header">
               <h2 class="dashboard-card__title">
-                <UiIcon name="Rocket" :size="16" />
-                <span>Mission Statement</span>
+                <span>🚀 Mission Statement</span>
               </h2>
               <div
                 v-if="!dashboardEditing"
@@ -1059,8 +1115,7 @@ onMounted(() => {
                 :class="{ 'is-empty': !mainGoalHasValue }"
               >
                 <h3 class="dashboard-card__title mission-goal-display__title">
-                  <UiIcon name="Target" :size="16" />
-                  <span>Goals</span>
+                  <span>🎯 Goals</span>
                 </h3>
                 <p>
                   {{
@@ -1079,8 +1134,7 @@ onMounted(() => {
                 class="dashboard-card__title dashboard-card__title-link"
                 to="/mission-control/wheel-of-life"
               >
-                <UiIcon name="ShipWheel" :size="16" />
-                <span>Wheel of Life</span>
+                <span>🎡 Wheel of Life</span>
               </RouterLink>
               <div class="dashboard-card__header-actions">
                 <span v-if="wheelSnapshot?.snapshot">
@@ -1965,6 +2019,11 @@ onMounted(() => {
   color: var(--ui-text-muted);
   font-size: 13px;
   line-height: 1.55;
+}
+
+.dashboard-card__timestamp {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .dashboard-card__header-actions {

@@ -16,6 +16,7 @@ const OUTER_RADIUS = 116;
 const VIEWBOX_MIN = -154;
 const VIEWBOX_SIZE = 308;
 const WHEEL_CENTER = VIEWBOX_MIN + VIEWBOX_SIZE / 2;
+const compactViewBox = "-136 -136 272 272";
 
 const props = withDefaults(
   defineProps<{
@@ -99,10 +100,16 @@ function sectorPath(radius: number, startAngle: number, endAngle: number) {
 function labelPositionStyle(midAngle: number) {
   const angle = ((midAngle - 90) * Math.PI) / 180;
   const cos = Math.cos(angle);
-  const labelRadiusPercent = props.compact ? 46 : 48;
+  const labelRadiusPercent = props.compact ? 30 : 48;
   const x = 50 + cos * labelRadiusPercent;
   const y = 50 + Math.sin(angle) * labelRadiusPercent;
-  const mobileNudge = cos > 0.7 ? "-4%" : cos < -0.7 ? "4%" : "0%";
+  const mobileNudge = props.compact
+    ? "0%"
+    : cos > 0.7
+      ? "-50%"
+      : cos < -0.7
+        ? "50%"
+        : "0%";
   return {
     left: `${x}%`,
     top: `${y}%`,
@@ -183,7 +190,7 @@ function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
     <svg
       ref="wheelSvg"
       class="life-wheel-chart__svg"
-      :viewBox="`${VIEWBOX_MIN} ${VIEWBOX_MIN} ${VIEWBOX_SIZE} ${VIEWBOX_SIZE}`"
+      :viewBox="compact ? compactViewBox : `${VIEWBOX_MIN} ${VIEWBOX_MIN} ${VIEWBOX_SIZE} ${VIEWBOX_SIZE}`"
       :aria-label="ariaLabel"
       @pointerleave="handlePointerLeave"
     >
@@ -443,9 +450,14 @@ function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
 }
 
 .life-wheel-chart--compact .life-wheel-chart__label {
-  width: clamp(64px, 14%, 96px);
-  padding: 3px 4px;
+  width: clamp(76px, 16%, 104px);
+  padding: 3px 1px;
   font-size: 10px;
+  font-weight: 700;
+}
+
+.life-wheel-chart--compact .life-wheel-chart__label-name {
+  white-space: nowrap;
 }
 
 @media (max-width: 959px) {
@@ -469,12 +481,17 @@ function handleSegmentKeydown(event: KeyboardEvent, segmentId: string) {
 
   .life-wheel-chart__label {
     --life-wheel-label-active-nudge: var(--life-wheel-label-mobile-nudge, 0%);
-    width: 64px;
+    width: 78px;
     max-width: 28%;
     gap: 1px;
-    padding: 3px 4px;
+    padding: 3px 1px;
     background: var(--ui-surface);
     font-size: 9.5px;
+    font-weight: 700;
+  }
+
+  .life-wheel-chart--compact .life-wheel-chart__label-name {
+    white-space: nowrap;
   }
 
   .life-wheel-chart__label-emoji {

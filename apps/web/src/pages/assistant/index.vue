@@ -755,7 +755,7 @@ let assistantAbortController: AbortController | null = null;
 let assistantThreadSearchDebounceId: number | null = null;
 
 const defaultDailyBriefingTemplate =
-  "☀️ Good morning, {{owner.name}}. {{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
+  "{{calendar.summary}}\n\n{{calendar.events}}\n{{calendar.reminders}}\n{{mission.tasks}}\n\nI'll keep an eye on the day from here.";
 
 const dailyBriefingVariables = [
   { label: "Name", value: "{{owner.name}}" },

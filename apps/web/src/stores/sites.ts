@@ -21,6 +21,7 @@ interface Site {
   created_at: string;
   updated_at: string;
   published_at: string | null;
+  bookings_enabled?: boolean;
 }
 
 export interface UploadImageResult {

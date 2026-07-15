@@ -65,6 +65,7 @@ import {
   isMissingSubscribersTableError,
   isSiteMediaFile,
   isValidPublicSiteDomain,
+  listBookingEnabledSiteIds,
   listSiteFiles,
   loadLandingPage,
   loadPublishManifest,
@@ -117,17 +118,25 @@ export function registerSiteRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const ownerId = await deps.requireOwner(c);
     if (!ownerId) return deps.unauthorized(c);
 
-    const result = await c.env.DB.prepare(
-      `SELECT id, user_id, username, site_type, template_id, custom_domain,
-              custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
-       FROM sites
-       WHERE user_id = ?
-       ORDER BY created_at DESC`,
-    )
-      .bind(ownerId)
-      .all<DbSite>();
+    const [result, bookingEnabledSiteIds] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT id, user_id, username, site_type, template_id, custom_domain,
+                custom_domain_status, custom_domain_cf_id, created_at, updated_at, published_at
+         FROM sites
+         WHERE user_id = ?
+         ORDER BY created_at DESC`,
+      )
+        .bind(ownerId)
+        .all<DbSite>(),
+      listBookingEnabledSiteIds(c.env, ownerId),
+    ]);
 
-    return c.json({ sites: result.results || [] });
+    return c.json({
+      sites: (result.results || []).map((site) => ({
+        ...site,
+        bookings_enabled: bookingEnabledSiteIds.has(site.id),
+      })),
+    });
   });
 
   app.get("/api/sites/quota", async (c) => {
