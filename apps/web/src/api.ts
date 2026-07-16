@@ -290,8 +290,8 @@ export async function searchLocations(
 }
 
 export const api = {
-  get<T>(endpoint: string): Promise<T> {
-    return request<T>(endpoint, { method: 'GET' })
+  get<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    return request<T>(endpoint, { ...options, method: 'GET' })
   },
 
   post<T>(endpoint: string, body?: unknown, options: RequestInit = {}): Promise<T> {

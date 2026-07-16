@@ -24,4 +24,4 @@ export interface CalendarAgendaEvent {
   dangerActionLabel?: string | null;
 }
 
-export type CalendarRangeMode = "schedule" | "day" | "month";
+export type CalendarRangeMode = "schedule" | "day" | "week" | "month";

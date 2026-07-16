@@ -1630,6 +1630,33 @@ export async function getAgentMailboxMessage(
   return { message: serializeAgentMailboxMessage(message) };
 }
 
+export async function listAgentMailboxThreadMessages(
+  env: Pick<CoreAgentChatEnv, "DB">,
+  userId: string,
+  threadId: string,
+): Promise<{ messages: AgentMailboxMessage[] } | { error: string; status: number }> {
+  const mailbox = await getAgentMailboxRow(env, userId);
+  if (!mailbox) return { error: "Mailbox not found", status: 404 };
+
+  let rows = await env.DB.prepare(
+    `${agentMailboxMessageSelectSql()}
+     WHERE mailbox_id = ? AND thread_key = ?
+     ORDER BY COALESCE(sent_at, received_at, approved_at, created_at) ASC, id ASC`,
+  )
+    .bind(mailbox.id, threadId)
+    .all<DbMailboxMessageRow>();
+  if ((rows.results || []).length === 0) {
+    rows = await env.DB.prepare(
+      `${agentMailboxMessageSelectSql()}
+       WHERE mailbox_id = ? AND id = ? AND (thread_key IS NULL OR thread_key = '')`,
+    )
+      .bind(mailbox.id, threadId)
+      .all<DbMailboxMessageRow>();
+  }
+  const messages = (rows.results || []).map(serializeAgentMailboxMessage);
+  return messages.length > 0 ? { messages } : { error: "Thread not found", status: 404 };
+}
+
 export async function createAgentMailboxDraft(
   env: Pick<CoreAgentChatEnv, "DB">,
   userId: string,
@@ -3918,15 +3945,15 @@ async function normalizeAgentMailboxDraftInput(
   const replyTo = replyToMessageId
     ? await getAgentMailboxMessageById(env, mailbox.id, replyToMessageId)
     : null;
-  const threadKey =
-    replyTo?.thread_key ||
-    replyTo?.id ||
-    existing?.thread_key ||
-    crypto.randomUUID();
   const existingHeaders = getDraftOutboundHeaders(existing);
   const replyHeaders = getReplyThreadHeaders(replyTo);
   const messageIdHeader =
     existingHeaders.messageIdHeader || createMessageIdHeader(fromAddress);
+  const threadKey =
+    replyTo?.thread_key ||
+    replyTo?.id ||
+    existing?.thread_key ||
+    messageIdHeader;
   const source = normalizeNullableText(body.source);
   const createdBy = source === "agent" ? "agent" : "owner";
   const normalizedTextBody =

@@ -18,6 +18,27 @@ function eventAt(hour: number): CalendarAgendaEvent {
 }
 
 describe("CalendarMonthBoard", () => {
+  it("anchors empty-day creation to the clicked date", async () => {
+    const wrapper = mount(CalendarMonthBoard, {
+      props: {
+        year: 2026,
+        month: 6,
+        events: [],
+        todayDayKey: "2026-07-15",
+      },
+    });
+    const day = wrapper
+      .findAll(".board-daynum")
+      .find((button) => button.text() === "15");
+    expect(day).toBeTruthy();
+    await day?.trigger("click");
+
+    expect(wrapper.emitted("select-day")?.[0]?.[0]).toBe("2026-07-15");
+    expect(wrapper.emitted("select-day")?.[0]?.[1]).toMatchObject({
+      trigger: day?.element,
+    });
+  });
+
   it("reveals an overflowing day without starting event creation", async () => {
     const wrapper = mount(CalendarMonthBoard, {
       props: {

@@ -20,11 +20,26 @@ import {
   type AgentMailboxUpdateInput,
 } from "../agent-chat";
 import {
+  EmailProviderDeliveryUnknownError,
   EmailProviderInputError,
   sendEmailWithProvider,
   type EmailProviderAttachment,
+  type EmailProviderSendResponse,
 } from "../email-providers";
 import type { AppContext, AppHono } from "../http/types";
+import {
+  getMailboxDraftDeliveryStatus,
+  markMailboxDraftSentByOwner,
+  prepareMailboxDraftRetryAnyway,
+} from "../mailbox-delivery";
+import {
+  listMailboxThreadMessages,
+  listMailboxThreads,
+  moveMailboxThread,
+  resolveMailboxThreadKey,
+  setMailboxThreadReadState,
+  summarizeMailboxThread,
+} from "../mailbox-threads";
 import { getOwnerProfile, normalizeEmail } from "../sites";
 import type { DbMailboxAlias, Env } from "../types";
 import {
@@ -55,6 +70,119 @@ export type ForwardableEmailMessageLike = {
 
 export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
   const { requireOwner, unauthorized } = deps;
+
+  const deliveryUnknownResponse = async (
+    c: AppContext,
+    ownerId: string,
+    draftId: string,
+    message: string,
+    status = 502,
+  ) => {
+    let delivery;
+    try {
+      delivery = await getMailboxDraftDeliveryStatus(c.env, ownerId, draftId);
+    } catch {
+      delivery = null;
+    }
+    return c.json(
+      {
+        error: message,
+        ...(delivery && !("error" in delivery) ? { delivery } : {}),
+      },
+      status as any,
+    );
+  };
+
+  const sendDraft = async (c: AppContext, ownerId: string, draftId: string) => {
+    let approval = await getAgentMailboxDraftForApproval(c.env, ownerId, draftId);
+    if (
+      "error" in approval &&
+      approval.status === 409 &&
+      (await reconcileMailboxDraftFromAudit(c.env, ownerId, draftId))
+    ) {
+      approval = await getAgentMailboxDraftForApproval(c.env, ownerId, draftId);
+    }
+    if ("error" in approval) return c.json({ error: approval.error }, approval.status as any);
+    if (approval.alreadySent) return c.json({ draft: approval.draft });
+
+    const { mailbox, draft } = approval;
+    let result: EmailProviderSendResponse;
+    try {
+      const outboundHeaders = getAgentMailboxOutboundHeaders(draft);
+      const attachments = await loadDraftProviderAttachments(c.env, draft);
+      const draftFromAddress =
+        draft.fromAddress && !draft.fromAddress.toLowerCase().endsWith("@me3.local")
+          ? draft.fromAddress
+          : null;
+      result = await sendEmailWithProvider(c.env, ownerId, {
+        purpose: draft.sourceId ? "reply" : "draft",
+        mailboxId: mailbox.id,
+        mailboxMessageId: draft.id,
+        fromAddress: draftFromAddress,
+        toAddress: draft.toAddress || "",
+        subject: draft.subject || "(no subject)",
+        textBody: draft.body || "",
+        htmlBody: draft.htmlBody,
+        attachments,
+        threadKey: draft.threadKey,
+        messageIdHeader: outboundHeaders.messageIdHeader,
+        inReplyTo: outboundHeaders.inReplyTo,
+        referencesHeader: outboundHeaders.referencesHeader,
+        metadata: {
+          mailbox_message_id: draft.id,
+          source_id: draft.sourceId,
+        },
+        createdBy: draft.createdBy,
+        approvedByUserId: ownerId,
+      });
+    } catch (error) {
+      if (error instanceof EmailProviderDeliveryUnknownError) {
+        return deliveryUnknownResponse(
+          c,
+          ownerId,
+          draftId,
+          error.message,
+          error.status,
+        );
+      }
+      await markAgentMailboxDraftFailed(c.env, ownerId, draftId, {
+        errorMessage: error instanceof Error ? error.message : "Email send failed",
+      });
+      if (error instanceof EmailProviderInputError) {
+        return c.json({ error: error.message }, error.status as any);
+      }
+      throw error;
+    }
+
+    try {
+      const sent = await markAgentMailboxDraftSent(c.env, ownerId, draft.id, {
+        providerId: result.providerId,
+        providerMessageId: result.providerMessageId,
+        sentAt: result.sentAt,
+        approvedByUserId: ownerId,
+      });
+      if (!("error" in sent)) return c.json(sent);
+    } catch {
+      // The provider accepted the message and its sent audit is durable. Reconcile below.
+    }
+
+    try {
+      await reconcileMailboxDraftFromAudit(c.env, ownerId, draftId);
+      const reconciled = await getAgentMailboxMessage(c.env, ownerId, draftId);
+      if (!("error" in reconciled) && reconciled.message.status === "sent") {
+        return c.json({ draft: reconciled.message });
+      }
+    } catch {
+      // Keep the approved draft recoverable when local persistence is unavailable.
+    }
+
+    return deliveryUnknownResponse(
+      c,
+      ownerId,
+      draftId,
+      "The email provider accepted the message, but ME3 could not finish recording it. Check delivery status before retrying.",
+    );
+  };
 
   app.get("/api/mailbox", async (c) => {
     const ownerId = await requireOwner(c);
@@ -111,6 +239,66 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
       query: c.req.query("q") || "",
       unread: c.req.query("unread") || "",
     }));
+  });
+
+  app.get("/api/mailbox/threads", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const result = await listMailboxThreads(c.env, ownerId, {
+      folder: c.req.query("folder") || "inbox",
+      query: c.req.query("q") || "",
+      limit: c.req.query("limit"),
+      cursor: c.req.query("cursor"),
+    });
+    if ("error" in result) return c.json({ error: result.error }, result.status as any);
+    return c.json(result);
+  });
+
+  app.get("/api/mailbox/threads/:threadId", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const threadId = c.req.param("threadId");
+    const result = await listMailboxThreadMessages(c.env, ownerId, threadId);
+    if ("error" in result) return c.json({ error: result.error }, result.status as any);
+    return c.json({
+      thread: summarizeMailboxThread(threadId, result.messages),
+      messages: result.messages,
+    });
+  });
+
+  app.post("/api/mailbox/threads/:threadId/read", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const body = await c.req.json<{ read?: boolean }>().catch(() => ({ read: true }));
+    const result = await setMailboxThreadReadState(
+      c.env,
+      ownerId,
+      c.req.param("threadId"),
+      body.read !== false,
+    );
+    if ("error" in result) return c.json({ error: result.error }, result.status as any);
+    return c.json(result);
+  });
+
+  app.post("/api/mailbox/threads/:threadId/move", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const body = await c.req
+      .json<{ folder?: string; fromFolder?: string }>()
+      .catch((): { folder?: string; fromFolder?: string } => ({}));
+    const result = await moveMailboxThread(
+      c.env,
+      ownerId,
+      c.req.param("threadId"),
+      body.folder,
+      body.fromFolder,
+    );
+    if ("error" in result) return c.json({ error: result.error }, result.status as any);
+    return c.json(result);
   });
 
   app.get("/api/mailbox/messages/:messageId", async (c) => {
@@ -319,64 +507,86 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
     const ownerId = await requireOwner(c);
     if (!ownerId) return unauthorized(c);
 
-    const draftId = c.req.param("draftId");
-    let approval = await getAgentMailboxDraftForApproval(c.env, ownerId, draftId);
-    if (
-      "error" in approval &&
-      approval.status === 409 &&
-      (await reconcileMailboxDraftFromAudit(c.env, ownerId, draftId))
-    ) {
-      approval = await getAgentMailboxDraftForApproval(c.env, ownerId, draftId);
-    }
-    if ("error" in approval) return c.json({ error: approval.error }, approval.status as any);
-    if (approval.alreadySent) return c.json({ draft: approval.draft });
+    return sendDraft(c, ownerId, c.req.param("draftId"));
+  });
 
-    try {
-      const { mailbox, draft } = approval;
-      const outboundHeaders = getAgentMailboxOutboundHeaders(draft);
-      const attachments = await loadDraftProviderAttachments(c.env, draft);
-      const draftFromAddress =
-        draft.fromAddress && !draft.fromAddress.toLowerCase().endsWith("@me3.local")
-          ? draft.fromAddress
-          : null;
-      const result = await sendEmailWithProvider(c.env, ownerId, {
-        purpose: draft.sourceId ? "reply" : "draft",
-        mailboxId: mailbox.id,
-        mailboxMessageId: draft.id,
-        fromAddress: draftFromAddress,
-        toAddress: draft.toAddress || "",
-        subject: draft.subject || "(no subject)",
-        textBody: draft.body || "",
-        htmlBody: draft.htmlBody,
-        attachments,
-        threadKey: draft.threadKey,
-        messageIdHeader: outboundHeaders.messageIdHeader,
-        inReplyTo: outboundHeaders.inReplyTo,
-        referencesHeader: outboundHeaders.referencesHeader,
-        metadata: {
-          mailbox_message_id: draft.id,
-          source_id: draft.sourceId,
-        },
-        createdBy: draft.createdBy,
-        approvedByUserId: ownerId,
-      });
-      const sent = await markAgentMailboxDraftSent(c.env, ownerId, draft.id, {
-        providerId: result.providerId,
-        providerMessageId: result.providerMessageId,
-        sentAt: result.sentAt,
-        approvedByUserId: ownerId,
-      });
-      if ("error" in sent) return c.json({ error: sent.error }, sent.status as any);
-      return c.json(sent);
-    } catch (error) {
-      await markAgentMailboxDraftFailed(c.env, ownerId, draftId, {
-        errorMessage: error instanceof Error ? error.message : "Email send failed",
-      });
-      if (error instanceof EmailProviderInputError) {
-        return c.json({ error: error.message }, error.status as any);
-      }
-      throw error;
+  app.get("/api/mailbox/drafts/:draftId/delivery-status", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const draftId = c.req.param("draftId");
+    await reconcileMailboxDraftFromAudit(c.env, ownerId, draftId);
+    const delivery = await getMailboxDraftDeliveryStatus(c.env, ownerId, draftId);
+    if ("error" in delivery) return c.json({ error: delivery.error }, delivery.status as any);
+    return c.json({ delivery });
+  });
+
+  app.post("/api/mailbox/drafts/:draftId/mark-sent", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const draftId = c.req.param("draftId");
+    await reconcileMailboxDraftFromAudit(c.env, ownerId, draftId);
+    const currentDelivery = await getMailboxDraftDeliveryStatus(c.env, ownerId, draftId);
+    if ("error" in currentDelivery) {
+      return c.json({ error: currentDelivery.error }, currentDelivery.status as any);
     }
+    if (currentDelivery.state === "sent") {
+      const draft = await getAgentMailboxMessage(c.env, ownerId, draftId);
+      if ("error" in draft) return c.json({ error: draft.error }, draft.status as any);
+      return c.json({ draft: draft.message, delivery: currentDelivery });
+    }
+    if (currentDelivery.state !== "delivery_unknown") {
+      return c.json(
+        {
+          error:
+            currentDelivery.state === "failed"
+              ? "Delivery failed; retry the draft normally."
+              : "Draft delivery is not awaiting confirmation.",
+          delivery: currentDelivery,
+        },
+        409,
+      );
+    }
+    const result = await markMailboxDraftSentByOwner(c.env, ownerId, draftId);
+    if ("error" in result) return c.json({ error: result.error }, result.status as any);
+    const draft = await getAgentMailboxMessage(c.env, ownerId, draftId);
+    if ("error" in draft) return c.json({ error: draft.error }, draft.status as any);
+    const delivery = await getMailboxDraftDeliveryStatus(c.env, ownerId, draftId);
+    if ("error" in delivery) return c.json({ error: delivery.error }, delivery.status as any);
+    return c.json({ draft: draft.message, delivery });
+  });
+
+  app.post("/api/mailbox/drafts/:draftId/retry-anyway", async (c) => {
+    const ownerId = await requireOwner(c);
+    if (!ownerId) return unauthorized(c);
+
+    const draftId = c.req.param("draftId");
+    await reconcileMailboxDraftFromAudit(c.env, ownerId, draftId);
+    const currentDelivery = await getMailboxDraftDeliveryStatus(c.env, ownerId, draftId);
+    if ("error" in currentDelivery) {
+      return c.json({ error: currentDelivery.error }, currentDelivery.status as any);
+    }
+    if (currentDelivery.state === "sent") {
+      const draft = await getAgentMailboxMessage(c.env, ownerId, draftId);
+      if ("error" in draft) return c.json({ error: draft.error }, draft.status as any);
+      return c.json({ draft: draft.message, delivery: currentDelivery });
+    }
+    if (currentDelivery.state !== "delivery_unknown") {
+      return c.json(
+        {
+          error:
+            currentDelivery.state === "failed"
+              ? "Delivery failed; retry the draft normally."
+              : "Draft delivery is not awaiting confirmation.",
+          delivery: currentDelivery,
+        },
+        409,
+      );
+    }
+    const result = await prepareMailboxDraftRetryAnyway(c.env, ownerId, draftId);
+    if ("error" in result) return c.json({ error: result.error }, result.status as any);
+    return sendDraft(c, ownerId, draftId);
   });
 
   app.post("/api/mailbox/messages/:messageId/read", async (c) => {
@@ -428,13 +638,21 @@ async function reconcileMailboxDraftFromAudit(
   } | null = null;
   try {
     audit = await env.DB.prepare(
-      `SELECT provider_id, provider_message_id, status, error_message, sent_at
-       FROM email_send_audit
-       WHERE user_id = ? AND mailbox_message_id = ? AND status IN ('sent', 'failed')
-       ORDER BY created_at DESC
+      `SELECT a.provider_id, a.provider_message_id, a.status, a.error_message, a.sent_at
+       FROM email_send_audit a
+       JOIN mailbox_messages m ON m.id = a.mailbox_message_id
+       JOIN mailbox_aliases mb ON mb.id = m.mailbox_id
+       WHERE a.user_id = ?
+         AND mb.user_id = ?
+         AND a.mailbox_message_id = ?
+         AND m.message_kind = 'draft'
+         AND m.status = 'approved'
+         AND a.requested_at >= COALESCE(m.approved_at, m.updated_at, m.created_at)
+         AND a.status IN ('sent', 'failed')
+       ORDER BY a.requested_at DESC, a.created_at DESC
        LIMIT 1`,
     )
-      .bind(ownerId, draftId)
+      .bind(ownerId, ownerId, draftId)
       .first();
   } catch {
     return false;
@@ -491,10 +709,7 @@ export async function handleInboundEmail(
     const now = new Date().toISOString();
     const providerMessageId =
       normalizeEmailHeaderValue(parsed.headers["message-id"]) || crypto.randomUUID();
-    const threadKey =
-      normalizeEmailHeaderValue(parsed.headers.references) ||
-      normalizeEmailHeaderValue(parsed.headers["in-reply-to"]) ||
-      providerMessageId;
+    const threadKey = resolveMailboxThreadKey(parsed.headers, providerMessageId);
     const rowId = crypto.randomUUID();
     const storedAttachments = await storeInboundEmailAttachments(
       env,

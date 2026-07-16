@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { CalendarAgendaEvent } from "./calendarAgenda";
+import {
+  calendarContextAnchor,
+  type CalendarContextAnchor,
+} from "./calendarWeek";
 
 const props = withDefaults(
   defineProps<{
@@ -20,8 +24,16 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  (e: "select-event", id: string): void;
-  (e: "select-day", dayKey: string): void;
+  (
+    e: "select-event",
+    id: string,
+    anchor: CalendarContextAnchor,
+  ): void;
+  (
+    e: "select-day",
+    dayKey: string,
+    anchor: CalendarContextAnchor,
+  ): void;
   (e: "show-day", dayKey: string): void;
 }>();
 
@@ -162,6 +174,22 @@ function cellEvents(dayKey: string): CalendarAgendaEvent[] {
   return eventsByDay.value.get(dayKey) ?? [];
 }
 
+function selectEvent(eventId: string, event: MouseEvent) {
+  emit(
+    "select-event",
+    eventId,
+    calendarContextAnchor(event.currentTarget),
+  );
+}
+
+function selectDay(dayKey: string, event: MouseEvent) {
+  emit(
+    "select-day",
+    dayKey,
+    calendarContextAnchor(event.currentTarget),
+  );
+}
+
 function lastCellIndexOnOrBefore(week: Cell[], dayKey: string): number {
   for (let i = week.length - 1; i >= 0; i -= 1) {
     if (week[i]?.dayKey <= dayKey) return i;
@@ -237,14 +265,14 @@ function weekSegments(week: Cell[]): WeekSegment[] {
             'board-cell--fade': !cell.inMonth,
             'board-cell--today': cell.dayKey === todayDayKey,
           }"
-          @click.self="emit('select-day', cell.dayKey)"
+          @click.self.stop="selectDay(cell.dayKey, $event)"
         >
           <button
             type="button"
             class="board-daynum"
             :class="{ 'is-today': cell.dayKey === todayDayKey }"
             :aria-label="`Create event on ${dateLabel(cell.dayKey)}`"
-            @click="emit('select-day', cell.dayKey)"
+            @click.stop="selectDay(cell.dayKey, $event)"
           >
             {{ cell.dayNum }}
           </button>
@@ -259,8 +287,9 @@ function weekSegments(week: Cell[]): WeekSegment[] {
                 'is-active': ev.id === selectedEventId,
                 'is-highlighted': ev.id === highlightedEventId,
               }"
+              :style="{ '--board-event-color': colorForEvent(ev) }"
               :title="`${ev.title} · ${ev.siteLabel}`"
-              @click.stop="emit('select-event', ev.id)"
+              @click.stop="selectEvent(ev.id, $event)"
             >
               <span
                 class="board-event-dot"
@@ -294,10 +323,10 @@ function weekSegments(week: Cell[]): WeekSegment[] {
             :style="{
               gridColumn: `${segment.startIndex + 1} / span ${segment.span}`,
               gridRow: `${segment.row + 1}`,
-              background: colorForEvent(segment.event),
+              '--board-event-color': colorForEvent(segment.event),
             }"
             :title="`${segment.event.title} · ${segment.event.siteLabel}`"
-            @click.stop="emit('select-event', segment.event.id)"
+            @click.stop="selectEvent(segment.event.id, $event)"
           >
             <span>{{ segment.event.title }}</span>
           </button>
@@ -440,8 +469,14 @@ function weekSegments(week: Cell[]): WeekSegment[] {
   margin: 0 2px;
   padding: 0 8px;
   border: 0;
+  border-left: 3px solid var(--board-event-color);
   border-radius: 5px;
-  color: #111111;
+  background: color-mix(
+    in oklab,
+    var(--board-event-color) 20%,
+    var(--cal-surface, var(--ui-surface))
+  );
+  color: var(--color-text);
   font: inherit;
   font-size: 11px;
   font-weight: 700;
@@ -482,8 +517,13 @@ function weekSegments(week: Cell[]): WeekSegment[] {
   min-height: 24px;
   padding: 3px 5px;
   border: 0;
+  border-left: 3px solid var(--board-event-color);
   border-radius: 4px;
-  background: var(--cal-chip, color-mix(in oklab, var(--color-text) 6%, var(--color-bg)));
+  background: color-mix(
+    in oklab,
+    var(--board-event-color) 14%,
+    var(--cal-surface, var(--ui-surface))
+  );
   color: var(--color-text);
   font: inherit;
   font-size: 11px;

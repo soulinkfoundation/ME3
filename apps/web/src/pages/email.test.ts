@@ -1,6 +1,6 @@
-import { flushPromises, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EmailPage from "./email.vue";
 import { api } from "../api";
 
@@ -67,6 +67,40 @@ const sentMessage = {
   createdAt: "2026-07-03T09:00:00Z",
 };
 
+enableAutoUnmount(afterEach);
+afterEach(() => vi.useRealTimers());
+
+function threadSummaryFor(
+  message: {
+    id: string;
+    threadKey: string | null;
+    subject: string;
+    direction: string;
+    fromAddress: string | null;
+    toAddress: string | null;
+    preview: string;
+    unread: boolean;
+    metadata: { attachmentCount?: number };
+    createdAt: string;
+  } = sentMessage,
+) {
+  return {
+    id: message.threadKey || message.id,
+    subject: message.subject,
+    participants: [
+      message.direction === "inbound"
+        ? message.fromAddress || "Unknown sender"
+        : message.toAddress || "Unknown recipient",
+    ],
+    latestSnippet: message.preview,
+    latestMessageId: message.id,
+    messageCount: 1,
+    unreadCount: message.unread ? 1 : 0,
+    attachmentCount: message.metadata?.attachmentCount || 0,
+    lastActivity: message.createdAt,
+  };
+}
+
 function emptyContactSummary() {
   const outreach = Object.fromEntries(
     [
@@ -113,6 +147,15 @@ function mailboxResponseFor(endpoint: string) {
   if (endpoint === "/contacts") {
     return { contacts: [], summary: emptyContactSummary() };
   }
+  if (endpoint.startsWith("/mailbox/threads?")) {
+    const params = new URLSearchParams(endpoint.split("?")[1] || "");
+    const threads =
+      params.get("folder") === "sent" ? [threadSummaryFor()] : [];
+    return { threads, nextCursor: null };
+  }
+  if (endpoint === "/mailbox/threads/thread-1") {
+    return { thread: threadSummaryFor(), messages: [sentMessage] };
+  }
   if (endpoint.startsWith("/mailbox/messages?")) {
     const params = new URLSearchParams(endpoint.split("?")[1] || "");
     const limit = Number(params.get("limit") || 50);
@@ -133,8 +176,9 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function mountEmailPage() {
+function mountEmailPage(attachTo?: Element) {
   return mount(EmailPage, {
+    attachTo,
     global: {
       stubs: {
         RouterLink: true,
@@ -178,8 +222,9 @@ describe("EmailPage", () => {
     await wrapper.get(".bulk-mail-actions .me3-btn--danger").trigger("click");
     await flushPromises();
 
-    expect(api.post).toHaveBeenCalledWith("/mailbox/messages/sent-1/move", {
+    expect(api.post).toHaveBeenCalledWith("/mailbox/threads/thread-1/move", {
       folder: "trash",
+      fromFolder: "sent",
     });
     expect(wrapper.get(".conversation-list").classes()).not.toContain(
       "conversation-list--mobile-hidden",
@@ -197,8 +242,9 @@ describe("EmailPage", () => {
     await wrapper.get('input[aria-label="Select ME3"]').setValue(true);
     await wrapper.get(".bulk-mail-actions .me3-btn--outline").trigger("click");
 
-    expect(api.post).toHaveBeenCalledWith("/mailbox/messages/sent-1/move", {
+    expect(api.post).toHaveBeenCalledWith("/mailbox/threads/thread-1/move", {
       folder: "archive",
+      fromFolder: "sent",
     });
     expect(wrapper.text()).toContain("No sent messages yet.");
 
@@ -207,9 +253,9 @@ describe("EmailPage", () => {
   });
 
   it("does not show an empty mailbox before the first list request succeeds", async () => {
-    const initialList = deferred<ReturnType<typeof mailboxResponseFor>>();
+    const initialList = deferred<{ threads: unknown[]; nextCursor: null }>();
     vi.mocked(api.get).mockImplementation((endpoint) => {
-      if (endpoint.startsWith("/mailbox/messages?") && endpoint.includes("folder=sent")) {
+      if (endpoint.startsWith("/mailbox/threads?") && endpoint.includes("folder=sent")) {
         return initialList.promise;
       }
       return Promise.resolve(mailboxResponseFor(endpoint));
@@ -220,7 +266,7 @@ describe("EmailPage", () => {
 
     expect(wrapper.text()).not.toContain("No sent messages yet.");
 
-    initialList.resolve({ messages: [], total: 0, limit: 50, offset: 0 });
+    initialList.resolve({ threads: [], nextCursor: null });
     await flushPromises();
 
     expect(wrapper.text()).toContain("No sent messages yet.");
@@ -233,7 +279,7 @@ describe("EmailPage", () => {
 
     const revalidation = deferred<ReturnType<typeof mailboxResponseFor>>();
     vi.mocked(api.get).mockImplementation((endpoint) => {
-      if (endpoint.startsWith("/mailbox/messages?") && endpoint.includes("folder=sent")) {
+      if (endpoint.startsWith("/mailbox/threads?") && endpoint.includes("folder=sent")) {
         return revalidation.promise;
       }
       return Promise.resolve(mailboxResponseFor(endpoint));
@@ -245,7 +291,7 @@ describe("EmailPage", () => {
     expect(second.find(".conversation-item").exists()).toBe(true);
     expect(second.text()).not.toContain("Loading messages...");
 
-    revalidation.resolve({ messages: [sentMessage], total: 1, limit: 50, offset: 0 });
+    revalidation.resolve({ threads: [threadSummaryFor()], nextCursor: null });
     await flushPromises();
   });
 
@@ -258,11 +304,14 @@ describe("EmailPage", () => {
       toAddress: "archive@example.com",
     };
     vi.mocked(api.get).mockImplementation((endpoint) => {
-      if (endpoint.startsWith("/mailbox/messages?") && endpoint.includes("folder=sent")) {
+      if (endpoint.startsWith("/mailbox/threads?") && endpoint.includes("folder=sent")) {
         return sent.promise;
       }
-      if (endpoint.startsWith("/mailbox/messages?") && endpoint.includes("folder=archive")) {
-        return Promise.resolve({ messages: [archiveMessage], total: 1, limit: 50, offset: 0 });
+      if (endpoint.startsWith("/mailbox/threads?") && endpoint.includes("folder=archive")) {
+        return Promise.resolve({
+          threads: [threadSummaryFor(archiveMessage)],
+          nextCursor: null,
+        });
       }
       return Promise.resolve(mailboxResponseFor(endpoint));
     });
@@ -272,7 +321,7 @@ describe("EmailPage", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("archive@example.com");
-    sent.resolve({ messages: [sentMessage], total: 1, limit: 50, offset: 0 });
+    sent.resolve({ threads: [threadSummaryFor()], nextCursor: null });
     await flushPromises();
 
     expect(wrapper.text()).toContain("archive@example.com");
@@ -295,15 +344,35 @@ describe("EmailPage", () => {
 
     expect(wrapper.find(".conversation-item").exists()).toBe(true);
     expect(wrapper.text()).toContain(
-      "1 message could not be moved. The folder was refreshed.",
+      "Some conversations could not be moved. The folder was refreshed.",
     );
   });
 
   it("reconciles the folder after a partially successful bulk move", async () => {
-    const first = { ...sentMessage, id: "sent-1", subject: "First" };
-    const second = { ...sentMessage, id: "sent-2", subject: "Second" };
+    const first = {
+      ...sentMessage,
+      id: "sent-1",
+      threadKey: "thread-1",
+      subject: "First",
+    };
+    const second = {
+      ...sentMessage,
+      id: "sent-2",
+      threadKey: "thread-2",
+      subject: "Second",
+    };
     let serverMessages = [first, second];
     vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint.startsWith("/mailbox/threads?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        return {
+          threads:
+            params.get("folder") === "sent"
+              ? serverMessages.map(threadSummaryFor)
+              : [],
+          nextCursor: null,
+        };
+      }
       if (endpoint.startsWith("/mailbox/messages?")) {
         const params = new URLSearchParams(endpoint.split("?")[1] || "");
         const visible =
@@ -321,11 +390,11 @@ describe("EmailPage", () => {
       return mailboxResponseFor(endpoint);
     });
     vi.mocked(api.post).mockImplementation(async (endpoint) => {
-      if (endpoint === "/mailbox/messages/sent-1/move") {
+      if (endpoint === "/mailbox/threads/thread-1/move") {
         serverMessages = [second];
         return { ok: true };
       }
-      if (endpoint === "/mailbox/messages/sent-2/move") {
+      if (endpoint === "/mailbox/threads/thread-2/move") {
         throw new Error("Move failed");
       }
       return { ok: true };
@@ -334,7 +403,7 @@ describe("EmailPage", () => {
     const wrapper = mountEmailPage();
     await flushPromises();
     await wrapper
-      .get('input[aria-label="Select all messages on this page"]')
+      .get('input[aria-label="Select all conversations on this page"]')
       .setValue(true);
     await wrapper.get(".bulk-mail-actions .me3-btn--outline").trigger("click");
     await flushPromises();
@@ -342,10 +411,10 @@ describe("EmailPage", () => {
     expect(wrapper.text()).not.toContain("First");
     expect(wrapper.text()).toContain("Second");
     expect(wrapper.text()).toContain(
-      "1 message could not be moved. The folder was refreshed.",
+      "Some conversations could not be moved. The folder was refreshed.",
     );
     expect(toastApi.success).toHaveBeenCalledWith(
-      "Message archived.",
+      "Conversation archived.",
       expect.objectContaining({ action: expect.any(Object) }),
     );
   });
@@ -355,6 +424,7 @@ describe("EmailPage", () => {
     const unreadMessage = {
       ...sentMessage,
       id: "inbox-1",
+      threadKey: "thread-inbox",
       direction: "inbound",
       status: "received",
       folder: "inbox",
@@ -364,6 +434,22 @@ describe("EmailPage", () => {
       unread: true,
     };
     vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint.startsWith("/mailbox/threads?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        return {
+          threads:
+            params.get("folder") === "inbox"
+              ? [threadSummaryFor(unreadMessage)]
+              : [],
+          nextCursor: null,
+        };
+      }
+      if (endpoint === "/mailbox/threads/thread-inbox") {
+        return {
+          thread: threadSummaryFor(unreadMessage),
+          messages: [unreadMessage],
+        };
+      }
       if (endpoint.startsWith("/mailbox/messages?")) {
         const params = new URLSearchParams(endpoint.split("?")[1] || "");
         const showMessage =
@@ -383,16 +469,88 @@ describe("EmailPage", () => {
     await flushPromises();
 
     expect(api.post).not.toHaveBeenCalledWith(
-      "/mailbox/messages/inbox-1/read",
+      "/mailbox/threads/thread-inbox/read",
       { read: true },
     );
 
     await wrapper.get(".conversation-open").trigger("click");
     await flushPromises();
 
-    expect(api.post).toHaveBeenCalledWith("/mailbox/messages/inbox-1/read", {
+    expect(api.post).toHaveBeenCalledWith("/mailbox/threads/thread-inbox/read", {
       read: true,
     });
+  });
+
+  it("applies a delayed read result to the conversation that requested it", async () => {
+    routeTab = "inbox";
+    const first = {
+      ...sentMessage,
+      id: "inbox-1",
+      threadKey: "thread-inbox-1",
+      subject: "First unread",
+      direction: "inbound",
+      status: "received",
+      folder: "inbox",
+      readAt: null,
+      unread: true,
+    };
+    const second = {
+      ...first,
+      id: "inbox-2",
+      threadKey: "thread-inbox-2",
+      subject: "Second unread",
+    };
+    const firstRead = deferred<{ ok: boolean }>();
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint.startsWith("/mailbox/threads?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        return {
+          threads:
+            params.get("folder") === "inbox"
+              ? [
+                  threadSummaryFor(first),
+                  { ...threadSummaryFor(second), unreadCount: 2 },
+                ]
+              : [],
+          nextCursor: null,
+        };
+      }
+      if (endpoint === "/mailbox/threads/thread-inbox-1") {
+        return { thread: threadSummaryFor(first), messages: [first] };
+      }
+      if (endpoint === "/mailbox/threads/thread-inbox-2") {
+        return {
+          thread: { ...threadSummaryFor(second), unreadCount: 2 },
+          messages: [second],
+        };
+      }
+      return mailboxResponseFor(endpoint);
+    });
+    vi.mocked(api.post).mockImplementation(async (endpoint) => {
+      if (endpoint === "/mailbox/threads/thread-inbox-1/read") {
+        return firstRead.promise;
+      }
+      if (endpoint === "/mailbox/threads/thread-inbox-2/read") {
+        throw new Error("Read failed");
+      }
+      return { ok: true };
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+    const rows = wrapper.findAll(".conversation-open");
+    await rows[0].trigger("click");
+    await flushPromises();
+    await rows[1].trigger("click");
+    await flushPromises();
+
+    firstRead.resolve({ ok: true });
+    await flushPromises();
+
+    const secondRow = wrapper
+      .findAll(".conversation-item")
+      .find((row) => row.text().includes("Second unread"));
+    expect(secondRow?.text()).toContain("2 unread");
   });
 
   it("keeps and reuses a saved draft when sending fails", async () => {
@@ -503,6 +661,22 @@ describe("EmailPage", () => {
       htmlBody: '<p>Hello</p><img src="https://tracker.example/pixel.png">',
     };
     vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint.startsWith("/mailbox/threads?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        return {
+          threads:
+            params.get("folder") === "sent"
+              ? [threadSummaryFor(richMessage)]
+              : [],
+          nextCursor: null,
+        };
+      }
+      if (endpoint === "/mailbox/threads/thread-1") {
+        return {
+          thread: threadSummaryFor(richMessage),
+          messages: [richMessage],
+        };
+      }
       if (endpoint.startsWith("/mailbox/messages?")) {
         const params = new URLSearchParams(endpoint.split("?")[1] || "");
         const showMessage =
@@ -533,5 +707,526 @@ describe("EmailPage", () => {
     await flushPromises();
 
     expect(frame.srcdoc).toContain("img-src https: http: data: blob:");
+  });
+
+  it("uses an opaque cursor and renders thread cues without loading bodies", async () => {
+    const secondMessage = {
+      ...sentMessage,
+      id: "sent-2",
+      threadKey: "thread-2",
+      toAddress: "alex@example.com",
+      subject: "Second page",
+    };
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint.startsWith("/mailbox/threads?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        if (params.get("cursor") === "opaque-next") {
+          return {
+            threads: [threadSummaryFor(secondMessage)],
+            nextCursor: null,
+          };
+        }
+        return {
+          threads: [
+            {
+              ...threadSummaryFor(),
+              participants: ["hey@example.com", "kim@example.com"],
+              messageCount: 3,
+              unreadCount: 2,
+              attachmentCount: 1,
+            },
+          ],
+          nextCursor: "opaque-next",
+        };
+      }
+      return mailboxResponseFor(endpoint);
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("3");
+    expect(wrapper.text()).toContain("2 unread");
+    expect(wrapper.get(".conversation-item__meta").text()).toBe(
+      "kim@example.com",
+    );
+    expect(api.get).not.toHaveBeenCalledWith("/mailbox/threads/thread-1");
+
+    const conversationList = wrapper.get(".conversation-list")
+      .element as HTMLElement;
+    conversationList.scrollTop = 147;
+    await wrapper.get('button[aria-label="Next page"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Second page");
+    expect(conversationList.scrollTop).toBe(0);
+    expect(api.get).toHaveBeenCalledWith(
+      "/mailbox/threads?folder=sent&limit=50&cursor=opaque-next",
+    );
+
+    conversationList.scrollTop = 31;
+    await wrapper.get('button[aria-label="Previous page"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("ME3");
+    expect(conversationList.scrollTop).toBe(147);
+  });
+
+  it("restores the cached page cursor while its refresh is pending", async () => {
+    const secondMessage = {
+      ...sentMessage,
+      id: "sent-2",
+      threadKey: "thread-2",
+      subject: "Second page",
+    };
+    const firstPageRefresh = deferred<{
+      threads: ReturnType<typeof threadSummaryFor>[];
+      nextCursor: string;
+    }>();
+    let firstPageRequests = 0;
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint.startsWith("/mailbox/threads?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        if (params.get("cursor") === "opaque-next") {
+          return {
+            threads: [threadSummaryFor(secondMessage)],
+            nextCursor: null,
+          };
+        }
+        firstPageRequests += 1;
+        if (firstPageRequests > 1) return firstPageRefresh.promise;
+        return {
+          threads: [threadSummaryFor()],
+          nextCursor: "opaque-next",
+        };
+      }
+      return mailboxResponseFor(endpoint);
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+    await wrapper.get('button[aria-label="Next page"]').trigger("click");
+    await flushPromises();
+    await wrapper.get('button[aria-label="Previous page"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("ME3");
+    expect(
+      wrapper.get('button[aria-label="Next page"]').attributes("disabled"),
+    ).toBeUndefined();
+
+    firstPageRefresh.resolve({
+      threads: [threadSummaryFor()],
+      nextCursor: "opaque-next",
+    });
+    await flushPromises();
+  });
+
+  it("keeps mailbox shortcuts active when a conversation row has focus", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const wrapper = mountEmailPage(host);
+    await flushPromises();
+    const row = wrapper.get(".conversation-open");
+    await wrapper.get('input[aria-label="Select ME3"]').setValue(true);
+    (row.element as HTMLButtonElement).focus();
+
+    row.element.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "e", bubbles: true }),
+    );
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith("/mailbox/threads/thread-1/move", {
+      folder: "archive",
+      fromFolder: "sent",
+    });
+  });
+
+  it("requires an active or checked conversation before keyboard actions", async () => {
+    const wrapper = mountEmailPage();
+    await flushPromises();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalledWith(
+      "/mailbox/threads/thread-1/move",
+      { folder: "archive", fromFolder: "sent" },
+    );
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
+    await flushPromises();
+    expect(wrapper.get(".conversation-open").attributes("aria-current")).toBe(
+      "true",
+    );
+
+    const search = document.querySelector(
+      "#mail-search-input-mobile-nav",
+    ) as HTMLInputElement;
+    search.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "e", bubbles: true }),
+    );
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalledWith(
+      "/mailbox/threads/thread-1/move",
+      { folder: "archive", fromFolder: "sent" },
+    );
+    expect(
+      wrapper.find('button[aria-label="Archive conversation"]').exists(),
+    ).toBe(true);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
+    await flushPromises();
+    expect(api.post).toHaveBeenCalledWith(
+      "/mailbox/threads/thread-1/move",
+      { folder: "archive", fromFolder: "sent" },
+    );
+  });
+
+  it("falls back to the message list on older Core versions", async () => {
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint.startsWith("/mailbox/threads?")) {
+        throw Object.assign(new Error("Not found"), { status: 404 });
+      }
+      return mailboxResponseFor(endpoint);
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("kim@example.com");
+    expect(api.get).toHaveBeenCalledWith(
+      expect.stringContaining("/mailbox/messages?folder=sent"),
+    );
+  });
+
+  it("adopts and polls an approved draft after an ambiguous send response", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-16T09:00:00Z"));
+    routeTab = "drafts";
+    const draft = {
+      ...sentMessage,
+      id: "draft-ambiguous",
+      kind: "draft",
+      status: "pending_approval",
+      folder: "drafts",
+      sentAt: null,
+    };
+    const approved = {
+      ...draft,
+      status: "approved",
+      approvedAt: "2026-07-16T09:00:00Z",
+    };
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint === "/mailbox/messages/draft-ambiguous") {
+        return { message: approved };
+      }
+      if (endpoint === "/mailbox/drafts/draft-ambiguous/delivery-status") {
+        return {
+          delivery: {
+            id: draft.id,
+            state: "sending",
+            checkedAt: "2026-07-16T09:00:01Z",
+            unknownAfter: "2026-07-16T09:05:00Z",
+            canMarkSent: false,
+            canRetryAnyway: false,
+          },
+        };
+      }
+      if (endpoint.startsWith("/mailbox/messages?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        const visible =
+          params.get("folder") === "drafts" &&
+          Number(params.get("limit") || 50) > 0;
+        return {
+          messages: visible ? [draft] : [],
+          total: visible ? 1 : 0,
+          limit: Number(params.get("limit") || 50),
+          offset: 0,
+        };
+      }
+      return mailboxResponseFor(endpoint);
+    });
+    vi.mocked(api.post).mockImplementation(async (endpoint) => {
+      if (endpoint === "/mailbox/drafts/draft-ambiguous/approve") {
+        throw Object.assign(new Error("Delivery could not be confirmed"), {
+          status: 502,
+        });
+      }
+      return { ok: true };
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+    await wrapper.get(".conversation-open").trigger("click");
+    await flushPromises();
+    await wrapper.get(".message-card__actions .me3-btn--primary").trigger("click");
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledWith("/mailbox/messages/draft-ambiguous");
+    expect(api.get).toHaveBeenCalledWith(
+      "/mailbox/drafts/draft-ambiguous/delivery-status",
+    );
+    expect(wrapper.text()).toContain("Sending");
+    expect(wrapper.find(".message-card__actions").exists()).toBe(false);
+  });
+
+  it("starts the new delivery window after an ambiguous retry-anyway response", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-16T09:00:00Z"));
+    routeTab = "drafts";
+    const draft = {
+      ...sentMessage,
+      id: "draft-retried",
+      kind: "draft",
+      status: "approved",
+      folder: "drafts",
+      approvedAt: "2026-07-16T08:00:00Z",
+      sentAt: null,
+    };
+    const retried = {
+      ...draft,
+      approvedAt: "2026-07-16T09:00:00Z",
+    };
+    let statusChecks = 0;
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint === "/mailbox/messages/draft-retried") {
+        return { message: retried };
+      }
+      if (endpoint === "/mailbox/drafts/draft-retried/delivery-status") {
+        statusChecks += 1;
+        return {
+          delivery: {
+            id: draft.id,
+            state: statusChecks === 1 ? "delivery_unknown" : "sending",
+            checkedAt: "2026-07-16T09:00:01Z",
+            unknownAfter:
+              statusChecks === 1
+                ? "2026-07-16T08:05:00Z"
+                : "2026-07-16T09:05:00Z",
+            canMarkSent: statusChecks === 1,
+            canRetryAnyway: statusChecks === 1,
+          },
+        };
+      }
+      if (endpoint.startsWith("/mailbox/messages?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        const visible =
+          params.get("folder") === "drafts" &&
+          Number(params.get("limit") || 50) > 0;
+        return {
+          messages: visible ? [draft] : [],
+          total: visible ? 1 : 0,
+          limit: Number(params.get("limit") || 50),
+          offset: 0,
+        };
+      }
+      return mailboxResponseFor(endpoint);
+    });
+    vi.mocked(api.post).mockImplementation(async (endpoint) => {
+      if (endpoint === "/mailbox/drafts/draft-retried/retry-anyway") {
+        throw Object.assign(new Error("Delivery could not be confirmed"), {
+          status: 502,
+        });
+      }
+      return { ok: true };
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+    await wrapper.get(".conversation-open").trigger("click");
+    await flushPromises();
+    const retry = wrapper
+      .findAll(".delivery-unconfirmed button")
+      .find((button) => button.text() === "Retry anyway");
+    await retry!.trigger("click");
+    const confirm = wrapper
+      .findAll(".delivery-unconfirmed button")
+      .find((button) => button.text() === "Confirm retry");
+    await confirm!.trigger("click");
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledWith("/mailbox/messages/draft-retried");
+    expect(statusChecks).toBe(2);
+    expect(wrapper.text()).toContain("Sending");
+    expect(wrapper.text()).not.toContain("Delivery could not be confirmed");
+  });
+
+  it("refreshes the Drafts list when delivery reconciliation becomes terminal", async () => {
+    routeTab = "drafts";
+    const draft = {
+      ...sentMessage,
+      id: "draft-reconciled",
+      kind: "draft",
+      status: "approved",
+      folder: "drafts",
+      sentAt: null,
+    };
+    const sent = {
+      ...draft,
+      kind: "email",
+      status: "sent",
+      folder: "sent",
+      sentAt: "2026-07-16T09:00:00Z",
+    };
+    let draftListLoads = 0;
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint === "/mailbox/messages/draft-reconciled") {
+        return { message: sent };
+      }
+      if (endpoint === "/mailbox/drafts/draft-reconciled/delivery-status") {
+        return {
+          delivery: {
+            id: draft.id,
+            state: "sent",
+            checkedAt: "2026-07-16T09:00:01Z",
+            unknownAfter: null,
+            canMarkSent: false,
+            canRetryAnyway: false,
+          },
+        };
+      }
+      if (endpoint.startsWith("/mailbox/messages?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        const isDraftList =
+          params.get("folder") === "drafts" &&
+          Number(params.get("limit") || 50) > 0;
+        if (isDraftList) draftListLoads += 1;
+        const visible = isDraftList && draftListLoads === 1;
+        return {
+          messages: visible ? [draft] : [],
+          total: visible ? 1 : 0,
+          limit: Number(params.get("limit") || 50),
+          offset: 0,
+        };
+      }
+      return mailboxResponseFor(endpoint);
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+    await wrapper.get(".conversation-open").trigger("click");
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledWith("/mailbox/messages/draft-reconciled");
+    expect(draftListLoads).toBe(2);
+    expect(wrapper.text()).toContain("No drafts awaiting action");
+    expect(wrapper.text()).not.toContain("Sending");
+  });
+
+  it("shows explicit recovery for delivery-unknown drafts without resending", async () => {
+    routeTab = "drafts";
+    const draft = {
+      ...sentMessage,
+      id: "draft-unknown",
+      kind: "draft",
+      status: "approved",
+      folder: "drafts",
+      sentAt: null,
+    };
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint === "/mailbox/drafts/draft-unknown/delivery-status") {
+        return {
+          delivery: {
+            id: draft.id,
+            state: "delivery_unknown",
+            checkedAt: "2026-07-16T09:10:00Z",
+            unknownAfter: "2026-07-16T09:05:00Z",
+            canMarkSent: true,
+            canRetryAnyway: true,
+          },
+        };
+      }
+      if (endpoint.startsWith("/mailbox/messages?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        const visible =
+          params.get("folder") === "drafts" &&
+          Number(params.get("limit") || 50) > 0;
+        return {
+          messages: visible ? [draft] : [],
+          total: visible ? 1 : 0,
+          limit: Number(params.get("limit") || 50),
+          offset: 0,
+        };
+      }
+      return mailboxResponseFor(endpoint);
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+    await wrapper.get(".conversation-open").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Delivery could not be confirmed");
+    expect(wrapper.text()).toContain("Retry anyway");
+
+    await wrapper.get(".delivery-unconfirmed .me3-btn--outline").trigger("click");
+    await flushPromises();
+
+    expect(api.post).toHaveBeenCalledWith(
+      "/mailbox/drafts/draft-unknown/mark-sent",
+    );
+    expect(api.post).not.toHaveBeenCalledWith(
+      "/mailbox/drafts/draft-unknown/retry-anyway",
+    );
+  });
+
+  it("refreshes a sending draft once when its confirmation window expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-16T09:00:00Z"));
+    routeTab = "drafts";
+    const draft = {
+      ...sentMessage,
+      id: "draft-waiting",
+      kind: "draft",
+      status: "approved",
+      folder: "drafts",
+      sentAt: null,
+    };
+    let statusChecks = 0;
+    vi.mocked(api.get).mockImplementation(async (endpoint) => {
+      if (endpoint === "/mailbox/drafts/draft-waiting/delivery-status") {
+        statusChecks += 1;
+        return {
+          delivery: {
+            id: draft.id,
+            state: statusChecks === 1 ? "sending" : "delivery_unknown",
+            checkedAt: new Date().toISOString(),
+            unknownAfter: "2026-07-16T09:00:01Z",
+            canMarkSent: statusChecks > 1,
+            canRetryAnyway: statusChecks > 1,
+          },
+        };
+      }
+      if (endpoint.startsWith("/mailbox/messages?")) {
+        const params = new URLSearchParams(endpoint.split("?")[1] || "");
+        const visible =
+          params.get("folder") === "drafts" &&
+          Number(params.get("limit") || 50) > 0;
+        return {
+          messages: visible ? [draft] : [],
+          total: visible ? 1 : 0,
+          limit: Number(params.get("limit") || 50),
+          offset: 0,
+        };
+      }
+      return mailboxResponseFor(endpoint);
+    });
+
+    const wrapper = mountEmailPage();
+    await flushPromises();
+    await wrapper.get(".conversation-open").trigger("click");
+    await flushPromises();
+
+    expect(statusChecks).toBe(1);
+    expect(wrapper.text()).not.toContain("Delivery could not be confirmed");
+
+    await vi.advanceTimersByTimeAsync(1_250);
+    await flushPromises();
+
+    expect(statusChecks).toBe(2);
+    expect(wrapper.text()).toContain("Delivery could not be confirmed");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(statusChecks).toBe(2);
   });
 });

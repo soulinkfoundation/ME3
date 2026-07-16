@@ -40,6 +40,7 @@ export {
   isAgentSandboxDispatchInput,
   listAgentContentItems,
   listAgentMailboxMessages,
+  listAgentMailboxThreadMessages,
   listAgentContacts,
   markAgentMailboxDraftFailed,
   markAgentMailboxDraftSent,

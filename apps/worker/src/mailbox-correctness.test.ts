@@ -101,6 +101,9 @@ describe("mailbox correctness", () => {
       subject: "Started",
       body: "",
     });
+    expect(created.draft.threadKey).toBe(
+      (created.draft.metadata.outbound_headers as { message_id: string }).message_id,
+    );
     await expect(
       getAgentMailboxDraftForApproval(state as never, "owner", created.draft.id),
     ).resolves.toEqual({ error: "Draft recipient is required", status: 400 });
@@ -199,6 +202,8 @@ describe("mailbox correctness", () => {
       status: "sent",
       provider_id: "postmark",
       provider_message_id: "provider-2",
+      error_message: null,
+      requested_at: "2026-07-15T12:30:00.000Z",
       sent_at: "2026-07-15T12:30:00.000Z",
     });
     const app = new Hono();
@@ -222,6 +227,95 @@ describe("mailbox correctness", () => {
       message_kind: "email",
       status: "sent",
       provider_message_id: "provider-2",
+    });
+  });
+
+  it("makes Mark sent idempotent when a sent audit arrives before the click", async () => {
+    const state = createMailboxState();
+    state.messages.push(
+      mailboxMessage({
+        id: "stuck-draft",
+        message_kind: "draft",
+        status: "approved",
+        folder: "drafts",
+        approved_at: "2026-07-15T12:00:00.000Z",
+        sent_at: null,
+      }),
+    );
+    state.sendAudits.push({
+      user_id: "owner",
+      mailbox_message_id: "stuck-draft",
+      status: "sent",
+      provider_id: "postmark",
+      provider_message_id: "provider-3",
+      error_message: null,
+      requested_at: "2026-07-15T12:00:30.000Z",
+      sent_at: "2026-07-15T12:01:00.000Z",
+    });
+    const app = new Hono();
+    registerMailboxRoutes(app as never, {
+      requireOwner: async () => "owner",
+      unauthorized: () => new Response(null, { status: 401 }),
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/mailbox/drafts/stuck-draft/mark-sent", {
+        method: "POST",
+      }),
+      { DB: state.db } as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      draft: { id: "stuck-draft", status: "sent", providerMessageId: "provider-3" },
+      delivery: { id: "stuck-draft", state: "sent" },
+    });
+    expect(state.messages).toHaveLength(1);
+  });
+
+  it("ignores audits from an earlier approval attempt", async () => {
+    const state = createMailboxState();
+    state.messages.push(
+      mailboxMessage({
+        id: "retried-draft",
+        message_kind: "draft",
+        status: "approved",
+        folder: "drafts",
+        approved_at: "2026-07-15T12:00:00.000Z",
+        updated_at: "2026-07-15T12:00:00.000Z",
+        sent_at: null,
+      }),
+    );
+    state.sendAudits.push({
+      user_id: "owner",
+      mailbox_message_id: "retried-draft",
+      status: "failed",
+      provider_id: "postmark",
+      provider_message_id: null,
+      error_message: "Historical rejection",
+      requested_at: "2026-07-15T11:00:00.000Z",
+      sent_at: null,
+    });
+    const app = new Hono();
+    registerMailboxRoutes(app as never, {
+      requireOwner: async () => "owner",
+      unauthorized: () => new Response(null, { status: 401 }),
+    });
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/api/mailbox/drafts/retried-draft/delivery-status",
+      ),
+      { DB: state.db } as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      delivery: { id: "retried-draft", state: "delivery_unknown" },
+    });
+    expect(state.messages[0]).toMatchObject({
+      status: "approved",
+      error_message: null,
     });
   });
 });
@@ -253,10 +347,12 @@ function createMailboxState() {
   const sendAudits: Array<{
     user_id: string;
     mailbox_message_id: string;
-    status: "sent";
+    status: "sent" | "failed";
     provider_id: string;
     provider_message_id: string | null;
-    sent_at: string;
+    error_message: string | null;
+    requested_at: string;
+    sent_at: string | null;
   }> = [];
 
   const execute = (sql: string, values: unknown[]) => ({
@@ -265,13 +361,24 @@ function createMailboxState() {
         return (values[0] === mailbox.user_id ? mailbox : null) as T | null;
       }
       if (sql.includes("FROM email_send_audit")) {
-        const [userId, messageId] = values as [string, string];
-        return (sendAudits.find(
-          (audit) =>
-            audit.user_id === userId &&
-            audit.mailbox_message_id === messageId &&
-            audit.status === "sent",
-        ) || null) as T | null;
+        const [auditUserId, ownerId, messageId] = values as [string, string, string];
+        const message = messages.find(
+          (row) => row.id === messageId && row.mailbox_id === mailbox.id,
+        );
+        const attemptStartedAt =
+          message?.approved_at || message?.updated_at || message?.created_at || "";
+        return (
+          sendAudits
+            .filter(
+              (audit) =>
+                audit.user_id === auditUserId &&
+                ownerId === mailbox.user_id &&
+                audit.mailbox_message_id === messageId &&
+                audit.requested_at >= attemptStartedAt,
+            )
+            .sort((left, right) => right.requested_at.localeCompare(left.requested_at))[0] ||
+          null
+        ) as T | null;
       }
       if (sql.includes("instr(COALESCE(metadata_json")) {
         const [mailboxId, storageKey] = values as [string, string];
@@ -280,6 +387,12 @@ function createMailboxState() {
             message.mailbox_id === mailboxId &&
             (message.metadata_json || "").includes(storageKey),
         ) || null) as T | null;
+      }
+      if (sql.includes("JOIN mailbox_aliases") && sql.includes("m.updated_at")) {
+        const [ownerId, id] = values as [string, string];
+        return (ownerId === mailbox.user_id
+          ? messages.find((message) => message.id === id) || null
+          : null) as T | null;
       }
       if (sql.includes("FROM mailbox_messages") && sql.includes("WHERE id = ? AND mailbox_id = ?")) {
         const [id, mailboxId] = values as [string, string];

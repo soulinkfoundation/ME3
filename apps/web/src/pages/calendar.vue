@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useRouter } from "vue-router";
 import CalendarAgenda from "../components/calendar/CalendarAgenda.vue";
 import DatePickerPopover from "../components/calendar/DatePickerPopover.vue";
 import CalendarMiniMonth from "../components/calendar/CalendarMiniMonth.vue";
 import CalendarMonthBoard from "../components/calendar/CalendarMonthBoard.vue";
+import CalendarWeekBoard from "../components/calendar/CalendarWeekBoard.vue";
+import CalendarEventPopover from "../components/calendar/CalendarEventPopover.vue";
+import CalendarQuickEventPopover from "../components/calendar/CalendarQuickEventPopover.vue";
 import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
 import PageLoading from "../components/PageLoading.vue";
@@ -19,6 +29,10 @@ import type {
   CalendarAgendaEvent,
   CalendarRangeMode,
 } from "../components/calendar/calendarAgenda";
+import type {
+  CalendarContextAnchor,
+  CalendarWeekSlot,
+} from "../components/calendar/calendarWeek";
 import { ApiError, api } from "../api";
 import { useSitesStore, type SiteContent } from "../stores/sites";
 
@@ -197,6 +211,7 @@ const removingSourceId = ref<string | null>(null);
 const addingImportedBirthdayId = ref<string | null>(null);
 const { toastSuccess, toastFromUnknown } = useAppToast();
 let calendarLoadToken = 0;
+let calendarLoadController: AbortController | null = null;
 /** Matches `.cal-shell` stacked layout at `max-width: 1100px`. */
 const CALENDAR_COMPACT_MAX_WIDTH_PX = 1100;
 
@@ -212,6 +227,8 @@ const calendarsDialogOpen = ref(false);
 const calendarPickerOpen = ref(false);
 const calendarPickerMonth = ref(monthKeyFromDate(new Date()));
 const quickCreateDayKey = ref<string | null>(null);
+const boardContextAnchor = ref<CalendarContextAnchor | null>(null);
+const quickWeekSlot = ref<CalendarWeekSlot | null>(null);
 const availabilityModalOpen = ref(false);
 const availabilityLoading = ref(false);
 const availabilitySaving = ref(false);
@@ -265,6 +282,34 @@ const monthToolbarTitle = computed(() =>
   }).format(monthCursor.value),
 );
 
+const weekStart = computed(() => startOfWeekMonday(monthCursor.value));
+
+const weekToolbarTitle = computed(() => {
+  const start = weekStart.value;
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const day = new Intl.DateTimeFormat("en-GB", { day: "numeric" });
+  const dayMonth = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+  });
+  const dayMonthYear = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  if (
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth()
+  ) {
+    return `${day.format(start)}–${dayMonthYear.format(end)}`;
+  }
+  if (start.getFullYear() === end.getFullYear()) {
+    return `${dayMonth.format(start)}–${dayMonthYear.format(end)}`;
+  }
+  return `${dayMonthYear.format(start)}–${dayMonthYear.format(end)}`;
+});
+
 const dayToolbarTitle = computed(() =>
   new Intl.DateTimeFormat("en-GB", {
     weekday: "short",
@@ -283,6 +328,7 @@ const miniCalendarCursor = computed(() =>
 const rangeLabel = computed(() => {
   if (rangeMode.value === "schedule") return "Schedule";
   if (rangeMode.value === "day") return "Day";
+  if (rangeMode.value === "week") return "Week";
   return "Month";
 });
 
@@ -368,6 +414,12 @@ const calendarWindow = computed(() => {
     return { start, end };
   }
   const c = monthCursor.value;
+  if (rangeMode.value === "week") {
+    const start = startOfWeekMonday(c);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 7);
+    return { start, end };
+  }
   if (rangeMode.value === "schedule") {
     const start = new Date(c);
     start.setHours(0, 0, 0, 0);
@@ -450,6 +502,7 @@ const quickCreateHeading = computed(() => {
 const activeToolbarTitle = computed(() => {
   if (rangeMode.value === "schedule") return scheduleToolbarTitle.value;
   if (rangeMode.value === "day") return dayToolbarTitle.value;
+  if (rangeMode.value === "week") return weekToolbarTitle.value;
   return monthToolbarTitle.value;
 });
 
@@ -458,6 +511,9 @@ const mobileToolbarTitle = computed(() => activeToolbarTitle.value);
 const calendarPickerSelectedDate = computed(() => {
   if (rangeMode.value === "day") return dayKeyFormatter.value.format(dayCursor.value);
   if (focusedDayKey.value) return focusedDayKey.value;
+  if (rangeMode.value === "week") {
+    return dayKeyFormatter.value.format(monthCursor.value);
+  }
   return null;
 });
 
@@ -1024,8 +1080,33 @@ const selectedBoardEvent = computed(() => {
   );
 });
 
+const selectedContextEvent = computed(() =>
+  boardContextAnchor.value && !isCompactCalendar.value
+    ? selectedBoardEvent.value
+    : null,
+);
+
+const selectedModalEvent = computed(() =>
+  !boardContextAnchor.value || isCompactCalendar.value
+    ? selectedBoardEvent.value
+    : null,
+);
+
+function closeBoardContext(restoreFocus = true) {
+  const trigger = boardContextAnchor.value?.trigger;
+  boardContextAnchor.value = null;
+  quickWeekSlot.value = null;
+  boardHighlightId.value = "";
+  if (restoreFocus && trigger) {
+    void nextTick(() => trigger.focus());
+  }
+}
+
 async function reloadCalendar() {
   const token = ++calendarLoadToken;
+  calendarLoadController?.abort();
+  const controller = new AbortController();
+  calendarLoadController = controller;
   loading.value = true;
   error.value = "";
 
@@ -1037,6 +1118,7 @@ async function reloadCalendar() {
     });
     const response = await api.get<CalendarFeedResponse>(
       `/calendar/feed?${qs.toString()}`,
+      { signal: controller.signal },
     );
     if (token !== calendarLoadToken) return;
     bookings.value = response.bookings || [];
@@ -1047,6 +1129,7 @@ async function reloadCalendar() {
     tasks.value = response.tasks || [];
     calendarLoaded.value = true;
   } catch (err) {
+    if (controller.signal.aborted) return;
     if (token !== calendarLoadToken) return;
     error.value =
       err instanceof Error ? err.message : "Failed to load calendar";
@@ -1102,6 +1185,7 @@ async function deleteCalendarEvent(eventId: string) {
 }
 
 function handleEventAction(event: CalendarAgendaEvent) {
+  closeBoardContext(false);
   if (event.entryType === "task") {
     openTaskInMissionControl(event.id);
     return;
@@ -1131,6 +1215,7 @@ function handleEventAction(event: CalendarAgendaEvent) {
 }
 
 function handleEventDangerAction(event: CalendarAgendaEvent) {
+  closeBoardContext(false);
   if (event.entryType === "reminder" || event.sourceLabel === "Reminder") {
     void cancelReminder(event.id);
     return;
@@ -1567,6 +1652,8 @@ async function saveAvailabilitySettings() {
 function onRangeChange(mode: CalendarRangeMode) {
   const anchor =
     rangeMode.value === "day" ? new Date(dayCursor.value) : new Date(monthCursor.value);
+  if (mode === "week" && isCompactCalendar.value) mode = "day";
+  closeBoardContext(false);
   rangeMode.value = mode;
   calendarPickerOpen.value = false;
   showSettingsMenu.value = false;
@@ -1584,6 +1671,7 @@ function onRangeChange(mode: CalendarRangeMode) {
 
 function onCalendarToday() {
   const today = new Date();
+  closeBoardContext(false);
   if (rangeMode.value === "day") {
     dayCursor.value = today;
     focusedDayKey.value = todayDayKey.value;
@@ -1628,6 +1716,15 @@ function onNextDay() {
   void reloadCalendar();
 }
 
+function moveWeek(weeks: number) {
+  const next = new Date(monthCursor.value);
+  next.setDate(next.getDate() + weeks * 7);
+  monthCursor.value = next;
+  focusedDayKey.value = null;
+  closeBoardContext(false);
+  void reloadCalendar();
+}
+
 function onPrevMonth() {
   const c = monthCursor.value;
   monthCursor.value = new Date(c.getFullYear(), c.getMonth() - 1, 1);
@@ -1643,14 +1740,18 @@ function onNextMonth() {
 }
 
 function onToolbarPrev() {
+  closeBoardContext(false);
   if (rangeMode.value === "day") onPrevDay();
   else if (rangeMode.value === "schedule") moveScheduleWindow(-30);
+  else if (rangeMode.value === "week") moveWeek(-1);
   else onPrevMonth();
 }
 
 function onToolbarNext() {
+  closeBoardContext(false);
   if (rangeMode.value === "day") onNextDay();
   else if (rangeMode.value === "schedule") moveScheduleWindow(30);
+  else if (rangeMode.value === "week") moveWeek(1);
   else onNextMonth();
 }
 
@@ -1660,6 +1761,7 @@ watch(visibleEvents, (nextEvents) => {
     !nextEvents.some((event) => event.id === boardHighlightId.value)
   ) {
     boardHighlightId.value = "";
+    boardContextAnchor.value = null;
   }
 });
 
@@ -1693,12 +1795,33 @@ function applyInitialCalendarViewport(matches: boolean) {
 function onMobileCalendarChange(event: MediaQueryListEvent) {
   isCompactCalendar.value = event.matches;
   closeCalendarHeaderMenus();
+  if (event.matches && rangeMode.value === "week") {
+    dayCursor.value = new Date(monthCursor.value);
+    focusedDayKey.value = dayKeyFormatter.value.format(dayCursor.value);
+    rangeMode.value = "day";
+    closeBoardContext(false);
+    void reloadCalendar();
+  }
 }
 
-function onBoardSelectEvent(id: string) {
+function onBoardSelectEvent(id: string, anchor: CalendarContextAnchor) {
+  quickWeekSlot.value = null;
+  boardContextAnchor.value = isCompactCalendar.value ? null : anchor;
   boardHighlightId.value = id;
   preferSelectEventId.value = id;
   focusedDayKey.value = null;
+}
+
+function onWeekSelectSlot(
+  slot: CalendarWeekSlot,
+  anchor: CalendarContextAnchor,
+) {
+  boardHighlightId.value = "";
+  preferSelectEventId.value = null;
+  focusedDayKey.value = slot.dayKey;
+  newEventError.value = "";
+  quickWeekSlot.value = slot;
+  boardContextAnchor.value = anchor;
 }
 
 function focusBoardDay(dayKey: string) {
@@ -1715,10 +1838,24 @@ function focusBoardDay(dayKey: string) {
   }
 }
 
-function onBoardSelectDay(dayKey: string) {
+function onBoardSelectDay(
+  dayKey: string,
+  anchor?: CalendarContextAnchor,
+) {
   focusedDayKey.value = dayKey;
   boardHighlightId.value = "";
   preferSelectEventId.value = null;
+  if (anchor && !isCompactCalendar.value) {
+    onWeekSelectSlot(
+      {
+        dayKey,
+        startMinutes: 9 * 60,
+        endMinutes: 10 * 60,
+      },
+      anchor,
+    );
+    return;
+  }
   openCreateMode("event", dayKey, true);
 }
 
@@ -1729,6 +1866,7 @@ function onBoardShowDay(dayKey: string) {
   focusedDayKey.value = dayKey;
   boardHighlightId.value = "";
   preferSelectEventId.value = null;
+  closeBoardContext(false);
   rangeMode.value = "day";
   closeCalendarHeaderMenus();
   void reloadCalendar();
@@ -1744,6 +1882,9 @@ function onMiniPick(dayKey: string) {
       void reloadCalendar();
     } else if (rangeMode.value === "month") {
       monthCursor.value = new Date(year, month - 1, 1);
+      void reloadCalendar();
+    } else if (rangeMode.value === "week") {
+      monthCursor.value = picked;
       void reloadCalendar();
     } else if (rangeMode.value === "schedule") {
       monthCursor.value = picked;
@@ -1804,6 +1945,56 @@ function resetEventForm() {
   };
 }
 
+function dateTimeInputFromDayMinutes(dayKey: string, minutes: number) {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  const date = new Date(year, month - 1, day, 0, minutes, 0, 0);
+  return {
+    date: dateInputFromDate(date),
+    time: `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`,
+  };
+}
+
+function applyWeekSlotToEventForm(slot: CalendarWeekSlot, title = "") {
+  const start = dateTimeInputFromDayMinutes(slot.dayKey, slot.startMinutes);
+  const end = dateTimeInputFromDayMinutes(slot.dayKey, slot.endMinutes);
+  editingEventId.value = null;
+  quickCreateDayKey.value = slot.dayKey;
+  newEventError.value = "";
+  newEventForm.value = {
+    title,
+    startDate: slot.dayKey,
+    startTime: slot.allDay ? "" : start.time,
+    endDate: slot.allDay ? slot.dayKey : end.date,
+    endTime: slot.allDay ? "" : end.time,
+    timezone: defaultFormTimeZone,
+    allDay: slot.allDay === true,
+    recurrence: "none",
+    customInterval: 1,
+    customUnit: "day",
+    customEnd: "never",
+    customUntilDate: "",
+    customCount: 30,
+    location: "",
+    notes: "",
+  };
+}
+
+async function submitWeekQuickEvent(title: string) {
+  const slot = quickWeekSlot.value;
+  if (!slot) return;
+  applyWeekSlotToEventForm(slot, title);
+  if (await submitNewEvent()) closeBoardContext(false);
+}
+
+function openWeekSlotMoreOptions(title = "") {
+  const slot = quickWeekSlot.value;
+  if (!slot) return;
+  applyWeekSlotToEventForm(slot, title);
+  closeBoardContext(false);
+  compactEventCreate.value = false;
+  activeCreateMode.value = "event";
+}
+
 function resetBirthdayForm() {
   editingEventId.value = null;
   newEventError.value = "";
@@ -1829,6 +2020,7 @@ function openCreateMode(
   dayKey?: string,
   compact = false,
 ) {
+  closeBoardContext(false);
   if (showCreateMenu.value) focusCalendarHeaderTrigger("create");
   else if (showSettingsMenu.value) focusCalendarHeaderTrigger("settings");
   showCreateMenu.value = false;
@@ -2041,21 +2233,21 @@ async function submitNewReminder() {
   }
 }
 
-async function submitNewEvent() {
+async function submitNewEvent(): Promise<boolean> {
   newEventError.value = "";
   const form = newEventForm.value;
   if (!form.title.trim()) {
     newEventError.value = "Title is required.";
-    return;
+    return false;
   }
   if (form.recurrence === "custom") {
     if (form.customEnd === "on" && !form.customUntilDate) {
       newEventError.value = "Choose an end date or set custom recurrence to never end.";
-      return;
+      return false;
     }
     if (form.customEnd === "after" && (!form.customCount || form.customCount < 1)) {
       newEventError.value = "Custom recurrence needs at least one occurrence.";
-      return;
+      return false;
     }
   }
 
@@ -2090,6 +2282,7 @@ async function submitNewEvent() {
     );
     closeCreateMode();
     await reloadCalendar();
+    return true;
   } catch (err) {
     newEventError.value =
       err instanceof ApiError
@@ -2097,6 +2290,7 @@ async function submitNewEvent() {
         : err instanceof Error
           ? err.message
           : "Could not save event.";
+    return false;
   } finally {
     newEventSubmitting.value = false;
   }
@@ -2234,18 +2428,72 @@ function focusCalendarHeaderTrigger(kind: "create" | "settings") {
   document.getElementById(`calendar-${prefix}-${kind}`)?.focus();
 }
 
+function isCalendarShortcutTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      Boolean(target.closest("input, textarea, select, [contenteditable='true']")))
+  );
+}
+
 function handleWindowKeydown(event: KeyboardEvent) {
   if (event.key === "Escape") {
     if (availabilityModalOpen.value) {
       closeAvailabilitySettings();
       return;
     }
+    if (boardContextAnchor.value) {
+      closeBoardContext();
+      return;
+    }
     closeCalendarHeaderMenus();
+    return;
   }
+
+  if (
+    event.defaultPrevented ||
+    event.repeat ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    isCalendarShortcutTarget(event.target) ||
+    boardContextAnchor.value ||
+    selectedModalEvent.value ||
+    activeCreateMode.value ||
+    availabilityModalOpen.value ||
+    calendarsDialogOpen.value
+  ) {
+    return;
+  }
+
+  const shortcut = event.key.toLowerCase();
+  if (shortcut === "t") onCalendarToday();
+  else if (shortcut === "s") onRangeChange("schedule");
+  else if (shortcut === "w" && !isCompactCalendar.value) onRangeChange("week");
+  else if (shortcut === "m") onRangeChange("month");
+  else return;
+  event.preventDefault();
 }
 
 function handleWindowClick() {
   closeCalendarHeaderMenus();
+  if (boardContextAnchor.value) closeBoardContext(false);
+}
+
+function handleWindowScroll(event: Event) {
+  if (!boardContextAnchor.value) return;
+  const target = event.target;
+  if (
+    target instanceof HTMLElement &&
+    target.closest(".calendar-context-popover")
+  ) {
+    return;
+  }
+  closeBoardContext(false);
+}
+
+function handleWindowResize() {
+  if (boardContextAnchor.value) closeBoardContext(false);
 }
 
 onMounted(async () => {
@@ -2257,6 +2505,8 @@ onMounted(async () => {
   mobileMediaQuery.addEventListener("change", onMobileCalendarChange);
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener("click", handleWindowClick);
+  window.addEventListener("scroll", handleWindowScroll, true);
+  window.addEventListener("resize", handleWindowResize);
   await sites.fetchSites();
   if (sites.sites[0]) {
     newBookingForm.value.username = sites.sites[0].username;
@@ -2265,10 +2515,13 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  calendarLoadController?.abort();
   if (transientHighlightTimer) clearTimeout(transientHighlightTimer);
   mobileMediaQuery?.removeEventListener("change", onMobileCalendarChange);
   window.removeEventListener("keydown", handleWindowKeydown);
   window.removeEventListener("click", handleWindowClick);
+  window.removeEventListener("scroll", handleWindowScroll, true);
+  window.removeEventListener("resize", handleWindowResize);
 });
 </script>
 
@@ -2436,6 +2689,7 @@ onBeforeUnmount(() => {
             shape="soft"
             size="compact"
             type="button"
+            title="Go to today (T)"
             @click="onCalendarToday"
           >
             Today
@@ -2444,13 +2698,26 @@ onBeforeUnmount(() => {
             <button
               type="button"
               :class="{ 'is-on': rangeMode === 'schedule' }"
+              :aria-pressed="rangeMode === 'schedule'"
+              title="Schedule view (S)"
               @click="onRangeChange('schedule')"
             >
               Schedule
             </button>
             <button
               type="button"
+              :class="{ 'is-on': rangeMode === 'week' }"
+              :aria-pressed="rangeMode === 'week'"
+              title="Week view (W)"
+              @click="onRangeChange('week')"
+            >
+              Week
+            </button>
+            <button
+              type="button"
               :class="{ 'is-on': rangeMode === 'month' }"
+              :aria-pressed="rangeMode === 'month'"
+              title="Month view (M)"
               @click="onRangeChange('month')"
             >
               Month
@@ -2726,6 +2993,17 @@ onBeforeUnmount(() => {
                 @clear-focus="focusedDayKey = null"
                 @consumed-prefer-select="preferSelectEventId = null"
               />
+              <CalendarWeekBoard
+                v-else-if="rangeMode === 'week'"
+                :week-start="weekStart"
+                :events="visibleEvents"
+                :selected-event-id="boardHighlightId"
+                :highlighted-event-id="transientHighlightId"
+                :today-day-key="todayDayKey"
+                @select-event="onBoardSelectEvent"
+                @select-slot="onWeekSelectSlot"
+                @show-day="onBoardShowDay"
+              />
               <template v-else>
                 <CalendarMonthBoard
                   :year="monthCursor.getFullYear()"
@@ -2745,39 +3023,61 @@ onBeforeUnmount(() => {
       </template>
     </main>
 
+    <CalendarEventPopover
+      v-if="selectedContextEvent && boardContextAnchor"
+      :event="selectedContextEvent"
+      :anchor="boardContextAnchor"
+      :cancelling-booking="cancellingBookingId === selectedContextEvent.id"
+      @close="closeBoardContext"
+      @event-action="handleEventAction"
+      @event-danger-action="handleEventDangerAction"
+      @cancel-booking="handleCancelBooking"
+    />
+
+    <CalendarQuickEventPopover
+      v-if="quickWeekSlot && boardContextAnchor && !isCompactCalendar"
+      :slot="quickWeekSlot"
+      :anchor="boardContextAnchor"
+      :submitting="newEventSubmitting"
+      :error="newEventError"
+      @close="closeBoardContext"
+      @submit="submitWeekQuickEvent"
+      @more-options="openWeekSlotMoreOptions"
+    />
+
     <AppDialog
-      :open="Boolean(selectedBoardEvent)"
+      :open="Boolean(selectedModalEvent)"
       labelled-by="event-detail-title"
-      @close="boardHighlightId = ''"
+      @close="closeBoardContext(false)"
     >
       <aside
-        v-if="selectedBoardEvent"
+        v-if="selectedModalEvent"
         class="modal-card event-detail-modal"
       >
         <div class="modal-header">
           <div>
-            <p class="event-detail-source">{{ selectedBoardEvent.sourceLabel }}</p>
-            <h2 id="event-detail-title">{{ selectedBoardEvent.title }}</h2>
+            <p class="event-detail-source">{{ selectedModalEvent.sourceLabel }}</p>
+            <h2 id="event-detail-title">{{ selectedModalEvent.title }}</h2>
           </div>
           <button
             type="button"
             class="icon-close"
             aria-label="Close"
-            @click="boardHighlightId = ''"
+            @click="closeBoardContext(false)"
           >
             ×
           </button>
         </div>
 
-        <p class="event-detail-summary">{{ selectedBoardEvent.summary }}</p>
+        <p class="event-detail-summary">{{ selectedModalEvent.summary }}</p>
         <p class="event-detail-time">
-          {{ formatEventTimeRange(selectedBoardEvent) }}
+          {{ formatEventTimeRange(selectedModalEvent) }}
         </p>
-        <p class="event-detail-site">{{ selectedBoardEvent.siteLabel }}</p>
+        <p class="event-detail-site">{{ selectedModalEvent.siteLabel }}</p>
 
         <dl class="event-detail-list">
           <div
-            v-for="line in selectedBoardEvent.detailLines"
+            v-for="line in selectedModalEvent.detailLines"
             :key="line.label"
             class="event-detail-row"
           >
@@ -2786,38 +3086,38 @@ onBeforeUnmount(() => {
           </div>
         </dl>
 
-        <div v-if="selectedBoardEvent.notes" class="event-detail-notes">
+        <div v-if="selectedModalEvent.notes" class="event-detail-notes">
           <h3>Notes</h3>
-          <p>{{ selectedBoardEvent.notes }}</p>
+          <p>{{ selectedModalEvent.notes }}</p>
         </div>
 
         <button
-          v-if="selectedBoardEvent.actionLabel"
+          v-if="selectedModalEvent.actionLabel"
           type="button"
           class="event-detail-action"
-          @click="handleEventAction(selectedBoardEvent)"
+          @click="handleEventAction(selectedModalEvent)"
         >
-          {{ selectedBoardEvent.actionLabel }}
+          {{ selectedModalEvent.actionLabel }}
         </button>
 
         <button
-          v-if="selectedBoardEvent.dangerActionLabel"
+          v-if="selectedModalEvent.dangerActionLabel"
           type="button"
           class="event-detail-action event-detail-action--danger"
-          @click="handleEventDangerAction(selectedBoardEvent)"
+          @click="handleEventDangerAction(selectedModalEvent)"
         >
-          {{ selectedBoardEvent.dangerActionLabel }}
+          {{ selectedModalEvent.dangerActionLabel }}
         </button>
 
         <button
-          v-if="selectedBoardEvent.sourceLabel === 'Booking'"
+          v-if="selectedModalEvent.sourceLabel === 'Booking'"
           type="button"
           class="event-detail-action event-detail-action--danger"
-          :disabled="cancellingBookingId === selectedBoardEvent.id"
-          @click="handleCancelBooking(selectedBoardEvent)"
+          :disabled="cancellingBookingId === selectedModalEvent.id"
+          @click="handleCancelBooking(selectedModalEvent)"
         >
           {{
-            cancellingBookingId === selectedBoardEvent.id
+            cancellingBookingId === selectedModalEvent.id
               ? "Cancelling…"
               : "Cancel booking"
           }}
@@ -4307,8 +4607,9 @@ onBeforeUnmount(() => {
   }
 }
 
-.cal-mobile-icon-btn {
+.cal-mobile-nav-controls .cal-mobile-icon-btn {
   flex: 0 0 auto;
+  min-width: 44px;
   width: 44px;
   height: 44px;
 }

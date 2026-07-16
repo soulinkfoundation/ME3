@@ -61,6 +61,14 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0019_owner_content_search")).toBe(
       "2026-07-15-owner-content-search-v1",
     );
+    expect(db.migrations.get("0020_mailbox_thread_index")).toBe(
+      "2026-07-16-mailbox-thread-index-v1",
+    );
+    expect(
+      db.statements.some((sql) =>
+        sql.includes("idx_mailbox_messages_mailbox_thread_activity"),
+      ),
+    ).toBe(true);
     expect(
       db.statements.some((sql) =>
         sql.includes("idx_social_publications_one_active_variant"),

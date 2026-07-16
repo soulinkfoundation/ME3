@@ -335,6 +335,8 @@ function createEnv(): Env & {
   aiGatewaySettings: StoredAiGatewaySettings | null;
   emailProviderSettings: DbEmailProviderSetting[];
   emailSendAudit: DbEmailSendAudit[];
+  failEmailSendAuditInsertOnce: boolean;
+  failMailboxDraftSentUpdateOnce: boolean;
   emailSends: Array<Record<string, unknown>>;
   mailboxMessages: StoredMailboxMessage[];
   reminders: DbUserReminder[];
@@ -381,6 +383,8 @@ function createEnv(): Env & {
     aiGatewaySettings: null as StoredAiGatewaySettings | null,
     emailProviderSettings: [] as DbEmailProviderSetting[],
     emailSendAudit: [] as DbEmailSendAudit[],
+    failEmailSendAuditInsertOnce: false,
+    failMailboxDraftSentUpdateOnce: false,
     emailSends: [] as Array<Record<string, unknown>>,
     mailboxMessages: [] as StoredMailboxMessage[],
     reminders: [] as DbUserReminder[],
@@ -1208,6 +1212,10 @@ function createEnv(): Env & {
               }
 
               if (sql.includes("INSERT INTO email_send_audit")) {
+                if (state.failEmailSendAuditInsertOnce) {
+                  state.failEmailSendAuditInsertOnce = false;
+                  throw new Error("Simulated email send audit insert failure");
+                }
                 state.emailSendAudit.push({
                   id: values[0] as string,
                   user_id: values[1] as string,
@@ -1730,6 +1738,10 @@ function createEnv(): Env & {
                 sql.includes("UPDATE mailbox_messages") &&
                 sql.includes("message_kind = 'email'")
               ) {
+                if (state.failMailboxDraftSentUpdateOnce) {
+                  state.failMailboxDraftSentUpdateOnce = false;
+                  throw new Error("Simulated mailbox sent update failure");
+                }
                 state.mailboxMessages = state.mailboxMessages.map((message) =>
                   message.id === values[6] && message.mailbox_id === values[7]
                     ? {
@@ -2107,6 +2119,35 @@ function createEnv(): Env & {
                       project.user_id === values[1] &&
                       project.status !== "archived",
                   ) || null
+                ) as T | null;
+              }
+              if (sql.includes("FROM email_send_audit")) {
+                const [auditOwnerId, mailboxOwnerId, messageId] = values as [
+                  string,
+                  string,
+                  string,
+                ];
+                const message = state.mailboxMessages.find(
+                  (entry) => entry.id === messageId,
+                );
+                const attemptStartedAt =
+                  message?.approved_at || message?.updated_at || message?.created_at || "";
+                return (
+                  state.mailbox &&
+                  state.mailbox.user_id === mailboxOwnerId &&
+                  message?.mailbox_id === state.mailbox.id
+                    ? state.emailSendAudit
+                        .filter(
+                          (audit) =>
+                            audit.user_id === auditOwnerId &&
+                            audit.mailbox_message_id === messageId &&
+                            (audit.status === "sent" || audit.status === "failed") &&
+                            audit.requested_at >= attemptStartedAt,
+                        )
+                        .sort((left, right) =>
+                          right.requested_at.localeCompare(left.requested_at),
+                        )[0] || null
+                    : null
                 ) as T | null;
               }
               if (
@@ -2788,6 +2829,18 @@ function createEnv(): Env & {
     get emailSendAudit() {
       return state.emailSendAudit;
     },
+    get failEmailSendAuditInsertOnce() {
+      return state.failEmailSendAuditInsertOnce;
+    },
+    set failEmailSendAuditInsertOnce(value: boolean) {
+      state.failEmailSendAuditInsertOnce = value;
+    },
+    get failMailboxDraftSentUpdateOnce() {
+      return state.failMailboxDraftSentUpdateOnce;
+    },
+    set failMailboxDraftSentUpdateOnce(value: boolean) {
+      state.failMailboxDraftSentUpdateOnce = value;
+    },
     get emailSends() {
       return state.emailSends;
     },
@@ -3319,6 +3372,59 @@ function base64UrlBytes(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function createPostmarkMailboxDraft(
+  env: ReturnType<typeof createEnv>,
+  session: string,
+): Promise<string> {
+  const settingsResponse = await app.fetch(
+    new Request("http://localhost/api/email-provider-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: session },
+      body: JSON.stringify({
+        activeProviderId: "postmark",
+        providers: [
+          {
+            id: "postmark",
+            fromAddress: "hello@example.com",
+            fromName: "ME3 Mail",
+            messageStream: "outbound",
+            serverToken: "postmark-secret-1234",
+          },
+        ],
+      }),
+    }),
+    env,
+  );
+  expect(settingsResponse.status).toBe(200);
+
+  const mailboxResponse = await app.fetch(
+    new Request("http://localhost/api/mailbox", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: session },
+      body: JSON.stringify({ aliasLocalPart: "owner", forwardingEnabled: false }),
+    }),
+    env,
+  );
+  expect(mailboxResponse.status).toBe(200);
+
+  const draftResponse = await app.fetch(
+    new Request("http://localhost/api/mailbox/drafts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: session },
+      body: JSON.stringify({
+        to: "client@example.com",
+        subject: "Delivery boundary",
+        textBody: "Delivery boundary test",
+        source: "user",
+      }),
+    }),
+    env,
+  );
+  expect(draftResponse.status).toBe(201);
+  const body = (await draftResponse.json()) as { draft: { id: string } };
+  return body.draft.id;
 }
 
 describe("ME3 Core Worker auth", () => {
@@ -12340,6 +12446,142 @@ describe("ME3 Core Worker auth", () => {
         Subject: "Hello",
         MessageStream: "outbound",
       });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a draft approved when the provider response is unknown", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const draftId = await createPostmarkMailboxDraft(env, session);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Provider request timed out");
+      }),
+    );
+
+    try {
+      const response = await app.fetch(
+        new Request(`http://localhost/api/mailbox/drafts/${draftId}/approve`, {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const body = (await response.json()) as {
+        error: string;
+        delivery: { state: string };
+      };
+
+      expect(response.status).toBe(502);
+      expect(body.error).toContain("could not be confirmed");
+      expect(body.delivery.state).toBe("sending");
+      expect(env.mailboxMessages[0]).toMatchObject({
+        id: draftId,
+        message_kind: "draft",
+        status: "approved",
+        folder: "drafts",
+        error_message: null,
+      });
+      expect(env.emailSendAudit).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a provider-accepted draft approved when its sent audit cannot be stored", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const draftId = await createPostmarkMailboxDraft(env, session);
+    env.failEmailSendAuditInsertOnce = true;
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ ErrorCode: 0, Message: "OK", MessageID: "pm-unknown-1" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const response = await app.fetch(
+        new Request(`http://localhost/api/mailbox/drafts/${draftId}/approve`, {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const body = (await response.json()) as {
+        error: string;
+        delivery: { state: string };
+      };
+
+      expect(response.status).toBe(502);
+      expect(body.error).toContain("provider accepted the message");
+      expect(body.delivery.state).toBe("sending");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(env.mailboxMessages[0]).toMatchObject({
+        id: draftId,
+        message_kind: "draft",
+        status: "approved",
+        folder: "drafts",
+        error_message: null,
+      });
+      expect(env.emailSendAudit).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reconciles a sent audit when the first mailbox sent update fails", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    const draftId = await createPostmarkMailboxDraft(env, session);
+    env.failMailboxDraftSentUpdateOnce = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ ErrorCode: 0, Message: "OK", MessageID: "pm-reconciled-1" }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+
+    try {
+      const response = await app.fetch(
+        new Request(`http://localhost/api/mailbox/drafts/${draftId}/approve`, {
+          method: "POST",
+          headers: { Cookie: session },
+        }),
+        env,
+      );
+      const body = (await response.json()) as {
+        draft: { status: string; providerMessageId: string | null };
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.draft).toMatchObject({
+        status: "sent",
+        providerMessageId: "pm-reconciled-1",
+      });
+      expect(env.mailboxMessages[0]).toMatchObject({
+        id: draftId,
+        message_kind: "email",
+        status: "sent",
+        folder: "sent",
+        error_message: null,
+      });
+      expect(env.emailSendAudit).toEqual([
+        expect.objectContaining({
+          mailbox_message_id: draftId,
+          provider_message_id: "pm-reconciled-1",
+          status: "sent",
+        }),
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }

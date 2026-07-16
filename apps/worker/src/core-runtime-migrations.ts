@@ -67,6 +67,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-15-owner-content-search-v1",
     apply: applyOwnerContentSearchMigration,
   },
+  {
+    id: "0020_mailbox_thread_index",
+    checksum: "2026-07-16-mailbox-thread-index-v1",
+    apply: applyMailboxThreadIndexMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -477,6 +482,20 @@ async function applyAgentRuntimeIdempotencyMigration(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_mailbox_drafts_agent_idempotency
        ON mailbox_messages(mailbox_id, agent_idempotency_key)
        WHERE message_kind = 'draft' AND agent_idempotency_key IS NOT NULL`,
+    )
+    .run();
+}
+
+async function applyMailboxThreadIndexMigration(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_mailbox_messages_mailbox_thread_activity
+       ON mailbox_messages(
+         mailbox_id,
+         thread_key,
+         COALESCE(sent_at, received_at, approved_at, created_at) DESC,
+         id DESC
+       )`,
     )
     .run();
 }

@@ -39,6 +39,7 @@ export const RUNTIME_MIGRATIONS = [
   ["0016_social_content_packages", "2026-07-10-social-content-packages-v1"],
   ["0018_social_publication_idempotency", "2026-07-10-social-publication-idempotency-v1"],
   ["0019_owner_content_search", "2026-07-15-owner-content-search-v1"],
+  ["0020_mailbox_thread_index", "2026-07-16-mailbox-thread-index-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];

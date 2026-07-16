@@ -103,6 +103,7 @@ type InboxMessage = {
         status?: "suggested" | "accepted" | "dismissed";
       };
     };
+    threadSummary?: MailboxThreadSummary;
   } | null;
   unsubscribeAction?: MailboxUnsubscribeAction | null;
   createdBy: string;
@@ -117,6 +118,43 @@ type MessagesResponse = {
   total: number;
   limit: number;
   offset: number;
+};
+
+type MailboxThreadSummary = {
+  id: string;
+  subject: string;
+  participants: string[];
+  latestSnippet: string;
+  latestMessageId: string;
+  messageCount: number;
+  unreadCount: number;
+  attachmentCount: number;
+  lastActivity: string;
+};
+
+type MailboxThreadsResponse = {
+  threads: MailboxThreadSummary[];
+  nextCursor: string | null;
+};
+
+type MailboxThreadResponse = {
+  thread: MailboxThreadSummary;
+  messages: InboxMessage[];
+};
+
+type MailboxDeliveryStatus = {
+  id: string;
+  state:
+    | "draft"
+    | "sending"
+    | "delivery_unknown"
+    | "sent"
+    | "failed"
+    | "rejected";
+  checkedAt: string;
+  unknownAfter: string | null;
+  canMarkSent: boolean;
+  canRetryAnyway: boolean;
 };
 
 type MailboxSource = {
@@ -199,6 +237,23 @@ const loading = ref(false);
 const messagesLoaded = ref(false);
 const error = ref("");
 const messages = ref<InboxMessage[]>([]);
+const threadSummaries = ref<MailboxThreadSummary[]>([]);
+const threadMode = ref(false);
+const threadNextCursor = ref<string | null>(null);
+const threadCursorHistory = ref<Array<string | null>>([null]);
+const threadCursorIndex = ref(0);
+const selectedThreadId = ref<string | null>(null);
+const loadedThreadId = ref<string | null>(null);
+const loadedThreadMessages = ref<InboxMessage[]>([]);
+const threadDetailLoading = ref(false);
+const threadDetailError = ref("");
+const conversationScrollRef = ref<HTMLElement | null>(null);
+let renderedThreadPageKey: string | null = null;
+const threadPageNextCursors = new Map<string, string | null>();
+const keyboardStatus = ref("");
+const deliveryResolutionPending = ref<string | null>(null);
+const deliveryRetryConfirmId = ref<string | null>(null);
+const deliveryStatuses = ref<Record<string, MailboxDeliveryStatus>>({});
 const total = ref(0);
 const activeTab = ref<Tab>("inbox");
 const folderCounts = ref<Record<EmailTab, number | null>>({
@@ -260,6 +315,11 @@ const mobileFolderMore = ref<HTMLDetailsElement | null>(null);
 let contactsRequested = contacts.value.length > 0;
 let providerSettingsRequested = false;
 let telegramHealthRequested = false;
+let threadEndpointAvailable: boolean | null = null;
+let threadRequestId = 0;
+const threadPageScrollOffsets = new Map<string, number>();
+const deliveryStatusRefreshTimers = new Map<string, number>();
+const deliveryRefreshAttemptedIds = new Set<string>();
 
 const mailboxMeta = ref<FullMailboxResponse["mailbox"] | null>(null);
 const mailboxSources = ref<MailboxSource[]>([]);
@@ -541,7 +601,25 @@ const followUpDraftCount = computed(
         message.status === "pending_approval" && isLikelyFollowUpDraft(message),
     ).length,
 );
+const selectedThreadSummary = computed(() =>
+  selectedThreadId.value
+    ? threadSummaries.value.find(
+        (thread) => thread.id === selectedThreadId.value,
+      ) || null
+    : null,
+);
+const selectedThreadDetailUnavailable = computed(
+  () =>
+    threadMode.value && loadedThreadId.value !== selectedThreadId.value,
+);
 const selectedMessage = computed(() => {
+  if (
+    threadMode.value &&
+    loadedThreadId.value === selectedThreadId.value &&
+    loadedThreadMessages.value.length > 0
+  ) {
+    return loadedThreadMessages.value.at(-1) || null;
+  }
   if (expandedId.value) {
     const selected = messages.value.find(
       (message) => message.id === expandedId.value,
@@ -551,6 +629,12 @@ const selectedMessage = computed(() => {
   return null;
 });
 const selectedThreadMessages = computed(() => {
+  if (
+    threadMode.value &&
+    loadedThreadId.value === selectedThreadId.value
+  ) {
+    return loadedThreadMessages.value;
+  }
   const selected = selectedMessage.value;
   if (!selected) return [];
   if (!selected.threadKey) return [selected];
@@ -601,7 +685,9 @@ function getCalendarDayDiff(date: Date, now: Date, timeZone?: string): number {
   }
 }
 const selectedThreadIsUnread = computed(() =>
-  selectedThreadMessages.value.some((message) => message.unread),
+  selectedThreadSummary.value
+    ? selectedThreadSummary.value.unreadCount > 0
+    : selectedThreadMessages.value.some((message) => message.unread),
 );
 
 function isEditableDraft(message: InboxMessage): boolean {
@@ -737,13 +823,99 @@ function getMessageSubject(message: InboxMessage): string {
   return getDisplayText(message.subject) || "(no subject)";
 }
 
+function getThreadSummary(message: InboxMessage): MailboxThreadSummary | null {
+  if (!threadMode.value) return null;
+  return (
+    threadSummaries.value.find(
+      (thread) => thread.latestMessageId === message.id,
+    ) ||
+    message.metadata?.threadSummary ||
+    null
+  );
+}
+
+function getConversationParticipants(message: InboxMessage): string {
+  const participants = getThreadSummary(message)?.participants
+    .map((participant) => getDisplayText(participant))
+    .filter(Boolean);
+  if (participants?.length) {
+    const ownAddresses = new Set(
+      [
+        visibleMailboxAddress.value,
+        mailboxAddress.value,
+        configuredEmailAddress.value,
+        ...mailboxSources.value.map((source) => source.address),
+      ]
+        .map((address) => address?.trim().toLowerCase())
+        .filter((address): address is string => Boolean(address)),
+    );
+    const external = participants.filter(
+      (participant) => !ownAddresses.has(participant.trim().toLowerCase()),
+    );
+    return (external.length ? external : participants).slice(0, 3).join(", ");
+  }
+  return getCounterpartyAddress(message);
+}
+
+function getConversationMessageCount(message: InboxMessage): number {
+  return getThreadSummary(message)?.messageCount || 1;
+}
+
+function getConversationUnreadCount(message: InboxMessage): number {
+  return getThreadSummary(message)?.unreadCount || (message.unread ? 1 : 0);
+}
+
+function getConversationAttachmentCount(message: InboxMessage): number {
+  return (
+    getThreadSummary(message)?.attachmentCount ||
+    message.metadata?.attachmentCount ||
+    getMessageAttachments(message).length
+  );
+}
+
+function threadSummaryToMessage(
+  thread: MailboxThreadSummary,
+  tab: EmailTab,
+): InboxMessage {
+  const outbound = tab === "sent";
+  const participant = thread.participants[0] || null;
+  return {
+    id: thread.latestMessageId,
+    direction: outbound ? "outbound" : "inbound",
+    kind: "email",
+    status: outbound ? "sent" : "received",
+    threadKey: thread.id,
+    fromAddress: outbound ? visibleMailboxAddress.value : participant,
+    fromName: outbound ? null : participant,
+    toAddress: outbound ? participant : visibleMailboxAddress.value,
+    subject: thread.subject,
+    body: "",
+    htmlBody: null,
+    preview: thread.latestSnippet,
+    folder: emailTabConfig[tab].folderParam,
+    readAt: thread.unreadCount > 0 ? null : thread.lastActivity,
+    unread: thread.unreadCount > 0,
+    agentSummary: null,
+    agentLabels: [],
+    metadata: {
+      attachmentCount: thread.attachmentCount,
+      threadSummary: thread,
+    },
+    unsubscribeAction: null,
+    createdBy: "",
+    approvedByUserId: null,
+    approvedAt: null,
+    sentAt: outbound ? thread.lastActivity : null,
+    createdAt: thread.lastActivity,
+  };
+}
+
 function syncSelectedMessages(nextMessages: InboxMessage[]) {
   if (
     expandedId.value &&
     !nextMessages.some((message) => message.id === expandedId.value)
   ) {
-    expandedId.value = null;
-    mobileThreadOpen.value = false;
+    clearOpenConversation();
   }
   const nextIds = new Set(nextMessages.map((message) => message.id));
   selectedMessageIds.value = new Set(
@@ -900,6 +1072,51 @@ function showMoveToast(
   });
 }
 
+async function undoThreadMoves(
+  moves: Array<{ id: string; folder: NonNullable<InboxMessage["folder"]> }>,
+  fromFolder: NonNullable<InboxMessage["folder"]>,
+) {
+  const results = await Promise.allSettled(
+    moves.map(({ id, folder }) =>
+      api.post(`/mailbox/threads/${encodeURIComponent(id)}/move`, {
+        folder,
+        fromFolder,
+      }),
+    ),
+  );
+  await Promise.all([loadMessages(), loadFolderCounts()]);
+  if (results.every((result) => result.status === "fulfilled")) {
+    toastSuccess(moves.length === 1 ? "Move undone." : "Moves undone.");
+  } else {
+    toast.error("Some conversation moves could not be undone.");
+  }
+}
+
+function showThreadMoveToast(
+  folder: "inbox" | "archive" | "trash",
+  moves: Array<{ id: string; folder: NonNullable<InboxMessage["folder"]> }>,
+) {
+  const count = moves.length;
+  const label =
+    folder === "archive"
+      ? count === 1
+        ? "Conversation archived."
+        : `${count} conversations archived.`
+      : folder === "trash"
+        ? count === 1
+          ? "Conversation moved to Trash."
+          : `${count} conversations moved to Trash.`
+        : count === 1
+          ? "Conversation restored to Inbox."
+          : `${count} conversations restored to Inbox.`;
+  toast.success(label, {
+    action: {
+      label: "Undo",
+      onClick: () => void undoThreadMoves(moves, folder),
+    },
+  });
+}
+
 function mailboxListRequest(tab: EmailTab): MailboxListRequest {
   const config = emailTabConfig[tab];
   return {
@@ -913,7 +1130,13 @@ function mailboxListRequest(tab: EmailTab): MailboxListRequest {
 }
 
 function cacheActiveMessages() {
-  if (!isEmailTab(activeTab.value) || !messagesLoaded.value) return;
+  if (
+    threadMode.value ||
+    !isEmailTab(activeTab.value) ||
+    !messagesLoaded.value
+  ) {
+    return;
+  }
   mailboxCache.setList(mailboxCacheScope(auth.user?.id), mailboxListRequest(activeTab.value), {
     messages: messages.value,
     total: total.value,
@@ -922,15 +1145,71 @@ function cacheActiveMessages() {
 
 function ignorePendingMessageResponses() {
   messageRequestId += 1;
+  threadRequestId += 1;
 }
 
-async function loadMessages() {
-  if (!isEmailTab(activeTab.value)) return;
-  const tab = activeTab.value;
-  const requestId = ++messageRequestId;
+function resetThreadPagination() {
+  threadCursorHistory.value = [null];
+  threadCursorIndex.value = 0;
+  threadNextCursor.value = null;
+}
+
+function clearOpenConversation() {
+  threadRequestId += 1;
+  clearDeliveryStatusRefreshes();
+  expandedId.value = null;
+  selectedThreadId.value = null;
+  loadedThreadId.value = null;
+  loadedThreadMessages.value = [];
+  threadDetailLoading.value = false;
+  threadDetailError.value = "";
+  mobileThreadOpen.value = false;
+}
+
+function currentThreadPageKey(): string {
+  return JSON.stringify([
+    activeTab.value,
+    searchQuery.value.trim(),
+    threadCursorHistory.value[threadCursorIndex.value] || null,
+  ]);
+}
+
+function rememberConversationScroll() {
+  if (!threadMode.value || !conversationScrollRef.value) return;
+  threadPageScrollOffsets.set(
+    renderedThreadPageKey || currentThreadPageKey(),
+    conversationScrollRef.value.scrollTop,
+  );
+}
+
+async function restoreConversationScroll(pageKey = currentThreadPageKey()) {
+  await nextTick();
+  if (!conversationScrollRef.value) return;
+  conversationScrollRef.value.scrollTop =
+    threadPageScrollOffsets.get(pageKey) || 0;
+}
+
+function isMissingThreadEndpoint(error: unknown): boolean {
+  const status =
+    error && typeof error === "object" && "status" in error
+      ? Number((error as { status?: unknown }).status)
+      : 0;
+  return status === 404 || status === 405;
+}
+
+async function loadLegacyMessages(tab: EmailTab, requestId: number) {
   const request = mailboxListRequest(tab);
   const scope = mailboxCacheScope(auth.user?.id);
-  const cached = mailboxCache.getList<InboxMessage>(scope, request);
+  const cachedEntry = mailboxCache.getList<InboxMessage>(scope, request);
+  const cached = cachedEntry?.messages.some(
+    (message) => message.metadata?.threadSummary,
+  )
+    ? null
+    : cachedEntry;
+  threadMode.value = false;
+  renderedThreadPageKey = null;
+  threadSummaries.value = [];
+  threadNextCursor.value = null;
   if (cached) {
     loading.value = false;
     messages.value = cached.messages;
@@ -943,25 +1222,106 @@ async function loadMessages() {
     messages.value = [];
     total.value = 0;
   }
+  const params = new URLSearchParams();
+  params.set("folder", request.folder);
+  if (request.status) params.set("status", request.status);
+  params.set("direction", request.direction);
+  if (request.search) params.set("q", request.search);
+  params.set("limit", String(request.limit));
+  params.set("offset", String(request.offset));
+  const data = await api.get<MessagesResponse>(
+    `/mailbox/messages?${params.toString()}`,
+  );
+  if (requestId !== messageRequestId) return;
+  mailboxCache.setList(scope, request, data);
+  messages.value = data.messages;
+  total.value = data.total;
+  messagesLoaded.value = true;
+  syncSelectedMessages(data.messages);
+}
+
+async function loadMessages() {
+  if (!isEmailTab(activeTab.value)) return;
+  const tab = activeTab.value;
+  const requestedThreadPageKey = currentThreadPageKey();
+  const requestId = ++messageRequestId;
+  rememberConversationScroll();
   error.value = "";
-  mobileThreadOpen.value = false;
+
   try {
-    const params = new URLSearchParams();
-    params.set("folder", request.folder);
-    if (request.status) params.set("status", request.status);
-    params.set("direction", request.direction);
-    if (request.search) params.set("q", request.search);
-    params.set("limit", String(request.limit));
-    params.set("offset", String(request.offset));
-    const data = await api.get<MessagesResponse>(
-      `/mailbox/messages?${params.toString()}`,
-    );
-    if (requestId !== messageRequestId) return;
-    mailboxCache.setList(scope, request, data);
-    messages.value = data.messages;
-    total.value = data.total;
-    messagesLoaded.value = true;
-    syncSelectedMessages(data.messages);
+    if (tab !== "drafts" && threadEndpointAvailable !== false) {
+      const cacheRequest: MailboxListRequest = {
+        ...mailboxListRequest(tab),
+        offset: threadCursorIndex.value * limit,
+      };
+      const cached = mailboxCache.getList<InboxMessage>(
+        mailboxCacheScope(auth.user?.id),
+        cacheRequest,
+      );
+      const cachedThreads = cached?.messages
+        .map((message) => message.metadata?.threadSummary)
+        .filter((thread): thread is MailboxThreadSummary => Boolean(thread));
+      if (cached && cachedThreads?.length === cached.messages.length) {
+        threadMode.value = true;
+        threadSummaries.value = cachedThreads;
+        threadNextCursor.value =
+          threadPageNextCursors.get(requestedThreadPageKey) ?? null;
+        messages.value = cached.messages;
+        total.value = cached.total;
+        messagesLoaded.value = true;
+        loading.value = false;
+        syncSelectedMessages(cached.messages);
+        renderedThreadPageKey = requestedThreadPageKey;
+        await restoreConversationScroll(requestedThreadPageKey);
+      } else {
+        loading.value = true;
+        messagesLoaded.value = false;
+      }
+      const params = new URLSearchParams({
+        folder: emailTabConfig[tab].folderParam,
+        limit: String(limit),
+      });
+      const query = searchQuery.value.trim();
+      const cursor = threadCursorHistory.value[threadCursorIndex.value];
+      if (query) params.set("q", query);
+      if (cursor) params.set("cursor", cursor);
+      try {
+        const data = await api.get<MailboxThreadsResponse>(
+          `/mailbox/threads?${params.toString()}`,
+        );
+        if (requestId !== messageRequestId) return;
+        threadEndpointAvailable = true;
+        threadMode.value = true;
+        threadSummaries.value = data.threads || [];
+        threadNextCursor.value = data.nextCursor || null;
+        threadPageNextCursors.set(
+          requestedThreadPageKey,
+          threadNextCursor.value,
+        );
+        messages.value = threadSummaries.value.map((thread) =>
+          threadSummaryToMessage(thread, tab),
+        );
+        total.value =
+          threadCursorIndex.value * limit +
+          messages.value.length +
+          (threadNextCursor.value ? 1 : 0);
+        mailboxCache.setList(
+          mailboxCacheScope(auth.user?.id),
+          cacheRequest,
+          { messages: messages.value, total: total.value },
+        );
+        messagesLoaded.value = true;
+        syncSelectedMessages(messages.value);
+        renderedThreadPageKey = requestedThreadPageKey;
+        await restoreConversationScroll(requestedThreadPageKey);
+        return;
+      } catch (err) {
+        if (!isMissingThreadEndpoint(err)) throw err;
+        threadEndpointAvailable = false;
+      }
+    }
+
+    await loadLegacyMessages(tab, requestId);
   } catch (err) {
     if (
       err instanceof Error &&
@@ -980,8 +1340,8 @@ async function loadMessages() {
 
 async function applySearch() {
   offset.value = 0;
-  expandedId.value = null;
-  mobileThreadOpen.value = false;
+  resetThreadPagination();
+  clearOpenConversation();
   clearSelectedMessages();
   await loadMessages();
 }
@@ -1000,9 +1360,168 @@ function updateMessageLocally(id: string, patch: Partial<InboxMessage>) {
   messages.value = messages.value.map((message) =>
     message.id === id ? { ...message, ...patch } : message,
   );
+  loadedThreadMessages.value = loadedThreadMessages.value.map((message) =>
+    message.id === id ? { ...message, ...patch } : message,
+  );
+}
+
+function updateThreadSummary(
+  threadId: string,
+  patch: Partial<MailboxThreadSummary>,
+) {
+  threadSummaries.value = threadSummaries.value.map((thread) =>
+    thread.id === threadId ? { ...thread, ...patch } : thread,
+  );
+  const latestId = threadSummaries.value.find(
+    (thread) => thread.id === threadId,
+  )?.latestMessageId;
+  if (latestId && patch.unreadCount !== undefined) {
+    updateMessageLocally(latestId, {
+      unread: patch.unreadCount > 0,
+      readAt: patch.unreadCount > 0 ? null : new Date().toISOString(),
+    });
+  }
+}
+
+async function fetchThreadMessages(
+  thread: MailboxThreadSummary,
+): Promise<InboxMessage[]> {
+  if (loadedThreadId.value === thread.id && loadedThreadMessages.value.length) {
+    return loadedThreadMessages.value;
+  }
+  const data = await api.get<MailboxThreadResponse>(
+    `/mailbox/threads/${encodeURIComponent(thread.id)}`,
+  );
+  if (selectedThreadId.value === thread.id) {
+    loadedThreadId.value = thread.id;
+    loadedThreadMessages.value = data.messages || [];
+  }
+  updateThreadSummary(thread.id, data.thread || thread);
+  return data.messages || [];
+}
+
+function clearDeliveryStatusRefreshes() {
+  deliveryStatusRefreshTimers.forEach((timer) => window.clearTimeout(timer));
+  deliveryStatusRefreshTimers.clear();
+  deliveryRefreshAttemptedIds.clear();
+  deliveryRetryConfirmId.value = null;
+}
+
+function scheduleDeliveryStatusRefresh(
+  message: InboxMessage,
+  delivery: MailboxDeliveryStatus,
+) {
+  const existing = deliveryStatusRefreshTimers.get(message.id);
+  if (existing) {
+    window.clearTimeout(existing);
+    deliveryStatusRefreshTimers.delete(message.id);
+  }
+  const unknownAfter = delivery.unknownAfter
+    ? parseApiDate(delivery.unknownAfter).getTime()
+    : Number.NaN;
+  if (
+    delivery.state !== "sending" ||
+    !Number.isFinite(unknownAfter) ||
+    deliveryRefreshAttemptedIds.has(message.id)
+  ) {
+    return;
+  }
+  const delay = Math.max(250, unknownAfter - Date.now() + 250);
+  const timer = window.setTimeout(() => {
+    deliveryStatusRefreshTimers.delete(message.id);
+    deliveryRefreshAttemptedIds.add(message.id);
+    const stillSelected =
+      expandedId.value === message.id ||
+      (Boolean(selectedThreadId.value) &&
+        loadedThreadMessages.value.some(
+          (candidate) => candidate.id === message.id,
+        ));
+    if (stillSelected) void loadDeliveryStatus(message);
+  }, delay);
+  deliveryStatusRefreshTimers.set(message.id, timer);
+}
+
+function isTerminalDeliveryState(state: MailboxDeliveryStatus["state"]): boolean {
+  return state === "sent" || state === "failed" || state === "rejected";
+}
+
+async function refreshMailboxMessage(id: string): Promise<InboxMessage | null> {
+  try {
+    const data = await api.get<{ message: InboxMessage }>(
+      `/mailbox/messages/${encodeURIComponent(id)}`,
+    );
+    updateMessageLocally(id, data.message);
+    cacheActiveMessages();
+    return data.message;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshDraftDeliveryState(id: string) {
+  const refreshed = await refreshMailboxMessage(id);
+  if (!refreshed) return;
+  if (refreshed.kind === "draft" && refreshed.status === "approved") {
+    await loadDeliveryStatus(refreshed);
+    return;
+  }
+  if (activeTab.value === "drafts") await loadMessages();
+  void loadFolderCounts();
+}
+
+async function loadDeliveryStatus(message: InboxMessage) {
+  if (message.kind !== "draft" || message.status !== "approved") return;
+  try {
+    const data = await api.get<{ delivery: MailboxDeliveryStatus }>(
+      `/mailbox/drafts/${encodeURIComponent(message.id)}/delivery-status`,
+    );
+    deliveryStatuses.value = {
+      ...deliveryStatuses.value,
+      [message.id]: data.delivery,
+    };
+    if (isTerminalDeliveryState(data.delivery.state)) {
+      await refreshMailboxMessage(message.id);
+      if (activeTab.value === "drafts") await loadMessages();
+      void loadFolderCounts();
+      return;
+    }
+    scheduleDeliveryStatusRefresh(message, data.delivery);
+  } catch {
+    // Older Core versions do not expose delivery reconciliation.
+  }
+}
+
+function isDeliveryUnknown(message: InboxMessage): boolean {
+  return deliveryStatuses.value[message.id]?.state === "delivery_unknown";
+}
+
+async function loadSelectedThread(thread: MailboxThreadSummary) {
+  const requestId = ++threadRequestId;
+  threadDetailLoading.value = true;
+  threadDetailError.value = "";
+  try {
+    const data = await api.get<MailboxThreadResponse>(
+      `/mailbox/threads/${encodeURIComponent(thread.id)}`,
+    );
+    if (requestId !== threadRequestId || selectedThreadId.value !== thread.id) {
+      return;
+    }
+    loadedThreadId.value = thread.id;
+    loadedThreadMessages.value = data.messages || [];
+    updateThreadSummary(thread.id, data.thread || thread);
+    void Promise.all(loadedThreadMessages.value.map(loadDeliveryStatus));
+    await markVisibleThreadRead();
+  } catch (err) {
+    if (requestId !== threadRequestId) return;
+    threadDetailError.value =
+      err instanceof Error ? err.message : "Failed to load this conversation";
+  } finally {
+    if (requestId === threadRequestId) threadDetailLoading.value = false;
+  }
 }
 
 async function markVisibleThreadRead() {
+  const threadId = selectedThreadId.value;
   const unread = selectedThreadMessages.value.filter(
     (message) => message.unread,
   );
@@ -1016,23 +1535,38 @@ async function markVisibleThreadRead() {
     });
   }
 
-  const results = await Promise.allSettled(
-    unread.map((message) =>
-      api.post(`/mailbox/messages/${message.id}/read`, { read: true }),
-    ),
-  );
+  const results = threadId
+    ? await Promise.allSettled([
+        api.post(
+          `/mailbox/threads/${encodeURIComponent(threadId)}/read`,
+          { read: true },
+        ),
+      ])
+    : await Promise.allSettled(
+        unread.map((message) =>
+          api.post(`/mailbox/messages/${message.id}/read`, { read: true }),
+        ),
+      );
   results.forEach((result, index) => {
     if (result.status !== "rejected") return;
-    const message = unread[index];
-    updateMessageLocally(message.id, {
-      readAt: message.readAt,
-      unread: message.unread,
-    });
+    const failed = threadId
+      ? unread
+      : unread[index]
+        ? [unread[index]]
+        : [];
+    failed.forEach((message) =>
+      updateMessageLocally(message.id, {
+        readAt: message.readAt,
+        unread: message.unread,
+      }),
+    );
   });
   cacheActiveMessages();
   void loadFolderCounts();
   if (results.some((result) => result.status === "rejected")) {
     toast.error("Some messages could not be marked as read.");
+  } else if (threadId) {
+    updateThreadSummary(threadId, { unreadCount: 0 });
   }
 }
 
@@ -1199,8 +1733,8 @@ function switchTab(tab: Tab) {
   if (activeTab.value === tab) return;
   activeTab.value = tab;
   offset.value = 0;
-  expandedId.value = null;
-  mobileThreadOpen.value = false;
+  resetThreadPagination();
+  clearOpenConversation();
   clearSelectedMessages();
   error.value = "";
   telegramError.value = "";
@@ -1238,10 +1772,24 @@ async function refreshMessagesPage() {
   }
 }
 
-function selectMessage(id: string) {
+async function selectMessage(id: string) {
+  clearDeliveryStatusRefreshes();
   expandedId.value = id;
   mobileThreadOpen.value = true;
-  void markVisibleThreadRead();
+  const thread = threadSummaries.value.find(
+    (candidate) => candidate.latestMessageId === id,
+  );
+  if (threadMode.value && thread) {
+    selectedThreadId.value = thread.id;
+    loadedThreadId.value = null;
+    loadedThreadMessages.value = [];
+    await loadSelectedThread(thread);
+    return;
+  }
+  selectedThreadId.value = null;
+  await markVisibleThreadRead();
+  const message = messages.value.find((candidate) => candidate.id === id);
+  if (message) void loadDeliveryStatus(message);
 }
 
 async function approveMessage(msg: InboxMessage) {
@@ -1266,6 +1814,7 @@ async function approveMessage(msg: InboxMessage) {
     mobileThreadOpen.value = previousMobileThreadOpen;
     syncSelectedMessages(previousMessages);
     cacheActiveMessages();
+    await refreshDraftDeliveryState(msg.id);
     error.value = err instanceof Error ? err.message : "Failed to approve";
   } finally {
     actionPending.value = null;
@@ -1353,7 +1902,140 @@ async function moveMessage(
   }
 }
 
+async function getConversationActionMessages(
+  message: InboxMessage,
+): Promise<InboxMessage[]> {
+  const thread = getThreadSummary(message);
+  if (!thread) return [message];
+  const detail = await fetchThreadMessages(thread);
+  const folder = isEmailTab(activeTab.value)
+    ? emailTabConfig[activeTab.value].folderParam
+    : message.folder;
+  const matching = detail.filter(
+    (candidate) => candidate.kind !== "draft" && candidate.folder === folder,
+  );
+  return matching.length ? matching : detail.filter((candidate) => candidate.kind !== "draft");
+}
+
+async function moveConversation(
+  message: InboxMessage,
+  folder: "inbox" | "archive" | "trash",
+) {
+  const thread = getThreadSummary(message);
+  if (!thread) {
+    await moveMessage(message, folder);
+    return;
+  }
+  if (inboxBusy.value) return;
+  deletePending.value = message.id;
+  error.value = "";
+  try {
+    const previousFolder = emailTabConfig[activeTab.value as EmailTab].folderParam;
+    const previousMessages = messages.value;
+    const previousThreads = threadSummaries.value;
+    const previousExpandedId = expandedId.value;
+    const previousSelectedThreadId = selectedThreadId.value;
+    const previousLoadedThreadId = loadedThreadId.value;
+    const previousLoadedMessages = loadedThreadMessages.value;
+    const previousSelectedIds = new Set(selectedMessageIds.value);
+    const previousMobileThreadOpen = mobileThreadOpen.value;
+    const wasOpen = selectedThreadId.value === thread.id;
+    messages.value = messages.value.filter((candidate) => candidate.id !== message.id);
+    threadSummaries.value = threadSummaries.value.filter(
+      (candidate) => candidate.id !== thread.id,
+    );
+    total.value = Math.max(0, total.value - 1);
+    clearSelectedMessages();
+    if (wasOpen) {
+      clearOpenConversation();
+    }
+
+    try {
+      await api.post(
+        `/mailbox/threads/${encodeURIComponent(thread.id)}/move`,
+        { folder, fromFolder: previousFolder },
+      );
+    } catch {
+      messages.value = previousMessages;
+      threadSummaries.value = previousThreads;
+      expandedId.value = previousExpandedId;
+      selectedThreadId.value = previousSelectedThreadId;
+      loadedThreadId.value = previousLoadedThreadId;
+      loadedThreadMessages.value = previousLoadedMessages;
+      selectedMessageIds.value = previousSelectedIds;
+      mobileThreadOpen.value = previousMobileThreadOpen;
+      await loadMessages();
+      error.value = "This conversation could not be moved. The folder was refreshed.";
+      return;
+    }
+    showThreadMoveToast(folder, [{ id: thread.id, folder: previousFolder }]);
+    await loadFolderCounts();
+  } catch (err) {
+    error.value =
+      err instanceof Error ? err.message : "Failed to move conversation";
+  } finally {
+    deletePending.value = null;
+  }
+}
+
+async function moveSelectedThreads(folder: "inbox" | "archive" | "trash") {
+  const selected = selectedMessages.value;
+  if (inboxBusy.value || selected.length === 0) return;
+  bulkActionPending.value = true;
+  error.value = "";
+  try {
+    const previousFolder = emailTabConfig[activeTab.value as EmailTab].folderParam;
+    const selectedLatestIds = new Set(selected.map((message) => message.id));
+    const selectedThreadIds = new Set(
+      selected
+        .map((message) => getThreadSummary(message)?.id)
+        .filter((id): id is string => Boolean(id)),
+    );
+    messages.value = messages.value.filter(
+      (message) => !selectedLatestIds.has(message.id),
+    );
+    threadSummaries.value = threadSummaries.value.filter(
+      (thread) => !selectedThreadIds.has(thread.id),
+    );
+    total.value = Math.max(0, total.value - selectedThreadIds.size);
+    clearSelectedMessages();
+    if (selectedThreadId.value && selectedThreadIds.has(selectedThreadId.value)) {
+      clearOpenConversation();
+    }
+    const moves = [...selectedThreadIds].map((id) => ({
+      id,
+      folder: previousFolder,
+    }));
+    const results = await Promise.allSettled(
+      [...selectedThreadIds].map((id) =>
+        api.post(`/mailbox/threads/${encodeURIComponent(id)}/move`, {
+          folder,
+          fromFolder: previousFolder,
+        }),
+      ),
+    );
+    const successfulMoves = moves.filter(
+      (_, index) => results[index]?.status === "fulfilled",
+    );
+    if (results.some((result) => result.status === "rejected")) {
+      await loadMessages();
+      error.value = "Some conversations could not be moved. The folder was refreshed.";
+    }
+    if (successfulMoves.length) showThreadMoveToast(folder, successfulMoves);
+    await loadFolderCounts();
+  } catch (err) {
+    error.value =
+      err instanceof Error ? err.message : "Failed to move conversations";
+  } finally {
+    bulkActionPending.value = false;
+  }
+}
+
 async function moveSelectedMessages(folder: "inbox" | "archive" | "trash") {
+  if (threadMode.value) {
+    await moveSelectedThreads(folder);
+    return;
+  }
   if (inboxBusy.value || selectedMessages.value.length === 0) return;
   bulkActionPending.value = true;
   error.value = "";
@@ -1412,6 +2094,63 @@ async function moveSelectedMessages(folder: "inbox" | "archive" | "trash") {
 
 async function deleteSelectedMessagesPermanently() {
   if (inboxBusy.value || selectedMessages.value.length === 0) return;
+  if (threadMode.value) {
+    const selected = selectedMessages.value;
+    const confirmed = window.confirm(
+      `Permanently delete ${selected.length} selected ${
+        selected.length === 1 ? "conversation" : "conversations"
+      }?`,
+    );
+    if (!confirmed) return;
+    bulkActionPending.value = true;
+    error.value = "";
+    try {
+      const groups = await Promise.all(
+        selected.map((message) => getConversationActionMessages(message)),
+      );
+      const targets = groups
+        .flat()
+        .filter(
+          (message, index, all) =>
+            all.findIndex((candidate) => candidate.id === message.id) === index,
+        );
+      const selectedIds = new Set(selected.map((message) => message.id));
+      const selectedThreadIds = new Set(
+        selected
+          .map((message) => getThreadSummary(message)?.id)
+          .filter((id): id is string => Boolean(id)),
+      );
+      messages.value = messages.value.filter(
+        (message) => !selectedIds.has(message.id),
+      );
+      threadSummaries.value = threadSummaries.value.filter(
+        (thread) => !selectedThreadIds.has(thread.id),
+      );
+      total.value = Math.max(0, total.value - selectedThreadIds.size);
+      clearSelectedMessages();
+      if (
+        selectedThreadId.value &&
+        selectedThreadIds.has(selectedThreadId.value)
+      ) {
+        clearOpenConversation();
+      }
+      const results = await Promise.allSettled(
+        targets.map((message) => api.delete(`/mailbox/messages/${message.id}`)),
+      );
+      if (results.some((result) => result.status === "rejected")) {
+        await loadMessages();
+        error.value =
+          "Some conversations could not be deleted. Trash was refreshed.";
+      }
+      await loadFolderCounts();
+    } catch (err) {
+      error.value =
+        err instanceof Error ? err.message : "Failed to delete conversations";
+    } finally {
+      bulkActionPending.value = false;
+    }
+    return;
+  }
   const confirmed = window.confirm(
     `Permanently delete ${selectedMessages.value.length} selected ${
       selectedMessages.value.length === 1 ? "message" : "messages"
@@ -1495,6 +2234,18 @@ async function markMessageRead(msg: InboxMessage, read = true) {
     error.value = "Some messages could not be updated. The folder was refreshed.";
   } else {
     cacheActiveMessages();
+    if (selectedThreadId.value) {
+      updateThreadSummary(selectedThreadId.value, {
+        unreadCount: read
+          ? 0
+          : Math.max(
+              1,
+              selectedThreadMessages.value.filter(
+                (message) => message.direction === "inbound",
+              ).length,
+            ),
+      });
+    }
     toast.success(read ? "Marked as read." : "Marked as unread.", {
       action: {
         label: "Undo",
@@ -1504,6 +2255,46 @@ async function markMessageRead(msg: InboxMessage, read = true) {
   }
   await loadFolderCounts();
   actionPending.value = null;
+}
+
+async function markConversationRead(message: InboxMessage, read: boolean) {
+  const thread = getThreadSummary(message);
+  if (!thread) {
+    await markMessageRead(message, read);
+    return;
+  }
+  if (inboxBusy.value) return;
+  actionPending.value = message.id;
+  error.value = "";
+  try {
+    await api.post(
+      `/mailbox/threads/${encodeURIComponent(thread.id)}/read`,
+      { read },
+    );
+    const readAt = new Date().toISOString();
+    const targets =
+      loadedThreadId.value === thread.id
+        ? loadedThreadMessages.value.filter(
+            (candidate) => candidate.direction === "inbound",
+          )
+        : [];
+    targets.forEach((target) =>
+      updateMessageLocally(target.id, {
+        readAt: read ? target.readAt || readAt : null,
+        unread: !read,
+      }),
+    );
+    updateThreadSummary(thread.id, {
+      unreadCount: read ? 0 : Math.max(1, targets.length || thread.messageCount),
+    });
+    toastSuccess(read ? "Conversation marked as read." : "Conversation marked as unread.");
+    await loadFolderCounts();
+  } catch (err) {
+    error.value =
+      err instanceof Error ? err.message : "Failed to update conversation";
+  } finally {
+    actionPending.value = null;
+  }
 }
 
 async function unsubscribeFromMessage(message: InboxMessage) {
@@ -1813,6 +2604,8 @@ async function saveDraft(sendNow = false) {
     forceCloseComposeModal();
     activeTab.value = sendNow ? "inbox" : "drafts";
     offset.value = 0;
+    resetThreadPagination();
+    clearOpenConversation();
     expandedId.value = sendNow ? null : draftId;
     await loadMessages();
     if (!sendNow) {
@@ -2188,27 +2981,220 @@ function formatChatRelativeTime(value: string): string {
   });
 }
 
-const totalPages = computed(() => Math.ceil(total.value / limit) || 1);
-const currentPage = computed(() => Math.floor(offset.value / limit) + 1);
-const pageRangeStart = computed(() => (total.value > 0 ? offset.value + 1 : 0));
+const totalPages = computed(() =>
+  threadMode.value
+    ? threadCursorIndex.value + (threadNextCursor.value ? 2 : 1)
+    : Math.ceil(total.value / limit) || 1,
+);
+const currentPage = computed(() =>
+  threadMode.value
+    ? threadCursorIndex.value + 1
+    : Math.floor(offset.value / limit) + 1,
+);
+const pageRangeStart = computed(() =>
+  messages.value.length > 0
+    ? threadMode.value
+      ? threadCursorIndex.value * limit + 1
+      : offset.value + 1
+    : 0,
+);
 const pageRangeEnd = computed(() =>
-  Math.min(offset.value + messages.value.length, total.value),
+  threadMode.value
+    ? threadCursorIndex.value * limit + messages.value.length
+    : Math.min(offset.value + messages.value.length, total.value),
+);
+const hasPreviousPage = computed(() =>
+  threadMode.value ? threadCursorIndex.value > 0 : currentPage.value > 1,
+);
+const hasNextPage = computed(() =>
+  threadMode.value
+    ? Boolean(threadNextCursor.value)
+    : currentPage.value < totalPages.value,
 );
 
 function prevPage() {
-  if (offset.value <= 0) return;
-  offset.value = Math.max(0, offset.value - limit);
-  mobileThreadOpen.value = false;
+  if (!hasPreviousPage.value) return;
+  rememberConversationScroll();
+  if (threadMode.value) {
+    threadCursorIndex.value -= 1;
+  } else {
+    offset.value = Math.max(0, offset.value - limit);
+  }
+  clearOpenConversation();
   clearSelectedMessages();
-  loadMessages();
+  void loadMessages();
 }
 
 function nextPage() {
-  if (currentPage.value >= totalPages.value) return;
-  offset.value += limit;
-  mobileThreadOpen.value = false;
+  if (!hasNextPage.value) return;
+  rememberConversationScroll();
+  if (threadMode.value) {
+    threadCursorHistory.value = [
+      ...threadCursorHistory.value.slice(0, threadCursorIndex.value + 1),
+      threadNextCursor.value,
+    ];
+    threadCursorIndex.value += 1;
+  } else {
+    offset.value += limit;
+  }
+  clearOpenConversation();
   clearSelectedMessages();
-  loadMessages();
+  void loadMessages();
+}
+
+async function resolveUnconfirmedDelivery(
+  message: InboxMessage,
+  resolution: "mark-sent" | "retry-anyway",
+) {
+  if (deliveryResolutionPending.value || inboxBusy.value) return;
+  deliveryResolutionPending.value = message.id;
+  try {
+    const result = await api.post<{ delivery?: MailboxDeliveryStatus }>(
+      `/mailbox/drafts/${encodeURIComponent(message.id)}/${resolution}`,
+    );
+    if (result.delivery) {
+      deliveryStatuses.value = {
+        ...deliveryStatuses.value,
+        [message.id]: result.delivery,
+      };
+    } else {
+      const next = { ...deliveryStatuses.value };
+      delete next[message.id];
+      deliveryStatuses.value = next;
+    }
+    toastSuccess(
+      resolution === "mark-sent"
+        ? "Marked as sent without resending."
+        : "Retry requested. Check delivery status before trying again.",
+    );
+    const thread = selectedThreadSummary.value;
+    if (thread) {
+      await loadSelectedThread(thread);
+    } else {
+      await loadMessages();
+    }
+    await loadFolderCounts();
+  } catch (err) {
+    await refreshDraftDeliveryState(message.id);
+    toastFromUnknown(err, "Failed to resolve delivery status");
+  } finally {
+    deliveryResolutionPending.value = null;
+    deliveryRetryConfirmId.value = null;
+  }
+}
+
+function keyboardTargetIsEditable(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest('[role="dialog"]')) return true;
+  if (target.closest(".conversation-open")) return false;
+  return Boolean(
+    target.closest(
+      'input, textarea, select, button, [contenteditable="true"]',
+    ),
+  );
+}
+
+function activeConversationMessage(): InboxMessage | null {
+  return (
+    messages.value.find((message) => message.id === expandedId.value) ||
+    messages.value.find((message) => selectedMessageIds.value.has(message.id)) ||
+    null
+  );
+}
+
+async function moveConversationSelection(direction: -1 | 1) {
+  if (!messages.value.length) return;
+  const currentIndex = messages.value.findIndex(
+    (message) => message.id === expandedId.value,
+  );
+  const nextIndex =
+    currentIndex < 0
+      ? direction > 0
+        ? 0
+        : messages.value.length - 1
+      : Math.min(
+          messages.value.length - 1,
+          Math.max(0, currentIndex + direction),
+        );
+  const message = messages.value[nextIndex];
+  if (!message || message.id === expandedId.value) return;
+  await selectMessage(message.id);
+  keyboardStatus.value = `${nextIndex + 1} of ${messages.value.length}: ${getMessageSubject(message)}`;
+  await nextTick();
+  const row = conversationScrollRef.value?.querySelector<HTMLElement>(
+    `[data-message-id="${message.id.replace(/["\\]/g, "\\$&")}"]`,
+  );
+  row?.scrollIntoView?.({ block: "nearest" });
+}
+
+async function handleMailboxKeyboardShortcut(event: KeyboardEvent) {
+  if (
+    event.defaultPrevented ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    activeTab.value === "telegram" ||
+    composeOpen.value ||
+    composeDiscardConfirmOpen.value ||
+    keyboardTargetIsEditable(event.target)
+  ) {
+    return;
+  }
+  const key = event.key.toLowerCase();
+  if (key === "j" || event.key === "ArrowDown") {
+    event.preventDefault();
+    await moveConversationSelection(1);
+    return;
+  }
+  if (key === "k" || event.key === "ArrowUp") {
+    event.preventDefault();
+    await moveConversationSelection(-1);
+    return;
+  }
+
+  const message = activeConversationMessage();
+  if (!message || inboxBusy.value) return;
+  if (key === "x") {
+    event.preventDefault();
+    toggleMessageSelected(
+      message.id,
+      !selectedMessageIds.value.has(message.id),
+    );
+    keyboardStatus.value = selectedMessageIds.value.has(message.id)
+      ? "Conversation selected."
+      : "Conversation unselected.";
+    return;
+  }
+  if (key === "e") {
+    if (activeTab.value === "archive" || activeTab.value === "trash") return;
+    event.preventDefault();
+    await moveConversation(message, "archive");
+    keyboardStatus.value = "Conversation archived.";
+    return;
+  }
+  if (key === "u") {
+    event.preventDefault();
+    const read = getConversationUnreadCount(message) > 0;
+    await markConversationRead(message, read);
+    keyboardStatus.value = read
+      ? "Conversation marked as read."
+      : "Conversation marked as unread.";
+    return;
+  }
+  if (key === "r" && !isDraftMessage(message)) {
+    event.preventDefault();
+    await selectMessage(message.id);
+    if (selectedMessage.value && !isDraftMessage(selectedMessage.value)) {
+      openComposeModal(selectedMessage.value);
+    }
+    return;
+  }
+  if (event.key === "Delete" || event.key === "#") {
+    if (activeTab.value === "trash") return;
+    event.preventDefault();
+    await moveConversation(message, "trash");
+    keyboardStatus.value = "Conversation moved to Trash.";
+  }
 }
 
 onMounted(() => {
@@ -2220,9 +3206,12 @@ onMounted(() => {
     await loadMessages();
     void Promise.all([loadMailboxHealth(), loadFolderCounts()]);
   })();
+  window.addEventListener("keydown", handleMailboxKeyboardShortcut);
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleMailboxKeyboardShortcut);
+  clearDeliveryStatusRefreshes();
   for (const observer of activeEmailFrameObservers) {
     observer.disconnect();
   }
@@ -2480,11 +3469,13 @@ onBeforeUnmount(() => {
               </aside>
 
               <section
+                ref="conversationScrollRef"
                 class="conversation-list"
                 :class="{
                   'conversation-list--mobile-hidden': mobileThreadOpen,
                 }"
                 aria-label="Conversations"
+                aria-keyshortcuts="J K ArrowDown ArrowUp X E U R Delete #"
               >
                 <PageLoading
                   v-if="loading"
@@ -2511,7 +3502,7 @@ onBeforeUnmount(() => {
                               : 'false'
                         "
                         :disabled="inboxBusy"
-                        aria-label="Select all messages on this page"
+                        aria-label="Select all conversations on this page"
                         @change="
                           setAllMessagesOnPageSelected(
                             ($event.target as HTMLInputElement).checked,
@@ -2565,11 +3556,27 @@ onBeforeUnmount(() => {
                         Clear
                       </Button>
                     </div>
+                    <details v-else class="mail-keyboard-help">
+                      <summary>
+                        <UiIcon name="HelpCircle" :size="14" aria-hidden="true" />
+                        Shortcuts
+                      </summary>
+                      <p>
+                        <kbd>J</kbd>/<kbd>K</kbd> or <kbd>↑</kbd>/<kbd>↓</kbd> move ·
+                        <kbd>X</kbd> select ·
+                        <kbd>E</kbd> archive · <kbd>U</kbd> read/unread ·
+                        <kbd>R</kbd> reply · <kbd>#</kbd> trash
+                      </p>
+                    </details>
                   </div>
+                  <p class="sr-only" role="status" aria-live="polite">
+                    {{ keyboardStatus }}
+                  </p>
                   <div class="conversation-scroll">
                   <article
                     v-for="message in messages"
                     :key="message.id"
+                    :data-message-id="message.id"
                     class="conversation-item"
                     :class="{
                       'conversation-item--active':
@@ -2596,11 +3603,12 @@ onBeforeUnmount(() => {
                     <button
                       type="button"
                       class="conversation-open"
+                      :aria-current="selectedMessage?.id === message.id ? 'true' : undefined"
                       @click="selectMessage(message.id)"
                     >
                       <div class="conversation-item__content">
                         <div class="conversation-item__meta">
-                          <strong>{{ getCounterpartyAddress(message) }}</strong>
+                          <strong>{{ getConversationParticipants(message) }}</strong>
                         </div>
                         <p class="conversation-item__summary">
                           <span class="conversation-item__subject">
@@ -2609,6 +3617,7 @@ onBeforeUnmount(() => {
                           <span class="conversation-item__separator">-</span>
                           <span
                             v-if="
+                              !threadMode &&
                               message.direction === 'inbound' &&
                               message.toAddress
                             "
@@ -2628,11 +3637,122 @@ onBeforeUnmount(() => {
                         >
                           {{ draftStatusLabel(message) }}
                         </span>
+                        <span
+                          v-if="getConversationMessageCount(message) > 1"
+                          class="conversation-cue"
+                          :aria-label="`${getConversationMessageCount(message)} messages`"
+                          title="Messages in conversation"
+                        >
+                          {{ getConversationMessageCount(message) }}
+                        </span>
+                        <span
+                          v-if="getConversationUnreadCount(message) > 1"
+                          class="conversation-cue conversation-cue--unread"
+                          :aria-label="`${getConversationUnreadCount(message)} unread messages`"
+                        >
+                          {{ getConversationUnreadCount(message) }} unread
+                        </span>
+                        <UiIcon
+                          v-if="getConversationAttachmentCount(message) > 0"
+                          class="conversation-attachment-cue"
+                          name="Paperclip"
+                          :size="14"
+                          :aria-label="`${getConversationAttachmentCount(message)} attachments`"
+                        />
                         <time class="conversation-item__date">
                           {{ formatRelativeDate(message.createdAt) }}
                         </time>
                       </span>
                     </button>
+                    <div
+                      v-if="!isDraftMessage(message)"
+                      class="conversation-quick-actions"
+                      aria-label="Conversation actions"
+                    >
+                      <Button
+                        color="ghost"
+                        shape="soft"
+                        size="small"
+                        icon-only
+                        type="button"
+                        :aria-label="
+                          activeTab === 'archive' || activeTab === 'trash'
+                            ? 'Restore conversation to Inbox'
+                            : 'Archive conversation'
+                        "
+                        :title="
+                          activeTab === 'archive' || activeTab === 'trash'
+                            ? 'Restore to Inbox'
+                            : 'Archive'
+                        "
+                        :aria-keyshortcuts="
+                          activeTab === 'archive' || activeTab === 'trash'
+                            ? undefined
+                            : 'E'
+                        "
+                        :disabled="inboxBusy"
+                        @click.stop="
+                          moveConversation(
+                            message,
+                            activeTab === 'archive' || activeTab === 'trash'
+                              ? 'inbox'
+                              : 'archive',
+                          )
+                        "
+                      >
+                        <UiIcon
+                          :name="
+                            activeTab === 'archive' || activeTab === 'trash'
+                              ? 'Inbox'
+                              : 'Archive'
+                          "
+                          :size="15"
+                          aria-hidden="true"
+                        />
+                      </Button>
+                      <Button
+                        v-if="activeTab !== 'trash'"
+                        color="ghost"
+                        shape="soft"
+                        size="small"
+                        icon-only
+                        type="button"
+                        :aria-label="
+                          getConversationUnreadCount(message) > 0
+                            ? 'Mark conversation as read'
+                            : 'Mark conversation as unread'
+                        "
+                        :title="
+                          getConversationUnreadCount(message) > 0
+                            ? 'Mark read'
+                            : 'Mark unread'
+                        "
+                        aria-keyshortcuts="U"
+                        :disabled="inboxBusy"
+                        @click.stop="
+                          markConversationRead(
+                            message,
+                            getConversationUnreadCount(message) > 0,
+                          )
+                        "
+                      >
+                        <UiIcon name="Mail" :size="15" aria-hidden="true" />
+                      </Button>
+                      <Button
+                        color="ghost"
+                        shape="soft"
+                        size="small"
+                        icon-only
+                        type="button"
+                        aria-label="Move conversation to Trash"
+                        title="Move to Trash"
+                        aria-keyshortcuts="# Delete"
+                        :disabled="inboxBusy"
+                        @click.stop="moveConversation(message, 'trash')"
+                      >
+                        <UiIcon name="Trash2" :size="15" aria-hidden="true" />
+                      </Button>
+                    </div>
                   </article>
                   </div>
                 </template>
@@ -2720,17 +3840,22 @@ onBeforeUnmount(() => {
                 >
                   <div class="pagination-nav">
                     <Button color="ghost" shape="soft" size="small" icon-only type="button"
-                      :disabled="currentPage <= 1"
+                      :disabled="!hasPreviousPage"
                       aria-label="Previous page"
                       @click="prevPage"
                     >
                       ◂
                     </Button>
                     <span class="page-label">
-                      {{ pageRangeStart }}–{{ pageRangeEnd }} of {{ total }}
+                      <template v-if="threadMode">
+                        Page {{ currentPage }} · {{ pageRangeStart }}–{{ pageRangeEnd }}
+                      </template>
+                      <template v-else>
+                        {{ pageRangeStart }}–{{ pageRangeEnd }} of {{ total }}
+                      </template>
                     </span>
                     <Button color="ghost" shape="soft" size="small" icon-only type="button"
-                      :disabled="currentPage >= totalPages"
+                      :disabled="!hasNextPage"
                       aria-label="Next page"
                       @click="nextPage"
                     >
@@ -2763,8 +3888,10 @@ onBeforeUnmount(() => {
                     <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       title="Reply"
                       aria-label="Reply"
+                      aria-keyshortcuts="R"
                       :disabled="
                         inboxBusy ||
+                        selectedThreadDetailUnavailable ||
                         isDraftMessage(selectedMessage)
                       "
                       @click="openComposeModal(selectedMessage)"
@@ -2776,6 +3903,7 @@ onBeforeUnmount(() => {
                       aria-label="Forward"
                       :disabled="
                         inboxBusy ||
+                        selectedThreadDetailUnavailable ||
                         isDraftMessage(selectedMessage)
                       "
                       @click="openComposeModal(selectedMessage, 'forward')"
@@ -2790,7 +3918,7 @@ onBeforeUnmount(() => {
                       title="Restore to inbox"
                       aria-label="Restore to inbox"
                       :disabled="inboxBusy || isDraftMessage(selectedMessage)"
-                      @click="moveMessage(selectedMessage, 'inbox')"
+                      @click="moveConversation(selectedMessage, 'inbox')"
                     >
                       <UiIcon name="Inbox" :size="16" aria-hidden="true" />
                     </Button>
@@ -2798,8 +3926,9 @@ onBeforeUnmount(() => {
                       v-else
                       title="Archive"
                       aria-label="Archive"
+                      aria-keyshortcuts="E"
                       :disabled="inboxBusy || isDraftMessage(selectedMessage)"
-                      @click="moveMessage(selectedMessage, 'archive')"
+                      @click="moveConversation(selectedMessage, 'archive')"
                     >
                       <UiIcon name="Archive" :size="16" aria-hidden="true" />
                     </Button>
@@ -2810,9 +3939,10 @@ onBeforeUnmount(() => {
                       :aria-label="
                         selectedThreadIsUnread ? 'Mark read' : 'Mark unread'
                       "
+                      aria-keyshortcuts="U"
                       :disabled="inboxBusy || isDraftMessage(selectedMessage)"
                       @click="
-                        markMessageRead(selectedMessage, selectedThreadIsUnread)
+                        markConversationRead(selectedMessage, selectedThreadIsUnread)
                       "
                     >
                       <UiIcon name="Mail" :size="16" aria-hidden="true" />
@@ -2820,12 +3950,13 @@ onBeforeUnmount(() => {
                     <Button color="ghost" shape="soft" size="compact" icon-only type="button"
                       title="Move to trash"
                       aria-label="Move to trash"
+                      aria-keyshortcuts="# Delete"
                       :disabled="
                         inboxBusy ||
                         isDraftMessage(selectedMessage) ||
                         selectedMessage.folder === 'trash'
                       "
-                      @click="moveMessage(selectedMessage, 'trash')"
+                      @click="moveConversation(selectedMessage, 'trash')"
                     >
                       <UiIcon name="Trash2" :size="16" aria-hidden="true" />
                     </Button>
@@ -2833,11 +3964,13 @@ onBeforeUnmount(() => {
                 </header>
 
                 <div class="thread-heading">
-                  <h2>{{ getMessageSubject(selectedMessage) }}</h2>
+                  <h2>
+                    {{ selectedThreadSummary?.subject || getMessageSubject(selectedMessage) }}
+                  </h2>
                   <p>
-                    {{ selectedThreadMessages.length }}
+                    {{ selectedThreadSummary?.messageCount || selectedThreadMessages.length }}
                     {{
-                      selectedThreadMessages.length === 1
+                      (selectedThreadSummary?.messageCount || selectedThreadMessages.length) === 1
                         ? "message"
                         : "messages"
                     }}
@@ -2846,6 +3979,30 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="thread-scroll">
+                  <PageLoading
+                    v-if="threadDetailLoading"
+                    compact
+                    class="thread-detail-loading"
+                    label="Loading conversation..."
+                  />
+                  <div
+                    v-else-if="threadDetailError"
+                    class="state-card state-card--error thread-detail-error"
+                    role="alert"
+                  >
+                    <p>{{ threadDetailError }}</p>
+                    <Button
+                      v-if="selectedThreadSummary"
+                      color="outline"
+                      shape="soft"
+                      size="compact"
+                      type="button"
+                      @click="loadSelectedThread(selectedThreadSummary)"
+                    >
+                      Try again
+                    </Button>
+                  </div>
+                  <template v-else>
                   <article
                     v-for="message in selectedThreadMessages"
                     :key="message.id"
@@ -2915,6 +4072,86 @@ onBeforeUnmount(() => {
                           </Button>
                         </div>
                       </div>
+
+                      <section
+                        v-if="isDeliveryUnknown(message)"
+                        class="delivery-unconfirmed"
+                        aria-label="Delivery needs confirmation"
+                        aria-live="polite"
+                      >
+                        <div>
+                          <strong>Delivery could not be confirmed</strong>
+                          <p>
+                            This email may already have arrived. Mark it as sent
+                            if you verified delivery, or retry only if you accept
+                            the risk of a duplicate.
+                          </p>
+                        </div>
+                        <div class="delivery-unconfirmed__actions">
+                          <Button
+                            color="outline"
+                            shape="soft"
+                            size="compact"
+                            type="button"
+                            :disabled="
+                              Boolean(deliveryResolutionPending) ||
+                              !deliveryStatuses[message.id]?.canMarkSent
+                            "
+                            @click="resolveUnconfirmedDelivery(message, 'mark-sent')"
+                          >
+                            {{
+                              deliveryResolutionPending === message.id
+                                ? "Working…"
+                                : "Mark as sent"
+                            }}
+                          </Button>
+                          <Button
+                            v-if="deliveryRetryConfirmId !== message.id"
+                            color="danger"
+                            shape="soft"
+                            size="compact"
+                            type="button"
+                            :disabled="
+                              Boolean(deliveryResolutionPending) ||
+                              !deliveryStatuses[message.id]?.canRetryAnyway
+                            "
+                            @click="deliveryRetryConfirmId = message.id"
+                          >
+                            Retry anyway
+                          </Button>
+                          <template v-else>
+                            <Button
+                              color="outline"
+                              shape="soft"
+                              size="compact"
+                              type="button"
+                              :disabled="Boolean(deliveryResolutionPending)"
+                              @click="deliveryRetryConfirmId = null"
+                            >
+                              Cancel retry
+                            </Button>
+                            <Button
+                              color="danger"
+                              shape="soft"
+                              size="compact"
+                              type="button"
+                              :disabled="Boolean(deliveryResolutionPending)"
+                              @click="
+                                resolveUnconfirmedDelivery(
+                                  message,
+                                  'retry-anyway',
+                                )
+                              "
+                            >
+                              {{
+                                deliveryResolutionPending === message.id
+                                  ? "Retrying…"
+                                  : "Confirm retry"
+                              }}
+                            </Button>
+                          </template>
+                        </div>
+                      </section>
 
                       <div
                         v-if="
@@ -3018,6 +4255,7 @@ onBeforeUnmount(() => {
                       </div>
                     </div>
                   </article>
+                  </template>
                 </div>
               </section>
               <section v-else class="thread-pane thread-pane--empty">
@@ -3280,6 +4518,18 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .agent-page {
   display: flex;
   flex-direction: column;
@@ -4093,6 +5343,57 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.mail-keyboard-help {
+  position: relative;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+}
+
+.mail-keyboard-help summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 7px;
+  border-radius: var(--ui-radius-sm, 6px);
+  cursor: pointer;
+  list-style: none;
+}
+
+.mail-keyboard-help summary::-webkit-details-marker {
+  display: none;
+}
+
+.mail-keyboard-help summary:hover,
+.mail-keyboard-help summary:focus-visible {
+  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  color: var(--ui-text, var(--color-text));
+  outline: none;
+}
+
+.mail-keyboard-help[open] p {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 6px);
+  background: var(--ui-surface, var(--color-bg));
+  box-shadow: var(--ui-shadow-md, 0 12px 32px rgba(0, 0, 0, 0.14));
+  color: var(--ui-text-muted, var(--color-text-muted));
+  line-height: 1.7;
+}
+
+.mail-keyboard-help kbd {
+  color: var(--ui-text, var(--color-text));
+  font: inherit;
+  font-weight: 800;
+}
+
 .bulk-mail-btn {
   display: inline-flex;
   align-items: center;
@@ -4142,6 +5443,35 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--color-border);
   background: transparent;
   cursor: pointer;
+}
+
+.conversation-quick-actions {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: var(--ui-radius-sm, 6px);
+  background: var(--ui-surface, var(--color-bg));
+  box-shadow: var(--ui-shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.08));
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.conversation-item:hover .conversation-quick-actions,
+.conversation-item:focus-within .conversation-quick-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.conversation-quick-actions :deep(.me3-btn--icon-only) {
+  min-width: 32px;
+  min-height: 32px;
 }
 
 .conversation-open {
@@ -4249,6 +5579,30 @@ onBeforeUnmount(() => {
   color: var(--color-text-muted);
 }
 
+.conversation-cue {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-height: 20px;
+  padding: 1px 6px;
+  border: 1px solid var(--ui-border, var(--color-border));
+  border-radius: 999px;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.conversation-cue--unread {
+  border-color: var(--ui-text, var(--color-text));
+  color: var(--ui-text, var(--color-text));
+}
+
+.conversation-attachment-cue {
+  flex-shrink: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+}
+
 .conversation-item__date {
   justify-self: end;
   align-self: start;
@@ -4312,6 +5666,46 @@ onBeforeUnmount(() => {
 .thread-scroll {
   flex: 1;
   padding: 0 0 24px;
+}
+
+.thread-detail-loading,
+.thread-detail-error {
+  margin: 18px 24px;
+}
+
+.delivery-unconfirmed {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--ui-warning, #b26a00) 48%,
+    var(--ui-border, var(--color-border))
+  );
+  border-radius: var(--ui-radius-sm, 6px);
+  background: color-mix(
+    in srgb,
+    var(--ui-warning, #b26a00) 8%,
+    var(--ui-surface, var(--color-bg))
+  );
+}
+
+.delivery-unconfirmed strong {
+  color: var(--ui-text, var(--color-text));
+}
+
+.delivery-unconfirmed p {
+  margin: 4px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.delivery-unconfirmed__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (min-width: 641px) {
@@ -5448,6 +6842,11 @@ onBeforeUnmount(() => {
     gap: 4px;
   }
 
+  .mail-keyboard-help,
+  .conversation-quick-actions {
+    display: none;
+  }
+
   .bulk-mail-btn {
     min-height: 30px;
     padding: 0 7px;
@@ -5468,6 +6867,10 @@ onBeforeUnmount(() => {
 
   .conversation-item__trailing {
     gap: 4px;
+  }
+
+  .conversation-cue--unread {
+    display: none;
   }
 
   .conversation-select {
@@ -5539,6 +6942,10 @@ onBeforeUnmount(() => {
   .message-card__header {
     display: grid;
     gap: 6px;
+  }
+
+  .delivery-unconfirmed__actions {
+    display: grid;
   }
 
   .thread-scroll {

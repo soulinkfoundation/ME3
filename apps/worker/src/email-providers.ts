@@ -631,6 +631,16 @@ export class EmailProviderInputError extends Error {
   }
 }
 
+export class EmailProviderDeliveryUnknownError extends Error {
+  constructor(
+    message = "Email delivery could not be confirmed. Check delivery status before retrying.",
+    public readonly status = 502,
+  ) {
+    super(message);
+    this.name = "EmailProviderDeliveryUnknownError";
+  }
+}
+
 class EmailProviderSendError extends Error {
   constructor(
     message: string,
@@ -793,47 +803,19 @@ export async function sendEmailWithProvider(
     }),
   };
 
+  let result: EmailProviderSendResult;
   try {
-    const result = await resolved.adapter.send(
+    result = await resolved.adapter.send(
       env,
       resolved.config,
       resolved.secret,
       message,
     );
-    const sentAt = new Date().toISOString();
-    await insertEmailSendAudit(env, {
-      auditId,
-      ownerId,
-      mailboxId: input.mailboxId || null,
-      mailboxMessageId: input.mailboxMessageId || null,
-      providerId: resolved.providerId,
-      providerMessageId: result.providerMessageId,
-      providerStatus: result.providerStatus,
-      status: "sent",
-      purpose: input.purpose,
-      fromAddress,
-      toAddress,
-      subject,
-      threadKey: input.threadKey || null,
-      messageIdHeader: input.messageIdHeader || null,
-      inReplyTo: input.inReplyTo || null,
-      referencesHeader: input.referencesHeader || null,
-      metadata: { raw: result.raw, source: resolved.source, ...(input.metadata || {}) },
-      errorMessage: null,
-      createdBy: input.createdBy || "owner",
-      approvedByUserId: input.approvedByUserId || null,
-      requestedAt,
-      sentAt,
-    });
-    return {
-      auditId,
-      providerId: resolved.providerId,
-      providerLabel: resolved.adapter.label,
-      providerMessageId: result.providerMessageId,
-      providerStatus: result.providerStatus,
-      sentAt,
-    };
   } catch (error) {
+    if (!isDefinitiveProviderFailure(error)) {
+      throw new EmailProviderDeliveryUnknownError();
+    }
+
     const sendError = normalizeSendError(error);
     await insertEmailSendAudit(env, {
       auditId,
@@ -861,6 +843,47 @@ export async function sendEmailWithProvider(
     });
     throw new EmailProviderInputError(sendError.message, sendError.status);
   }
+
+  const sentAt = new Date().toISOString();
+  try {
+    await insertEmailSendAudit(env, {
+      auditId,
+      ownerId,
+      mailboxId: input.mailboxId || null,
+      mailboxMessageId: input.mailboxMessageId || null,
+      providerId: resolved.providerId,
+      providerMessageId: result.providerMessageId,
+      providerStatus: result.providerStatus,
+      status: "sent",
+      purpose: input.purpose,
+      fromAddress,
+      toAddress,
+      subject,
+      threadKey: input.threadKey || null,
+      messageIdHeader: input.messageIdHeader || null,
+      inReplyTo: input.inReplyTo || null,
+      referencesHeader: input.referencesHeader || null,
+      metadata: { raw: result.raw, source: resolved.source, ...(input.metadata || {}) },
+      errorMessage: null,
+      createdBy: input.createdBy || "owner",
+      approvedByUserId: input.approvedByUserId || null,
+      requestedAt,
+      sentAt,
+    });
+  } catch {
+    throw new EmailProviderDeliveryUnknownError(
+      "The email provider accepted the message, but ME3 could not confirm delivery. Check delivery status before retrying.",
+    );
+  }
+
+  return {
+    auditId,
+    providerId: resolved.providerId,
+    providerLabel: resolved.adapter.label,
+    providerMessageId: result.providerMessageId,
+    providerStatus: result.providerStatus,
+    sentAt,
+  };
 }
 
 async function applyProviderUpdate(
@@ -1943,6 +1966,13 @@ function normalizeSendError(error: unknown): {
     code: null,
     raw: null,
   };
+}
+
+function isDefinitiveProviderFailure(error: unknown): boolean {
+  return (
+    error instanceof EmailProviderInputError ||
+    (error instanceof EmailProviderSendError && error.code !== "CONNECTION_CLOSED")
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
