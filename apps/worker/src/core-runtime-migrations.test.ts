@@ -22,6 +22,13 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("agent_turn_results")).toBe(true);
     expect(db.tables.has("agent_tool_executions")).toBe(true);
     expect(db.tables.has("owner_content_search")).toBe(true);
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("CREATE VIRTUAL TABLE IF NOT EXISTS owner_content_search") &&
+          sql.includes("prefix = '2 3'"),
+      ),
+    ).toBe(true);
     expect(db.columns.get("financial_entries")?.has("project_id")).toBe(true);
     expect(db.columns.get("social_packages")?.has("source_type")).toBe(true);
     expect(db.columns.get("social_packages")?.has("source_ref")).toBe(true);
@@ -194,14 +201,6 @@ class RuntimeMigrationDb {
   prepare(sql: string) {
     return new RuntimeMigrationStatement(this, sql);
   }
-
-  async exec(sql: string) {
-    this.statements.push(sql);
-    if (sql.includes("CREATE VIRTUAL TABLE IF NOT EXISTS owner_content_search")) {
-      this.tables.add("owner_content_search");
-    }
-    return { count: 1, duration: 0 };
-  }
 }
 
 class RuntimeMigrationStatement {
@@ -255,6 +254,10 @@ class RuntimeMigrationStatement {
     }
     if (this.sql.includes("CREATE TABLE IF NOT EXISTS agent_tool_executions")) {
       this.db.tables.add("agent_tool_executions");
+      return { success: true };
+    }
+    if (this.sql.includes("CREATE VIRTUAL TABLE IF NOT EXISTS owner_content_search")) {
+      this.db.tables.add("owner_content_search");
       return { success: true };
     }
     if (this.sql.includes("ALTER TABLE mission_tasks")) {

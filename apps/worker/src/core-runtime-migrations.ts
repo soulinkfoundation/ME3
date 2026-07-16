@@ -548,8 +548,8 @@ async function applyOwnerContentSearchMigration(db: D1Database): Promise<void> {
   if (!(await tableExists(db, "journal_entries")) || !(await tableExists(db, "mission_tasks"))) {
     throw new Error("Cannot apply 0019_owner_content_search: source tables are missing");
   }
-  await db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS owner_content_search USING fts5(
+  const statements = [
+    `CREATE VIRTUAL TABLE IF NOT EXISTS owner_content_search USING fts5(
       user_id UNINDEXED,
       source_type UNINDEXED,
       source_id UNINDEXED,
@@ -562,9 +562,8 @@ async function applyOwnerContentSearchMigration(db: D1Database): Promise<void> {
       updated_at UNINDEXED,
       tokenize = 'unicode61 remove_diacritics 2',
       prefix = '2 3'
-    );
-
-    CREATE TRIGGER IF NOT EXISTS owner_content_search_journal_insert
+    )`,
+    `CREATE TRIGGER IF NOT EXISTS owner_content_search_journal_insert
     AFTER INSERT ON journal_entries
     WHEN NEW.archived_at IS NULL
     BEGIN
@@ -575,9 +574,8 @@ async function applyOwnerContentSearchMigration(db: D1Database): Promise<void> {
         COALESCE(NULLIF(TRIM(NEW.title), ''), 'Journal entry for ' || NEW.entry_date),
         NEW.body, NULL, '', NULL, NEW.entry_date, NEW.updated_at
       );
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS owner_content_search_journal_update
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS owner_content_search_journal_update
     AFTER UPDATE ON journal_entries
     BEGIN
       DELETE FROM owner_content_search
@@ -588,16 +586,14 @@ async function applyOwnerContentSearchMigration(db: D1Database): Promise<void> {
              COALESCE(NULLIF(TRIM(NEW.title), ''), 'Journal entry for ' || NEW.entry_date),
              NEW.body, NULL, '', NULL, NEW.entry_date, NEW.updated_at
       WHERE NEW.archived_at IS NULL;
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS owner_content_search_journal_delete
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS owner_content_search_journal_delete
     AFTER DELETE ON journal_entries
     BEGIN
       DELETE FROM owner_content_search
       WHERE user_id = OLD.user_id AND source_type = 'journal' AND source_id = OLD.id;
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS owner_content_search_task_insert
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS owner_content_search_task_insert
     AFTER INSERT ON mission_tasks
     WHEN NEW.archived_at IS NULL
     BEGIN
@@ -608,9 +604,8 @@ async function applyOwnerContentSearchMigration(db: D1Database): Promise<void> {
         COALESCE((SELECT name FROM mission_projects WHERE id = NEW.project_id AND user_id = NEW.user_id LIMIT 1), ''),
         NEW.status, NEW.due_at, NEW.updated_at
       );
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS owner_content_search_task_update
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS owner_content_search_task_update
     AFTER UPDATE ON mission_tasks
     BEGIN
       DELETE FROM owner_content_search
@@ -621,37 +616,40 @@ async function applyOwnerContentSearchMigration(db: D1Database): Promise<void> {
              COALESCE((SELECT name FROM mission_projects WHERE id = NEW.project_id AND user_id = NEW.user_id LIMIT 1), ''),
              NEW.status, NEW.due_at, NEW.updated_at
       WHERE NEW.archived_at IS NULL;
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS owner_content_search_task_delete
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS owner_content_search_task_delete
     AFTER DELETE ON mission_tasks
     BEGIN
       DELETE FROM owner_content_search
       WHERE user_id = OLD.user_id AND source_type = 'mission_task' AND source_id = OLD.id;
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS owner_content_search_project_rename
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS owner_content_search_project_rename
     AFTER UPDATE OF name ON mission_projects
     BEGIN
       UPDATE owner_content_search SET project_name = NEW.name
       WHERE user_id = NEW.user_id AND source_type = 'mission_task' AND project_id = NEW.id;
-    END;
-
-    DELETE FROM owner_content_search;
-    INSERT INTO owner_content_search
+    END`,
+    "DELETE FROM owner_content_search",
+    `INSERT INTO owner_content_search
       (user_id, source_type, source_id, title, body, project_id, project_name, status, source_date, updated_at)
     SELECT user_id, 'journal', id,
            COALESCE(NULLIF(TRIM(title), ''), 'Journal entry for ' || entry_date),
            body, NULL, '', NULL, entry_date, updated_at
-    FROM journal_entries WHERE archived_at IS NULL;
-    INSERT INTO owner_content_search
+    FROM journal_entries WHERE archived_at IS NULL`,
+    `INSERT INTO owner_content_search
       (user_id, source_type, source_id, title, body, project_id, project_name, status, source_date, updated_at)
     SELECT t.user_id, 'mission_task', t.id, t.title, COALESCE(t.description, ''), t.project_id,
            COALESCE(p.name, ''), t.status, t.due_at, t.updated_at
     FROM mission_tasks t
     LEFT JOIN mission_projects p ON p.id = t.project_id AND p.user_id = t.user_id
-    WHERE t.archived_at IS NULL;
-  `);
+    WHERE t.archived_at IS NULL`,
+  ];
+
+  // D1Database.exec treats each newline as a separate query. Keep multiline
+  // FTS5 and trigger definitions intact by preparing each statement directly.
+  for (const sql of statements) {
+    await db.prepare(sql).run();
+  }
 }
 
 async function tableExists(db: D1Database, tableName: string): Promise<boolean> {
