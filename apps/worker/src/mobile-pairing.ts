@@ -415,6 +415,14 @@ async function issueMobileTokens(
   const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString();
 
   await env.DB.prepare(
+    `UPDATE mobile_refresh_tokens
+     SET status = 'revoked', revoked_at = ?, updated_at = ?
+     WHERE user_id = ? AND device_id = ? AND status = 'active'`,
+  )
+    .bind(now, now, ownerId, device.id)
+    .run();
+
+  await env.DB.prepare(
     `INSERT INTO mobile_refresh_tokens
        (id, user_id, device_id, device_name, platform, app_version, token_hash, status, scope_json, expires_at, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,

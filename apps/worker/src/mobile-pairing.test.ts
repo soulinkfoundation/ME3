@@ -124,6 +124,43 @@ describe("mobile pairing", () => {
     ).rejects.toMatchObject({ status: 401 });
   });
 
+  it("replaces an existing active credential when the same device reconnects", async () => {
+    const env = createEnv();
+    const device = {
+      id: "ios-reconnect-1",
+      name: "Kieran's iPhone",
+      platform: "ios",
+      appVersion: "0.1.0",
+    };
+
+    const firstChallenge = await startMobilePairing(env, { device }, origins);
+    await approveMobilePairing(env, "owner", firstChallenge.pairingId, {
+      userCode: firstChallenge.userCode,
+    });
+    const firstTokens = await claimMobilePairing(env, {
+      pairingId: firstChallenge.pairingId,
+      userCode: firstChallenge.userCode,
+      deviceId: device.id,
+    }, origins);
+
+    const secondChallenge = await startMobilePairing(env, { device }, origins);
+    await approveMobilePairing(env, "owner", secondChallenge.pairingId, {
+      userCode: secondChallenge.userCode,
+    });
+    const secondTokens = await claimMobilePairing(env, {
+      pairingId: secondChallenge.pairingId,
+      userCode: secondChallenge.userCode,
+      deviceId: device.id,
+    }, origins);
+
+    expect(await authenticateMobileOwner(env, `Bearer ${firstTokens.accessToken}`)).toBeNull();
+    expect(await authenticateMobileOwner(env, `Bearer ${secondTokens.accessToken}`)).toBe("owner");
+    await expect(refreshMobileToken(env, {
+      refreshToken: firstTokens.refreshToken,
+      deviceId: device.id,
+    }, origins)).rejects.toMatchObject({ status: 401 });
+  });
+
   it("returns the mobile config contract", async () => {
     const config = await getMobileConfig(createEnv(), origins);
 
@@ -404,6 +441,22 @@ class MobilePairingStatement {
     }
 
     if (this.sql.includes("SET status = 'revoked'")) {
+      if (this.sql.includes("WHERE user_id = ? AND device_id = ?")) {
+        const [revokedAt, updatedAt, userId, deviceId] = this.values as string[];
+        const rows = this.state.refreshTokens.filter(
+          (token) =>
+            token.user_id === userId &&
+            token.device_id === deviceId &&
+            token.status === "active",
+        );
+        for (const row of rows) {
+          row.status = "revoked";
+          row.revoked_at = revokedAt;
+          row.updated_at = updatedAt;
+        }
+        return result(rows.length);
+      }
+
       const [revokedAt, updatedAt, id] = this.values as string[];
       const row = this.state.refreshTokens.find((token) => token.id === id);
       if (!row) return result(0);
