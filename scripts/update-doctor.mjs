@@ -21,6 +21,10 @@ const deployButtonScript = packageJson.scripts?.deploy || "";
 const deployScript = packageJson.scripts?.["deploy:cloudflare"] || "";
 const deployPreparesResources = /deploy:prepare/.test(deployScript);
 const deployButtonPreparesResources = /deploy:prepare/.test(deployButtonScript);
+const deployButtonMigrationIndex = deployButtonScript.indexOf("db:migrations:apply");
+const deployButtonWorkerIndex = deployButtonScript.indexOf("wrangler deploy");
+const deployMigrationIndex = deployScript.indexOf("db:migrations:apply");
+const deployWorkerIndex = deployScript.indexOf("wrangler deploy");
 
 check(
   "Core version metadata exists",
@@ -103,11 +107,11 @@ check(
 );
 
 check(
-  "Deploy button script relies on Cloudflare resource provisioning",
+  "Deploy button script migrates before Cloudflare deployment",
   !deployButtonPreparesResources &&
-    /db:migrations:apply/.test(deployButtonScript) &&
-    /wrangler deploy/.test(deployButtonScript),
-  "Expected package.json scripts.deploy for the Cloudflare deploy form to apply migrations and deploy without running deploy:prepare. Manual use should still prefer pnpm deploy:cloudflare.",
+    deployButtonMigrationIndex !== -1 &&
+    deployButtonWorkerIndex > deployButtonMigrationIndex,
+  "Expected package.json scripts.deploy for Cloudflare Workers Builds to apply migrations before deploy without running deploy:prepare. Manual use should still prefer pnpm deploy:cloudflare.",
 );
 check(
   "Cloudflare deploy script is available",
@@ -122,8 +126,8 @@ check(
 );
 check(
   "Deploy script applies migrations before deploy",
-  /db:migrations:apply/.test(deployScript),
-  "Expected pnpm deploy:cloudflare to run db:migrations:apply.",
+  deployMigrationIndex !== -1 && deployWorkerIndex > deployMigrationIndex,
+  "Expected pnpm deploy:cloudflare to run db:migrations:apply before wrangler deploy.",
 );
 check(
   "Update checker script is available",

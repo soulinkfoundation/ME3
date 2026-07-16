@@ -96,6 +96,15 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Pushing main can trigger Cloudflare Workers Builds, so migrations must
+      # succeed before the update commit reaches the copied repository.
+      - name: Apply database migrations
+        if: steps.changes.outputs.changed == 'true' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          set -euo pipefail
+
+          pnpm db:migrations:apply
+
       - name: Commit and push Core update
         if: steps.changes.outputs.changed == 'true'
         run: |
@@ -113,16 +122,13 @@ jobs:
         run: echo "ME3 Core is already up to date."
 
       - name: Deploy to Cloudflare
-        if: env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
+        if: steps.changes.outputs.changed == 'true' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != ''
         run: |
           set -euo pipefail
 
-          pnpm install --frozen-lockfile
-          pnpm deploy:prepare -- --skip-create
-          pnpm build
           pnpm exec wrangler deploy --config wrangler.toml
 
       - name: Cloudflare deploy skipped
-        if: env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == ''
+        if: steps.changes.outputs.changed == 'true' && (env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '')
         run: |
-          echo "Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN repository secrets to deploy automatically after Core updates."
+          echo "GitHub Cloudflare secrets are not set. Cloudflare Workers Builds must use pnpm deploy so migrations run before deployment."
