@@ -5,6 +5,10 @@ import { useRoute } from "vue-router";
 import { api, ApiError } from "../../../api";
 import BrandLogo from "../../../components/BrandLogo.vue";
 import Button from "../../../components/Button.vue";
+import {
+  mobilePairingStatusMessage,
+  type MobilePairingStatus,
+} from "../../../utils/mobilePairingStatus";
 
 definePage({
   meta: {
@@ -15,13 +19,6 @@ definePage({
     robots: "noindex,follow",
   },
 });
-
-type MobilePairingStatus =
-  | "pending"
-  | "approved"
-  | "claimed"
-  | "expired"
-  | "revoked";
 
 type MobilePairing = {
   id: string;
@@ -43,7 +40,6 @@ const code = ref("");
 const loading = ref(true);
 const approving = ref(false);
 const error = ref("");
-const notice = ref("");
 
 const pairingId = computed(() =>
   typeof route.params.pairingId === "string" ? route.params.pairingId : "",
@@ -86,7 +82,6 @@ async function approvePairing() {
 
   approving.value = true;
   error.value = "";
-  notice.value = "";
 
   try {
     const response = await api.post<{ ok: boolean; pairing: MobilePairing }>(
@@ -94,7 +89,6 @@ async function approvePairing() {
       { userCode: code.value },
     );
     pairing.value = response.pairing;
-    notice.value = "Approved. Return to the ME3 app to finish connecting.";
   } catch (approveError) {
     error.value =
       approveError instanceof ApiError
@@ -151,19 +145,9 @@ onMounted(loadPairing);
         </form>
 
         <div v-else class="mobile-pair__status">
-          <p v-if="pairing.status === 'approved'">
-            Approved. Return to the ME3 app to finish connecting.
-          </p>
-          <p v-else-if="pairing.status === 'claimed'">
-            This device is connected.
-          </p>
-          <p v-else-if="pairing.status === 'expired'">
-            This pairing expired. Start again in the ME3 app.
-          </p>
-          <p v-else>This pairing is no longer available.</p>
+          <p>{{ mobilePairingStatusMessage(pairing.status) }}</p>
         </div>
 
-        <p v-if="notice" class="mobile-pair__notice">{{ notice }}</p>
         <p v-if="error" class="mobile-pair__error">{{ error }}</p>
       </template>
 
@@ -244,7 +228,6 @@ onMounted(loadPairing);
 }
 
 .mobile-pair__status,
-.mobile-pair__notice,
 .mobile-pair__error {
   margin: 0;
   padding: 12px 14px;
@@ -252,8 +235,7 @@ onMounted(loadPairing);
   font-weight: 700;
 }
 
-.mobile-pair__status,
-.mobile-pair__notice {
+.mobile-pair__status {
   background: rgba(69, 161, 107, 0.12);
   color: #14543a;
 }
@@ -275,8 +257,7 @@ onMounted(loadPairing);
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
   }
 
-  .mobile-pair__status,
-  .mobile-pair__notice {
+  .mobile-pair__status {
     color: #a7f3c4;
   }
 }
