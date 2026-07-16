@@ -26,6 +26,7 @@
     "portable:compare": "node scripts/portable.mjs compare",
     "portable:proof": "node scripts/portable.mjs proof",
     "portable:test": "node --test scripts/portable-v1.test.mjs",
+    "managed-install:test": "node --test scripts/configure-managed-install.test.mjs",
     "verify:local-boot": "node scripts/verify-local-boot.mjs",
     "build": "pnpm generate:llms && pnpm -r build",
     "typecheck": "pnpm -r typecheck",
