@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Stripe from "stripe";
 import { validateMe3KnowledgeAgainstPlugins } from "@me3/knowledge";
-import { DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL } from "@me3-core/plugin-agent-chat";
+import {
+  DEFAULT_WORKERS_AI_IMAGE_GENERATION_MODEL,
+  allowsAgentChatRawModelSelection,
+  normalizeMe3DeploymentMode,
+} from "@me3-core/plugin-agent-chat";
 import app, { getMe3CloudUsernamePublishBlockReason } from "./index";
 import {
   DEFAULT_WORKERS_AI_TEXT_MODEL,
@@ -2882,6 +2886,7 @@ function createEnv(): Env & {
     },
     DB: db as unknown as D1Database,
     ENVIRONMENT: "local",
+    ME3_DEPLOYMENT_MODE: "self_hosted",
     CORE_WEB_ORIGIN: "http://localhost:4000",
     CORE_API_ORIGIN: "http://localhost:8787",
     JWT_SECRET: "test-secret-at-least-long-enough",
@@ -3317,6 +3322,50 @@ function base64UrlBytes(bytes: Uint8Array): string {
 }
 
 describe("ME3 Core Worker auth", () => {
+  it("normalizes only managed and self_hosted deployment modes", () => {
+    expect(normalizeMe3DeploymentMode(" MANAGED ")).toBe("managed");
+    expect(normalizeMe3DeploymentMode("self_hosted")).toBe("self_hosted");
+    expect(normalizeMe3DeploymentMode("hosted")).toBeNull();
+    expect(normalizeMe3DeploymentMode(undefined)).toBeNull();
+    expect(allowsAgentChatRawModelSelection({ ME3_DEPLOYMENT_MODE: "self_hosted" })).toBe(
+      true,
+    );
+    expect(allowsAgentChatRawModelSelection({ ME3_DEPLOYMENT_MODE: "managed" })).toBe(
+      false,
+    );
+    expect(
+      allowsAgentChatRawModelSelection({
+        ME3_DEPLOYMENT_MODE: "invalid",
+        ME3_AI_RAW_MODEL_SELECTION_ENABLED: "true",
+      }),
+    ).toBe(false);
+  });
+
+  it("exposes the canonical deployment mode and fails closed on invalid config", async () => {
+    const managedEnv = createEnv();
+    managedEnv.ME3_DEPLOYMENT_MODE = " MANAGED ";
+    const managedResponse = await app.fetch(
+      new Request("http://localhost/api/config"),
+      managedEnv,
+    );
+    expect(managedResponse.status).toBe(200);
+    await expect(managedResponse.json()).resolves.toMatchObject({ deploymentMode: "managed" });
+
+    const invalidEnv = createEnv();
+    invalidEnv.ME3_DEPLOYMENT_MODE = "hosted";
+    const invalidResponse = await app.fetch(
+      new Request("http://localhost/api/config"),
+      invalidEnv,
+    );
+    const invalidBody = (await invalidResponse.json()) as Record<string, unknown>;
+    expect(invalidResponse.status).toBe(503);
+    expect(invalidBody).toEqual({
+      ok: false,
+      code: "INVALID_DEPLOYMENT_MODE",
+      error: "ME3 deployment mode must be managed or self_hosted",
+    });
+  });
+
   it("exposes Core version metadata", async () => {
     const env = createEnv();
 
@@ -3667,16 +3716,165 @@ describe("ME3 Core Worker auth", () => {
     const env = createEnv();
 
     const before = await app.fetch(new Request("http://localhost/api/config"), env);
-    expect((await before.json()) as { ownerAuthConfigured: boolean }).toMatchObject({
+    expect(await before.json()).toMatchObject({
       ownerAuthConfigured: false,
+      transferReadiness: {
+        ready: false,
+        blockers: ["LOCAL_PASSWORD_REQUIRED"],
+      },
     });
 
     await bootstrap(env);
 
     const after = await app.fetch(new Request("http://localhost/api/config"), env);
-    expect((await after.json()) as { ownerAuthConfigured: boolean }).toMatchObject({
+    expect(await after.json()).toMatchObject({
       ownerAuthConfigured: true,
+      transferReadiness: { ready: true, blockers: [] },
     });
+  });
+
+  it("lets an authenticated managed owner establish verified local login", async () => {
+    const env = createEnv();
+    env.ME3_DEPLOYMENT_MODE = "managed";
+    const session = cookieHeader(await bootstrap(env));
+    env.SETUP_PASSWORD = "operator-secret-must-not-return";
+    env.owner!.password_hash = null;
+    env.installSecrets.set("ME3_CLOUD_OWNER_ID", "managed-owner");
+    const localPassword = "owner-local-password";
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/account/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          password: localPassword,
+          passwordConfirmation: localPassword,
+        }),
+      }),
+      env,
+    );
+    const responseText = await response.text();
+    const body = JSON.parse(responseText) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      localPasswordConfigured: true,
+      transferReadiness: { ready: true, blockers: [] },
+    });
+    expect(responseText).not.toContain(localPassword);
+    expect(responseText).not.toContain(env.SETUP_PASSWORD);
+    expect(responseText).not.toContain(env.owner!.password_hash!);
+
+    const loginResponse = await app.fetch(
+      new Request("http://localhost/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "owner@example.com",
+          password: localPassword,
+        }),
+      }),
+      env,
+    );
+    expect(loginResponse.status).toBe(200);
+
+    const configResponse = await app.fetch(new Request("http://localhost/api/config"), env);
+    await expect(configResponse.json()).resolves.toMatchObject({
+      deploymentMode: "managed",
+      ownerPasswordAuthConfigured: true,
+      transferReadiness: { ready: true, blockers: [] },
+    });
+
+    const connectionsResponse = await app.fetch(
+      new Request("http://localhost/api/account/app-connections", {
+        headers: { Cookie: session },
+      }),
+      env,
+    );
+    const connectionsText = await connectionsResponse.text();
+    expect(JSON.parse(connectionsText)).toMatchObject({
+      localAccess: {
+        passwordConfigured: true,
+        transferReadiness: { ready: true, blockers: [] },
+      },
+    });
+    expect(connectionsText).not.toContain(localPassword);
+    expect(connectionsText).not.toContain(env.owner!.password_hash!);
+  });
+
+  it("requires owner authentication and matching password confirmation", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.owner!.password_hash = null;
+
+    const unauthorizedResponse = await app.fetch(
+      new Request("http://localhost/api/account/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password: "new-owner-password",
+          passwordConfirmation: "new-owner-password",
+        }),
+      }),
+      env,
+    );
+    expect(unauthorizedResponse.status).toBe(401);
+    expect(env.owner!.password_hash).toBeNull();
+
+    const mismatchResponse = await app.fetch(
+      new Request("http://localhost/api/account/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          password: "new-owner-password",
+          passwordConfirmation: "different-password",
+        }),
+      }),
+      env,
+    );
+    expect(mismatchResponse.status).toBe(400);
+    expect(env.owner!.password_hash).toBeNull();
+  });
+
+  it("rate limits authenticated local password changes without storing password material", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+    env.owner!.password_hash = null;
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await app.fetch(
+        new Request("http://localhost/api/account/password", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({
+            password: "new-owner-password",
+            passwordConfirmation: "different-password",
+          }),
+        }),
+        env,
+      );
+      expect(response.status).toBe(400);
+    }
+
+    const blockedResponse = await app.fetch(
+      new Request("http://localhost/api/account/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Cookie: session },
+        body: JSON.stringify({
+          password: "new-owner-password",
+          passwordConfirmation: "different-password",
+        }),
+      }),
+      env,
+    );
+    expect(blockedResponse.status).toBe(429);
+    expect(JSON.stringify([...env.authRateLimits.entries()])).not.toContain(
+      "new-owner-password",
+    );
+    expect(JSON.stringify([...env.authRateLimits.entries()])).not.toContain(
+      "different-password",
+    );
   });
 
   it("does not treat a placeholder owner row as configured auth", async () => {

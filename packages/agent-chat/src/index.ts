@@ -184,18 +184,30 @@ export const AGENT_CHAT_PLUGIN_ID = "me3.agent-chat";
 export const CORE_MAILBOX_DAILY_INBOUND_LIMIT = 200;
 export const CORE_MAILBOX_DAILY_OUTBOUND_LIMIT = 200;
 export const AGENT_CHAT_MODES = ["everyday", "advanced", "owner"] as const;
+export const ME3_DEPLOYMENT_MODES = ["managed", "self_hosted"] as const;
 
 export type AgentChatMode = (typeof AGENT_CHAT_MODES)[number];
+export type Me3DeploymentMode = (typeof ME3_DEPLOYMENT_MODES)[number];
+
+export function normalizeMe3DeploymentMode(value: unknown): Me3DeploymentMode | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return ME3_DEPLOYMENT_MODES.includes(normalized as Me3DeploymentMode)
+    ? (normalized as Me3DeploymentMode)
+    : null;
+}
 
 export function allowsAgentChatRawModelSelection(env: {
   ME3_DEPLOYMENT_MODE?: string;
   ME3_AI_RAW_MODEL_SELECTION_ENABLED?: string;
 }): boolean {
+  const deploymentMode = normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE);
   return (
-    env.ME3_DEPLOYMENT_MODE?.trim().toLowerCase() !== "managed" ||
-    /^(1|true|yes)$/i.test(
-      env.ME3_AI_RAW_MODEL_SELECTION_ENABLED?.trim() || "",
-    )
+    deploymentMode === "self_hosted" ||
+    (deploymentMode === "managed" &&
+      /^(1|true|yes)$/i.test(
+        env.ME3_AI_RAW_MODEL_SELECTION_ENABLED?.trim() || "",
+      ))
   );
 }
 

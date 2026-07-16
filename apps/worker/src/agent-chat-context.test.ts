@@ -650,6 +650,7 @@ function createEnv(state: Partial<FakeDbState> = {}) {
   return {
     DB: db,
     CORE_API_ORIGIN: "https://core.example.com",
+    ME3_DEPLOYMENT_MODE: "self_hosted",
     state: dbState,
   };
 }

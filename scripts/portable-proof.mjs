@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -13,6 +13,7 @@ import {
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:net";
 import {
   PortableError,
   RUNTIME_MIGRATIONS,
@@ -25,7 +26,12 @@ export const PROOF_INSTALL_ID = "core_11111111-1111-4111-8111-111111111111";
 export const PROOF_PASSPHRASE = "me3-portable-proof-passphrase";
 export const PROOF_PLATFORM_SECRET = "platform-credential-must-not-export";
 export const PROOF_SESSION_SECRET = "old-session-secret-must-rotate";
-export const PROOF_DEVICE_TOKEN_HASH = "old-device-token-hash-must-not-export";
+export const PROOF_LOCAL_PASSWORD = "portable-owner-local-password";
+export const PROOF_DEVICE_REFRESH_TOKEN =
+  "me3mrt_11111111-1111-4111-8111-111111111111_old-device-refresh-credential";
+export const PROOF_DEVICE_TOKEN_HASH = createHash("sha256")
+  .update(PROOF_DEVICE_REFRESH_TOKEN)
+  .digest("hex");
 
 export async function runLocalProof({ keep = false, root } = {}) {
   const proofRoot = root || mkdtempSync(join(tmpdir(), "me3-portable-proof-"));
@@ -70,6 +76,7 @@ export async function runLocalProof({ keep = false, root } = {}) {
       throw new PortableError("PROOF_FAILED", "Restore retained a mobile pairing");
     }
 
+    const runtime = await proveRestoredRuntime(join(proofRoot, "target"), target);
     const freshCredential = proveFreshClientRepair(target);
     const result = {
       ok: true,
@@ -80,15 +87,228 @@ export async function runLocalProof({ keep = false, root } = {}) {
       r2Objects: restored.r2Objects,
       sessionsRotated: restored.sessionsRotated,
       oldDeviceCredentialsRemoved: true,
+      oldBrowserSessionRejected: runtime.oldBrowserSessionRejected,
+      oldDeviceAccessRejected: runtime.oldDeviceAccessRejected,
+      oldDeviceRefreshRejected: runtime.oldDeviceRefreshRejected,
+      restoredLocalPasswordLoginVerified: runtime.restoredLocalPasswordLoginVerified,
       clientRepairedWithFreshCredential: freshCredential !== PROOF_DEVICE_TOKEN_HASH,
       archive: keep ? archive : "temporary (removed after proof)",
     };
+    assertNoProofCredentialMaterial(JSON.stringify(result));
     if (!keep && !root) rmSync(proofRoot, { recursive: true, force: true });
     return result;
   } catch (error) {
     if (!keep && !root) rmSync(proofRoot, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function proveRestoredRuntime(persistDirectory, database) {
+  const port = await availablePort();
+  const origin = `http://127.0.0.1:${port}`;
+  const emptyEnvFile = join(persistDirectory, "proof.env");
+  writeFileSync(emptyEnvFile, "", { mode: 0o600 });
+  const worker = spawn(
+    "pnpm",
+    [
+      "exec",
+      "wrangler",
+      "dev",
+      "--local",
+      "--config",
+      "apps/worker/wrangler.core.example.toml",
+      "--persist-to",
+      persistDirectory,
+      "--ip",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--log-level",
+      "error",
+      "--show-interactive-dev-session=false",
+      "--env-file",
+      emptyEnvFile,
+    ],
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, CI: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  const runtimeLogChunks = [];
+  worker.stdout.on("data", (chunk) => runtimeLogChunks.push(chunk));
+  worker.stderr.on("data", (chunk) => runtimeLogChunks.push(chunk));
+
+  try {
+    await waitForRuntime(origin, worker);
+    const oldBrowserSession = await fetch(`${origin}/api/auth/me`, {
+      headers: { Cookie: `me3_core_session=${proofBrowserSession(PROOF_SESSION_SECRET)}` },
+    });
+    const oldDeviceAccess = await fetch(`${origin}/api/account`, {
+      headers: { Authorization: `Bearer ${proofMobileAccessToken(PROOF_SESSION_SECRET)}` },
+    });
+    const oldDeviceRefresh = await fetch(`${origin}/api/mobile/token/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        refreshToken: PROOF_DEVICE_REFRESH_TOKEN,
+        deviceId: "iphone-old",
+      }),
+    });
+    if (
+      oldBrowserSession.status !== 401 ||
+      oldDeviceAccess.status !== 401 ||
+      oldDeviceRefresh.status !== 401
+    ) {
+      throw new PortableError(
+        "PROOF_FAILED",
+        "Restored runtime accepted a pre-transfer session or device credential",
+      );
+    }
+
+    const login = await fetch(`${origin}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "owner@example.test",
+        password: PROOF_LOCAL_PASSWORD,
+      }),
+    });
+    const loginText = await login.text();
+    const passwordHash = queryScalar(
+      database,
+      "SELECT password_hash FROM owner_profile WHERE id = 'owner';",
+    );
+    if (
+      login.status !== 200 ||
+      loginText.includes(PROOF_LOCAL_PASSWORD) ||
+      loginText.includes(passwordHash)
+    ) {
+      throw new PortableError("PROOF_FAILED", "Restored runtime local login failed");
+    }
+    const session = login.headers.get("set-cookie")?.split(";")[0];
+    if (!session) {
+      throw new PortableError("PROOF_FAILED", "Restored runtime did not issue a fresh session");
+    }
+
+    const [owner, config] = await Promise.all([
+      fetch(`${origin}/api/auth/me`, { headers: { Cookie: session } }),
+      fetch(`${origin}/api/config`),
+    ]);
+    const configText = await config.text();
+    const configBody = JSON.parse(configText);
+    if (
+      owner.status !== 200 ||
+      config.status !== 200 ||
+      configBody.deploymentMode !== "self_hosted" ||
+      configBody.transferReadiness?.ready !== true ||
+      configText.includes(PROOF_LOCAL_PASSWORD) ||
+      configText.includes(passwordHash)
+    ) {
+      throw new PortableError(
+        "PROOF_FAILED",
+        "Restored runtime did not expose verified transfer readiness",
+      );
+    }
+
+    return {
+      oldBrowserSessionRejected: true,
+      oldDeviceAccessRejected: true,
+      oldDeviceRefreshRejected: true,
+      restoredLocalPasswordLoginVerified: true,
+    };
+  } finally {
+    await stopProcess(worker);
+    assertNoProofCredentialMaterial(Buffer.concat(runtimeLogChunks).toString("utf8"));
+  }
+}
+
+function assertNoProofCredentialMaterial(value) {
+  const sensitiveValues = [
+    PROOF_LOCAL_PASSWORD,
+    proofPasswordHash(),
+    PROOF_PLATFORM_SECRET,
+    PROOF_SESSION_SECRET,
+    PROOF_DEVICE_REFRESH_TOKEN,
+    PROOF_DEVICE_TOKEN_HASH,
+  ];
+  if (sensitiveValues.some((secret) => value.includes(secret))) {
+    throw new PortableError("PROOF_FAILED", "Proof output exposed credential material");
+  }
+}
+
+async function availablePort() {
+  const server = createServer();
+  await new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolvePromise);
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  await new Promise((resolvePromise) => server.close(resolvePromise));
+  if (!port) throw new PortableError("PROOF_SETUP_FAILED", "Could not reserve a local proof port");
+  return port;
+}
+
+async function waitForRuntime(origin, worker) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (worker.exitCode !== null) break;
+    try {
+      const response = await fetch(`${origin}/api/core/version`);
+      if (response.ok) return;
+    } catch {
+      // The local Worker is still starting.
+    }
+    await delay(100);
+  }
+  throw new PortableError("PROOF_SETUP_FAILED", "Restored local runtime did not start");
+}
+
+async function stopProcess(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await Promise.race([
+    new Promise((resolvePromise) => child.once("exit", resolvePromise)),
+    delay(2_000),
+  ]);
+  if (child.exitCode === null) child.kill("SIGKILL");
+}
+
+function proofBrowserSession(secret) {
+  const header = base64UrlJson({ alg: "HS256", typ: "JWT" });
+  const payload = base64UrlJson({
+    sub: "owner",
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 3_600,
+  });
+  return signProofToken(`${header}.${payload}`, secret);
+}
+
+function proofMobileAccessToken(secret) {
+  const payload = base64UrlJson({
+    typ: "me3_mobile_access",
+    sub: "owner",
+    did: "iphone-old",
+    rid: "11111111-1111-4111-8111-111111111111",
+    scope: ["mobile.v1", "account"],
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 900,
+  });
+  return `me3mat_${signProofToken(payload, secret)}`;
+}
+
+function signProofToken(payload, secret) {
+  const signature = createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function delay(milliseconds) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
 export function createMigratedDatabase(persistDirectory) {
@@ -163,7 +383,7 @@ export function seedProofInstallation(database, r2Directory) {
      INSERT INTO owner_profile
        (id, email, name, username, timezone, password_hash, created_at, updated_at)
        VALUES ('owner', 'owner@example.test', 'Portable Owner', 'portable-owner', 'Europe/Dublin',
-               'pbkdf2:fixture-owner-password-hash', ${quote(now)}, ${quote(now)});
+               ${quote(proofPasswordHash())}, ${quote(now)}, ${quote(now)});
      INSERT INTO core_install (id, installed_at, schema_version)
        VALUES ('me3-core', ${quote(now)}, 1);
      ${secrets
@@ -284,6 +504,12 @@ export function seedProofInstallation(database, r2Directory) {
     mkdirSync(resolve(path, ".."), { recursive: true });
     writeFileSync(path, value);
   }
+}
+
+function proofPasswordHash() {
+  const salt = Buffer.from("portable-proof!!", "utf8");
+  const hash = pbkdf2Sync(PROOF_LOCAL_PASSWORD, salt, 100_000, 32, "sha256");
+  return `pbkdf2_sha256$100000$${salt.toString("base64url")}$${hash.toString("base64url")}`;
 }
 
 function proveFreshClientRepair(database) {

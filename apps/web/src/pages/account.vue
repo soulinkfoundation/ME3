@@ -240,6 +240,13 @@ type AppConnectionsResponse = {
     meJsonUrl: string;
     meJsonSource: "core_install" | "hosted_profile";
   };
+  localAccess: {
+    passwordConfigured: boolean;
+    transferReadiness: {
+      ready: boolean;
+      blockers: string[];
+    };
+  };
 };
 
 type CoreGithubStatusResponse = {
@@ -363,6 +370,13 @@ const appConnectionsLoading = ref(false);
 const appConnectionsSaving = ref(false);
 const me3Connection = ref<AppConnectionsResponse["me3"] | null>(null);
 const appConnectionsError = ref<string | null>(null);
+const localPasswordConfigured = ref(false);
+const localPasswordFormOpen = ref(false);
+const localPasswordSaving = ref(false);
+const localPasswordInput = ref("");
+const localPasswordConfirmationInput = ref("");
+const localPasswordMessage = ref<string | null>(null);
+const localPasswordError = ref<string | null>(null);
 const coreGithubLoading = ref(false);
 const coreGithubSaving = ref<"connect" | "update" | null>(null);
 const coreGithubStatus = ref<CoreGithubStatusResponse | null>(null);
@@ -767,6 +781,21 @@ const me3ConnectionDescription = computed(() => {
   }
   return "Use ME3.app to claim and sign in to this Core install.";
 });
+
+const localPasswordSaveDisabled = computed(
+  () =>
+    localPasswordSaving.value ||
+    localPasswordInput.value.trim().length < 8 ||
+    localPasswordInput.value.trim() !==
+      localPasswordConfirmationInput.value.trim(),
+);
+
+const localPasswordConfirmationMismatch = computed(
+  () =>
+    localPasswordConfirmationInput.value.length > 0 &&
+    localPasswordInput.value.trim() !==
+      localPasswordConfirmationInput.value.trim(),
+);
 
 const coreGithubConnection = computed(
   () => coreGithubStatus.value?.github || null,
@@ -1615,11 +1644,49 @@ async function loadAppConnections() {
       "/account/app-connections",
     );
     me3Connection.value = response.me3;
+    localPasswordConfigured.value = response.localAccess.passwordConfigured;
   } catch (e: any) {
     appConnectionsError.value = e.message || "Failed to load app connections";
   } finally {
     appConnectionsLoading.value = false;
   }
+}
+
+async function saveLocalPassword() {
+  if (localPasswordSaveDisabled.value) return;
+  localPasswordSaving.value = true;
+  localPasswordMessage.value = null;
+  localPasswordError.value = null;
+
+  try {
+    await api.put("/account/password", {
+      password: localPasswordInput.value,
+      passwordConfirmation: localPasswordConfirmationInput.value,
+    });
+    localPasswordInput.value = "";
+    localPasswordConfirmationInput.value = "";
+    localPasswordConfigured.value = true;
+    localPasswordFormOpen.value = false;
+    localPasswordMessage.value =
+      "Local password verified. This installation is ready to export.";
+    await loadAppConnections();
+  } catch (e: any) {
+    localPasswordError.value = e.message || "Failed to save local password";
+  } finally {
+    localPasswordSaving.value = false;
+  }
+}
+
+function toggleLocalPasswordForm() {
+  if (localPasswordFormOpen.value) {
+    localPasswordInput.value = "";
+    localPasswordConfirmationInput.value = "";
+    localPasswordError.value = null;
+  } else {
+    localPasswordMessage.value = null;
+    localPasswordError.value = null;
+  }
+  localPasswordFormOpen.value = !localPasswordFormOpen.value;
 }
 
 async function connectMe3App() {
@@ -2651,6 +2718,121 @@ onBeforeUnmount(() => {
                       {{ appConnectionsSaving ? "Opening..." : "Connect" }}
                     </Button>
                   </div>
+                </div>
+
+                <div
+                  v-if="!appConnectionsLoading"
+                  class="connection-line connection-line--local-password"
+                  :class="{
+                    'connection-line--connected': localPasswordConfigured,
+                  }"
+                >
+                  <div class="connection-line__header">
+                    <div class="connection-line__copy">
+                      <span class="connection-line__title">Local password</span>
+                      <p class="connection-line__description">
+                        Sign in directly after a restore without needing the
+                        operator setup password.
+                      </p>
+                    </div>
+                    <div class="connection-line__end">
+                      <StatusBadge
+                        :tone="localPasswordConfigured ? 'active' : 'pending_setup'"
+                      >
+                        {{ localPasswordConfigured ? "Ready" : "Required" }}
+                      </StatusBadge>
+                      <Button
+                        color="outline"
+                        size="compact"
+                        type="button"
+                        :disabled="localPasswordSaving"
+                        @click="toggleLocalPasswordForm"
+                      >
+                        {{
+                          localPasswordFormOpen
+                            ? "Cancel"
+                            : localPasswordConfigured
+                              ? "Change"
+                              : "Add password"
+                        }}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <form
+                    v-if="localPasswordFormOpen"
+                    class="local-password-form"
+                    aria-label="Local password"
+                    @submit.prevent="saveLocalPassword"
+                  >
+                    <div class="local-password-form__fields">
+                      <label class="field local-password-form__field">
+                        <span>New password</span>
+                        <input
+                          v-model="localPasswordInput"
+                          class="input"
+                          type="password"
+                          autocomplete="new-password"
+                          aria-describedby="local-password-guidance"
+                          minlength="8"
+                          required
+                        />
+                      </label>
+                      <label class="field local-password-form__field">
+                        <span>Confirm password</span>
+                        <input
+                          v-model="localPasswordConfirmationInput"
+                          class="input"
+                          type="password"
+                          autocomplete="new-password"
+                          :aria-invalid="localPasswordConfirmationMismatch"
+                          :aria-describedby="
+                            localPasswordConfirmationMismatch
+                              ? 'local-password-guidance local-password-confirmation-error'
+                              : 'local-password-guidance'
+                          "
+                          minlength="8"
+                          required
+                        />
+                      </label>
+                      <Button
+                        color="primary"
+                        size="compact"
+                        type="submit"
+                        :disabled="localPasswordSaveDisabled"
+                      >
+                        {{ localPasswordSaving ? "Verifying..." : "Save password" }}
+                      </Button>
+                    </div>
+                    <p id="local-password-guidance" class="connection-lines__hint">
+                      Use at least 8 characters. The password and its hash are
+                      never returned by the API.
+                    </p>
+                    <p
+                      v-if="localPasswordConfirmationMismatch"
+                      id="local-password-confirmation-error"
+                      class="connection-line__error"
+                      role="alert"
+                    >
+                      Password confirmation does not match.
+                    </p>
+                  </form>
+
+                  <p
+                    v-if="localPasswordMessage"
+                    class="connection-line__message"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {{ localPasswordMessage }}
+                  </p>
+                  <p
+                    v-if="localPasswordError"
+                    class="connection-line__error"
+                    role="alert"
+                  >
+                    {{ localPasswordError }}
+                  </p>
                 </div>
 
                 <div
@@ -4621,6 +4803,39 @@ h1 {
   padding: 10px 12px;
 }
 
+.connection-line--local-password {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+}
+
+.connection-line--local-password :deep(.me3-btn) {
+  min-height: 44px;
+}
+
+.local-password-form {
+  display: grid;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ui-border, var(--color-border));
+}
+
+.local-password-form__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.local-password-form__field {
+  gap: 4px;
+  margin: 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .connection-line__copy {
   flex: 1;
   min-width: 0;
@@ -4750,6 +4965,9 @@ h1 {
 
 .connection-lines__hint {
   margin: 8px 0 0;
+  color: var(--ui-text-muted, var(--color-text-muted));
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .commerce-settings-row {
@@ -5218,6 +5436,15 @@ h1 {
 
   .connection-line--telegram-connected {
     align-items: stretch;
+  }
+
+  .connection-line--local-password .connection-line__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .local-password-form__fields {
+    grid-template-columns: 1fr;
   }
 
   .timezone-row,

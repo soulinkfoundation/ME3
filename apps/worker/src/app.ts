@@ -137,6 +137,7 @@ import {
   markAgentMailboxDraftFailed,
   markAgentMailboxDraftSent,
   moveAgentMailboxMessage,
+  normalizeMe3DeploymentMode,
   pauseAgentMailbox,
   queueAgentContentItem,
   rejectAgentMailboxDraft,
@@ -223,6 +224,10 @@ type BootstrapPasswordResetBody = {
   email?: string;
   bootstrapCode?: string;
   password?: string;
+};
+type OwnerPasswordBody = {
+  password?: string;
+  passwordConfirmation?: string;
 };
 type Me3ClaimStartBody = {
   redirect?: string;
@@ -324,6 +329,12 @@ const AUTH_RATE_LIMITS = {
     maxAttempts: 5,
     windowSeconds: 15 * 60,
     lockoutSeconds: 30 * 60,
+  },
+  ownerPassword: {
+    route: "auth.owner_password",
+    maxAttempts: 10,
+    windowSeconds: 15 * 60,
+    lockoutSeconds: 15 * 60,
   },
 } satisfies Record<string, AuthRateLimitPolicy>;
 const OWNER_APP_ROUTE_PREFIXES = [
@@ -440,12 +451,26 @@ app.get("/health", async (c) => {
 });
 
 app.get("/api/config", async (c) => {
+  const deploymentMode = normalizeMe3DeploymentMode(c.env.ME3_DEPLOYMENT_MODE);
+  if (!deploymentMode) {
+    return c.json(
+      {
+        ok: false,
+        code: "INVALID_DEPLOYMENT_MODE",
+        error: "ME3 deployment mode must be managed or self_hosted",
+      },
+      503,
+    );
+  }
+
   const authState = await getOwnerAuthState(c.env);
   const aiRoutes = await getAiRoutingSummary(c.env, "owner");
   const cloudOrigin = getMe3CloudOrigin(c.env);
 
   return c.json({
     core: getCoreVersionInfo(),
+    deploymentMode,
+    transferReadiness: getTransferReadiness(authState),
     apiOrigin: getCoreApiOrigin(c.env, c.req.url),
     webOrigin: getCoreWebOrigin(c.env, c.req.url),
     adminHost: getAdminHost(c.env, c.req.url) || null,
@@ -738,12 +763,62 @@ app.get("/api/account", async (c) => {
   return c.json({ user: serializeAccountOwner(owner) });
 });
 
+app.put("/api/account/password", async (c) => {
+  const ownerId = await requireOwner(c);
+  if (!ownerId) return unauthorized(c);
+  const rateLimitScope = await createAuthRateLimitScope(
+    c,
+    AUTH_RATE_LIMITS.ownerPassword,
+    ownerId,
+  );
+  const rateLimitBlock = await checkAuthRateLimit(c, rateLimitScope);
+  if (rateLimitBlock) return rateLimitBlock;
+  await recordAuthRateLimitAttempt(c.env, AUTH_RATE_LIMITS.ownerPassword, rateLimitScope);
+
+  const body = await c.req.json<OwnerPasswordBody>().catch((): OwnerPasswordBody => ({}));
+  const password = body.password?.trim();
+  const passwordConfirmation = body.passwordConfirmation?.trim();
+  if (!password || password.length < 8) {
+    return c.json({ ok: false, error: "Password must be at least 8 characters" }, 400);
+  }
+  if (password !== passwordConfirmation) {
+    return c.json({ ok: false, error: "Password confirmation does not match" }, 400);
+  }
+
+  const owner = await getOwnerProfile(c.env, ownerId);
+  if (!owner?.email) {
+    return c.json({ ok: false, error: "Owner email is required for local login" }, 409);
+  }
+
+  const passwordHash = await hashPassword(password);
+  if (!(await verifyPassword(password, passwordHash))) {
+    return c.json({ ok: false, error: "Local password could not be verified" }, 500);
+  }
+
+  await c.env.DB.prepare(
+    "UPDATE owner_profile SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+  )
+    .bind(passwordHash, ownerId)
+    .run();
+
+  return c.json({
+    ok: true,
+    localPasswordConfigured: true,
+    transferReadiness: getTransferReadiness(await getOwnerAuthState(c.env)),
+  });
+});
+
 app.get("/api/account/app-connections", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
+  const authState = await getOwnerAuthState(c.env);
 
   return c.json({
     me3: await getMe3AppConnectionDetails(c),
+    localAccess: {
+      passwordConfigured: authState.passwordConfigured,
+      transferReadiness: getTransferReadiness(authState),
+    },
   });
 });
 
@@ -1712,11 +1787,13 @@ async function createMe3ClaimStartResponse(c: AppContext, rawRedirect?: unknown)
 
 async function getOwnerAuthState(env: Env): Promise<OwnerAuthState> {
   const result = await env.DB.prepare(
-    "SELECT id, password_hash FROM owner_profile WHERE id = ?",
+    "SELECT id, email, password_hash FROM owner_profile WHERE id = ?",
   )
     .bind("owner")
-    .first<{ id: string; password_hash: string | null }>();
-  const passwordConfigured = Boolean(result?.password_hash);
+    .first<{ id: string; email: string | null; password_hash: string | null }>();
+  const passwordConfigured = Boolean(
+    result?.email?.trim() && parsePasswordHash(result.password_hash),
+  );
   const me3Configured = Boolean(await getStoredMe3CloudOwnerId(env));
   const configured = passwordConfigured || me3Configured;
 
@@ -1724,6 +1801,13 @@ async function getOwnerAuthState(env: Env): Promise<OwnerAuthState> {
     configured,
     passwordConfigured,
     me3Configured,
+  };
+}
+
+function getTransferReadiness(authState: OwnerAuthState) {
+  return {
+    ready: authState.passwordConfigured,
+    blockers: authState.passwordConfigured ? [] : ["LOCAL_PASSWORD_REQUIRED"],
   };
 }
 
@@ -2012,19 +2096,46 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
-  const [algorithm, rawIterations, rawSalt, expectedHash] = storedHash.split("$");
-  const iterations = Number(rawIterations);
+  const parsed = parsePasswordHash(storedHash);
+  if (!parsed) return false;
+  const actualHash = encodeBase64Url(
+    await derivePasswordHash(password, parsed.salt, parsed.iterations),
+  );
+  return constantTimeEqual(actualHash, parsed.expectedHash);
+}
 
-  if (algorithm !== PASSWORD_HASH_ALGORITHM || !Number.isInteger(iterations) || iterations <= 0) {
-    return false;
+function parsePasswordHash(storedHash: string | null | undefined): {
+  iterations: number;
+  salt: Uint8Array;
+  expectedHash: string;
+} | null {
+  if (!storedHash) return null;
+  const [algorithm, rawIterations, rawSalt, expectedHash, extra] = storedHash.split("$");
+  const iterations = Number(rawIterations);
+  if (
+    extra !== undefined ||
+    algorithm !== PASSWORD_HASH_ALGORITHM ||
+    !Number.isInteger(iterations) ||
+    iterations <= 0 ||
+    !/^[A-Za-z0-9_-]+$/.test(rawSalt || "") ||
+    !/^[A-Za-z0-9_-]+$/.test(expectedHash || "")
+  ) {
+    return null;
   }
 
   try {
     const salt = decodeBase64UrlBytes(rawSalt);
-    const actualHash = encodeBase64Url(await derivePasswordHash(password, salt, iterations));
-    return constantTimeEqual(actualHash, expectedHash);
+    const expectedBytes = decodeBase64UrlBytes(expectedHash);
+    if (
+      salt.byteLength === 0 ||
+      expectedBytes.byteLength !== 32 ||
+      encodeBase64Url(expectedBytes) !== expectedHash
+    ) {
+      return null;
+    }
+    return { iterations, salt, expectedHash };
   } catch {
-    return false;
+    return null;
   }
 }
 

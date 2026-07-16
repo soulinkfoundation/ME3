@@ -38,9 +38,18 @@ export const RUNTIME_MIGRATIONS = [
   ["0015_agent_runtime_idempotency", "2026-07-09-agent-runtime-idempotency-v2"],
   ["0016_social_content_packages", "2026-07-10-social-content-packages-v1"],
   ["0018_social_publication_idempotency", "2026-07-10-social-publication-idempotency-v1"],
+  ["0019_owner_content_search", "2026-07-15-owner-content-search-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
+const DERIVED_TABLES = [
+  "owner_content_search",
+  "owner_content_search_config",
+  "owner_content_search_content",
+  "owner_content_search_data",
+  "owner_content_search_docsize",
+  "owner_content_search_idx",
+];
 const OPTIONAL_PLATFORM_TABLES = new Set(["_cf_METADATA"]);
 const SECRET_TABLES = ["install_secrets"];
 const EXCLUDED_TABLES = [
@@ -137,6 +146,7 @@ const COPIED_TABLES = [
 
 export const TABLE_POLICIES = new Map([
   ...VERIFY_TABLES.map((name) => [name, "verify"]),
+  ...DERIVED_TABLES.map((name) => [name, "derived"]),
   ...SECRET_TABLES.map((name) => [name, "secret-envelope"]),
   ...EXCLUDED_TABLES.map((name) => [name, "exclude"]),
   ...TRANSFORMED_TABLES.map((name) => [name, "transform"]),
@@ -303,6 +313,7 @@ export async function exportPortableV1({
   }
 
   const schema = validateDatabaseSchema(database);
+  assertLocalLoginAvailable(database);
   assertForeignKeys(database, "SOURCE_INVALID", "Source D1 foreign keys are invalid");
   const installSecrets = readInstallSecrets(database);
   const logicalInstallId = resolveInstallId(installId, installSecrets.get("ME3_CORE_INSTALL_ID"));
@@ -723,6 +734,48 @@ function validateDatabaseSchema(database) {
   return { tables, checksum: sha256(stableJson(schema)) };
 }
 
+function assertLocalLoginAvailable(database) {
+  const rows = sqliteJson(
+    database,
+    "SELECT email, password_hash AS passwordHash FROM owner_profile WHERE id = 'owner';",
+  );
+  const owner = rows.length === 1 ? rows[0] : null;
+  if (
+    typeof owner?.email !== "string" ||
+    !owner.email.trim().includes("@") ||
+    !isSupportedPasswordHash(owner.passwordHash)
+  ) {
+    throw new PortableError(
+      "LOCAL_PASSWORD_REQUIRED",
+      "Verified local password login is required before portable export",
+    );
+  }
+}
+
+function isSupportedPasswordHash(value) {
+  if (typeof value !== "string") return false;
+  const [algorithm, rawIterations, rawSalt, expectedHash, extra] = value.split("$");
+  const iterations = Number(rawIterations);
+  if (
+    extra !== undefined ||
+    algorithm !== "pbkdf2_sha256" ||
+    !Number.isInteger(iterations) ||
+    iterations <= 0 ||
+    !/^[A-Za-z0-9_-]+$/.test(rawSalt || "") ||
+    !/^[A-Za-z0-9_-]+$/.test(expectedHash || "")
+  ) {
+    return false;
+  }
+  const salt = Buffer.from(rawSalt, "base64url");
+  const hash = Buffer.from(expectedHash, "base64url");
+  return (
+    salt.byteLength > 0 &&
+    hash.byteLength === 32 &&
+    salt.toString("base64url") === rawSalt &&
+    hash.toString("base64url") === expectedHash
+  );
+}
+
 function readInstallSecrets(database) {
   const rows = sqliteJson(database, "SELECT name, value FROM install_secrets ORDER BY name;");
   const unknown = rows.map((row) => row.name).filter((name) => !KNOWN_INSTALL_SECRETS.has(name));
@@ -826,7 +879,7 @@ function buildDatabaseExport(database) {
 
   for (const [name, policy] of [...TABLE_POLICIES.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const sourceRows = Number(sqliteScalar(database, `SELECT COUNT(*) FROM ${identifier(name)};`));
-    sourceRowCount += policy === "verify" ? 0 : sourceRows;
+    sourceRowCount += policy === "verify" || policy === "derived" ? 0 : sourceRows;
     if (policy === "copy" || policy === "transform") {
       const exported = canonicalTableRows(database, name);
       statements.push(...exported.statements);
@@ -840,7 +893,7 @@ function buildDatabaseExport(database) {
         sha256: exported.sha256,
       });
     } else {
-      if (policy !== "verify") excludedRowCount += sourceRows;
+      if (policy !== "verify" && policy !== "derived") excludedRowCount += sourceRows;
       tables.push({ name, policy, sourceRows, rows: 0, sha256: EMPTY_SHA256 });
     }
   }
@@ -1103,7 +1156,7 @@ function assertArchiveFileSet(archive, objects) {
 function assertCleanTarget(database) {
   const occupied = [];
   for (const [table, policy] of TABLE_POLICIES) {
-    if (policy === "verify") continue;
+    if (policy === "verify" || policy === "derived") continue;
     const rows = Number(sqliteScalar(database, `SELECT COUNT(*) FROM ${identifier(table)};`));
     if (rows > 0) occupied.push({ table, rows });
   }

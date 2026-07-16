@@ -32,6 +32,7 @@ import {
 import {
   PROOF_DEVICE_TOKEN_HASH,
   PROOF_INSTALL_ID,
+  PROOF_LOCAL_PASSWORD,
   PROOF_PASSPHRASE,
   PROOF_PLATFORM_SECRET,
   PROOF_SESSION_SECRET,
@@ -161,11 +162,45 @@ test("archive omits platform, session, device, and managed-only credentials", ()
   assert.equal(textFiles.includes(PROOF_PLATFORM_SECRET), false);
   assert.equal(textFiles.includes(PROOF_SESSION_SECRET), false);
   assert.equal(textFiles.includes(PROOF_DEVICE_TOKEN_HASH), false);
+  assert.equal(textFiles.includes(PROOF_LOCAL_PASSWORD), false);
   assert.equal(textFiles.includes("cloudflare-account-must-not-export"), false);
   assert.equal(textFiles.includes("managed-gateway-must-not-export"), false);
   assert.equal(textFiles.includes("cloudflare-domain-id-must-reset"), false);
   assert.equal(textFiles.includes("cf-destination-must-reset"), false);
   assert.equal(textFiles.includes("cf-rule-must-reset"), false);
+});
+
+test("export requires verified local password login before creating output", async () => {
+  const missingPassword = cloneSource("missing-local-password");
+  const missingOutput = join(root, "missing-local-password-archive");
+  runSqlite(missingPassword, "UPDATE owner_profile SET password_hash = NULL WHERE id = 'owner';");
+  await assert.rejects(
+    exportPortableV1({
+      database: missingPassword,
+      r2Directory: sourceR2,
+      output: missingOutput,
+      passphrase: PROOF_PASSPHRASE,
+    }),
+    (error) => error instanceof PortableError && error.code === "LOCAL_PASSWORD_REQUIRED",
+  );
+  assert.equal(existsSync(missingOutput), false);
+
+  const malformedPassword = cloneSource("malformed-local-password");
+  const malformedOutput = join(root, "malformed-local-password-archive");
+  runSqlite(
+    malformedPassword,
+    "UPDATE owner_profile SET password_hash = 'pbkdf2_sha256$100000$invalid$invalid' WHERE id = 'owner';",
+  );
+  await assert.rejects(
+    exportPortableV1({
+      database: malformedPassword,
+      r2Directory: sourceR2,
+      output: malformedOutput,
+      passphrase: PROOF_PASSPHRASE,
+    }),
+    (error) => error instanceof PortableError && error.code === "LOCAL_PASSWORD_REQUIRED",
+  );
+  assert.equal(existsSync(malformedOutput), false);
 });
 
 test("wrong passphrases, tampering, version mismatches, and non-clean targets fail before mutation", () => {

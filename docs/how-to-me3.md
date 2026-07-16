@@ -92,7 +92,16 @@ On success, the Worker calls `POST /api/admin/bootstrap`, stores the owner profi
 
 ### Reset Or Enable Password Auth
 
-Use the same `SETUP_PASSWORD` flow when the owner has forgotten their password or previously only used ME3.app auth.
+Use the `SETUP_PASSWORD` recovery flow when the owner has forgotten their password and has no
+authenticated owner session.
+
+An owner who is already signed in through ME3.app does not need the operator's `SETUP_PASSWORD`.
+Open Account -> App Connections -> Local password, choose and confirm a password, then save it. The
+authenticated Worker calls `PUT /api/account/password`, verifies the newly generated hash before
+storing it, and returns only readiness state. Passwords and hashes are never returned by the API or
+written to logs.
+
+Use the recovery flow below only when there is no authenticated owner session:
 
 1. Make sure the current `SETUP_PASSWORD` is known. If it is not known, rotate it with `wrangler secret put SETUP_PASSWORD`.
 2. Open the ME3 login page.
@@ -230,16 +239,17 @@ hosted-only, do not belong in Core D1, and are never included.
 
 The proof creates two fresh local D1 installations from the real migration chain, seeds
 representative owner data and five R2 objects, exports, restores into the clean target, verifies all
-counts/checksums and the logical identity, confirms old credentials are absent, and issues a fresh
-proof client credential after re-pair:
+counts/checksums and the logical identity, boots the restored Worker, rejects the old browser and
+device credentials, signs in with the preserved synthetic local password, and issues a fresh proof
+client credential after re-pair:
 
 ```bash
 pnpm portable:test
 pnpm portable:proof
 ```
 
-Add `-- --keep` to keep the temporary archive and databases for inspection. No network calls or
-Cloudflare/GitHub mutations occur.
+Add `-- --keep` to keep the temporary archive and databases for inspection. The proof uses only a
+loopback local Worker; no external network calls or Cloudflare/GitHub mutations occur.
 
 ### Owner-Scoped Export And Restore
 
@@ -268,9 +278,11 @@ pnpm portable:export -- \
 pnpm portable:verify -- --archive .me3-portable/source.me3-portable
 ```
 
-Omit `--r2-dir` only when the installation has no R2 binding or objects. Export fails closed for an
-unknown table, unclassified credential field or `install_secrets` name, incomplete runtime
-migrations, unsafe secret material, or invalid logical installation ID.
+Omit `--r2-dir` only when the installation has no R2 binding or objects. Export fails with
+`LOCAL_PASSWORD_REQUIRED` before creating output unless the owner has a valid email and supported
+local password hash. It also fails closed for an unknown table, unclassified credential field or
+`install_secrets` name, incomplete runtime migrations, unsafe secret material, or invalid logical
+installation ID.
 
 Prepare a clean target from the exact recorded Core tag/commit, apply D1 migrations, and let Core
 finish its runtime migrations. Materialize that empty target D1 as SQLite, then restore locally:
