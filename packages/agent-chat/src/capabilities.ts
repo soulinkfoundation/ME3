@@ -658,19 +658,19 @@ export const CORE_CHAT_CAPABILITIES = [
         },
         ideaText: {
           type: "string",
-          description: "A concise description of the post angle or key idea.",
+          description: "A concise source-derived description using the owner's own wording where possible.",
         },
         linkedinBody: {
           type: "string",
-          description: "Optional LinkedIn-native draft body with a strong opening and useful detail.",
+          description: "Optional LinkedIn draft that preserves the source wording and voice, with only necessary formatting edits.",
         },
         xBody: {
           type: "string",
-          description: "Optional concise X post draft body.",
+          description: "Optional concise X draft that stays as close as possible to the owner's source words.",
         },
         instagramBody: {
           type: "string",
-          description: "Optional Instagram-native caption with an opening hook and readable rhythm.",
+          description: "Optional Instagram caption that preserves the owner's source wording and voice.",
         },
       },
       additionalProperties: false,

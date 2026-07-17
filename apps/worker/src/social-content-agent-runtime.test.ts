@@ -45,13 +45,18 @@ describe("Social content Agent Runtime v2", () => {
           xBody: "Ship the smallest useful slice. Learn. Then sharpen the next one.",
           instagramBody: "Small can still be useful. ✨\n\nShip one clear slice. Learn from real feedback. Make the next move sharper.",
         }),
-        { response: "I saved three platform-specific drafts for your review." },
+        {
+          response:
+            "I saved three drafts. Package ID: social-package-should-not-render.",
+        },
       ]) as never,
       messages: baseMessages("Turn today's journal into LinkedIn, X, and Instagram drafts."),
     });
 
     expect(response).toMatchObject({
       specialist: "core.social.draft.create",
+      replyText:
+        "Saved 3 social drafts from Small useful slices for review. Nothing was approved or published.",
       contentAction: {
         kind: "saved",
         packageId: expect.stringMatching(/^social-package-/),
@@ -59,9 +64,13 @@ describe("Social content Agent Runtime v2", () => {
       },
       actionCards: [expect.objectContaining({
         kind: "social.draft_saved",
+        title: "Social drafts saved",
+        summary: "Small useful slices",
         status: "pending_approval",
+        changed: [{ label: "Platforms", value: "LinkedIn, X, Instagram" }],
       })],
     });
+    expect(response.replyText).not.toContain("social-package-");
     expect(database.packages[0]).toMatchObject({
       source_type: "journal",
       source_ref: "journal:journal-1",
@@ -118,6 +127,13 @@ describe("Social content Agent Runtime v2", () => {
     });
 
     expect(response.contentAction?.platforms).toEqual(["linkedin"]);
+    expect(response.actionCards).toEqual([
+      expect.objectContaining({
+        title: "Social draft saved",
+        summary: "Publish the social workflow",
+        changed: [{ label: "Platform", value: "LinkedIn" }],
+      }),
+    ]);
     expect(database.packages[0]).toMatchObject({
       source_type: "mission_task",
       source_ref: "mission_task:task-1",
@@ -157,12 +173,18 @@ describe("Social content Agent Runtime v2", () => {
           sourceType: "mission_task",
           sourceId: "task-cross-turn",
         }),
-        { response: "I found and read the requested task." },
+        { response: "I found and read task-cross-turn." },
       ]) as never,
       messages: baseMessages("Use the task Eating our own AI cooking."),
     });
-    const sourceReference = selected.replyText || "";
-    expect(sourceReference).toContain("Source: mission_task:task-cross-turn");
+    expect(selected).toMatchObject({
+      replyText: "Read the social post source: Eating our own AI cooking.",
+      sourceReference: {
+        sourceType: "mission_task",
+        sourceId: "task-cross-turn",
+      },
+    });
+    expect(selected.replyText).not.toContain("task-cross-turn");
 
     database.tasks[0]!.description = "The fresh source snapshot after selection.";
     database.tasks[0]!.updated_at = "2026-07-15T10:00:00Z";
@@ -182,8 +204,13 @@ describe("Social content Agent Runtime v2", () => {
         { response: "Saved the selected source as a LinkedIn draft." },
       ]) as never,
       messages: [
-        ...baseMessages("Use the task Eating our own AI cooking."),
-        { role: "assistant" as const, content: sourceReference },
+        {
+          role: "system" as const,
+          content:
+            "You are ME3. Private runtime source selection: sourceType=mission_task; sourceId=task-cross-turn.",
+        },
+        { role: "user" as const, content: "Use the task Eating our own AI cooking." },
+        { role: "assistant" as const, content: selected.replyText || "" },
         { role: "user", content: "Great, create the LinkedIn draft." },
       ],
     });
@@ -193,6 +220,82 @@ describe("Social content Agent Runtime v2", () => {
       "The fresh source snapshot after selection.",
     );
     expect(database.packages[0]?.source_snapshot).not.toContain("The first source snapshot.");
+  });
+
+  it("revalidates a privately selected Journal source across turns", async () => {
+    const database = createSocialAgentDb({
+      journals: [{
+        id: "journal-cross-turn",
+        user_id: "owner",
+        entry_date: "2026-07-14",
+        title: "Useful quiet progress",
+        body: "The first Journal snapshot.",
+        body_format: "markdown",
+        updated_at: "2026-07-14T10:00:00Z",
+        archived_at: null,
+      }],
+    });
+    const selected = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "journal-cross-turn-read",
+      turnId: "turn-journal-cross-turn-read",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute([
+        toolCall("read-journal-cross-turn", "core_social_source_read", {
+          sourceType: "journal",
+          sourceId: "journal-cross-turn",
+        }),
+        { response: "I found journal-cross-turn." },
+      ]) as never,
+      messages: baseMessages("Use my Journal entry Useful quiet progress."),
+    });
+
+    expect(selected).toMatchObject({
+      replyText: "Read the social post source: Useful quiet progress.",
+      sourceReference: {
+        sourceType: "journal",
+        sourceId: "journal-cross-turn",
+      },
+    });
+    expect(selected.replyText).not.toContain("journal-cross-turn");
+
+    database.journals[0]!.body = "The fresh Journal snapshot after selection.";
+    database.journals[0]!.updated_at = "2026-07-15T10:00:00Z";
+    const drafted = await runCoreAgentToolTurn({
+      db: database.db,
+      userId: "owner",
+      requestId: "journal-cross-turn-draft",
+      turnId: "turn-journal-cross-turn-draft",
+      ownerTimezone: "Europe/Dublin",
+      route: workersRoute([
+        toolCall("save-journal-cross-turn", "core_social_draft_create", {
+          sourceType: "journal",
+          sourceId: "journal-cross-turn",
+          ideaText: "Useful quiet progress",
+          xBody: "Useful quiet progress is still progress.",
+        }),
+        { response: "Saved the selected Journal source as an X draft." },
+      ]) as never,
+      messages: [
+        {
+          role: "system" as const,
+          content:
+            "You are ME3. Private runtime source selection: sourceType=journal; sourceId=journal-cross-turn.",
+        },
+        { role: "user" as const, content: "Use my Journal entry Useful quiet progress." },
+        { role: "assistant" as const, content: selected.replyText || "" },
+        { role: "user", content: "Great, create the X draft." },
+      ],
+    });
+
+    expect(drafted.contentAction?.platforms).toEqual(["x"]);
+    expect(database.packages[0]?.source_snapshot).toContain(
+      "The fresh Journal snapshot after selection.",
+    );
+    expect(database.packages[0]?.source_snapshot).not.toContain(
+      "The first Journal snapshot.",
+    );
   });
 
   it("refuses to create drafts when the exact source cannot be revalidated", async () => {

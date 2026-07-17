@@ -177,7 +177,7 @@ describe("mailbox threads", () => {
           },
         };
       },
-    } as D1Database;
+    } as unknown as D1Database;
 
     await expect(
       listAgentMailboxThreadMessages({ DB: db } as never, "owner", "thread-1"),

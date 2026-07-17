@@ -2,6 +2,7 @@ import { normalizeTimeZone } from "@me3-core/plugin-calendar";
 import type {
   AgentChatActionCard,
   AgentChatModelAttemptTrace,
+  AgentOwnerContentSourceReference,
   AgentMailboxDraftInput,
   AgentMailboxMessage,
   AgentMailboxMessageListOptions,
@@ -74,6 +75,7 @@ type CoreToolOutcome = {
   emailAction?: AgentSandboxDispatchResponse["emailAction"];
   contentAction?: AgentSandboxDispatchResponse["contentAction"];
   actionCards: AgentChatActionCard[];
+  sourceReference?: AgentOwnerContentSourceReference | null;
 };
 
 export type CoreMailboxToolServices = {
@@ -648,9 +650,10 @@ async function executeSocialToolCall(input: {
     return {
       capabilityId: "core.social.source.read",
       result: { ok: true, source },
-      fallbackReply: `Read the social post source: ${source.title}. Source: ${source.sourceType}:${source.id}.`,
+      fallbackReply: `Read the social post source: ${source.title}.`,
       reminderAction: null,
       actionCards: [],
+      sourceReference: { sourceType: source.sourceType, sourceId: source.id },
     };
   }
 
@@ -677,8 +680,9 @@ async function executeSocialToolCall(input: {
     capabilityId: "core.social.draft.create",
     result: {
       ok: true,
-      package: detail.package,
-      variants: detail.variants,
+      saved: true,
+      sourceTitle: source.title,
+      platforms,
       approved: false,
       published: false,
     },
@@ -691,6 +695,7 @@ async function executeSocialToolCall(input: {
       platforms,
     },
     actionCards: [buildSocialDraftActionCard(detail, source)],
+    sourceReference: { sourceType: source.sourceType, sourceId: source.id },
   };
 }
 
@@ -709,15 +714,15 @@ function buildSocialDraftActionCard(
     id: `social-package:${detail.package.id}`,
     kind: "social.draft_saved",
     capabilityId: "core.social.draft.create",
-    title: "Social drafts saved",
-    summary: detail.package.ideaText,
+    title: detail.variants.length === 1 ? "Social draft saved" : "Social drafts saved",
+    summary: source.title,
     status: "pending_approval",
     statusLabel: "Needs review",
     changed: [
-      { label: "Source", value: source.title },
-      { label: "Platforms", value: platformLabels.join(", ") },
-      { label: "Approval", value: "Not approved" },
-      { label: "Publishing", value: "Not published" },
+      {
+        label: detail.variants.length === 1 ? "Platform" : "Platforms",
+        value: platformLabels.join(", "),
+      },
     ],
     records: [{ kind: "social_package", id: detail.package.id }],
     primaryAction: { label: "Review drafts", href: "/social" },
@@ -936,9 +941,12 @@ function withCoreToolInstructions(
     "- Use social tools when the owner asks to turn a Journal entry or Mission Control task into social posts.",
     "- Search owner content when the owner gives a remembered task or Journal title. For Journal, an entry ID, YYYY-MM-DD date, or today can also be used directly. Never invent a source ID.",
     "- Read the exact source with core_social_source_read before calling core_social_draft_create. Build every draft from that returned source, not from assumptions or a summary invented by the model.",
-    "- If source reading is the last action in a turn, preserve the returned sourceType and stable source ID in the reply. Draft creation revalidates that source ID so a confirmed selection remains safe across turns.",
-    "- Write platform-native variants: a strong practical opening for LinkedIn, concise copy for X, and a hook plus readable caption rhythm for Instagram. Do not copy identical text across platforms.",
+    "- If source reading is the last action in a turn, confirm the source by its human title only. ME3 preserves the stable source ID privately for safe cross-turn revalidation.",
+    "- Preserve the owner's words, voice, claims, tone, and intended meaning by default. Reuse exact source phrases where they fit and make only light edits for length, clarity, or platform formatting unless the owner asks for a rewrite.",
+    "- Do not add generic hooks, emojis, hashtags, advice, claims, or framing that are not in the source. When one source wording already fits several platforms, keep it instead of rewriting for novelty.",
     "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
+    "- Never mention internal social package or variant IDs in the user-facing reply. Confirm the saved draft and use the review action instead.",
+    "- Never mention internal Mission task or Journal source IDs in the user-facing reply. Disambiguate with human titles, projects, dates, and snippets.",
     "- A tool result is the source of truth. Do not claim an action succeeded unless its result says ok=true.",
     "- For current ME3 data, call the relevant tool in this turn instead of answering from earlier conversation or context alone.",
     "- When the owner confirms several independent actions and their stable IDs are known, return all tool calls together. ME3 executes them sequentially with policy and idempotency checks.",
@@ -1149,7 +1157,7 @@ function successfulResponse(
     auditId: null,
     turnId,
     specialist: outcome?.capabilityId || "core.agent-chat",
-    replyText: withSocialSourceReference(replyText, outcome),
+    replyText: userFacingToolReply(replyText, outcome),
     model,
     source: route.providerId,
     fallbackReason: null,
@@ -1160,20 +1168,46 @@ function successfulResponse(
     contentAction: outcome?.contentAction || null,
     contactsChanged: false,
     modelAttempts,
+    sourceReference: outcome?.sourceReference || null,
   };
 }
 
-function withSocialSourceReference(
+function userFacingToolReply(
   replyText: string,
   outcome: CoreToolOutcome | null,
 ): string {
-  if (outcome?.capabilityId !== "core.social.source.read") return replyText;
-  const source = outcome.result.source;
-  if (!isAgentSocialSource(source)) return replyText;
-  const reference = `${source.sourceType}:${source.id}`;
-  return replyText.toLowerCase().includes(reference.toLowerCase())
-    ? replyText
-    : `${replyText}\n\nSource: ${reference}`;
+  if (
+    outcome &&
+    (
+      /\b(?:social-package|social-variant)-[0-9a-z-]+\b/i.test(replyText) ||
+      /\b(?:mission_task|journal):[0-9a-z-]+\b/i.test(replyText) ||
+      Boolean(
+        outcome.sourceReference?.sourceId &&
+          replyText.toLowerCase().includes(outcome.sourceReference.sourceId.toLowerCase()),
+      ) ||
+      replyContainsSearchResultId(replyText, outcome)
+    )
+  ) {
+    return outcome.fallbackReply;
+  }
+  return replyText;
+}
+
+function replyContainsSearchResultId(
+  replyText: string,
+  outcome: CoreToolOutcome,
+): boolean {
+  if (outcome.capabilityId !== "core.owner_content.search") return false;
+  const results = outcome.result.results;
+  if (!Array.isArray(results)) return false;
+  const reply = replyText.toLowerCase();
+  return results.some((result) => {
+    if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+    const sourceId = (result as Record<string, unknown>).sourceId;
+    return typeof sourceId === "string" &&
+      sourceId.length > 0 &&
+      reply.includes(sourceId.toLowerCase());
+  });
 }
 
 function fallbackResponse(
@@ -1215,6 +1249,7 @@ function fallbackResponse(
     contentAction: outcome?.contentAction || null,
     contactsChanged: false,
     modelAttempts,
+    sourceReference: outcome?.sourceReference || null,
   };
 }
 
@@ -1263,13 +1298,13 @@ function formatOwnerContentSearch(
   }
   return [
     ambiguous
-      ? "I found several similarly strong matches. Choose one by its stable source ID:"
+      ? "I found several similarly strong matches. Tell me which title, project, or date you mean:"
       : `Found ${results.length} matching owner-content source${results.length === 1 ? "" : "s"}:`,
     ...results.map((result) => {
       const context = result.sourceType === "mission_task"
         ? [result.projectName, result.status].filter(Boolean).join(" — ")
         : result.sourceDate;
-      return `- ${result.title}${context ? ` — ${context}` : ""} (Source: ${result.sourceType}:${result.sourceId})`;
+      return `- ${result.title}${context ? ` — ${context}` : ""}`;
     }),
   ].join("\n");
 }

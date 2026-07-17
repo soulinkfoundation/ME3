@@ -303,6 +303,13 @@ function createEnv(state: Partial<FakeDbState> = {}) {
                     item.source_ref === values[1] &&
                     !item.archived_at,
                 )
+              : sql.includes("WHERE t.user_id = ? AND t.id = ?")
+                ? dbState.tasks.find(
+                    (item) =>
+                      item.user_id === values[0] &&
+                      item.id === values[1] &&
+                      !item.archived_at,
+                  )
               : dbState.tasks.find(
                   (item) =>
                     item.id === values[0] &&
@@ -1569,6 +1576,73 @@ describe("Core chat native context", () => {
         content: expect.stringContaining("Add an AI provider"),
       }),
     );
+  });
+
+  it("persists a selected source privately and restores it into the next turn", async () => {
+    const aiRun = workersAiSequence(
+      {
+        tool_calls: [{
+          id: "read-private-source",
+          name: "core_social_source_read",
+          arguments: {
+            sourceType: "mission_task",
+            sourceId: "task-hidden",
+          },
+        }],
+      },
+      { response: "I found task-hidden." },
+      { response: "I can use the selected task for the next draft." },
+    );
+    const env = createEnv({
+      projects: [projectRow("project-writing", "Writing", "writing")],
+      tasks: [taskRow("task-hidden", "Useful source title", "project-writing")],
+    });
+    const runtimeEnv = { ...env, AI: { run: aiRun } };
+    const storage = createStorage();
+    const threadId = "thread-private-source";
+
+    const selected = await dispatchAgentSandboxTurn(
+      runtimeEnv as never,
+      storage,
+      { ...dispatchInput("Read Useful source title for a LinkedIn post."), threadId },
+    );
+
+    expect(selected.replyText).toBe("Read the social post source: Useful source title.");
+    expect(selected.replyText).not.toContain("task-hidden");
+    expect(selected).not.toHaveProperty("sourceReference");
+    const savedAssistantMessage = env.state.persistedMessages.find(
+      (message) => message.role === "assistant",
+    );
+    expect(JSON.parse(savedAssistantMessage?.metadata_json || "{}")).toMatchObject({
+      sourceReference: {
+        sourceType: "mission_task",
+        sourceId: "task-hidden",
+      },
+    });
+
+    env.state.recentMessages = env.state.persistedMessages.map((message) => ({
+      role: message.role,
+      content: message.content,
+      metadata_json: message.metadata_json,
+    }));
+    const followUp = await dispatchAgentSandboxTurn(
+      runtimeEnv as never,
+      storage,
+      { ...dispatchInput("Create a LinkedIn post from that source."), threadId },
+    );
+
+    expect(followUp.replyText).toBe("I can use the selected task for the next draft.");
+    expect(followUp).not.toHaveProperty("sourceReference");
+    const modelInput = (aiRun.mock.calls as unknown[][])[2]?.[1] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(modelInput.messages[0]?.content).toContain(
+      "sourceType=mission_task; sourceId=task-hidden",
+    );
+    expect(modelInput.messages).toContainEqual({
+      role: "assistant",
+      content: "Read the social post source: Useful source title.",
+    });
   });
 
   it("uses the default Workers AI backup when a configured model is empty", async () => {

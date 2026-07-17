@@ -326,6 +326,11 @@ export type AgentChatRuntimeStreamOptions = {
   onEvent(event: AgentChatRuntimeStreamEvent): void | Promise<void>;
 };
 
+export type AgentOwnerContentSourceReference = {
+  sourceType: "journal" | "mission_task";
+  sourceId: string;
+};
+
 export type AgentSandboxDispatchResponse = {
   ok: boolean;
   auditId: string | null;
@@ -363,6 +368,7 @@ export type AgentSandboxDispatchResponse = {
   modelAttempts?: AgentChatModelAttemptTrace[] | null;
   streamMetrics?: AgentChatStreamMetrics | null;
   trace?: AgentChatTurnTrace | null;
+  sourceReference?: AgentOwnerContentSourceReference | null;
   error?: string;
 };
 
@@ -697,6 +703,7 @@ type StorageLike = {
 type CoreChatToolTurnPlan = {
   decision: CoreChatToolPlannerDecision;
   recent: Array<{ role: "user" | "assistant"; content: string }>;
+  sourceReference: AgentOwnerContentSourceReference | null;
 };
 
 type OwnerProfileRow = {
@@ -2235,6 +2242,7 @@ export async function dispatchAgentSandboxTurn(
     knowledgeContext,
     agentContext?.prompt ?? null,
     buildCoreChatOrientationPrompt(toolPlan.decision, setupReadiness),
+    toolPlan.sourceReference,
   );
   let imageInputs: AgentChatImageInput[] = [];
   let imageInputError: string | null = null;
@@ -2331,6 +2339,7 @@ export async function dispatchAgentSandboxTurn(
     route,
     context: agentContext,
   });
+  response = withoutPrivateAgentResponseContext(response);
 
   await persistAgentTurnResult(env.DB, storage, input, resultKey, response);
   return response;
@@ -3042,7 +3051,8 @@ async function loadCoreChatToolTurnPlan(
 ): Promise<CoreChatToolTurnPlan> {
   const recent = await loadRecentMessages(env, input.userId, input.threadId);
   return {
-    recent,
+    recent: recent.messages,
+    sourceReference: recent.sourceReference,
     decision: planLegacyNativeToolTurn({
       messageText: input.messageText.trim(),
     }),
@@ -4979,29 +4989,44 @@ async function loadRecentMessages(
   env: CoreAgentChatEnv,
   ownerId: string,
   threadId?: string | null,
-): Promise<Array<{ role: "user" | "assistant"; content: string }>> {
+): Promise<{
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  sourceReference: AgentOwnerContentSourceReference | null;
+}> {
   try {
     const hasThread = typeof threadId === "string" && threadId.trim().length > 0;
     const rows = await env.DB.prepare(
       hasThread
-        ? `SELECT role, content
+        ? `SELECT role, content, metadata_json
            FROM assistant_messages
            WHERE owner_id = ? AND thread_id = ? AND role IN ('user', 'assistant')
            ORDER BY created_at DESC
            LIMIT 12`
-        : `SELECT role, content
+        : `SELECT role, content, metadata_json
            FROM assistant_messages
            WHERE owner_id = ? AND role IN ('user', 'assistant')
            ORDER BY created_at DESC
            LIMIT 12`,
     )
       .bind(...(hasThread ? [ownerId, threadId] : [ownerId]))
-      .all<{ role: "user" | "assistant"; content: string }>();
-    return (rows.results || [])
-      .reverse()
-      .filter((message) => !isProviderSetupFallbackMessage(message.content));
+      .all<{
+        role: "user" | "assistant";
+        content: string;
+        metadata_json?: string | null;
+      }>();
+    const recent = (rows.results || []).reverse();
+    const sourceReference = recent
+      .map((message) => assistantSourceReferenceFromMetadata(message.metadata_json))
+      .filter((reference): reference is AgentOwnerContentSourceReference => Boolean(reference))
+      .at(-1) || null;
+    return {
+      messages: recent.filter(
+        (message) => !isProviderSetupFallbackMessage(message.content),
+      ).map(({ role, content }) => ({ role, content })),
+      sourceReference,
+    };
   } catch {
-    return [];
+    return { messages: [], sourceReference: null };
   }
 }
 
@@ -5012,6 +5037,7 @@ function buildChatMessages(
   knowledgeContext: string,
   agentContextPrompt: string | null,
   orientationPrompt: string | null,
+  sourceReference: AgentOwnerContentSourceReference | null,
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
   const ownerName = owner?.name?.trim() || owner?.username?.trim() || "the owner";
   const assistantName = normalizeAssistantDisplayName(owner?.assistant_name);
@@ -5025,6 +5051,9 @@ function buildChatMessages(
     knowledgeContext,
     agentContextPrompt,
     orientationPrompt,
+    sourceReference
+      ? `Private runtime source selection for follow-up tool calls: sourceType=${sourceReference.sourceType}; sourceId=${sourceReference.sourceId}. Never show this source ID to the owner.`
+      : null,
     "Answer helpfully and plainly. Do not claim external actions are complete unless a tool result says they are.",
     "When the owner is setting up ME3, testing the assistant, or asking what you can do, acknowledge their goal and explain useful next steps from the available capability/context map. Treat capability examples as context unless the owner clearly asks for one concrete action.",
     "When the owner asks to configure ME3, use the setup readiness summary first: separate what already looks ready from the most useful missing next steps. Use 'your ME3 installation' in owner-facing setup copy, not 'Core install'.",
@@ -6344,12 +6373,40 @@ async function persistAssistantMessageAssetLinks(
 }
 
 function assistantMessageMetadataForResponse(
-  response: Pick<AgentSandboxDispatchResponse, "actionCards" | "imageAction">,
+  response: Pick<
+    AgentSandboxDispatchResponse,
+    "actionCards" | "imageAction" | "sourceReference"
+  >,
 ): Record<string, unknown> | null {
   const metadata: Record<string, unknown> = {};
   if (response.actionCards?.length) metadata.actionCards = response.actionCards;
   if (response.imageAction) metadata.imageAction = response.imageAction;
+  if (response.sourceReference) metadata.sourceReference = response.sourceReference;
   return Object.keys(metadata).length ? metadata : null;
+}
+
+function assistantSourceReferenceFromMetadata(
+  metadataJson: string | null | undefined,
+): AgentOwnerContentSourceReference | null {
+  const reference = parseJsonRecord(metadataJson || null).sourceReference;
+  if (!reference || typeof reference !== "object" || Array.isArray(reference)) return null;
+  const source = reference as Record<string, unknown>;
+  const sourceType = source.sourceType;
+  const sourceId = typeof source.sourceId === "string" ? source.sourceId.trim() : "";
+  if (
+    (sourceType !== "journal" && sourceType !== "mission_task") ||
+    !sourceId ||
+    sourceId.length > 160 ||
+    /[\u0000-\u001f\u007f]/.test(sourceId)
+  ) return null;
+  return { sourceType, sourceId };
+}
+
+function withoutPrivateAgentResponseContext(
+  response: AgentSandboxDispatchResponse,
+): AgentSandboxDispatchResponse {
+  const { sourceReference: _sourceReference, ...publicResponse } = response;
+  return publicResponse;
 }
 
 async function touchAssistantThread(
