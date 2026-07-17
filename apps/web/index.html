@@ -13,6 +13,27 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="ME3" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <script>
+      (() => {
+        try {
+          const preference = window.localStorage.getItem("me3-theme");
+          const systemIsDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const effectiveTheme =
+            preference === "light" || preference === "dark"
+              ? preference
+              : systemIsDark
+                ? "dark"
+                : "light";
+
+          if (preference === "light" || preference === "dark") {
+            document.documentElement.dataset.theme = preference;
+          }
+          document.documentElement.style.colorScheme = effectiveTheme;
+        } catch {
+          // Fall back to the system theme when storage is unavailable.
+        }
+      })();
+    </script>
     <title>ME3: Your Personal AI Assistant</title>
     <meta
       name="description"
@@ -44,60 +65,111 @@
       }
     </script>
     <style>
+      html,
+      body,
+      #app {
+        min-height: 100%;
+        background: #fff;
+      }
+
+      body {
+        margin: 0;
+      }
+
       .app-launch-splash {
-        display: none;
+        position: fixed;
+        inset: 0;
+        display: flex;
         min-height: 100vh;
         min-height: 100dvh;
         align-items: center;
         justify-content: center;
         background: #fff;
+        overflow: hidden;
       }
 
-      .app-launch-splash img {
-        width: min(220px, 56vw);
+      .app-launch-splash__logo {
+        width: min(132px, 38vw);
         height: auto;
       }
 
-      @media (max-width: 820px) and (display-mode: standalone),
-        (max-width: 820px) and (display-mode: fullscreen) {
-        html,
-        body,
-        #app {
-          min-height: 100%;
-          background: #fff;
+      .app-launch-splash__logo--dark {
+        display: none;
+      }
+
+      .app-launch-splash__progress {
+        position: absolute;
+        inset: 0 auto auto 0;
+        width: 72%;
+        height: 2px;
+        background: #1f9d91;
+        animation: app-launch-progress 650ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+
+      :root[data-theme="dark"],
+      :root[data-theme="dark"] body,
+      :root[data-theme="dark"] #app,
+      :root[data-theme="dark"] .app-launch-splash {
+        background: #111;
+      }
+
+      :root[data-theme="dark"] .app-launch-splash__logo--light {
+        display: none;
+      }
+
+      :root[data-theme="dark"] .app-launch-splash__logo--dark {
+        display: block;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme]),
+        :root:not([data-theme]) body,
+        :root:not([data-theme]) #app,
+        :root:not([data-theme]) .app-launch-splash {
+          background: #111;
         }
 
-        body {
-          margin: 0;
+        :root:not([data-theme]) .app-launch-splash__logo--light {
+          display: none;
         }
 
-        .app-launch-splash {
-          display: flex;
+        :root:not([data-theme]) .app-launch-splash__logo--dark {
+          display: block;
         }
       }
 
-      @media (max-width: 820px) {
-        html.is-ios-standalone,
-        html.is-ios-standalone body,
-        html.is-ios-standalone #app {
-          min-height: 100%;
-          background: #fff;
+      @keyframes app-launch-progress {
+        from {
+          width: 0;
         }
 
-        html.is-ios-standalone body {
-          margin: 0;
-        }
-
-        html.is-ios-standalone .app-launch-splash {
-          display: flex;
+        to {
+          width: 72%;
         }
       }
+
+      @media (prefers-reduced-motion: reduce) {
+        .app-launch-splash__progress {
+          animation: none;
+        }
+      }
+
     </style>
   </head>
   <body>
     <div id="app">
-      <div class="app-launch-splash" aria-label="ME3 is launching">
-        <img src="/me3-logo-light.png" alt="ME3" />
+      <div class="app-launch-splash" role="status" aria-label="ME3 is loading">
+        <div class="app-launch-splash__progress" aria-hidden="true"></div>
+        <img
+          class="app-launch-splash__logo app-launch-splash__logo--light"
+          src="/me3-logo-light.png"
+          alt=""
+        />
+        <img
+          class="app-launch-splash__logo app-launch-splash__logo--dark"
+          src="/me3-logo-dark.png"
+          alt=""
+        />
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
