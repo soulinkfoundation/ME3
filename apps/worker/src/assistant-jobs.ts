@@ -3490,36 +3490,134 @@ async function loadAssistantJobTasksContext(
 
 function richTextToPlainText(value: string | null) {
   if (!value) return "";
-  return decodeHtmlEntities(
-    value
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<br\s*\/?>/gi, " ")
-      .replace(/<\/(?:p|div|li|h[1-6]|blockquote)>/gi, " ")
-      .replace(/<[^>]+>/g, " "),
-  )
+  return stripRichTextHtml(decodeHtmlEntities(value))
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function decodeHtmlEntities(value: string) {
-  return value
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#(\d+);/g, (match, code: string) => htmlCodePointToString(match, code, 10))
-    .replace(/&#x([0-9a-f]+);/gi, (match, code: string) =>
-      htmlCodePointToString(match, code, 16),
-    );
+  let decoded = "";
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] !== "&") {
+      decoded += value[index];
+      index += 1;
+      continue;
+    }
+    const end = value.indexOf(";", index + 1);
+    if (end < 0 || end - index > 12) {
+      decoded += value[index];
+      index += 1;
+      continue;
+    }
+    const replacement = decodeHtmlEntity(value.slice(index + 1, end));
+    if (replacement === null) {
+      decoded += value[index];
+      index += 1;
+      continue;
+    }
+    decoded += replacement;
+    index = end + 1;
+  }
+  return decoded;
 }
 
-function htmlCodePointToString(fallback: string, value: string, radix: number) {
-  const codePoint = Number.parseInt(value, radix);
-  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return fallback;
+function decodeHtmlEntity(entity: string): string | null {
+  switch (entity.toLowerCase()) {
+    case "nbsp": return " ";
+    case "amp": return "&";
+    case "lt": return "<";
+    case "gt": return ">";
+    case "quot": return '"';
+    case "#39": return "'";
+  }
+  if (!entity.startsWith("#")) return null;
+  const hexadecimal = entity[1]?.toLowerCase() === "x";
+  const digits = entity.slice(hexadecimal ? 2 : 1);
+  if (!digits || !isHtmlEntityNumber(digits, hexadecimal ? 16 : 10)) return null;
+  const codePoint = Number.parseInt(digits, hexadecimal ? 16 : 10);
+  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return null;
   return String.fromCodePoint(codePoint);
+}
+
+function isHtmlEntityNumber(value: string, radix: 10 | 16): boolean {
+  for (const character of value.toLowerCase()) {
+    const code = character.charCodeAt(0);
+    const digit = code >= 48 && code <= 57;
+    const hexLetter = radix === 16 && code >= 97 && code <= 102;
+    if (!digit && !hexLetter) return false;
+  }
+  return true;
+}
+
+function stripRichTextHtml(value: string): string {
+  let text = "";
+  let ignoredContentTag: "script" | "style" | null = null;
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] !== "<") {
+      if (!ignoredContentTag) text += value[index];
+      index += 1;
+      continue;
+    }
+    const tagEnd = findRichTextTagEnd(value, index + 1);
+    if (tagEnd < 0) {
+      if (!ignoredContentTag) text += value[index];
+      index += 1;
+      continue;
+    }
+    const tag = parseRichTextTag(value.slice(index + 1, tagEnd));
+    if (!ignoredContentTag) {
+      text += " ";
+      if (!tag?.closing && (tag?.name === "script" || tag?.name === "style")) {
+        ignoredContentTag = tag.name;
+      }
+    } else if (tag?.closing && tag.name === ignoredContentTag) {
+      ignoredContentTag = null;
+      text += " ";
+    }
+    index = tagEnd + 1;
+  }
+  return text;
+}
+
+function findRichTextTagEnd(value: string, start: number): number {
+  let quote: "'" | '"' | null = null;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === ">") return index;
+  }
+  return -1;
+}
+
+function parseRichTextTag(value: string): { name: string; closing: boolean } | null {
+  let index = 0;
+  while (isRichTextWhitespace(value[index] || "")) index += 1;
+  const closing = value[index] === "/";
+  if (closing) index += 1;
+  while (isRichTextWhitespace(value[index] || "")) index += 1;
+  const start = index;
+  while (isRichTextTagNameCharacter(value[index] || "")) index += 1;
+  if (index === start) return null;
+  return { name: value.slice(start, index).toLowerCase(), closing };
+}
+
+function isRichTextTagNameCharacter(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
+    (code >= 48 && code <= 57) || value === "-";
+}
+
+function isRichTextWhitespace(value: string): boolean {
+  return value === " " || value === "\t" || value === "\n" || value === "\r";
 }
 
 async function loadAssistantJobMemoryContext(

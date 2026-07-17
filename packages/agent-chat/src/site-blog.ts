@@ -772,16 +772,18 @@ function parseSiteBlogPostCreateText(messageText: string): {
   draft: boolean;
   publishedAt: string | null;
 } {
-  const bodyMarkdown = extractAgentBlogField(messageText, "body|body markdown|markdown");
-  const excerpt = extractAgentBlogField(messageText, "excerpt|summary");
-  const slug = normalizeAgentBlogSlug(extractAgentBlogField(messageText, "slug"));
-  const explicitTitle =
-    normalizeNullableText(
-      messageText.match(/\b(?:called|titled|named|title(?:d)?\s+as)\s+["“]?([^"”]+?)["”]?(?:\s+(?:with|and|as|but)\b|[.?!]*$)/i)?.[1],
-    ) ||
-    normalizeNullableText(messageText.match(/\btitle\s*(?:to|as|:)\s*["“]?([^"”]+?)["”]?(?:\s+(?:with|and|as|but)\b|[.?!]*$)/i)?.[1]);
-  const topic = normalizeNullableText(
-    messageText.match(/\b(?:blog\s+post|article|post)\s+(?:about|on)\s+["“]?([^"”.?!]+?)["”]?(?:\s+(?:with|and|but|keep|as|for)\b|[.?!]*$)/i)?.[1],
+  const bodyMarkdown = extractAgentBlogField(messageText, ["body markdown", "body", "markdown"]);
+  const excerpt = extractAgentBlogField(messageText, ["excerpt", "summary"]);
+  const slug = normalizeAgentBlogSlug(extractAgentBlogField(messageText, ["slug"]));
+  const explicitTitle = extractAgentBlogPhrase(
+    messageText,
+    ["titled as ", "called ", "titled ", "named ", "title to ", "title as ", "title:"],
+    [" with ", " and ", " as ", " but "],
+  );
+  const topic = extractAgentBlogPhrase(
+    messageText,
+    ["blog post about ", "blog post on ", "article about ", "article on ", "post about ", "post on "],
+    [" with ", " and ", " but ", " keep ", " as ", " for "],
   );
   const title = explicitTitle || (topic ? titleFromAgentBlogTopic(topic) : null);
   const draft = !/\b(?:publish|published|make\s+(?:it\s+)?live)\b/i.test(messageText) ||
@@ -806,35 +808,29 @@ function parseSiteBlogPostUpdateText(messageText: string): {
   draft?: boolean;
   publishedAt?: string | null;
 } {
-  const rename = messageText.match(
-    /^\s*(?:please\s+)?(?:rename|retitle)\s+(?:the\s+)?(?:blog\s+post|article|post)\s+["“]?(.+?)["”]?\s+to\s+["“]?(.+?)["”]?[.?!]*$/i,
-  );
+  const rename = parseAgentBlogRename(messageText);
   if (rename) {
     return {
-      target: cleanAgentBlogPostReference(rename[1]),
-      title: normalizeNullableText(rename[2]) || undefined,
+      target: cleanAgentBlogPostReference(rename.target),
+      title: normalizeAgentBlogCommandValue(rename.title) || undefined,
     };
   }
 
-  const fieldUpdate = messageText.match(
-    /^\s*(?:please\s+)?(?:update|set|change|replace)\s+(?:the\s+)?(title|slug|excerpt|summary|body|body markdown|markdown|published date|publishedAt)\s+(?:for|on|of)\s+(?:the\s+)?(?:blog\s+post|article|post)?\s*["“]?(.+?)["”]?\s+(?:to|as|:)\s+["“]?([\s\S]+?)["”]?[.?!]*$/i,
-  );
+  const fieldUpdate = parseAgentBlogFieldUpdate(messageText);
   if (fieldUpdate) {
     return blogUpdateForField(
-      cleanAgentBlogPostReference(fieldUpdate[2]),
-      fieldUpdate[1],
-      fieldUpdate[3],
+      cleanAgentBlogPostReference(fieldUpdate.target),
+      fieldUpdate.field,
+      fieldUpdate.value,
     );
   }
 
-  const postFieldUpdate = messageText.match(
-    /^\s*(?:please\s+)?(?:update|set|change|replace)\s+(?:the\s+)?(?:blog\s+post|article|post)\s+["“]?(.+?)["”]?\s+(title|slug|excerpt|summary|body|body markdown|markdown|published date|publishedAt)\s+(?:to|as|:)\s+["“]?([\s\S]+?)["”]?[.?!]*$/i,
-  );
+  const postFieldUpdate = parseAgentBlogPostFieldUpdate(messageText);
   if (postFieldUpdate) {
     return blogUpdateForField(
-      cleanAgentBlogPostReference(postFieldUpdate[1]),
-      postFieldUpdate[2],
-      postFieldUpdate[3],
+      cleanAgentBlogPostReference(postFieldUpdate.target),
+      postFieldUpdate.field,
+      postFieldUpdate.value,
     );
   }
 
@@ -875,36 +871,54 @@ function blogUpdateForField(
 }
 
 function extractSiteBlogPostReadReference(messageText: string): string | null {
-  const direct =
-    messageText.match(/\b(?:blog\s+post|article|post|draft)\s+(?:about|called|titled|named|for)\s+["“]?(.+?)["”]?[.?!]*$/i)?.[1] ||
-    messageText.match(/\b(?:read|open|show|pull up|check|inspect|publish|unpublish)\s+(?:the\s+)?(?:full\s+)?(?:blog\s+post|article|post|draft)\s+["“]?(.+?)["”]?[.?!]*$/i)?.[1];
+  const direct = extractAgentBlogPhrase(messageText, [
+    "blog post about ",
+    "blog post called ",
+    "blog post titled ",
+    "blog post named ",
+    "blog post for ",
+    "article about ",
+    "article called ",
+    "article titled ",
+    "article named ",
+    "article for ",
+    "post about ",
+    "post called ",
+    "post titled ",
+    "post named ",
+    "post for ",
+    "draft about ",
+    "draft called ",
+    "draft titled ",
+    "draft named ",
+    "draft for ",
+  ]);
   if (direct) return cleanAgentBlogPostReference(direct);
+  const requested = extractAgentBlogRequestedPostReference(messageText);
+  if (requested) return cleanAgentBlogPostReference(requested);
   return cleanAgentBlogPostReference(
-    messageText
-      .replace(/^(?:please\s+)?/i, "")
-      .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-      .replace(/^(?:read|open|show|pull up|check|inspect|publish|unpublish)\s+(?:the\s+)?(?:full\s+)?/i, "")
-      .replace(/^(?:the\s+)?(?:blog\s+post|article|post|draft)\s*/i, "")
-      .replace(/[.?!]+$/g, ""),
+    removeAgentBlogPostKind(
+      removeAgentBlogPrefix(removeAgentBlogPrefix(withoutAgentBlogPoliteness(messageText), "the "), "full "),
+    ),
   );
 }
 
 function extractSiteBlogPostArchiveReference(messageText: string): string | null {
-  return cleanAgentBlogPostReference(
-    messageText
-      .replace(/^(?:please\s+)?/i, "")
-      .replace(/^(?:can|could|would|will)\s+you\s+/i, "")
-      .replace(/^(?:delete|archive|remove)\s+(?:the\s+)?(?:old\s+)?(?:blog\s+post|article|post)\s*/i, "")
-      .replace(/\b(?:blog\s+post|article|post)\b/gi, "")
-      .replace(/[.?!]+$/g, ""),
-  );
+  let reference = withoutAgentBlogPoliteness(messageText);
+  const action = consumeAgentBlogPrefix(reference, ["delete ", "archive ", "remove "]);
+  if (action) reference = action.remaining;
+  reference = removeAgentBlogPrefix(reference, "the ");
+  reference = removeAgentBlogPostKind(reference);
+  return cleanAgentBlogPostReference(reference);
 }
 
-function extractAgentBlogField(messageText: string, fieldPattern: string): string | null {
-  const match = messageText.match(
-    new RegExp(`\\b(?:${fieldPattern})\\s*(?:to|as|is|:)?\\s+["“]?([\\s\\S]+?)["”]?\\s*[.?!]*$`, "i"),
-  );
-  return normalizeNullableText(match?.[1]);
+function extractAgentBlogField(messageText: string, fields: readonly string[]): string | null {
+  const match = findAgentBlogPhrase(messageText, fields);
+  if (!match) return null;
+  let value = messageText.slice(match.start + match.phrase.length).trimStart();
+  const connector = consumeAgentBlogPrefix(value, ["to ", "as ", "is ", ":"]);
+  if (connector) value = connector.remaining;
+  return normalizeAgentBlogCommandValue(value);
 }
 
 function extractAgentBlogPublishedAt(messageText: string): string | null {
@@ -912,10 +926,24 @@ function extractAgentBlogPublishedAt(messageText: string): string | null {
 }
 
 function extractAgentBlogSiteReference(messageText: string): string | null {
-  const match =
-    messageText.match(/\b(?:on|for|from|in)\s+(?:the\s+|my\s+)?(?:profile\s+site|public\s+site|site)\s+["“]?([^"”?.]+?)["”]?(?:\s+(?:blog|post|article|draft)\b|[.?!]*$)/i) ||
-    messageText.match(/\bsite\s+@?([a-z0-9][a-z0-9._-]{1,80})\b/i);
-  const value = normalizeNullableText(match?.[1]);
+  const value = extractAgentBlogPhrase(
+    messageText,
+    [
+      "on the profile site ", "on my profile site ", "on profile site ",
+      "for the profile site ", "for my profile site ", "for profile site ",
+      "from the profile site ", "from my profile site ", "from profile site ",
+      "in the profile site ", "in my profile site ", "in profile site ",
+      "on the public site ", "on my public site ", "on public site ",
+      "for the public site ", "for my public site ", "for public site ",
+      "from the public site ", "from my public site ", "from public site ",
+      "in the public site ", "in my public site ", "in public site ",
+      "on the site ", "on my site ", "on site ",
+      "for the site ", "for my site ", "for site ",
+      "from the site ", "from my site ", "from site ",
+      "in the site ", "in my site ", "in site ",
+    ],
+    [" blog", " post", " article", " draft"],
+  ) || extractAgentBlogSiteHandle(messageText);
   if (!value || /^(?:my|the|profile|public)$/i.test(value)) return null;
   return value;
 }
@@ -923,15 +951,280 @@ function extractAgentBlogSiteReference(messageText: string): string | null {
 function cleanAgentBlogPostReference(value: unknown): string | null {
   const normalized = normalizeNullableText(value);
   if (!normalized) return null;
-  return normalizeNullableText(
-    normalized
-      .replace(/^["“]|["”]$/g, "")
-      .replace(/^(?:the|old|draft)\s+/i, "")
-      .replace(/\s+(?:blog\s+post|article|post|draft)$/i, "")
-      .replace(/\s+on\s+(?:my\s+|the\s+)?(?:profile\s+site|public\s+site|site)\s+[^.?!]+$/i, "")
-      .replace(/\s+for\s+(?:my\s+|the\s+)?(?:profile\s+site|public\s+site|site)\s+[^.?!]+$/i, "")
-      .replace(/[.?!]+$/g, ""),
+  let cleaned = stripAgentBlogTerminalPunctuation(trimAgentBlogQuotes(normalized));
+  cleaned = removeAgentBlogPrefix(cleaned, "the ");
+  cleaned = removeAgentBlogPrefix(cleaned, "draft ");
+  cleaned = removeAgentBlogPostKindSuffix(cleaned);
+  cleaned = truncateAgentBlogSiteQualifier(cleaned, "on");
+  cleaned = truncateAgentBlogSiteQualifier(cleaned, "for");
+  return normalizeNullableText(cleaned);
+}
+
+const AGENT_BLOG_UPDATE_FIELDS = [
+  "body markdown",
+  "published date",
+  "publishedat",
+  "excerpt",
+  "summary",
+  "markdown",
+  "title",
+  "slug",
+  "body",
+] as const;
+
+function parseAgentBlogRename(messageText: string): { target: string; title: string } | null {
+  let remaining = withoutAgentBlogPoliteness(messageText);
+  const action = consumeAgentBlogPrefix(remaining, ["rename ", "retitle "]);
+  if (!action) return null;
+  remaining = removeAgentBlogPrefix(action.remaining, "the ");
+  const postKind = consumeAgentBlogPrefix(remaining, ["blog post ", "article ", "post "]);
+  if (!postKind) return null;
+  const splitAt = findAgentBlogText(postKind.remaining, " to ");
+  if (splitAt <= 0) return null;
+  return {
+    target: postKind.remaining.slice(0, splitAt),
+    title: postKind.remaining.slice(splitAt + 4),
+  };
+}
+
+function parseAgentBlogFieldUpdate(messageText: string): {
+  field: string;
+  target: string;
+  value: string;
+} | null {
+  let remaining = withoutAgentBlogPoliteness(messageText);
+  const action = consumeAgentBlogPrefix(remaining, ["update ", "set ", "change ", "replace "]);
+  if (!action) return null;
+  remaining = removeAgentBlogPrefix(action.remaining, "the ");
+  const field = consumeAgentBlogPrefix(remaining, AGENT_BLOG_UPDATE_FIELDS);
+  if (!field) return null;
+  const relationship = consumeAgentBlogPrefix(field.remaining, ["for ", "on ", "of "]);
+  if (!relationship) return null;
+  remaining = removeAgentBlogPrefix(relationship.remaining, "the ");
+  const postKind = consumeAgentBlogPrefix(remaining, ["blog post ", "article ", "post "]);
+  const assignment = splitAgentBlogAssignment(postKind?.remaining || remaining);
+  if (!assignment) return null;
+  return { field: field.phrase, target: assignment.target, value: assignment.value };
+}
+
+function parseAgentBlogPostFieldUpdate(messageText: string): {
+  field: string;
+  target: string;
+  value: string;
+} | null {
+  let remaining = withoutAgentBlogPoliteness(messageText);
+  const action = consumeAgentBlogPrefix(remaining, ["update ", "set ", "change ", "replace "]);
+  if (!action) return null;
+  remaining = removeAgentBlogPrefix(action.remaining, "the ");
+  const postKind = consumeAgentBlogPrefix(remaining, ["blog post ", "article ", "post "]);
+  if (!postKind) return null;
+
+  let match: { field: string; index: number } | null = null;
+  for (const field of AGENT_BLOG_UPDATE_FIELDS) {
+    const index = findAgentBlogText(postKind.remaining, ` ${field}`);
+    if (index > 0 && (!match || index < match.index)) match = { field, index };
+  }
+  if (!match) return null;
+  const assignment = splitAgentBlogAssignment(
+    postKind.remaining.slice(match.index + match.field.length + 1),
   );
+  if (!assignment) return null;
+  return {
+    field: match.field,
+    target: postKind.remaining.slice(0, match.index),
+    value: assignment.value,
+  };
+}
+
+function splitAgentBlogAssignment(value: string): { target: string; value: string } | null {
+  let splitAt = -1;
+  let marker = "";
+  for (const candidate of [" to ", " as ", " : "]) {
+    const index = findAgentBlogText(value, candidate);
+    if (index >= 0 && (splitAt === -1 || index < splitAt)) {
+      splitAt = index;
+      marker = candidate;
+    }
+  }
+  if (splitAt <= 0) return null;
+  const target = value.slice(0, splitAt).trim();
+  const rawValue = value.slice(splitAt + marker.length);
+  if (!target || !rawValue.trim()) return null;
+  return { target, value: rawValue };
+}
+
+function extractAgentBlogRequestedPostReference(messageText: string): string | null {
+  let remaining = withoutAgentBlogPoliteness(messageText);
+  const action = consumeAgentBlogPrefix(remaining, [
+    "read ", "open ", "show ", "pull up ", "check ", "inspect ", "publish ", "unpublish ",
+  ]);
+  if (!action) return null;
+  remaining = removeAgentBlogPrefix(removeAgentBlogPrefix(action.remaining, "the "), "full ");
+  const postKind = consumeAgentBlogPrefix(remaining, ["blog post ", "article ", "post ", "draft "]);
+  return postKind?.remaining || null;
+}
+
+function extractAgentBlogPhrase(
+  messageText: string,
+  phrases: readonly string[],
+  terminators: readonly string[] = [],
+): string | null {
+  const match = findAgentBlogPhrase(messageText, phrases);
+  if (!match) return null;
+  const candidate = messageText.slice(match.start + match.phrase.length);
+  let end = candidate.length;
+  for (const terminator of terminators) {
+    const index = findAgentBlogText(candidate, terminator);
+    if (index >= 0 && index < end) end = index;
+  }
+  return normalizeAgentBlogCommandValue(candidate.slice(0, end));
+}
+
+function findAgentBlogPhrase(
+  value: string,
+  phrases: readonly string[],
+): { start: number; phrase: string } | null {
+  let match: { start: number; phrase: string } | null = null;
+  for (const phrase of phrases) {
+    let searchFrom = 0;
+    while (searchFrom < value.length) {
+      const index = findAgentBlogText(value, phrase, searchFrom);
+      if (index < 0) break;
+      const previous = index > 0 ? value[index - 1] : "";
+      if (!previous || !isAgentBlogWordCharacter(previous)) {
+        if (!match || index < match.start || (index === match.start && phrase.length > match.phrase.length)) {
+          match = { start: index, phrase };
+        }
+        break;
+      }
+      searchFrom = index + 1;
+    }
+  }
+  return match;
+}
+
+function consumeAgentBlogPrefix(
+  value: string,
+  phrases: readonly string[],
+): { phrase: string; remaining: string } | null {
+  const trimmed = value.trimStart();
+  let match = "";
+  const lower = trimmed.toLowerCase();
+  for (const phrase of phrases) {
+    if (lower.startsWith(phrase.toLowerCase()) && phrase.length > match.length) match = phrase;
+  }
+  if (!match) return null;
+  return { phrase: match, remaining: trimmed.slice(match.length).trimStart() };
+}
+
+function removeAgentBlogPrefix(value: string, phrase: string): string {
+  const match = consumeAgentBlogPrefix(value, [phrase]);
+  return match ? match.remaining : value.trim();
+}
+
+function removeAgentBlogPostKind(value: string): string {
+  const match = consumeAgentBlogPrefix(value, ["blog post ", "article ", "post ", "draft "]);
+  return match ? match.remaining : value.trim();
+}
+
+function removeAgentBlogPostKindSuffix(value: string): string {
+  const trimmed = value.trim();
+  const lower = trimmed.toLowerCase();
+  for (const suffix of [" blog post", " article", " post", " draft"]) {
+    if (lower.endsWith(suffix)) return trimmed.slice(0, -suffix.length).trimEnd();
+  }
+  return trimmed;
+}
+
+function withoutAgentBlogPoliteness(value: string): string {
+  let remaining = value.trim();
+  const please = consumeAgentBlogPrefix(remaining, ["please "]);
+  if (please) remaining = please.remaining;
+  const request = consumeAgentBlogPrefix(remaining, ["can you ", "could you ", "would you ", "will you "]);
+  return request ? request.remaining : remaining;
+}
+
+function extractAgentBlogSiteHandle(value: string): string | null {
+  const lower = value.toLowerCase();
+  let searchFrom = 0;
+  while (searchFrom < lower.length) {
+    const siteIndex = lower.indexOf("site", searchFrom);
+    if (siteIndex < 0) break;
+    const before = siteIndex > 0 ? value[siteIndex - 1] : "";
+    const after = value[siteIndex + 4] || "";
+    if (before && isAgentBlogWordCharacter(before)) {
+      searchFrom = siteIndex + 4;
+      continue;
+    }
+    let index = siteIndex + 4;
+    while (isAgentBlogWhitespace(value[index] || "")) index += 1;
+    if (value[index] === "@") index += 1;
+    const start = index;
+    while (isAgentBlogHandleCharacter(value[index] || "")) index += 1;
+    const handle = value.slice(start, index);
+    if (handle.length >= 2 && isAgentBlogAlphaNumeric(handle[0]) && (!after || !isAgentBlogWordCharacter(after) || start > siteIndex + 4)) {
+      return handle;
+    }
+    searchFrom = siteIndex + 4;
+  }
+  return null;
+}
+
+function truncateAgentBlogSiteQualifier(value: string, preposition: "on" | "for"): string {
+  const lower = value.toLowerCase();
+  for (const qualifier of [
+    ` ${preposition} my profile site `,
+    ` ${preposition} the profile site `,
+    ` ${preposition} profile site `,
+    ` ${preposition} my public site `,
+    ` ${preposition} the public site `,
+    ` ${preposition} public site `,
+    ` ${preposition} my site `,
+    ` ${preposition} the site `,
+    ` ${preposition} site `,
+  ]) {
+    const index = lower.indexOf(qualifier);
+    if (index >= 0) return value.slice(0, index).trimEnd();
+  }
+  return value;
+}
+
+function normalizeAgentBlogCommandValue(value: string): string | null {
+  return normalizeNullableText(stripAgentBlogTerminalPunctuation(trimAgentBlogQuotes(value)));
+}
+
+function trimAgentBlogQuotes(value: string): string {
+  let result = value.trim();
+  if (result.startsWith('"') || result.startsWith("“")) result = result.slice(1).trimStart();
+  if (result.endsWith('"') || result.endsWith("”")) result = result.slice(0, -1).trimEnd();
+  return result;
+}
+
+function stripAgentBlogTerminalPunctuation(value: string): string {
+  let end = value.trimEnd().length;
+  while (end > 0 && ".?!".includes(value[end - 1])) end -= 1;
+  return value.slice(0, end).trimEnd();
+}
+
+function findAgentBlogText(value: string, search: string, fromIndex = 0): number {
+  return value.toLowerCase().indexOf(search.toLowerCase(), fromIndex);
+}
+
+function isAgentBlogAlphaNumeric(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 97 && code <= 122) || (code >= 65 && code <= 90);
+}
+
+function isAgentBlogWordCharacter(value: string): boolean {
+  return isAgentBlogAlphaNumeric(value) || value === "_";
+}
+
+function isAgentBlogHandleCharacter(value: string): boolean {
+  return isAgentBlogWordCharacter(value) || value === "." || value === "-";
+}
+
+function isAgentBlogWhitespace(value: string): boolean {
+  return value === " " || value === "\t" || value === "\n" || value === "\r";
 }
 
 function uniqueAgentBlogPostSlug(posts: AgentBlogPost[], title: string): string {
@@ -969,11 +1262,18 @@ function normalizeAgentBlogSlug(value: unknown): string | null {
 }
 
 function slugifyAgentBlogText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+  let slug = "";
+  let pendingSeparator = false;
+  for (const character of value.toLowerCase()) {
+    if (isAgentBlogAlphaNumeric(character)) {
+      if (pendingSeparator && slug) slug += "-";
+      slug += character;
+      pendingSeparator = false;
+    } else if (slug) {
+      pendingSeparator = true;
+    }
+  }
+  return slug.slice(0, 80);
 }
 
 function slugFromAgentBlogPostFile(file: string): string {

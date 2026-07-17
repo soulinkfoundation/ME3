@@ -971,14 +971,7 @@ function jsonForScript(value: unknown): string {
 }
 
 function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
+  return slugifyAscii(value, 48);
 }
 
 function generateNewsletter(profile: Me3SiteProfile): string {
@@ -1137,7 +1130,18 @@ function unescapeMarkdownPunctuation(value: string): string {
 }
 
 function looksLikeHtml(value: string): boolean {
-  return /<\/?[a-z][a-z0-9-]*(?:\s|>|\/>)[\s\S]*>/i.test(value.trim());
+  const trimmed = value.trim();
+  for (let index = 0; index < trimmed.length; index += 1) {
+    if (trimmed[index] !== "<") continue;
+    let cursor = index + 1;
+    if (trimmed[cursor] === "/") cursor += 1;
+    if (!isAsciiLetter(trimmed[cursor] || "")) continue;
+    while (isHtmlTagNameCharacter(trimmed[cursor] || "")) cursor += 1;
+    const separator = trimmed[cursor] || "";
+    if (!isHtmlTagSeparator(separator)) continue;
+    if (findHtmlTagEnd(trimmed, cursor) >= 0) return true;
+  }
+  return false;
 }
 
 function normalizeMarkdownLinkHref(value: string): string {
@@ -1317,10 +1321,34 @@ function contentToPlainText(value: string): string {
 }
 
 function stripHtmlTags(value: string): string {
-  return value
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ");
+  let result = "";
+  let ignoredContentTag: "script" | "style" | null = null;
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] !== "<") {
+      if (!ignoredContentTag) result += value[index];
+      index += 1;
+      continue;
+    }
+    const tagEnd = findHtmlTagEnd(value, index + 1);
+    if (tagEnd < 0) {
+      if (!ignoredContentTag) result += value[index];
+      index += 1;
+      continue;
+    }
+    const tag = parseHtmlTag(value.slice(index + 1, tagEnd));
+    if (!ignoredContentTag) {
+      result += " ";
+      if (!tag?.closing && (tag?.name === "script" || tag?.name === "style")) {
+        ignoredContentTag = tag.name;
+      }
+    } else if (tag?.closing && tag.name === ignoredContentTag) {
+      ignoredContentTag = null;
+      result += " ";
+    }
+    index = tagEnd + 1;
+  }
+  return result;
 }
 
 export function resolveSiteSectionPaths(profile: Me3SiteProfile): SiteSectionPaths {
@@ -1336,15 +1364,74 @@ export function resolveSiteSectionPaths(profile: Me3SiteProfile): SiteSectionPat
 }
 
 function slugifySectionPath(value: string, fallback: string): string {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
+  const slug = slugifyAscii(value, 60);
   return slug || fallback;
+}
+
+function slugifyAscii(value: string, maximumLength: number): string {
+  let slug = "";
+  let separatorPending = false;
+  for (const character of value.trim().toLowerCase()) {
+    if (isAsciiLetter(character) || isAsciiDigit(character)) {
+      if (separatorPending && slug) slug += "-";
+      slug += character;
+      separatorPending = false;
+    } else if ((character === "-" || isAsciiWhitespace(character)) && slug) {
+      separatorPending = true;
+    }
+  }
+  return slug.slice(0, maximumLength);
+}
+
+function findHtmlTagEnd(value: string, start: number): number {
+  let quote: "'" | '"' | null = null;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === ">") return index;
+  }
+  return -1;
+}
+
+function parseHtmlTag(value: string): { name: string; closing: boolean } | null {
+  let cursor = 0;
+  while (isAsciiWhitespace(value[cursor] || "")) cursor += 1;
+  const closing = value[cursor] === "/";
+  if (closing) cursor += 1;
+  while (isAsciiWhitespace(value[cursor] || "")) cursor += 1;
+  const start = cursor;
+  while (isHtmlTagNameCharacter(value[cursor] || "")) cursor += 1;
+  if (cursor === start) return null;
+  return { name: value.slice(start, cursor).toLowerCase(), closing };
+}
+
+function isHtmlTagNameCharacter(value: string): boolean {
+  return isAsciiLetter(value) || isAsciiDigit(value) || value === "-";
+}
+
+function isHtmlTagSeparator(value: string): boolean {
+  return isAsciiWhitespace(value) || value === ">" || value === "/";
+}
+
+function isAsciiLetter(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isAsciiDigit(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return code >= 48 && code <= 57;
+}
+
+function isAsciiWhitespace(value: string): boolean {
+  return value === " " || value === "\t" || value === "\n" || value === "\r";
 }
 
 function ensureUniqueSectionPath(basePath: string, taken: Set<string>): string {

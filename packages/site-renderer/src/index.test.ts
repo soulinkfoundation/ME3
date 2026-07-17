@@ -391,4 +391,26 @@ describe("site generator", () => {
     expect(files["index.html"]).toContain('href="./work-with-me/"');
     expect(files["index.html"]).not.toContain('href="./shop/"');
   });
+
+  it("excludes script and style contents from collection excerpts", async () => {
+    const files = await generateSiteHtml(
+      {
+        version: "0.1",
+        name: "Excerpt Site",
+        posts: [{ slug: "safe", title: "Safe", file: "blog/safe.md", publishedAt: "2026-02-03" }],
+      },
+      [
+        {
+          name: "blog/safe.md",
+          content: "Visible <script >do-not-include()</script > after <style >.hidden{display:none}</style > styling.",
+        },
+      ],
+    );
+
+    expect(files["blog/index.html"]).toContain("Visible");
+    expect(files["blog/index.html"]).toContain("after");
+    expect(files["blog/index.html"]).toContain("styling.");
+    expect(files["blog/index.html"]).not.toContain("do-not-include");
+    expect(files["blog/index.html"]).not.toContain(".hidden{display:none}");
+  });
 });

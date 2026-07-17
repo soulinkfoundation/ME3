@@ -71,8 +71,6 @@ try {
       {
         ok: false,
         code: portable ? error.code : "UNEXPECTED_ERROR",
-        error: error instanceof Error ? error.message : String(error),
-        ...(portable && error.details ? { details: error.details } : {}),
       },
       null,
       2,
