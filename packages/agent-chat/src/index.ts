@@ -3448,21 +3448,141 @@ function formatMissionTaskDescription(
 }
 
 function extractMissionTaskProjectName(messageText: string): string | null {
-  const match = messageText.match(
-    /\b(?:to|in|under|for)\s+(?:the\s+)?(?:mission\s+control\s+)?project\s+["“]?([^"”?.]+?)["”]?(?:\s+(?:to|due|by|today|tomorrow)\b|[.?!]*$)/i,
-  );
-  return normalizeNullableText(match?.[1]);
+  return extractMissionProjectName(messageText, [
+    "to the mission control project ",
+    "in the mission control project ",
+    "under the mission control project ",
+    "for the mission control project ",
+    "to mission control project ",
+    "in mission control project ",
+    "under mission control project ",
+    "for mission control project ",
+    "to the project ",
+    "in the project ",
+    "under the project ",
+    "for the project ",
+    "to project ",
+    "in project ",
+    "under project ",
+    "for project ",
+  ], [" to ", " due ", " by ", " today", " tomorrow"]);
 }
 
 function extractMissionTaskListProjectName(messageText: string): string | null {
-  const match = messageText.match(
-    /\b(?:for|in)\s+["“]?([^"”?.]+?)["”]?(?:\s+(?:tasks?|todos?)\b|[.?!]*$)/i,
-  );
-  const value = normalizeNullableText(match?.[1]);
-  if (!value || /^(?:backlog|todo|to do|doing|in progress|review|done|complete|completed)$/i.test(value)) {
-    return null;
+  const value = extractMissionProjectName(messageText, ["for ", "in "], [
+    " task",
+    " todo",
+  ]);
+  return value && !isMissionTaskStatusName(value) ? value : null;
+}
+
+function extractMissionProjectName(
+  messageText: string,
+  prefixes: string[],
+  terminators: string[],
+): string | null {
+  const lowerCaseText = messageText.toLowerCase();
+  let candidateStart = -1;
+  for (const prefix of prefixes) {
+    const prefixIndex = findMissionProjectPhrase(lowerCaseText, prefix);
+    if (prefixIndex === -1) continue;
+    const start = prefixIndex + prefix.length;
+    if (candidateStart === -1 || start < candidateStart) candidateStart = start;
   }
-  return value;
+  if (candidateStart === -1) return null;
+
+  const candidateEnd = findMissionProjectEnd(
+    lowerCaseText,
+    candidateStart,
+    terminators,
+  );
+  return normalizeNullableText(
+    trimMissionProjectPunctuation(messageText.slice(candidateStart, candidateEnd)),
+  );
+}
+
+function findMissionProjectPhrase(value: string, phrase: string): number {
+  let index = value.indexOf(phrase);
+  while (index !== -1) {
+    if (index === 0 || !isMissionProjectWordCharacter(value[index - 1])) {
+      return index;
+    }
+    index = value.indexOf(phrase, index + 1);
+  }
+  return -1;
+}
+
+function findMissionProjectEnd(
+  value: string,
+  start: number,
+  terminators: string[],
+): number {
+  let end = value.length;
+  for (const terminator of terminators) {
+    let index = value.indexOf(terminator, start);
+    while (index !== -1) {
+      const afterTerminator = index + terminator.length;
+      if (
+        terminator.endsWith(" ") ||
+        afterTerminator === value.length ||
+        !isMissionProjectWordCharacter(value[afterTerminator])
+      ) {
+        end = Math.min(end, index);
+        break;
+      }
+      index = value.indexOf(terminator, index + 1);
+    }
+  }
+  for (let index = start; index < end; index += 1) {
+    if (value[index] === "." || value[index] === "?" || value[index] === "!") {
+      return index;
+    }
+  }
+  return end;
+}
+
+function trimMissionProjectPunctuation(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && isMissionProjectTrimCharacter(value[start])) start += 1;
+  while (end > start && isMissionProjectTrimCharacter(value[end - 1])) end -= 1;
+  return value.slice(start, end);
+}
+
+function isMissionProjectTrimCharacter(value: string): boolean {
+  return (
+    value === " " ||
+    value === "\n" ||
+    value === "\r" ||
+    value === "\t" ||
+    value === '"' ||
+    value === "“" ||
+    value === "”"
+  );
+}
+
+function isMissionProjectWordCharacter(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    value === "_"
+  );
+}
+
+function isMissionTaskStatusName(value: string): boolean {
+  return [
+    "backlog",
+    "todo",
+    "to do",
+    "doing",
+    "in progress",
+    "review",
+    "done",
+    "complete",
+    "completed",
+  ].includes(value.toLowerCase());
 }
 
 function missionTaskStatusLabel(status: string): string {
@@ -3684,24 +3804,60 @@ async function getAgentMailboxRow(
 }
 
 function suggestAgentMailboxAlias(value: string): string {
-  const base = value
-    .split("@")[0]
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]/g, "")
-    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+  const atIndex = value.indexOf("@");
+  const base = normalizeAgentMailboxAlias(
+    atIndex === -1 ? value : value.slice(0, atIndex),
+  );
   return base || "owner";
 }
 
 function normalizeAgentMailboxAlias(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]/g, "")
-    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+  let normalized = "";
+  for (const character of value.trim().toLowerCase()) {
+    if (isAgentMailboxAliasCharacter(character)) normalized += character;
+  }
+  let start = 0;
+  let end = normalized.length;
+  while (start < end && !isAgentMailboxAliasAlphaNumeric(normalized[start])) {
+    start += 1;
+  }
+  while (end > start && !isAgentMailboxAliasAlphaNumeric(normalized[end - 1])) {
+    end -= 1;
+  }
+  return normalized.slice(start, end);
+}
+
+function isAgentMailboxAliasCharacter(value: string): boolean {
+  return isAgentMailboxAliasAlphaNumeric(value) || value === "." || value === "_" || value === "-";
+}
+
+function isAgentMailboxAliasAlphaNumeric(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 97 && code <= 122);
 }
 
 function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  const atIndex = value.indexOf("@");
+  if (
+    atIndex <= 0 ||
+    atIndex !== value.lastIndexOf("@") ||
+    atIndex >= value.length - 1
+  ) {
+    return false;
+  }
+  const dotIndex = value.indexOf(".", atIndex + 1);
+  if (dotIndex <= atIndex + 1 || dotIndex >= value.length - 1) return false;
+  for (const character of value) {
+    if (
+      character === " " ||
+      character === "\n" ||
+      character === "\r" ||
+      character === "\t"
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function normalizeEmailText(value: unknown): string | null {
@@ -4438,9 +4594,16 @@ function coreMeJsonUrl(env: CoreAgentChatEnv): string | null {
 
 function normalizeOrigin(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const trimmed = value.trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//.test(trimmed)) return null;
-  return trimmed;
+  const trimmed = value.trim();
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  } catch {
+    return null;
+  }
+  let end = trimmed.length;
+  while (end > 0 && trimmed[end - 1] === "/") end -= 1;
+  return trimmed.slice(0, end);
 }
 
 function localDateForTimezone(timezone: string | null): string {

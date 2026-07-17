@@ -57,7 +57,10 @@ The owner then opens the ME3 login page, enters the setup password as the setup 
 Preferred production path:
 
 ```bash
-pnpm init:cloudflare
+SETUP_PASSWORD="$(openssl rand -hex 16)"
+pnpm init:cloudflare -- --setup-password "$SETUP_PASSWORD"
+printf 'Save this setup password privately: %s\n' "$SETUP_PASSWORD"
+unset SETUP_PASSWORD
 ```
 
 Manual production path:

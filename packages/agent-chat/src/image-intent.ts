@@ -22,8 +22,6 @@ const IMAGE_NOUN_PATTERN =
   /\b(image|picture|photo|photograph|illustration|graphic|artwork|banner|poster|thumbnail|cover|avatar|logo|icon|visual)\b/i;
 const EXPLICIT_GENERATION_PATTERN =
   /\b(generate|create|make|draw|illustrate|render|design|produce)\s+(?:an?\s+)?(?:new\s+)?(?:image|picture|photo|photograph|illustration|graphic|artwork|banner|poster|thumbnail|cover|avatar|logo|icon|visual)\b/i;
-const PROMPT_DRAFTING_PATTERN =
-  /\b(write|draft|compose|improve|rewrite|turn\s+this\s+into)\s+(?:an?\s+)?(?:image|picture|photo|illustration|graphic|artwork)?\s*prompt\b|\bprompt\s+for\s+(?:an?\s+)?(?:image|picture|photo|illustration|graphic|artwork)\b/i;
 const IMAGE_UNDERSTANDING_PATTERN =
   /\b(analy[sz]e|describe|caption|summari[sz]e|explain|identify|read|inspect|what(?:'s| is)\s+in)\b.*\b(image|picture|photo|screenshot|attachment)\b/i;
 const EDIT_PATTERN =
@@ -37,7 +35,7 @@ export function classifyAssistantImageIntent(
 ): AssistantImageTurnIntent {
   const text = messageText.trim();
   if (!text) return { kind: "none", capability: null };
-  if (PROMPT_DRAFTING_PATTERN.test(text)) {
+  if (isImagePromptDraftingRequest(text)) {
     return { kind: "none", capability: null };
   }
   if (IMAGE_UNDERSTANDING_PATTERN.test(text)) {
@@ -85,4 +83,68 @@ export function classifyAssistantImageIntent(
   }
 
   return { kind: "none", capability: null };
+}
+
+function isImagePromptDraftingRequest(value: string): boolean {
+  const text = value.toLowerCase();
+  const promptIndex = findImageIntentWord(text, "prompt");
+  if (promptIndex === -1) return false;
+
+  const beforePrompt = text.slice(0, promptIndex).trimEnd();
+  if (hasImagePromptDraftingAction(beforePrompt)) return true;
+
+  const afterPrompt = text.slice(promptIndex + "prompt".length).trimStart();
+  if (!afterPrompt.startsWith("for ")) return false;
+  return containsImagePromptNoun(afterPrompt.slice("for ".length));
+}
+
+function hasImagePromptDraftingAction(value: string): boolean {
+  let prefix = value;
+  const imageNoun = findTrailingImagePromptNoun(prefix);
+  if (imageNoun) prefix = prefix.slice(0, prefix.length - imageNoun.length).trimEnd();
+  if (prefix.endsWith(" an")) prefix = prefix.slice(0, -3).trimEnd();
+  else if (prefix.endsWith(" a")) prefix = prefix.slice(0, -2).trimEnd();
+
+  return ["write", "draft", "compose", "improve", "rewrite", "turn this into"].some(
+    (action) => endsWithImageIntentPhrase(prefix, action),
+  );
+}
+
+function findTrailingImagePromptNoun(value: string): string | null {
+  for (const noun of ["image", "picture", "photo", "illustration", "graphic", "artwork"]) {
+    if (endsWithImageIntentPhrase(value, noun)) return noun;
+  }
+  return null;
+}
+
+function containsImagePromptNoun(value: string): boolean {
+  return ["image", "picture", "photo", "illustration", "graphic", "artwork"].some(
+    (noun) => findImageIntentWord(value, noun) !== -1,
+  );
+}
+
+function endsWithImageIntentPhrase(value: string, phrase: string): boolean {
+  if (!value.endsWith(phrase)) return false;
+  const prefixIndex = value.length - phrase.length - 1;
+  return prefixIndex < 0 || !isImageIntentWordCharacter(value[prefixIndex]);
+}
+
+function findImageIntentWord(value: string, word: string): number {
+  let index = value.indexOf(word);
+  while (index !== -1) {
+    const afterIndex = index + word.length;
+    if (
+      (index === 0 || !isImageIntentWordCharacter(value[index - 1])) &&
+      (afterIndex === value.length || !isImageIntentWordCharacter(value[afterIndex]))
+    ) {
+      return index;
+    }
+    index = value.indexOf(word, index + 1);
+  }
+  return -1;
+}
+
+function isImageIntentWordCharacter(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || value === "_";
 }

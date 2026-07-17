@@ -114,13 +114,23 @@ export function normalizeMissionProjectStatus(value: unknown): MissionProjectSta
 }
 
 export function slugifyMissionProjectName(value: string): string {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/['"]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  let slug = "";
+  let separatorPending = false;
+  for (const character of value.trim().toLowerCase()) {
+    if (isMissionSlugAlphaNumeric(character)) {
+      if (separatorPending && slug) slug += "-";
+      slug += character;
+      separatorPending = false;
+    } else if (character !== "'" && character !== '"' && slug) {
+      separatorPending = true;
+    }
+  }
   return slug || "project";
+}
+
+function isMissionSlugAlphaNumeric(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
 export {

@@ -37,8 +37,45 @@ export function parseEmailAddressHeader(
       address: angleMatch[2].trim().toLowerCase(),
     };
   }
-  const emailMatch = decoded.match(/[^\s<>@]+@[^\s<>@]+/);
-  return emailMatch ? { name: null, address: emailMatch[0].toLowerCase() } : null;
+  const address = findBareEmailAddress(decoded);
+  return address ? { name: null, address: address.toLowerCase() } : null;
+}
+
+function findBareEmailAddress(value: string): string | null {
+  let start = 0;
+  while (start < value.length) {
+    while (start < value.length && isEmailAddressDelimiter(value[start])) {
+      start += 1;
+    }
+    let end = start;
+    while (end < value.length && !isEmailAddressDelimiter(value[end])) {
+      end += 1;
+    }
+    const candidate = value.slice(start, end);
+    if (isBareEmailAddress(candidate)) return candidate;
+    start = end + 1;
+  }
+  return null;
+}
+
+function isEmailAddressDelimiter(value: string): boolean {
+  return (
+    value === " " ||
+    value === "\n" ||
+    value === "\r" ||
+    value === "\t" ||
+    value === "<" ||
+    value === ">"
+  );
+}
+
+function isBareEmailAddress(value: string): boolean {
+  const atIndex = value.indexOf("@");
+  return (
+    atIndex > 0 &&
+    atIndex === value.lastIndexOf("@") &&
+    atIndex < value.length - 1
+  );
 }
 
 function decodeMimeBBytes(value: string): Uint8Array {

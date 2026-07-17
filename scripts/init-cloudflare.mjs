@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -152,15 +151,16 @@ if (config !== originalConfig) {
 }
 
 if (!args.skipSecrets) {
-  const setupPassword = args.setupPassword || randomBytes(16).toString("hex");
+  if (!args.setupPassword) {
+    fail("--setup-password is required unless --skip-secrets is used. Generate and store it in your password manager before running this command.");
+  }
 
-  putSecret("SETUP_PASSWORD", setupPassword);
+  putSecret("SETUP_PASSWORD", args.setupPassword);
   putAiGatewaySecrets();
 
   console.log("");
   console.log("Remote standalone setup password secret is set.");
-  console.log(`SETUP_PASSWORD=${setupPassword}`);
-  console.log("Save that setup password somewhere private; it is needed only for advanced standalone setup or recovery.");
+  console.log("The setup password was not printed. Keep the value supplied with --setup-password in your password manager for setup or recovery.");
 }
 
 console.log("");
@@ -296,7 +296,7 @@ Options:
   --db-name <name>         D1 database name
   --db-id <uuid>           Existing D1 database id
   --bucket <name>          R2 bucket name
-  --setup-password <value> SETUP_PASSWORD secret value
+  --setup-password <value> SETUP_PASSWORD secret value (required unless --skip-secrets)
   --cloudflare-account-id <id>
                            Set CLOUDFLARE_ACCOUNT_ID for AI Gateway usage
   --cloudflare-ai-gateway-id <id>

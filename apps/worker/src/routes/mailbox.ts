@@ -1190,12 +1190,90 @@ async function loadDraftProviderAttachments(
 }
 
 function stripHtml(value: string): string {
-  return value
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  let text = "";
+  let ignoredTag: "script" | "style" | null = null;
+  let index = 0;
+
+  while (index < value.length) {
+    if (value[index] !== "<") {
+      if (!ignoredTag) text += value[index];
+      index += 1;
+      continue;
+    }
+
+    const tagEnd = findMailboxHtmlTagEnd(value, index + 1);
+    if (tagEnd === -1) {
+      if (!ignoredTag) text += value[index];
+      index += 1;
+      continue;
+    }
+
+    const tag = parseMailboxHtmlTag(value.slice(index + 1, tagEnd));
+    if (!tag) {
+      if (!ignoredTag) text += " ";
+      index = tagEnd + 1;
+      continue;
+    }
+
+    if (!ignoredTag) {
+      text += " ";
+      if (!tag.closing && (tag.name === "script" || tag.name === "style")) {
+        ignoredTag = tag.name;
+      }
+    } else if (tag.closing && tag.name === ignoredTag) {
+      ignoredTag = null;
+      text += " ";
+    }
+    index = tagEnd + 1;
+  }
+
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function findMailboxHtmlTagEnd(value: string, start: number): number {
+  let quote: string | null = null;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function parseMailboxHtmlTag(
+  content: string,
+): { closing: boolean; name: string } | null {
+  let index = 0;
+  while (index < content.length && isMailboxHtmlWhitespace(content[index])) {
+    index += 1;
+  }
+  const closing = content[index] === "/";
+  if (closing) index += 1;
+  while (index < content.length && isMailboxHtmlWhitespace(content[index])) {
+    index += 1;
+  }
+
+  const nameStart = index;
+  while (
+    index < content.length &&
+    ((content[index] >= "a" && content[index] <= "z") ||
+      (content[index] >= "A" && content[index] <= "Z") ||
+      (content[index] >= "0" && content[index] <= "9") ||
+      content[index] === "-")
+  ) {
+    index += 1;
+  }
+  if (index === nameStart) return null;
+  return { closing, name: content.slice(nameStart, index).toLowerCase() };
+}
+
+function isMailboxHtmlWhitespace(value: string): boolean {
+  return value === " " || value === "\n" || value === "\r" || value === "\t";
 }
 
 function normalizeEmailHeaderValue(value: unknown): string {

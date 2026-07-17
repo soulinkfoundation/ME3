@@ -196,18 +196,37 @@ async function loadRuntime(argv) {
     );
   });
   const configuredApiBase = readFlag(argv, "--api") || tokenRecord.apiBase || config.apiBase;
-  if (!configuredApiBase || String(configuredApiBase).includes("example.com")) {
+  const apiBase = normalizeApiBase(configuredApiBase);
+  if (!apiBase) {
     throw new Error(
       "No ME3 Core API URL is configured. Pair again from Account > Plugins > Local Executor, " +
         "or run once with --api http://localhost:8787/api/local-executor.",
     );
   }
-  const apiBase = String(configuredApiBase).replace(/\/$/, "");
   const authHeaders = {
     Authorization: `Bearer ${tokenRecord.token}`,
     "Content-Type": "application/json",
   };
   return { configPath, config, tokenStore, tokenRecord, apiBase, authHeaders };
+}
+
+function normalizeApiBase(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(String(value));
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.hostname === "example.com" ||
+      url.hostname.endsWith(".example.com")
+    ) {
+      return null;
+    }
+    let normalized = url.toString();
+    while (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
+    return normalized || null;
+  } catch {
+    return null;
+  }
 }
 
 async function preflightRuntime(runtime, providerOverride) {

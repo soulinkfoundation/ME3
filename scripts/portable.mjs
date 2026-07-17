@@ -59,7 +59,28 @@ try {
       ),
     );
   } else if (command === "proof") {
-    console.log(JSON.stringify(await runLocalProof({ keep: Boolean(args.keep) }), null, 2));
+    const proof = await runLocalProof({ keep: Boolean(args.keep) });
+    console.log(
+      JSON.stringify(
+        {
+          ok: proof.ok,
+          format: proof.format,
+          logicalInstallId: proof.logicalInstallId,
+          core: proof.core,
+          databaseRows: proof.databaseRows,
+          r2Objects: proof.r2Objects,
+          sessionsRotated: proof.sessionsRotated,
+          oldDeviceCredentialsRemoved: proof.oldDeviceCredentialsRemoved,
+          oldBrowserSessionRejected: proof.oldBrowserSessionRejected,
+          oldDeviceAccessRejected: proof.oldDeviceAccessRejected,
+          oldDeviceRefreshRejected: proof.oldDeviceRefreshRejected,
+          clientRepairedWithFreshCredential: proof.clientRepairedWithFreshCredential,
+          archive: proof.archive,
+        },
+        null,
+        2,
+      ),
+    );
   } else {
     usage();
     process.exitCode = command ? 1 : 0;

@@ -1743,7 +1743,16 @@ function formatAddress(email: string, name: string): string {
 function quoteAddressName(name: string): string {
   const clean = sanitizeHeaderValue(name);
   if (/^[a-z0-9 ._-]+$/i.test(clean)) return clean;
-  return `"${clean.replace(/"/g, '\\"')}"`;
+  return `"${escapeQuotedHeaderName(clean)}"`;
+}
+
+function escapeQuotedHeaderName(value: string): string {
+  let escaped = "";
+  for (const character of value) {
+    if (character === "\\" || character === '"') escaped += "\\";
+    escaped += character;
+  }
+  return escaped;
 }
 
 function domainFromEmail(email: string): string {

@@ -2786,7 +2786,7 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       bindings.push(projectFilter);
     }
     if (search) {
-      const pattern = `%${search.replace(/[%_]/g, "\\$&")}%`;
+      const pattern = `%${escapeSqlLikePattern(search)}%`;
       where.push(
         `(title LIKE ? ESCAPE '\\' OR EXISTS (
           SELECT 1
@@ -4016,4 +4016,15 @@ export function registerAssistantRoutes(app: AppHono, deps: AssistantRouteDeps) 
       streamChannelId,
     });
   });
+}
+
+function escapeSqlLikePattern(value: string): string {
+  let escaped = "";
+  for (const character of value) {
+    if (character === "\\" || character === "%" || character === "_") {
+      escaped += "\\";
+    }
+    escaped += character;
+  }
+  return escaped;
 }

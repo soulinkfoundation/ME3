@@ -489,18 +489,145 @@ export function taskDescriptionText(task: MissionTask | null | undefined): strin
   if (!description) return "";
   if (!/[<&]/.test(description)) return description;
 
-  return description
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|h[1-6]|blockquote)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/g, "'")
+  return decodeTaskDescriptionEntities(stripTaskDescriptionHtml(description))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function stripTaskDescriptionHtml(value: string): string {
+  let text = "";
+  let index = 0;
+
+  while (index < value.length) {
+    if (value[index] !== "<") {
+      text += value[index];
+      index += 1;
+      continue;
+    }
+
+    const tagEnd = findTaskDescriptionTagEnd(value, index + 1);
+    if (tagEnd === -1) {
+      text += value[index];
+      index += 1;
+      continue;
+    }
+
+    const tag = parseTaskDescriptionTag(value.slice(index + 1, tagEnd));
+    if (tag?.name === "br" || (tag?.closing && isTaskDescriptionBlockTag(tag.name))) {
+      text += "\n";
+    } else {
+      text += " ";
+    }
+    index = tagEnd + 1;
+  }
+
+  return text;
+}
+
+function findTaskDescriptionTagEnd(value: string, start: number): number {
+  let quote: string | null = null;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function parseTaskDescriptionTag(
+  content: string,
+): { closing: boolean; name: string } | null {
+  let index = 0;
+  while (index < content.length && isTaskDescriptionWhitespace(content[index])) {
+    index += 1;
+  }
+  const closing = content[index] === "/";
+  if (closing) index += 1;
+  while (index < content.length && isTaskDescriptionWhitespace(content[index])) {
+    index += 1;
+  }
+
+  const nameStart = index;
+  while (
+    index < content.length &&
+    ((content[index] >= "a" && content[index] <= "z") ||
+      (content[index] >= "A" && content[index] <= "Z") ||
+      (content[index] >= "0" && content[index] <= "9"))
+  ) {
+    index += 1;
+  }
+  if (index === nameStart) return null;
+  return { closing, name: content.slice(nameStart, index).toLowerCase() };
+}
+
+function isTaskDescriptionBlockTag(value: string): boolean {
+  return (
+    value === "p" ||
+    value === "div" ||
+    value === "li" ||
+    value === "blockquote" ||
+    (value.length === 2 && value[0] === "h" && value[1] >= "1" && value[1] <= "6")
+  );
+}
+
+function isTaskDescriptionWhitespace(value: string): boolean {
+  return value === " " || value === "\n" || value === "\r" || value === "\t";
+}
+
+function decodeTaskDescriptionEntities(value: string): string {
+  let decoded = "";
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] !== "&") {
+      decoded += value[index];
+      index += 1;
+      continue;
+    }
+
+    const entityEnd = findTaskDescriptionEntityEnd(value, index + 1);
+    if (entityEnd === -1) {
+      decoded += "&";
+      index += 1;
+      continue;
+    }
+    const entity = value.slice(index + 1, entityEnd).toLowerCase();
+    const replacement = taskDescriptionEntityReplacement(entity);
+    if (replacement === null) {
+      decoded += "&";
+      index += 1;
+      continue;
+    }
+    decoded += replacement;
+    index = entityEnd + 1;
+  }
+  return decoded;
+}
+
+function findTaskDescriptionEntityEnd(value: string, start: number): number {
+  const maximumEntityLength = 10;
+  for (
+    let index = start;
+    index < value.length && index - start <= maximumEntityLength;
+    index += 1
+  ) {
+    if (value[index] === ";") return index;
+  }
+  return -1;
+}
+
+function taskDescriptionEntityReplacement(value: string): string | null {
+  if (value === "nbsp") return " ";
+  if (value === "amp") return "&";
+  if (value === "lt") return "<";
+  if (value === "gt") return ">";
+  if (value === "quot") return '"';
+  if (value === "#39") return "'";
+  return null;
 }
 
 export function groupProjectTasks(
