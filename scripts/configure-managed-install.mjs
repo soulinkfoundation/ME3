@@ -1,17 +1,47 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 
-const [configPath, workerName, workersDevText] = process.argv.slice(2);
-if (!configPath || !workerName || !/^(true|false)$/.test(workersDevText || "")) {
+const [
+  configPath,
+  workerName,
+  workersDevText,
+  managedInstallationId,
+  managedEmailGatewayOriginText,
+] = process.argv.slice(2);
+if (
+  !configPath ||
+  !workerName ||
+  !/^(true|false)$/.test(workersDevText || "") ||
+  !managedInstallationId ||
+  !managedEmailGatewayOriginText
+) {
   throw new Error(
-    "usage: configure-managed-install.mjs <wrangler.toml> <worker-name> <true|false>",
+    "usage: configure-managed-install.mjs <wrangler.toml> <worker-name> <true|false> <managed-installation-id> <managed-email-gateway-origin>",
   );
 }
 if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(workerName)) {
   throw new Error("managed Worker name is invalid");
 }
+if (!/^mi-[0-9a-f]{16}$/.test(managedInstallationId)) {
+  throw new Error("managed installation id is invalid");
+}
+if (workerName !== `me3-${managedInstallationId}`) {
+  throw new Error("managed Worker name does not match the installation id");
+}
+const managedEmailGatewayUrl = new URL(managedEmailGatewayOriginText);
+if (
+  managedEmailGatewayUrl.protocol !== "https:" ||
+  managedEmailGatewayUrl.origin !== managedEmailGatewayOriginText ||
+  managedEmailGatewayUrl.pathname !== "/" ||
+  managedEmailGatewayUrl.search ||
+  managedEmailGatewayUrl.hash
+) {
+  throw new Error("managed email gateway origin must be an explicit HTTPS origin");
+}
 
 const routes = {
+  ME3_MANAGED_INSTALLATION_ID: managedInstallationId,
+  ME3_MANAGED_EMAIL_GATEWAY_ORIGIN: managedEmailGatewayUrl.origin,
   ME3_AI_CHAT_PROVIDER: "workers-ai",
   ME3_AI_CHAT_MODEL: "@cf/google/gemma-4-26b-a4b-it",
   ME3_AI_CHAT_BACKUP_MODEL: "@cf/zai-org/glm-4.7-flash",

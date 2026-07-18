@@ -20,6 +20,8 @@ export interface Env {
   ME3_WORKER_NAME?: string;
   ME3_CLOUD_ORIGIN?: string;
   ME3_CLOUD_API_ORIGIN?: string;
+  ME3_MANAGED_INSTALLATION_ID?: string;
+  ME3_MANAGED_EMAIL_GATEWAY_ORIGIN?: string;
   ME3_SOCIAL_OAUTH_ORIGIN?: string;
   ME3_LOCATION_SEARCH_ORIGIN?: string;
 

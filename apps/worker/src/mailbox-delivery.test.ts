@@ -67,10 +67,18 @@ describe("mailbox delivery recovery", () => {
       prepareMailboxDraftRetryAnyway({ DB: retry.db } as never, "owner", "draft-1", now),
     ).resolves.toEqual({ ok: true });
     expect(retry.calls.at(-1)?.sql).toContain("Owner chose Retry anyway");
-    expect(retry.calls.at(-1)?.sql).toContain("NOT EXISTS");
-    expect(retry.calls.at(-1)?.sql).toContain(
+    expect(retry.calls[0]?.sql).toContain("NOT EXISTS");
+    expect(retry.calls[0]?.sql).toContain(
       "a.requested_at >= COALESCE(\n             mailbox_messages.approved_at",
     );
+    expect(retry.calls[1]?.sql).toContain("provider_status = 'owner_retry_anyway'");
+    expect(retry.calls[1]?.values).toEqual([
+      now.toISOString(),
+      "owner",
+      "draft-1",
+      "owner",
+      "draft-1",
+    ]);
 
     const raced = deliveryDb({}, 0);
     await expect(
@@ -110,6 +118,11 @@ function deliveryDb(
       return runCalls;
     },
     db: {
+      async batch(statements: Array<{ run(): Promise<unknown> }>) {
+        const results = [];
+        for (const statement of statements) results.push(await statement.run());
+        return results;
+      },
       prepare(sql: string) {
         return {
           bind(...values: unknown[]) {

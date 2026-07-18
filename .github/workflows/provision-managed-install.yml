@@ -45,6 +45,7 @@ jobs:
       ME3_MANAGED_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_CALLBACK_SECRET }}
       ME3_MANAGED_CALLBACK_URL: ${{ inputs.callback_url }}
       ME3_MANAGED_INSTALLATION_ID: ${{ inputs.installation_id }}
+      ME3_MANAGED_EMAIL_GATEWAY_ORIGIN: https://api.me3.app
       WORKER_NAME: ${{ inputs.worker_name }}
       D1_NAME: ${{ inputs.d1_name }}
       R2_NAME: ${{ inputs.r2_name }}
@@ -94,7 +95,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Configure the private managed deployment
-        run: node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" false
+        run: node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" false "$ME3_MANAGED_INSTALLATION_ID" "$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN"
 
       - name: Provision isolated D1 and R2
         working-directory: source
@@ -158,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           set +x
-          node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" true
+          node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" true "$ME3_MANAGED_INSTALLATION_ID" "$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN"
           cd source
           pnpm exec wrangler deploy \
             --config wrangler.toml \

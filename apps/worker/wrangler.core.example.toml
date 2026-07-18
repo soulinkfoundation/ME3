@@ -71,6 +71,11 @@ name = "EMAIL"
 [vars]
 ENVIRONMENT = "local"
 ME3_DEPLOYMENT_MODE = "self_hosted"
+# Managed-fleet provisioning sets both values below. Self-hosted installs must
+# leave them unset; managed email then reuses the linked install's stored
+# ME3_CORE_INSTALL_ID and ME3_CLOUD_CORE_TOKEN rather than provider credentials.
+# ME3_MANAGED_INSTALLATION_ID = "mi-example"
+# ME3_MANAGED_EMAIL_GATEWAY_ORIGIN = "https://mail.me3.app"
 # Internal/evaluation only; never enable for managed production.
 # ME3_AI_RAW_MODEL_SELECTION_ENABLED = "true"
 CORE_WEB_ORIGIN = "http://localhost:4000"

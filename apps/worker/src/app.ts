@@ -240,6 +240,7 @@ type Me3ClaimTokenPayload = {
   name?: unknown;
   display_name?: unknown;
   handle?: unknown;
+  managed_email_address?: unknown;
   install_id?: unknown;
   core_update_token?: unknown;
   core_origin?: unknown;
@@ -466,6 +467,7 @@ app.get("/api/config", async (c) => {
   const authState = await getOwnerAuthState(c.env);
   const aiRoutes = await getAiRoutingSummary(c.env, "owner");
   const cloudOrigin = getMe3CloudOrigin(c.env);
+  const managedEmailAddress = await getProvisionedManagedEmailAddress(c.env);
 
   return c.json({
     core: getCoreVersionInfo(),
@@ -475,6 +477,7 @@ app.get("/api/config", async (c) => {
     webOrigin: getCoreWebOrigin(c.env, c.req.url),
     adminHost: getAdminHost(c.env, c.req.url) || null,
     siteHost: getSiteHost(c.env) || null,
+    managedEmailAddress,
     ai: {
       defaultProvider: aiRoutes.default.providerId,
       defaultModel: aiRoutes.default.model,
@@ -562,6 +565,10 @@ app.get("/api/auth/me3/callback", async (c) => {
   const callbackUrl = `${apiOrigin}/api/auth/me3/callback`;
   const claimedHandle = normalizeUsername(payload.handle);
   const claimedInstallId = normalizeMe3CoreInstallId(payload.install_id);
+  const managedEmailAddress =
+    payload.managed_email_address === undefined || payload.managed_email_address === null
+      ? null
+      : normalizeManagedEmailAddress(payload.managed_email_address);
 
   if (
     payload.state !== state ||
@@ -574,7 +581,10 @@ app.get("/api/auth/me3/callback", async (c) => {
     typeof payload.email !== "string" ||
     !payload.email.trim() ||
     !claimedHandle ||
-    !USERNAME_REGEX.test(claimedHandle)
+    !USERNAME_REGEX.test(claimedHandle) ||
+    (payload.managed_email_address != null && !managedEmailAddress) ||
+    (managedEmailAddress &&
+      normalizeMe3DeploymentMode(c.env.ME3_DEPLOYMENT_MODE) !== "managed")
   ) {
     return redirectMe3ClaimError(c, "claim_mismatch", pending.redirect_path);
   }
@@ -586,6 +596,9 @@ app.get("/api/auth/me3/callback", async (c) => {
   }
 
   await upsertMe3ClaimedOwner(c.env, payload, claimedHandle);
+  if (managedEmailAddress) {
+    await bootstrapManagedEmailMailbox(c.env, managedEmailAddress, payload.email);
+  }
   await getOrCreateInstallEncryptionKey(c.env);
   await deleteMe3ClaimState(c.env, state);
   await setOwnerSession(c, "owner");
@@ -1883,6 +1896,59 @@ function normalizeMe3CoreInstallId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
   return ME3_CORE_INSTALL_ID_REGEX.test(normalized) ? normalized : null;
+}
+
+function normalizeManagedEmailAddress(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const address = value.trim();
+  if (address !== address.toLowerCase() || address.length > 254) return null;
+  const suffix = "@me3.app";
+  if (!address.endsWith(suffix)) return null;
+  const localPart = address.slice(0, -suffix.length);
+  if (
+    localPart.length < 1 ||
+    localPart.length > 64 ||
+    !/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(localPart) ||
+    localPart.includes("+")
+  ) {
+    return null;
+  }
+  return address;
+}
+
+async function bootstrapManagedEmailMailbox(
+  env: Env,
+  address: string,
+  ownerEmail: unknown,
+): Promise<void> {
+  const aliasLocalPart = address.slice(0, address.lastIndexOf("@"));
+  const saved = await upsertAgentMailbox(
+    env,
+    "owner",
+    { aliasLocalPart, forwardingEnabled: false },
+    { email: typeof ownerEmail === "string" ? ownerEmail : null },
+  );
+  if ("error" in saved) throw new Error(`Managed email bootstrap failed: ${saved.error}`);
+  const activated = await activateAgentMailbox(env, "owner");
+  if ("error" in activated) {
+    throw new Error(`Managed email activation failed: ${activated.error}`);
+  }
+}
+
+async function getProvisionedManagedEmailAddress(env: Env): Promise<string | null> {
+  if (normalizeMe3DeploymentMode(env.ME3_DEPLOYMENT_MODE) !== "managed") return null;
+  const mailbox = await env.DB.prepare(
+    `SELECT alias_local_part
+     FROM mailbox_aliases
+     WHERE user_id = 'owner' AND status = 'active'
+     ORDER BY created_at ASC
+     LIMIT 1`,
+  )
+    .bind()
+    .first<{ alias_local_part: string }>();
+  return normalizeManagedEmailAddress(
+    mailbox?.alias_local_part ? `${mailbox.alias_local_part}@me3.app` : null,
+  );
 }
 
 async function getOrCreateMe3CoreInstallId(env: Env): Promise<string> {

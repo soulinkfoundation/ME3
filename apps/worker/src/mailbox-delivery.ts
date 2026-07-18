@@ -104,7 +104,7 @@ export async function prepareMailboxDraftRetryAnyway(
 ): Promise<{ ok: true } | MailboxDeliveryError> {
   const updatedAt = now.toISOString();
   const staleBefore = new Date(now.getTime() - MAILBOX_DELIVERY_UNKNOWN_AFTER_MS).toISOString();
-  const result = await env.DB.prepare(
+  const messageUpdate = env.DB.prepare(
     `UPDATE mailbox_messages
      SET status = 'failed',
          folder = 'drafts',
@@ -126,8 +126,29 @@ export async function prepareMailboxDraftRetryAnyway(
            AND a.status IN ('sent', 'failed')
        )`,
   )
-    .bind(updatedAt, draftId, ownerId, staleBefore, ownerId)
-    .run();
+    .bind(updatedAt, draftId, ownerId, staleBefore, ownerId);
+  const pendingAuditUpdate = env.DB.prepare(
+    `UPDATE email_send_audit
+     SET status = 'failed',
+         provider_status = 'owner_retry_anyway',
+         error_message = 'Owner chose Retry anyway after delivery remained unconfirmed.',
+         updated_at = ?
+     WHERE user_id = ?
+       AND mailbox_message_id = ?
+       AND provider_id = 'managed_gateway'
+       AND status = 'pending'
+       AND EXISTS (
+         SELECT 1
+         FROM mailbox_messages m
+         JOIN mailbox_aliases a ON a.id = m.mailbox_id
+         WHERE a.user_id = ?
+           AND m.id = ?
+           AND m.message_kind = 'draft'
+           AND m.status = 'failed'
+           AND m.error_message = 'Delivery was unconfirmed. Owner chose Retry anyway.'
+       )`,
+  ).bind(updatedAt, ownerId, draftId, ownerId, draftId);
+  const [result] = await env.DB.batch([messageUpdate, pendingAuditUpdate]);
   if ((result.meta?.changes || 0) === 0) {
     return { error: "Draft delivery is not awaiting confirmation", status: 409 };
   }

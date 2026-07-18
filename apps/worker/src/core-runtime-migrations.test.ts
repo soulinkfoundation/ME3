@@ -22,6 +22,7 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("agent_turn_results")).toBe(true);
     expect(db.tables.has("agent_tool_executions")).toBe(true);
     expect(db.tables.has("owner_content_search")).toBe(true);
+    expect(db.tables.has("managed_email_inbound_deliveries")).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
@@ -63,6 +64,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0020_mailbox_thread_index")).toBe(
       "2026-07-16-mailbox-thread-index-v1",
+    );
+    expect(db.migrations.get("0021_managed_email_inbound_deliveries")).toBe(
+      "2026-07-18-managed-email-inbound-deliveries-v1",
     );
     expect(
       db.statements.some((sql) =>
@@ -266,6 +270,10 @@ class RuntimeMigrationStatement {
     }
     if (this.sql.includes("CREATE VIRTUAL TABLE IF NOT EXISTS owner_content_search")) {
       this.db.tables.add("owner_content_search");
+      return { success: true };
+    }
+    if (this.sql.includes("CREATE TABLE IF NOT EXISTS managed_email_inbound_deliveries")) {
+      this.db.tables.add("managed_email_inbound_deliveries");
       return { success: true };
     }
     if (this.sql.includes("ALTER TABLE mission_tasks")) {

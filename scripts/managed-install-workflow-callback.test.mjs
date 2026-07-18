@@ -61,6 +61,19 @@ test("the workflow treats activation as a gate and reports only a generic follow
   assert.ok(workflow.indexOf(activation) < workflow.indexOf(failure));
 });
 
+test("the workflow provisions the managed email install identity and HTTPS gateway origin", () => {
+  assert.match(
+    workflow,
+    /ME3_MANAGED_EMAIL_GATEWAY_ORIGIN: https:\/\/api\.me3\.app/,
+  );
+  const configureCalls = workflow.match(/configure-managed-install\.mjs[^\n]+/g) || [];
+  assert.equal(configureCalls.length, 2);
+  for (const call of configureCalls) {
+    assert.match(call, /"\$ME3_MANAGED_INSTALLATION_ID"/);
+    assert.match(call, /"\$ME3_MANAGED_EMAIL_GATEWAY_ORIGIN"/);
+  }
+});
+
 function getStep(name) {
   const start = workflow.indexOf(`      - name: ${name}\n`);
   assert.notEqual(start, -1, `Missing workflow step: ${name}`);

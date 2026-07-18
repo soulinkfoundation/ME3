@@ -72,6 +72,11 @@ const runtimeMigrations: RuntimeMigration[] = [
     checksum: "2026-07-16-mailbox-thread-index-v1",
     apply: applyMailboxThreadIndexMigration,
   },
+  {
+    id: "0021_managed_email_inbound_deliveries",
+    checksum: "2026-07-18-managed-email-inbound-deliveries-v1",
+    apply: applyManagedEmailInboundDeliveriesMigration,
+  },
 ];
 
 let migrationPromise: Promise<void> | null = null;
@@ -496,6 +501,34 @@ async function applyMailboxThreadIndexMigration(db: D1Database): Promise<void> {
          COALESCE(sent_at, received_at, approved_at, created_at) DESC,
          id DESC
        )`,
+    )
+    .run();
+}
+
+async function applyManagedEmailInboundDeliveriesMigration(
+  db: D1Database,
+): Promise<void> {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS managed_email_inbound_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        managed_installation_id TEXT NOT NULL,
+        core_install_id TEXT NOT NULL,
+        mailbox_id TEXT NOT NULL,
+        mailbox_message_id TEXT NOT NULL UNIQUE,
+        recipient TEXT NOT NULL,
+        body_sha256 TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (mailbox_id) REFERENCES mailbox_aliases(id) ON DELETE CASCADE,
+        FOREIGN KEY (mailbox_message_id) REFERENCES mailbox_messages(id) ON DELETE CASCADE
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE INDEX IF NOT EXISTS idx_managed_email_inbound_install_received
+       ON managed_email_inbound_deliveries(managed_installation_id, received_at DESC)`,
     )
     .run();
 }

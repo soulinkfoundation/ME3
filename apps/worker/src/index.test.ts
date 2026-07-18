@@ -3308,6 +3308,7 @@ async function createSignedMe3ClaimToken(input: {
   handle?: string | null;
   installId?: string;
   coreUpdateToken?: string;
+  managedEmailAddress?: string | null;
 }): Promise<{ token: string; publicJwk: JsonWebKey & { kid?: string; alg?: string; use?: string } }> {
   const keyPair = await crypto.subtle.generateKey(
     {
@@ -3350,6 +3351,9 @@ async function createSignedMe3ClaimToken(input: {
   }
   if (input.name !== undefined) {
     payload.name = input.name;
+  }
+  if (input.managedEmailAddress !== undefined) {
+    payload.managed_email_address = input.managedEmailAddress;
   }
   const signingInput = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
   const signature = await crypto.subtle.sign(
@@ -4185,6 +4189,7 @@ describe("ME3 Core Worker auth", () => {
   it("accepts a verified ME3 Cloud install claim callback", async () => {
     const env = createEnv();
     env.TOKEN_ENCRYPTION_KEY = undefined;
+    env.ME3_DEPLOYMENT_MODE = "managed";
     env.ME3_CLOUD_ORIGIN = "https://me3.example";
     env.ME3_CLOUD_API_ORIGIN = "https://api.me3.example";
 
@@ -4205,6 +4210,7 @@ describe("ME3 Core Worker auth", () => {
       coreOrigin: "http://localhost:4000",
       callbackUrl: "http://localhost:8787/api/auth/me3/callback",
       email: "owner@example.com",
+      managedEmailAddress: "my_name@me3.app",
     });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ keys: [signedClaim.publicJwk] }), {
@@ -4235,6 +4241,38 @@ describe("ME3 Core Worker auth", () => {
     expect(env.installSecrets.get("ME3_CLOUD_CORE_TOKEN")).toBe("core-update-token-123");
     expect(env.installSecrets.get("TOKEN_ENCRYPTION_KEY")).toMatch(/^[a-f0-9]{64}$/);
     expect(env.me3ClaimStates).toHaveLength(0);
+    expect(env.mailbox).toMatchObject({
+      user_id: "owner",
+      alias_local_part: "my_name",
+      status: "active",
+      forwarding_enabled: 0,
+    });
+
+    const configResponse = await app.fetch(
+      new Request("http://localhost:8787/api/config"),
+      env,
+    );
+    await expect(configResponse.json()).resolves.toMatchObject({
+      deploymentMode: "managed",
+      managedEmailAddress: "my_name@me3.app",
+    });
+
+    const mailboxUpdate = await app.fetch(
+      new Request("http://localhost:8787/api/mailbox", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookieHeader(callbackResponse),
+        },
+        body: JSON.stringify({
+          aliasLocalPart: "changed-name",
+          forwardingEnabled: false,
+        }),
+      }),
+      env,
+    );
+    expect(mailboxUpdate.status).toBe(409);
+    expect(env.mailbox?.alias_local_part).toBe("my_name");
 
     fetchMock.mockRestore();
   });

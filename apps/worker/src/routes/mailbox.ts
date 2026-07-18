@@ -16,39 +16,46 @@ import {
   updateAgentMailboxDraft,
   upsertAgentMailbox,
   type AgentMailboxDraftInput,
-  type AgentMailboxMessage,
   type AgentMailboxUpdateInput,
 } from "../agent-chat";
 import {
   EmailProviderDeliveryUnknownError,
   EmailProviderInputError,
   sendEmailWithProvider,
-  type EmailProviderAttachment,
   type EmailProviderSendResponse,
 } from "../email-providers";
 import type { AppContext, AppHono } from "../http/types";
+import {
+  getStoredMailboxAttachments,
+  loadDraftProviderAttachments,
+  resolveMailboxUnsubscribeAction,
+  sanitizeAttachmentFilename,
+  type StoredMailboxAttachment,
+} from "../mailbox-inbound";
+export {
+  handleInboundEmail,
+  type ForwardableEmailMessageLike,
+} from "../mailbox-inbound";
 import {
   getMailboxDraftDeliveryStatus,
   markMailboxDraftSentByOwner,
   prepareMailboxDraftRetryAnyway,
 } from "../mailbox-delivery";
 import {
+  isManagedEmailDeployment,
+  MANAGED_EMAIL_INBOUND_PATH,
+  receiveManagedEmailInbound,
+} from "../managed-email";
+import {
   listMailboxThreadMessages,
   listMailboxThreads,
   moveMailboxThread,
-  resolveMailboxThreadKey,
   setMailboxThreadReadState,
   summarizeMailboxThread,
 } from "../mailbox-threads";
-import { getOwnerProfile, normalizeEmail } from "../sites";
-import type { DbMailboxAlias, Env } from "../types";
-import {
-  decodeMimeHeaderValue,
-  parseEmailAddressHeader,
-} from "../../../../shared/email-headers";
+import { getOwnerProfile } from "../sites";
+import type { Env } from "../types";
 
-const INBOUND_EMAIL_PROVIDER_ID = "cloudflare-email-routing";
-const MAX_INBOUND_EMAIL_BYTES = 1024 * 1024;
 const MAX_MAILBOX_ATTACHMENT_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_MAILBOX_ATTACHMENT_UPLOAD_COUNT = 10;
 
@@ -57,19 +64,12 @@ type MailboxRouteDeps = {
   unauthorized(c: AppContext): Response;
 };
 
-export type ForwardableEmailMessageLike = {
-  readonly from: string;
-  readonly to: string;
-  readonly headers: Headers;
-  readonly raw: ReadableStream<Uint8Array>;
-  readonly rawSize: number;
-  readonly canBeForwarded: boolean;
-  setReject(reason: string): void;
-  forward(rcptTo: string, headers?: Headers): Promise<void>;
-};
-
 export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
   const { requireOwner, unauthorized } = deps;
+
+  app.post(MANAGED_EMAIL_INBOUND_PATH, (c) =>
+    receiveManagedEmailInbound(c.req.raw, c.env),
+  );
 
   const deliveryUnknownResponse = async (
     c: AppContext,
@@ -199,6 +199,15 @@ export function registerMailboxRoutes(app: AppHono, deps: MailboxRouteDeps) {
   app.put("/api/mailbox", async (c) => {
     const ownerId = await requireOwner(c);
     if (!ownerId) return unauthorized(c);
+    if (isManagedEmailDeployment(c.env)) {
+      return c.json(
+        {
+          error:
+            "This mailbox address is assigned by ME3 managed hosting and cannot be changed here",
+        },
+        409,
+      );
+    }
 
     const body = await c.req.json<AgentMailboxUpdateInput>().catch((): AgentMailboxUpdateInput => ({}));
     const owner = await getOwnerProfile(c.env, ownerId);
@@ -674,608 +683,4 @@ async function reconcileMailboxDraftFromAudit(
     approvedByUserId: ownerId,
   });
   return !("error" in result) && result.draft?.status === "sent";
-}
-
-function parseJsonRecord(value: string | null): Record<string, unknown> {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-export async function handleInboundEmail(
-  message: ForwardableEmailMessageLike,
-  env: Env,
-): Promise<void> {
-  try {
-    const mailbox = await getActiveMailboxForInbound(env);
-    if (!mailbox) {
-      message.setReject("ME3 Core mailbox is not active for this installation.");
-      return;
-    }
-
-    if (message.rawSize > MAX_INBOUND_EMAIL_BYTES) {
-      message.setReject("Message is too large for this ME3 Core mailbox.");
-      return;
-    }
-
-    const rawMessage = await readEmailRawText(message.raw, MAX_INBOUND_EMAIL_BYTES);
-    const parsed = parseInboundEmail(rawMessage, message.headers);
-    const now = new Date().toISOString();
-    const providerMessageId =
-      normalizeEmailHeaderValue(parsed.headers["message-id"]) || crypto.randomUUID();
-    const threadKey = resolveMailboxThreadKey(parsed.headers, providerMessageId);
-    const rowId = crypto.randomUUID();
-    const storedAttachments = await storeInboundEmailAttachments(
-      env,
-      mailbox.id,
-      rowId,
-      parsed.attachments,
-    );
-
-    await env.DB.prepare(
-      `INSERT INTO mailbox_messages (
-         id, mailbox_id, direction, message_kind, status, thread_key,
-         provider_id, provider_message_id, from_address, to_address, subject,
-         text_body, html_body, raw_headers_json, raw_message, metadata_json,
-         folder, created_by, received_at, created_at, updated_at
-       )
-       VALUES (
-         ?, ?, 'inbound', 'email', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-         'inbox', 'cloudflare-email-routing', ?, ?, ?
-       )`,
-    )
-      .bind(
-        rowId,
-        mailbox.id,
-        "received",
-        threadKey,
-        INBOUND_EMAIL_PROVIDER_ID,
-        providerMessageId,
-        parseEmailAddressHeader(parsed.headers.from)?.address ||
-          normalizeEmail(message.from) ||
-          normalizeEmailHeaderValue(parsed.headers.from),
-        parseEmailAddressHeader(parsed.headers.to)?.address ||
-          normalizeEmail(message.to) ||
-          normalizeEmailHeaderValue(parsed.headers.to),
-        parsed.subject || "(no subject)",
-        parsed.textBody || parsed.htmlBody || "",
-        parsed.htmlBody,
-        JSON.stringify(parsed.headers),
-        rawMessage,
-        JSON.stringify({
-          rawSize: message.rawSize,
-          envelopeFrom: message.from,
-          envelopeTo: message.to,
-          attachmentCount: storedAttachments.length,
-          attachments: storedAttachments,
-        }),
-        now,
-        now,
-        now,
-      )
-      .run();
-
-    if (mailbox.forwarding_enabled && mailbox.forwarding_email && message.canBeForwarded) {
-      await message.forward(mailbox.forwarding_email);
-      await markInboundEmailForwarded(env, mailbox.id, rowId, mailbox.forwarding_email);
-    }
-  } catch (error) {
-    console.error("Inbound email processing failed", error);
-    message.setReject("ME3 Core could not process this email.");
-  }
-}
-
-async function getActiveMailboxForInbound(env: Env): Promise<DbMailboxAlias | null> {
-  return (
-    (await env.DB.prepare(
-      `SELECT id, user_id, alias_local_part, forwarding_email, forwarding_status,
-              forwarding_enabled, forwarding_mode, status, approval_policy,
-              daily_inbound_limit, daily_outbound_limit, activated_at,
-              cf_destination_id, cf_destination_verified_at, cf_rule_id,
-              cf_last_synced_at, cf_last_error, created_at, updated_at
-       FROM mailbox_aliases
-       WHERE status = 'active'
-       ORDER BY created_at ASC
-       LIMIT 1`,
-    )
-      .bind()
-      .first<DbMailboxAlias>()) || null
-  );
-}
-
-async function markInboundEmailForwarded(
-  env: Env,
-  mailboxId: string,
-  messageId: string,
-  forwardedTo: string,
-): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE mailbox_messages
-     SET status = 'forwarded',
-         forwarded_to = ?,
-         updated_at = ?
-     WHERE id = ? AND mailbox_id = ?`,
-  )
-    .bind(forwardedTo, new Date().toISOString(), messageId, mailboxId)
-    .run();
-}
-
-async function readEmailRawText(
-  raw: ReadableStream<Uint8Array>,
-  maxBytes: number,
-): Promise<string> {
-  const reader = raw.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    size += chunk.value.byteLength;
-    if (size > maxBytes) {
-      throw new Error("Inbound email exceeded ME3 Core raw message limit.");
-    }
-    chunks.push(chunk.value);
-  }
-
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(bytes);
-}
-
-function parseInboundEmail(
-  rawMessage: string,
-  envelopeHeaders: Headers,
-): {
-  headers: Record<string, string>;
-  subject: string;
-  textBody: string;
-  htmlBody: string | null;
-  attachments: ParsedInboundEmailAttachment[];
-} {
-  const [rawHeaderText, ...bodyParts] = rawMessage.split(/\r?\n\r?\n/);
-  const headers = {
-    ...headersToRecord(envelopeHeaders),
-    ...parseRawEmailHeaders(rawHeaderText || ""),
-  };
-  const body = bodyParts.join("\n\n");
-  const contentType = headers["content-type"] || "";
-  const parsedBody = parseEmailBody(body, contentType, headers["content-transfer-encoding"]);
-
-  return {
-    headers,
-    subject: decodeMimeHeaderValue(normalizeEmailHeaderValue(headers.subject)) || "",
-    textBody: parsedBody.textBody,
-    htmlBody: parsedBody.htmlBody,
-    attachments: parsedBody.attachments,
-  };
-}
-
-type ParsedInboundEmailAttachment = {
-  filename: string;
-  mimeType: string;
-  disposition: "attachment" | "inline";
-  contentId: string | null;
-  content: Uint8Array;
-};
-
-type StoredMailboxAttachment = {
-  filename: string;
-  mimeType: string;
-  disposition: "attachment" | "inline";
-  size: number;
-  storageKey: string;
-  contentId?: string | null;
-  sourceMessageId: string;
-};
-
-function headersToRecord(headers: Headers): Record<string, string> {
-  const record: Record<string, string> = {};
-  headers.forEach((value, key) => {
-    record[key.toLowerCase()] = value;
-  });
-  return record;
-}
-
-function parseRawEmailHeaders(rawHeaders: string): Record<string, string> {
-  const headers: Record<string, string> = {};
-  let currentHeader = "";
-
-  for (const line of rawHeaders.split(/\r?\n/)) {
-    if (/^\s/.test(line) && currentHeader) {
-      headers[currentHeader] = `${headers[currentHeader]} ${line.trim()}`;
-      continue;
-    }
-    const separatorIndex = line.indexOf(":");
-    if (separatorIndex <= 0) continue;
-    currentHeader = line.slice(0, separatorIndex).trim().toLowerCase();
-    headers[currentHeader] = line.slice(separatorIndex + 1).trim();
-  }
-
-  return headers;
-}
-
-type MailboxUnsubscribeAction =
-  | { mode: "one_click"; url: string }
-  | { mode: "link"; url: string }
-  | { mode: "mailto"; url: string };
-
-function resolveMailboxUnsubscribeAction(
-  rawHeadersJson: string | null,
-): MailboxUnsubscribeAction | null {
-  const headers = parseJsonRecord(rawHeadersJson);
-  const listUnsubscribe = getHeaderValue(headers, "list-unsubscribe");
-  if (!listUnsubscribe) return null;
-
-  const urls = parseListUnsubscribeUrls(listUnsubscribe);
-  const httpsUrl = urls.find(isHttpsUrl);
-  const mailtoUrl = urls.find((url) => url.trim().toLowerCase().startsWith("mailto:"));
-  const oneClick =
-    getHeaderValue(headers, "list-unsubscribe-post")?.trim().toLowerCase() ===
-    "list-unsubscribe=one-click";
-
-  if (oneClick && httpsUrl) return { mode: "one_click", url: httpsUrl };
-  if (httpsUrl) return { mode: "link", url: httpsUrl };
-  if (mailtoUrl) return { mode: "mailto", url: mailtoUrl };
-  return null;
-}
-
-function getHeaderValue(headers: Record<string, unknown>, name: string): string | null {
-  const lowerName = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === lowerName && typeof value === "string") {
-      return value;
-    }
-  }
-  return null;
-}
-
-function parseListUnsubscribeUrls(value: string): string[] {
-  const bracketed = [...value.matchAll(/<([^>]+)>/g)]
-    .map((match) => match[1]?.trim() || "")
-    .filter(Boolean);
-  if (bracketed.length > 0) return bracketed;
-  return value.split(",").map((part) => part.trim()).filter(Boolean);
-}
-
-function isHttpsUrl(value: string): boolean {
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function parseEmailBody(
-  body: string,
-  contentType: string,
-  transferEncoding: string | undefined,
-): { textBody: string; htmlBody: string | null; attachments: ParsedInboundEmailAttachment[] } {
-  const boundary = extractMimeBoundary(contentType);
-  if (!boundary) {
-    const decoded = decodeEmailBody(body, transferEncoding);
-    if (/text\/html/i.test(contentType)) {
-      return { textBody: stripHtml(decoded), htmlBody: decoded.trim() || null, attachments: [] };
-    }
-    return { textBody: decoded.trim(), htmlBody: null, attachments: [] };
-  }
-
-  let textBody = "";
-  let htmlBody: string | null = null;
-  const attachments: ParsedInboundEmailAttachment[] = [];
-  for (const part of body.split(`--${boundary}`)) {
-    if (!part.trim() || part.trim() === "--") continue;
-    const [partHeadersText, ...partBodyParts] = part
-      .replace(/^(\r?\n)/, "")
-      .split(/\r?\n\r?\n/);
-    const partHeaders = parseRawEmailHeaders(partHeadersText || "");
-    const partContentType = partHeaders["content-type"] || "";
-    const partBody = partBodyParts.join("\n\n").replace(/\r?\n--$/, "");
-    const partDisposition = partHeaders["content-disposition"] || "";
-    const filename = extractMimeFilename(partContentType, partDisposition);
-    const isAttachment =
-      /^attachment\b/i.test(partDisposition) ||
-      (Boolean(filename) && !/^text\/(?:plain|html)\b/i.test(partContentType));
-
-    if (isAttachment && filename) {
-      const content = decodeEmailBodyBytes(
-        partBody,
-        partHeaders["content-transfer-encoding"],
-      );
-      attachments.push({
-        filename,
-        mimeType: normalizeMimeType(partContentType),
-        disposition: /^inline\b/i.test(partDisposition) ? "inline" : "attachment",
-        contentId: normalizeEmailHeaderValue(partHeaders["content-id"]) || null,
-        content,
-      });
-      continue;
-    }
-
-    const decoded = decodeEmailBody(partBody, partHeaders["content-transfer-encoding"]).trim();
-    if (!textBody && /^text\/plain\b/i.test(partContentType)) {
-      textBody = decoded;
-    } else if (!htmlBody && /^text\/html\b/i.test(partContentType)) {
-      htmlBody = decoded;
-    }
-  }
-
-  return {
-    textBody: textBody || (htmlBody ? stripHtml(htmlBody) : ""),
-    htmlBody,
-    attachments,
-  };
-}
-
-function extractMimeBoundary(contentType: string): string | null {
-  const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
-  return (match?.[1] || match?.[2] || "").trim() || null;
-}
-
-function decodeEmailBody(body: string, transferEncoding: string | undefined): string {
-  return new TextDecoder().decode(decodeEmailBodyBytes(body, transferEncoding));
-}
-
-function decodeEmailBodyBytes(body: string, transferEncoding: string | undefined): Uint8Array {
-  const encoding = (transferEncoding || "").trim().toLowerCase();
-  if (encoding === "base64") {
-    try {
-      const binary = atob(body.replace(/\s/g, ""));
-      return Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    } catch {
-      return new TextEncoder().encode(body);
-    }
-  }
-  if (encoding === "quoted-printable") {
-    const decoded = body
-      .replace(/=\r?\n/g, "")
-      .replace(/=([0-9a-f]{2})/gi, (_, hex: string) =>
-        String.fromCharCode(Number.parseInt(hex, 16)),
-      );
-    return Uint8Array.from(decoded, (char) => char.charCodeAt(0) & 0xff);
-  }
-  return new TextEncoder().encode(body);
-}
-
-function extractMimeFilename(contentType: string, contentDisposition: string): string | null {
-  return (
-    extractMimeParameter(contentDisposition, "filename*") ||
-    extractMimeParameter(contentDisposition, "filename") ||
-    extractMimeParameter(contentType, "name*") ||
-    extractMimeParameter(contentType, "name")
-  );
-}
-
-function extractMimeParameter(header: string, name: string): string | null {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`${escapedName}=("[^"]*"|[^;]+)`, "i").exec(header);
-  const raw = (match?.[1] || "").trim();
-  if (!raw) return null;
-  const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
-  const rfc5987 = /^utf-8''(.+)$/i.exec(value);
-  try {
-    return decodeURIComponent(rfc5987?.[1] || value).trim() || null;
-  } catch {
-    return value.trim() || null;
-  }
-}
-
-function normalizeMimeType(contentType: string): string {
-  return (contentType.split(";")[0] || "application/octet-stream").trim().toLowerCase();
-}
-
-function sanitizeAttachmentFilename(value: string, fallback: string): string {
-  const sanitized = value
-    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 180);
-  return sanitized || fallback;
-}
-
-async function storeInboundEmailAttachments(
-  env: Env,
-  mailboxId: string,
-  messageId: string,
-  attachments: ParsedInboundEmailAttachment[],
-): Promise<StoredMailboxAttachment[]> {
-  if (!env.SITE_ASSETS || attachments.length === 0) return [];
-
-  const stored: StoredMailboxAttachment[] = [];
-  for (const [index, attachment] of attachments.entries()) {
-    const filename = sanitizeAttachmentFilename(
-      attachment.filename,
-      `attachment-${index + 1}`,
-    );
-    const storageKey = [
-      "mailbox",
-      mailboxId,
-      "messages",
-      messageId,
-      "attachments",
-      `${index}-${crypto.randomUUID()}-${filename}`,
-    ].join("/");
-    await env.SITE_ASSETS.put(storageKey, attachment.content, {
-      httpMetadata: {
-        contentType: attachment.mimeType,
-      },
-      customMetadata: {
-        mailboxId,
-        messageId,
-        filename,
-        disposition: attachment.disposition,
-      },
-    });
-    stored.push({
-      filename,
-      mimeType: attachment.mimeType,
-      disposition: attachment.disposition,
-      size: attachment.content.byteLength,
-      storageKey,
-      contentId: attachment.contentId,
-      sourceMessageId: messageId,
-    });
-  }
-  return stored;
-}
-
-function getStoredMailboxAttachments(metadataJson: string | null): StoredMailboxAttachment[] {
-  const metadata = parseJsonRecord(metadataJson);
-  const rawAttachments = Array.isArray(metadata.attachments)
-    ? metadata.attachments
-    : [];
-  return rawAttachments
-    .filter((attachment): attachment is Record<string, unknown> =>
-      Boolean(attachment && typeof attachment === "object" && !Array.isArray(attachment)),
-    )
-    .map((attachment) => ({
-      filename: typeof attachment.filename === "string" ? attachment.filename : "",
-      mimeType:
-        typeof attachment.mimeType === "string" && attachment.mimeType.trim()
-          ? attachment.mimeType
-          : "application/octet-stream",
-      disposition:
-        attachment.disposition === "inline" ? ("inline" as const) : ("attachment" as const),
-      size:
-        typeof attachment.size === "number" && Number.isFinite(attachment.size)
-          ? attachment.size
-          : 0,
-      storageKey:
-        typeof attachment.storageKey === "string" ? attachment.storageKey : "",
-      contentId:
-        typeof attachment.contentId === "string" ? attachment.contentId : null,
-      sourceMessageId:
-        typeof attachment.sourceMessageId === "string"
-          ? attachment.sourceMessageId
-          : "",
-    }))
-    .filter((attachment) => attachment.storageKey.startsWith("mailbox/"));
-}
-
-async function loadDraftProviderAttachments(
-  env: Env,
-  draft: AgentMailboxMessage,
-): Promise<EmailProviderAttachment[]> {
-  if (!env.SITE_ASSETS) return [];
-  const rawAttachments = Array.isArray(draft.metadata.attachments)
-    ? draft.metadata.attachments
-    : [];
-  const attachments = getStoredMailboxAttachments(
-    JSON.stringify({ attachments: rawAttachments }),
-  );
-  const loaded: EmailProviderAttachment[] = [];
-  for (const attachment of attachments) {
-    const object = await env.SITE_ASSETS.get(attachment.storageKey);
-    if (!object) continue;
-    loaded.push({
-      filename: sanitizeAttachmentFilename(
-        attachment.filename,
-        `attachment-${loaded.length + 1}`,
-      ),
-      mimeType: attachment.mimeType || "application/octet-stream",
-      content: new Uint8Array(await object.arrayBuffer()),
-    });
-  }
-  return loaded;
-}
-
-function stripHtml(value: string): string {
-  let text = "";
-  let ignoredTag: "script" | "style" | null = null;
-  let index = 0;
-
-  while (index < value.length) {
-    if (value[index] !== "<") {
-      if (!ignoredTag) text += value[index];
-      index += 1;
-      continue;
-    }
-
-    const tagEnd = findMailboxHtmlTagEnd(value, index + 1);
-    if (tagEnd === -1) {
-      if (!ignoredTag) text += value[index];
-      index += 1;
-      continue;
-    }
-
-    const tag = parseMailboxHtmlTag(value.slice(index + 1, tagEnd));
-    if (!tag) {
-      if (!ignoredTag) text += " ";
-      index = tagEnd + 1;
-      continue;
-    }
-
-    if (!ignoredTag) {
-      text += " ";
-      if (!tag.closing && (tag.name === "script" || tag.name === "style")) {
-        ignoredTag = tag.name;
-      }
-    } else if (tag.closing && tag.name === ignoredTag) {
-      ignoredTag = null;
-      text += " ";
-    }
-    index = tagEnd + 1;
-  }
-
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function findMailboxHtmlTagEnd(value: string, start: number): number {
-  let quote: string | null = null;
-  for (let index = start; index < value.length; index += 1) {
-    const character = value[index];
-    if (quote) {
-      if (character === quote) quote = null;
-    } else if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === ">") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function parseMailboxHtmlTag(
-  content: string,
-): { closing: boolean; name: string } | null {
-  let index = 0;
-  while (index < content.length && isMailboxHtmlWhitespace(content[index])) {
-    index += 1;
-  }
-  const closing = content[index] === "/";
-  if (closing) index += 1;
-  while (index < content.length && isMailboxHtmlWhitespace(content[index])) {
-    index += 1;
-  }
-
-  const nameStart = index;
-  while (
-    index < content.length &&
-    ((content[index] >= "a" && content[index] <= "z") ||
-      (content[index] >= "A" && content[index] <= "Z") ||
-      (content[index] >= "0" && content[index] <= "9") ||
-      content[index] === "-")
-  ) {
-    index += 1;
-  }
-  if (index === nameStart) return null;
-  return { closing, name: content.slice(nameStart, index).toLowerCase() };
-}
-
-function isMailboxHtmlWhitespace(value: string): boolean {
-  return value === " " || value === "\n" || value === "\r" || value === "\t";
-}
-
-function normalizeEmailHeaderValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
 }

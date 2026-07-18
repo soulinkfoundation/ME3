@@ -2,15 +2,28 @@ import {
   getOrCreateInstallEncryptionKey,
   hasInstallEncryptionKey,
 } from "./install-secrets";
+import {
+  hasManagedEmailGatewayCapability,
+  isManagedEmailDeployment,
+  ManagedEmailGatewayError,
+  MANAGED_EMAIL_PROVIDER_ID,
+  sendManagedEmailThroughGateway,
+} from "./managed-email";
 import type { DbEmailProviderSetting, Env } from "./types";
 
-export const EMAIL_PROVIDER_IDS = ["cloudflare-email", "smtp", "mailgun", "postmark"] as const;
+export const EMAIL_PROVIDER_IDS = [
+  MANAGED_EMAIL_PROVIDER_ID,
+  "cloudflare-email",
+  "smtp",
+  "mailgun",
+  "postmark",
+] as const;
 export type EmailProviderId = (typeof EMAIL_PROVIDER_IDS)[number];
 export type EmailSendPurpose = "test" | "draft" | "reply" | "workflow";
 
 const DEFAULT_EMAIL_PROVIDER_ID: EmailProviderId = "smtp";
 
-type EmailProviderSource = "binding" | "stored" | "manual" | "not_configured";
+type EmailProviderSource = "managed" | "binding" | "stored" | "manual" | "not_configured";
 type EmailProviderStatus = "not_configured" | "ready" | "failed";
 type SmtpSecurity = "starttls" | "tls" | "none";
 type MailgunRegion = "us" | "eu";
@@ -128,6 +141,7 @@ type EmailProviderUpdate = {
 
 type EmailProviderSendMessage = {
   auditId: string;
+  purpose: EmailSendPurpose;
   fromAddress: string;
   fromName: string;
   replyToAddress: string;
@@ -139,6 +153,7 @@ type EmailProviderSendMessage = {
   messageIdHeader: string | null;
   inReplyTo: string | null;
   referencesHeader: string | null;
+  approvedByUserId: string | null;
   metadata: Record<string, string>;
 };
 
@@ -186,6 +201,72 @@ type EmailProviderAdapter = {
     secret: string | null,
     message: EmailProviderSendMessage,
   ): Promise<EmailProviderSendResult>;
+};
+
+const MANAGED_GATEWAY_PROVIDER: EmailProviderAdapter = {
+  id: MANAGED_EMAIL_PROVIDER_ID,
+  label: "ME3 managed email",
+  description:
+    "Managed @me3.app delivery through the shared ME3 gateway without provider credentials in this installation.",
+  recommended: true,
+  stable: false,
+  secretLabel: null,
+  defaultConfig: createDefaultConfig("rest", ""),
+  isConfigured(_row, _config, env) {
+    return hasManagedEmailGatewayCapability(env);
+  },
+  source(_row, _config, env) {
+    return hasManagedEmailGatewayCapability(env) ? "managed" : "not_configured";
+  },
+  setupRequirements(_row, _config, env) {
+    return [
+      {
+        id: "managed-deployment",
+        label: "Managed ME3 installation",
+        required: true,
+        configured: isManagedEmailDeployment(env),
+        note: "This capability is provisioned by ME3 Cloud and is unavailable to self-hosted deployments.",
+      },
+      {
+        id: "managed-email-gateway",
+        label: "Managed email gateway",
+        required: true,
+        configured: hasManagedEmailGatewayCapability(env),
+        note: "ME3 Cloud provisions the gateway origin and logical managed installation ID.",
+      },
+    ];
+  },
+  async send(env, _config, _secret, message) {
+    try {
+      return await sendManagedEmailThroughGateway(env, {
+        auditId: message.auditId,
+        purpose: message.purpose,
+        fromAddress: message.fromAddress,
+        fromName: message.fromName,
+        replyToAddress: message.replyToAddress,
+        toAddress: message.toAddress,
+        subject: message.subject,
+        textBody: message.textBody,
+        htmlBody: message.htmlBody,
+        attachments: message.attachments,
+        messageIdHeader: message.messageIdHeader,
+        inReplyTo: message.inReplyTo,
+        referencesHeader: message.referencesHeader,
+        approvedByUserId: message.approvedByUserId,
+        metadata: message.metadata,
+      });
+    } catch (error) {
+      if (error instanceof ManagedEmailGatewayError && error.definitive) {
+        throw new EmailProviderSendError(
+          error.message,
+          error.status,
+          error.code,
+          error.raw,
+        );
+      }
+      throw error;
+    }
+  },
 };
 
 const CLOUDFLARE_EMAIL_PROVIDER: EmailProviderAdapter = {
@@ -600,12 +681,17 @@ const MAILGUN_PROVIDER: EmailProviderAdapter = {
 };
 
 const EMAIL_PROVIDER_ADAPTERS = [
+  MANAGED_GATEWAY_PROVIDER,
   SMTP_PROVIDER,
   MAILGUN_PROVIDER,
   POSTMARK_PROVIDER,
   CLOUDFLARE_EMAIL_PROVIDER,
 ] as const;
 const PROVIDER_ALIASES: Record<string, EmailProviderId> = {
+  managed: MANAGED_EMAIL_PROVIDER_ID,
+  managed_gateway: MANAGED_EMAIL_PROVIDER_ID,
+  "managed-gateway": MANAGED_EMAIL_PROVIDER_ID,
+  "me3-managed-email": MANAGED_EMAIL_PROVIDER_ID,
   cloudflare: "cloudflare-email",
   "cloudflare-email": "cloudflare-email",
   "cloudflare-email-service": "cloudflare-email",
@@ -660,15 +746,14 @@ export async function getEmailProviderSettings(
   const settings = await listEmailProviderRows(env, ownerId);
   const activeProviderId =
     getActiveProviderId(settings) ||
-    normalizeEmailProviderId(env.ME3_EMAIL_DEFAULT_PROVIDER) ||
-    DEFAULT_EMAIL_PROVIDER_ID;
+    getDefaultEmailProviderId(env);
 
   return {
     encryptionConfigured: await hasInstallEncryptionKey(env),
     activeProviderId,
-    providers: EMAIL_PROVIDER_ADAPTERS.map((adapter) =>
-      serializeProvider(adapter, settings.get(adapter.id) || null, env),
-    ),
+    providers: EMAIL_PROVIDER_ADAPTERS.filter(
+      (adapter) => adapter.id !== MANAGED_EMAIL_PROVIDER_ID || isManagedEmailDeployment(env),
+    ).map((adapter) => serializeProvider(adapter, settings.get(adapter.id) || null, env)),
     futureProviders: [...FUTURE_EMAIL_PROVIDERS],
   };
 }
@@ -685,7 +770,7 @@ export async function updateEmailProviderSettings(
   const activeProviderId =
     normalizeEmailProviderId(input.activeProviderId) ||
     getActiveProviderId(existing) ||
-    DEFAULT_EMAIL_PROVIDER_ID;
+    getDefaultEmailProviderId(env);
   let changed = false;
 
   if (input.providers !== undefined) {
@@ -738,6 +823,7 @@ export async function sendEmailProviderTest(
       textBody: "This is a test email from your ME3 Core outbound sender settings.",
       htmlBody: "<p>This is a test email from your ME3 Core outbound sender settings.</p>",
       metadata: { test: true },
+      approvedByUserId: ownerId,
     });
     await updateProviderTestStatus(env, ownerId, result.providerId, "ready", result.sentAt, null);
     return { ok: true, sentTo: toAddress, ...result };
@@ -763,14 +849,33 @@ export async function sendEmailWithProvider(
   input: EmailProviderSendRequest,
 ): Promise<EmailProviderSendResponse> {
   const resolved = await resolveReadyProvider(env, ownerId, input.providerId || null);
-  const fromAddress = (input.fromAddress || resolved.config.fromAddress).trim().toLowerCase();
+  const managedGateway = resolved.providerId === MANAGED_EMAIL_PROVIDER_ID;
+  if (managedGateway && input.purpose === "workflow") {
+    throw new EmailProviderInputError(
+      "Automated workflow email is not available through ME3 managed email yet",
+      409,
+    );
+  }
+  if (managedGateway && !input.approvedByUserId) {
+    throw new EmailProviderInputError(
+      "ME3 managed email requires explicit owner approval",
+      403,
+    );
+  }
+  const fromAddress = (
+    managedGateway
+      ? await getManagedEmailFromAddress(env, ownerId)
+      : input.fromAddress || resolved.config.fromAddress
+  )
+    .trim()
+    .toLowerCase();
   const fromName = (input.fromName || resolved.config.fromName || "ME3 Core").trim();
   const replyToAddress = (input.replyToAddress || resolved.config.replyToAddress || "")
     .trim()
     .toLowerCase();
   const toAddress = input.toAddress.trim().toLowerCase();
   const subject = input.subject.trim() || "(no subject)";
-  const auditId = crypto.randomUUID();
+  const attachments = input.attachments || [];
   const requestedAt = new Date().toISOString();
 
   if (!isValidEmail(fromAddress)) {
@@ -783,8 +888,30 @@ export async function sendEmailWithProvider(
     throw new EmailProviderInputError("Configured reply-to email address is invalid", 503);
   }
 
+  const managedRequestFingerprint =
+    managedGateway && input.mailboxMessageId
+      ? await createManagedEmailRequestFingerprint(input, {
+          fromAddress,
+          fromName,
+          replyToAddress,
+          toAddress,
+          subject,
+          attachments,
+        })
+      : null;
+  const pendingAudit =
+    managedRequestFingerprint && input.mailboxMessageId
+      ? await findPendingManagedEmailAudit(
+          env,
+          ownerId,
+          input.mailboxMessageId,
+          managedRequestFingerprint,
+        )
+      : null;
+  const auditId = pendingAudit?.id || crypto.randomUUID();
   const message: EmailProviderSendMessage = {
     auditId,
+    purpose: input.purpose,
     fromAddress,
     fromName,
     replyToAddress,
@@ -792,16 +919,61 @@ export async function sendEmailWithProvider(
     subject,
     textBody: input.textBody,
     htmlBody: input.htmlBody || null,
-    attachments: input.attachments || [],
+    attachments,
     messageIdHeader: input.messageIdHeader || null,
     inReplyTo: input.inReplyTo || null,
     referencesHeader: input.referencesHeader || null,
+    approvedByUserId: input.approvedByUserId || null,
     metadata: stringifyMetadata({
       me3_audit_id: auditId,
       me3_purpose: input.purpose,
       ...(input.metadata || {}),
     }),
   };
+  const auditDetails = {
+    auditId,
+    ownerId,
+    mailboxId: input.mailboxId || null,
+    mailboxMessageId: input.mailboxMessageId || null,
+    providerId: resolved.providerId,
+    purpose: input.purpose,
+    fromAddress,
+    toAddress,
+    subject,
+    threadKey: input.threadKey || null,
+    messageIdHeader: input.messageIdHeader || null,
+    inReplyTo: input.inReplyTo || null,
+    referencesHeader: input.referencesHeader || null,
+    createdBy: input.createdBy || "owner",
+    approvedByUserId: input.approvedByUserId || null,
+    requestedAt,
+  };
+
+  if (managedGateway) {
+    if (pendingAudit) {
+      await refreshPendingEmailSendAudit(
+        env,
+        auditId,
+        ownerId,
+        requestedAt,
+        input.approvedByUserId || null,
+      );
+    } else {
+      await insertEmailSendAudit(env, {
+        ...auditDetails,
+        providerMessageId: null,
+        providerStatus: "pending",
+        status: "pending",
+        metadata: {
+          source: resolved.source,
+          managed_request_fingerprint: managedRequestFingerprint,
+          ...(input.metadata || {}),
+        },
+        errorMessage: null,
+        sentAt: null,
+      });
+    }
+  }
 
   let result: EmailProviderSendResult;
   try {
@@ -817,59 +989,39 @@ export async function sendEmailWithProvider(
     }
 
     const sendError = normalizeSendError(error);
-    await insertEmailSendAudit(env, {
-      auditId,
-      ownerId,
-      mailboxId: input.mailboxId || null,
-      mailboxMessageId: input.mailboxMessageId || null,
-      providerId: resolved.providerId,
+    const failedAudit = {
+      ...auditDetails,
       providerMessageId: null,
       providerStatus: sendError.code,
-      status: "failed",
-      purpose: input.purpose,
-      fromAddress,
-      toAddress,
-      subject,
-      threadKey: input.threadKey || null,
-      messageIdHeader: input.messageIdHeader || null,
-      inReplyTo: input.inReplyTo || null,
-      referencesHeader: input.referencesHeader || null,
+      status: "failed" as const,
       metadata: { raw: sendError.raw, source: resolved.source, ...(input.metadata || {}) },
       errorMessage: sendError.message,
-      createdBy: input.createdBy || "owner",
-      approvedByUserId: input.approvedByUserId || null,
-      requestedAt,
       sentAt: null,
-    });
+    };
+    if (managedGateway) {
+      await updatePendingEmailSendAudit(env, failedAudit);
+    } else {
+      await insertEmailSendAudit(env, failedAudit);
+    }
     throw new EmailProviderInputError(sendError.message, sendError.status);
   }
 
   const sentAt = new Date().toISOString();
+  const sentAudit = {
+    ...auditDetails,
+    providerMessageId: result.providerMessageId,
+    providerStatus: result.providerStatus,
+    status: "sent" as const,
+    metadata: { raw: result.raw, source: resolved.source, ...(input.metadata || {}) },
+    errorMessage: null,
+    sentAt,
+  };
   try {
-    await insertEmailSendAudit(env, {
-      auditId,
-      ownerId,
-      mailboxId: input.mailboxId || null,
-      mailboxMessageId: input.mailboxMessageId || null,
-      providerId: resolved.providerId,
-      providerMessageId: result.providerMessageId,
-      providerStatus: result.providerStatus,
-      status: "sent",
-      purpose: input.purpose,
-      fromAddress,
-      toAddress,
-      subject,
-      threadKey: input.threadKey || null,
-      messageIdHeader: input.messageIdHeader || null,
-      inReplyTo: input.inReplyTo || null,
-      referencesHeader: input.referencesHeader || null,
-      metadata: { raw: result.raw, source: resolved.source, ...(input.metadata || {}) },
-      errorMessage: null,
-      createdBy: input.createdBy || "owner",
-      approvedByUserId: input.approvedByUserId || null,
-      requestedAt,
-      sentAt,
-    });
+    if (managedGateway) {
+      await updatePendingEmailSendAudit(env, sentAudit);
+    } else {
+      await insertEmailSendAudit(env, sentAudit);
+    }
   } catch {
     throw new EmailProviderDeliveryUnknownError(
       "The email provider accepted the message, but ME3 could not confirm delivery. Check delivery status before retrying.",
@@ -896,6 +1048,12 @@ async function applyProviderUpdate(
   if (!isRecord(update)) throw new EmailProviderInputError("provider updates must be objects");
   const providerId = normalizeEmailProviderId(update.id);
   if (!providerId) throw new EmailProviderInputError("Unknown email provider");
+  if (providerId === MANAGED_EMAIL_PROVIDER_ID) {
+    throw new EmailProviderInputError(
+      "ME3 managed email is provisioned by the managed deployment and cannot be edited here",
+      409,
+    );
+  }
   const adapter = getProviderAdapter(providerId);
   const current = existing.get(providerId) || null;
   const config = normalizeProviderConfigUpdate(
@@ -991,8 +1149,7 @@ async function resolveReadyProvider(
   const providerId =
     requestedProviderId ||
     getActiveProviderId(settings) ||
-    normalizeEmailProviderId(env.ME3_EMAIL_DEFAULT_PROVIDER) ||
-    DEFAULT_EMAIL_PROVIDER_ID;
+    getDefaultEmailProviderId(env);
   const adapter = getProviderAdapter(providerId);
   const row = settings.get(providerId) || null;
   const config = normalizeProviderConfig(row, adapter);
@@ -1083,32 +1240,117 @@ async function upsertEmailProviderRow(
     .run();
 }
 
+type EmailSendAuditWrite = {
+  auditId: string;
+  ownerId: string;
+  mailboxId: string | null;
+  mailboxMessageId: string | null;
+  providerId: EmailProviderId;
+  providerMessageId: string | null;
+  providerStatus: string | null;
+  status: "pending" | "sent" | "failed";
+  purpose: EmailSendPurpose;
+  fromAddress: string;
+  toAddress: string;
+  subject: string;
+  threadKey: string | null;
+  messageIdHeader: string | null;
+  inReplyTo: string | null;
+  referencesHeader: string | null;
+  metadata: Record<string, unknown>;
+  errorMessage: string | null;
+  createdBy: string;
+  approvedByUserId: string | null;
+  requestedAt: string;
+  sentAt: string | null;
+};
+
+async function findPendingManagedEmailAudit(
+  env: Env,
+  ownerId: string,
+  mailboxMessageId: string,
+  requestFingerprint: string,
+): Promise<{ id: string } | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, metadata_json
+     FROM email_send_audit
+     WHERE user_id = ?
+       AND mailbox_message_id = ?
+       AND provider_id = ?
+       AND status = 'pending'
+     ORDER BY requested_at DESC, created_at DESC
+     LIMIT 1`,
+  )
+    .bind(ownerId, mailboxMessageId, MANAGED_EMAIL_PROVIDER_ID)
+    .first<{ id: string; metadata_json: string | null }>();
+  if (!row) return null;
+  const metadata = parseJsonObject(row.metadata_json);
+  return metadata.managed_request_fingerprint === requestFingerprint
+    ? { id: row.id }
+    : null;
+}
+
+async function refreshPendingEmailSendAudit(
+  env: Env,
+  auditId: string,
+  ownerId: string,
+  requestedAt: string,
+  approvedByUserId: string | null,
+): Promise<void> {
+  const result = await env.DB.prepare(
+    `UPDATE email_send_audit
+     SET requested_at = ?, approved_by_user_id = ?, error_message = NULL, updated_at = ?
+     WHERE id = ? AND user_id = ? AND provider_id = ? AND status = 'pending'`,
+  )
+    .bind(
+      requestedAt,
+      approvedByUserId,
+      requestedAt,
+      auditId,
+      ownerId,
+      MANAGED_EMAIL_PROVIDER_ID,
+    )
+    .run();
+  if ((result.meta?.changes || 0) === 0) {
+    throw new Error("Managed email pending audit could not be reclaimed");
+  }
+}
+
+async function updatePendingEmailSendAudit(
+  env: Env,
+  input: EmailSendAuditWrite,
+): Promise<void> {
+  const updatedAt = new Date().toISOString();
+  const result = await env.DB.prepare(
+    `UPDATE email_send_audit
+     SET provider_message_id = ?, provider_status = ?, status = ?,
+         metadata_json = ?, error_message = ?, approved_by_user_id = ?,
+         requested_at = ?, sent_at = ?, updated_at = ?
+     WHERE id = ? AND user_id = ? AND provider_id = ? AND status = 'pending'`,
+  )
+    .bind(
+      input.providerMessageId,
+      input.providerStatus,
+      input.status,
+      JSON.stringify(input.metadata),
+      input.errorMessage,
+      input.approvedByUserId,
+      input.requestedAt,
+      input.sentAt,
+      updatedAt,
+      input.auditId,
+      input.ownerId,
+      input.providerId,
+    )
+    .run();
+  if ((result.meta?.changes || 0) === 0) {
+    throw new Error("Managed email audit state changed before delivery was recorded");
+  }
+}
+
 async function insertEmailSendAudit(
   env: Env,
-  input: {
-    auditId: string;
-    ownerId: string;
-    mailboxId: string | null;
-    mailboxMessageId: string | null;
-    providerId: EmailProviderId;
-    providerMessageId: string | null;
-    providerStatus: string | null;
-    status: "sent" | "failed";
-    purpose: EmailSendPurpose;
-    fromAddress: string;
-    toAddress: string;
-    subject: string;
-    threadKey: string | null;
-    messageIdHeader: string | null;
-    inReplyTo: string | null;
-    referencesHeader: string | null;
-    metadata: Record<string, unknown>;
-    errorMessage: string | null;
-    createdBy: string;
-    approvedByUserId: string | null;
-    requestedAt: string;
-    sentAt: string | null;
-  },
+  input: EmailSendAuditWrite,
 ) {
   const now = new Date().toISOString();
   await env.DB.prepare(
@@ -1721,6 +1963,36 @@ function normalizeEmailProviderId(value: unknown): EmailProviderId | null {
   return PROVIDER_ALIASES[value.trim().toLowerCase()] || null;
 }
 
+function getDefaultEmailProviderId(env: Env): EmailProviderId {
+  return (
+    normalizeEmailProviderId(env.ME3_EMAIL_DEFAULT_PROVIDER) ||
+    (hasManagedEmailGatewayCapability(env)
+      ? MANAGED_EMAIL_PROVIDER_ID
+      : DEFAULT_EMAIL_PROVIDER_ID)
+  );
+}
+
+async function getManagedEmailFromAddress(env: Env, ownerId: string): Promise<string> {
+  const mailbox = await env.DB.prepare(
+    `SELECT alias_local_part
+     FROM mailbox_aliases
+     WHERE user_id = ?
+     ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at ASC
+     LIMIT 1`,
+  )
+    .bind(ownerId)
+    .first<{ alias_local_part: string }>();
+  const localPart = mailbox?.alias_local_part?.trim().toLowerCase() || "";
+  const address = localPart ? `${localPart}@me3.app` : "";
+  if (!isValidEmail(address)) {
+    throw new EmailProviderInputError(
+      "ME3 managed email address is not provisioned for this mailbox",
+      503,
+    );
+  }
+  return address;
+}
+
 function getProviderAdapter(providerId: EmailProviderId): EmailProviderAdapter {
   const adapter = EMAIL_PROVIDER_ADAPTERS.find((candidate) => candidate.id === providerId);
   if (!adapter) throw new EmailProviderInputError("Unknown email provider");
@@ -1824,6 +2096,69 @@ function stringifyMetadata(metadata: Record<string, unknown>): Record<string, st
       typeof value === "string" ? value : JSON.stringify(value),
     ]),
   );
+}
+
+async function createManagedEmailRequestFingerprint(
+  input: EmailProviderSendRequest,
+  normalized: {
+    fromAddress: string;
+    fromName: string;
+    replyToAddress: string;
+    toAddress: string;
+    subject: string;
+    attachments: EmailProviderAttachment[];
+  },
+): Promise<string> {
+  const attachments = await Promise.all(
+    normalized.attachments.map(async (attachment) => ({
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      contentSha256: await sha256Hex(attachment.content),
+    })),
+  );
+  const metadata = Object.fromEntries(
+    Object.entries(stringifyMetadata(input.metadata || {})).sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  );
+  return sha256Hex(
+    new TextEncoder().encode(
+      JSON.stringify({
+        purpose: input.purpose,
+        fromAddress: normalized.fromAddress,
+        fromName: normalized.fromName,
+        replyToAddress: normalized.replyToAddress,
+        toAddress: normalized.toAddress,
+        subject: normalized.subject,
+        textBody: input.textBody,
+        htmlBody: input.htmlBody || null,
+        attachments,
+        messageIdHeader: input.messageIdHeader || null,
+        inReplyTo: input.inReplyTo || null,
+        referencesHeader: input.referencesHeader || null,
+        ownerApproved: Boolean(input.approvedByUserId),
+        metadata,
+      }),
+    ),
+  );
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const copy = bytes.slice();
+  const digest = await crypto.subtle.digest("SHA-256", copy.buffer as ArrayBuffer);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+function parseJsonObject(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function getSecretHint(secret: string): string {
