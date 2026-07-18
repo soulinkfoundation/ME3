@@ -40,6 +40,9 @@ export const RUNTIME_MIGRATIONS = [
   ["0018_social_publication_idempotency", "2026-07-10-social-publication-idempotency-v1"],
   ["0019_owner_content_search", "2026-07-15-owner-content-search-v1"],
   ["0020_mailbox_thread_index", "2026-07-16-mailbox-thread-index-v1"],
+  ["0021_managed_email_inbound_deliveries", "2026-07-18-managed-email-inbound-deliveries-v1"],
+  ["0022_social_posts_canonical", "2026-07-18-social-posts-canonical-v1"],
+  ["0023_social_publications_reusable", "2026-07-18-social-publications-reusable-v1"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
@@ -67,6 +70,7 @@ const EXCLUDED_TABLES = [
   "local_executor_project_policies",
   "local_executor_run_events",
   "local_executor_runs",
+  "managed_email_inbound_deliveries",
   "me3_install_claim_states",
   "mission_daemon_allowlist_entries",
   "mission_daemon_audit_events",

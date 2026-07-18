@@ -555,9 +555,9 @@ export const ME3_CAPABILITIES: readonly Me3Capability[] = [
     title: "Calendar events and reminders",
     category: "calendar",
     summary:
-      "ME3 can manage native personal calendar events, reminders, bookings, birthdays, imported calendar sources, and recurring event expansion.",
+      "ME3 can manage native personal calendar events, reminders, bookings, birthdays, imported calendar sources, recurring event expansion, and a read-only view of Social Publications when that plugin is ready.",
     agentSummary:
-      "ME3 has calendar and reminder surfaces. Creating or changing events/reminders is an internal write and should be clear to the owner.",
+      "ME3 has calendar and reminder surfaces. Social Publications can appear as plugin-owned read-only Calendar entries; creating or changing events/reminders remains a separate internal write.",
     surfaces: ["core", "hosted"],
     lifecycle: "available",
     pluginId: "me3.calendar",
@@ -570,8 +570,9 @@ export const ME3_CAPABILITIES: readonly Me3Capability[] = [
     boundaries: [
       "Be precise about dates, times, and time zones.",
       "Do not claim a reminder or event was created without an API/tool result.",
+      "Calendar projects Social Publications only while Social Publishing is ready and never copies them into personal calendar event records.",
     ],
-    tags: ["calendar", "reminders", "bookings"],
+    tags: ["calendar", "reminders", "bookings", "social-publications"],
   },
   {
     id: "mailbox.drafts_approvals",
@@ -619,26 +620,39 @@ export const ME3_CAPABILITIES: readonly Me3Capability[] = [
   },
   {
     id: "content.social_publishing",
-    title: "Social content publishing",
+    title: "Social Publishing",
     category: "content",
     summary:
-      "ME3 can manage social content drafts, connected accounts, queue state, and approval-first publishing workflows when the social plugin is installed.",
+      "ME3 can turn explicit human-authored Sources into reusable social Posts with account-specific Versions and approval-first Publications when Social Publishing is installed.",
     agentSummary:
-      "Social publishing is optional and approval-first. Drafting and queueing are different from external publishing.",
+      "Save only source-backed social Posts. LinkedIn Versions can be scheduled and published after exact owner approval; X and Instagram Versions are draft-only for now.",
     surfaces: ["core", "hosted"],
     lifecycle: "setup_required",
     pluginId: "me3.social-publishing",
     requires: ["social.oauth_accounts", "social.publish_queue"],
     approvalMode: "external_action_approval",
     sideEffect: "external_write",
-    dataBoundary: "Drafts and queue state are owner-scoped; external publication reaches connected social platforms.",
-    appRoutes: ["/social", "/api/content/items", "/api/social/accounts"],
-    agentToolIds: ["content.write_preview", "content.publish"],
-    boundaries: [
-      "Never represent queued or drafted content as published.",
-      "External publishing requires owner approval and provider setup.",
+    dataBoundary: "Sources, Posts, Versions, Publications, and delivery history are owner-scoped; a successful Publication sends approved content to its connected social account.",
+    appRoutes: [
+      "/social",
+      "/api/social/posts",
+      "/api/social/posts/:id",
+      "/api/social/versions/:id",
+      "/api/social/versions/:id/publications",
+      "/api/social/versions/:id/publish",
+      "/api/social/publications/:id",
+      "/api/social/publications/:id/resolve",
+      "/api/social/accounts",
     ],
-    tags: ["social", "content", "publishing"],
+    agentToolIds: ["social.post.suggest", "social.version.publish"],
+    boundaries: [
+      "An agent-saved Post requires a stable human-authored Source reference, immutable Source snapshot, and visible Source text; a blank prompt may be discussed but not saved as publishable content.",
+      "Approval applies to one exact account Version; editing its copy, media, format, or account removes approval and cancels incompatible future Publications without changing queued or historical snapshots.",
+      "Scheduling and reposting create new Publications with independent delivery state, provider results, recovery, and audit history.",
+      "Never represent a draft, scheduled Version, queued Publication, or failed Publication as published.",
+      "LinkedIn is the only end-to-end schedule and publish platform currently enabled; X, Instagram, and Instagram Business remain draft-only.",
+    ],
+    tags: ["social", "sources", "posts", "versions", "publications"],
   },
   {
     id: "sites.landing_pages",

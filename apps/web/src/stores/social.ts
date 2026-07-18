@@ -2,6 +2,16 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api, ApiError } from "../api";
 
+export type SocialPlatform = "x" | "linkedin" | "instagram" | "instagram_business";
+
+export type SocialPlatformCapabilities = {
+  platform: SocialPlatform;
+  draft: boolean;
+  schedule: boolean;
+  publish: boolean;
+  reason: string | null;
+};
+
 export type SocialAccountRow = {
   id: string;
   siteId: string;
@@ -18,6 +28,7 @@ export type SocialStatus = {
     enabled: boolean;
     ready: boolean;
     statusLabel: string;
+    platformCapabilities: SocialPlatformCapabilities[];
   };
   hostedOAuth: {
     configured: boolean;
@@ -26,7 +37,7 @@ export type SocialStatus = {
 };
 
 export type SocialProviderSetting = {
-  providerId: "x" | "linkedin" | "instagram" | "instagram_business";
+  providerId: SocialPlatform;
   label: string;
   clientId: string;
   configured: boolean;
@@ -36,28 +47,28 @@ export type SocialProviderSetting = {
   callbackPath: string;
 };
 
-export type SocialPlatform = "x" | "linkedin" | "instagram" | "instagram_business";
+export type SocialMediaAsset = {
+  url: string;
+  filename?: string;
+  mimeType?: string;
+  kind?: "image" | "video";
+};
 
-export type SocialContentVariant = {
+export type PostVersion = {
   id: string;
-  packageId: string;
+  postId: string;
   platform: SocialPlatform;
   targetAccountId: string | null;
   format: "post" | "carousel";
   bodyText: string;
-  assetManifest: Array<{
-    url: string;
-    filename?: string;
-    mimeType?: string;
-    kind?: "image" | "video";
-  }>;
+  assetManifest: SocialMediaAsset[];
   sourceExcerpt: string | null;
   approvalStatus: "draft" | "approved" | "rejected";
   approvedAt: string | null;
   approvedByUserId: string | null;
   scheduledFor: string | null;
   timezone: string | null;
-  publicationStatus: "queued" | "publishing" | "published" | "failed" | "cancelled" | null;
+  publicationStatus: "scheduled" | "queued" | "publishing" | "published" | "failed" | "cancelled" | null;
   platformPostUrl: string | null;
   publishedAt: string | null;
   failureClass: "retryable" | "reconnect_required" | "rejected" | "unsupported" | "outcome_unknown" | null;
@@ -66,13 +77,14 @@ export type SocialContentVariant = {
   updatedAt: string;
 };
 
-export type SocialContentPackage = {
-  package: {
+export type SocialPostDetail = {
+  post: {
     id: string;
     siteId: string;
-    sourceType: "journal" | "mission_task" | "site" | "pasted" | "original";
+    sourceType: "journal" | "mission_task" | "site" | "file" | "script" | "pasted" | "legacy_content_bank_read_only";
     sourceRef: string | null;
     sourceSnapshot: string;
+    sourceText: string;
     ideaText: string;
     goal: string | null;
     status: "draft" | "ready" | "partially_published" | "published" | "failed" | "archived";
@@ -80,15 +92,61 @@ export type SocialContentPackage = {
     createdAt: string;
     updatedAt: string;
   };
-  variants: SocialContentVariant[];
+  versions: PostVersion[];
 };
 
-export type SocialVariantUpdate = {
+export type CreateSocialPostInput = {
+  siteId: string;
+  sourceType: "pasted";
+  sourceSnapshot: string;
+  sourceText: string;
+  ideaText: string;
+  versions: Array<{
+    platform: SocialPlatform;
+    targetAccountId?: string | null;
+    bodyText: string;
+  }>;
+};
+
+export type PostVersionUpdate = {
   targetAccountId?: string | null;
   bodyText?: string;
-  approvalStatus?: SocialContentVariant["approvalStatus"];
+  approvalStatus?: PostVersion["approvalStatus"];
+};
+
+export type PublicationStatus =
+  | "scheduled"
+  | "queued"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "cancelled";
+
+export type Publication = {
+  id: string;
+  versionId: string;
+  platform: SocialPlatform;
+  status: PublicationStatus;
+  scheduledFor: string | null;
+  timezone: string | null;
+  queuedAt: string | null;
+  platformPostId: string | null;
+  platformPostUrl: string | null;
+  publishedAt: string | null;
+  failureClass: PostVersion["failureClass"];
+  errorCode: string | null;
+  errorMessage: string | null;
+  requestedByType: "owner" | "agent" | "migration" | null;
+  requestedByUserId: string | null;
+  requestContext: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatePublicationInput = {
   scheduledFor?: string | null;
   timezone?: string | null;
+  requestContext?: unknown;
 };
 
 export const useSocialStore = defineStore("social", () => {
@@ -102,9 +160,7 @@ export const useSocialStore = defineStore("social", () => {
 
   async function fetchSocialAccounts(): Promise<SocialAccountRow[]> {
     error.value = null;
-    const data = await api.get<{ accounts: SocialAccountRow[] }>(
-      "/social/accounts",
-    );
+    const data = await api.get<{ accounts: SocialAccountRow[] }>("/social/accounts");
     return data.accounts || [];
   }
 
@@ -116,57 +172,88 @@ export const useSocialStore = defineStore("social", () => {
     return data.providers || [];
   }
 
-  async function fetchContentPackages(siteId: string): Promise<SocialContentPackage[]> {
+  async function fetchSocialPosts(siteId: string): Promise<SocialPostDetail[]> {
     error.value = null;
     const query = siteId ? `?siteId=${encodeURIComponent(siteId)}` : "";
-    const data = await api.get<{ packages: SocialContentPackage[] }>(
-      `/social/packages${query}`,
-    );
-    return data.packages || [];
+    const data = await api.get<{ posts: SocialPostDetail[] }>(`/social/posts${query}`);
+    return data.posts || [];
   }
 
-  async function updateContentVariant(
-    variantId: string,
-    input: SocialVariantUpdate,
-  ): Promise<SocialContentVariant> {
+  async function createSocialPost(input: CreateSocialPostInput): Promise<SocialPostDetail> {
     error.value = null;
-    const data = await api.patch<{ variant: SocialContentVariant }>(
-      `/social/variants/${encodeURIComponent(variantId)}`,
+    const data = await api.post<{ post: SocialPostDetail }>("/social/posts", input);
+    if (!data.post) throw new Error("No Social Post returned");
+    return data.post;
+  }
+
+  async function updatePostVersion(
+    versionId: string,
+    input: PostVersionUpdate,
+  ): Promise<PostVersion> {
+    error.value = null;
+    const data = await api.patch<{ version: PostVersion }>(
+      `/social/versions/${encodeURIComponent(versionId)}`,
       input,
     );
-    if (!data.variant) throw new Error("No social variant returned");
-    return data.variant;
+    if (!data.version) throw new Error("No Post Version returned");
+    return data.version;
   }
 
-  async function publishContentVariant(variantId: string): Promise<{
-    id: string;
-    variantId: string;
-    status: SocialContentVariant["publicationStatus"];
-    platformPostUrl: string | null;
-  }> {
+  async function publishPostVersion(versionId: string): Promise<Publication> {
     error.value = null;
-    const data = await api.post<{
-      publication: {
-        id: string;
-        variantId: string;
-        status: SocialContentVariant["publicationStatus"];
-        platformPostUrl: string | null;
-      };
-    }>(`/social/variants/${encodeURIComponent(variantId)}/publish`, {});
-    if (!data.publication) throw new Error("No social publication returned");
+    const data = await api.post<{ publication: Publication }>(
+      `/social/versions/${encodeURIComponent(versionId)}/publish`,
+      {},
+    );
+    if (!data.publication) throw new Error("No Publication returned");
     return data.publication;
   }
 
-  async function resolveContentVariantOutcome(
-    variantId: string,
+  async function listPostVersionPublications(versionId: string): Promise<Publication[]> {
+    error.value = null;
+    const data = await api.get<{ publications: Publication[] }>(
+      `/social/versions/${encodeURIComponent(versionId)}/publications`,
+    );
+    return data.publications || [];
+  }
+
+  async function createPostVersionPublication(
+    versionId: string,
+    input: CreatePublicationInput = {},
+  ): Promise<Publication> {
+    error.value = null;
+    const data = await api.post<{ publication: Publication }>(
+      `/social/versions/${encodeURIComponent(versionId)}/publications`,
+      input,
+    );
+    if (!data.publication) throw new Error("No Publication returned");
+    return data.publication;
+  }
+
+  async function cancelPublication(publicationId: string): Promise<Publication> {
+    error.value = null;
+    const data = await api.delete<{ publication: Publication }>(
+      `/social/publications/${encodeURIComponent(publicationId)}`,
+    );
+    if (!data.publication) throw new Error("No Publication returned");
+    return data.publication;
+  }
+
+  async function resolvePublicationOutcome(
+    publicationId: string,
     outcome: "published" | "not_published",
     platformPostUrl?: string,
-  ): Promise<void> {
+  ): Promise<Publication> {
     error.value = null;
-    await api.post(`/social/variants/${encodeURIComponent(variantId)}/resolve`, {
-      outcome,
-      platformPostUrl: platformPostUrl || null,
-    });
+    const data = await api.post<{ publication: Publication }>(
+      `/social/publications/${encodeURIComponent(publicationId)}/resolve`,
+      {
+        outcome,
+        platformPostUrl: platformPostUrl || null,
+      },
+    );
+    if (!data.publication) throw new Error("No Publication returned");
+    return data.publication;
   }
 
   async function updateProviderSetting(payload: {
@@ -184,12 +271,7 @@ export const useSocialStore = defineStore("social", () => {
   }
 
   async function startSocialOAuth(
-    platform:
-      | "x"
-      | "linkedin"
-      | "instagram"
-      | "instagram_business"
-      | "youtube",
+    platform: SocialPlatform | "youtube",
     siteId: string,
     returnPath?: string,
     credentialSource?: "managed" | "byo",
@@ -209,11 +291,7 @@ export const useSocialStore = defineStore("social", () => {
   }
 
   function setErrorFromApi(e: unknown, fallback: string) {
-    if (e instanceof ApiError) {
-      error.value = e.message;
-    } else {
-      error.value = fallback;
-    }
+    error.value = e instanceof ApiError ? e.message : fallback;
   }
 
   return {
@@ -222,10 +300,14 @@ export const useSocialStore = defineStore("social", () => {
     fetchSocialStatus,
     fetchSocialAccounts,
     fetchProviderSettings,
-    fetchContentPackages,
-    updateContentVariant,
-    publishContentVariant,
-    resolveContentVariantOutcome,
+    fetchSocialPosts,
+    createSocialPost,
+    updatePostVersion,
+    publishPostVersion,
+    listPostVersionPublications,
+    createPostVersionPublication,
+    cancelPublication,
+    resolvePublicationOutcome,
     updateProviderSetting,
     startSocialOAuth,
     disconnectSocialAccount,

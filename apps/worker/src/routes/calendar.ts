@@ -16,6 +16,10 @@ import {
   listCalendarMissionTasks,
   parseCalendarWindow,
 } from "../calendar-feed";
+import {
+  getSocialPublishingRuntimeStatus,
+  listCalendarSocialPublications,
+} from "../social-publishing";
 import type { AppContext, AppHono, OwnerRouteDeps } from "../http/types";
 import type {
   DbBooking,
@@ -39,7 +43,16 @@ export function registerCalendarRoutes(app: AppHono, deps: OwnerRouteDeps) {
     const window = parseCalendarWindow(c.req.query("start"), c.req.query("end"));
     if ("error" in window) return c.json({ error: window.error }, 400);
 
-    const [bookings, reminders, events, recurringEvents, sources, importedEvents, tasks] =
+    const [
+      bookings,
+      reminders,
+      events,
+      recurringEvents,
+      sources,
+      importedEvents,
+      tasks,
+      socialPublishing,
+    ] =
       await Promise.all([
         c.env.DB.prepare(
           `SELECT b.*, s.username
@@ -104,6 +117,7 @@ export function registerCalendarRoutes(app: AppHono, deps: OwnerRouteDeps) {
           .bind(ownerId, window.start, window.end)
           .all<DbCalendarSourceEvent & { source_name: string }>(),
         listCalendarMissionTasks(c.env, ownerId, window),
+        loadSocialPublishingCalendar(c.env, ownerId, window),
       ]);
 
     return c.json({
@@ -118,6 +132,7 @@ export function registerCalendarRoutes(app: AppHono, deps: OwnerRouteDeps) {
       sources: (sources.results || []).map(serializeCalendarSource),
       importedEvents: (importedEvents.results || []).map(serializeImportedCalendarEvent),
       tasks,
+      socialPublishing,
     });
   });
 
@@ -276,6 +291,22 @@ export function registerCalendarRoutes(app: AppHono, deps: OwnerRouteDeps) {
     if ("error" in result) return c.json({ error: result.error }, result.status as any);
     return c.json(result);
   });
+}
+
+async function loadSocialPublishingCalendar(
+  env: AppContext["env"],
+  ownerId: string,
+  window: { start: string; end: string },
+) {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) {
+    return { ready: false, publications: [] };
+  }
+
+  return {
+    ready: true,
+    publications: await listCalendarSocialPublications(env, ownerId, window),
+  };
 }
 
 async function parseCalendarEventBody(c: AppContext): Promise<

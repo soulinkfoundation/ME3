@@ -18,7 +18,6 @@ import {
   validateCorePluginAgentToolContracts,
   type DbPluginInstallation,
 } from "./plugins";
-import { publishQueuedContentPublication } from "./social-publishing";
 import type {
   DbAiModelDefault,
   DbAiProviderCredential,
@@ -215,6 +214,44 @@ type StoredSocialPublicationEvent = {
   payload_json: string | null;
   created_at: string;
 };
+type StoredSocialPost = {
+  id: string;
+  site_id: string;
+  source_type:
+    | "journal"
+    | "mission_task"
+    | "site"
+    | "file"
+    | "script"
+    | "pasted"
+    | "legacy_content_bank_read_only";
+  source_ref: string | null;
+  source_snapshot: string;
+  source_text: string;
+  idea_text: string;
+  goal: string | null;
+  status: "draft" | "ready" | "partially_published" | "published" | "failed" | "archived";
+  created_by: "user" | "agent";
+  created_at: string;
+  updated_at: string;
+};
+type StoredPostVersion = {
+  id: string;
+  package_id: string;
+  platform: "x" | "linkedin" | "instagram" | "instagram_business";
+  target_account_id: string | null;
+  format: "post" | "carousel";
+  body_text: string;
+  asset_manifest_json: string;
+  source_excerpt: string | null;
+  approval_status: "draft" | "approved" | "rejected";
+  approved_at: string | null;
+  approved_by_user_id: string | null;
+  scheduled_for: string | null;
+  timezone: string | null;
+  created_at: string;
+  updated_at: string;
+};
 type StoredMe3ClaimState = {
   state: string;
   redirect_path: string | null;
@@ -353,6 +390,8 @@ function createEnv(): Env & {
   socialOauthStates: StoredSocialOauthState[];
   socialPublications: StoredSocialPublication[];
   socialPublicationEvents: StoredSocialPublicationEvent[];
+  socialPosts: StoredSocialPost[];
+  postVersions: StoredPostVersion[];
   socialPublishQueueMessages: Array<{ publicationId: string }>;
   me3ClaimStates: StoredMe3ClaimState[];
   authRateLimits: StoredAuthRateLimit[];
@@ -401,6 +440,8 @@ function createEnv(): Env & {
     socialOauthStates: [] as StoredSocialOauthState[],
     socialPublications: [] as StoredSocialPublication[],
     socialPublicationEvents: [] as StoredSocialPublicationEvent[],
+    socialPosts: [] as StoredSocialPost[],
+    postVersions: [] as StoredPostVersion[],
     socialPublishQueueMessages: [] as Array<{ publicationId: string }>,
     me3ClaimStates: [] as StoredMe3ClaimState[],
     authRateLimits: [] as StoredAuthRateLimit[],
@@ -440,8 +481,11 @@ function createEnv(): Env & {
         "mission_tasks",
         "journal_entries",
         "commerce_settings",
+        "content_bank_items",
         "financial_entries",
         "social_packages",
+        "social_publication_events",
+        "social_publications",
         "social_variants",
       ]);
       return {
@@ -881,6 +925,43 @@ function createEnv(): Env & {
                   account.last_verified_at = values[3] as string;
                   account.updated_at = values[4] as string;
                 }
+              }
+
+              if (sql.includes("INSERT INTO social_packages")) {
+                state.socialPosts.push({
+                  id: values[0] as string,
+                  site_id: values[1] as string,
+                  source_type: values[7] as StoredSocialPost["source_type"],
+                  source_ref: values[8] as string | null,
+                  source_snapshot: values[9] as string,
+                  source_text: values[10] as string,
+                  idea_text: values[11] as string,
+                  goal: values[5] as string | null,
+                  status: "ready",
+                  created_by: values[6] as StoredSocialPost["created_by"],
+                  created_at: values[12] as string,
+                  updated_at: values[13] as string,
+                });
+              }
+
+              if (sql.includes("INSERT INTO social_variants")) {
+                state.postVersions.push({
+                  id: values[0] as string,
+                  package_id: values[1] as string,
+                  platform: values[2] as StoredPostVersion["platform"],
+                  target_account_id: values[3] as string | null,
+                  format: values[4] as StoredPostVersion["format"],
+                  body_text: values[5] as string,
+                  asset_manifest_json: values[6] as string,
+                  source_excerpt: values[7] as string | null,
+                  approval_status: "draft",
+                  approved_at: null,
+                  approved_by_user_id: null,
+                  scheduled_for: null,
+                  timezone: null,
+                  created_at: values[8] as string,
+                  updated_at: values[9] as string,
+                });
               }
 
               if (sql.includes("INSERT INTO content_bank_items")) {
@@ -2271,6 +2352,36 @@ function createEnv(): Env & {
                   ) || null
                 ) as T | null;
               }
+              if (sql.includes("FROM social_accounts") && sql.includes("WHERE id = ?")) {
+                return (
+                  state.socialAccounts.find(
+                    (account) =>
+                      account.id === values[0] &&
+                      account.user_id === values[1] &&
+                      account.site_id === values[2] &&
+                      account.platform === values[3] &&
+                      account.status === "active",
+                  ) || null
+                ) as T | null;
+              }
+              if (sql.includes("FROM social_variants v")) {
+                const version = state.postVersions.find((entry) => entry.id === values[0]);
+                const post = version
+                  ? state.socialPosts.find((entry) => entry.id === version.package_id)
+                  : null;
+                return post && values[1] === "owner"
+                  ? ({ ...version, site_id: post.site_id } as T)
+                  : null;
+              }
+              if (sql.includes("FROM social_variants WHERE id = ?")) {
+                return (
+                  state.postVersions.find((entry) => entry.id === values[0]) || null
+                ) as T | null;
+              }
+              if (sql.includes("FROM social_packages p")) {
+                const post = state.socialPosts.find((entry) => entry.id === values[0]);
+                return post && values[1] === "owner" ? (post as T) : null;
+              }
               if (sql.includes("FROM content_bank_items")) {
                 if (sql.includes("SUM(CASE")) {
                   const userId = values[0] as string;
@@ -2693,6 +2804,23 @@ function createEnv(): Env & {
                   ) as T[],
                 };
               }
+              if (sql.includes("FROM social_packages p")) {
+                const siteId = values[1] as string | null;
+                return {
+                  results: state.socialPosts.filter(
+                    (post) =>
+                      post.status !== "archived" &&
+                      (!siteId || post.site_id === siteId),
+                  ) as T[],
+                };
+              }
+              if (sql.includes("FROM social_variants v")) {
+                return {
+                  results: state.postVersions.filter(
+                    (version) => version.package_id === values[0],
+                  ) as T[],
+                };
+              }
               if (sql.includes("FROM content_bank_items")) {
                 if (sql.includes("status IN ('queued', 'scheduled')")) {
                   return {
@@ -2894,6 +3022,12 @@ function createEnv(): Env & {
     },
     get socialPublicationEvents() {
       return state.socialPublicationEvents;
+    },
+    get socialPosts() {
+      return state.socialPosts;
+    },
+    get postVersions() {
+      return state.postVersions;
     },
     get socialPublishQueueMessages() {
       return state.socialPublishQueueMessages;
@@ -9580,7 +9714,7 @@ describe("ME3 Core Worker auth", () => {
     expect(socialPlugin?.agentTools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "content.publish",
+          id: "social.version.publish",
           approvalMode: "approval_required",
         }),
       ]),
@@ -9883,12 +10017,52 @@ describe("ME3 Core Worker auth", () => {
       env,
     );
     const statusBody = (await statusResponse.json()) as {
-      plugin: { status: string; ready: boolean };
+      plugin: {
+        status: string;
+        ready: boolean;
+        platformCapabilities: Array<{
+          platform: string;
+          draft: boolean;
+          schedule: boolean;
+          publish: boolean;
+          reason: string | null;
+        }>;
+      };
       hostedOAuth: { configured: boolean; platforms: string[] };
     };
 
     expect(statusResponse.status).toBe(200);
     expect(statusBody.plugin).toMatchObject({ status: "installed", ready: true });
+    expect(statusBody.plugin.platformCapabilities).toEqual([
+      {
+        platform: "linkedin",
+        draft: true,
+        schedule: true,
+        publish: true,
+        reason: null,
+      },
+      {
+        platform: "x",
+        draft: true,
+        schedule: false,
+        publish: false,
+        reason: expect.any(String),
+      },
+      {
+        platform: "instagram",
+        draft: true,
+        schedule: false,
+        publish: false,
+        reason: expect.any(String),
+      },
+      {
+        platform: "instagram_business",
+        draft: true,
+        schedule: false,
+        publish: false,
+        reason: expect.any(String),
+      },
+    ]);
     expect(statusBody.hostedOAuth).toEqual({
       configured: true,
       platforms: ["linkedin", "instagram"],
@@ -9986,7 +10160,7 @@ describe("ME3 Core Worker auth", () => {
     });
   });
 
-  it("creates and queues Social Publishing content items when installed", async () => {
+  it("creates and lists a source-backed Social Post and Version", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
     await app.fetch(
@@ -9998,7 +10172,7 @@ describe("ME3 Core Worker auth", () => {
     );
 
     const createResponse = await app.fetch(
-      new Request("http://localhost/api/content/items", {
+      new Request("http://localhost/api/social/posts", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -10006,54 +10180,91 @@ describe("ME3 Core Worker auth", () => {
         },
         body: JSON.stringify({
           siteId: "site-1",
-          body: "A useful small post for the content bank.",
-          platforms: ["linkedin"],
+          sourceType: "journal",
+          sourceRef: "journal:2026-07-18",
+          sourceSnapshot: "We shipped the smallest useful slice today.",
+          sourceText: "We shipped the smallest useful slice today.",
+          ideaText: "Small useful releases build momentum.",
+          versions: [
+            {
+              platform: "linkedin",
+              bodyText: "The smallest useful release is often the best next step.",
+            },
+          ],
         }),
       }),
       env,
     );
     const createBody = (await createResponse.json()) as {
-      item: { id: string; body: string; status: string; platforms: string[] };
+      ok: boolean;
+      post: {
+        post: {
+          id: string;
+          sourceType: string;
+          sourceRef: string;
+          sourceSnapshot: string;
+          sourceText: string;
+        };
+        versions: Array<{
+          id: string;
+          postId: string;
+          platform: string;
+          bodyText: string;
+          approvalStatus: string;
+        }>;
+      };
     };
 
     expect(createResponse.status).toBe(201);
-    expect(createBody.item).toMatchObject({
-      body: "A useful small post for the content bank.",
-      status: "bank",
-      platforms: ["linkedin"],
+    expect(createBody.ok).toBe(true);
+    expect(createBody.post.post).toMatchObject({
+      sourceType: "journal",
+      sourceRef: "journal:2026-07-18",
+      sourceSnapshot: "We shipped the smallest useful slice today.",
+      sourceText: "We shipped the smallest useful slice today.",
     });
-
-    const queueResponse = await app.fetch(
-      new Request(`http://localhost/api/content/items/${createBody.item.id}/queue`, {
-        method: "POST",
-        headers: { Cookie: session },
+    expect(createBody.post.versions).toEqual([
+      expect.objectContaining({
+        postId: createBody.post.post.id,
+        platform: "linkedin",
+        bodyText: "The smallest useful release is often the best next step.",
+        approvalStatus: "draft",
       }),
-      env,
-    );
-    const queueBody = (await queueResponse.json()) as {
-      item: { status: string; queuePosition: number };
-    };
-
-    expect(queueResponse.status).toBe(200);
-    expect(queueBody.item).toMatchObject({ status: "queued", queuePosition: 1 });
+    ]);
 
     const listResponse = await app.fetch(
-      new Request("http://localhost/api/content/items?siteId=site-1", {
+      new Request("http://localhost/api/social/posts?siteId=site-1", {
         headers: { Cookie: session },
       }),
       env,
     );
     const listBody = (await listResponse.json()) as {
-      items: Array<{ id: string; status: string }>;
+      posts: Array<{
+        post: { id: string; sourceRef: string; sourceText: string };
+        versions: Array<{ id: string; postId: string; platform: string }>;
+      }>;
     };
 
     expect(listResponse.status).toBe(200);
-    expect(listBody.items).toEqual([
-      expect.objectContaining({ id: createBody.item.id, status: "queued" }),
+    expect(listBody.posts).toEqual([
+      {
+        post: expect.objectContaining({
+          id: createBody.post.post.id,
+          sourceRef: "journal:2026-07-18",
+          sourceText: "We shipped the smallest useful slice today.",
+        }),
+        versions: [
+          expect.objectContaining({
+            id: createBody.post.versions[0]?.id,
+            postId: createBody.post.post.id,
+            platform: "linkedin",
+          }),
+        ],
+      },
     ]);
   });
 
-  it("queues approved Social Publishing content for provider publish", async () => {
+  it("rejects scheduling for draft-only X and Instagram Versions", async () => {
     const env = createEnv();
     const session = cookieHeader(await bootstrap(env));
     await app.fetch(
@@ -10063,433 +10274,101 @@ describe("ME3 Core Worker auth", () => {
       }),
       env,
     );
-    env.socialAccounts.push({
-      id: "social-account-1",
-      user_id: "owner",
-      site_id: "site-1",
-      platform: "linkedin",
-      platform_account_id: "linkedin-owner",
-      platform_handle: null,
-      display_name: "Owner LinkedIn",
-      access_token_ciphertext: "encrypted-for-enqueue-only",
-      refresh_token_ciphertext: null,
-      token_expires_at: null,
-      status: "active",
-      scopes_json: JSON.stringify(["w_member_social"]),
-      metadata_json: "{}",
-      last_verified_at: "2026-05-11T10:00:00Z",
-      created_at: "2026-05-11T09:00:00Z",
-      updated_at: "2026-05-11T10:00:00Z",
-    });
+
+    const draftOnlyPlatforms = ["x", "instagram", "instagram_business"] as const;
+    for (const platform of draftOnlyPlatforms) {
+      env.socialAccounts.push({
+        id: `${platform}-account`,
+        user_id: "owner",
+        site_id: "site-1",
+        platform,
+        platform_account_id: `${platform}-owner`,
+        platform_handle: null,
+        display_name: `${platform} owner`,
+        status: "active",
+        scopes_json: "[]",
+        last_verified_at: "2026-07-18T09:00:00.000Z",
+        created_at: "2026-07-18T09:00:00.000Z",
+        updated_at: "2026-07-18T09:00:00.000Z",
+      });
+    }
 
     const createResponse = await app.fetch(
-      new Request("http://localhost/api/content/items", {
+      new Request("http://localhost/api/social/posts", {
         method: "POST",
         headers: { "Content-Type": "application/json", Cookie: session },
         body: JSON.stringify({
           siteId: "site-1",
-          body: "Ready for LinkedIn.",
-          platforms: ["linkedin"],
+          sourceType: "pasted",
+          sourceSnapshot: "A human-authored scheduling test Source.",
+          sourceText: "A human-authored scheduling test Source.",
+          ideaText: "Draft-only platforms stay draft-only.",
+          versions: draftOnlyPlatforms.map((platform) => ({
+            platform,
+            targetAccountId: `${platform}-account`,
+            bodyText: `A ${platform} draft.`,
+          })),
         }),
       }),
       env,
     );
-    const createBody = (await createResponse.json()) as { item: { id: string } };
-    const publishResponse = await app.fetch(
-      new Request(`http://localhost/api/content/items/${createBody.item.id}/publish`, {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    const publishBody = (await publishResponse.json()) as {
-      item: { status: string };
-      publicationIds: string[];
+    const createBody = (await createResponse.json()) as {
+      post: { versions: Array<{ id: string; platform: string }> };
     };
 
-    expect(publishResponse.status).toBe(200);
-    expect(publishBody.item.status).toBe("publishing");
-    expect(publishBody.publicationIds).toHaveLength(1);
-    expect(env.socialPublishQueueMessages).toEqual([
-      { publicationId: publishBody.publicationIds[0] },
-    ]);
-    expect(env.socialPublications[0]).toMatchObject({
-      variant_id: createBody.item.id,
-      platform: "linkedin",
-      status: "queued",
-    });
-    expect(env.socialPublicationEvents).toEqual([
-      expect.objectContaining({ event_type: "queued" }),
-    ]);
-  });
-
-  it("publishes approved Social Publishing content directly when no queue binding exists", async () => {
-    const env = createEnv();
-    env.SOCIAL_PUBLISH_QUEUE = undefined;
-    const session = cookieHeader(await bootstrap(env));
-    await app.fetch(
-      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    await app.fetch(
-      new Request("http://localhost/api/social/provider-settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({
-          providers: [
-            {
-              id: "linkedin",
-              clientId: "linkedin-client",
-              clientSecret: "linkedin-secret-1234",
-              enabled: true,
-            },
-          ],
+    expect(createResponse.status).toBe(201);
+    for (const version of createBody.post.versions) {
+      const approvalResponse = await app.fetch(
+        new Request(`http://localhost/api/social/versions/${version.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({ approvalStatus: "approved" }),
         }),
-      }),
-      env,
-    );
-    const authorizeResponse = await app.fetch(
-      new Request("http://localhost/api/social/linkedin/authorize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({
-          siteId: "site-1",
-          returnPath: "/social",
-          credentialSource: "byo",
-        }),
-      }),
-      env,
-    );
-    const authorizeBody = (await authorizeResponse.json()) as { url: string };
-    const state = new URL(authorizeBody.url).searchParams.get("state") || "";
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("accessToken")) {
-        return Response.json({
-          access_token: "linkedin-access-token",
-          refresh_token: "linkedin-refresh-token",
-          expires_in: 3600,
-        });
-      }
-      if (url.includes("userinfo")) {
-        return Response.json({ sub: "linkedin-owner", name: "Owner LinkedIn" });
-      }
-      if (url.includes("/rest/posts")) {
-        return Response.json(
-          { id: "urn:li:share:direct-publish-1" },
-          { headers: { "x-restli-id": "urn:li:share:direct-publish-1" } },
-        );
-      }
-      return Response.json({});
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      await app.fetch(
-        new Request(
-          `http://localhost/api/social/linkedin/callback?code=ok-code&state=${encodeURIComponent(
-            state,
-          )}`,
-        ),
         env,
       );
+      expect(approvalResponse.status, version.platform).toBe(200);
 
-      const createResponse = await app.fetch(
-        new Request("http://localhost/api/content/items", {
+      const response = await app.fetch(
+        new Request(`http://localhost/api/social/versions/${version.id}/publications`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Cookie: session },
           body: JSON.stringify({
-            siteId: "site-1",
-            body: "Publish without queue.",
-            platforms: ["linkedin"],
+            scheduledFor: "2099-07-20T09:30:00.000Z",
+            timezone: "Europe/Dublin",
           }),
         }),
         env,
       );
-      const createBody = (await createResponse.json()) as { item: { id: string } };
-      const publishResponse = await app.fetch(
-        new Request(`http://localhost/api/content/items/${createBody.item.id}/publish`, {
-          method: "POST",
+      const body = (await response.json()) as { error: string };
+
+      expect(response.status, version.platform).toBe(400);
+      expect(body.error).toContain("Versions are draft-only and cannot be scheduled yet");
+    }
+  });
+
+  it("does not expose the retired legacy content-item routes", async () => {
+    const env = createEnv();
+    const session = cookieHeader(await bootstrap(env));
+
+    const [listResponse, createResponse] = await Promise.all([
+      app.fetch(
+        new Request("http://localhost/api/content/items?siteId=site-1", {
           headers: { Cookie: session },
         }),
         env,
-      );
-      const publishBody = (await publishResponse.json()) as {
-        item: { status: string };
-        publicationIds: string[];
-      };
-
-      expect(publishResponse.status).toBe(200);
-      expect(publishBody.item.status).toBe("posted");
-      expect(publishBody.publicationIds).toHaveLength(1);
-      expect(env.socialPublishQueueMessages).toHaveLength(0);
-      expect(env.socialPublications[0]).toMatchObject({
-        variant_id: createBody.item.id,
-        platform: "linkedin",
-        status: "published",
-        platform_post_id: "urn:li:share:direct-publish-1",
-      });
-      expect(env.socialPublicationEvents.map((event) => event.event_type)).toEqual([
-        "queued",
-        "publishing",
-        "published",
-      ]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("refuses Social Publishing provider queueing without a connected account", async () => {
-    const env = createEnv();
-    const session = cookieHeader(await bootstrap(env));
-    await app.fetch(
-      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    const createResponse = await app.fetch(
-      new Request("http://localhost/api/content/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({
-          siteId: "site-1",
-          body: "No account yet.",
-          platforms: ["linkedin"],
+      ),
+      app.fetch(
+        new Request("http://localhost/api/content/items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: session },
+          body: JSON.stringify({ siteId: "site-1", body: "obsolete" }),
         }),
-      }),
-      env,
-    );
-    const createBody = (await createResponse.json()) as { item: { id: string } };
-
-    const publishResponse = await app.fetch(
-      new Request(`http://localhost/api/content/items/${createBody.item.id}/publish`, {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    const body = (await publishResponse.json()) as { error: string };
-
-    expect(publishResponse.status).toBe(424);
-    expect(body.error).toBe("Connect LinkedIn before publishing");
-    expect(env.socialPublishQueueMessages).toHaveLength(0);
-    expect(env.socialPublications).toHaveLength(0);
-  });
-
-  it("refuses Social Publishing provider queueing for unapproved content", async () => {
-    const env = createEnv();
-    const session = cookieHeader(await bootstrap(env));
-    await app.fetch(
-      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    env.socialAccounts.push({
-      id: "social-account-1",
-      user_id: "owner",
-      site_id: "site-1",
-      platform: "linkedin",
-      platform_account_id: "linkedin-owner",
-      platform_handle: null,
-      display_name: "Owner LinkedIn",
-      access_token_ciphertext: "encrypted-for-enqueue-only",
-      refresh_token_ciphertext: null,
-      token_expires_at: null,
-      status: "active",
-      scopes_json: JSON.stringify(["w_member_social"]),
-      metadata_json: "{}",
-      last_verified_at: "2026-05-11T10:00:00Z",
-      created_at: "2026-05-11T09:00:00Z",
-      updated_at: "2026-05-11T10:00:00Z",
-    });
-    const createResponse = await app.fetch(
-      new Request("http://localhost/api/content/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({
-          siteId: "site-1",
-          body: "Needs a human approval flag.",
-          platforms: ["linkedin"],
-        }),
-      }),
-      env,
-    );
-    const createBody = (await createResponse.json()) as { item: { id: string } };
-    env.contentItems[0].approved_by_human = 0;
-
-    const publishResponse = await app.fetch(
-      new Request(`http://localhost/api/content/items/${createBody.item.id}/publish`, {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    const body = (await publishResponse.json()) as { error: string };
-
-    expect(publishResponse.status).toBe(403);
-    expect(body.error).toBe("Content item must be approved before publishing");
-    expect(env.socialPublishQueueMessages).toHaveLength(0);
-  });
-
-  it("records Social Publishing provider failures from the queue consumer", async () => {
-    const env = createEnv();
-    const session = cookieHeader(await bootstrap(env));
-    await app.fetch(
-      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    await app.fetch(
-      new Request("http://localhost/api/social/provider-settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({
-          providers: [
-            {
-              id: "linkedin",
-              clientId: "linkedin-client",
-              clientSecret: "linkedin-secret-1234",
-              enabled: true,
-            },
-          ],
-        }),
-      }),
-      env,
-    );
-    const authorizeResponse = await app.fetch(
-      new Request("http://localhost/api/social/linkedin/authorize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({ siteId: "site-1", returnPath: "/social" }),
-      }),
-      env,
-    );
-    const authorizeBody = (await authorizeResponse.json()) as { url: string };
-    const state = new URL(authorizeBody.url).searchParams.get("state") || "";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.includes("accessToken")) {
-          return Response.json({
-            access_token: "linkedin-access-token",
-            refresh_token: "linkedin-refresh-token",
-            expires_in: 3600,
-          });
-        }
-        return Response.json({ sub: "linkedin-owner", name: "Owner LinkedIn" });
-      }),
-    );
-    try {
-      await app.fetch(
-        new Request(
-          `http://localhost/api/social/linkedin/callback?code=ok-code&state=${encodeURIComponent(
-            state,
-          )}`,
-        ),
         env,
-      );
-    } finally {
-      vi.unstubAllGlobals();
-    }
-
-    const createResponse = await app.fetch(
-      new Request("http://localhost/api/content/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: session },
-        body: JSON.stringify({
-          siteId: "site-1",
-          body: "Provider will reject this.",
-          platforms: ["linkedin"],
-        }),
-      }),
-      env,
-    );
-    const createBody = (await createResponse.json()) as { item: { id: string } };
-    const publishResponse = await app.fetch(
-      new Request(`http://localhost/api/content/items/${createBody.item.id}/publish`, {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    const publishBody = (await publishResponse.json()) as { publicationIds: string[] };
-    env.socialAccounts[0].token_expires_at = "2020-01-01T00:00:00.000Z";
-    let refreshedAccessToken = false;
-
-    await publishQueuedContentPublication(
-      env,
-      publishBody.publicationIds[0],
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.includes("accessToken")) {
-          refreshedAccessToken = true;
-          return Response.json({
-            access_token: "linkedin-refreshed-access-token",
-            expires_in: 3600,
-          });
-        }
-        if (url.includes("userinfo")) return Response.json({ sub: "linkedin-owner" });
-        return Response.json({ message: "Provider rejected the post" }, { status: 400 });
-      }) as typeof fetch,
-    );
-
-    expect(env.socialPublications[0]).toMatchObject({
-      status: "failed",
-      error_code: "rejected:linkedin_post_error",
-      error_message: "Provider rejected the post",
-    });
-    expect(env.contentItems[0].status).toBe("failed");
-    expect(refreshedAccessToken).toBe(true);
-    expect(env.socialAccounts[0]).toMatchObject({ status: "active" });
-    expect(Date.parse(env.socialAccounts[0].token_expires_at || "")).toBeGreaterThan(Date.now());
-    expect(env.socialPublicationEvents.map((event) => event.event_type)).toEqual([
-      "queued",
-      "publishing",
-      "failed",
+      ),
     ]);
-  });
 
-  it("gates Social Publishing content items when disabled", async () => {
-    const env = createEnv();
-    const session = cookieHeader(await bootstrap(env));
-    await app.fetch(
-      new Request("http://localhost/api/plugins/me3.social-publishing/activate", {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    await app.fetch(
-      new Request("http://localhost/api/plugins/me3.social-publishing/deactivate", {
-        method: "POST",
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-
-    const response = await app.fetch(
-      new Request("http://localhost/api/content/items?siteId=site-1", {
-        headers: { Cookie: session },
-      }),
-      env,
-    );
-    const body = (await response.json()) as {
-      error: string;
-      plugin: { status: string; ready: boolean };
-    };
-
-    expect(response.status).toBe(403);
-    expect(body.error).toBe("Social Publishing is disabled");
-    expect(body.plugin).toMatchObject({ status: "disabled", ready: false });
+    expect(listResponse.status).toBe(404);
+    expect(createResponse.status).toBe(404);
   });
 
   it("stores Social Publishing provider settings without returning secrets", async () => {

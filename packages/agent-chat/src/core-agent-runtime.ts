@@ -45,7 +45,7 @@ import {
 } from "./tools";
 import {
   agentSocialSourceKey,
-  createAgentSocialDraft,
+  createAgentSocialPost,
   readAgentSocialSource,
   type AgentSocialSource,
   type AgentSocialSourceType,
@@ -668,14 +668,14 @@ async function executeSocialToolCall(input: {
     );
     cacheSocialSource(source, input.socialSources);
   }
-  const detail = await createAgentSocialDraft(input.db, input.userId, source, {
+  const detail = await createAgentSocialPost(input.db, input.userId, source, {
     siteId: optionalToolString(args.siteId),
     ideaText: requiredToolString(args.ideaText, "Social draft ideaText"),
     linkedinBody: optionalToolString(args.linkedinBody),
     xBody: optionalToolString(args.xBody),
     instagramBody: optionalToolString(args.instagramBody),
   });
-  const platforms = detail.variants.map((variant) => variant.platform);
+  const platforms = detail.versions.map((version) => version.platform);
   return {
     capabilityId: "core.social.draft.create",
     result: {
@@ -690,8 +690,7 @@ async function executeSocialToolCall(input: {
     reminderAction: null,
     contentAction: {
       kind: "saved",
-      itemId: detail.package.id,
-      packageId: detail.package.id,
+      postId: detail.post.id,
       platforms,
     },
     actionCards: [buildSocialDraftActionCard(detail, source)],
@@ -700,32 +699,32 @@ async function executeSocialToolCall(input: {
 }
 
 function buildSocialDraftActionCard(
-  detail: Awaited<ReturnType<typeof createAgentSocialDraft>>,
+  detail: Awaited<ReturnType<typeof createAgentSocialPost>>,
   source: AgentSocialSource,
 ): AgentChatActionCard {
-  const platformLabels = detail.variants.map((variant) =>
-    variant.platform === "x"
+  const platformLabels = detail.versions.map((version) =>
+    version.platform === "x"
       ? "X"
-      : variant.platform === "linkedin"
+      : version.platform === "linkedin"
         ? "LinkedIn"
         : "Instagram"
   );
   return {
-    id: `social-package:${detail.package.id}`,
+    id: `social-post:${detail.post.id}`,
     kind: "social.draft_saved",
     capabilityId: "core.social.draft.create",
-    title: detail.variants.length === 1 ? "Social draft saved" : "Social drafts saved",
+    title: detail.versions.length === 1 ? "Social post saved" : "Social posts saved",
     summary: source.title,
     status: "pending_approval",
     statusLabel: "Needs review",
     changed: [
       {
-        label: detail.variants.length === 1 ? "Platform" : "Platforms",
+        label: detail.versions.length === 1 ? "Platform" : "Platforms",
         value: platformLabels.join(", "),
       },
     ],
-    records: [{ kind: "social_package", id: detail.package.id }],
-    primaryAction: { label: "Review drafts", href: "/social" },
+    records: [{ kind: "social_post", id: detail.post.id }],
+    primaryAction: { label: "Review post", href: "/social" },
     secondaryActions: [],
   };
 }
@@ -945,7 +944,7 @@ function withCoreToolInstructions(
     "- Preserve the owner's words, voice, claims, tone, and intended meaning by default. Reuse exact source phrases where they fit and make only light edits for length, clarity, or platform formatting unless the owner asks for a rewrite.",
     "- Do not add generic hooks, emojis, hashtags, advice, claims, or framing that are not in the source. When one source wording already fits several platforms, keep it instead of rewriting for novelty.",
     "- Create only the platforms the owner requested. Draft creation saves reviewable internal drafts only; it never approves, schedules, or publishes them.",
-    "- Never mention internal social package or variant IDs in the user-facing reply. Confirm the saved draft and use the review action instead.",
+    "- Never mention internal Social Post or Version IDs in the user-facing reply. Confirm the saved Post and use the review action instead.",
     "- Never mention internal Mission task or Journal source IDs in the user-facing reply. Disambiguate with human titles, projects, dates, and snippets.",
     "- A tool result is the source of truth. Do not claim an action succeeded unless its result says ok=true.",
     "- For current ME3 data, call the relevant tool in this turn instead of answering from earlier conversation or context alone.",

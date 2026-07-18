@@ -59,12 +59,12 @@ describe("Social content Agent Runtime v2", () => {
         "Saved 3 social drafts from Small useful slices for review. Nothing was approved or published.",
       contentAction: {
         kind: "saved",
-        packageId: expect.stringMatching(/^social-package-/),
+        postId: expect.stringMatching(/^social-post-/),
         platforms: ["linkedin", "x", "instagram"],
       },
       actionCards: [expect.objectContaining({
         kind: "social.draft_saved",
-        title: "Social drafts saved",
+        title: "Social posts saved",
         summary: "Small useful slices",
         status: "pending_approval",
         changed: [{ label: "Platforms", value: "LinkedIn, X, Instagram" }],
@@ -77,6 +77,9 @@ describe("Social content Agent Runtime v2", () => {
       created_by: "agent",
     });
     expect(database.packages[0]?.source_snapshot).toContain(
+      "Today we shipped the smallest useful slice",
+    );
+    expect(database.packages[0]?.source_text).toContain(
       "Today we shipped the smallest useful slice",
     );
     expect(database.variants.map((variant) => variant.platform)).toEqual([
@@ -129,7 +132,7 @@ describe("Social content Agent Runtime v2", () => {
     expect(response.contentAction?.platforms).toEqual(["linkedin"]);
     expect(response.actionCards).toEqual([
       expect.objectContaining({
-        title: "Social draft saved",
+        title: "Social post saved",
         summary: "Publish the social workflow",
         changed: [{ label: "Platform", value: "LinkedIn" }],
       }),
@@ -461,11 +464,12 @@ class Statement {
         Object.assign(execution, { status: "failed", error_message: this.values[0] });
       }
     } else if (this.sql.includes("INSERT INTO social_packages")) {
-      const [id, siteId, postSlug, title, sourceHash, goal, createdBy, sourceType, sourceRef, sourceSnapshot, ideaText, createdAt, updatedAt] = this.values;
+      const [id, siteId, postSlug, title, sourceHash, goal, createdBy, sourceType, sourceRef, sourceSnapshot, sourceText, ideaText, createdAt, updatedAt] = this.values;
       this.state.packages.push({
         id, site_id: siteId, post_slug: postSlug, post_title_snapshot: title,
         source_hash: sourceHash, goal, status: "ready", created_by: createdBy,
         source_type: sourceType, source_ref: sourceRef, source_snapshot: sourceSnapshot,
+        source_text: sourceText,
         idea_text: ideaText, created_at: createdAt, updated_at: updatedAt,
       });
     } else if (this.sql.includes("INSERT INTO social_variants")) {

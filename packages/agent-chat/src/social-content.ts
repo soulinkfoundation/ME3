@@ -1,9 +1,9 @@
 import { normalizeTimeZone } from "@me3-core/plugin-calendar";
 import {
-  createSocialContentPackage,
-  type CreateSocialContentPackageInput,
-  type SocialContentPackageDetail,
-  type SocialContentPackageEnv,
+  createSocialPost,
+  type CreateSocialPostInput,
+  type SocialPostDetail,
+  type SocialPostEnv,
 } from "@me3-core/plugin-social-publishing";
 
 type AgentSocialStatement = {
@@ -30,7 +30,7 @@ export type AgentSocialSource = {
   snapshot: string;
 };
 
-export type CreateAgentSocialDraftInput = {
+export type CreateAgentSocialPostInput = {
   siteId?: string;
   ideaText: string;
   linkedinBody?: string;
@@ -121,6 +121,7 @@ export async function readAgentSocialSource(
     throw new Error("Mission Control task not found. List tasks and use a valid stable task ID.");
   }
   const content = [
+    row.title,
     row.description?.trim(),
     row.project_name ? `Project: ${row.project_name}` : null,
     `Status: ${row.status}`,
@@ -146,38 +147,39 @@ export async function readAgentSocialSource(
   };
 }
 
-export async function createAgentSocialDraft(
+export async function createAgentSocialPost(
   db: AgentSocialDb,
   userId: string,
   source: AgentSocialSource,
-  input: CreateAgentSocialDraftInput,
-): Promise<SocialContentPackageDetail> {
+  input: CreateAgentSocialPostInput,
+): Promise<SocialPostDetail> {
   if (typeof db.batch !== "function") {
     throw new Error("Social draft storage is not configured for this runtime.");
   }
   const siteId = optionalText(input.siteId) || await primaryProfileSiteId(db, userId);
-  const variants: CreateSocialContentPackageInput["variants"] = [];
+  const versions: CreateSocialPostInput["versions"] = [];
   const linkedinBody = optionalText(input.linkedinBody);
   const xBody = optionalText(input.xBody);
   const instagramBody = optionalText(input.instagramBody);
-  if (linkedinBody) variants.push({ platform: "linkedin", bodyText: linkedinBody });
-  if (xBody) variants.push({ platform: "x", bodyText: xBody });
-  if (instagramBody) variants.push({ platform: "instagram", bodyText: instagramBody });
-  if (variants.length === 0) {
+  if (linkedinBody) versions.push({ platform: "linkedin", bodyText: linkedinBody });
+  if (xBody) versions.push({ platform: "x", bodyText: xBody });
+  if (instagramBody) versions.push({ platform: "instagram", bodyText: instagramBody });
+  if (versions.length === 0) {
     throw new Error("At least one LinkedIn, X, or Instagram draft body is required.");
   }
 
-  return createSocialContentPackage(
-    { DB: db as unknown as SocialContentPackageEnv["DB"] },
+  return createSocialPost(
+    { DB: db as unknown as SocialPostEnv["DB"] },
     userId,
     {
       siteId,
       sourceType: source.sourceType,
       sourceRef: `${source.sourceType}:${source.id}`,
       sourceSnapshot: source.snapshot,
+      sourceText: source.content,
       ideaText: requiredText(input.ideaText, "Social draft ideaText is required."),
       createdBy: "agent",
-      variants,
+      versions,
     },
   );
 }

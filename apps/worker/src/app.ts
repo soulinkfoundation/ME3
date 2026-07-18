@@ -51,9 +51,7 @@ import { getCoreVersionInfo } from "./core-version";
 import {
   SocialPublishingGateError,
   SocialPublishingInputError,
-  appendContentItemMedia,
   completeSocialOAuth,
-  createQueuedContentPublicationAndEnqueue,
   dispatchDueSocialPublications,
   getSocialPublishingRuntimeStatus,
   listSocialProviderSettings,
@@ -121,17 +119,13 @@ import {
 import {
   activateAgentMailbox,
   convertAgentContactToClient,
-  createAgentContentItem,
   createAgentMailboxDraft,
   createAgentSandboxTurnRecord,
   createAgentContact,
-  deleteAgentContentItem,
   deleteAgentContact,
-  getAgentContentStats,
   getAgentMailboxDraftForApproval,
   getAgentMailboxOutboundHeaders,
   getAgentMailboxOverview,
-  listAgentContentItems,
   listAgentMailboxMessages,
   listAgentContacts,
   markAgentMailboxDraftFailed,
@@ -139,14 +133,10 @@ import {
   moveAgentMailboxMessage,
   normalizeMe3DeploymentMode,
   pauseAgentMailbox,
-  queueAgentContentItem,
   rejectAgentMailboxDraft,
-  reorderAgentContentQueue,
   setAgentMailboxMessageReadState,
   trashAgentMailboxMessage,
-  unqueueAgentContentItem,
   updateAgentMailboxDraft,
-  updateAgentContentItem,
   updateAgentContact,
   updateAgentContactOutreachStatus,
   upsertAgentContact,
@@ -1065,185 +1055,6 @@ app.get("/api/social/:platform/callback", async (c) => {
   }
 });
 
-app.get("/api/content/items", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  try {
-    return c.json({
-      items: await listAgentContentItems(
-        c.env,
-        ownerId,
-        c.req.query("siteId"),
-        c.req.query("status"),
-      ),
-    });
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.get("/api/content/stats", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  try {
-    const stats = await getAgentContentStats(c.env, ownerId, c.req.query("siteId"));
-    if (!stats) return c.json({ error: "Site not found" }, 404);
-    return c.json({ stats });
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.post("/api/content/items", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  const body = await c.req.json<unknown>().catch((): unknown => ({}));
-  try {
-    return c.json({ ok: true, item: await createAgentContentItem(c.env, ownerId, body as any) }, 201);
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.put("/api/content/items/:id", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  const body = await c.req.json<unknown>().catch((): unknown => ({}));
-  try {
-    const item = await updateAgentContentItem(c.env, ownerId, c.req.param("id"), body as any);
-    if (!item) return c.json({ error: "Content item not found" }, 404);
-    return c.json({ ok: true, item });
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.delete("/api/content/items/:id", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  try {
-    const ok = await deleteAgentContentItem(c.env, ownerId, c.req.param("id"));
-    if (!ok) return c.json({ error: "Content item not found" }, 404);
-    return c.json({ ok: true });
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.post("/api/content/items/:id/queue", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  try {
-    const item = await queueAgentContentItem(c.env, ownerId, c.req.param("id"));
-    if (!item) return c.json({ error: "Content item not found" }, 404);
-    return c.json({ ok: true, item });
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.post("/api/content/items/:id/unqueue", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  try {
-    const item = await unqueueAgentContentItem(c.env, ownerId, c.req.param("id"));
-    if (!item) return c.json({ error: "Content item not found" }, 404);
-    return c.json({ ok: true, item });
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.put("/api/content/queue/reorder", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  const body = (await c.req.json<unknown>().catch((): unknown => ({}))) as {
-    siteId?: unknown;
-    itemIds?: unknown;
-  };
-  try {
-    return c.json({
-      ok: true,
-      items: await reorderAgentContentQueue(c.env, ownerId, body.siteId, body.itemIds),
-    });
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.post("/api/content/items/:id/media", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  try {
-    const formData = await c.req.formData();
-    const file = formData.get("file");
-    if (!(file instanceof File)) return c.json({ error: "Image file is required" }, 400);
-    if (!file.type.startsWith("image/")) return c.json({ error: "Only image uploads are supported" }, 400);
-    if (file.size > 5 * 1024 * 1024) return c.json({ error: "File must be less than 5MB" }, 400);
-
-    const itemId = c.req.param("id");
-    const itemRows = await c.env.DB.prepare(
-      `SELECT c.site_id, s.username, s.user_id, s.site_type, s.template_id,
-              s.custom_domain, s.custom_domain_status, s.custom_domain_cf_id,
-              s.created_at, s.updated_at, s.published_at
-       FROM content_bank_items c
-       JOIN sites s ON s.id = c.site_id
-       WHERE c.id = ? AND c.user_id = ?`,
-    )
-      .bind(itemId, ownerId)
-      .first<DbSite & { site_id: string }>();
-    if (!itemRows) return c.json({ error: "Content item not found" }, 404);
-
-    const ext = imageExtension(file);
-    const rawIndex = Number(formData.get("assetIndex"));
-    const assetIndex = Number.isFinite(rawIndex) && rawIndex > 0 ? Math.round(rawIndex) : 1;
-    const filename = `content-${itemId}-${assetIndex}.${ext}`;
-    const buffer = await file.arrayBuffer();
-    await putSiteMediaFile(c.env, itemRows, `public/files/${filename}`, buffer, file.type);
-    const publicPath = `files/${filename}`;
-    const asset = {
-      url: `/preview/${itemRows.username}/${publicPath}`,
-      filename,
-      mimeType: file.type,
-      kind: "image" as const,
-      path: publicPath,
-      assetIndex,
-    };
-    const item = await appendContentItemMedia(c.env, ownerId, itemId, asset);
-    if (!item) return c.json({ error: "Content item not found" }, 404);
-    return c.json({ ok: true, asset, item });
-  } catch (error) {
-    if (isMissingSiteFilesTableError(error)) return siteStorageSetupRequired(c);
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
-app.post("/api/content/items/:id/publish", async (c) => {
-  const ownerId = await requireOwner(c);
-  if (!ownerId) return unauthorized(c);
-
-  try {
-    const result = await createQueuedContentPublicationAndEnqueue(
-      c.env,
-      ownerId,
-      c.req.param("id"),
-    );
-    if (!result) return c.json({ error: "Content item not found" }, 404);
-    return c.json({ ok: true, item: result.item, publicationIds: result.publicationIds });
-  } catch (error) {
-    return socialPublishingErrorResponse(c, error);
-  }
-});
-
 app.get("/api/ai-settings", async (c) => {
   const ownerId = await requireOwner(c);
   if (!ownerId) return unauthorized(c);
@@ -1623,16 +1434,6 @@ function isOwnerSurfaceRequest(c: AppContext, pathname: string): boolean {
     hostsMatch(requestHost, getAdminHost(c.env, c.req.url)) ||
     hostsMatch(requestHost, getApiHost(c.env, c.req.url))
   );
-}
-
-function socialPublishingErrorResponse(c: AppContext, error: unknown) {
-  if (error instanceof SocialPublishingGateError) {
-    return c.json({ ok: false, error: error.message, plugin: error.gate }, error.status as any);
-  }
-  if (error instanceof SocialPublishingInputError) {
-    return c.json({ ok: false, error: error.message }, error.status as any);
-  }
-  throw error;
 }
 
 function commerceSettingsErrorResponse(c: AppContext, error: unknown) {

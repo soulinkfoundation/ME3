@@ -87,13 +87,13 @@ Generated from the typed ME3 knowledge package. This file is public-safe and sho
   Surfaces: core, hosted
   Lifecycle: available
   Runtime state in Core: available
-  Summary: ME3 can manage native personal calendar events, reminders, bookings, birthdays, imported calendar sources, and recurring event expansion.
+  Summary: ME3 can manage native personal calendar events, reminders, bookings, birthdays, imported calendar sources, recurring event expansion, and a read-only view of Social Publications when that plugin is ready.
   Approval mode: owner_approval
   Side effect: internal_write
   Data boundary: Calendar records are private owner workspace data unless explicitly shared through a public surface.
   App/API routes: /calendar, /api/calendar/feed, /api/agent/reminders
   Agent tool ids: calendar.event.create, calendar.reminder.create
-  Boundaries: Be precise about dates, times, and time zones. Do not claim a reminder or event was created without an API/tool result.
+  Boundaries: Be precise about dates, times, and time zones. Do not claim a reminder or event was created without an API/tool result. Calendar projects Social Publications only while Social Publishing is ready and never copies them into personal calendar event records.
 - Mailbox drafts and approvals (mailbox.drafts_approvals)
   Category: mailbox
   Surfaces: core, hosted
@@ -116,19 +116,19 @@ Generated from the typed ME3 knowledge package. This file is public-safe and sho
   Data boundary: Contacts are private owner workspace data unless explicitly published or exported.
   App/API routes: /api/contacts
   Boundaries: Do not expose private contact notes in public profile output. Be careful with outreach status and follow-up claims.
-- Social content publishing (content.social_publishing)
+- Social Publishing (content.social_publishing)
   Category: content
   Surfaces: core, hosted
   Lifecycle: setup_required
   Runtime state in Core: setup_required
-  Summary: ME3 can manage social content drafts, connected accounts, queue state, and approval-first publishing workflows when the social plugin is installed.
+  Summary: ME3 can turn explicit human-authored Sources into reusable social Posts with account-specific Versions and approval-first Publications when Social Publishing is installed.
   Approval mode: external_action_approval
   Side effect: external_write
-  Data boundary: Drafts and queue state are owner-scoped; external publication reaches connected social platforms.
-  App/API routes: /social, /api/content/items, /api/social/accounts
-  Agent tool ids: content.write_preview, content.publish
+  Data boundary: Sources, Posts, Versions, Publications, and delivery history are owner-scoped; a successful Publication sends approved content to its connected social account.
+  App/API routes: /social, /api/social/posts, /api/social/posts/:id, /api/social/versions/:id, /api/social/versions/:id/publications, /api/social/versions/:id/publish, /api/social/publications/:id, /api/social/publications/:id/resolve, /api/social/accounts
+  Agent tool ids: social.post.suggest, social.version.publish
   Requires: social.oauth_accounts, social.publish_queue
-  Boundaries: Never represent queued or drafted content as published. External publishing requires owner approval and provider setup.
+  Boundaries: An agent-saved Post requires a stable human-authored Source reference, immutable Source snapshot, and visible Source text; a blank prompt may be discussed but not saved as publishable content. Approval applies to one exact account Version; editing its copy, media, format, or account removes approval and cancels incompatible future Publications without changing queued or historical snapshots. Scheduling and reposting create new Publications with independent delivery state, provider results, recovery, and audit history. Never represent a draft, scheduled Version, queued Publication, or failed Publication as published. LinkedIn is the only end-to-end schedule and publish platform currently enabled; X, Instagram, and Instagram Business remain draft-only.
 - Landing page generation (sites.landing_pages)
   Category: sites
   Surfaces: core, hosted

@@ -1,28 +1,21 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import AppDialog from "../components/AppDialog.vue";
 import Button from "../components/Button.vue";
 import SocialAccountsPanel from "../components/SocialAccountsPanel.vue";
 import UiIcon from "../components/UiIcon.vue";
 import WorkspaceTabs from "../components/WorkspaceTabs.vue";
-import {
-  useContentStore,
-  type ContentItem,
-  type ContentMediaAsset,
-} from "../stores/content";
 import { useSitesStore } from "../stores/sites";
 import {
   useSocialStore,
+  type PostVersion,
+  type Publication,
   type SocialAccountRow,
-  type SocialContentPackage,
-  type SocialContentVariant,
   type SocialPlatform,
+  type SocialPlatformCapabilities,
+  type SocialPostDetail,
 } from "../stores/social";
-import {
-  getSocialBlockingIssues,
-  socialPlatformLabel,
-} from "../utils/social-compose";
 
 definePage({
   meta: {
@@ -35,56 +28,33 @@ definePage({
 });
 
 type WorkspaceMode = "drafts" | "scheduled" | "published";
-type WorkspaceEntry =
-  | { key: string; kind: "package"; detail: SocialContentPackage }
-  | { key: string; kind: "manual"; item: ContentItem };
-type PendingImage = {
-  file: File;
-  previewUrl: string;
-};
-type ComposeForm = {
-  id: string | null;
-  body: string;
-  platforms: SocialPlatform[];
-  mediaManifest: ContentMediaAsset[];
-};
-
-const supportedPlatforms: SocialPlatform[] = [
-  "x",
-  "linkedin",
-  "instagram",
-  "instagram_business",
-];
 
 const sites = useSitesStore();
 const social = useSocialStore();
-const content = useContentStore();
 const selectedSiteId = ref("");
-const packages = ref<SocialContentPackage[]>([]);
-const manualItems = ref<ContentItem[]>([]);
+const posts = ref<SocialPostDetail[]>([]);
 const accounts = ref<SocialAccountRow[]>([]);
+const capabilities = ref<SocialPlatformCapabilities[]>([]);
+const publications = ref<Publication[]>([]);
+const publicationsLoading = ref(false);
 const activeMode = ref<WorkspaceMode>("drafts");
-const selectedEntryKey = ref<string | null>(null);
-const selectedVariantId = ref<string | null>(null);
+const selectedPostId = ref<string | null>(null);
+const selectedVersionId = ref<string | null>(null);
 const editorBody = ref("");
 const editorAccountId = ref("");
 const scheduleLocal = ref("");
-const showAccounts = ref(false);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
 const notice = ref("");
-const compactWorkspace = ref(false);
+const showAccounts = ref(false);
 const composeOpen = ref(false);
-const composeDiscardConfirmOpen = ref(false);
-const composeSaving = ref(false);
-const composeSaveMode = ref<"draft" | "publish" | null>(null);
+const composeBody = ref("");
+const composePlatforms = ref<SocialPlatform[]>([]);
 const composeError = ref("");
-const composeInitialSnapshot = ref("");
-const composeForm = ref<ComposeForm>(emptyComposeForm());
-const pendingImages = ref<PendingImage[]>([]);
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-let compactMediaQuery: MediaQueryList | null = null;
+
+const linkedPublicationId = ref(currentQueryParam("publicationId"));
 
 const currentSite = computed(
   () => sites.sites.find((site) => site.id === selectedSiteId.value) || null,
@@ -92,338 +62,130 @@ const currentSite = computed(
 
 const activeAccounts = computed(() =>
   accounts.value.filter(
-    (account) =>
-      account.siteId === selectedSiteId.value && account.status === "active",
+    (account) => account.siteId === selectedSiteId.value && account.status === "active",
   ),
 );
 
-const activeAccountPlatforms = computed(
-  () => new Set(activeAccounts.value.map((account) => account.platform)),
+const capabilityMap = computed(
+  () => new Map(capabilities.value.map((capability) => [capability.platform, capability])),
 );
 
-const draftPackages = computed(() =>
-  packages.value.filter((detail) =>
-    detail.variants.some(
-      (variant) =>
-        !variant.scheduledFor &&
-        variant.publicationStatus !== "queued" &&
-        variant.publicationStatus !== "publishing" &&
-        variant.publicationStatus !== "published",
+const visiblePosts = computed(() =>
+  posts.value
+    .filter((detail) => detail.versions.some((version) => versionMode(version) === activeMode.value))
+    .sort(
+      (left, right) =>
+        Date.parse(right.post.updatedAt) - Date.parse(left.post.updatedAt),
     ),
-  ),
 );
 
-const scheduledPackages = computed(() =>
-  packages.value.filter((detail) =>
-    detail.variants.some(
-      (variant) =>
-        Boolean(variant.scheduledFor) ||
-        variant.publicationStatus === "queued" ||
-        variant.publicationStatus === "publishing",
-    ),
-  ),
+const modeTabs = computed(() =>
+  (["drafts", "scheduled", "published"] as WorkspaceMode[]).map((id) => ({
+    id,
+    label: id[0]!.toUpperCase() + id.slice(1),
+    count: posts.value.filter((detail) =>
+      detail.versions.some((version) => versionMode(version) === id),
+    ).length,
+  })),
 );
 
-const publishedPackages = computed(() =>
-  packages.value.filter(
-    (detail) =>
-      isPublished(detail) ||
-      detail.variants.some(
-        (variant) => variant.publicationStatus === "published",
-      ),
-  ),
+const selectedPost = computed(
+  () => posts.value.find((detail) => detail.post.id === selectedPostId.value) || null,
 );
 
-const draftManualItems = computed(() =>
-  manualItems.value.filter(
-    (item) => item.status === "bank" || item.status === "failed",
-  ),
-);
-
-const scheduledManualItems = computed(() =>
-  manualItems.value.filter((item) =>
-    ["queued", "scheduled", "publishing"].includes(item.status),
-  ),
-);
-
-const publishedManualItems = computed(() =>
-  manualItems.value.filter((item) => item.status === "posted"),
-);
-
-const entriesByMode = computed<Record<WorkspaceMode, WorkspaceEntry[]>>(() => ({
-  drafts: sortEntries([
-    ...draftPackages.value.map(packageEntry),
-    ...draftManualItems.value.map(manualEntry),
-  ]),
-  scheduled: sortEntries([
-    ...scheduledPackages.value.map(packageEntry),
-    ...scheduledManualItems.value.map(manualEntry),
-  ]),
-  published: sortEntries([
-    ...publishedPackages.value.map(packageEntry),
-    ...publishedManualItems.value.map(manualEntry),
-  ]),
-}));
-
-const visibleEntries = computed(() => entriesByMode.value[activeMode.value]);
-
-const modeTabs = computed(() => [
-  { id: "drafts", label: "Drafts", count: entriesByMode.value.drafts.length },
-  {
-    id: "scheduled",
-    label: "Scheduled",
-    count: entriesByMode.value.scheduled.length,
-  },
-  {
-    id: "published",
-    label: "Published",
-    count: entriesByMode.value.published.length,
-  },
-]);
-
-const selectedEntry = computed(
+const selectedVersion = computed(
   () =>
-    visibleEntries.value.find((entry) => entry.key === selectedEntryKey.value) ||
+    selectedPost.value?.versions.find((version) => version.id === selectedVersionId.value) ||
     null,
 );
 
-const selectedPackage = computed(() =>
-  selectedEntry.value?.kind === "package" ? selectedEntry.value.detail : null,
+const selectedPostReadOnly = computed(
+  () => selectedPost.value?.post.sourceType === "legacy_content_bank_read_only",
 );
 
-const selectedManualItem = computed(() =>
-  selectedEntry.value?.kind === "manual" ? selectedEntry.value.item : null,
+const selectedCapability = computed(() =>
+  selectedVersion.value
+    ? capabilityMap.value.get(selectedVersion.value.platform) || null
+    : null,
 );
 
-const selectedVariant = computed(
-  () =>
-    selectedPackage.value?.variants.find(
-      (variant) => variant.id === selectedVariantId.value,
-    ) || null,
+const scheduledPublication = computed(
+  () => publications.value.find((publication) => publication.status === "scheduled") || null,
+);
+
+const hasPublishedPublication = computed(() =>
+  publications.value.some((publication) => publication.status === "published"),
 );
 
 const matchingAccounts = computed(() => {
-  const platform = selectedVariant.value?.platform;
-  if (!platform) return [];
-  return activeAccounts.value.filter((account) => account.platform === platform);
+  const platform = selectedVersion.value?.platform;
+  return platform
+    ? activeAccounts.value.filter((account) => account.platform === platform)
+    : [];
 });
 
 const editorDirty = computed(() => {
-  const variant = selectedVariant.value;
-  return (
-    Boolean(variant) &&
-    (editorBody.value.trim() !== variant?.bodyText ||
-      (editorAccountId.value || null) !== variant?.targetAccountId)
+  const version = selectedVersion.value;
+  return Boolean(
+    version &&
+      (editorBody.value.trim() !== version.bodyText ||
+        (editorAccountId.value || null) !== version.targetAccountId),
   );
 });
 
 const canApprove = computed(() =>
   Boolean(
-    selectedVariant.value && editorBody.value.trim() && editorAccountId.value,
+    !selectedPostReadOnly.value &&
+      selectedVersion.value &&
+      editorBody.value.trim() &&
+      editorAccountId.value,
   ),
 );
 
-const canSchedule = computed(
-  () =>
-    selectedVariant.value?.approvalStatus === "approved" &&
-    !editorDirty.value &&
-    Boolean(scheduleLocal.value),
-);
-
-const canPublish = computed(
-  () =>
-    selectedVariant.value?.platform === "linkedin" &&
-    selectedVariant.value.approvalStatus === "approved" &&
-    matchingAccounts.value.some(
-      (account) => account.id === editorAccountId.value,
-    ) &&
-    !editorDirty.value &&
-    selectedVariant.value.publicationStatus !== "queued" &&
-    selectedVariant.value.publicationStatus !== "publishing" &&
-    selectedVariant.value.publicationStatus !== "published",
-);
-
-const publicationRecovery = computed(() => {
-  const variant = selectedVariant.value;
-  if (!variant?.failureClass) return null;
-  const guidance = {
-    retryable:
-      "LinkedIn returned a temporary error. You can safely try publishing again.",
-    reconnect_required:
-      "Reconnect this LinkedIn account, then publish the approved variant again.",
-    rejected:
-      "LinkedIn rejected this exact post. Edit it, approve the new version, then try again.",
-    unsupported:
-      "This post format is not supported yet. Change the copy or media before retrying.",
-    outcome_unknown:
-      "Do not retry yet. Check LinkedIn first because the post may already be live.",
-  }[variant.failureClass];
-  return {
-    guidance,
-    message: variant.errorMessage,
-  };
-});
-
-const composePlatformOptions = computed(() =>
-  supportedPlatforms.map((id) => ({
-    id,
-    label: socialPlatformLabel(id),
-    connected: activeAccountPlatforms.value.has(id),
-  })),
-);
-
-const composeMedia = computed(() => [
-  ...composeForm.value.mediaManifest.map((asset, index) => ({
-    key: `saved-${asset.url}-${index}`,
-    url: asset.url,
-    filename: asset.filename || `Image ${index + 1}`,
-    saved: true,
-    index,
-  })),
-  ...pendingImages.value.map((asset, index) => ({
-    key: `pending-${asset.previewUrl}`,
-    url: asset.previewUrl,
-    filename: asset.file.name,
-    saved: false,
-    index,
-  })),
-]);
-
-const composeIssues = computed(() =>
-  getSocialBlockingIssues({
-    caption: composeForm.value.body,
-    platforms: composeForm.value.platforms,
-    hasUsableImages: composeMedia.value.length > 0,
-  }),
-);
-
-const composeMissingAccounts = computed(() =>
-  composeForm.value.platforms.filter(
-    (platform) => !activeAccountPlatforms.value.has(platform),
+const canSchedule = computed(() =>
+  Boolean(
+    !selectedPostReadOnly.value &&
+      selectedCapability.value?.schedule &&
+      selectedVersion.value?.approvalStatus === "approved" &&
+      !editorDirty.value &&
+      scheduleLocal.value,
   ),
+);
+
+const canPublish = computed(() =>
+  Boolean(
+    !selectedPostReadOnly.value &&
+      selectedCapability.value?.publish &&
+      selectedVersion.value?.approvalStatus === "approved" &&
+      !editorDirty.value &&
+      matchingAccounts.value.some((account) => account.id === editorAccountId.value) &&
+      !["queued", "publishing"].includes(
+        selectedVersion.value?.publicationStatus || "",
+      ) &&
+      !publications.value.some((publication) =>
+        publication.status === "queued" || publication.status === "publishing"
+      ),
+  ),
+);
+
+const composeOptions = computed(() =>
+  capabilities.value.filter((item) => item.draft).map((item) => ({
+    ...item,
+    label: platformLabel(item.platform),
+    connected: activeAccounts.value.some((account) => account.platform === item.platform),
+  })),
 );
 
 const composeCanSave = computed(
-  () =>
-    Boolean(composeForm.value.body.trim()) &&
-    composeForm.value.platforms.length > 0 &&
-    composeIssues.value.length === 0,
+  () => Boolean(composeBody.value.trim() && composePlatforms.value.length),
 );
 
-const composeCanPublish = computed(
-  () => composeCanSave.value && composeMissingAccounts.value.length === 0,
-);
-
-const composeDirty = computed(
-  () =>
-    pendingImages.value.length > 0 ||
-    composeSnapshot() !== composeInitialSnapshot.value,
-);
-
-const minimumScheduleLocal = computed(() =>
-  toLocalInput(new Date(Date.now() + 60_000)),
-);
-
-function emptyComposeForm(): ComposeForm {
-  return {
-    id: null,
-    body: "",
-    platforms: [],
-    mediaManifest: [],
-  };
-}
-
-function packageEntry(detail: SocialContentPackage): WorkspaceEntry {
-  return { key: `package:${detail.package.id}`, kind: "package", detail };
-}
-
-function manualEntry(item: ContentItem): WorkspaceEntry {
-  return { key: `manual:${item.id}`, kind: "manual", item };
-}
-
-function entryUpdatedAt(entry: WorkspaceEntry): string {
-  return entry.kind === "package"
-    ? entry.detail.package.updatedAt
-    : entry.item.updatedAt;
-}
-
-function sortEntries(entries: WorkspaceEntry[]): WorkspaceEntry[] {
-  return entries.sort(
-    (left, right) =>
-      Date.parse(entryUpdatedAt(right)) - Date.parse(entryUpdatedAt(left)),
-  );
-}
-
-function entrySource(entry: WorkspaceEntry): string {
-  return entry.kind === "package" ? sourceLabel(entry.detail) : "You";
-}
-
-function entryTitle(entry: WorkspaceEntry): string {
-  return entry.kind === "package"
-    ? entry.detail.package.ideaText
-    : manualTitle(entry.item);
-}
-
-function entryPlatforms(entry: WorkspaceEntry): string[] {
-  return entry.kind === "package"
-    ? entry.detail.variants.map((variant) => variant.platform)
-    : entry.item.platforms;
-}
-
-function entryImageCount(entry: WorkspaceEntry): number {
-  if (entry.kind === "manual") return entry.item.mediaManifest.length;
-  return Math.max(
-    0,
-    ...entry.detail.variants.map((variant) => variant.assetManifest.length),
-  );
-}
-
-function entryStatus(entry: WorkspaceEntry): string | null {
-  if (entry.kind === "manual") {
-    if (entry.item.status === "publishing") return "Publishing";
-    if (entry.item.status === "queued") return "Queued";
-    if (entry.item.status === "scheduled") return "Scheduled";
-    if (entry.item.status === "failed") return "Needs attention";
-    return null;
-  }
-  if (entry.detail.variants.some((variant) => variant.failureClass)) {
-    return "Needs attention";
-  }
-  if (
-    entry.detail.variants.some(
-      (variant) =>
-        variant.publicationStatus === "queued" ||
-        variant.publicationStatus === "publishing",
-    )
-  ) {
-    return "Publishing";
-  }
-  if (entry.detail.variants.some((variant) => variant.scheduledFor)) {
-    return "Scheduled";
-  }
-  if (
-    entry.detail.variants.some(
-      (variant) => variant.approvalStatus === "approved",
-    )
-  ) {
-    return "Approved";
-  }
-  return null;
-}
-
-function isPublished(detail: SocialContentPackage): boolean {
-  return (
-    detail.package.status === "published" ||
-    detail.package.status === "partially_published"
-  );
-}
+const minimumScheduleLocal = computed(() => toLocalInput(new Date(Date.now() + 60_000)));
 
 function platformLabel(platform: string): string {
   if (platform === "x") return "X";
   if (platform === "linkedin") return "LinkedIn";
-  if (platform === "instagram_business") return "Instagram Business";
-  if (platform === "instagram") return "Instagram";
-  return platform;
+  return platform === "instagram_business" ? "Instagram Business" : "Instagram";
 }
 
 function platformShortLabel(platform: SocialPlatform): string {
@@ -433,33 +195,55 @@ function platformShortLabel(platform: SocialPlatform): string {
   return "X";
 }
 
-function sourceLabel(detail: SocialContentPackage): string {
-  if (detail.package.sourceType === "journal") return "Journal";
-  if (detail.package.sourceType === "mission_task") return "Mission Control";
-  if (detail.package.sourceType === "site") return "Site";
-  if (detail.package.sourceType === "pasted") return "Pasted text";
-  return "Original idea";
+function sourceLabel(detail: SocialPostDetail): string {
+  if (detail.post.sourceType === "journal") return "Journal";
+  if (detail.post.sourceType === "mission_task") return "Mission Control";
+  if (detail.post.sourceType === "site") return "Site";
+  if (detail.post.sourceType === "file") return "File";
+  if (detail.post.sourceType === "script") return "Script";
+  if (detail.post.sourceType === "legacy_content_bank_read_only") return "Imported post";
+  return "Pasted text";
 }
 
-function sourceText(detail: SocialContentPackage): string {
-  const snapshot = detail.package.sourceSnapshot;
-  try {
-    const parsed = JSON.parse(snapshot) as Record<string, unknown>;
-    for (const key of ["body", "description", "content", "title"]) {
-      if (typeof parsed[key] === "string" && parsed[key].trim()) {
-        return parsed[key].trim();
-      }
-    }
-  } catch {
-    // Older and manually generated packages may store plain-text snapshots.
+function versionState(version: PostVersion): string {
+  if (version.failureClass || version.publicationStatus === "failed") return "Failed";
+  if (version.publicationStatus === "publishing" || version.publicationStatus === "queued") {
+    return "Publishing";
   }
-  return snapshot;
+  if (version.publicationStatus === "published") return "Published";
+  if (version.scheduledFor) return "Scheduled";
+  if (version.approvalStatus === "approved") return "Approved";
+  return "Draft";
 }
 
-function manualTitle(item: ContentItem): string {
-  const compact = item.body.trim().replace(/\s+/g, " ");
-  if (!compact) return "Untitled post";
-  return compact.length > 84 ? `${compact.slice(0, 81)}…` : compact;
+function publicationStateLabel(status: Publication["status"]): string {
+  return status[0]!.toUpperCase() + status.slice(1);
+}
+
+function publicationMoment(publication: Publication): string | null {
+  return publication.publishedAt || publication.scheduledFor || publication.queuedAt || publication.createdAt;
+}
+
+function versionMode(version: PostVersion): WorkspaceMode {
+  if (version.publicationStatus === "published") return "published";
+  if (
+    version.scheduledFor ||
+    version.publicationStatus === "queued" ||
+    version.publicationStatus === "publishing"
+  ) {
+    return "scheduled";
+  }
+  return "drafts";
+}
+
+function postStatus(detail: SocialPostDetail): string {
+  const states = detail.versions.map(versionState);
+  if (states.includes("Failed")) return "Failed";
+  if (states.includes("Publishing")) return "Publishing";
+  if (states.includes("Scheduled")) return "Scheduled";
+  if (states.includes("Published")) return "Published";
+  if (states.includes("Approved")) return "Approved";
+  return "Draft";
 }
 
 function formatDate(value: string | null): string {
@@ -473,67 +257,77 @@ function formatDate(value: string | null): string {
 }
 
 function toLocalInput(value: Date): string {
-  const shifted = new Date(
-    value.getTime() - value.getTimezoneOffset() * 60_000,
-  );
+  const shifted = new Date(value.getTime() - value.getTimezoneOffset() * 60_000);
   return shifted.toISOString().slice(0, 16);
 }
 
 function setActiveMode(value: string) {
-  if (!(["drafts", "scheduled", "published"] as string[]).includes(value)) {
-    return;
-  }
-  activeMode.value = value as WorkspaceMode;
-  if (compactWorkspace.value) selectedEntryKey.value = null;
+  if (!(value === "drafts" || value === "scheduled" || value === "published")) return;
+  activeMode.value = value;
+  ensureVisibleSelection();
 }
 
-function selectEntry(entry: WorkspaceEntry) {
-  selectedEntryKey.value = entry.key;
-  if (entry.kind === "package") selectPackage(entry.detail);
-  else selectVariant(null);
-}
-
-function selectPackage(detail: SocialContentPackage) {
-  const preferred =
-    detail.variants.find((variant) =>
-      activeMode.value === "published"
-        ? variant.publicationStatus === "published"
-        : activeMode.value === "scheduled"
-          ? Boolean(variant.scheduledFor) ||
-            variant.publicationStatus === "queued" ||
-            variant.publicationStatus === "publishing"
-          : !variant.scheduledFor &&
-            variant.publicationStatus !== "queued" &&
-            variant.publicationStatus !== "publishing" &&
-            variant.publicationStatus !== "published",
-    ) ||
-    detail.variants[0] ||
+function selectPost(detail: SocialPostDetail) {
+  selectedPostId.value = detail.post.id;
+  const version =
+    detail.versions.find((candidate) => versionMode(candidate) === activeMode.value) ||
+    detail.versions[0] ||
     null;
-  selectVariant(preferred);
+  selectVersion(version);
 }
 
-function selectVariant(variant: SocialContentVariant | null) {
-  selectedVariantId.value = variant?.id || null;
-  editorBody.value = variant?.bodyText || "";
-  editorAccountId.value = variant?.targetAccountId || "";
-  scheduleLocal.value = variant?.scheduledFor
-    ? toLocalInput(new Date(variant.scheduledFor))
+function selectVersion(version: PostVersion | null) {
+  selectedVersionId.value = version?.id || null;
+  editorBody.value = version?.bodyText || "";
+  editorAccountId.value = version?.targetAccountId || "";
+  scheduleLocal.value = version?.scheduledFor
+    ? toLocalInput(new Date(version.scheduledFor))
     : "";
+  publications.value = [];
+  if (version) void loadVersionPublications(version.id);
+}
+
+async function loadVersionPublications(versionId: string) {
+  publicationsLoading.value = true;
+  try {
+    const next = await social.listPostVersionPublications(versionId);
+    if (selectedVersionId.value === versionId) {
+      publications.value = next;
+      await focusLinkedPublication();
+    }
+  } catch (value) {
+    if (selectedVersionId.value === versionId) {
+      social.setErrorFromApi(value, "Failed to load Publication history");
+      error.value = social.error || "Failed to load Publication history";
+    }
+  } finally {
+    if (selectedVersionId.value === versionId) publicationsLoading.value = false;
+  }
 }
 
 function ensureVisibleSelection() {
-  const visible = visibleEntries.value;
-  const current = visible.find((entry) => entry.key === selectedEntryKey.value);
+  const current = visiblePosts.value.find((detail) => detail.post.id === selectedPostId.value);
   if (current) {
-    if (current.kind === "package") selectPackage(current.detail);
-    return;
+    selectPost(current);
+  } else if (visiblePosts.value[0]) {
+    selectPost(visiblePosts.value[0]);
+  } else {
+    selectedPostId.value = null;
+    selectVersion(null);
   }
-  if (compactWorkspace.value || !visible[0]) {
-    selectedEntryKey.value = null;
-    selectVariant(null);
-    return;
-  }
-  selectEntry(visible[0]);
+}
+
+function selectLinkedSocialRecord(): boolean {
+  const postId = currentQueryParam("postId");
+  const versionId = currentQueryParam("versionId");
+  if (!postId || !versionId) return false;
+  const detail = posts.value.find((item) => item.post.id === postId);
+  const version = detail?.versions.find((item) => item.id === versionId) || null;
+  if (!detail || !version) return false;
+  activeMode.value = versionMode(version);
+  selectedPostId.value = detail.post.id;
+  selectVersion(version);
+  return true;
 }
 
 async function loadWorkspace() {
@@ -541,15 +335,15 @@ async function loadWorkspace() {
   loading.value = true;
   error.value = "";
   try {
-    const [nextPackages, nextAccounts, nextManualItems] = await Promise.all([
-      social.fetchContentPackages(selectedSiteId.value),
+    const [nextPosts, nextAccounts, status] = await Promise.all([
+      social.fetchSocialPosts(selectedSiteId.value),
       social.fetchSocialAccounts(),
-      content.fetchItems(selectedSiteId.value),
+      social.fetchSocialStatus(),
     ]);
-    packages.value = nextPackages;
+    posts.value = nextPosts;
     accounts.value = nextAccounts;
-    manualItems.value = nextManualItems;
-    ensureVisibleSelection();
+    capabilities.value = status.plugin.platformCapabilities || [];
+    if (!selectLinkedSocialRecord()) ensureVisibleSelection();
   } catch (value) {
     social.setErrorFromApi(value, "Failed to load social posts");
     error.value = social.error || "Failed to load social posts";
@@ -558,483 +352,270 @@ async function loadWorkspace() {
   }
 }
 
-async function refreshWorkspace() {
-  notice.value = "";
-  await loadWorkspace();
-}
-
-function replaceVariant(variant: SocialContentVariant) {
-  packages.value = packages.value.map((detail) =>
-    detail.package.id === variant.packageId
+function replaceVersion(version: PostVersion) {
+  posts.value = posts.value.map((detail) =>
+    detail.post.id === version.postId
       ? {
           ...detail,
-          variants: detail.variants.map((item) =>
-            item.id === variant.id ? variant : item,
-          ),
+          versions: detail.versions.map((item) => (item.id === version.id ? version : item)),
         }
       : detail,
   );
-  selectVariant(variant);
+  selectVersion(version);
 }
 
-async function saveVariant() {
-  const variant = selectedVariant.value;
-  if (!variant || !editorBody.value.trim()) return;
+async function saveVersion() {
+  const version = selectedVersion.value;
+  if (!version || selectedPostReadOnly.value || !editorBody.value.trim()) return;
   saving.value = true;
   error.value = "";
   notice.value = "";
   try {
-    replaceVariant(
-      await social.updateContentVariant(variant.id, {
+    replaceVersion(
+      await social.updatePostVersion(version.id, {
         bodyText: editorBody.value,
         targetAccountId: editorAccountId.value || null,
       }),
     );
-    notice.value = "Draft saved. Approval was removed if the content changed.";
+    notice.value = "Draft saved. Approval was removed if this Version changed.";
   } catch (value) {
-    social.setErrorFromApi(value, "Failed to save social draft");
-    error.value = social.error || "Failed to save social draft";
+    social.setErrorFromApi(value, "Failed to save this Version");
+    error.value = social.error || "Failed to save this Version";
   } finally {
     saving.value = false;
   }
 }
 
-async function approveVariant() {
-  const variant = selectedVariant.value;
-  if (!variant || !canApprove.value) return;
+async function approveVersion() {
+  const version = selectedVersion.value;
+  if (!version || selectedPostReadOnly.value || !canApprove.value) return;
   saving.value = true;
   error.value = "";
   notice.value = "";
   try {
-    replaceVariant(
-      await social.updateContentVariant(variant.id, {
+    replaceVersion(
+      await social.updatePostVersion(version.id, {
         bodyText: editorBody.value,
         targetAccountId: editorAccountId.value,
         approvalStatus: "approved",
       }),
     );
-    notice.value = "Exact account version approved. It has not been published.";
+    notice.value = "Exact account Version approved. It has not been published.";
   } catch (value) {
-    social.setErrorFromApi(value, "Failed to approve social draft");
-    error.value = social.error || "Failed to approve social draft";
+    social.setErrorFromApi(value, "Failed to approve this Version");
+    error.value = social.error || "Failed to approve this Version";
   } finally {
     saving.value = false;
   }
 }
 
-async function scheduleVariant() {
-  const variant = selectedVariant.value;
-  if (!variant || !canSchedule.value) return;
+async function scheduleVersion() {
+  const version = selectedVersion.value;
+  if (!version || selectedPostReadOnly.value || !canSchedule.value) return;
   const date = new Date(scheduleLocal.value);
   if (Number.isNaN(date.getTime())) return;
   saving.value = true;
   error.value = "";
   notice.value = "";
   try {
-    replaceVariant(
-      await social.updateContentVariant(variant.id, {
-        scheduledFor: date.toISOString(),
-        timezone: browserTimezone,
-      }),
-    );
-    notice.value = "Post scheduled using this exact approved version.";
+    await social.createPostVersionPublication(version.id, {
+      scheduledFor: date.toISOString(),
+      timezone: browserTimezone,
+      requestContext: { surface: "social_workspace" },
+    });
     activeMode.value = "scheduled";
+    selectedPostId.value = version.postId;
     await loadWorkspace();
+    notice.value = "Post scheduled using this exact approved Version.";
   } catch (value) {
-    social.setErrorFromApi(value, "Failed to schedule social draft");
-    error.value = social.error || "Failed to schedule social draft";
+    social.setErrorFromApi(value, "Failed to schedule this Version");
+    error.value = social.error || "Failed to schedule this Version";
   } finally {
     saving.value = false;
   }
 }
 
-async function unscheduleVariant() {
-  const variant = selectedVariant.value;
-  if (!variant) return;
+async function removeSchedule() {
+  const version = selectedVersion.value;
+  if (!version || selectedPostReadOnly.value) return;
   saving.value = true;
-  error.value = "";
-  notice.value = "";
   try {
-    await social.updateContentVariant(variant.id, { scheduledFor: null });
+    const publication = scheduledPublication.value ||
+      (await social.listPostVersionPublications(version.id)).find(
+        (item) => item.status === "scheduled",
+      );
+    if (!publication) throw new Error("No scheduled Publication found");
+    await social.cancelPublication(publication.id);
     activeMode.value = "drafts";
-    selectedEntryKey.value = `package:${variant.packageId}`;
-    notice.value = "Post moved back to drafts.";
+    selectedPostId.value = version.postId;
     await loadWorkspace();
+    notice.value = "Post moved back to Drafts.";
   } catch (value) {
-    social.setErrorFromApi(value, "Failed to remove schedule");
-    error.value = social.error || "Failed to remove schedule";
+    social.setErrorFromApi(value, "Failed to remove the schedule");
+    error.value = social.error || "Failed to remove the schedule";
   } finally {
     saving.value = false;
   }
 }
 
-async function publishVariant() {
-  const variant = selectedVariant.value;
-  if (!variant || !canPublish.value) return;
-  if (!window.confirm("Publish this exact approved LinkedIn version now?")) {
+async function publishVersion() {
+  const version = selectedVersion.value;
+  if (!version || selectedPostReadOnly.value || !canPublish.value) return;
+  if (!window.confirm(`Publish this exact approved ${platformLabel(version.platform)} Version now?`)) {
     return;
   }
   saving.value = true;
   error.value = "";
-  notice.value = "";
   try {
-    const publication = await social.publishContentVariant(variant.id);
-    activeMode.value =
-      publication.status === "published" ? "published" : "scheduled";
-    selectedEntryKey.value = `package:${variant.packageId}`;
+    const publication = await social.publishPostVersion(version.id);
+    activeMode.value = publication.status === "published" ? "published" : "scheduled";
+    selectedPostId.value = version.postId;
     await loadWorkspace();
     notice.value =
-      publication.status === "published"
-        ? "LinkedIn post published."
-        : "LinkedIn post added to the publishing queue.";
+      publication.status === "published" ? "Post published." : "Post is publishing.";
   } catch (value) {
-    social.setErrorFromApi(value, "Failed to publish LinkedIn post");
-    error.value = social.error || "Failed to publish LinkedIn post";
+    social.setErrorFromApi(value, "Failed to publish this Version");
+    error.value = social.error || "Failed to publish this Version";
   } finally {
     saving.value = false;
   }
 }
 
 async function resolveUnknownOutcome(outcome: "published" | "not_published") {
-  const variant = selectedVariant.value;
-  if (!variant || variant.failureClass !== "outcome_unknown") return;
+  const version = selectedVersion.value;
+  if (!version || version.failureClass !== "outcome_unknown") return;
   let platformPostUrl: string | undefined;
   if (outcome === "published") {
-    const value = window.prompt(
-      "Paste the LinkedIn post URL so ME3 can attach it to the history:",
-    );
+    const value = window.prompt("Paste the published post URL so ME3 can attach it to the history:");
     if (!value?.trim()) return;
     platformPostUrl = value.trim();
-  } else if (
-    !window.confirm("Confirm that you checked LinkedIn and no post was created?")
-  ) {
+  } else if (!window.confirm("Confirm that you checked the platform and no post was created?")) {
     return;
   }
   saving.value = true;
-  error.value = "";
   try {
-    await social.resolveContentVariantOutcome(
-      variant.id,
-      outcome,
-      platformPostUrl,
+    const history = publications.value.length
+      ? publications.value
+      : await social.listPostVersionPublications(version.id);
+    const publication = history.find(
+      (item) => item.status === "publishing" && item.failureClass === "outcome_unknown",
     );
+    if (!publication) throw new Error("No Publication needs outcome resolution");
+    await social.resolvePublicationOutcome(publication.id, outcome, platformPostUrl);
     activeMode.value = outcome === "published" ? "published" : "drafts";
-    selectedEntryKey.value = `package:${variant.packageId}`;
+    selectedPostId.value = version.postId;
     await loadWorkspace();
-    notice.value =
-      outcome === "published"
-        ? "Published LinkedIn post attached to the history."
-        : "Outcome cleared. This approved version can now be published again.";
   } catch (value) {
-    social.setErrorFromApi(value, "Could not resolve the publication outcome");
-    error.value =
-      social.error || "Could not resolve the publication outcome";
+    social.setErrorFromApi(value, "Could not resolve the Publication outcome");
+    error.value = social.error || "Could not resolve the Publication outcome";
   } finally {
     saving.value = false;
   }
 }
 
-function composeSnapshot(): string {
-  return JSON.stringify({
-    id: composeForm.value.id,
-    body: composeForm.value.body,
-    platforms: [...composeForm.value.platforms].sort(),
-    media: composeForm.value.mediaManifest.map((asset) => asset.url),
-  });
-}
-
-function revokePendingImages() {
-  for (const image of pendingImages.value) URL.revokeObjectURL(image.previewUrl);
-  pendingImages.value = [];
-}
-
-function openCompose(item?: ContentItem) {
-  revokePendingImages();
+function openCompose() {
+  composeBody.value = "";
   composeError.value = "";
-  composeForm.value = item
-    ? {
-        id: item.id,
-        body: item.body,
-        platforms: item.platforms.filter((platform): platform is SocialPlatform =>
-          supportedPlatforms.includes(platform as SocialPlatform),
-        ),
-        mediaManifest: [...item.mediaManifest],
-      }
-    : emptyComposeForm();
-  if (!item) {
-    const connected = supportedPlatforms.filter((platform) =>
-      activeAccountPlatforms.value.has(platform),
-    );
-    if (connected.length === 1) composeForm.value.platforms = connected;
-  }
-  composeInitialSnapshot.value = composeSnapshot();
+  const connected = composeOptions.value.filter((item) => item.connected);
+  composePlatforms.value = connected.length === 1 ? [connected[0]!.platform] : [];
   composeOpen.value = true;
 }
 
-function requestCloseCompose() {
-  if (composeSaving.value) return;
-  if (composeDirty.value) {
-    composeDiscardConfirmOpen.value = true;
-    return;
-  }
-  forceCloseCompose();
-}
-
-function forceCloseCompose() {
-  composeDiscardConfirmOpen.value = false;
-  composeOpen.value = false;
-  revokePendingImages();
-  composeForm.value = emptyComposeForm();
-  composeInitialSnapshot.value = "";
-  composeError.value = "";
-}
-
 function toggleComposePlatform(platform: SocialPlatform) {
-  const next = [...composeForm.value.platforms];
-  const index = next.indexOf(platform);
-  if (index >= 0) next.splice(index, 1);
-  else next.push(platform);
-  composeForm.value.platforms = next;
+  composePlatforms.value = composePlatforms.value.includes(platform)
+    ? composePlatforms.value.filter((item) => item !== platform)
+    : [...composePlatforms.value, platform];
 }
 
-function addComposeImages(event: Event) {
-  const target = event.target as HTMLInputElement | null;
-  const files = target?.files ? Array.from(target.files) : [];
-  if (target) target.value = "";
+async function saveComposedPost() {
+  const site = currentSite.value;
+  const sourceText = composeBody.value.trim();
+  if (!site || !composeCanSave.value || !sourceText) return;
+  saving.value = true;
+  error.value = "";
   composeError.value = "";
-
-  const available = Math.max(0, 10 - composeMedia.value.length);
-  if (files.length > available) {
-    composeError.value = "You can attach up to 10 images to one post.";
-  }
-  for (const file of files.slice(0, available)) {
-    if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) {
-      composeError.value = "Use JPEG, PNG, WebP, or GIF images.";
-      continue;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      composeError.value = `${file.name} is larger than 5MB.`;
-      continue;
-    }
-    pendingImages.value.push({
-      file,
-      previewUrl: URL.createObjectURL(file),
+  try {
+    const detail = await social.createSocialPost({
+      siteId: site.id,
+      sourceType: "pasted",
+      sourceSnapshot: sourceText,
+      sourceText,
+      ideaText: sourceText.length > 120 ? `${sourceText.slice(0, 117)}…` : sourceText,
+      versions: composePlatforms.value.map((platform) => {
+        const platformAccounts = activeAccounts.value.filter(
+          (account) => account.platform === platform,
+        );
+        return {
+          platform,
+          bodyText: sourceText,
+          targetAccountId: platformAccounts.length === 1 ? platformAccounts[0]!.id : null,
+        };
+      }),
     });
-  }
-}
-
-function removeComposeImage(saved: boolean, index: number) {
-  if (saved) {
-    composeForm.value.mediaManifest.splice(index, 1);
-    return;
-  }
-  const [removed] = pendingImages.value.splice(index, 1);
-  if (removed) URL.revokeObjectURL(removed.previewUrl);
-}
-
-async function saveCompose(publishNow: boolean) {
-  if (!currentSite.value || !composeCanSave.value) return;
-  if (publishNow && !composeCanPublish.value) return;
-  composeSaving.value = true;
-  composeSaveMode.value = publishNow ? "publish" : "draft";
-  composeError.value = "";
-  try {
-    let item = composeForm.value.id
-      ? await content.updateItem(composeForm.value.id, {
-          body: composeForm.value.body,
-          platforms: composeForm.value.platforms,
-          mediaManifest: composeForm.value.mediaManifest,
-          timezone: browserTimezone,
-        })
-      : await content.createItem({
-          siteId: currentSite.value.id,
-          body: composeForm.value.body,
-          platforms: composeForm.value.platforms,
-          mediaManifest: composeForm.value.mediaManifest,
-          timezone: browserTimezone,
-        });
-
-    composeForm.value.id = item.id;
-    composeForm.value.mediaManifest = [...item.mediaManifest];
-
-    while (pendingImages.value.length > 0) {
-      const pending = pendingImages.value[0];
-      if (!pending) break;
-      const uploaded = await content.uploadItemMedia(
-        item.id,
-        pending.file,
-        item.mediaManifest.length + 1,
-      );
-      URL.revokeObjectURL(pending.previewUrl);
-      pendingImages.value.shift();
-      item = uploaded.item;
-      composeForm.value.mediaManifest = [...item.mediaManifest];
-    }
-
-    if (publishNow) item = await content.publishItem(item.id);
-
-    activeMode.value =
-      item.status === "posted"
-        ? "published"
-        : ["queued", "scheduled", "publishing"].includes(item.status)
-          ? "scheduled"
-          : "drafts";
-    selectedEntryKey.value = `manual:${item.id}`;
-    composeInitialSnapshot.value = composeSnapshot();
-    forceCloseCompose();
-    await loadWorkspace();
-    notice.value = publishNow
-      ? item.status === "posted"
-        ? "Post published."
-        : "Post added to the publishing queue."
-      : "Draft saved.";
-  } catch (value) {
-    content.setErrorFromApi(value, "Failed to save social post");
-    composeError.value = content.error || "Failed to save social post";
-  } finally {
-    composeSaving.value = false;
-    composeSaveMode.value = null;
-  }
-}
-
-async function publishManualItem(item: ContentItem) {
-  if (!window.confirm("Publish this post now?")) return;
-  saving.value = true;
-  error.value = "";
-  notice.value = "";
-  try {
-    const updated = await content.publishItem(item.id);
-    activeMode.value = updated.status === "posted" ? "published" : "scheduled";
-    selectedEntryKey.value = `manual:${updated.id}`;
-    await loadWorkspace();
-    notice.value =
-      updated.status === "posted"
-        ? "Post published."
-        : "Post added to the publishing queue.";
-  } catch (value) {
-    content.setErrorFromApi(value, "Failed to publish social post");
-    error.value = content.error || "Failed to publish social post";
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function queueManualItem(item: ContentItem) {
-  saving.value = true;
-  error.value = "";
-  notice.value = "";
-  try {
-    const updated = await content.queueItem(item.id);
-    activeMode.value = "scheduled";
-    selectedEntryKey.value = `manual:${updated.id}`;
-    await loadWorkspace();
-    notice.value = "Post added to the content queue.";
-  } catch (value) {
-    content.setErrorFromApi(value, "Failed to queue social post");
-    error.value = content.error || "Failed to queue social post";
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function unqueueManualItem(item: ContentItem) {
-  saving.value = true;
-  error.value = "";
-  notice.value = "";
-  try {
-    const updated = await content.unqueueItem(item.id);
+    composeOpen.value = false;
+    posts.value = [detail, ...posts.value];
     activeMode.value = "drafts";
-    selectedEntryKey.value = `manual:${updated.id}`;
-    await loadWorkspace();
-    notice.value = "Post moved back to drafts.";
+    selectPost(detail);
+    notice.value = "Source-backed Post saved for review.";
   } catch (value) {
-    content.setErrorFromApi(value, "Failed to move social post");
-    error.value = content.error || "Failed to move social post";
+    social.setErrorFromApi(value, "Failed to save this Post");
+    composeError.value = social.error || "Failed to save this Post";
   } finally {
     saving.value = false;
   }
 }
 
-async function deleteManualItem(item: ContentItem) {
-  if (!window.confirm("Delete this social post?")) return;
-  saving.value = true;
-  error.value = "";
-  notice.value = "";
-  try {
-    await content.deleteItem(item.id);
-    selectedEntryKey.value = null;
-    await loadWorkspace();
-    notice.value = "Post deleted.";
-  } catch (value) {
-    content.setErrorFromApi(value, "Failed to delete social post");
-    error.value = content.error || "Failed to delete social post";
-  } finally {
-    saving.value = false;
-  }
-}
-
-function manualItemCanPublish(item: ContentItem): boolean {
-  return (
-    item.status !== "publishing" &&
-    item.status !== "posted" &&
-    item.platforms.every((platform) =>
-      activeAccountPlatforms.value.has(platform),
-    )
-  );
-}
-
-function closeAccounts() {
-  showAccounts.value = false;
+watch(selectedSiteId, () => {
   void loadWorkspace();
-}
-
-function handleCompactChange(event: MediaQueryListEvent | MediaQueryList) {
-  compactWorkspace.value = event.matches;
-  ensureVisibleSelection();
-}
-
-watch(activeMode, ensureVisibleSelection);
-watch(selectedSiteId, loadWorkspace);
+});
 
 onMounted(async () => {
-  compactMediaQuery = window.matchMedia("(max-width: 720px)");
-  compactWorkspace.value = compactMediaQuery.matches;
-  compactMediaQuery.addEventListener("change", handleCompactChange);
   if (sites.sites.length === 0) await sites.fetchSites();
-  selectedSiteId.value = sites.sites[0]?.id || "";
+  const linkedSiteId = currentQueryParam("siteId");
+  selectedSiteId.value =
+    sites.sites.find((site) => site.id === linkedSiteId)?.id ||
+    sites.sites[0]?.id ||
+    "";
 });
 
-onBeforeUnmount(() => {
-  revokePendingImages();
-  compactMediaQuery?.removeEventListener("change", handleCompactChange);
-});
+function currentQueryParam(name: string): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get(name)?.trim() || null;
+}
+
+function publicationElementId(publicationId: string): string {
+  return `social-publication-${encodeURIComponent(publicationId)}`;
+}
+
+async function focusLinkedPublication() {
+  const publicationId = linkedPublicationId.value;
+  if (!publicationId || !publications.value.some((item) => item.id === publicationId)) {
+    return;
+  }
+  await nextTick();
+  const element = document.getElementById(publicationElementId(publicationId));
+  element?.focus({ preventScroll: true });
+  element?.scrollIntoView?.({ block: "center" });
+}
 </script>
 
 <template>
   <div class="social-page">
     <main class="social-main">
-      <div v-if="error" class="state-banner state-banner--error" role="alert">
-        {{ error }}
-      </div>
-      <div
-        v-if="notice"
-        class="state-banner"
-        role="status"
-        aria-live="polite"
-      >
+      <div v-if="error" class="state-banner state-banner--error" role="alert">{{ error }}</div>
+      <div v-if="notice" class="state-banner" role="status" aria-live="polite">
         {{ notice }}
       </div>
 
       <header class="social-toolbar">
         <WorkspaceTabs
-          class="social-tabs"
           :tabs="modeTabs"
           :model-value="activeMode"
           aria-label="Social publishing views"
           semantics="navigation"
           @update:model-value="setActiveMode"
         />
-        <div class="social-toolbar__actions">
+        <div class="toolbar-actions">
           <Button
             color="ghost"
             shape="soft"
@@ -1043,7 +624,6 @@ onBeforeUnmount(() => {
             type="button"
             aria-label="Manage social accounts"
             title="Social accounts"
-            :aria-expanded="showAccounts"
             @click="showAccounts = true"
           >
             <UiIcon name="Settings" :size="18" aria-hidden="true" />
@@ -1054,12 +634,10 @@ onBeforeUnmount(() => {
             size="compact"
             type="button"
             :disabled="!currentSite"
-            @click="openCompose()"
+            @click="openCompose"
           >
-            <template #icon>
-              <UiIcon name="SquarePen" :size="16" aria-hidden="true" />
-            </template>
-            Compose
+            <template #icon><UiIcon name="SquarePen" :size="16" aria-hidden="true" /></template>
+            New Post
           </Button>
           <Button
             color="ghost"
@@ -1070,7 +648,7 @@ onBeforeUnmount(() => {
             aria-label="Refresh social posts"
             title="Refresh"
             :disabled="loading || !currentSite"
-            @click="refreshWorkspace"
+            @click="loadWorkspace"
           >
             <UiIcon name="RefreshCw" :size="18" aria-hidden="true" />
           </Button>
@@ -1082,727 +660,313 @@ onBeforeUnmount(() => {
         <RouterLink to="/onboarding">Continue setup</RouterLink>
       </div>
 
-      <div
-        v-else
-        class="social-inbox"
-        :class="{ 'social-inbox--detail-open': selectedEntry }"
-        :aria-busy="loading"
-      >
+      <div v-else class="social-workspace" :aria-busy="loading">
         <section class="post-list" aria-label="Social posts">
           <div v-if="loading" class="empty-state">Loading social posts…</div>
-          <div v-else-if="visibleEntries.length === 0" class="empty-state">
+          <div v-else-if="visiblePosts.length === 0" class="empty-state">
             <strong>No {{ activeMode }} yet.</strong>
-            <span v-if="activeMode === 'drafts'">
-              Compose a post or ask the agent to prepare one.
-            </span>
+            <span v-if="activeMode === 'drafts'">Write a Post or ask the agent to repurpose a Source.</span>
             <Button
               v-if="activeMode === 'drafts'"
               color="outline"
               shape="soft"
               size="compact"
               type="button"
-              @click="openCompose()"
+              @click="openCompose"
             >
-              Write a post
+              Write a Post
             </Button>
           </div>
           <button
-            v-for="entry in visibleEntries"
+            v-for="detail in visiblePosts"
             v-else
-            :key="entry.key"
+            :key="detail.post.id"
             type="button"
             class="post-row"
-            :class="{ 'post-row--active': selectedEntryKey === entry.key }"
-            :aria-current="selectedEntryKey === entry.key ? 'true' : undefined"
-            @click="selectEntry(entry)"
+            :class="{ 'post-row--active': selectedPostId === detail.post.id }"
+            :aria-current="selectedPostId === detail.post.id ? 'true' : undefined"
+            @click="selectPost(detail)"
           >
             <span class="post-row__meta">
-              <span>{{ entrySource(entry) }}</span>
-              <time :datetime="entryUpdatedAt(entry)">
-                {{ formatDate(entryUpdatedAt(entry)) }}
-              </time>
+              <span>{{ sourceLabel(detail) }}</span>
+              <time :datetime="detail.post.updatedAt">{{ formatDate(detail.post.updatedAt) }}</time>
             </span>
-            <strong>{{ entryTitle(entry) }}</strong>
+            <strong>{{ detail.post.ideaText }}</strong>
             <span class="post-row__footer">
               <span class="platform-list">
-                <span
-                  v-for="platform in entryPlatforms(entry)"
-                  :key="platform"
-                  class="platform-chip"
-                >
-                  {{ platformLabel(platform) }}
+                <span v-for="version in detail.versions" :key="version.id" class="platform-chip">
+                  {{ platformLabel(version.platform) }}
                 </span>
               </span>
-              <span v-if="entryImageCount(entry)" class="image-count">
-                <UiIcon name="Image" :size="13" aria-hidden="true" />
-                {{ entryImageCount(entry) }}
-              </span>
-              <span v-if="entryStatus(entry)" class="row-status">
-                {{ entryStatus(entry) }}
-              </span>
+              <span class="row-status">{{ postStatus(detail) }}</span>
             </span>
           </button>
         </section>
 
-        <section v-if="selectedEntry" class="post-detail" aria-live="polite">
-          <div class="post-detail__mobile-back">
-            <Button
-              color="ghost"
-              shape="soft"
-              size="compact"
-              icon-only
+        <section v-if="selectedPost" class="post-detail" aria-live="polite">
+          <header class="detail-header">
+            <div>
+              <div class="detail-meta">
+                <span>{{ sourceLabel(selectedPost) }}</span>
+                <span>Created by {{ selectedPost.post.createdBy === 'agent' ? 'agent' : 'you' }}</span>
+              </div>
+              <h1>{{ selectedPost.post.ideaText }}</h1>
+            </div>
+          </header>
+
+          <details class="source-context">
+            <summary>View Source</summary>
+            <p>{{ selectedPost.post.sourceText }}</p>
+          </details>
+
+          <aside
+            v-if="selectedPostReadOnly"
+            class="state-banner read-only-banner"
+            aria-label="Imported Post is read-only"
+          >
+            <strong>Imported Post — read-only</strong>
+            <span>
+              This legacy content is preserved for reference and Publication history. Create a
+              source-backed Post to edit, approve, schedule, or publish it again.
+            </span>
+          </aside>
+
+          <div class="version-tabs" role="group" aria-label="Platform Versions">
+            <button
+              v-for="version in selectedPost.versions"
+              :key="version.id"
               type="button"
-              aria-label="Back to social posts"
-              @click="selectedEntryKey = null"
+              :aria-pressed="selectedVersionId === version.id"
+              :class="['version-tab', { 'version-tab--active': selectedVersionId === version.id }]"
+              @click="selectVersion(version)"
             >
-              <UiIcon name="ArrowLeft" :size="18" aria-hidden="true" />
-            </Button>
+              {{ platformLabel(version.platform) }}
+              <span>{{ versionState(version) }}</span>
+            </button>
           </div>
 
-          <template v-if="selectedPackage">
-            <header class="detail-header">
-              <div>
-                <div class="detail-meta">
-                  <span>{{ sourceLabel(selectedPackage) }}</span>
-                  <span>Created by {{ selectedPackage.package.createdBy }}</span>
-                </div>
-                <h2>{{ selectedPackage.package.ideaText }}</h2>
-              </div>
-            </header>
-
-            <details class="source-context">
-              <summary>View source context</summary>
-              <p>{{ sourceText(selectedPackage) }}</p>
-              <small v-if="selectedPackage.package.sourceRef">
-                {{ selectedPackage.package.sourceRef }}
-              </small>
-            </details>
-
-            <div class="variant-tabs" role="tablist" aria-label="Platform versions">
-              <button
-                v-for="variant in selectedPackage.variants"
-                :key="variant.id"
-                type="button"
-                role="tab"
-                :aria-selected="selectedVariantId === variant.id"
-                :class="[
-                  'variant-tab',
-                  { 'variant-tab--active': selectedVariantId === variant.id },
-                ]"
-                @click="selectVariant(variant)"
-              >
-                {{ platformLabel(variant.platform) }}
-                <span
-                  :class="[
-                    'status-dot',
-                    `status-dot--${variant.approvalStatus}`,
-                  ]"
-                  aria-hidden="true"
-                />
-              </button>
-            </div>
-
-            <div v-if="selectedVariant" class="variant-workspace">
-              <div class="variant-editor">
-                <div v-if="publicationRecovery" class="recovery-banner" role="alert">
-                  <strong>Publishing needs attention</strong>
-                  <span>
-                    {{ publicationRecovery.message || publicationRecovery.guidance }}
-                  </span>
-                  <small v-if="publicationRecovery.message">
-                    {{ publicationRecovery.guidance }}
-                  </small>
-                  <div
-                    v-if="selectedVariant.failureClass === 'outcome_unknown'"
-                    class="inline-actions"
-                  >
-                    <Button
-                      color="outline"
-                      shape="soft"
-                      size="compact"
-                      type="button"
-                      :disabled="saving"
-                      @click="resolveUnknownOutcome('published')"
-                    >
-                      I found the post
-                    </Button>
-                    <Button
-                      color="outline"
-                      shape="soft"
-                      size="compact"
-                      type="button"
-                      :disabled="saving"
-                      @click="resolveUnknownOutcome('not_published')"
-                    >
-                      No post was created
-                    </Button>
-                  </div>
-                </div>
-
-                <label class="field">
-                  <span>Publishing account</span>
-                  <select
-                    v-model="editorAccountId"
-                    :disabled="selectedVariant.publicationStatus === 'published'"
-                  >
-                    <option value="">Choose an account</option>
-                    <option
-                      v-for="account in matchingAccounts"
-                      :key="account.id"
-                      :value="account.id"
-                    >
-                      {{
-                        account.displayName ||
-                        account.handle ||
-                        platformLabel(selectedVariant.platform)
-                      }}
-                      <template v-if="account.handle">
-                        · @{{ account.handle.replace(/^@/, "") }}
-                      </template>
-                    </option>
-                  </select>
-                </label>
-
-                <label class="field">
-                  <span>{{ platformLabel(selectedVariant.platform) }} copy</span>
-                  <textarea
-                    v-model="editorBody"
-                    rows="10"
-                    :readonly="selectedVariant.publicationStatus === 'published'"
-                    :aria-describedby="
-                      selectedVariant.approvalStatus === 'approved'
-                        ? 'approval-edit-note'
-                        : undefined
-                    "
-                  />
-                </label>
-
-                <div
-                  v-if="selectedVariant.assetManifest.length"
-                  class="detail-images"
-                >
-                  <img
-                    v-for="(asset, index) in selectedVariant.assetManifest"
-                    :key="`${asset.url}-${index}`"
-                    :src="asset.url"
-                    :alt="asset.filename || `Post image ${index + 1}`"
-                  />
-                </div>
-
-                <p
-                  v-if="
-                    selectedVariant.approvalStatus === 'approved' &&
-                    selectedVariant.publicationStatus !== 'published'
-                  "
-                  id="approval-edit-note"
-                  class="field-note"
-                >
-                  Editing approved copy or changing its account removes approval
-                  and any schedule.
-                </p>
-
-                <div
-                  v-if="selectedVariant.publicationStatus !== 'published'"
-                  class="inline-actions"
-                >
-                  <Button
-                    color="outline"
-                    shape="soft"
-                    size="compact"
-                    type="button"
-                    :disabled="saving || !editorDirty || !editorBody.trim()"
-                    @click="saveVariant"
-                  >
-                    Save changes
+          <div v-if="selectedVersion" class="version-workspace">
+            <div class="version-editor">
+              <div v-if="selectedVersion.failureClass" class="recovery-banner" role="alert">
+                <strong>Publishing needs attention</strong>
+                <span>{{ selectedVersion.errorMessage || 'Review this Publication before retrying.' }}</span>
+                <div v-if="selectedVersion.failureClass === 'outcome_unknown'" class="inline-actions">
+                  <Button color="outline" shape="soft" size="compact" type="button" @click="resolveUnknownOutcome('published')">
+                    It was published
                   </Button>
-                  <Button
-                    color="primary"
-                    shape="soft"
-                    size="compact"
-                    type="button"
-                    :disabled="saving || !canApprove"
-                    @click="approveVariant"
-                  >
-                    <UiIcon name="Check" :size="15" aria-hidden="true" />
-                    {{
-                      selectedVariant.approvalStatus === 'approved' && !editorDirty
-                        ? 'Approved'
-                        : 'Approve exact version'
-                    }}
+                  <Button color="outline" shape="soft" size="compact" type="button" @click="resolveUnknownOutcome('not_published')">
+                    It was not published
                   </Button>
                 </div>
-
-                <a
-                  v-if="selectedVariant.platformPostUrl"
-                  class="post-link"
-                  :href="selectedVariant.platformPostUrl"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  View published post
-                  <UiIcon name="ExternalLink" :size="15" aria-hidden="true" />
-                </a>
               </div>
 
-              <aside class="post-preview" aria-label="Post preview">
-                <div class="preview-heading">
-                  <span>{{ platformLabel(selectedVariant.platform) }} preview</span>
-                  <span
-                    :class="[
-                      'approval-badge',
-                      `approval-badge--${selectedVariant.approvalStatus}`,
-                    ]"
-                  >
-                    {{ selectedVariant.approvalStatus }}
-                  </span>
-                </div>
-                <div class="preview-account">
-                  <span class="preview-avatar">
-                    {{
-                      (
-                        matchingAccounts.find(
-                          (item) => item.id === editorAccountId,
-                        )?.displayName ||
-                        currentSite?.username ||
-                        "M"
-                      )
-                        .slice(0, 1)
-                        .toUpperCase()
-                    }}
-                  </span>
-                  <div>
-                    <strong>
-                      {{
-                        matchingAccounts.find(
-                          (item) => item.id === editorAccountId,
-                        )?.displayName || currentSite?.username
-                      }}
-                    </strong>
-                    <small>
-                      {{
-                        matchingAccounts.find(
-                          (item) => item.id === editorAccountId,
-                        )?.handle || "Preview only"
-                      }}
-                    </small>
-                  </div>
-                </div>
-                <p class="preview-copy">
-                  {{ editorBody || "Your post preview will appear here." }}
-                </p>
-                <img
-                  v-if="selectedVariant.assetManifest[0]"
-                  class="preview-image"
-                  :src="selectedVariant.assetManifest[0].url"
-                  :alt="selectedVariant.assetManifest[0].filename || 'Post image'"
+              <label class="field">
+                <span>{{ platformLabel(selectedVersion.platform) }} Version</span>
+                <textarea
+                  v-model="editorBody"
+                  rows="10"
+                  :disabled="saving"
+                  :readonly="selectedPostReadOnly"
                 />
-              </aside>
-            </div>
+              </label>
 
-            <section
-              v-if="
-                selectedVariant &&
-                selectedVariant.publicationStatus !== 'published'
-              "
-              class="schedule-panel"
-              aria-labelledby="schedule-title"
-            >
-              <div>
-                <h3 id="schedule-title">Publish</h3>
-                <p v-if="selectedVariant.scheduledFor">
-                  Set for {{ formatDate(selectedVariant.scheduledFor) }} ·
-                  {{ selectedVariant.timezone }}
-                </p>
-                <p v-else>
-                  Approve this exact account version before scheduling it.
-                </p>
-              </div>
-              <div class="schedule-controls">
-                <Button
-                  v-if="selectedVariant.platform === 'linkedin'"
-                  color="primary"
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving || !canPublish"
-                  @click="publishVariant"
-                >
-                  Publish now
+              <label class="field">
+                <span>Account</span>
+                <select v-model="editorAccountId" :disabled="saving || selectedPostReadOnly">
+                  <option value="">Choose an account</option>
+                  <option v-for="account in matchingAccounts" :key="account.id" :value="account.id">
+                    {{ account.displayName || account.handle || platformLabel(account.platform) }}
+                  </option>
+                </select>
+              </label>
+
+              <div v-if="!selectedPostReadOnly" class="editor-actions">
+                <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving || !editorDirty" @click="saveVersion">
+                  Save Draft
                 </Button>
+                <Button color="primary" shape="soft" size="compact" type="button" :disabled="saving || !canApprove" @click="approveVersion">
+                  Approve Version
+                </Button>
+              </div>
+            </div>
+
+            <aside class="post-preview" aria-label="Post preview">
+              <div class="preview-heading">
+                <span>{{ platformLabel(selectedVersion.platform) }} preview</span>
+                <span>{{ versionState(selectedVersion) }}</span>
+              </div>
+              <p>{{ editorBody || 'Your Post preview will appear here.' }}</p>
+              <img
+                v-if="selectedVersion.assetManifest[0]"
+                :src="selectedVersion.assetManifest[0].url"
+                :alt="selectedVersion.assetManifest[0].filename || 'Post image'"
+              />
+              <a v-if="selectedVersion.platformPostUrl" :href="selectedVersion.platformPostUrl" target="_blank" rel="noopener noreferrer">
+                View published Post
+              </a>
+            </aside>
+          </div>
+
+          <section v-if="selectedVersion" class="publication-panel" aria-labelledby="publication-title">
+            <div>
+              <h2 id="publication-title">
+                {{ selectedPostReadOnly ? 'Publication history' : 'Publish' }}
+              </h2>
+              <template v-if="selectedPostReadOnly">
+                <p>
+                  Existing Publication activity remains visible, but no new Publication can be created.
+                </p>
+                <p v-if="selectedVersion.scheduledFor">
+                  Preserved schedule: {{ formatDate(selectedVersion.scheduledFor) }} ·
+                  {{ selectedVersion.timezone }}
+                </p>
+              </template>
+              <p v-else-if="scheduledPublication">
+                Scheduled for {{ formatDate(scheduledPublication.scheduledFor) }} · {{ scheduledPublication.timezone }}
+              </p>
+              <p v-else-if="!selectedCapability?.schedule">
+                {{ selectedCapability?.reason || 'This platform is draft-only for now.' }}
+              </p>
+              <p v-else>Approve this exact account Version before scheduling it.</p>
+            </div>
+            <div v-if="!selectedPostReadOnly" class="publication-actions">
+              <Button
+                v-if="selectedCapability?.publish"
+                color="primary"
+                shape="soft"
+                size="compact"
+                type="button"
+                :disabled="saving || !canPublish"
+                @click="publishVersion"
+              >
+                {{ hasPublishedPublication ? 'Repost now' : 'Publish now' }}
+              </Button>
+              <template v-if="selectedCapability?.schedule">
                 <label>
                   <span class="sr-only">Schedule date and time</span>
                   <input
                     v-model="scheduleLocal"
                     type="datetime-local"
                     :min="minimumScheduleLocal"
-                    :disabled="
-                      selectedVariant.approvalStatus !== 'approved' || editorDirty
-                    "
+                    :disabled="selectedVersion.approvalStatus !== 'approved' || editorDirty"
                   />
                 </label>
-                <Button
-                  color="outline"
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving || !canSchedule"
-                  @click="scheduleVariant"
-                >
+                <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving || !canSchedule" @click="scheduleVersion">
                   Schedule
                 </Button>
-                <Button
-                  v-if="selectedVariant.scheduledFor"
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving"
-                  @click="unscheduleVariant"
-                >
+                <Button v-if="scheduledPublication" color="ghost" shape="soft" size="compact" type="button" :disabled="saving" @click="removeSchedule">
                   Remove schedule
                 </Button>
-              </div>
-            </section>
-          </template>
-
-          <template v-else-if="selectedManualItem">
-            <header class="detail-header detail-header--manual">
-              <div>
-                <div class="detail-meta">
-                  <span>Written by you</span>
-                  <time :datetime="selectedManualItem.updatedAt">
-                    {{ formatDate(selectedManualItem.updatedAt) }}
-                  </time>
-                </div>
-                <h2>{{ manualTitle(selectedManualItem) }}</h2>
-              </div>
-              <div class="detail-actions">
-                <Button
-                  v-if="selectedManualItem.status !== 'posted'"
-                  color="outline"
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving || selectedManualItem.status === 'publishing'"
-                  @click="openCompose(selectedManualItem)"
-                >
-                  <UiIcon name="Pencil" :size="14" aria-hidden="true" />
-                  Edit
-                </Button>
-                <Button
-                  v-if="selectedManualItem.status === 'bank'"
-                  color="outline"
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving"
-                  @click="queueManualItem(selectedManualItem)"
-                >
-                  Add to queue
-                </Button>
-                <Button
-                  v-if="
-                    selectedManualItem.status === 'queued' ||
-                    selectedManualItem.status === 'scheduled'
-                  "
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving"
-                  @click="unqueueManualItem(selectedManualItem)"
-                >
-                  Back to drafts
-                </Button>
-                <Button
-                  v-if="selectedManualItem.status !== 'posted'"
-                  color="primary"
-                  shape="soft"
-                  size="compact"
-                  type="button"
-                  :disabled="saving || !manualItemCanPublish(selectedManualItem)"
-                  @click="publishManualItem(selectedManualItem)"
-                >
-                  Publish now
-                </Button>
-                <Button
-                  v-if="selectedManualItem.status !== 'publishing'"
-                  color="ghost"
-                  shape="soft"
-                  size="compact"
-                  icon-only
-                  type="button"
-                  aria-label="Delete social post"
-                  title="Delete"
-                  :disabled="saving"
-                  @click="deleteManualItem(selectedManualItem)"
-                >
-                  <UiIcon name="Trash2" :size="16" aria-hidden="true" />
-                </Button>
-              </div>
-            </header>
-
-            <div class="manual-platforms" aria-label="Publishing platforms">
-              <span
-                v-for="platform in selectedManualItem.platforms"
-                :key="platform"
-                class="platform-chip"
-              >
-                {{ platformLabel(platform) }}
-              </span>
-              <span class="manual-status">{{ selectedManualItem.status }}</span>
+              </template>
             </div>
+          </section>
 
-            <article class="manual-post">
-              <p>{{ selectedManualItem.body }}</p>
-              <div
-                v-if="selectedManualItem.mediaManifest.length"
-                class="detail-images detail-images--manual"
-              >
-                <img
-                  v-for="(asset, index) in selectedManualItem.mediaManifest"
-                  :key="`${asset.url}-${index}`"
-                  :src="asset.url"
-                  :alt="asset.filename || `Post image ${index + 1}`"
-                />
-              </div>
-            </article>
-
-            <p
-              v-if="
-                selectedManualItem.status !== 'posted' &&
-                !manualItemCanPublish(selectedManualItem)
-              "
-              class="connection-note"
-            >
-              Connect the selected social accounts before publishing this post.
+          <section
+            v-if="selectedVersion"
+            class="publication-history"
+            aria-labelledby="publication-history-title"
+            :aria-busy="publicationsLoading"
+          >
+            <div class="publication-history__heading">
+              <h2 id="publication-history-title">Publication history</h2>
+              <span v-if="publicationsLoading" role="status">Loading Publication history…</span>
+            </div>
+            <p v-if="!publicationsLoading && publications.length === 0" class="publication-history__empty">
+              This Version has not been scheduled or published yet.
             </p>
-          </template>
+            <ul v-else class="publication-history__list">
+              <li
+                v-for="publication in publications"
+                :id="publicationElementId(publication.id)"
+                :key="publication.id"
+                :class="{
+                  'publication-history__item--linked': linkedPublicationId === publication.id,
+                }"
+                :aria-current="linkedPublicationId === publication.id ? 'true' : undefined"
+                :tabindex="linkedPublicationId === publication.id ? -1 : undefined"
+              >
+                <span class="row-status">{{ publicationStateLabel(publication.status) }}</span>
+                <time v-if="publicationMoment(publication)" :datetime="publicationMoment(publication) || undefined">
+                  {{ formatDate(publicationMoment(publication)) }}
+                </time>
+                <a
+                  v-if="publication.platformPostUrl"
+                  :href="publication.platformPostUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >View Post</a>
+                <span v-else-if="publication.errorMessage" class="publication-history__error">
+                  {{ publication.errorMessage }}
+                </span>
+              </li>
+            </ul>
+          </section>
         </section>
 
-        <section v-else class="detail-empty" aria-label="No social post selected">
+        <section v-else class="detail-empty" aria-label="No social Post selected">
           <UiIcon name="SquarePen" :size="24" aria-hidden="true" />
-          <p>Select a post to review it, or compose a new one.</p>
+          <p>Select a Post to review it, or write a new one.</p>
         </section>
       </div>
     </main>
 
-    <AppDialog
-      :open="composeOpen"
-      class="compose-modal"
-      labelled-by="social-compose-title"
-      @close="requestCloseCompose"
-    >
-      <form class="compose-card" @submit.prevent="saveCompose(false)">
-        <header class="compose-card__header">
+    <AppDialog :open="composeOpen" labelled-by="social-compose-title" @close="composeOpen = false">
+      <form class="compose-card" @submit.prevent="saveComposedPost">
+        <header>
           <div>
-            <h2 id="social-compose-title">
-              {{ composeForm.id ? "Edit social post" : "New social post" }}
-            </h2>
-            <p>Choose where it will go, then write one exact version.</p>
+            <h2 id="social-compose-title">New Social Post</h2>
+            <p>Your text becomes the Post’s human-authored Source.</p>
           </div>
-          <Button
-            color="ghost"
-            shape="soft"
-            size="compact"
-            icon-only
-            type="button"
-            aria-label="Close compose"
-            :disabled="composeSaving"
-            @click="requestCloseCompose"
-          >
+          <Button color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close compose" @click="composeOpen = false">
             <UiIcon name="X" :size="17" aria-hidden="true" />
           </Button>
         </header>
 
-        <fieldset class="compose-platforms">
-          <legend>Publish to</legend>
+        <div
+          v-if="composeError"
+          class="state-banner state-banner--error compose-error"
+          role="alert"
+        >
+          {{ composeError }}
+        </div>
+
+        <fieldset>
+          <legend>Versions</legend>
           <div class="platform-picker">
             <button
-              v-for="platform in composePlatformOptions"
-              :key="platform.id"
+              v-for="platform in composeOptions"
+              :key="platform.platform"
               type="button"
-              class="platform-target"
-              :class="{
-                'platform-target--active': composeForm.platforms.includes(
-                  platform.id,
-                ),
-              }"
-              :aria-pressed="composeForm.platforms.includes(platform.id)"
-              :aria-label="`${
-                composeForm.platforms.includes(platform.id) ? 'Remove' : 'Add'
-              } ${platform.label}`"
-              @click="toggleComposePlatform(platform.id)"
+              :class="['platform-target', { 'platform-target--active': composePlatforms.includes(platform.platform) }]"
+              :aria-pressed="composePlatforms.includes(platform.platform)"
+              @click="toggleComposePlatform(platform.platform)"
             >
-              <span :class="['platform-mark', `platform-mark--${platform.id}`]">
-                {{ platformShortLabel(platform.id) }}
-              </span>
+              <span class="platform-mark">{{ platformShortLabel(platform.platform) }}</span>
               <span>{{ platform.label }}</span>
-              <small :class="{ 'is-connected': platform.connected }">
-                {{ platform.connected ? "Connected" : "Not connected" }}
-              </small>
+              <small>{{ platform.publish ? 'Publishing ready' : 'Draft only' }}</small>
             </button>
           </div>
         </fieldset>
 
-        <label class="compose-field compose-field--body">
-          <span>Post</span>
-          <textarea
-            v-model="composeForm.body"
-            rows="9"
-            placeholder="What’s worth sharing?"
-            autofocus
-          />
+        <label class="field">
+          <span>Source text</span>
+          <textarea v-model="composeBody" rows="10" placeholder="Paste or write something you created…" autofocus />
         </label>
 
-        <section class="compose-images" aria-labelledby="compose-images-title">
-          <div class="compose-images__header">
-            <div>
-              <h3 id="compose-images-title">Images</h3>
-              <p>JPEG, PNG, WebP, or GIF · up to 5MB each</p>
-            </div>
-            <label class="image-upload">
-              <UiIcon name="Image" :size="15" aria-hidden="true" />
-              <span>Add images</span>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                multiple
-                :disabled="composeSaving"
-                @change="addComposeImages"
-              />
-            </label>
-          </div>
-          <div v-if="composeMedia.length" class="compose-image-grid">
-            <figure v-for="asset in composeMedia" :key="asset.key">
-              <img :src="asset.url" :alt="asset.filename" />
-              <figcaption>
-                <span>{{ asset.filename }}</span>
-                <Button
-                  color="ghost"
-                  shape="soft"
-                  size="small"
-                  icon-only
-                  type="button"
-                  :aria-label="`Remove ${asset.filename}`"
-                  @click="removeComposeImage(asset.saved, asset.index)"
-                >
-                  <UiIcon name="X" :size="14" aria-hidden="true" />
-                </Button>
-              </figcaption>
-            </figure>
-          </div>
-        </section>
-
-        <div class="compose-feedback" aria-live="polite">
-          <p v-for="issue in composeIssues" :key="issue" role="alert">
-            {{ issue }}
-          </p>
-          <p v-if="composeMissingAccounts.length" class="compose-account-note">
-            Connect {{
-              composeMissingAccounts.map(platformLabel).join(", ")
-            }} before publishing. You can still save this draft.
-          </p>
-          <p v-if="composeError" class="compose-error" role="alert">
-            {{ composeError }}
-          </p>
-        </div>
-
-        <footer class="compose-card__actions">
-          <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="composeSaving"
-            @click="requestCloseCompose"
-          >
+        <footer>
+          <Button color="outline" shape="soft" size="compact" type="button" :disabled="saving" @click="composeOpen = false">
             Cancel
           </Button>
-          <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="submit"
-            :disabled="composeSaving || !composeCanSave"
-          >
-            {{
-              composeSaving && composeSaveMode === "draft"
-                ? "Saving…"
-                : "Save draft"
-            }}
-          </Button>
-          <Button
-            color="primary"
-            shape="soft"
-            size="compact"
-            type="button"
-            :disabled="composeSaving || !composeCanPublish"
-            @click="saveCompose(true)"
-          >
-            <UiIcon name="Send" :size="14" aria-hidden="true" />
-            {{
-              composeSaving && composeSaveMode === "publish"
-                ? "Publishing…"
-                : "Publish now"
-            }}
+          <Button color="primary" shape="soft" size="compact" type="submit" :disabled="saving || !composeCanSave">
+            {{ saving ? 'Saving…' : 'Save Post' }}
           </Button>
         </footer>
       </form>
     </AppDialog>
 
-    <AppDialog
-      :open="composeDiscardConfirmOpen"
-      class="confirm-modal"
-      labelled-by="discard-social-compose-title"
-      described-by="discard-social-compose-description"
-      @close="composeDiscardConfirmOpen = false"
-    >
-      <section class="confirm-card">
-        <h2 id="discard-social-compose-title">Discard unsaved changes?</h2>
-        <p id="discard-social-compose-description">
-          This social post has not been saved.
-        </p>
-        <footer>
-          <Button
-            color="outline"
-            shape="soft"
-            size="compact"
-            type="button"
-            @click="composeDiscardConfirmOpen = false"
-          >
-            Keep editing
-          </Button>
-          <Button
-            color="danger"
-            shape="soft"
-            size="compact"
-            type="button"
-            @click="forceCloseCompose"
-          >
-            Discard changes
-          </Button>
-        </footer>
-      </section>
-    </AppDialog>
-
-    <AppDialog
-      :open="showAccounts"
-      class="accounts-modal"
-      aria-label="Social accounts"
-      @close="closeAccounts"
-    >
+    <AppDialog :open="showAccounts" aria-label="Social accounts" @close="showAccounts = false">
       <section class="accounts-card">
-        <Button
-          class="accounts-card__close"
-          color="ghost"
-          shape="soft"
-          size="compact"
-          icon-only
-          type="button"
-          aria-label="Close social accounts"
-          @click="closeAccounts"
-        >
+        <Button class="accounts-close" color="ghost" shape="soft" size="compact" icon-only type="button" aria-label="Close social accounts" @click="showAccounts = false">
           <UiIcon name="X" :size="17" aria-hidden="true" />
         </Button>
         <SocialAccountsPanel v-if="currentSite" :site-id="currentSite.id" />
@@ -1824,937 +988,469 @@ onBeforeUnmount(() => {
   border: 0;
 }
 
-.social-page,
-.social-main {
-  min-height: 0;
-}
-
 .social-page {
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
-  background: var(--ui-bg, var(--color-bg));
-  color: var(--ui-text, var(--color-text));
+  min-height: 100%;
+  background: var(--ui-bg);
+  color: var(--ui-text);
 }
 
 .social-main {
-  display: flex;
-  height: 100%;
-  flex-direction: column;
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 20px 0 40px;
 }
 
 .state-banner {
-  margin: 10px 12px 0;
+  margin-bottom: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 6px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
 }
 
-.state-banner--error {
-  border-color: var(--ui-border-strong, var(--color-text));
-  color: var(--ui-text, var(--color-text));
+.state-banner--error,
+.recovery-banner {
+  border-color: color-mix(in srgb, #c94b4b 45%, var(--ui-border));
+}
+
+.read-only-banner {
+  display: grid;
+  gap: 4px;
+  margin-top: 18px;
+}
+
+.social-toolbar,
+.toolbar-actions,
+.editor-actions,
+.publication-actions,
+.inline-actions,
+.compose-card header,
+.compose-card footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .social-toolbar {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: flex-end;
+  position: sticky;
+  top: 0;
+  z-index: 3;
   justify-content: space-between;
-  gap: 16px;
-  min-height: 54px;
-  box-sizing: border-box;
-  padding: 9px 12px 0 56px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
-  background: var(--ui-bg, var(--color-bg));
+  padding: 10px 0 14px;
+  background: var(--ui-bg);
 }
 
-.social-toolbar__actions,
-.detail-actions,
-.inline-actions,
-.schedule-controls {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.social-toolbar__actions {
-  padding-bottom: 6px;
-}
-
-.social-toolbar__actions :deep(.me3-btn--icon-only),
-.post-detail__mobile-back :deep(.me3-btn--icon-only) {
-  min-width: 44px;
-  min-height: 44px;
-}
-
-.social-inbox {
+.social-workspace {
   display: grid;
-  grid-template-columns: minmax(270px, 35%) minmax(0, 1fr);
-  flex: 1 1 auto;
-  min-height: 0;
+  grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.7fr);
+  min-height: 640px;
   overflow: hidden;
-}
-
-.post-list,
-.post-detail {
-  min-height: 0;
-  overflow-y: auto;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
 }
 
 .post-list {
-  border-right: 1px solid var(--ui-border, var(--color-border));
-  background: var(--ui-bg, var(--color-bg));
+  border-right: 1px solid var(--ui-border);
+  background: var(--ui-surface-muted);
 }
 
 .post-row {
   display: grid;
-  gap: 8px;
   width: 100%;
-  min-height: 104px;
-  box-sizing: border-box;
-  padding: 14px 16px;
+  gap: 8px;
+  padding: 16px;
   border: 0;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
+  border-bottom: 1px solid var(--ui-border);
   background: transparent;
   color: inherit;
-  font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
 .post-row:hover,
 .post-row--active {
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-}
-
-.post-row--active {
-  box-shadow: inset 3px 0 0 var(--ui-accent, var(--color-text));
+  background: var(--ui-surface);
 }
 
 .post-row:focus-visible,
-.variant-tab:focus-visible,
-.platform-target:focus-visible,
-summary:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
-input:focus-visible,
-.image-upload:focus-within {
-  position: relative;
-  z-index: 1;
-  outline: 2px solid var(--ui-accent, var(--color-text));
+.version-tab:focus-visible,
+.platform-target:focus-visible {
+  outline: 2px solid var(--ui-accent);
   outline-offset: -2px;
 }
 
 .post-row__meta,
 .post-row__footer,
 .detail-meta,
-.manual-platforms,
 .preview-heading {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.post-row__meta {
   justify-content: space-between;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 11px;
+  gap: 8px;
+  color: var(--ui-text-muted);
+  font-size: 0.78rem;
 }
 
 .post-row strong {
   display: -webkit-box;
   overflow: hidden;
-  font-size: 14px;
-  line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-height: 1.4;
 }
 
-.post-row__footer {
-  min-width: 0;
-}
-
-.platform-list {
+.platform-list,
+.version-tabs {
   display: flex;
-  min-width: 0;
-  gap: 5px;
   flex-wrap: wrap;
+  gap: 6px;
 }
 
 .platform-chip,
 .row-status,
-.manual-status,
-.approval-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 1px 7px;
+.version-tab span {
+  padding: 3px 7px;
+  border: 1px solid var(--ui-border);
   border-radius: 999px;
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 10px;
-  font-weight: 750;
-}
-
-.row-status {
-  margin-left: auto;
-}
-
-.image-count {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 11px;
+  color: var(--ui-text-muted);
+  font-size: 0.72rem;
 }
 
 .post-detail {
-  padding: 24px 28px 40px;
-}
-
-.detail-empty,
-.empty-state {
-  display: flex;
-  min-height: 220px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
+  min-width: 0;
   padding: 24px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  text-align: center;
-  font-size: 13px;
 }
 
-.detail-empty {
-  min-height: 0;
-}
-
-.empty-state a {
-  color: var(--ui-text, var(--color-text));
-  font-weight: 750;
-}
-
-.post-detail__mobile-back {
-  display: none;
-}
-
-.detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-}
-
-.detail-header h2 {
-  max-width: 780px;
+.detail-header h1 {
   margin: 8px 0 0;
-  font-size: clamp(20px, 2.5vw, 28px);
-  line-height: 1.22;
-  letter-spacing: -0.025em;
+  font-size: clamp(1.25rem, 2vw, 1.75rem);
+  line-height: 1.25;
 }
 
-.detail-meta {
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 11px;
-}
-
-.detail-meta > * + *::before {
-  content: "·";
-  margin-right: 8px;
-}
-
-.source-context {
-  margin-top: 20px;
-  border-top: 1px solid var(--ui-border, var(--color-border));
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
+.source-context,
+.publication-panel,
+.recovery-banner {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
 }
 
 .source-context summary {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  font-size: 13px;
-  font-weight: 700;
   cursor: pointer;
+  font-weight: 650;
 }
 
-.source-context p {
-  max-width: 760px;
-  margin: 0 0 12px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-  line-height: 1.6;
+.source-context p,
+.post-preview p {
   white-space: pre-wrap;
+  line-height: 1.55;
 }
 
-.source-context small {
-  display: block;
-  margin-bottom: 12px;
-  color: var(--ui-text-muted, var(--color-text-muted));
+.version-tabs {
+  margin-top: 18px;
+  border-bottom: 1px solid var(--ui-border);
 }
 
-.variant-tabs {
+.version-tab {
   display: flex;
-  gap: 7px;
-  padding: 18px 0;
-  overflow-x: auto;
-}
-
-.variant-tab {
-  display: inline-flex;
-  min-height: 40px;
   align-items: center;
   gap: 8px;
-  padding: 0 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 6px);
-  background: var(--ui-surface, var(--color-bg));
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
+  padding: 9px 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ui-text-muted);
   cursor: pointer;
 }
 
-.variant-tab--active {
-  border-color: var(--ui-border-strong, var(--color-text));
-  color: var(--ui-text, var(--color-text));
+.version-tab--active {
+  border-bottom-color: var(--ui-accent);
+  color: var(--ui-text);
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ui-border-strong, var(--color-border));
-}
-
-.status-dot--approved {
-  background: var(--ui-accent, #15966f);
-}
-
-.variant-workspace {
+.version-workspace {
   display: grid;
-  grid-template-columns: minmax(300px, 1.3fr) minmax(220px, 0.7fr);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(230px, 0.75fr);
+  gap: 20px;
+  margin-top: 20px;
 }
 
-.variant-editor {
+.version-editor,
+.field {
   display: grid;
-  gap: 15px;
+  gap: 8px;
 }
 
-.field,
-.compose-field {
-  display: grid;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 700;
+.version-editor {
+  gap: 14px;
 }
 
-select,
+.field > span,
+.compose-card legend {
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
 textarea,
+select,
 input[type="datetime-local"] {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 6px);
-  background: var(--ui-surface, var(--color-bg));
-  color: var(--ui-text, var(--color-text));
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   font: inherit;
+}
+
+textarea {
+  resize: vertical;
+  padding: 12px;
+  line-height: 1.5;
 }
 
 select,
 input[type="datetime-local"] {
-  min-height: 42px;
-  padding: 0 11px;
+  min-height: 40px;
+  padding: 8px 10px;
 }
 
-textarea {
-  padding: 12px 13px;
-  line-height: 1.55;
-  resize: vertical;
-}
-
-textarea:read-only {
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-}
-
-.field-note,
-.connection-note {
-  margin: -5px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.recovery-banner {
-  display: grid;
-  gap: 5px;
-  padding: 12px 13px;
-  border: 1px solid var(--ui-border-strong, var(--color-text));
-  border-radius: var(--ui-radius-sm, 6px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-  font-size: 12px;
-}
-
-.recovery-banner span,
-.recovery-banner small {
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.post-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--ui-accent-strong, var(--color-text));
-  font-size: 12px;
-  font-weight: 750;
+textarea:focus,
+select:focus,
+input:focus {
+  border-color: var(--ui-accent);
+  outline: 2px solid var(--ui-accent-soft);
 }
 
 .post-preview {
   align-self: start;
   padding: 16px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 8px);
-  background: var(--ui-surface, var(--color-bg));
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
 }
 
-.preview-heading {
-  justify-content: space-between;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
-  font-size: 11px;
-  font-weight: 750;
-}
-
-.approval-badge--approved {
-  background: var(--ui-accent-soft, rgba(21, 150, 111, 0.12));
-  color: var(--ui-accent-strong, #0d7655);
-}
-
-.preview-account {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.preview-account div {
-  display: grid;
-  gap: 2px;
-}
-
-.preview-account small {
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.preview-avatar {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--ui-text, var(--color-text));
-  color: var(--ui-bg, var(--color-bg));
-  font-weight: 800;
-}
-
-.preview-copy {
-  min-height: 120px;
-  margin: 16px 0 0;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.preview-image {
-  width: calc(100% + 32px);
-  max-height: 280px;
-  margin: 14px -16px -16px;
-  object-fit: cover;
-  border-radius: 0 0 var(--ui-radius-md, 8px) var(--ui-radius-md, 8px);
-}
-
-.detail-images {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 8px;
-}
-
-.detail-images img {
+.post-preview img {
   width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
-  border-radius: var(--ui-radius-sm, 6px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  border-radius: var(--ui-radius-sm);
 }
 
-.schedule-panel {
+.publication-panel {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  margin-top: 24px;
-  padding-top: 18px;
-  border-top: 1px solid var(--ui-border, var(--color-border));
 }
 
-.schedule-panel h3,
-.compose-images h3 {
+.publication-panel h2,
+.publication-panel p {
   margin: 0;
-  font-size: 14px;
 }
 
-.schedule-panel p,
-.compose-images p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
+.publication-panel p {
+  margin-top: 5px;
+  color: var(--ui-text-muted);
+  font-size: 0.85rem;
 }
 
-.detail-header--manual {
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--ui-border, var(--color-border));
+.publication-history {
+  display: grid;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border);
 }
 
-.manual-platforms {
-  margin-top: 16px;
+.publication-history__heading,
+.publication-history__list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.manual-status {
+.publication-history__heading {
+  justify-content: space-between;
+}
+
+.publication-history__heading h2,
+.publication-history__empty {
+  margin: 0;
+}
+
+.publication-history__heading span,
+.publication-history__empty,
+.publication-history__list time,
+.publication-history__error {
+  color: var(--ui-text-muted);
+  font-size: 0.85rem;
+}
+
+.publication-history__list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.publication-history__list li {
+  min-width: 0;
+}
+
+.publication-history__list li.publication-history__item--linked {
+  padding: 8px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-soft);
+  outline: 1px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+
+.publication-history__list a,
+.publication-history__error {
   margin-left: auto;
-  text-transform: capitalize;
 }
 
-.manual-post {
-  max-width: 760px;
-  margin-top: 22px;
-}
-
-.manual-post > p {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 16px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-}
-
-.detail-images--manual {
-  margin-top: 22px;
-}
-
-.connection-note {
-  margin-top: 20px;
+.empty-state,
+.detail-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 220px;
+  padding: 24px;
+  color: var(--ui-text-muted);
+  text-align: center;
 }
 
 .compose-card,
-.accounts-card,
-.confirm-card {
+.accounts-card {
+  position: relative;
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
   box-sizing: border-box;
-  width: min(100%, 720px);
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-lg, 12px);
-  background: var(--ui-surface, var(--color-bg));
-  box-shadow: var(--ui-shadow-md, 0 22px 70px rgba(0, 0, 0, 0.2));
+  padding: 20px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-md);
 }
 
 .compose-card {
   display: grid;
-  gap: 18px;
-  padding: 22px;
+  gap: 20px;
 }
 
-.compose-card__header,
-.compose-images__header {
-  display: flex;
-  align-items: flex-start;
+.compose-card header,
+.compose-card footer {
   justify-content: space-between;
-  gap: 18px;
 }
 
-.compose-card__header h2,
-.confirm-card h2 {
+.compose-card h2,
+.compose-card p {
   margin: 0;
-  font-size: 21px;
-  letter-spacing: -0.02em;
 }
 
-.compose-card__header p,
-.confirm-card p {
-  margin: 5px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
+.compose-card p {
+  margin-top: 4px;
+  color: var(--ui-text-muted);
 }
 
-.compose-platforms {
-  min-width: 0;
+.compose-card fieldset {
   margin: 0;
   padding: 0;
   border: 0;
 }
 
-.compose-platforms legend {
-  margin-bottom: 8px;
-  font-size: 12px;
-  font-weight: 750;
-}
-
 .platform-picker {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .platform-target {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  grid-template-rows: auto auto;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 1px 8px;
-  min-height: 58px;
-  padding: 7px 9px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 6px);
-  background: transparent;
-  color: var(--ui-text, var(--color-text));
-  font: inherit;
-  font-size: 12px;
-  font-weight: 700;
+  gap: 3px 9px;
+  padding: 11px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
   text-align: left;
   cursor: pointer;
 }
 
 .platform-target--active {
-  border-color: var(--ui-border-strong, var(--color-text));
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
 }
 
 .platform-target small {
   grid-column: 2;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 10px;
-  font-weight: 500;
-}
-
-.platform-target small.is-connected {
-  color: var(--ui-accent-strong, var(--color-accent));
+  color: var(--ui-text-muted);
 }
 
 .platform-mark {
-  display: grid;
   grid-row: 1 / 3;
-  width: 28px;
-  height: 28px;
+  display: grid;
+  width: 30px;
+  height: 30px;
   place-items: center;
-  border-radius: 8px;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 900;
+  border-radius: 50%;
+  background: var(--ui-text);
+  color: var(--ui-bg);
+  font-size: 0.72rem;
+  font-weight: 750;
 }
 
-.platform-mark--x {
-  background: #111;
-}
-
-.platform-mark--linkedin {
-  background: #0a66c2;
-}
-
-.platform-mark--instagram {
-  background: #c13584;
-}
-
-.platform-mark--instagram_business {
-  background: #1877f2;
-}
-
-.compose-field--body textarea {
-  min-height: 174px;
-}
-
-.compose-images {
-  display: grid;
-  gap: 11px;
-  padding-top: 16px;
-  border-top: 1px solid var(--ui-border, var(--color-border));
-}
-
-.image-upload {
-  position: relative;
-  display: inline-flex;
-  min-height: 38px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 11px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 6px);
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.image-upload input {
+.accounts-close {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
+  top: 10px;
+  right: 10px;
 }
 
-.compose-image-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 8px;
-}
-
-.compose-image-grid figure {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 6px);
-}
-
-.compose-image-grid img {
-  display: block;
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
-}
-
-.compose-image-grid figcaption {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 5px 4px 8px;
-}
-
-.compose-image-grid figcaption > span {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.compose-image-grid :deep(.me3-btn--icon-only) {
-  min-width: 30px;
-  min-height: 30px;
-}
-
-.compose-feedback {
-  display: grid;
-  gap: 4px;
-}
-
-.compose-feedback p {
-  margin: 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.compose-feedback .compose-error {
-  color: #b33b2e;
-}
-
-.compose-card__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 7px;
-  padding-top: 16px;
-  border-top: 1px solid var(--ui-border, var(--color-border));
-}
-
-.confirm-card {
-  width: min(100%, 420px);
-  padding: 20px;
-}
-
-.confirm-card footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 18px;
-}
-
-.accounts-card {
-  position: relative;
-  width: min(100%, 820px);
-  max-height: min(760px, calc(100dvh - 48px));
-  padding: 22px;
-  overflow-y: auto;
-}
-
-.accounts-card__close {
-  position: absolute;
-  z-index: 2;
-  top: 14px;
-  right: 14px;
-  min-width: 44px;
-  min-height: 44px;
-}
-
-@media (max-width: 980px) {
-  .social-inbox {
-    grid-template-columns: minmax(250px, 38%) minmax(0, 1fr);
+@media (max-width: 820px) {
+  .social-main {
+    width: min(100% - 20px, 680px);
   }
 
-  .post-detail {
-    padding: 22px 20px 36px;
-  }
-
-  .variant-workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .detail-header--manual {
-    display: grid;
-  }
-
-  .platform-picker {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 720px) {
-  .social-page {
-    height: calc(100vh - var(--app-shell-mobile-nav-height, 0px));
-    height: calc(100dvh - var(--app-shell-mobile-nav-height, 0px));
-  }
-
-  .social-toolbar {
-    position: relative;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
-    min-height: 96px;
-    padding: 6px 8px 0 54px;
-  }
-
-  .social-tabs {
-    grid-row: 2;
-    min-width: 0;
-    max-width: calc(100vw - 16px);
-    margin-left: -46px;
-  }
-
-  .social-toolbar__actions {
-    grid-row: 1;
-    justify-content: flex-end;
-    flex-wrap: nowrap;
-    padding-bottom: 0;
-  }
-
-  .social-inbox {
-    display: block;
-  }
-
-  .post-list,
-  .post-detail {
-    height: 100%;
-  }
-
-  .post-detail,
-  .detail-empty {
-    display: none;
-  }
-
-  .social-inbox--detail-open .post-list {
-    display: none;
-  }
-
-  .social-inbox--detail-open .post-detail {
-    display: block;
-  }
-
-  .post-detail {
-    padding: 12px 16px 32px;
-  }
-
-  .post-detail__mobile-back {
-    display: block;
-    margin: -4px 0 6px -8px;
-  }
-
-  .detail-header,
-  .schedule-panel,
-  .compose-images__header {
+  .social-toolbar,
+  .publication-panel,
+  .publication-actions {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .detail-header h2 {
-    font-size: 22px;
+  .social-workspace,
+  .version-workspace {
+    grid-template-columns: 1fr;
   }
 
-  .detail-actions,
-  .schedule-controls {
-    align-items: stretch;
-  }
-
-  .schedule-controls,
-  .schedule-controls label,
-  .schedule-controls :deep(.me3-btn) {
-    width: 100%;
-  }
-
-  .compose-modal,
-  .accounts-modal {
-    padding: 0;
-  }
-
-  .compose-card,
-  .accounts-card {
-    width: 100%;
-    max-height: 94dvh;
-    margin-top: auto;
-    padding: 18px 16px;
-    overflow-y: auto;
-    border-radius: var(--ui-radius-lg, 12px) var(--ui-radius-lg, 12px) 0 0;
-  }
-
-  .platform-picker {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .compose-card__actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .compose-card__actions :deep(.me3-btn) {
-    width: 100%;
-  }
-
-  .compose-card__actions :deep(.me3-btn--primary) {
-    grid-column: 1 / -1;
-    grid-row: 1;
-  }
-
-  .confirm-card footer {
-    flex-direction: column-reverse;
+  .post-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--ui-border);
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
+@media (max-width: 520px) {
+  .toolbar-actions,
+  .editor-actions,
+  .platform-picker {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar-actions,
+  .editor-actions {
+    display: grid;
+  }
+
+  .post-detail {
+    padding: 16px;
   }
 }
 </style>

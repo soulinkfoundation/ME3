@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   SocialPublishingInputError,
-  resolveSocialVariantPublicationOutcome,
+  resolvePublicationOutcome,
 } from "@me3-core/plugin-social-publishing";
 
 describe("Social publication outcome recovery", () => {
-  it("requires evidence and records an owner-confirmed published outcome", async () => {
+  it("requires evidence and records an owner-confirmed Post Version publication", async () => {
     const publication = {
       id: "publication-1",
-      variant_id: "social-variant-1",
+      variant_id: "social-version-1",
       status: "publishing",
       platform_post_id: null,
       platform_post_url: null as string | null,
@@ -20,18 +20,18 @@ describe("Social publication outcome recovery", () => {
     const env = createRecoveryEnv(publication, events);
 
     await expect(
-      resolveSocialVariantPublicationOutcome(
+      resolvePublicationOutcome(
         env as never,
         "owner",
-        "social-variant-1",
+        "publication-1",
         { outcome: "published", platformPostUrl: "not a URL" },
       ),
     ).rejects.toBeInstanceOf(SocialPublishingInputError);
 
-    const resolved = await resolveSocialVariantPublicationOutcome(
+    const resolved = await resolvePublicationOutcome(
       env as never,
       "owner",
-      "social-variant-1",
+      "publication-1",
       {
         outcome: "published",
         platformPostUrl: "https://www.linkedin.com/feed/update/urn:li:share:123",
@@ -39,6 +39,7 @@ describe("Social publication outcome recovery", () => {
     );
 
     expect(resolved).toMatchObject({
+      versionId: "social-version-1",
       status: "published",
       platformPostUrl: "https://www.linkedin.com/feed/update/urn:li:share:123",
       failureClass: null,
@@ -65,14 +66,32 @@ function createRecoveryEnv(
             if (sql.includes("FROM plugin_installations")) {
               return { enabled: 1, status: "installed" };
             }
+            if (
+              sql.includes("UPDATE social_publications") &&
+              sql.includes("platform_post_url") &&
+              sql.includes("RETURNING id")
+            ) {
+              if (
+                publication.status !== "publishing" ||
+                !String(publication.error_code || "").startsWith("outcome_unknown")
+              ) {
+                return null;
+              }
+              publication.status = "published";
+              publication.platform_post_url = values[0];
+              publication.published_at = new Date().toISOString();
+              publication.error_code = null;
+              publication.error_message = null;
+              return { id: publication.id };
+            }
             if (sql.includes("FROM social_variants v") && sql.includes("JOIN sites")) {
-              return values[0] === "social-variant-1" && values[1] === "owner"
-                ? { id: "social-variant-1" }
+              return values[0] === "social-version-1" && values[1] === "owner"
+                ? { id: "social-version-1" }
                 : null;
             }
             if (sql.includes("status = 'publishing'")) return publication;
             if (sql.includes("SELECT package_id FROM social_variants")) {
-              return { package_id: "package-1" };
+              return { package_id: "social-post-1" };
             }
             if (sql.includes("SELECT COUNT(*) AS total")) {
               return { total: 1, published_count: 1 };
@@ -87,13 +106,6 @@ function createRecoveryEnv(
             return { results: [] };
           },
           async run() {
-            if (sql.includes("UPDATE social_publications") && sql.includes("platform_post_url")) {
-              publication.status = "published";
-              publication.platform_post_url = values[0];
-              publication.published_at = new Date().toISOString();
-              publication.error_code = null;
-              publication.error_message = null;
-            }
             if (sql.includes("INSERT INTO social_publication_events")) {
               events.push({
                 id: values[0],

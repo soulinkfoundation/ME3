@@ -34,6 +34,7 @@ describe("Core runtime migrations", () => {
     expect(db.columns.get("social_packages")?.has("source_type")).toBe(true);
     expect(db.columns.get("social_packages")?.has("source_ref")).toBe(true);
     expect(db.columns.get("social_packages")?.has("source_snapshot")).toBe(true);
+    expect(db.columns.get("social_packages")?.has("source_text")).toBe(true);
     expect(db.columns.get("social_packages")?.has("idea_text")).toBe(true);
     expect(db.columns.get("social_variants")?.has("target_account_id")).toBe(true);
     expect(db.columns.get("social_variants")?.has("approved_at")).toBe(true);
@@ -68,6 +69,12 @@ describe("Core runtime migrations", () => {
     expect(db.migrations.get("0021_managed_email_inbound_deliveries")).toBe(
       "2026-07-18-managed-email-inbound-deliveries-v1",
     );
+    expect(db.migrations.get("0022_social_posts_canonical")).toBe(
+      "2026-07-18-social-posts-canonical-v1",
+    );
+    expect(db.migrations.get("0023_social_publications_reusable")).toBe(
+      "2026-07-18-social-publications-reusable-v1",
+    );
     expect(
       db.statements.some((sql) =>
         sql.includes("idx_mailbox_messages_mailbox_thread_activity"),
@@ -76,6 +83,44 @@ describe("Core runtime migrations", () => {
     expect(
       db.statements.some((sql) =>
         sql.includes("idx_social_publications_one_active_variant"),
+      ),
+    ).toBe(true);
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("CREATE UNIQUE INDEX IF NOT EXISTS idx_social_publications_one_active_variant") &&
+          sql.includes("status IN ('queued', 'publishing')") &&
+          !sql.includes("'published'")
+      ),
+    ).toBe(true);
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("CREATE TABLE social_publications_0023_new") &&
+          sql.includes("body_text_snapshot") &&
+          sql.includes("requested_by_type"),
+      ),
+    ).toBe(true);
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("idx_social_publications_same_time_scheduled") &&
+          sql.includes("status = 'scheduled'"),
+      ),
+    ).toBe(true);
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("idx_social_publications_one_in_flight_variant") &&
+          sql.includes("status IN ('queued', 'publishing')") &&
+          !sql.includes("'published'"),
+      ),
+    ).toBe(true);
+    expect(
+      db.statements.some(
+        (sql) =>
+          sql.includes("INSERT OR IGNORE INTO social_packages") &&
+          sql.includes("legacy_content_bank_read_only"),
       ),
     ).toBe(true);
   });
@@ -141,7 +186,10 @@ class RuntimeMigrationDb {
     "mailbox_messages",
     "owner_profile",
     "mission_projects",
+    "content_bank_items",
     "social_packages",
+    "social_publication_events",
+    "social_publications",
     "social_variants",
   ]);
   readonly columns = new Map<string, Set<string>>([

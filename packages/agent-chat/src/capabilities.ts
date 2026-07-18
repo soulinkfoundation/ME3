@@ -605,7 +605,7 @@ export const CORE_CHAT_CAPABILITIES = [
       properties: {
         sourceType: {
           type: "string",
-          description: "Source kind for the social draft.",
+          description: "Source kind for the social Post.",
           enum: ["journal", "mission_task"],
         },
         sourceId: {
@@ -617,7 +617,7 @@ export const CORE_CHAT_CAPABILITIES = [
     },
     auditEventKind: "social_content_source_read",
     examples: {
-      positive: ["Read today's journal as the source for a social draft."],
+      positive: ["Read today's journal as the Source for a social Post."],
       negative: ["Read the blog post about agent context."],
     },
     chat: {
@@ -630,7 +630,7 @@ export const CORE_CHAT_CAPABILITIES = [
     owner: "plugin",
     pluginId: "me3.social-publishing",
     ownerFacingLabel: "Save social post drafts",
-    summary: "Save source-backed LinkedIn, X, and Instagram variants as one reviewable social content package.",
+    summary: "Save a source-backed social Post with reviewable LinkedIn, X, and Instagram Versions.",
     category: "content",
     handler: {
       surface: "chat",
@@ -645,7 +645,7 @@ export const CORE_CHAT_CAPABILITIES = [
       properties: {
         sourceType: {
           type: "string",
-          description: "Source kind already read with the social source tool.",
+          description: "Source kind already read with the social Source tool.",
           enum: ["journal", "mission_task"],
         },
         sourceId: {
@@ -678,7 +678,10 @@ export const CORE_CHAT_CAPABILITIES = [
     auditEventKind: "social_content_draft_saved",
     examples: {
       positive: ["Turn today's journal into LinkedIn, X, and Instagram drafts."],
-      negative: ["Brainstorm social post ideas with me."],
+      negative: [
+        "Brainstorm social post ideas with me.",
+        "Save a publishable post from this blank prompt without using one of my Sources.",
+      ],
     },
     chat: {
       intentKind: "write_action",

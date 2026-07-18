@@ -187,10 +187,10 @@ async function sendMessage() {
         result.reminderAction?.kind === "updated",
       actionHref:
         siteActionLink?.href ||
-        (result.contentAction?.kind === "saved" ? "/assistant" : null),
+        (result.contentAction?.kind === "saved" ? "/social" : null),
       actionLabel:
         siteActionLink?.label ||
-        (result.contentAction?.kind === "saved" ? "Open content bank" : null),
+        (result.contentAction?.kind === "saved" ? "Open Social Publishing" : null),
     });
   } catch (cause: any) {
     const message =

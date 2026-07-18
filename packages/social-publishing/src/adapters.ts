@@ -1,4 +1,4 @@
-import type { ContentMediaAsset, SocialPlatform } from "./index";
+import type { SocialMediaAsset, SocialPlatform } from "./index";
 
 export type SocialPublishAdapterResult = {
   ok: boolean;
@@ -20,13 +20,13 @@ export type SocialPublishFailureClass =
 export type SocialPublishAdapter = {
   validateDraft(input: {
     bodyText: string;
-    assets: ContentMediaAsset[];
+    assets: SocialMediaAsset[];
   }): { ok: true } | { ok: false; error: string };
   publish(input: {
     accessToken: string;
     accountId: string;
     bodyText: string;
-    assets: ContentMediaAsset[];
+    assets: SocialMediaAsset[];
     fetcher: typeof fetch;
   }): Promise<SocialPublishAdapterResult>;
 };

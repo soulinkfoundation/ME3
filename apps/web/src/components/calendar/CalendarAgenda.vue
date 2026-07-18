@@ -72,6 +72,7 @@ const CALENDAR_KIND_ICONS: Record<string, UiIconName> = {
   Birthday: "Gift",
   Event: "CalendarClock",
   Reminder: "AlarmClock",
+  "Social Publication": "Send",
   Task: "CircleCheck",
 };
 

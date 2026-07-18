@@ -2940,10 +2940,10 @@ function applyAssistantResultToMessage(
   const siteActionLink = resolveAgentMessageActionLink(result);
   message.actionHref =
     siteActionLink?.href ||
-    (result.contentAction?.kind === "saved" ? "/assistant" : null);
+    (result.contentAction?.kind === "saved" ? "/social" : null);
   message.actionLabel =
     siteActionLink?.label ||
-    (result.contentAction?.kind === "saved" ? "Open content bank" : null);
+    (result.contentAction?.kind === "saved" ? "Open Social Publishing" : null);
   message.jobBuilderAction = result.jobBuilderAction || null;
 }
 

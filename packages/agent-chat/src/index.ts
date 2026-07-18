@@ -164,22 +164,6 @@ export {
   type AssistantImageCapability,
 } from "./model-capabilities";
 
-export {
-  createAgentContentItem,
-  deleteAgentContentItem,
-  getAgentContentStats,
-  listAgentContentItems,
-  markAgentContentItemPublishing,
-  queueAgentContentItem,
-  reorderAgentContentQueue,
-  unqueueAgentContentItem,
-  updateAgentContentItem,
-  type AgentContentCreateInput,
-  type AgentContentItem,
-  type AgentContentStats,
-  type AgentContentUpdateInput,
-} from "./content";
-
 export const AGENT_CHAT_PLUGIN_ID = "me3.agent-chat";
 export const CORE_MAILBOX_DAILY_INBOUND_LIMIT = 200;
 export const CORE_MAILBOX_DAILY_OUTBOUND_LIMIT = 200;
@@ -284,7 +268,7 @@ export type AgentChatActionCardLink = {
 };
 
 export type AgentChatActionCardRecord = {
-  kind: "mailbox_draft" | "reminder" | "mission_task" | "social_package";
+  kind: "mailbox_draft" | "reminder" | "mission_task" | "social_post";
   id: string;
 };
 
@@ -360,8 +344,7 @@ export type AgentSandboxDispatchResponse = {
   imageAction?: AgentChatImageAction | null;
   contentAction?: {
     kind: "saved";
-    itemId: string;
-    packageId: string;
+    postId: string;
     platforms: Array<"x" | "linkedin" | "instagram" | "instagram_business">;
   } | null;
   contactsChanged?: boolean;

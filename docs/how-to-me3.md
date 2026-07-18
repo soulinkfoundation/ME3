@@ -344,10 +344,45 @@ ME3 exposes its first-party capability catalog through `/api/plugins`. Account -
 | ME3 Mission Control | Bundled, default on | Projects, tasks, approvals, private memory, sources, activity, and review surfaces. |
 | ME3 Journal | Bundled, optional | Private daily writing, notes, drafts, and longer-form capture. |
 | ME3 Accounts | Bundled, optional | Income/expense ledger, categories, CSV import/export, and Stripe-backed context. |
-| ME3 Calendar | Bundled | Events, reminders, bookings, birthdays, imports, and recurring event expansion. |
+| ME3 Calendar | Bundled | Events, reminders, bookings, birthdays, tasks, imports, recurring event expansion, and ready-plugin Social Publication visibility. |
 | Local Executor | Bundled, optional setup | Pairs a local runner for approved local tasks with policies, run history, and audit. |
 | ME3 Landing Pages | Bundled but coming soon; activation blocked | Landing-page draft generation and rendering package, not a live owner feature unless runtime state proves otherwise. |
-| ME3 Social Publishing | Bundled/catalog depending runtime; setup required | Social drafts, connected accounts, queueing, approval-first publishing, and audit history. |
+| ME3 Social Publishing | Bundled/catalog depending runtime; setup required | Source-backed Posts, account-specific Versions, connected accounts, approval-first Publications, and delivery history. |
+
+### Social Publishing
+
+Social Publishing uses four owner-facing domain terms:
+
+- A **Source** is explicit human-authored material such as a Journal entry, Mission Control task,
+  site article, file, script, or pasted text. An agent-saved Post requires a stable Source reference,
+  immutable snapshot, and visible Source text. Brainstorming from a blank prompt may remain
+  conversational, but it cannot be saved as a publishable Post.
+- A **Post** is reusable social content derived from a Source.
+- A **Version** is the exact platform- and account-specific copy, media, format, and rendered output
+  for a Post. Approval applies to that exact Version. Editing its copy, media, format, or account
+  removes approval and cancels future scheduled Publications that no longer match. Already queued
+  or completed Publications keep their immutable delivery snapshots and history.
+- A **Publication** is one planned or completed use of an approved Version, with its own delivery
+  time, timezone, request context, delivery state, provider result, recovery, and history. The same
+  approved Version can have many future and historical Publications; reposting creates another one.
+
+LinkedIn currently supports the complete approval, scheduling, publishing, and recovery workflow
+when an active account and the Social Publishing queue are ready. X, Instagram, and Instagram
+Business currently support drafting and review only; ME3 rejects attempts to schedule or publish
+those Versions until their provider workflows work end to end.
+
+The canonical owner API is `GET|POST /api/social/posts`, `GET /api/social/posts/:id`,
+`PATCH /api/social/versions/:id`, `GET|POST /api/social/versions/:id/publications`, and the immediate
+publish convenience route `POST /api/social/versions/:id/publish`. Cancel a future Publication with
+`DELETE /api/social/publications/:id`; resolve an ambiguous provider outcome for that exact attempt
+with `POST /api/social/publications/:id/resolve`. Account connection and runtime readiness remain
+under `/api/social/accounts` and `/api/social/status`.
+
+When Social Publishing is ready, `/api/calendar/feed` includes a bounded, read-only projection of
+planned, publishing, published, failed, and attention-required Publications. Calendar presents a
+toggleable Social publishing source in its existing schedule, day, week, and month views. Each
+entry deep-links to the exact Post Version and Publication; Calendar never copies a Publication
+into `user_calendar_events`.
 
 Plugin boundaries:
 

@@ -43,7 +43,7 @@ definePage({
     requiresPlugin: "me3.calendar",
     title: "Calendar | ME3",
     description:
-      "View upcoming bookings, reminders, events, and imported calendars across your ME3 workspace.",
+      "View bookings, reminders, events, tasks, social Publications, and imported calendars across your ME3 workspace.",
     robots: "noindex,follow",
   },
 });
@@ -150,6 +150,34 @@ interface CalendarTaskRow {
   archivedAt: string | null;
 }
 
+interface CalendarSocialPublicationRow {
+  id: string;
+  siteId: string;
+  postId: string;
+  postTitle: string;
+  versionId: string;
+  versionLabel: string;
+  platform: "x" | "linkedin" | "instagram" | "instagram_business";
+  accountId: string | null;
+  accountLabel: string;
+  publicationStatus: "scheduled" | "queued" | "publishing" | "published" | "failed";
+  calendarState: "planned" | "publishing" | "published" | "failed" | "needs_attention";
+  sourceType: string;
+  sourceRef: string | null;
+  sourceLabel: string;
+  displayAt: string;
+  scheduledFor: string | null;
+  publishedAt: string | null;
+  timezone: string | null;
+  platformPostUrl: string | null;
+  errorMessage: string | null;
+}
+
+interface CalendarSocialPublishingFeed {
+  ready: boolean;
+  publications: CalendarSocialPublicationRow[];
+}
+
 interface CalendarSiteOption {
   value: string;
   label: string;
@@ -163,6 +191,7 @@ interface CalendarFeedResponse {
   importedEvents: CalendarEventRow[];
   sources: CalendarSourceRow[];
   tasks: CalendarTaskRow[];
+  socialPublishing?: CalendarSocialPublishingFeed;
 }
 
 type CreateMode =
@@ -178,6 +207,7 @@ const PERSONAL_EVENTS_KEY = "__events__";
 const BIRTHDAYS_KEY = "__birthdays__";
 const REMINDERS_KEY = "__reminders__";
 const PROJECT_TASKS_KEY = "__project_tasks__";
+const SOCIAL_PUBLISHING_KEY = "__social_publishing__";
 const CALENDAR_VISIBILITY_STORAGE_KEY = "me3:calendar:hidden-sources";
 const SCHEDULE_WINDOW_INCREMENT_DAYS = 60;
 const SCHEDULE_MAX_WINDOW_DAYS = 365;
@@ -201,6 +231,8 @@ const events = ref<CalendarEventRow[]>([]);
 const importedEvents = ref<CalendarEventRow[]>([]);
 const sources = ref<CalendarSourceRow[]>([]);
 const tasks = ref<CalendarTaskRow[]>([]);
+const socialPublishingReady = ref(false);
+const socialPublications = ref<CalendarSocialPublicationRow[]>([]);
 const loading = ref(false);
 const calendarLoaded = ref(false);
 const error = ref("");
@@ -885,6 +917,63 @@ function mapTaskToCalendarEvent(task: CalendarTaskRow): CalendarAgendaEvent {
   };
 }
 
+function mapSocialPublicationToCalendarEvent(
+  publication: CalendarSocialPublicationRow,
+): CalendarAgendaEvent {
+  const state = formatSocialPublicationState(publication.calendarState);
+  const platform = formatSocialPlatform(publication.platform);
+  return {
+    id: `social-publication:${publication.id}`,
+    entryType: "social_publication",
+    recordId: publication.id,
+    sourceLabel: "Social Publication",
+    title: publication.postTitle,
+    siteKey: SOCIAL_PUBLISHING_KEY,
+    siteLabel: "Social publishing",
+    startsAt: publication.displayAt,
+    endsAt: publication.displayAt,
+    color: siteDotColor(SOCIAL_PUBLISHING_KEY),
+    summary: `${state} · ${platform} · ${publication.accountLabel}`,
+    detailLines: [
+      { label: "Post", value: publication.postTitle },
+      {
+        label: "Version",
+        value: `${publication.versionLabel} · ${publication.versionId}`,
+      },
+      { label: "Platform", value: platform },
+      { label: "Account", value: publication.accountLabel },
+      { label: "Delivery", value: state },
+      {
+        label: "Source",
+        value: publication.sourceRef
+          ? `${publication.sourceLabel} · ${publication.sourceRef}`
+          : publication.sourceLabel,
+      },
+      ...(publication.timezone
+        ? [{ label: "Timezone", value: publication.timezone }]
+        : []),
+    ],
+    notes: publication.errorMessage,
+    actionLabel: "Open Publication",
+  };
+}
+
+function formatSocialPublicationState(
+  state: CalendarSocialPublicationRow["calendarState"],
+): string {
+  if (state === "needs_attention") return "Needs attention";
+  return state[0]!.toUpperCase() + state.slice(1);
+}
+
+function formatSocialPlatform(
+  platform: CalendarSocialPublicationRow["platform"],
+): string {
+  if (platform === "linkedin") return "LinkedIn";
+  if (platform === "instagram_business") return "Instagram Business";
+  if (platform === "instagram") return "Instagram";
+  return "X";
+}
+
 function mapEventToCalendarEvent(event: CalendarEventRow): CalendarAgendaEvent {
   const isImported = event.sourceKind === "imported";
   const isBirthday = event.kind === "birthday";
@@ -977,6 +1066,9 @@ const siteOptions = computed<CalendarSiteOption[]>(() => {
     { value: BIRTHDAYS_KEY, label: "Birthdays" },
     { value: REMINDERS_KEY, label: "Reminders" },
     { value: PROJECT_TASKS_KEY, label: "Tasks" },
+    ...(socialPublishingReady.value
+      ? [{ value: SOCIAL_PUBLISHING_KEY, label: "Social publishing" }]
+      : []),
     ...sources.value.map((source) => ({
       value: `import:${source.id}`,
       label: source.name,
@@ -1051,6 +1143,7 @@ const mergedRangeEvents = computed(() =>
     ...importedEvents.value.map(mapEventToCalendarEvent),
     ...reminders.value.map(mapReminderToCalendarEvent),
     ...tasks.value.map(mapTaskToCalendarEvent),
+    ...socialPublications.value.map(mapSocialPublicationToCalendarEvent),
   ].sort(
     (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
   ),
@@ -1127,6 +1220,10 @@ async function reloadCalendar() {
     importedEvents.value = response.importedEvents || [];
     sources.value = response.sources || [];
     tasks.value = response.tasks || [];
+    socialPublishingReady.value = response.socialPublishing?.ready === true;
+    socialPublications.value = socialPublishingReady.value
+      ? response.socialPublishing?.publications || []
+      : [];
     calendarLoaded.value = true;
   } catch (err) {
     if (controller.signal.aborted) return;
@@ -1140,6 +1237,8 @@ async function reloadCalendar() {
       importedEvents.value = [];
       sources.value = [];
       tasks.value = [];
+      socialPublishingReady.value = false;
+      socialPublications.value = [];
     } else {
       toastFromUnknown(err, "Failed to refresh calendar");
     }
@@ -1186,6 +1285,11 @@ async function deleteCalendarEvent(eventId: string) {
 
 function handleEventAction(event: CalendarAgendaEvent) {
   closeBoardContext(false);
+  if (event.entryType === "social_publication") {
+    openSocialPublication(event.recordId || event.id);
+    return;
+  }
+
   if (event.entryType === "task") {
     openTaskInMissionControl(event.id);
     return;
@@ -1212,6 +1316,22 @@ function handleEventAction(event: CalendarAgendaEvent) {
   ) {
     openEditEvent(event.id);
   }
+}
+
+function openSocialPublication(publicationId: string) {
+  const publication = socialPublications.value.find(
+    (item) => item.id === publicationId,
+  );
+  if (!publication) return;
+  void router.push({
+    path: "/social",
+    query: {
+      siteId: publication.siteId,
+      postId: publication.postId,
+      versionId: publication.versionId,
+      publicationId: publication.id,
+    },
+  });
 }
 
 function handleEventDangerAction(event: CalendarAgendaEvent) {
@@ -1356,6 +1476,7 @@ function siteDotColor(key: string): string {
   if (key === REMINDERS_KEY) return "#9aa0a6";
   if (key === PERSONAL_EVENTS_KEY) return "#fdd663";
   if (key === BIRTHDAYS_KEY) return "#81c995";
+  if (key === SOCIAL_PUBLISHING_KEY) return "#26806f";
   let h = 0;
   for (let i = 0; i < key.length; i += 1) {
     h = (h * 31 + key.charCodeAt(i)) | 0;
@@ -2977,7 +3098,7 @@ onBeforeUnmount(() => {
                 v-else-if="rangeMode === 'day'"
                 :events="visibleEvents"
                 title="Daily schedule"
-                description="Bookings, reminders, events, and imported calendars."
+                description="Bookings, reminders, events, tasks, social Publications, and imported calendars."
                 range-label="Day"
                 range-mode="day"
                 :start-day-key="calendarWindowStartDayKey"

@@ -1,4 +1,4 @@
-import type { ContentMediaAsset, SocialPlatform } from "./index";
+import type { SocialMediaAsset, SocialPlatform } from "./index";
 
 type Statement = {
   bind(...values: unknown[]): Statement;
@@ -7,31 +7,33 @@ type Statement = {
   run(): Promise<unknown>;
 };
 
-export type SocialContentPackageEnv = {
+export type SocialPostEnv = {
   DB: {
     prepare(sql: string): Statement;
     batch(statements: Statement[]): Promise<unknown>;
   };
 };
 
-export const SOCIAL_CONTENT_SOURCE_TYPES = [
+export const SOCIAL_POST_SOURCE_TYPES = [
   "journal",
   "mission_task",
   "site",
+  "file",
+  "script",
   "pasted",
-  "original",
 ] as const;
 
-export type SocialContentSourceType = (typeof SOCIAL_CONTENT_SOURCE_TYPES)[number];
-export type SocialContentVariantFormat = "post" | "carousel";
-export type SocialContentApprovalStatus = "draft" | "approved" | "rejected";
+export type SocialPostSourceType = (typeof SOCIAL_POST_SOURCE_TYPES)[number];
+export type SocialPostFormat = "post" | "carousel";
+export type SocialPostApprovalStatus = "draft" | "approved" | "rejected";
 
-export type SocialContentPackage = {
+export type SocialPost = {
   id: string;
   siteId: string;
-  sourceType: SocialContentSourceType;
+  sourceType: SocialPostSourceType | "legacy_content_bank_read_only";
   sourceRef: string | null;
   sourceSnapshot: string;
+  sourceText: string;
   ideaText: string;
   goal: string | null;
   status: "draft" | "ready" | "partially_published" | "published" | "failed" | "archived";
@@ -40,21 +42,28 @@ export type SocialContentPackage = {
   updatedAt: string;
 };
 
-export type SocialAccountVariant = {
+export type PostVersion = {
   id: string;
-  packageId: string;
+  postId: string;
   platform: SocialPlatform;
   targetAccountId: string | null;
-  format: SocialContentVariantFormat;
+  format: SocialPostFormat;
   bodyText: string;
-  assetManifest: ContentMediaAsset[];
+  assetManifest: SocialMediaAsset[];
   sourceExcerpt: string | null;
-  approvalStatus: SocialContentApprovalStatus;
+  approvalStatus: SocialPostApprovalStatus;
   approvedAt: string | null;
   approvedByUserId: string | null;
   scheduledFor: string | null;
   timezone: string | null;
-  publicationStatus: "queued" | "publishing" | "published" | "failed" | "cancelled" | null;
+  publicationStatus:
+    | "scheduled"
+    | "queued"
+    | "publishing"
+    | "published"
+    | "failed"
+    | "cancelled"
+    | null;
   platformPostUrl: string | null;
   publishedAt: string | null;
   failureClass: import("./adapters").SocialPublishFailureClass | null;
@@ -63,44 +72,62 @@ export type SocialAccountVariant = {
   updatedAt: string;
 };
 
-export type SocialContentPackageDetail = {
-  package: SocialContentPackage;
-  variants: SocialAccountVariant[];
+export type SocialPostDetail = {
+  post: SocialPost;
+  versions: PostVersion[];
 };
 
-export type CreateSocialContentPackageInput = {
+export type CreateSocialPostInput = {
   siteId: string;
-  sourceType: SocialContentSourceType;
+  sourceType: SocialPostSourceType;
   sourceRef?: string | null;
   sourceSnapshot?: string;
+  sourceText?: string;
   ideaText: string;
   goal?: string | null;
   createdBy?: "user" | "agent";
-  variants: Array<{
+  versions: Array<{
     platform: SocialPlatform;
     targetAccountId?: string | null;
-    format?: SocialContentVariantFormat;
+    format?: SocialPostFormat;
     bodyText: string;
-    assetManifest?: ContentMediaAsset[];
+    assetManifest?: SocialMediaAsset[];
   }>;
 };
 
-export type UpdateSocialAccountVariantInput = {
+export type UpdatePostVersionInput = {
   targetAccountId?: string | null;
-  format?: SocialContentVariantFormat;
+  format?: SocialPostFormat;
   bodyText?: string;
-  assetManifest?: ContentMediaAsset[];
-  approvalStatus?: SocialContentApprovalStatus;
-  scheduledFor?: string | null;
-  timezone?: string | null;
+  assetManifest?: SocialMediaAsset[];
+  approvalStatus?: SocialPostApprovalStatus;
 };
+
+/* Legacy storage vocabulary stays private while the D1 schema is migrated in place. */
+type SocialContentPackageEnv = SocialPostEnv;
+const SOCIAL_CONTENT_SOURCE_TYPES = SOCIAL_POST_SOURCE_TYPES;
+type SocialContentSourceType = SocialPostSourceType;
+type LegacySocialPostSourceType = "legacy_content_bank_read_only";
+type SocialContentVariantFormat = SocialPostFormat;
+type SocialContentApprovalStatus = SocialPostApprovalStatus;
+type SocialContentPackage = SocialPost;
+type SocialAccountVariant = Omit<PostVersion, "postId"> & { packageId: string };
+type SocialContentPackageDetail = {
+  package: SocialContentPackage;
+  variants: SocialAccountVariant[];
+};
+type CreateSocialContentPackageInput = Omit<CreateSocialPostInput, "versions"> & {
+  variants: CreateSocialPostInput["versions"];
+};
+type UpdateSocialAccountVariantInput = UpdatePostVersionInput;
 
 type PackageRow = {
   id: string;
   site_id: string;
-  source_type: SocialContentSourceType;
+  source_type: SocialContentSourceType | LegacySocialPostSourceType;
   source_ref: string | null;
   source_snapshot: string;
+  source_text: string;
   idea_text: string;
   goal: string | null;
   status: SocialContentPackage["status"];
@@ -113,6 +140,7 @@ type VariantRow = {
   id: string;
   package_id: string;
   site_id?: string;
+  post_source_type?: PackageRow["source_type"];
   platform: SocialPlatform;
   target_account_id: string | null;
   format: SocialContentVariantFormat;
@@ -133,7 +161,7 @@ type VariantRow = {
   updated_at: string;
 };
 
-export class SocialContentPackageInputError extends Error {
+export class SocialPostInputError extends Error {
   constructor(
     message: string,
     public readonly status: 400 | 403 | 404 = 400,
@@ -142,7 +170,9 @@ export class SocialContentPackageInputError extends Error {
   }
 }
 
-export async function createSocialContentPackage(
+const SocialContentPackageInputError = SocialPostInputError;
+
+async function createSocialContentPackage(
   env: SocialContentPackageEnv,
   ownerId: string,
   input: CreateSocialContentPackageInput,
@@ -157,24 +187,20 @@ export async function createSocialContentPackage(
     throw new SocialContentPackageInputError("Unsupported social content source");
   }
   const ideaText = requiredText(input.ideaText, "ideaText is required");
-  const sourceRef = optionalText(input.sourceRef);
-  const suppliedSnapshot = input.sourceSnapshot?.trim() || "";
-  if (
-    (input.sourceType === "journal" ||
-      input.sourceType === "mission_task" ||
-      input.sourceType === "site") &&
-    (!sourceRef || !suppliedSnapshot)
-  ) {
-    throw new SocialContentPackageInputError(
-      `${input.sourceType} sources require a reference and snapshot`,
-    );
-  }
+  const suppliedSnapshot = requiredText(
+    input.sourceSnapshot,
+    "A human-authored Source snapshot is required",
+  );
+  const sourceText = requiredText(
+    input.sourceText,
+    "Visible human-authored Source text is required",
+  );
   if (!Array.isArray(input.variants) || input.variants.length === 0) {
-    throw new SocialContentPackageInputError("At least one social variant is required");
+    throw new SocialContentPackageInputError("At least one Post Version is required");
   }
   const platforms = input.variants.map((variant) => variant.platform);
   if (new Set(platforms).size !== platforms.length) {
-    throw new SocialContentPackageInputError("Only one draft per platform is supported for now");
+    throw new SocialContentPackageInputError("Only one Version per platform is supported for now");
   }
 
   for (const variant of input.variants) {
@@ -184,16 +210,23 @@ export async function createSocialContentPackage(
     }
   }
 
-  const id = `social-package-${crypto.randomUUID()}`;
+  const id = `social-post-${crypto.randomUUID()}`;
+  const sourceRef = optionalText(input.sourceRef) ||
+    (input.sourceType === "pasted" ? `pasted:${id}` : null);
+  if (!sourceRef) {
+    throw new SocialContentPackageInputError(
+      `${input.sourceType} Sources require a stable reference`,
+    );
+  }
   const now = new Date().toISOString();
-  const sourceSnapshot = suppliedSnapshot || ideaText;
+  const sourceSnapshot = suppliedSnapshot;
   const statements: Statement[] = [
     env.DB.prepare(
       `INSERT INTO social_packages (
          id, site_id, post_slug, post_title_snapshot, source_hash, goal, status,
-         created_by, source_type, source_ref, source_snapshot, idea_text,
+         created_by, source_type, source_ref, source_snapshot, source_text, idea_text,
          created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       id,
       siteId,
@@ -205,6 +238,7 @@ export async function createSocialContentPackage(
       input.sourceType,
       sourceRef,
       sourceSnapshot,
+      sourceText,
       ideaText,
       now,
       now,
@@ -252,18 +286,18 @@ export async function createSocialContentPackage(
 
   await env.DB.batch(statements);
   const created = await getSocialContentPackage(env, ownerId, id);
-  if (!created) throw new SocialContentPackageInputError("Could not create social package");
+  if (!created) throw new SocialContentPackageInputError("Could not create Social Post");
   return created;
 }
 
-export async function getSocialContentPackage(
+async function getSocialContentPackage(
   env: SocialContentPackageEnv,
   ownerId: string,
   packageIdInput: string,
 ): Promise<SocialContentPackageDetail | null> {
   const packageId = requiredText(packageIdInput, "packageId is required");
   const row = await env.DB.prepare(
-    `SELECT p.id, p.site_id, p.source_type, p.source_ref, p.source_snapshot,
+    `SELECT p.id, p.site_id, p.source_type, p.source_ref, p.source_snapshot, p.source_text,
             p.idea_text, p.goal, p.status, p.created_by, p.created_at, p.updated_at
      FROM social_packages p
      JOIN sites s ON s.id = p.site_id
@@ -281,14 +315,14 @@ export async function getSocialContentPackage(
   };
 }
 
-export async function listSocialContentPackages(
+async function listSocialContentPackages(
   env: SocialContentPackageEnv,
   ownerId: string,
   siteIdInput?: string | null,
 ): Promise<SocialContentPackageDetail[]> {
   const siteId = optionalText(siteIdInput);
   const rows = await env.DB.prepare(
-    `SELECT p.id, p.site_id, p.source_type, p.source_ref, p.source_snapshot,
+    `SELECT p.id, p.site_id, p.source_type, p.source_ref, p.source_snapshot, p.source_text,
             p.idea_text, p.goal, p.status, p.created_by, p.created_at, p.updated_at
      FROM social_packages p
      JOIN sites s ON s.id = p.site_id
@@ -313,17 +347,39 @@ async function listPackageVariants(
   const variants = await env.DB.prepare(
     `SELECT v.id, v.package_id, v.platform, v.target_account_id, v.format, v.body_text,
             v.asset_manifest_json, v.source_excerpt, v.approval_status, v.approved_at,
-            v.approved_by_user_id, v.scheduled_for, v.timezone, v.created_at, v.updated_at,
+            v.approved_by_user_id,
+            (SELECT pub.scheduled_for FROM social_publications pub
+             WHERE pub.variant_id = v.id AND pub.status = 'scheduled'
+             ORDER BY pub.scheduled_for ASC LIMIT 1) AS scheduled_for,
+            (SELECT pub.timezone FROM social_publications pub
+             WHERE pub.variant_id = v.id AND pub.status = 'scheduled'
+             ORDER BY pub.scheduled_for ASC LIMIT 1) AS timezone,
+            v.created_at, v.updated_at,
             (SELECT pub.status FROM social_publications pub
-             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS publication_status,
+             WHERE pub.variant_id = v.id
+             ORDER BY CASE pub.status
+               WHEN 'publishing' THEN 0 WHEN 'queued' THEN 1 WHEN 'scheduled' THEN 2 ELSE 3 END,
+               pub.created_at DESC LIMIT 1) AS publication_status,
             (SELECT pub.platform_post_url FROM social_publications pub
-             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS platform_post_url,
+             WHERE pub.variant_id = v.id
+             ORDER BY CASE pub.status
+               WHEN 'publishing' THEN 0 WHEN 'queued' THEN 1 WHEN 'scheduled' THEN 2 ELSE 3 END,
+               pub.created_at DESC LIMIT 1) AS platform_post_url,
             (SELECT pub.published_at FROM social_publications pub
-             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS published_at,
+             WHERE pub.variant_id = v.id
+             ORDER BY CASE pub.status
+               WHEN 'publishing' THEN 0 WHEN 'queued' THEN 1 WHEN 'scheduled' THEN 2 ELSE 3 END,
+               pub.created_at DESC LIMIT 1) AS published_at,
             (SELECT pub.error_code FROM social_publications pub
-             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS publication_error_code,
+             WHERE pub.variant_id = v.id
+             ORDER BY CASE pub.status
+               WHEN 'publishing' THEN 0 WHEN 'queued' THEN 1 WHEN 'scheduled' THEN 2 ELSE 3 END,
+               pub.created_at DESC LIMIT 1) AS publication_error_code,
             (SELECT pub.error_message FROM social_publications pub
-             WHERE pub.variant_id = v.id ORDER BY pub.created_at DESC LIMIT 1) AS publication_error_message
+             WHERE pub.variant_id = v.id
+             ORDER BY CASE pub.status
+               WHEN 'publishing' THEN 0 WHEN 'queued' THEN 1 WHEN 'scheduled' THEN 2 ELSE 3 END,
+               pub.created_at DESC LIMIT 1) AS publication_error_message
      FROM social_variants v
      WHERE v.package_id = ?
      ORDER BY v.created_at ASC`,
@@ -333,15 +389,24 @@ async function listPackageVariants(
   return (variants.results || []).map(serializeVariant);
 }
 
-export async function updateSocialAccountVariant(
+async function updateSocialAccountVariant(
   env: SocialContentPackageEnv,
   ownerId: string,
   variantIdInput: string,
   input: UpdateSocialAccountVariantInput,
 ): Promise<SocialAccountVariant | null> {
-  const variantId = requiredText(variantIdInput, "variantId is required");
+  if (
+    Object.prototype.hasOwnProperty.call(input, "scheduledFor") ||
+    Object.prototype.hasOwnProperty.call(input, "timezone")
+  ) {
+    throw new SocialContentPackageInputError(
+      "Schedule this Version by creating a Publication",
+    );
+  }
+  const variantId = requiredText(variantIdInput, "Post Version id is required");
   const existing = await env.DB.prepare(
-    `SELECT v.id, v.package_id, p.site_id, v.platform, v.target_account_id,
+    `SELECT v.id, v.package_id, p.site_id, p.source_type AS post_source_type,
+            v.platform, v.target_account_id,
             v.format, v.body_text, v.asset_manifest_json, v.source_excerpt,
             v.approval_status, v.approved_at, v.approved_by_user_id,
             v.scheduled_for, v.timezone, v.created_at, v.updated_at
@@ -353,6 +418,12 @@ export async function updateSocialAccountVariant(
     .bind(variantId, ownerId)
     .first<VariantRow>();
   if (!existing) return null;
+  if (existing.post_source_type === "legacy_content_bank_read_only") {
+    throw new SocialContentPackageInputError(
+      "This imported Post is read-only. Create a source-backed Post to make changes.",
+      403,
+    );
+  }
 
   const bodyText = input.bodyText === undefined
     ? existing.body_text
@@ -375,7 +446,7 @@ export async function updateSocialAccountVariant(
   if (approvalStatus === "approved") {
     if (!targetAccountId) {
       throw new SocialContentPackageInputError(
-        "Choose a connected account before approving this variant",
+        "Choose a connected account before approving this Version",
       );
     }
     await requireActiveAccount(
@@ -385,25 +456,6 @@ export async function updateSocialAccountVariant(
       existing.platform,
       targetAccountId,
     );
-  }
-
-  let scheduledFor = existing.scheduled_for;
-  let timezone = existing.timezone;
-  if (contentChanged || approvalStatus !== "approved") {
-    scheduledFor = null;
-    timezone = null;
-  } else if (input.scheduledFor !== undefined) {
-    if (input.scheduledFor === null || !input.scheduledFor.trim()) {
-      scheduledFor = null;
-      timezone = null;
-    } else {
-      const timestamp = Date.parse(input.scheduledFor);
-      if (!Number.isFinite(timestamp) || timestamp <= Date.now()) {
-        throw new SocialContentPackageInputError("Schedule time must be in the future");
-      }
-      scheduledFor = new Date(timestamp).toISOString();
-      timezone = validTimezone(input.timezone || existing.timezone || "UTC");
-    }
   }
 
   const now = new Date().toISOString();
@@ -430,12 +482,52 @@ export async function updateSocialAccountVariant(
       approvalStatus,
       approvedAt,
       approvedByUserId,
-      scheduledFor,
-      timezone,
+      null,
+      null,
       now,
       variantId,
     ),
   ];
+  if (contentChanged || approvalStatus !== "approved") {
+    const scheduled = await env.DB.prepare(
+      `SELECT id FROM social_publications
+       WHERE variant_id = ? AND status = 'scheduled'`,
+    )
+      .bind(variantId)
+      .all<{ id: string }>();
+    const reason = contentChanged ? "version_changed" : "approval_revoked";
+    for (const publication of scheduled.results || []) {
+      // Keep this UPDATE and audit INSERT adjacent in the D1 batch. changes()
+      // records cancellation only when this edit wins the scheduled-state CAS.
+      statements.push(
+        env.DB.prepare(
+          `UPDATE social_publications
+           SET status = 'cancelled', error_code = ?, error_message = ?, updated_at = ?
+           WHERE id = ? AND status = 'scheduled'`,
+        ).bind(
+          `cancelled:${reason}`,
+          contentChanged
+            ? "Cancelled because the approved Version changed."
+            : "Cancelled because Version approval was removed.",
+          now,
+          publication.id,
+        ),
+        env.DB.prepare(
+          `INSERT INTO social_publication_events (
+             id, publication_id, variant_id, event_type, payload_json, created_at
+           )
+           SELECT ?, ?, ?, 'cancelled', ?, ?
+           WHERE changes() > 0`,
+        ).bind(
+          `social-event-${crypto.randomUUID()}`,
+          publication.id,
+          variantId,
+          JSON.stringify({ reason }),
+          now,
+        ),
+      );
+    }
+  }
   if (
     approvalStatus === "approved" &&
     newlyApproved
@@ -453,31 +545,74 @@ export async function updateSocialAccountVariant(
       ),
     );
   }
-  if (scheduledFor && scheduledFor !== existing.scheduled_for) {
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO social_publication_events (
-           id, publication_id, variant_id, event_type, payload_json, created_at
-         ) VALUES (?, NULL, ?, 'queued', ?, ?)`,
-      ).bind(
-        `social-event-${crypto.randomUUID()}`,
-        variantId,
-        JSON.stringify({ platform: existing.platform, targetAccountId, scheduledFor, timezone }),
-        now,
-      ),
-    );
-  }
   await env.DB.batch(statements);
 
   const updated = await env.DB.prepare(
     `SELECT id, package_id, platform, target_account_id, format, body_text,
             asset_manifest_json, source_excerpt, approval_status, approved_at,
-            approved_by_user_id, scheduled_for, timezone, created_at, updated_at
+            approved_by_user_id,
+            (SELECT scheduled_for FROM social_publications
+             WHERE variant_id = ? AND status = 'scheduled'
+             ORDER BY scheduled_for ASC LIMIT 1) AS scheduled_for,
+            (SELECT timezone FROM social_publications
+             WHERE variant_id = ? AND status = 'scheduled'
+             ORDER BY scheduled_for ASC LIMIT 1) AS timezone,
+            created_at, updated_at
      FROM social_variants WHERE id = ?`,
   )
-    .bind(variantId)
+    .bind(variantId, variantId, variantId)
     .first<VariantRow>();
   return updated ? serializeVariant(updated) : null;
+}
+
+export async function createSocialPost(
+  env: SocialPostEnv,
+  ownerId: string,
+  input: CreateSocialPostInput,
+): Promise<SocialPostDetail> {
+  return canonicalDetail(await createSocialContentPackage(env, ownerId, {
+    ...input,
+    variants: input.versions,
+  }));
+}
+
+export async function getSocialPost(
+  env: SocialPostEnv,
+  ownerId: string,
+  postId: string,
+): Promise<SocialPostDetail | null> {
+  const detail = await getSocialContentPackage(env, ownerId, postId);
+  return detail ? canonicalDetail(detail) : null;
+}
+
+export async function listSocialPosts(
+  env: SocialPostEnv,
+  ownerId: string,
+  siteId?: string | null,
+): Promise<SocialPostDetail[]> {
+  return (await listSocialContentPackages(env, ownerId, siteId)).map(canonicalDetail);
+}
+
+export async function updatePostVersion(
+  env: SocialPostEnv,
+  ownerId: string,
+  versionId: string,
+  input: UpdatePostVersionInput,
+): Promise<PostVersion | null> {
+  const version = await updateSocialAccountVariant(env, ownerId, versionId, input);
+  return version ? canonicalVersion(version) : null;
+}
+
+function canonicalDetail(detail: SocialContentPackageDetail): SocialPostDetail {
+  return {
+    post: detail.package,
+    versions: detail.variants.map(canonicalVersion),
+  };
+}
+
+function canonicalVersion(version: SocialAccountVariant): PostVersion {
+  const { packageId, ...rest } = version;
+  return { ...rest, postId: packageId };
 }
 
 async function requireActiveAccount(
@@ -505,6 +640,7 @@ function serializePackage(row: PackageRow): SocialContentPackage {
     sourceType: row.source_type,
     sourceRef: row.source_ref,
     sourceSnapshot: row.source_snapshot,
+    sourceText: row.source_text,
     ideaText: row.idea_text,
     goal: row.goal,
     status: row.status,
@@ -552,7 +688,7 @@ function parseFailureClass(
     : null;
 }
 
-function parseAssets(value: string): ContentMediaAsset[] {
+function parseAssets(value: string): SocialMediaAsset[] {
   try {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed : [];
@@ -569,15 +705,6 @@ function requiredText(value: unknown, message: string): string {
 
 function optionalText(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;
-}
-
-function validTimezone(value: string): string {
-  try {
-    new Intl.DateTimeFormat("en", { timeZone: value }).format();
-    return value;
-  } catch {
-    throw new SocialContentPackageInputError("A valid scheduling timezone is required");
-  }
 }
 
 async function sha256(value: string): Promise<string> {

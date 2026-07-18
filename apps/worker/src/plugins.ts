@@ -163,13 +163,13 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   name: "ME3 Social Publishing",
   version: "0.1.0",
   description:
-    "First-party social publishing capability pack for content drafts, account connections, scheduling, provider publishing, and audit history.",
+    "Turn human-authored Sources into reusable Posts, exact account Versions, and independently audited Publications.",
   trustTier: "first_party",
   distribution: "workspace_package",
   installMode: "enabled_by_owner_config",
   showInPluginList: true,
   implementationStatus: SOCIAL_PUBLISHING_RUNTIME.bundled ? "bundled" : "catalog_only",
-  capabilityIds: ["content.social_assistant"],
+  capabilityIds: ["content.social_publishing"],
   permissions: [
     {
       id: "content.social.publish",
@@ -194,26 +194,44 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
       auth: "owner",
     },
     {
-      id: "content.items.api",
-      path: "/api/content/items",
+      id: "social.posts.api",
+      path: "/api/social/posts",
       methods: ["GET", "POST"],
       auth: "owner",
     },
     {
-      id: "content.item.api",
-      path: "/api/content/items/:id",
-      methods: ["PUT", "DELETE"],
+      id: "social.post.api",
+      path: "/api/social/posts/:id",
+      methods: ["GET"],
       auth: "owner",
     },
     {
-      id: "content.queue.api",
-      path: "/api/content/items/:id/queue",
+      id: "social.version.api",
+      path: "/api/social/versions/:id",
+      methods: ["PATCH"],
+      auth: "owner",
+    },
+    {
+      id: "social.version.publications.api",
+      path: "/api/social/versions/:id/publications",
+      methods: ["GET", "POST"],
+      auth: "owner",
+    },
+    {
+      id: "social.version.publish.api",
+      path: "/api/social/versions/:id/publish",
       methods: ["POST"],
       auth: "owner",
     },
     {
-      id: "content.publish.api",
-      path: "/api/content/items/:id/publish",
+      id: "social.publication.api",
+      path: "/api/social/publications/:id",
+      methods: ["DELETE"],
+      auth: "owner",
+    },
+    {
+      id: "social.publication.resolve.api",
+      path: "/api/social/publications/:id/resolve",
       methods: ["POST"],
       auth: "owner",
     },
@@ -234,7 +252,7 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
     {
       id: "social.dashboard.nav",
       slot: "dashboard.nav",
-      label: "Content",
+      label: "Social Publishing",
     },
     {
       id: "social.accounts.panel",
@@ -269,14 +287,14 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   ],
   agentTools: [
     agentTool({
-      id: "content.write_preview",
-      label: "Preview social content",
+      id: "social.post.suggest",
+      label: "Suggest Posts from a Source",
       sideEffect: "none",
       approvalMode: "approval_required",
     }),
     agentTool({
-      id: "content.publish",
-      label: "Queue approved social content",
+      id: "social.version.publish",
+      label: "Publish an approved Version",
       sideEffect: "external_write",
       approvalMode: "approval_required",
     }),
@@ -285,22 +303,37 @@ const SOCIAL_PUBLISHING_PLUGIN: CorePluginManifestSummary = {
   migrations: [
     publicBaselineMigration(
       "social.public-baseline",
-      "Social accounts, OAuth state, content bank, packages, variants, publications, and audit tables are included in the initial public schema.",
+      "Social accounts, OAuth state, Source-backed Posts, account Versions, Publications, and audit history are included in the initial public schema.",
     ),
     {
       id: "social.source-first-packages",
       path: "./apps/worker/migrations/0016_social_content_packages.sql",
       destructive: false,
       description:
-        "Adds source provenance, account targets, and explicit approval metadata to social content packages and variants.",
+        "Adds stable Source references and snapshots, account targets, and explicit Version approval metadata.",
+    },
+    {
+      id: "social.canonical-posts",
+      path: "./apps/worker/migrations/0022_social_posts_canonical.sql",
+      destructive: false,
+      description:
+        "Adds visible Source text and safely bridges legacy owner data into canonical Posts and Versions.",
+    },
+    {
+      id: "social.reusable-publications",
+      path: "./apps/worker/migrations/0023_social_publications_reusable.sql",
+      destructive: false,
+      description:
+        "Moves schedules and immutable delivery snapshots into independently audited Publications while preserving existing history.",
     },
   ],
   queuesAndCrons: [...SOCIAL_PUBLISHING_RUNTIME.queuesAndCrons],
   notes: [
     "Bundled through @me3-core/plugin-social-publishing as a first-party Core package.",
-    "Current runtime exposes owner-only content bank, OAuth account connection, account inventory reads, and approval-first queue dispatch when installed.",
+    "The canonical owner path is Source-backed Posts, exact account Versions, and independently audited immutable Publications.",
+    "LinkedIn supports draft, schedule, and publish; X and Instagram remain draft-only until their delivery paths work end to end.",
     "ME3-hosted provider OAuth should supply social app credentials; Core installs should only connect their own social accounts.",
-    "External publishing workers and cron dispatch are package-owned and remain gated by plugin readiness, approval, and account state.",
+    "External publishing workers and cron dispatch remain gated by plugin readiness, exact Version approval, and account state.",
   ],
 };
 

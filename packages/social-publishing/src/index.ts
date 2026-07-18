@@ -1,4 +1,10 @@
 import { adapterFor } from "./adapters";
+import {
+  canPublishSocialPlatform,
+  canScheduleSocialPlatform,
+  getSocialPlatformCapabilities,
+  type SocialPlatformCapabilities,
+} from "./capabilities";
 
 export {
   adapterFor,
@@ -8,22 +14,37 @@ export {
 } from "./adapters";
 
 export {
-  SOCIAL_CONTENT_SOURCE_TYPES,
-  SocialContentPackageInputError,
-  createSocialContentPackage,
-  getSocialContentPackage,
-  listSocialContentPackages,
-  updateSocialAccountVariant,
-  type CreateSocialContentPackageInput,
-  type SocialAccountVariant,
-  type SocialContentApprovalStatus,
-  type SocialContentPackage,
-  type SocialContentPackageDetail,
-  type SocialContentPackageEnv,
-  type SocialContentSourceType,
-  type SocialContentVariantFormat,
-  type UpdateSocialAccountVariantInput,
+  SOCIAL_POST_SOURCE_TYPES,
+  SocialPostInputError,
+  createSocialPost,
+  getSocialPost,
+  listSocialPosts,
+  updatePostVersion,
+  type CreateSocialPostInput,
+  type PostVersion,
+  type SocialPost,
+  type SocialPostApprovalStatus,
+  type SocialPostDetail,
+  type SocialPostEnv,
+  type SocialPostFormat,
+  type SocialPostSourceType,
+  type UpdatePostVersionInput,
 } from "./content-packages";
+
+export {
+  canPublishSocialPlatform,
+  canScheduleSocialPlatform,
+  getSocialPlatformCapabilities,
+  socialPlatformCapabilities,
+  type SocialPlatformCapabilities,
+} from "./capabilities";
+
+export {
+  listCalendarSocialPublications,
+  type SocialPublicationCalendarEntry,
+  type SocialPublicationCalendarState,
+  type SocialPublicationCalendarWindow,
+} from "./calendar";
 
 export const SOCIAL_PUBLISHING_PLUGIN_ID = "me3.social-publishing";
 export const SOCIAL_PUBLISH_QUEUE_NAME = "me3-social-publish";
@@ -43,7 +64,7 @@ export const SOCIAL_PUBLISHING_RUNTIME = {
       binding: SOCIAL_PUBLISH_QUEUE_BINDING,
       queueName: SOCIAL_PUBLISH_QUEUE_NAME,
       producerEntrypoint:
-        "@me3-core/plugin-social-publishing#createQueuedContentPublicationAndEnqueue",
+        "@me3-core/plugin-social-publishing#createPostVersionPublication",
       consumerEntrypoint:
         "@me3-core/plugin-social-publishing#processSocialPublishBatch",
       maxRetries: 2,
@@ -58,8 +79,8 @@ export const SOCIAL_PUBLISHING_RUNTIME = {
   ],
   notes: [
     "Core bundles the plugin runtime through an explicit workspace package.",
-    "This slice exposes owner-only status, provider setup, OAuth account connection, account inventory reads, and approval-first queue dispatch.",
-    "Live provider writes are disabled unless the plugin is installed, enabled, the content item is human-approved, and a matching active account is connected.",
+    "Every schedule or repost creates an immutable Publication snapshot with independent delivery and audit history.",
+    "Live provider writes are disabled unless the plugin is installed, enabled, the exact Post Version is human-approved, and a matching active account is connected.",
   ],
 } as const;
 
@@ -75,6 +96,7 @@ export type SocialPublishingGate = {
   enabled: boolean;
   ready: boolean;
   statusLabel: string;
+  platformCapabilities: SocialPlatformCapabilities[];
 };
 
 export type SocialPublishingAccount = {
@@ -135,9 +157,9 @@ export type SocialProviderSettingsUpdate = {
   providers?: unknown;
 };
 
-export type ContentPlatform = SocialPlatform;
+type ContentPlatform = SocialPlatform;
 
-export type ContentItemStatus =
+type ContentItemStatus =
   | "bank"
   | "queued"
   | "scheduled"
@@ -146,7 +168,7 @@ export type ContentItemStatus =
   | "failed"
   | "archived";
 
-export type ContentMediaAsset = {
+export type SocialMediaAsset = {
   url: string;
   filename?: string;
   mimeType?: string;
@@ -155,7 +177,9 @@ export type ContentMediaAsset = {
   assetIndex?: number;
 };
 
-export type ContentItem = {
+type ContentMediaAsset = SocialMediaAsset;
+
+type ContentItem = {
   id: string;
   siteId: string;
   siteUsername: string;
@@ -181,14 +205,14 @@ export type ContentItem = {
   updatedAt: string;
 };
 
-export type ContentStats = {
+type ContentStats = {
   bankCount: number;
   queuedCount: number;
   postedCount: number;
   nextScheduledAt: string | null;
 };
 
-export type CreateContentItemInput = {
+type CreateContentItemInput = {
   siteId?: unknown;
   body?: unknown;
   platforms?: unknown;
@@ -199,7 +223,7 @@ export type CreateContentItemInput = {
   tags?: unknown;
 };
 
-export type UpdateContentItemInput = Partial<CreateContentItemInput> & {
+type UpdateContentItemInput = Partial<CreateContentItemInput> & {
   status?: unknown;
 };
 
@@ -286,18 +310,21 @@ type ContentQueueRow = {
 type SocialPublicationEventType =
   | "generated"
   | "approved"
+  | "scheduled"
   | "queued"
   | "publishing"
   | "published"
   | "failed"
-  | "retried";
+  | "retried"
+  | "cancelled";
 
 type SocialPublicationRow = {
   publication_id: string;
   variant_id: string;
   site_id: string;
   platform: SocialPlatform;
-  pub_status: "queued" | "publishing" | "published" | "failed" | "cancelled";
+  pub_status: PublicationStatus;
+  pub_updated_at: string;
   body: string;
   media_manifest_json: string;
   platforms_json: string;
@@ -323,17 +350,63 @@ class SocialPublishRetrySignal extends Error {
   }
 }
 
-export type SocialVariantPublication = {
+export type PublicationStatus =
+  | "scheduled"
+  | "queued"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "cancelled";
+
+export type Publication = {
   id: string;
-  variantId: string;
-  status: "queued" | "publishing" | "published" | "failed" | "cancelled";
+  versionId: string;
+  platform: SocialPlatform;
+  status: PublicationStatus;
+  scheduledFor: string | null;
+  timezone: string | null;
+  queuedAt: string | null;
   platformPostId: string | null;
   platformPostUrl: string | null;
   publishedAt: string | null;
   failureClass: import("./adapters").SocialPublishFailureClass | null;
   errorCode: string | null;
   errorMessage: string | null;
+  requestedByType: "owner" | "agent" | "migration" | null;
+  requestedByUserId: string | null;
+  requestContext: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 };
+
+export type CreatePublicationInput = {
+  scheduledFor?: unknown;
+  timezone?: unknown;
+  requestedByType?: unknown;
+  requestContext?: unknown;
+};
+
+type PublicationRow = {
+  id: string;
+  variant_id: string;
+  platform: SocialPlatform;
+  status: PublicationStatus;
+  scheduled_for: string | null;
+  timezone: string | null;
+  queued_at: string | null;
+  platform_post_id: string | null;
+  platform_post_url: string | null;
+  published_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  requested_by_type: Publication["requestedByType"];
+  requested_by_user_id: string | null;
+  request_context_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type SocialVariantPublication = Omit<Publication, "versionId"> & { variantId: string };
 
 type D1StatementLike = {
   bind(...values: unknown[]): {
@@ -841,7 +914,7 @@ async function completeHostedSocialOAuth(
   return buildFrontendRedirect(options.webOrigin, stateRow.return_path, { social_connected: stateRow.platform });
 }
 
-export async function listContentItems(
+async function listContentItems(
   env: SocialPublishingEnv,
   ownerId: string,
   siteIdInput: unknown,
@@ -885,7 +958,7 @@ export async function listContentItems(
   return (rows.results || []).map(serializeContentItem);
 }
 
-export async function getContentStats(
+async function getContentStats(
   env: SocialPublishingEnv,
   ownerId: string,
   siteIdInput: unknown,
@@ -923,7 +996,7 @@ export async function getContentStats(
   };
 }
 
-export async function createContentItem(
+async function createContentItem(
   env: SocialPublishingEnv,
   ownerId: string,
   input: CreateContentItemInput,
@@ -971,7 +1044,7 @@ export async function createContentItem(
   return serializeContentItem(created);
 }
 
-export async function updateContentItem(
+async function updateContentItem(
   env: SocialPublishingEnv,
   ownerId: string,
   idInput: unknown,
@@ -1042,7 +1115,7 @@ export async function updateContentItem(
   return updated ? serializeContentItem(updated) : null;
 }
 
-export async function deleteContentItem(
+async function deleteContentItem(
   env: SocialPublishingEnv,
   ownerId: string,
   idInput: unknown,
@@ -1065,7 +1138,7 @@ export async function deleteContentItem(
   return true;
 }
 
-export async function appendContentItemMedia(
+async function appendContentItemMedia(
   env: SocialPublishingEnv,
   ownerId: string,
   idInput: unknown,
@@ -1096,7 +1169,7 @@ export async function appendContentItemMedia(
   return updated ? serializeContentItem(updated) : null;
 }
 
-export async function queueContentItem(
+async function queueContentItem(
   env: SocialPublishingEnv,
   ownerId: string,
   idInput: unknown,
@@ -1104,7 +1177,7 @@ export async function queueContentItem(
   return setContentQueueState(env, ownerId, idInput, "queued");
 }
 
-export async function unqueueContentItem(
+async function unqueueContentItem(
   env: SocialPublishingEnv,
   ownerId: string,
   idInput: unknown,
@@ -1112,7 +1185,7 @@ export async function unqueueContentItem(
   return setContentQueueState(env, ownerId, idInput, "bank");
 }
 
-export async function markContentItemPublishing(
+async function markContentItemPublishing(
   env: SocialPublishingEnv,
   ownerId: string,
   idInput: unknown,
@@ -1121,7 +1194,7 @@ export async function markContentItemPublishing(
   return item;
 }
 
-export async function createQueuedContentPublicationAndEnqueue(
+async function createQueuedContentPublicationAndEnqueue(
   env: SocialPublishingEnv,
   ownerId: string,
   idInput: unknown,
@@ -1195,7 +1268,7 @@ export async function createQueuedContentPublicationAndEnqueue(
   await setContentQueueState(env, ownerId, existing.id, "publishing");
   if (!env.SOCIAL_PUBLISH_QUEUE) {
     for (const publicationId of publicationIds) {
-      await publishQueuedContentPublication(env, publicationId);
+      await publishQueuedPublication(env, publicationId);
     }
   }
 
@@ -1204,7 +1277,7 @@ export async function createQueuedContentPublicationAndEnqueue(
   return { item: serializeContentItem(updated), publicationIds };
 }
 
-export async function createQueuedSocialVariantPublicationAndEnqueue(
+async function createQueuedSocialVariantPublicationAndEnqueue(
   env: SocialPublishingEnv,
   ownerId: string,
   variantIdInput: unknown,
@@ -1213,10 +1286,11 @@ export async function createQueuedSocialVariantPublicationAndEnqueue(
   const gate = await getSocialPublishingRuntimeStatus(env);
   if (!gate.ready) throw new SocialPublishingGateError(gate);
   const variantId = normalizeId(variantIdInput);
-  if (!variantId) throw new SocialPublishingInputError("Social variant id is required");
+  if (!variantId) throw new SocialPublishingInputError("Post Version id is required");
 
   const variant = await env.DB.prepare(
-    `SELECT v.id, v.platform, v.target_account_id, v.approval_status, p.site_id
+    `SELECT v.id, v.platform, v.target_account_id, v.approval_status, p.site_id,
+            p.source_type AS post_source_type
      FROM social_variants v
      JOIN social_packages p ON p.id = v.package_id
      JOIN sites s ON s.id = p.site_id
@@ -1229,16 +1303,25 @@ export async function createQueuedSocialVariantPublicationAndEnqueue(
       target_account_id: string | null;
       approval_status: string;
       site_id: string;
+      post_source_type: string;
     }>();
   if (!variant) return null;
-  if (variant.platform !== "linkedin") {
-    throw new SocialPublishingInputError("LinkedIn is the only enabled variant publisher for now");
+  if (!canPublishSocialPlatform(variant.platform)) {
+    throw new SocialPublishingInputError(
+      `${platformLabel(variant.platform)} Versions are draft-only and cannot be published yet`,
+    );
   }
   if (variant.approval_status !== "approved") {
-    throw new SocialPublishingInputError("Approve this exact LinkedIn variant before publishing", 403);
+    throw new SocialPublishingInputError(
+      `Approve this exact ${platformLabel(variant.platform)} Version before publishing`,
+      403,
+    );
   }
   if (!variant.target_account_id) {
-    throw new SocialPublishingInputError("Choose a connected LinkedIn account before publishing", 424);
+    throw new SocialPublishingInputError(
+      `Choose a connected ${platformLabel(variant.platform)} account before publishing`,
+      424,
+    );
   }
   const account = await env.DB.prepare(
     `SELECT id FROM social_accounts
@@ -1247,7 +1330,10 @@ export async function createQueuedSocialVariantPublicationAndEnqueue(
     .bind(variant.target_account_id, ownerId, variant.site_id, variant.platform)
     .first<{ id: string }>();
   if (!account) {
-    throw new SocialPublishingInputError("Reconnect the selected LinkedIn account before publishing", 424);
+    throw new SocialPublishingInputError(
+      `Reconnect the selected ${platformLabel(variant.platform)} account before publishing`,
+      424,
+    );
   }
 
   const existing = await latestSocialVariantPublication(env, variantId, [
@@ -1262,6 +1348,12 @@ export async function createQueuedSocialVariantPublicationAndEnqueue(
       .bind(variant.id)
       .run();
     return existing;
+  }
+  if (variant.post_source_type === "legacy_content_bank_read_only") {
+    throw new SocialPublishingInputError(
+      "This imported Post is read-only. Create a source-backed Post before publishing.",
+      403,
+    );
   }
 
   const publicationId = randomToken("socpub");
@@ -1297,12 +1389,12 @@ export async function createQueuedSocialVariantPublicationAndEnqueue(
   if (env.SOCIAL_PUBLISH_QUEUE) {
     await env.SOCIAL_PUBLISH_QUEUE.send({ publicationId });
   } else {
-    await publishQueuedContentPublication(env, publicationId, fetcher);
+    await publishQueuedPublication(env, publicationId, fetcher);
   }
   return latestSocialVariantPublication(env, variantId);
 }
 
-export async function resolveSocialVariantPublicationOutcome(
+async function resolveSocialVariantPublicationOutcome(
   env: SocialPublishingEnv,
   ownerId: string,
   variantIdInput: unknown,
@@ -1311,7 +1403,7 @@ export async function resolveSocialVariantPublicationOutcome(
   const gate = await getSocialPublishingRuntimeStatus(env);
   if (!gate.ready) throw new SocialPublishingGateError(gate);
   const variantId = normalizeId(variantIdInput);
-  if (!variantId) throw new SocialPublishingInputError("Social variant id is required");
+  if (!variantId) throw new SocialPublishingInputError("Post Version id is required");
   const owned = await env.DB.prepare(
     `SELECT v.id
      FROM social_variants v
@@ -1367,59 +1459,443 @@ export async function resolveSocialVariantPublicationOutcome(
   return latestSocialVariantPublication(env, variantId);
 }
 
+export async function createPostVersionPublication(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  versionId: unknown,
+  input: CreatePublicationInput = {},
+  fetcher: typeof fetch = fetch,
+): Promise<Publication | null> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) throw new SocialPublishingGateError(gate);
+  const normalizedVersionId = normalizeId(versionId);
+  if (!normalizedVersionId) {
+    throw new SocialPublishingInputError("Post Version id is required");
+  }
+
+  const version = await env.DB.prepare(
+    `SELECT v.id, v.platform, v.target_account_id, v.format, v.body_text,
+            v.asset_manifest_json, v.approval_status, v.approved_at,
+            v.approved_by_user_id, p.site_id, p.source_type AS post_source_type
+     FROM social_variants v
+     JOIN social_packages p ON p.id = v.package_id
+     JOIN sites s ON s.id = p.site_id
+     WHERE v.id = ? AND s.user_id = ?`,
+  )
+    .bind(normalizedVersionId, ownerId)
+    .first<{
+      id: string;
+      platform: SocialPlatform;
+      target_account_id: string | null;
+      format: string;
+      body_text: string;
+      asset_manifest_json: string;
+      approval_status: string;
+      approved_at: string | null;
+      approved_by_user_id: string | null;
+      site_id: string;
+      post_source_type: string;
+    }>();
+  if (!version) return null;
+  if (version.post_source_type === "legacy_content_bank_read_only") {
+    throw new SocialPublishingInputError(
+      "This imported Post is read-only. Create a source-backed Post before publishing.",
+      403,
+    );
+  }
+
+  const scheduledForInput = normalizeId(input.scheduledFor);
+  const isScheduled = Boolean(scheduledForInput);
+  if (isScheduled ? !canScheduleSocialPlatform(version.platform) : !canPublishSocialPlatform(version.platform)) {
+    throw new SocialPublishingInputError(
+      `${platformLabel(version.platform)} Versions are draft-only and cannot be ${isScheduled ? "scheduled" : "published"} yet`,
+    );
+  }
+  if (version.approval_status !== "approved") {
+    throw new SocialPublishingInputError(
+      `Approve this exact ${platformLabel(version.platform)} Version before ${isScheduled ? "scheduling" : "publishing"}`,
+      403,
+    );
+  }
+  if (!version.target_account_id) {
+    throw new SocialPublishingInputError(
+      `Choose a connected ${platformLabel(version.platform)} account before ${isScheduled ? "scheduling" : "publishing"}`,
+      424,
+    );
+  }
+  const account = await env.DB.prepare(
+    `SELECT id FROM social_accounts
+     WHERE id = ? AND user_id = ? AND site_id = ? AND platform = ? AND status = 'active'`,
+  )
+    .bind(version.target_account_id, ownerId, version.site_id, version.platform)
+    .first<{ id: string }>();
+  if (!account) {
+    throw new SocialPublishingInputError(
+      `Reconnect the selected ${platformLabel(version.platform)} account before ${isScheduled ? "scheduling" : "publishing"}`,
+      424,
+    );
+  }
+
+  let scheduledFor: string | null = null;
+  let timezone: string | null = null;
+  if (scheduledForInput) {
+    const timestamp = Date.parse(scheduledForInput);
+    if (!Number.isFinite(timestamp) || timestamp <= Date.now()) {
+      throw new SocialPublishingInputError("Schedule time must be in the future");
+    }
+    scheduledFor = new Date(timestamp).toISOString();
+    timezone = publicationTimezone(input.timezone);
+    const duplicate = await findScheduledPublication(env, version.id, scheduledFor);
+    if (duplicate) {
+      throw new SocialPublishingInputError(
+        "This Version already has a Publication at that time",
+        409,
+      );
+    }
+  } else {
+    const inFlight = await latestSocialVariantPublication(env, version.id, [
+      "queued",
+      "publishing",
+    ]);
+    if (inFlight) {
+      await resumeQueuedPublicationHandoff(env, inFlight, fetcher);
+      return canonicalPublication(
+        (await latestSocialVariantPublication(env, version.id, [
+          "queued",
+          "publishing",
+          "published",
+          "failed",
+        ])) || inFlight,
+      );
+    }
+  }
+
+  const requestedByType = input.requestedByType === "agent" ? "agent" : "owner";
+  const requestContextJson = publicationRequestContextJson(input.requestContext);
+  const publicationId = randomToken("socpub");
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO social_publications (
+         id, variant_id, site_id, platform, status, scheduled_for, timezone,
+         target_account_id_snapshot, format_snapshot, body_text_snapshot,
+         asset_manifest_json_snapshot, approval_status_snapshot,
+         approved_at_snapshot, approved_by_user_id_snapshot, requested_by_type,
+         requested_by_user_id, request_context_json, queued_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        publicationId,
+        version.id,
+        version.site_id,
+        version.platform,
+        isScheduled ? "scheduled" : "queued",
+        scheduledFor,
+        timezone,
+        version.target_account_id,
+        version.format,
+        version.body_text,
+        version.asset_manifest_json,
+        version.approval_status,
+        version.approved_at,
+        version.approved_by_user_id,
+        requestedByType,
+        ownerId,
+        requestContextJson,
+        null,
+        now,
+        now,
+      )
+      .run();
+  } catch (error) {
+    if (scheduledFor && await findScheduledPublication(env, version.id, scheduledFor)) {
+      throw new SocialPublishingInputError(
+        "This Version already has a Publication at that time",
+        409,
+      );
+    }
+    if (!scheduledFor) {
+      const concurrent = await latestSocialVariantPublication(env, version.id, [
+        "queued",
+        "publishing",
+      ]);
+      if (concurrent) {
+        await resumeQueuedPublicationHandoff(env, concurrent, fetcher);
+        return canonicalPublication(
+          (await latestSocialVariantPublication(env, version.id, [
+            "queued",
+            "publishing",
+            "published",
+            "failed",
+          ])) || concurrent,
+        );
+      }
+    }
+    throw error;
+  }
+
+  await insertSocialPublicationEvent(env, {
+    publicationId,
+    variantId: version.id,
+    eventType: isScheduled ? "scheduled" : "queued",
+    payload: {
+      platform: version.platform,
+      targetAccountId: version.target_account_id,
+      scheduledFor,
+      timezone,
+      requestedByType,
+      requestedByUserId: ownerId,
+    },
+  });
+
+  if (!isScheduled) {
+    await resumeQueuedPublicationHandoff(
+      env,
+      {
+        id: publicationId,
+        status: "queued",
+        queuedAt: null,
+      },
+      fetcher,
+    );
+  }
+  return getOwnedPublication(env, ownerId, publicationId);
+}
+
+async function resumeQueuedPublicationHandoff(
+  env: SocialPublishingEnv,
+  publication: Pick<SocialVariantPublication, "id" | "status" | "queuedAt">,
+  fetcher: typeof fetch,
+): Promise<void> {
+  if (publication.status !== "queued") return;
+  if (env.SOCIAL_PUBLISH_QUEUE) {
+    if (publication.queuedAt) return;
+    const claimed = await env.DB.prepare(
+      `UPDATE social_publications
+       SET queued_at = datetime('now'), updated_at = datetime('now')
+       WHERE id = ? AND status = 'queued' AND queued_at IS NULL
+       RETURNING id`,
+    )
+      .bind(publication.id)
+      .first<{ id: string }>();
+    if (!claimed) return;
+    try {
+      await env.SOCIAL_PUBLISH_QUEUE.send({ publicationId: publication.id });
+    } catch (error) {
+      await env.DB.prepare(
+        `UPDATE social_publications
+         SET queued_at = NULL, updated_at = datetime('now')
+         WHERE id = ? AND status = 'queued'`,
+      )
+        .bind(publication.id)
+        .run();
+      throw error;
+    }
+    return;
+  }
+  await publishQueuedPublication(env, publication.id, fetcher);
+}
+
+export async function listPostVersionPublications(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  versionIdInput: unknown,
+): Promise<Publication[]> {
+  const versionId = normalizeId(versionIdInput);
+  if (!versionId) throw new SocialPublishingInputError("Post Version id is required");
+  const rows = await env.DB.prepare(
+    `${publicationSelectSql()}
+     JOIN social_variants v ON v.id = pub.variant_id
+     JOIN social_packages p ON p.id = v.package_id
+     JOIN sites s ON s.id = p.site_id
+     WHERE pub.variant_id = ? AND s.user_id = ?
+     ORDER BY COALESCE(pub.scheduled_for, pub.created_at) DESC, pub.created_at DESC`,
+  )
+    .bind(versionId, ownerId)
+    .all<PublicationRow>();
+  return (rows.results || []).map(serializePublication);
+}
+
+export async function cancelPublication(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  publicationIdInput: unknown,
+): Promise<Publication | null> {
+  const publicationId = normalizeId(publicationIdInput);
+  if (!publicationId) throw new SocialPublishingInputError("Publication id is required");
+  const publication = await getOwnedPublication(env, ownerId, publicationId);
+  if (!publication) return null;
+  if (publication.status !== "scheduled") {
+    throw new SocialPublishingInputError("Only a scheduled Publication can be cancelled", 409);
+  }
+  const cancelled = await env.DB.prepare(
+    `UPDATE social_publications
+     SET status = 'cancelled', error_code = 'cancelled:owner_request',
+         error_message = 'Cancelled by the owner.', updated_at = datetime('now')
+     WHERE id = ? AND status = 'scheduled'
+     RETURNING id`,
+  )
+    .bind(publication.id)
+    .first<{ id: string }>();
+  if (!cancelled) {
+    throw new SocialPublishingInputError(
+      "This Publication is already being dispatched and can no longer be cancelled",
+      409,
+    );
+  }
+  await insertSocialPublicationEvent(env, {
+    publicationId: publication.id,
+    variantId: publication.versionId,
+    eventType: "cancelled",
+    payload: { reason: "owner_request", ownerId },
+  });
+  return getOwnedPublication(env, ownerId, publication.id);
+}
+
+export async function resolvePublicationOutcome(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  publicationIdInput: unknown,
+  input: { outcome?: unknown; platformPostUrl?: unknown },
+): Promise<Publication | null> {
+  const gate = await getSocialPublishingRuntimeStatus(env);
+  if (!gate.ready) throw new SocialPublishingGateError(gate);
+  const publicationId = normalizeId(publicationIdInput);
+  if (!publicationId) throw new SocialPublishingInputError("Publication id is required");
+  const publication = await getOwnedPublication(env, ownerId, publicationId);
+  if (!publication) return null;
+  if (
+    publication.status !== "publishing" ||
+    publication.failureClass !== "outcome_unknown"
+  ) {
+    throw new SocialPublishingInputError("This Publication does not need outcome resolution", 409);
+  }
+
+  if (input.outcome === "published") {
+    const platformPostUrl = normalizeId(input.platformPostUrl);
+    if (!platformPostUrl || !isHttpsUrl(platformPostUrl)) {
+      throw new SocialPublishingInputError("Paste the published post URL to confirm the outcome");
+    }
+    const resolved = await env.DB.prepare(
+      `UPDATE social_publications
+       SET status = 'published', platform_post_url = ?, published_at = datetime('now'),
+           error_code = NULL, error_message = NULL, updated_at = datetime('now')
+       WHERE id = ? AND status = 'publishing'
+         AND (error_code = 'outcome_unknown' OR error_code LIKE 'outcome_unknown:%')
+       RETURNING id`,
+    )
+      .bind(platformPostUrl, publication.id)
+      .first<{ id: string }>();
+    if (!resolved) {
+      throw new SocialPublishingInputError(
+        "This Publication outcome was already resolved",
+        409,
+      );
+    }
+    await insertSocialPublicationEvent(env, {
+      publicationId: publication.id,
+      variantId: publication.versionId,
+      eventType: "published",
+      payload: { resolution: "owner_confirmed", platformPostUrl, ownerId },
+    });
+  } else if (input.outcome === "not_published") {
+    const errorCode = "retryable:owner_confirmed_not_published";
+    const errorMessage = "The owner confirmed that no provider post was created.";
+    const resolved = await env.DB.prepare(
+      `UPDATE social_publications
+       SET status = 'failed', error_code = ?, error_message = ?,
+           provider_response_json = NULL, updated_at = datetime('now')
+       WHERE id = ? AND status = 'publishing'
+         AND (error_code = 'outcome_unknown' OR error_code LIKE 'outcome_unknown:%')
+       RETURNING id`,
+    )
+      .bind(errorCode, errorMessage, publication.id)
+      .first<{ id: string }>();
+    if (!resolved) {
+      throw new SocialPublishingInputError(
+        "This Publication outcome was already resolved",
+        409,
+      );
+    }
+    await insertSocialPublicationEvent(env, {
+      publicationId: publication.id,
+      variantId: publication.versionId,
+      eventType: "failed",
+      payload: { code: errorCode, message: errorMessage, resolution: "owner_confirmed" },
+    });
+  } else {
+    throw new SocialPublishingInputError("Choose published or not_published");
+  }
+  await syncContentItemStatusFromPublications(env, publication.versionId);
+  return getOwnedPublication(env, ownerId, publication.id);
+}
+
 export async function dispatchDueSocialPublications(
   env: SocialPublishingEnv,
 ): Promise<{ queued: number; skipped: number }> {
   const gate = await getSocialPublishingRuntimeStatus(env);
   if (!gate.ready) return { queued: 0, skipped: 0 };
 
-  const rows = await env.DB.prepare(
-    `SELECT c.*, s.username AS site_username
-     FROM content_bank_items c
-     JOIN sites s ON s.id = c.site_id
-     WHERE c.status = 'scheduled'
-       AND c.approved_by_human = 1
-       AND c.scheduled_for IS NOT NULL
-       AND datetime(c.scheduled_for) <= datetime('now')
-     ORDER BY c.scheduled_for ASC
-     LIMIT 20`,
-  )
-    .bind()
-    .all<ContentItemRow>();
-
   let queued = 0;
   let skipped = 0;
-  for (const row of rows.results || []) {
-    try {
-      const result = await createQueuedContentPublicationAndEnqueue(env, row.user_id, row.id);
-      queued += result?.publicationIds.length || 0;
-    } catch {
-      skipped += 1;
-    }
-  }
-  const variants = await env.DB.prepare(
-    `SELECT v.id, s.user_id
-     FROM social_variants v
-     JOIN social_packages p ON p.id = v.package_id
-     JOIN sites s ON s.id = p.site_id
-     WHERE v.platform = 'linkedin'
-       AND v.approval_status = 'approved'
-       AND v.scheduled_for IS NOT NULL
-       AND datetime(v.scheduled_for) <= datetime('now')
-     ORDER BY v.scheduled_for ASC
+  const publications = await env.DB.prepare(
+    `SELECT id, variant_id
+     FROM social_publications
+     WHERE status = 'scheduled'
+       AND scheduled_for IS NOT NULL
+       AND datetime(scheduled_for) <= datetime('now')
+     ORDER BY scheduled_for ASC, created_at ASC
      LIMIT 20`,
   )
     .bind()
-    .all<{ id: string; user_id: string }>();
-  for (const variant of variants.results || []) {
+    .all<{ id: string; variant_id: string }>();
+  for (const publication of publications.results || []) {
+    let claimed = false;
     try {
-      const publication = await createQueuedSocialVariantPublicationAndEnqueue(
+      const claim = await env.DB.prepare(
+        `UPDATE social_publications
+         SET status = 'queued', queued_at = NULL, updated_at = datetime('now')
+         WHERE id = ? AND status = 'scheduled'
+         RETURNING id, variant_id`,
+      )
+        .bind(publication.id)
+        .first<{ id: string; variant_id: string }>();
+      if (!claim) {
+        skipped += 1;
+        continue;
+      }
+      claimed = true;
+      await insertSocialPublicationEvent(env, {
+        publicationId: claim.id,
+        variantId: claim.variant_id,
+        eventType: "queued",
+        payload: { dispatch: "scheduled" },
+      });
+      await resumeQueuedPublicationHandoff(
         env,
-        variant.user_id,
-        variant.id,
+        { id: claim.id, status: "queued", queuedAt: null },
+        fetch,
       );
-      queued += publication ? 1 : 0;
+      queued += 1;
     } catch {
+      if (claimed) {
+        const reset = await env.DB.prepare(
+          `UPDATE social_publications
+           SET status = 'scheduled', queued_at = NULL, updated_at = datetime('now')
+           WHERE id = ? AND status = 'queued'
+           RETURNING id, variant_id`,
+        )
+          .bind(publication.id)
+          .first<{ id: string; variant_id: string }>();
+        if (reset) {
+          await insertSocialPublicationEvent(env, {
+            publicationId: reset.id,
+            variantId: reset.variant_id,
+            eventType: "scheduled",
+            payload: { dispatch: "rollback", reason: "queue_handoff_failed" },
+          });
+        }
+      }
       skipped += 1;
     }
   }
@@ -1438,7 +1914,7 @@ export async function processSocialPublishBatch(
 ): Promise<void> {
   for (const message of batch.messages) {
     try {
-      await publishQueuedContentPublication(env, message.body.publicationId, fetch);
+      await publishQueuedPublication(env, message.body.publicationId, fetch);
       message.ack();
     } catch (error) {
       if (error instanceof SocialPublishRetrySignal) {
@@ -1451,7 +1927,7 @@ export async function processSocialPublishBatch(
   }
 }
 
-export async function publishQueuedContentPublication(
+export async function publishQueuedPublication(
   env: SocialPublishingEnv,
   publicationIdInput: unknown,
   fetcher: typeof fetch = fetch,
@@ -1463,19 +1939,22 @@ export async function publishQueuedContentPublication(
   const row = await getQueuedPublicationRow(env, publicationId);
   if (!row) return;
   if (
+    row.pub_status === "scheduled" ||
     row.pub_status === "published" ||
     row.pub_status === "cancelled" ||
     row.pub_status === "failed"
   ) return;
   if (row.pub_status === "publishing") {
-    await failContentPublication(
-      env,
-      row,
-      "outcome_unknown:delivery_interrupted",
-      "A previous publishing attempt did not finish cleanly. Check the provider before retrying.",
-      undefined,
-      true,
-    );
+    if (isStalePublishingTimestamp(row.pub_updated_at)) {
+      await failContentPublication(
+        env,
+        row,
+        "outcome_unknown:delivery_interrupted",
+        "A previous publishing attempt did not finish cleanly. Check the provider before retrying.",
+        undefined,
+        true,
+      );
+    }
     return;
   }
 
@@ -1489,7 +1968,7 @@ export async function publishQueuedContentPublication(
       env,
       row,
       "not_approved",
-      "Content item must be approved before publishing.",
+      "The exact Post Version must be approved before publishing.",
     );
     return;
   }
@@ -1513,6 +1992,16 @@ export async function publishQueuedContentPublication(
     );
     return;
   }
+
+  const claim = await env.DB.prepare(
+    `UPDATE social_publications
+     SET status = 'publishing', updated_at = datetime('now')
+     WHERE id = ? AND status = 'queued'
+     RETURNING id`,
+  )
+    .bind(row.publication_id)
+    .first<{ id: string }>();
+  if (!claim) return;
 
   const accessToken = await resolvePublishingAccessToken(env, row, fetcher);
   if (!accessToken) {
@@ -1547,13 +2036,6 @@ export async function publishQueuedContentPublication(
     return;
   }
 
-  await env.DB.prepare(
-    `UPDATE social_publications
-     SET status = 'publishing', updated_at = datetime('now')
-     WHERE id = ?`,
-  )
-    .bind(row.publication_id)
-    .run();
   const attempt = await publicationAttemptNumber(env, row.publication_id);
   await insertSocialPublicationEvent(env, {
     publicationId: row.publication_id,
@@ -1664,7 +2146,7 @@ async function publicationAttemptNumber(
   return Number(row?.count || 0) + 1;
 }
 
-export async function reorderContentQueue(
+async function reorderContentQueue(
   env: SocialPublishingEnv,
   ownerId: string,
   siteIdInput: unknown,
@@ -1711,6 +2193,7 @@ function createGate(
     enabled,
     ready: status === "installed" && enabled,
     statusLabel: statusToLabel(status),
+    platformCapabilities: getSocialPlatformCapabilities(),
   };
 }
 
@@ -1997,15 +2480,13 @@ async function getQueuedPublicationRow(
             pub.site_id,
             pub.platform,
             pub.status AS pub_status,
-            COALESCE(v.body_text, c.body) AS body,
-            COALESCE(v.asset_manifest_json, c.media_manifest_json, '[]') AS media_manifest_json,
-            COALESCE(c.platforms_json, '[]') AS platforms_json,
-            CASE
-              WHEN v.id IS NOT NULL AND v.approval_status = 'approved' THEN 1
-              WHEN v.id IS NOT NULL THEN 0
-              ELSE c.approved_by_human
-            END AS approved_by_human,
-            COALESCE(c.user_id, s.user_id) AS user_id,
+            pub.updated_at AS pub_updated_at,
+            pub.body_text_snapshot AS body,
+            COALESCE(pub.asset_manifest_json_snapshot, '[]') AS media_manifest_json,
+            '[]' AS platforms_json,
+            CASE WHEN pub.approval_status_snapshot = 'approved' THEN 1 ELSE 0 END
+              AS approved_by_human,
+            s.user_id AS user_id,
             acct.id AS account_id,
             acct.platform_account_id,
             acct.access_token_ciphertext,
@@ -2014,17 +2495,14 @@ async function getQueuedPublicationRow(
             acct.status AS account_status,
             acct.metadata_json AS account_metadata_json
      FROM social_publications pub
-     LEFT JOIN content_bank_items c ON c.id = pub.variant_id
-     LEFT JOIN social_variants v ON v.id = pub.variant_id
-     LEFT JOIN social_packages p ON p.id = v.package_id
-     LEFT JOIN sites s ON s.id = p.site_id
+     JOIN social_variants v ON v.id = pub.variant_id
+     JOIN social_packages p ON p.id = v.package_id
+     JOIN sites s ON s.id = p.site_id
      LEFT JOIN social_accounts acct
-       ON acct.site_id = pub.site_id
+       ON acct.id = pub.target_account_id_snapshot
+      AND acct.site_id = pub.site_id
       AND acct.platform = pub.platform
-      AND acct.status = 'active'
-      AND (v.id IS NULL OR acct.id = v.target_account_id)
      WHERE pub.id = ?
-       AND (c.id IS NOT NULL OR v.id IS NOT NULL)
      LIMIT 1`,
   )
     .bind(publicationId)
@@ -2040,37 +2518,85 @@ async function latestSocialVariantPublication(
     ? ` AND status IN (${statuses.map(() => "?").join(", ")})`
     : "";
   const row = await env.DB.prepare(
-    `SELECT id, variant_id, status, platform_post_id, platform_post_url, published_at,
-            error_code, error_message
-     FROM social_publications
-     WHERE variant_id = ?${statusFilter}
-     ORDER BY created_at DESC
+    `${publicationSelectSql()}
+     WHERE pub.variant_id = ?${statusFilter}
+     ORDER BY pub.created_at DESC
      LIMIT 1`,
   )
     .bind(variantId, ...(statuses || []))
-    .first<{
-      id: string;
-      variant_id: string;
-      status: SocialVariantPublication["status"];
-      platform_post_id: string | null;
-      platform_post_url: string | null;
-      published_at: string | null;
-      error_code: string | null;
-      error_message: string | null;
-    }>();
-  return row
-    ? {
-        id: row.id,
-        variantId: row.variant_id,
-        status: row.status,
-        platformPostId: row.platform_post_id,
-        platformPostUrl: row.platform_post_url,
-        publishedAt: row.published_at,
-        failureClass: parseFailureClass(row.error_code),
-        errorCode: row.error_code,
-        errorMessage: row.error_message,
-      }
-    : null;
+    .first<PublicationRow>();
+  if (!row) return null;
+  const { versionId, ...publication } = serializePublication(row);
+  return { ...publication, variantId: versionId };
+}
+
+function canonicalPublication(publication: SocialVariantPublication): Publication {
+  const { variantId, ...rest } = publication;
+  return { ...rest, versionId: variantId };
+}
+
+function publicationSelectSql(): string {
+  return `SELECT pub.id, pub.variant_id, pub.platform, pub.status, pub.scheduled_for,
+                 pub.timezone, pub.queued_at, pub.platform_post_id, pub.platform_post_url,
+                 pub.published_at, pub.error_code, pub.error_message,
+                 pub.requested_by_type, pub.requested_by_user_id,
+                 pub.request_context_json, pub.created_at, pub.updated_at
+          FROM social_publications pub`;
+}
+
+function serializePublication(row: PublicationRow): Publication {
+  return {
+    id: row.id,
+    versionId: row.variant_id,
+    platform: row.platform,
+    status: row.status,
+    scheduledFor: row.scheduled_for,
+    timezone: row.timezone,
+    queuedAt: row.queued_at,
+    platformPostId: row.platform_post_id,
+    platformPostUrl: row.platform_post_url,
+    publishedAt: row.published_at,
+    failureClass: parseFailureClass(row.error_code),
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    requestedByType: row.requested_by_type,
+    requestedByUserId: row.requested_by_user_id,
+    requestContext: parseJsonObject(row.request_context_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function getOwnedPublication(
+  env: SocialPublishingEnv,
+  ownerId: string,
+  publicationId: string,
+): Promise<Publication | null> {
+  const row = await env.DB.prepare(
+    `${publicationSelectSql()}
+     JOIN social_variants v ON v.id = pub.variant_id
+     JOIN social_packages p ON p.id = v.package_id
+     JOIN sites s ON s.id = p.site_id
+     WHERE pub.id = ? AND s.user_id = ?
+     LIMIT 1`,
+  )
+    .bind(publicationId, ownerId)
+    .first<PublicationRow>();
+  return row ? serializePublication(row) : null;
+}
+
+async function findScheduledPublication(
+  env: SocialPublishingEnv,
+  versionId: string,
+  scheduledFor: string,
+): Promise<{ id: string } | null> {
+  return env.DB.prepare(
+    `SELECT id FROM social_publications
+     WHERE variant_id = ? AND scheduled_for = ? AND status = 'scheduled'
+     LIMIT 1`,
+  )
+    .bind(versionId, scheduledFor)
+    .first<{ id: string }>();
 }
 
 async function insertSocialPublicationEvent(
@@ -2233,7 +2759,7 @@ async function syncSocialVariantStatusFromPublications(
   if (published) {
     await env.DB.prepare(
       `UPDATE social_variants
-       SET scheduled_for = NULL, timezone = NULL, published_variant_id = ?, updated_at = datetime('now')
+       SET published_variant_id = ?, updated_at = datetime('now')
        WHERE id = ?`,
     )
       .bind(published.id, variantId)
@@ -2309,6 +2835,29 @@ async function revokeSocialVariantApproval(
   )
     .bind(variantId)
     .run();
+  const scheduled = await env.DB.prepare(
+    `SELECT id FROM social_publications
+     WHERE variant_id = ? AND status = 'scheduled'`,
+  )
+    .bind(variantId)
+    .all<{ id: string }>();
+  for (const publication of scheduled.results || []) {
+    await env.DB.prepare(
+      `UPDATE social_publications
+       SET status = 'cancelled', error_code = 'cancelled:approval_revoked',
+           error_message = 'Cancelled because Version approval was removed.',
+           updated_at = datetime('now')
+       WHERE id = ? AND status = 'scheduled'`,
+    )
+      .bind(publication.id)
+      .run();
+    await insertSocialPublicationEvent(env, {
+      publicationId: publication.id,
+      variantId,
+      eventType: "cancelled",
+      payload: { reason: "approval_revoked" },
+    });
+  }
 }
 
 async function resolvePublishingAccessToken(
@@ -2695,6 +3244,31 @@ function normalizeId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed && trimmed.length <= 160 ? trimmed : null;
+}
+
+function publicationTimezone(value: unknown): string {
+  const timezone = normalizeId(value) || "UTC";
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+    return timezone;
+  } catch {
+    throw new SocialPublishingInputError("Choose a valid timezone");
+  }
+}
+
+function publicationRequestContextJson(value: unknown): string {
+  const json = JSON.stringify(isRecord(value) ? value : {});
+  if (json.length > 20_000) {
+    throw new SocialPublishingInputError("Publication request context is too large");
+  }
+  return json;
+}
+
+function isStalePublishingTimestamp(value: string | null | undefined): boolean {
+  if (!value) return true;
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const timestamp = Date.parse(normalized);
+  return !Number.isFinite(timestamp) || timestamp < Date.now() - 10 * 60_000;
 }
 
 function normalizeClientId(value: unknown): string {

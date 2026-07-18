@@ -1,7 +1,7 @@
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { useSitesStore } from "../stores/sites";
 import SocialPage from "./social.vue";
 
@@ -12,7 +12,6 @@ vi.mock("../api", () => ({
     patch: vi.fn(),
     put: vi.fn(),
     delete: vi.fn(),
-    upload: vi.fn(),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -27,56 +26,31 @@ const account = {
   lastVerifiedAt: "2026-07-18T08:00:00Z",
 };
 
-const contentItem = {
-  id: "content-1",
-  siteId: "site-1",
-  siteUsername: "kieran",
-  userId: "owner",
-  body: "A post written by the owner.",
-  mediaManifest: [],
-  platforms: ["linkedin"],
-  sourceType: "original",
-  sourceRef: null,
-  status: "bank",
-  queuePosition: null,
-  scheduledFor: null,
-  timezone: "Europe/Dublin",
-  createdBy: "human",
-  approvedByHuman: true,
-  evergreen: false,
-  timesPosted: 0,
-  lastPostedAt: null,
-  cooldownDays: 0,
-  tags: [],
-  notes: null,
-  createdAt: "2026-07-18T08:00:00Z",
-  updatedAt: "2026-07-18T08:00:00Z",
-};
-
-const agentPackage = {
-  package: {
-    id: "package-1",
+const sourcePost = {
+  post: {
+    id: "post-1",
     siteId: "site-1",
     sourceType: "mission_task",
-    sourceRef: "task-1",
-    sourceSnapshot: "A source-backed idea.",
-    ideaText: "An agent-prepared social post",
+    sourceRef: "mission_task:task-1",
+    sourceSnapshot: "{\"id\":\"task-1\"}",
+    sourceText: "A source-backed idea worth sharing.",
+    ideaText: "An agent-prepared social Post",
     goal: null,
     status: "ready",
     createdBy: "agent",
     createdAt: "2026-07-18T07:00:00Z",
     updatedAt: "2026-07-18T07:00:00Z",
   },
-  variants: [
+  versions: [
     {
-      id: "variant-1",
-      packageId: "package-1",
+      id: "version-1",
+      postId: "post-1",
       platform: "linkedin",
       targetAccountId: "account-linkedin",
       format: "post",
       bodyText: "Agent copy",
       assetManifest: [],
-      sourceExcerpt: "A source-backed idea.",
+      sourceExcerpt: "A source-backed idea worth sharing.",
       approvalStatus: "draft",
       approvedAt: null,
       approvedByUserId: null,
@@ -93,23 +67,91 @@ const agentPackage = {
   ],
 };
 
+const legacyPost = {
+  ...sourcePost,
+  post: {
+    ...sourcePost.post,
+    id: "post-legacy",
+    sourceType: "legacy_content_bank_read_only",
+    sourceRef: "content-bank:legacy-1",
+    ideaText: "Imported legacy Post",
+    createdBy: "user",
+  },
+  versions: sourcePost.versions.map((version) => ({
+    ...version,
+    id: "version-legacy",
+    postId: "post-legacy",
+    approvalStatus: "approved",
+    approvedAt: "2026-07-18T07:30:00Z",
+    approvedByUserId: "owner",
+  })),
+};
+
+const platformCapabilities = [
+  { platform: "linkedin", draft: true, schedule: true, publish: true, reason: null },
+  {
+    platform: "x",
+    draft: true,
+    schedule: false,
+    publish: false,
+    reason: "X Versions are draft-only until delivery works end to end.",
+  },
+  {
+    platform: "instagram",
+    draft: true,
+    schedule: false,
+    publish: false,
+    reason: "Instagram Versions are draft-only until delivery works end to end.",
+  },
+];
+
+const publication = {
+  id: "publication-1",
+  versionId: "version-1",
+  platform: "linkedin",
+  status: "scheduled",
+  scheduledFor: "2026-07-20T09:30:00.000Z",
+  timezone: "Europe/Dublin",
+  queuedAt: null,
+  platformPostId: null,
+  platformPostUrl: null,
+  publishedAt: null,
+  failureClass: null,
+  errorCode: null,
+  errorMessage: null,
+  requestedByType: "owner",
+  requestedByUserId: "owner",
+  requestContext: { surface: "social_workspace" },
+  createdAt: "2026-07-18T08:00:00.000Z",
+  updatedAt: "2026-07-18T08:00:00.000Z",
+};
+
 enableAutoUnmount(afterEach);
 
 function mockGet(endpoint: string) {
-  if (endpoint === "/social/packages?siteId=site-1") {
-    return Promise.resolve({ packages: [agentPackage] });
+  if (endpoint === "/social/posts?siteId=site-1") return Promise.resolve({ posts: [sourcePost] });
+  if (endpoint === "/social/accounts") return Promise.resolve({ accounts: [account] });
+  if (endpoint === "/social/versions/version-1/publications") {
+    return Promise.resolve({ publications: [publication] });
   }
-  if (endpoint === "/social/accounts") {
-    return Promise.resolve({ accounts: [account] });
-  }
-  if (endpoint === "/content/items?siteId=site-1") {
-    return Promise.resolve({ items: [contentItem] });
+  if (endpoint === "/social/status") {
+    return Promise.resolve({
+      plugin: {
+        status: "installed",
+        enabled: true,
+        ready: true,
+        statusLabel: "Installed",
+        platformCapabilities,
+      },
+      hostedOAuth: { configured: false, platforms: [] },
+    });
   }
   throw new Error(`Unexpected GET ${endpoint}`);
 }
 
 function mountPage() {
   return mount(SocialPage, {
+    attachTo: document.body,
     global: {
       stubs: {
         RouterLink: { template: "<a><slot /></a>" },
@@ -127,17 +169,7 @@ describe("SocialPage", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
-    window.matchMedia = vi.fn().mockReturnValue({
-      matches: false,
-      media: "(max-width: 720px)",
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    });
-    vi.stubGlobal("URL", {
-      ...URL,
-      createObjectURL: vi.fn(() => "blob:preview"),
-      revokeObjectURL: vi.fn(),
-    });
+    window.history.replaceState({}, "", "/social");
     const sites = useSitesStore();
     sites.sites = [
       {
@@ -154,89 +186,124 @@ describe("SocialPage", () => {
     vi.mocked(api.get).mockImplementation(mockGet);
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("uses an email-style toolbar without the old title or site picker", async () => {
+  it("shows visible Source text and canonical Post/Version language", async () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    expect(wrapper.find("h1").exists()).toBe(false);
-    expect(wrapper.text()).not.toContain("Social Publishing");
-    expect(wrapper.find(".site-picker").exists()).toBe(false);
-    expect(wrapper.text()).toContain("A post written by the owner.");
-    expect(wrapper.text()).toContain("An agent-prepared social post");
+    expect(wrapper.text()).toContain("An agent-prepared social Post");
+    expect(wrapper.text()).toContain("A source-backed idea worth sharing.");
+    expect(wrapper.text()).toContain("LinkedIn Version");
+    expect(wrapper.text().toLowerCase()).not.toContain("content bank");
+    expect(api.get).not.toHaveBeenCalledWith(expect.stringContaining("/content/"));
+  });
 
-    const accountsButton = wrapper.get(
-      'button[aria-label="Manage social accounts"]',
+  it("focuses the exact Publication named by a Calendar deep link", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/social?siteId=site-1&postId=post-1&versionId=version-1&publicationId=publication-1",
     );
-    expect(accountsButton.classes()).toContain("me3-btn--ghost");
-    expect(accountsButton.classes()).toContain("me3-btn--icon-only");
-  });
-
-  it("composes a post with an image and saves it through the content bank", async () => {
-    const createdItem = {
-      ...contentItem,
-      id: "content-new",
-      body: "A newly composed post.",
-    };
-    const uploadedItem = {
-      ...createdItem,
-      mediaManifest: [
-        {
-          url: "/preview/kieran/files/new.png",
-          filename: "new.png",
-          mimeType: "image/png",
-          kind: "image",
-        },
-      ],
-    };
-    vi.mocked(api.post).mockResolvedValue({ item: createdItem });
-    vi.mocked(api.upload).mockResolvedValue({
-      asset: uploadedItem.mediaManifest[0],
-      item: uploadedItem,
-    });
 
     const wrapper = mountPage();
     await flushPromises();
-    const composeButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().trim() === "Compose");
-    expect(composeButton).toBeTruthy();
+
+    expect(api.get).toHaveBeenCalledWith("/social/versions/version-1/publications");
+    const linked = wrapper.get("#social-publication-publication-1");
+    expect(linked.classes()).toContain("publication-history__item--linked");
+    expect(linked.attributes("aria-current")).toBe("true");
+    expect(linked.attributes("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(linked.element);
+  });
+
+  it("saves owner-authored compose text as a pasted Source-backed Post", async () => {
+    const created = {
+      ...sourcePost,
+      post: {
+        ...sourcePost.post,
+        id: "post-new",
+        sourceType: "pasted",
+        sourceText: "A newly composed Post.",
+        sourceSnapshot: "A newly composed Post.",
+        ideaText: "A newly composed Post.",
+        createdBy: "user",
+      },
+      versions: [{ ...sourcePost.versions[0], id: "version-new", postId: "post-new" }],
+    };
+    vi.mocked(api.post).mockResolvedValue({ post: created });
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const composeButton = wrapper.findAll("button").find((button) => button.text().trim() === "New Post");
     await composeButton!.trigger("click");
-
-    const textarea = wrapper.get(".compose-field--body textarea");
-    await textarea.setValue("A newly composed post.");
-
-    const fileInput = wrapper.get('.image-upload input[type="file"]');
-    const file = new File(["image"], "new.png", { type: "image/png" });
-    Object.defineProperty(fileInput.element, "files", {
-      configurable: true,
-      value: [file],
-    });
-    await fileInput.trigger("change");
-    expect(wrapper.text()).toContain("new.png");
-
-    const saveButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().trim() === "Save draft");
-    expect(saveButton).toBeTruthy();
-    expect(saveButton!.attributes("disabled")).toBeUndefined();
+    await wrapper.get(".compose-card textarea").setValue("A newly composed Post.");
     await wrapper.get("form.compose-card").trigger("submit");
     await flushPromises();
 
-    expect(api.post).toHaveBeenCalledWith("/content/items", {
+    expect(api.post).toHaveBeenCalledWith("/social/posts", {
       siteId: "site-1",
-      body: "A newly composed post.",
-      platforms: ["linkedin"],
-      mediaManifest: [],
-      timezone: expect.any(String),
+      sourceType: "pasted",
+      sourceSnapshot: "A newly composed Post.",
+      sourceText: "A newly composed Post.",
+      ideaText: "A newly composed Post.",
+      versions: [
+        {
+          platform: "linkedin",
+          bodyText: "A newly composed Post.",
+          targetAccountId: "account-linkedin",
+        },
+      ],
     });
-    expect(api.upload).toHaveBeenCalledWith(
-      "/content/items/content-new/media",
-      expect.any(FormData),
+    expect(wrapper.text()).toContain("Source-backed Post saved for review.");
+  });
+
+  it("presents X and Instagram as draft-only capability options", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    const composeButton = wrapper.findAll("button").find((button) => button.text().trim() === "New Post");
+    await composeButton!.trigger("click");
+
+    const xTarget = wrapper.findAll(".platform-target").find((button) => button.text().includes("X"));
+    const instagramTarget = wrapper.findAll(".platform-target").find((button) => button.text().includes("Instagram"));
+    expect(xTarget?.text()).toContain("Draft only");
+    expect(instagramTarget?.text()).toContain("Draft only");
+  });
+
+  it("presents imported legacy Posts as read-only with ordinary Version buttons", async () => {
+    vi.mocked(api.get).mockImplementation((endpoint) =>
+      endpoint === "/social/posts?siteId=site-1"
+        ? Promise.resolve({ posts: [legacyPost] })
+        : mockGet(endpoint)
     );
-    expect(wrapper.text()).toContain("Draft saved.");
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Imported Post — read-only");
+    expect(wrapper.get(".version-editor textarea").attributes("readonly")).toBeDefined();
+    expect(wrapper.get(".version-editor select").attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).not.toContain("Save Draft");
+    expect(wrapper.text()).not.toContain("Approve Version");
+    expect(wrapper.text()).not.toContain("Publish now");
+    expect(wrapper.find(".editor-actions").exists()).toBe(false);
+    expect(wrapper.find(".publication-actions").exists()).toBe(false);
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false);
+    expect(wrapper.find('[role="tab"]').exists()).toBe(false);
+    expect(wrapper.get(".version-tab").attributes("aria-pressed")).toBe("true");
+  });
+
+  it("shows compose-save failures inside the open dialog", async () => {
+    vi.mocked(api.post).mockRejectedValueOnce(new ApiError("Source-backed Post rejected", 400));
+
+    const wrapper = mountPage();
+    await flushPromises();
+    const composeButton = wrapper.findAll("button").find((button) => button.text().trim() === "New Post");
+    await composeButton!.trigger("click");
+    await wrapper.get(".compose-card textarea").setValue("A source that fails to save.");
+    await wrapper.get("form.compose-card").trigger("submit");
+    await flushPromises();
+
+    const alert = wrapper.get(".compose-card [role='alert']");
+    expect(alert.text()).toContain("Source-backed Post rejected");
+    expect(wrapper.find(".compose-card").exists()).toBe(true);
   });
 });

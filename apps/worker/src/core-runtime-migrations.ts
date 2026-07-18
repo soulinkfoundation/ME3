@@ -14,6 +14,10 @@ type SqliteNameRow = {
   name: string;
 };
 
+type SqliteDefinitionRow = {
+  sql: string | null;
+};
+
 const MIGRATION_TABLE = "core_runtime_migrations";
 
 const runtimeMigrations: RuntimeMigration[] = [
@@ -76,6 +80,16 @@ const runtimeMigrations: RuntimeMigration[] = [
     id: "0021_managed_email_inbound_deliveries",
     checksum: "2026-07-18-managed-email-inbound-deliveries-v1",
     apply: applyManagedEmailInboundDeliveriesMigration,
+  },
+  {
+    id: "0022_social_posts_canonical",
+    checksum: "2026-07-18-social-posts-canonical-v1",
+    apply: applySocialPostsCanonicalMigration,
+  },
+  {
+    id: "0023_social_publications_reusable",
+    checksum: "2026-07-18-social-publications-reusable-v1",
+    apply: applySocialPublicationsReusableMigration,
   },
 ];
 
@@ -596,6 +610,562 @@ async function applySocialPublicationIdempotencyMigration(db: D1Database): Promi
     .run();
 }
 
+async function applySocialPostsCanonicalMigration(db: D1Database): Promise<void> {
+  for (const tableName of [
+    "content_bank_items",
+    "social_packages",
+    "social_variants",
+    "social_publications",
+    "social_publication_events",
+  ]) {
+    if (!(await tableExists(db, tableName))) {
+      throw new Error(`Cannot apply 0022_social_posts_canonical: ${tableName} is missing`);
+    }
+  }
+
+  await addColumnIfMissing(
+    db,
+    "social_packages",
+    "source_text",
+    "TEXT NOT NULL DEFAULT ''",
+  );
+
+  const statements = [
+    `UPDATE social_packages
+     SET source_type = 'legacy_content_bank_read_only'
+     WHERE source_type = 'original'`,
+    `UPDATE social_packages
+     SET source_text = source_snapshot
+     WHERE source_text = '' AND source_snapshot <> ''`,
+    `INSERT OR IGNORE INTO social_packages (
+       id, site_id, post_slug, post_title_snapshot, source_hash, goal, status,
+       created_by, created_at, updated_at, source_type, source_ref,
+       source_snapshot, source_text, idea_text
+     )
+     SELECT
+       'social-post-legacy-' || lower(hex(CAST(item.id AS BLOB))),
+       item.site_id,
+       '_legacy-content-bank-' || lower(hex(CAST(item.id AS BLOB))),
+       substr(item.body, 1, 120),
+       'legacy-content-bank-' || lower(hex(CAST(item.id AS BLOB))),
+       NULL,
+       CASE item.status
+         WHEN 'bank' THEN 'draft'
+         WHEN 'posted' THEN 'published'
+         WHEN 'failed' THEN 'failed'
+         WHEN 'archived' THEN 'archived'
+         ELSE 'ready'
+       END,
+       CASE item.created_by WHEN 'agent_suggested' THEN 'agent' ELSE 'user' END,
+       item.created_at,
+       item.updated_at,
+       'legacy_content_bank_read_only',
+       'content-bank:' || item.id,
+       item.body,
+       item.body,
+       item.body
+     FROM content_bank_items AS item`,
+    `INSERT OR IGNORE INTO social_variants (
+       id, package_id, platform, format, title, body_text, first_comment,
+       hashtags_json, asset_manifest_json, source_excerpt, approval_status,
+       scheduled_for, timezone, published_variant_id, agent_notes, created_at,
+       updated_at, target_account_id, approved_at, approved_by_user_id
+     )
+     SELECT DISTINCT
+       'social-variant-legacy-' || lower(hex(CAST(item.id AS BLOB))) || '-' ||
+         lower(trim(CAST(platform.value AS TEXT))),
+       'social-post-legacy-' || lower(hex(CAST(item.id AS BLOB))),
+       lower(trim(CAST(platform.value AS TEXT))),
+       'post',
+       NULL,
+       item.body,
+       NULL,
+       '[]',
+       item.media_manifest_json,
+       NULL,
+       CASE WHEN item.approved_by_human = 1 THEN 'approved' ELSE 'draft' END,
+       CASE
+         WHEN lower(trim(CAST(platform.value AS TEXT))) = 'linkedin'
+           THEN item.scheduled_for
+         ELSE NULL
+       END,
+       CASE
+         WHEN lower(trim(CAST(platform.value AS TEXT))) = 'linkedin'
+           THEN item.timezone
+         ELSE NULL
+       END,
+       NULL,
+       item.notes,
+       item.created_at,
+       item.updated_at,
+       NULL,
+       NULL,
+       CASE WHEN item.approved_by_human = 1 THEN item.user_id ELSE NULL END
+     FROM content_bank_items AS item
+     JOIN json_each(
+       CASE
+         WHEN json_valid(item.platforms_json) AND json_type(item.platforms_json) = 'array'
+           THEN item.platforms_json
+         ELSE '[]'
+       END
+     ) AS platform
+     WHERE platform.type = 'text'
+       AND lower(trim(CAST(platform.value AS TEXT))) IN (
+         'x', 'linkedin', 'instagram', 'instagram_business'
+       )`,
+    "DROP INDEX IF EXISTS idx_social_publications_one_active_variant",
+    `UPDATE social_publications
+     SET variant_id = (
+       SELECT version.id
+       FROM content_bank_items AS item
+       JOIN social_variants AS version
+         ON version.package_id =
+           'social-post-legacy-' || lower(hex(CAST(item.id AS BLOB)))
+        AND version.platform = lower(trim(social_publications.platform))
+       WHERE item.id = social_publications.variant_id
+       LIMIT 1
+     )
+     WHERE EXISTS (
+       SELECT 1
+       FROM content_bank_items AS item
+       JOIN social_variants AS version
+         ON version.package_id =
+           'social-post-legacy-' || lower(hex(CAST(item.id AS BLOB)))
+        AND version.platform = lower(trim(social_publications.platform))
+       WHERE item.id = social_publications.variant_id
+     )`,
+    `UPDATE social_publication_events
+     SET variant_id = (
+       SELECT publication.variant_id
+       FROM social_publications AS publication
+       JOIN social_variants AS version ON version.id = publication.variant_id
+       JOIN content_bank_items AS item
+         ON version.package_id =
+           'social-post-legacy-' || lower(hex(CAST(item.id AS BLOB)))
+       WHERE publication.id = social_publication_events.publication_id
+         AND item.id = social_publication_events.variant_id
+       LIMIT 1
+     )
+     WHERE EXISTS (
+       SELECT 1
+       FROM social_publications AS publication
+       JOIN social_variants AS version ON version.id = publication.variant_id
+       JOIN content_bank_items AS item
+         ON version.package_id =
+           'social-post-legacy-' || lower(hex(CAST(item.id AS BLOB)))
+       WHERE publication.id = social_publication_events.publication_id
+         AND item.id = social_publication_events.variant_id
+     )`,
+    `UPDATE social_publication_events
+     SET variant_id = (
+       SELECT version.id
+       FROM content_bank_items AS item
+       JOIN social_variants AS version
+         ON version.package_id =
+           'social-post-legacy-' || lower(hex(CAST(item.id AS BLOB)))
+        AND version.platform = lower(trim(CAST(json_extract(
+          CASE
+            WHEN json_valid(social_publication_events.payload_json)
+              THEN social_publication_events.payload_json
+            ELSE '{}'
+          END,
+          '$.platform'
+        ) AS TEXT)))
+       WHERE item.id = social_publication_events.variant_id
+       LIMIT 1
+     )
+     WHERE (
+         social_publication_events.publication_id IS NULL
+         OR NOT EXISTS (
+           SELECT 1 FROM social_publications AS publication
+           WHERE publication.id = social_publication_events.publication_id
+         )
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM content_bank_items AS item
+         JOIN social_variants AS version
+           ON version.package_id =
+             'social-post-legacy-' || lower(hex(CAST(item.id AS BLOB)))
+          AND version.platform = lower(trim(CAST(json_extract(
+            CASE
+              WHEN json_valid(social_publication_events.payload_json)
+                THEN social_publication_events.payload_json
+              ELSE '{}'
+            END,
+            '$.platform'
+          ) AS TEXT)))
+         WHERE item.id = social_publication_events.variant_id
+       )`,
+    `UPDATE social_variants
+     SET published_variant_id = (
+       SELECT publication.id
+       FROM social_publications AS publication
+       WHERE publication.variant_id = social_variants.id
+         AND publication.status = 'published'
+       ORDER BY
+         COALESCE(publication.published_at, publication.updated_at, publication.created_at) DESC,
+         publication.id DESC
+       LIMIT 1
+     )
+     WHERE social_variants.id LIKE 'social-variant-legacy-%'
+       AND EXISTS (
+         SELECT 1
+         FROM social_publications AS publication
+         WHERE publication.variant_id = social_variants.id
+           AND publication.status = 'published'
+       )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_social_publications_one_active_variant
+     ON social_publications(variant_id)
+     WHERE variant_id LIKE 'social-variant-%'
+       AND status IN ('queued', 'publishing')`,
+  ];
+
+  for (const sql of statements) {
+    await db.prepare(sql).run();
+  }
+}
+
+async function applySocialPublicationsReusableMigration(db: D1Database): Promise<void> {
+  for (const tableName of ["content_bank_items", "social_packages", "social_variants"]) {
+    if (!(await tableExists(db, tableName))) {
+      throw new Error(
+        `Cannot apply 0023_social_publications_reusable: ${tableName} is missing`,
+      );
+    }
+  }
+
+  await db.prepare("DROP INDEX IF EXISTS idx_social_publications_one_active_variant").run();
+  await db.prepare("DROP INDEX IF EXISTS idx_social_publications_one_in_flight_variant").run();
+  await db.prepare("DROP INDEX IF EXISTS idx_social_publications_same_time_scheduled").run();
+
+  await rebuildSocialPublicationsForReusableMigration(db);
+  await rebuildSocialPublicationEventsForReusableMigration(db);
+
+  const statements = [
+    `INSERT OR IGNORE INTO social_publications (
+       id,
+       variant_id,
+       site_id,
+       platform,
+       status,
+       scheduled_for,
+       timezone,
+       target_account_id_snapshot,
+       format_snapshot,
+       body_text_snapshot,
+       asset_manifest_json_snapshot,
+       approval_status_snapshot,
+       approved_at_snapshot,
+       approved_by_user_id_snapshot,
+       requested_by_type,
+       requested_by_user_id,
+       request_context_json,
+       created_at,
+       updated_at
+     )
+     SELECT
+       'social-publication-scheduled-' || lower(hex(CAST(version.id AS BLOB))) || '-' ||
+         lower(hex(CAST(version.scheduled_for AS BLOB))),
+       version.id,
+       post.site_id,
+       version.platform,
+       'scheduled',
+       version.scheduled_for,
+       version.timezone,
+       version.target_account_id,
+       version.format,
+       version.body_text,
+       version.asset_manifest_json,
+       version.approval_status,
+       version.approved_at,
+       version.approved_by_user_id,
+       'migration',
+       NULL,
+       json_object(
+         'migration', '0023_social_publications_reusable',
+         'source', 'social_variants.scheduled_for'
+       ),
+       COALESCE(version.updated_at, version.created_at, datetime('now')),
+       COALESCE(version.updated_at, version.created_at, datetime('now'))
+     FROM social_variants AS version
+     JOIN social_packages AS post ON post.id = version.package_id
+     WHERE version.platform = 'linkedin'
+       AND version.approval_status = 'approved'
+       AND version.scheduled_for IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1
+         FROM social_publications AS active
+         WHERE active.variant_id = version.id
+           AND active.status IN ('scheduled', 'queued', 'publishing')
+       )`,
+    `INSERT OR IGNORE INTO social_publication_events (
+       id, publication_id, variant_id, event_type, payload_json, created_at
+     )
+     SELECT
+       'social-event-scheduled-' || lower(hex(CAST(version.id AS BLOB))) || '-' ||
+         lower(hex(CAST(version.scheduled_for AS BLOB))),
+       publication.id,
+       version.id,
+       'scheduled',
+       json_object(
+         'migration', '0023_social_publications_reusable',
+         'scheduledFor', publication.scheduled_for,
+         'timezone', publication.timezone
+       ),
+       publication.created_at
+     FROM social_variants AS version
+     JOIN social_publications AS publication
+       ON publication.id =
+         'social-publication-scheduled-' || lower(hex(CAST(version.id AS BLOB))) || '-' ||
+           lower(hex(CAST(version.scheduled_for AS BLOB)))
+     WHERE version.platform = 'linkedin'
+       AND version.approval_status = 'approved'
+       AND version.scheduled_for IS NOT NULL
+       AND publication.status = 'scheduled'
+       AND publication.variant_id = version.id
+       AND publication.scheduled_for = version.scheduled_for`,
+    `CREATE INDEX IF NOT EXISTS idx_social_publications_status
+     ON social_publications(status, scheduled_for, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_social_publications_variant
+     ON social_publications(variant_id, created_at DESC)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_social_publications_same_time_scheduled
+     ON social_publications(variant_id, scheduled_for)
+     WHERE status = 'scheduled' AND scheduled_for IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_social_publications_one_in_flight_variant
+     ON social_publications(variant_id)
+     WHERE status IN ('queued', 'publishing')`,
+    `CREATE INDEX IF NOT EXISTS idx_social_publication_events_publication
+     ON social_publication_events(publication_id, created_at ASC)`,
+    `CREATE INDEX IF NOT EXISTS idx_social_publication_events_variant
+     ON social_publication_events(variant_id, created_at ASC)`,
+  ];
+
+  for (const sql of statements) {
+    await db.prepare(sql).run();
+  }
+}
+
+async function rebuildSocialPublicationsForReusableMigration(
+  db: D1Database,
+): Promise<void> {
+  const tableName = "social_publications";
+  const stagingTableName = "social_publications_0023_new";
+  const tablePresent = await tableExists(db, tableName);
+
+  if (tablePresent && (await columnExists(db, tableName, "body_text_snapshot"))) {
+    if (await tableExists(db, stagingTableName)) {
+      await db.prepare(`DROP TABLE ${stagingTableName}`).run();
+    }
+    return;
+  }
+
+  if (!tablePresent) {
+    if (!(await tableExists(db, stagingTableName))) {
+      throw new Error(
+        "Cannot apply 0023_social_publications_reusable: social_publications is missing",
+      );
+    }
+    await db.prepare(`ALTER TABLE ${stagingTableName} RENAME TO ${tableName}`).run();
+    return;
+  }
+
+  await db.prepare(`DROP TABLE IF EXISTS ${stagingTableName}`).run();
+  await db
+    .prepare(
+      `CREATE TABLE ${stagingTableName} (
+        id TEXT PRIMARY KEY,
+        variant_id TEXT NOT NULL,
+        site_id TEXT NOT NULL,
+        platform TEXT NOT NULL
+          CHECK (platform IN ('x', 'linkedin', 'instagram', 'instagram_business')),
+        status TEXT NOT NULL
+          CHECK (status IN ('scheduled', 'queued', 'publishing', 'published', 'failed', 'cancelled')),
+        scheduled_for TEXT,
+        timezone TEXT,
+        target_account_id_snapshot TEXT,
+        format_snapshot TEXT
+          CHECK (format_snapshot IS NULL OR format_snapshot IN ('post', 'carousel')),
+        body_text_snapshot TEXT,
+        asset_manifest_json_snapshot TEXT,
+        approval_status_snapshot TEXT
+          CHECK (
+            approval_status_snapshot IS NULL
+            OR approval_status_snapshot IN ('draft', 'approved', 'rejected')
+          ),
+        approved_at_snapshot TEXT,
+        approved_by_user_id_snapshot TEXT,
+        requested_by_type TEXT
+          CHECK (requested_by_type IS NULL OR requested_by_type IN ('owner', 'agent', 'migration')),
+        requested_by_user_id TEXT,
+        request_context_json TEXT NOT NULL DEFAULT '{}',
+        platform_post_id TEXT,
+        platform_post_url TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        provider_response_json TEXT,
+        queued_at TEXT,
+        published_at TEXT,
+        last_polled_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO ${stagingTableName} (
+        id,
+        variant_id,
+        site_id,
+        platform,
+        status,
+        scheduled_for,
+        timezone,
+        target_account_id_snapshot,
+        format_snapshot,
+        body_text_snapshot,
+        asset_manifest_json_snapshot,
+        approval_status_snapshot,
+        approved_at_snapshot,
+        approved_by_user_id_snapshot,
+        requested_by_type,
+        requested_by_user_id,
+        request_context_json,
+        platform_post_id,
+        platform_post_url,
+        error_code,
+        error_message,
+        provider_response_json,
+        queued_at,
+        published_at,
+        last_polled_at,
+        created_at,
+        updated_at
+      )
+      SELECT
+        publication.id,
+        publication.variant_id,
+        publication.site_id,
+        publication.platform,
+        publication.status,
+        NULL,
+        NULL,
+        version.target_account_id,
+        COALESCE(version.format, CASE WHEN legacy_item.id IS NOT NULL THEN 'post' END),
+        COALESCE(version.body_text, legacy_item.body),
+        COALESCE(version.asset_manifest_json, legacy_item.media_manifest_json),
+        CASE
+          WHEN publication.status IN ('scheduled', 'queued', 'publishing')
+            THEN version.approval_status
+          ELSE NULL
+        END,
+        CASE
+          WHEN publication.status IN ('scheduled', 'queued', 'publishing')
+            THEN version.approved_at
+          ELSE NULL
+        END,
+        CASE
+          WHEN publication.status IN ('scheduled', 'queued', 'publishing')
+            THEN version.approved_by_user_id
+          ELSE NULL
+        END,
+        'migration',
+        NULL,
+        json_object(
+          'migration', '0023_social_publications_reusable',
+          'snapshotSource', CASE
+            WHEN version.id IS NOT NULL THEN 'canonical_version'
+            WHEN legacy_item.id IS NOT NULL THEN 'legacy_content_bank'
+            ELSE 'unavailable'
+          END
+        ),
+        publication.platform_post_id,
+        publication.platform_post_url,
+        publication.error_code,
+        publication.error_message,
+        publication.provider_response_json,
+        publication.queued_at,
+        publication.published_at,
+        publication.last_polled_at,
+        publication.created_at,
+        publication.updated_at
+      FROM ${tableName} AS publication
+      LEFT JOIN social_variants AS version ON version.id = publication.variant_id
+      LEFT JOIN content_bank_items AS legacy_item ON legacy_item.id = publication.variant_id`,
+    )
+    .run();
+  await db.prepare(`DROP TABLE ${tableName}`).run();
+  await db.prepare(`ALTER TABLE ${stagingTableName} RENAME TO ${tableName}`).run();
+}
+
+async function rebuildSocialPublicationEventsForReusableMigration(
+  db: D1Database,
+): Promise<void> {
+  const tableName = "social_publication_events";
+  const stagingTableName = "social_publication_events_0023_new";
+  const tablePresent = await tableExists(db, tableName);
+  const definition = tablePresent ? await tableDefinition(db, tableName) : null;
+
+  if (
+    tablePresent &&
+    definition?.includes("'scheduled'") &&
+    definition.includes("'cancelled'")
+  ) {
+    if (await tableExists(db, stagingTableName)) {
+      await db.prepare(`DROP TABLE ${stagingTableName}`).run();
+    }
+    return;
+  }
+
+  if (!tablePresent) {
+    if (!(await tableExists(db, stagingTableName))) {
+      throw new Error(
+        "Cannot apply 0023_social_publications_reusable: social_publication_events is missing",
+      );
+    }
+    await db.prepare(`ALTER TABLE ${stagingTableName} RENAME TO ${tableName}`).run();
+    return;
+  }
+
+  await db.prepare(`DROP TABLE IF EXISTS ${stagingTableName}`).run();
+  await db
+    .prepare(
+      `CREATE TABLE ${stagingTableName} (
+        id TEXT PRIMARY KEY,
+        publication_id TEXT,
+        variant_id TEXT NOT NULL,
+        event_type TEXT NOT NULL CHECK (
+          event_type IN (
+            'generated',
+            'approved',
+            'scheduled',
+            'queued',
+            'publishing',
+            'published',
+            'failed',
+            'retried',
+            'cancelled'
+          )
+        ),
+        payload_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO ${stagingTableName} (
+        id, publication_id, variant_id, event_type, payload_json, created_at
+      )
+      SELECT id, publication_id, variant_id, event_type, payload_json, created_at
+      FROM ${tableName}`,
+    )
+    .run();
+  await db.prepare(`DROP TABLE ${tableName}`).run();
+  await db.prepare(`ALTER TABLE ${stagingTableName} RENAME TO ${tableName}`).run();
+}
+
 async function applyOwnerContentSearchMigration(db: D1Database): Promise<void> {
   if (!(await tableExists(db, "journal_entries")) || !(await tableExists(db, "mission_tasks"))) {
     throw new Error("Cannot apply 0019_owner_content_search: source tables are missing");
@@ -710,6 +1280,14 @@ async function tableExists(db: D1Database, tableName: string): Promise<boolean> 
     .bind(tableName)
     .first<SqliteNameRow>();
   return Boolean(row?.name);
+}
+
+async function tableDefinition(db: D1Database, tableName: string): Promise<string | null> {
+  const row = await db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .bind(tableName)
+    .first<SqliteDefinitionRow>();
+  return row?.sql || null;
 }
 
 async function columnExists(

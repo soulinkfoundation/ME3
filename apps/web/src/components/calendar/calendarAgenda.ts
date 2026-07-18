@@ -5,7 +5,14 @@ export interface CalendarAgendaDetailLine {
 
 export interface CalendarAgendaEvent {
   id: string;
-  entryType?: "booking" | "reminder" | "event" | "birthday" | "imported" | "task";
+  entryType?:
+    | "booking"
+    | "reminder"
+    | "event"
+    | "birthday"
+    | "imported"
+    | "task"
+    | "social_publication";
   recordId?: string;
   sourceLabel: string;
   title: string;
