@@ -99,6 +99,7 @@ import { registerCoreGithubUpdaterRoutes } from "./routes/core-github-updater";
 import { registerFilesRoutes } from "./routes/files";
 import { registerJournalRoutes } from "./routes/journal";
 import { registerLocalExecutorRoutes } from "./routes/local-executor";
+import { registerManagedRuntimeRoutes } from "./routes/managed-runtime";
 import { registerMobileRoutes } from "./routes/mobile";
 import { registerPushNotificationRoutes } from "./routes/push-notifications";
 import {
@@ -204,6 +205,14 @@ import type {
   OwnerProfile,
   SocialPublishQueueMessage,
 } from "./types";
+import {
+  MANAGED_RUNTIME_CONTROL_PATH,
+  beginManagedRuntimeWriteLease,
+  getManagedInstallationId,
+  getManagedRuntimeStatus,
+  isManagedRuntime,
+  releaseManagedRuntimeWriteLease,
+} from "./managed-runtime-lifecycle";
 
 export { Me3UserAgent };
 export { getMe3CloudUsernamePublishBlockReason };
@@ -404,6 +413,74 @@ app.use("*", async (c, next) => {
 });
 
 app.use("*", async (c, next) => {
+  if (!isManagedRuntime(c.env)) return next();
+  const pathname = new URL(c.req.url).pathname;
+  if (pathname === MANAGED_RUNTIME_CONTROL_PATH || pathname === "/health") return next();
+
+  if (!getManagedInstallationId(c.env)) {
+    if (c.env.ENVIRONMENT !== "production") return next();
+    return c.json(
+      {
+        ok: false,
+        code: "managed_runtime_identity_invalid",
+        error: "Managed runtime configuration is unavailable",
+      },
+      503,
+    );
+  }
+
+  const runtime = await getManagedRuntimeStatus(c.env);
+  if (!runtime) return next();
+  if (runtime.state === "suspended") {
+    return c.json(
+      {
+        ok: false,
+        code: "managed_runtime_suspended",
+        error: "This managed ME3 installation is suspended",
+      },
+      423,
+    );
+  }
+
+  const method = c.req.method.toUpperCase();
+  const shouldLease =
+    method !== "OPTIONS" &&
+    (pathname.startsWith("/api/") || (method !== "GET" && method !== "HEAD"));
+  if (!shouldLease) return next();
+  const lease = await beginManagedRuntimeWriteLease(
+    c.env,
+    c.req.method,
+    pathname === "/api/auth/me3/callback" ? "auth_callback" : "api",
+  );
+  if (!lease) {
+    return c.json(
+      {
+        ok: false,
+        code: "managed_runtime_quiesced",
+        error: "This managed ME3 installation is temporarily read-only for export",
+      },
+      423,
+    );
+  }
+  let releaseWithResponseBody = false;
+  let released = false;
+  const releaseLeaseOnce = async () => {
+    if (released) return;
+    released = true;
+    await releaseManagedRuntimeWriteLease(c.env, lease);
+  };
+  try {
+    await next();
+    if (c.res.body) {
+      releaseWithResponseBody = true;
+      c.res = responseWithManagedLease(c.res, releaseLeaseOnce);
+    }
+  } finally {
+    if (!releaseWithResponseBody) await releaseLeaseOnce();
+  }
+});
+
+app.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname;
   if (
     !isPublicDiscoveryPath(pathname) &&
@@ -441,6 +518,8 @@ app.get("/health", async (c) => {
     setupRequired: await getSetupRequired(c.env),
   });
 });
+
+registerManagedRuntimeRoutes(app);
 
 app.get("/api/config", async (c) => {
   const deploymentMode = normalizeMe3DeploymentMode(c.env.ME3_DEPLOYMENT_MODE);
@@ -1232,6 +1311,48 @@ function normalizeClaimRedirect(value: unknown): string {
   if (!redirect || redirect.length > 500) return "";
   if (redirect.startsWith("/") && !redirect.startsWith("//")) return redirect;
   return "";
+}
+
+function responseWithManagedLease(
+  response: Response,
+  release: () => Promise<void>,
+): Response {
+  const reader = response.body!.getReader();
+  let released = false;
+  const releaseOnce = async () => {
+    if (released) return;
+    released = true;
+    reader.releaseLock();
+    await release();
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          await releaseOnce();
+          controller.close();
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        await releaseOnce();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        await releaseOnce();
+      }
+    },
+  });
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  });
 }
 
 async function requireOwner(c: AppContext): Promise<string | null> {

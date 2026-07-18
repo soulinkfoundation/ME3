@@ -30,6 +30,14 @@ import {
   validateArchive,
 } from "./portable-v1.mjs";
 import {
+  managedPortablePasswordMatches,
+  prepareManagedPortableCapture,
+} from "./prepare-managed-portable-capture.mjs";
+import {
+  createManagedExportEnvelope,
+  extractManagedExportEnvelope,
+} from "./managed-export-envelope.mjs";
+import {
   PROOF_DEVICE_TOKEN_HASH,
   PROOF_INSTALL_ID,
   PROOF_LOCAL_PASSWORD,
@@ -53,6 +61,18 @@ before(async () => {
   sourceR2 = join(root, "source-r2");
   archive = join(root, "snapshot.me3-portable");
   seedProofInstallation(source, sourceR2);
+  runSqlite(
+    source,
+    `INSERT INTO managed_runtime_state
+       (id, installation_id, state, generation, last_request_id)
+     VALUES ('managed', 'mi-aaaaaaaaaaaaaaaa', 'quiesced', 2, 'managed-control-must-not-export');
+     INSERT INTO managed_runtime_control_requests
+       (request_id, installation_id, action, expected_generation, status, applied_generation)
+     VALUES ('11111111-1111-4111-8111-111111111111', 'mi-aaaaaaaaaaaaaaaa', 'quiesce', 1, 'applied', 2);
+     INSERT INTO managed_runtime_write_leases
+       (lease_id, installation_id, method, path_class)
+     VALUES ('managed-write-lease-must-not-export', 'mi-aaaaaaaaaaaaaaaa', 'POST', 'api');`,
+  );
   await exportPortableV1({
     database: source,
     r2Directory: sourceR2,
@@ -95,6 +115,9 @@ test("exports sanitized owner data and restores the exact identity, D1 rows, and
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM mobile_refresh_tokens;"), "0");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM auth_rate_limits;"), "0");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM me3_install_claim_states;"), "0");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM managed_runtime_state;"), "0");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM managed_runtime_control_requests;"), "0");
+  assert.equal(queryScalar(target, "SELECT COUNT(*) FROM managed_runtime_write_leases;"), "0");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM agent_turn_results;"), "0");
   assert.equal(queryScalar(target, "SELECT COUNT(*) FROM social_accounts;"), "1");
   assert.equal(
@@ -562,6 +585,8 @@ test("archive omits platform, session, device, and managed-only credentials", ()
   assert.equal(textFiles.includes("v1.fixture.social-refresh"), false);
   assert.equal(textFiles.includes("v1.fixture.social-secret"), false);
   assert.equal(textFiles.includes("ephemeral-confirmation-token"), false);
+  assert.equal(textFiles.includes("managed-control-must-not-export"), false);
+  assert.equal(textFiles.includes("managed-write-lease-must-not-export"), false);
 });
 
 test("export requires verified local password login before creating output", async () => {
@@ -595,6 +620,58 @@ test("export requires verified local password login before creating output", asy
     (error) => error instanceof PortableError && error.code === "LOCAL_PASSWORD_REQUIRED",
   );
   assert.equal(existsSync(malformedOutput), false);
+});
+
+test("managed hosting export prepares a temporary login on the captured copy only", async () => {
+  const managedCapture = cloneSource("managed-hosted-null-password");
+  const managedArchive = join(root, "managed-hosted.me3-portable");
+  const managedTarget = freshTarget("managed-hosted-target");
+  runSqlite(managedCapture, "UPDATE owner_profile SET password_hash = NULL WHERE id = 'owner';");
+
+  prepareManagedPortableCapture(managedCapture, PROOF_PASSPHRASE);
+  assert.equal(managedPortablePasswordMatches(managedCapture, PROOF_PASSPHRASE), true);
+  await exportPortableV1({
+    database: managedCapture,
+    r2Directory: sourceR2,
+    output: managedArchive,
+    passphrase: PROOF_PASSPHRASE,
+    managedHosted: true,
+    createdAt: "2026-07-18T12:00:00.000Z",
+  });
+  const validated = validateArchive(managedArchive, PROOF_PASSPHRASE);
+  assert.equal(validated.manifest.restore.managedHostedRecovery, true);
+  assert.equal(validated.manifest.restore.requiresImmediatePasswordChange, true);
+  assert.match(
+    readFileSync(join(managedArchive, "README.txt"), "utf8"),
+    /export passphrase is also the temporary restored local login password/,
+  );
+  restorePortableV1({
+    archive: managedArchive,
+    targetDatabase: managedTarget,
+    targetR2Directory: join(root, "managed-hosted-target-r2"),
+    passphrase: PROOF_PASSPHRASE,
+  });
+  assert.equal(managedPortablePasswordMatches(managedTarget, PROOF_PASSPHRASE), true);
+});
+
+test("owner can decrypt a managed envelope into a verified portable-v1 archive", async () => {
+  const envelope = join(root, "owner-download.me3export");
+  const extracted = join(root, "owner-extracted-portable");
+  await createManagedExportEnvelope({
+    archive,
+    output: envelope,
+    passphrase: PROOF_PASSPHRASE,
+    installationId: "mi-1234567890abcdef",
+    operationId: "88888888-8888-4888-8888-888888888888",
+    keyVersion: "v1",
+  });
+  const result = await extractManagedExportEnvelope({
+    envelope,
+    output: extracted,
+    passphrase: PROOF_PASSPHRASE,
+  });
+  assert.equal(result.logicalInstallId, PROOF_INSTALL_ID);
+  assert.equal(validateArchive(extracted, PROOF_PASSPHRASE).manifest.format, "me3-portable-v1");
 });
 
 test("wrong passphrases, tampering, version mismatches, and non-clean targets fail before mutation", () => {

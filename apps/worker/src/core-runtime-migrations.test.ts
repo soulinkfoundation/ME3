@@ -32,6 +32,12 @@ describe("Core runtime migrations", () => {
     expect(db.tables.has("social_carousel_render_sets")).toBe(true);
     expect(db.tables.has("social_carousel_render_assets")).toBe(true);
     expect(db.tables.has("social_carousel_render_set_media")).toBe(true);
+    expect(db.tables.has("managed_runtime_state")).toBe(true);
+    expect(db.tables.has("managed_runtime_control_requests")).toBe(true);
+    expect(
+      db.columns.get("managed_runtime_control_requests")?.has("expected_generation"),
+    ).toBe(true);
+    expect(db.tables.has("managed_runtime_write_leases")).toBe(true);
     expect(
       db.statements.some(
         (sql) =>
@@ -94,6 +100,9 @@ describe("Core runtime migrations", () => {
     );
     expect(db.migrations.get("0026_social_carousels")).toBe(
       "2026-07-18-social-carousels-v1",
+    );
+    expect(db.migrations.get("0027_managed_runtime_lifecycle")).toBe(
+      "2026-07-18-managed-runtime-lifecycle-v2",
     );
     expect(
       db.statements.some(
@@ -331,7 +340,15 @@ class RuntimeMigrationStatement {
   async run() {
     this.db.statements.push(this.sql);
     const createdTable = this.sql.match(/CREATE TABLE IF NOT EXISTS (\w+)/)?.[1];
-    if (createdTable) this.db.tables.add(createdTable);
+    if (createdTable) {
+      this.db.tables.add(createdTable);
+      if (
+        createdTable === "managed_runtime_control_requests" &&
+        this.sql.includes("expected_generation")
+      ) {
+        this.db.columns.set(createdTable, new Set(["expected_generation"]));
+      }
+    }
     if (this.sql.includes("CREATE TABLE IF NOT EXISTS core_runtime_migrations")) {
       this.db.tables.add("core_runtime_migrations");
       return { success: true };
@@ -395,6 +412,15 @@ class RuntimeMigrationStatement {
         throw new Error("duplicate column name: agent_idempotency_key");
       }
       columns?.add("agent_idempotency_key");
+      return { success: true };
+    }
+    if (this.sql.includes("ALTER TABLE managed_runtime_control_requests")) {
+      const columns = this.db.columns.get("managed_runtime_control_requests") || new Set();
+      if (columns.has("expected_generation")) {
+        throw new Error("duplicate column name: expected_generation");
+      }
+      columns.add("expected_generation");
+      this.db.columns.set("managed_runtime_control_requests", columns);
       return { success: true };
     }
     if (

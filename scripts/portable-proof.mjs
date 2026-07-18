@@ -23,7 +23,7 @@ import {
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 export const PROOF_INSTALL_ID = "core_11111111-1111-4111-8111-111111111111";
-export const PROOF_PASSPHRASE = "me3-portable-proof-passphrase";
+export const PROOF_PASSPHRASE = "me3-portable-proof-passphrase-32bytes";
 export const PROOF_PLATFORM_SECRET = "platform-credential-must-not-export";
 export const PROOF_SESSION_SECRET = "old-session-secret-must-rotate";
 export const PROOF_LOCAL_PASSWORD = "portable-owner-local-password";

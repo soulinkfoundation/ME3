@@ -204,8 +204,9 @@ The optional existing Anthropic Sonnet candidate also requires
 
 `me3-portable-v1` is the Core-owned, owner-portable D1/R2 snapshot format. It is a
 quiescent snapshot and restore proof, not a live transfer system: stop writes while the source D1
-and R2 material are captured. This version does not implement a maintenance write barrier,
-dual-write, provisioning, DNS cutover, billing, or managed fleet orchestration.
+and R2 material are captured. The local CLI does not create a maintenance write barrier,
+dual-write, provisioning, DNS cutover, billing, or managed fleet orchestration. Managed hosting
+uses the separate lifecycle controls described below to create and prove that write barrier.
 
 The archive is a directory with this versioned shape:
 
@@ -249,6 +250,85 @@ storage to reproduce and preview the saved output.
 Installation-owned bookings, commerce orders, and Accounts ledger entries remain owner data and
 are portable. ME3 Managed subscription entitlements and control-plane billing records are
 hosted-only, do not belong in Core D1, and are never included.
+
+### Managed Hosting Cancellation And Decommission
+
+Cancelling a managed hosting subscription is a two-operation process. Export and decommission use
+different operation and attempt IDs. A runtime-backed install is never deleted without a retained,
+cryptographically verified owner export.
+
+At the paid service end, ME3 Cloud dispatches the export operation with the installation's complete,
+write-once resource manifest: exact Worker name, D1 name and UUID, R2 bucket, every dedicated Queue,
+the `Me3UserAgent` Durable Object namespace, and deployed release tag. The runtime must expose the
+generation-fenced `me3-managed-lifecycle-v2` protocol, the compatible portable-export policy, and
+the exact recorded release.
+Older managed installs that do not expose the signed lifecycle route stop with
+`runtime_upgrade_required`; they must first go through the managed runtime upgrade/reconciliation
+rollout. Operators must not bypass that prerequisite or delete those installs manually.
+The control-plane `ME3_MANAGED_LIFECYCLE_ENABLED` gate remains off until that attested rollout can
+record the actual lifecycle-capable deployed release for each install; changing a recorded tag
+without proving the deployment is not a reconciliation process.
+
+The managed export then:
+
+1. Quiesces the runtime and waits for every tracked foreground and background write lease to drain.
+2. Captures only classified D1 tables at one D1 export bookmark and materializes the SQL into a fresh,
+   migrated SQLite database before accepting it.
+3. Materializes R2 twice and requires stable before/after source listings plus identical full-file
+   SHA-256 hashes in both local copies.
+4. Creates a login-capable `me3-portable-v1` archive, then encrypts and authenticates the complete
+   archive as `me3-managed-export-v1` with a high-entropy per-export passphrase.
+5. Retains an artifact of at most 5 GiB with a single-part, `If-None-Match: *` R2 write, Content-MD5,
+   SHA-256/MD5 metadata, and its export-key version. An existing key is never overwritten.
+6. Independently downloads and re-hashes the retained bytes, verifies the envelope, records the
+   immutable evidence, then suspends and drains the runtime while leaving credentials and storage
+   intact until decommission is authorized.
+
+Only after those facts are reported can the export operation succeed. If capture, retention, or
+verification fails, deletion does not start. Failure compensation first tries an authenticated
+resume, which the control plane authorizes only when billing renewed or account deletion was
+canceled; otherwise it leaves the runtime quiesced for a safe retry. A retry may safely continue from
+an intact quiesced runtime. Export key rotation must retain every referenced key version in the
+managed export keyring until all
+artifacts using that version have passed their retention policy.
+
+Before a decommission attempt is claimed, a paid renewal or canceled account deletion can restore
+service after either an interrupted or completed export. The control plane freezes the current
+attempt, reads a fresh authenticated runtime generation, sends a generation-bound `resume`, and
+releases the lifecycle lock only after the runtime reports `active` with credentials and storage
+untouched. Every successful resume increments the runtime generation, so a quiesce or suspend token
+issued before cancellation cannot take effect afterward. Once decommission is claimed, credential
+revocation and storage deletion are irreversible and the cancellation path is closed.
+
+The later decommission operation re-downloads and re-verifies the same retained artifact and key
+version before any destructive control. It then suspends and drains again, revokes credentials,
+purges runtime-owned D1/R2/Durable Object data, proves the source R2 bucket empty, removes only Queue
+consumers whose exact `script_name` matches the managed Worker, deletes dedicated Queues, applies the
+Durable Object `deleted_classes` migration, and deletes the exact Worker, D1, and R2 resources. The
+operation succeeds only after GET/list checks prove every manifest resource absent. These deletion
+steps are idempotent, so an interrupted attempt can retry without broad cleanup or name-prefix scans.
+An authoritative `NoSuchBucket` counts as an already-absent R2 bucket; authorization and transient
+errors never do. If the Worker is already absent or has been replaced by the Durable Object deletion
+tombstone, persisted D1 state must prove suspension, credential revocation, and storage purge before
+the retry may skip runtime controls and continue exact-manifest cleanup.
+
+Owners receive the retained artifact with a `.me3export` download name and the per-export passphrase
+through authenticated owner-only delivery. The master keyring is never disclosed. To extract it:
+
+```bash
+read -rs ME3_MANAGED_EXPORT_PASSPHRASE
+export ME3_MANAGED_EXPORT_PASSPHRASE
+node scripts/managed-export-envelope.mjs extract \
+  --envelope owner-download.me3export \
+  --output owner-portable-v1
+unset ME3_MANAGED_EXPORT_PASSPHRASE
+pnpm portable:verify -- --archive owner-portable-v1
+```
+
+The lifecycle workflow requires separate, narrowly scoped GitHub secrets for the lifecycle callback,
+Cloudflare resource API, source R2 read/delete access, retained-export R2 access, and the versioned
+managed export keyring. Do not reuse the provisioning callback secret as the lifecycle secret, and do
+not expose provider or export-key secrets to code checked out from an older deployed release.
 
 ### Reproducible Local Proof
 

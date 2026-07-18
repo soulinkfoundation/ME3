@@ -20,6 +20,7 @@ try {
       output: required(args, "output"),
       installId: args["install-id"],
       passphrase: process.env.ME3_PORTABLE_PASSPHRASE,
+      managedHosted: Boolean(args["managed-hosted"]),
     });
     console.log(JSON.stringify({ ok: true, archive: result.archive, manifest: result.manifest }, null, 2));
   } else if (command === "restore") {
@@ -129,7 +130,7 @@ function usage() {
 
 Set ME3_PORTABLE_PASSPHRASE to a strong owner-only passphrase.
 
-  pnpm portable:export -- --db <source.sqlite> [--r2-dir <materialized-r2>] --output <archive-dir>
+  pnpm portable:export -- --db <source.sqlite> [--r2-dir <materialized-r2>] --output <archive-dir> [--managed-hosted]
   pnpm portable:restore -- --archive <archive-dir> --target-db <clean.sqlite> --target-r2-dir <empty-dir> [--sql-output <sensitive-import.sql>]
   pnpm portable:verify -- --archive <archive-dir>
   pnpm portable:compare -- --source <source-archive> --restored <restored-archive>

@@ -45,6 +45,7 @@ jobs:
       ME3_MANAGED_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_CALLBACK_SECRET }}
       ME3_MANAGED_CALLBACK_URL: ${{ inputs.callback_url }}
       ME3_MANAGED_INSTALLATION_ID: ${{ inputs.installation_id }}
+      ME3_MANAGED_RELEASE_TAG: ${{ inputs.release_tag }}
       ME3_MANAGED_EMAIL_GATEWAY_ORIGIN: https://api.me3.app
       WORKER_NAME: ${{ inputs.worker_name }}
       D1_NAME: ${{ inputs.d1_name }}
@@ -60,7 +61,7 @@ jobs:
           test "$WORKER_NAME" = "me3-${ME3_MANAGED_INSTALLATION_ID}"
           test "$D1_NAME" = "${WORKER_NAME}-d1"
           test "$R2_NAME" = "${WORKER_NAME}-r2"
-          [[ "${{ inputs.release_tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$ME3_MANAGED_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "$ME3_MANAGED_CALLBACK_URL" = "https://api.me3.app/api/managed-install/provisioning/callback"
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
@@ -108,6 +109,22 @@ jobs:
             --bucket "$R2_NAME" \
             --with-r2
 
+      - name: Freeze the exact managed resource manifest
+        run: |
+          set -euo pipefail
+          set +x
+          node control/scripts/managed-resource-manifest.mjs \
+            --config source/wrangler.toml \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --r2-name "$R2_NAME" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Provision isolated managed queues
+        working-directory: source
+        run: node ../control/scripts/provision-managed-queues.mjs --config wrangler.toml --worker-name "$WORKER_NAME" --queue-names "$ME3_MANAGED_QUEUE_NAMES"
+
       - name: Report resource provisioning
         env:
           ME3_MANAGED_STATUS: provisioning
@@ -144,6 +161,9 @@ jobs:
             --tag "managed-bootstrap-${ME3_MANAGED_INSTALLATION_ID}" \
             --message "Private managed bootstrap ${ME3_MANAGED_INSTALLATION_ID}"
 
+      - name: Resolve the dedicated Durable Object namespace
+        run: node control/scripts/resolve-managed-do-namespace.mjs
+
       - name: Install the recovery secret without exposing it
         working-directory: source
         run: |
@@ -164,8 +184,8 @@ jobs:
           pnpm exec wrangler deploy \
             --config wrangler.toml \
             --strict \
-            --tag "${{ inputs.release_tag }}" \
-            --message "Managed ME3 ${{ inputs.release_tag }} ${ME3_MANAGED_INSTALLATION_ID}" \
+            --tag "$ME3_MANAGED_RELEASE_TAG" \
+            --message "Managed ME3 $ME3_MANAGED_RELEASE_TAG $ME3_MANAGED_INSTALLATION_ID" \
             2>&1 | tee "$RUNNER_TEMP/me3-public-deploy.log"
           origin="$(grep -Eo 'https://[^[:space:]]+\.workers\.dev' "$RUNNER_TEMP/me3-public-deploy.log" | tail -1)"
           test -n "$origin"
@@ -201,6 +221,11 @@ jobs:
         env:
           ME3_MANAGED_STATUS: ready
         run: node control/scripts/managed-install-workflow-callback.mjs
+
+      - name: Recover every known resource identifier
+        if: always()
+        continue-on-error: true
+        run: node control/scripts/recover-managed-provision-manifest.mjs source/wrangler.toml
 
       - name: Report a safe failure
         if: failure()

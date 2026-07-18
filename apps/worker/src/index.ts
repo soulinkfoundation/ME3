@@ -24,6 +24,12 @@ import {
   ensureCoreRuntimeMigrationsForRequest,
 } from "./core-runtime-migrations";
 import { Me3UserAgent } from "./user-agent";
+import {
+  beginManagedRuntimeWriteLease,
+  getManagedInstallationId,
+  isManagedRuntime,
+  releaseManagedRuntimeWriteLease,
+} from "./managed-runtime-lifecycle";
 import type {
   AssistantJobEventQueueMessage,
   BookingReminderQueueMessage,
@@ -70,14 +76,29 @@ const worker = {
   },
   async email(message: ForwardableEmailMessageLike, env: Env, _ctx?: ExecutionContext) {
     await ensureCoreRuntimeMigrations(env);
-    return handleInboundEmail(message, env);
+    const lease = await acquireBackgroundWriteLease(env, "EMAIL", "email");
+    if (shouldBlockManagedRuntimeBackground(env, lease)) {
+      message.setReject("Managed ME3 is not accepting email during maintenance");
+      return;
+    }
+    try {
+      return await handleInboundEmail(message, env);
+    } finally {
+      await releaseManagedRuntimeWriteLease(env, lease);
+    }
   },
   async scheduled(_event: ScheduledEvent, env: Env, _ctx?: ExecutionContext) {
     await ensureCoreRuntimeMigrations(env);
-    await dispatchDueScheduledAssistantJobs(env);
-    await dispatchDueBookingReminders(env);
-    await dispatchDueSocialPublications(env);
-    await dispatchDueCalendarSourceRefreshes(env);
+    const lease = await acquireBackgroundWriteLease(env, "SCHEDULED", "scheduled");
+    if (shouldBlockManagedRuntimeBackground(env, lease)) return;
+    try {
+      await dispatchDueScheduledAssistantJobs(env);
+      await dispatchDueBookingReminders(env);
+      await dispatchDueSocialPublications(env);
+      await dispatchDueCalendarSourceRefreshes(env);
+    } finally {
+      await releaseManagedRuntimeWriteLease(env, lease);
+    }
   },
   async queue(
     batch: MessageBatch<
@@ -86,17 +107,50 @@ const worker = {
     env: Env,
   ) {
     await ensureCoreRuntimeMigrations(env);
-    if (batch.queue === BOOKING_REMINDER_QUEUE_NAME || batch.queue.includes("booking-reminders")) {
-      return processBookingReminderBatch(
-        batch as MessageBatch<BookingReminderQueueMessage>,
+    const lease = await acquireBackgroundWriteLease(env, "QUEUE", "queue");
+    if (shouldBlockManagedRuntimeBackground(env, lease)) {
+      for (const message of batch.messages) message.retry();
+      return;
+    }
+    try {
+      if (batch.queue === BOOKING_REMINDER_QUEUE_NAME || batch.queue.includes("booking-reminders")) {
+        return await processBookingReminderBatch(
+          batch as MessageBatch<BookingReminderQueueMessage>,
+          env,
+        );
+      }
+      if (batch.queue === SOCIAL_PUBLISH_QUEUE_NAME || batch.queue.includes("social-publish")) {
+        return await processSocialPublishBatch(batch as MessageBatch<SocialPublishQueueMessage>, env);
+      }
+      return await handleAssistantJobQueueBatch(
+        batch as MessageBatch<AssistantJobEventQueueMessage>,
         env,
       );
+    } finally {
+      await releaseManagedRuntimeWriteLease(env, lease);
     }
-    if (batch.queue === SOCIAL_PUBLISH_QUEUE_NAME || batch.queue.includes("social-publish")) {
-      return processSocialPublishBatch(batch as MessageBatch<SocialPublishQueueMessage>, env);
-    }
-    return handleAssistantJobQueueBatch(batch as MessageBatch<AssistantJobEventQueueMessage>, env);
   },
 };
+
+async function acquireBackgroundWriteLease(
+  env: Env,
+  method: string,
+  pathClass: "email" | "queue" | "scheduled",
+) {
+  if (!isManagedRuntime(env)) return null;
+  if (!getManagedInstallationId(env) && env.ENVIRONMENT !== "production") return null;
+  return beginManagedRuntimeWriteLease(env, method, pathClass);
+}
+
+export function shouldBlockManagedRuntimeBackground(
+  env: Env,
+  lease: { leaseId: string; installationId: string } | null,
+): boolean {
+  return (
+    isManagedRuntime(env) &&
+    (Boolean(getManagedInstallationId(env)) || env.ENVIRONMENT === "production") &&
+    !lease
+  );
+}
 
 export default worker;

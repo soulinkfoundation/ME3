@@ -20,6 +20,7 @@ import {
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { managedPortablePasswordMatches } from "./prepare-managed-portable-capture.mjs";
 
 export const PORTABLE_FORMAT = "me3-portable-v1";
 export const PORTABLE_VERSION = 1;
@@ -46,6 +47,7 @@ export const RUNTIME_MIGRATIONS = [
   ["0024_social_suggestions", "2026-07-18-social-suggestions-v2"],
   ["0025_social_posting_plans", "2026-07-18-social-posting-plans-v1"],
   ["0026_social_carousels", "2026-07-18-social-carousels-v1"],
+  ["0027_managed_runtime_lifecycle", "2026-07-18-managed-runtime-lifecycle-v2"],
 ];
 
 const VERIFY_TABLES = ["core_runtime_migrations", "d1_migrations"];
@@ -74,6 +76,9 @@ const EXCLUDED_TABLES = [
   "local_executor_run_events",
   "local_executor_runs",
   "managed_email_inbound_deliveries",
+  "managed_runtime_control_requests",
+  "managed_runtime_state",
+  "managed_runtime_write_leases",
   "me3_install_claim_states",
   "mission_daemon_allowlist_entries",
   "mission_daemon_audit_events",
@@ -242,6 +247,8 @@ const TRANSFORMS = {
 };
 
 const SENSITIVE_FIELD_POLICIES = new Map([
+  ["managed_runtime_state.credentials_revoked_at", "exclude hosted credential revocation state"],
+  ["managed_runtime_state.state", "exclude hosted lifecycle state"],
   ["agent_channel_connections.setup_token", "exclude and re-pair"],
   ["ai_gateway_settings.account_id", "exclude platform configuration"],
   ["ai_gateway_settings.gateway_id", "exclude platform configuration"],
@@ -355,6 +362,7 @@ export async function exportPortableV1({
   output,
   passphrase,
   installId,
+  managedHosted = false,
   createdAt = new Date().toISOString(),
   core = resolveCoreInfo(),
 }) {
@@ -370,6 +378,12 @@ export async function exportPortableV1({
 
   const schema = validateDatabaseSchema(database);
   assertLocalLoginAvailable(database);
+  if (managedHosted && !managedPortablePasswordMatches(database, passphrase)) {
+    throw new PortableError(
+      "MANAGED_RECOVERY_PASSWORD_INVALID",
+      "Managed export passphrase does not match the prepared local recovery login",
+    );
+  }
   assertForeignKeys(database, "SOURCE_INVALID", "Source D1 foreign keys are invalid");
   const installSecrets = readInstallSecrets(database);
   const logicalInstallId = resolveInstallId(installId, installSecrets.get("ME3_CORE_INSTALL_ID"));
@@ -397,6 +411,13 @@ export async function exportPortableV1({
       logicalInstallId,
       destinationDeploymentMode: "self_hosted",
       requiresClientRepair: true,
+      managedHostedRecovery: managedHosted,
+      ...(managedHosted
+        ? {
+            recoveryPasswordSource: "managed-export-passphrase",
+            requiresImmediatePasswordChange: true,
+          }
+        : {}),
       rotatedCredentials: ["JWT_SECRET", "mobile pairings", "mobile refresh tokens"],
       resetConfiguration: [
         "Cloudflare AI Gateway",
@@ -414,7 +435,7 @@ export async function exportPortableV1({
     );
     writeFileSync(
       join(temporaryOutput, "README.txt"),
-      portableReadme({ logicalInstallId, core, createdAt }),
+      portableReadme({ logicalInstallId, core, createdAt, managedHosted }),
     );
 
     const secretPolicy = {
@@ -469,6 +490,8 @@ export async function exportPortableV1({
         requiresExactCore: true,
         requiresExactMigrations: true,
         requiresClientRepair: true,
+        managedHostedRecovery: managedHosted,
+        requiresImmediatePasswordChange: managedHosted,
       },
     };
     const authenticatedBinding = buildAuthenticatedBinding(manifestCore);
@@ -1489,6 +1512,6 @@ function requireDirectory(path, label) {
   }
 }
 
-function portableReadme({ logicalInstallId, core, createdAt }) {
-  return `ME3 portable snapshot\n\nFormat: ${PORTABLE_FORMAT}\nCreated: ${createdAt}\nLogical installation: ${logicalInstallId}\nCore: ${core.version} (${core.tag}, ${core.commit})\n\nThis snapshot requires a clean installation running the exact same Core and migration versions.\nSet ME3_PORTABLE_PASSPHRASE, then run pnpm portable:restore with the archive, target D1 SQLite file, and empty target R2 directory.\nThe source must be quiescent while D1 and R2 are materialized. This v1 proof does not provide a live-write barrier.\nBrowser sessions, mobile/device credentials, one-time state, platform credentials, and host-bound configuration are not restored. Sign in with the local owner password and re-pair clients after restore.\n`;
+function portableReadme({ logicalInstallId, core, createdAt, managedHosted = false }) {
+  return `ME3 portable snapshot\n\nFormat: ${PORTABLE_FORMAT}\nCreated: ${createdAt}\nLogical installation: ${logicalInstallId}\nCore: ${core.version} (${core.tag}, ${core.commit})\n\nThis snapshot requires a clean installation running the exact same Core and migration versions.\nSet ME3_PORTABLE_PASSPHRASE, then run pnpm portable:restore with the archive, target D1 SQLite file, and empty target R2 directory.\nThe source must be quiescent while D1 and R2 are materialized. This v1 proof does not provide a live-write barrier.\nBrowser sessions, mobile/device credentials, one-time state, platform credentials, and host-bound configuration are not restored. ${managedHosted ? "For this managed-hosting export, the export passphrase is also the temporary restored local login password; change it immediately after signing in. " : "Sign in with the local owner password. "}Re-pair clients after restore.\n`;
 }

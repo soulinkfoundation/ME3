@@ -17,6 +17,10 @@ const callbackEnv = {
   ME3_MANAGED_STATUS: "ready",
   ME3_MANAGED_ORIGIN:
     "https://me3-mi-1234567890abcdef.managed-test.workers.dev",
+  ME3_MANAGED_D1_ID: "11111111-1111-4111-8111-111111111111",
+  ME3_MANAGED_QUEUE_NAMES:
+    '["me3-mi-1234567890abcdef-assistant-job-events"]',
+  ME3_MANAGED_DO_NAMESPACE_ID: "a".repeat(32),
 };
 
 test("a rejected activation callback fails without exposing its response or secret", async () => {
@@ -42,7 +46,68 @@ test("a rejected activation callback fails without exposing its response or secr
     installationId: "mi-1234567890abcdef",
     status: "ready",
     origin: "https://me3-mi-1234567890abcdef.managed-test.workers.dev",
+    d1Id: "11111111-1111-4111-8111-111111111111",
+    queueNames: ["me3-mi-1234567890abcdef-assistant-job-events"],
+    durableObjectNamespaceId: "a".repeat(32),
   });
+});
+
+test("ready cannot activate without every immutable resource identifier", async () => {
+  await assert.rejects(
+    sendManagedInstallWorkflowCallback(
+      { ...callbackEnv, ME3_MANAGED_DO_NAMESPACE_ID: "" },
+      async () => new Response(null, { status: 204 }),
+    ),
+    /complete resource manifest/,
+  );
+});
+
+test("a failure callback carries exact recovered Worker deployment proof", async () => {
+  let requestBody;
+  await sendManagedInstallWorkflowCallback(
+    {
+      ...callbackEnv,
+      ME3_MANAGED_STATUS: "failed",
+      ME3_MANAGED_WORKER_PRESENT: "true",
+      ME3_MANAGED_WORKER_PUBLIC: "false",
+      ME3_MANAGED_ORIGIN: "",
+    },
+    async (_url, init) => {
+      requestBody = JSON.parse(init.body);
+      return new Response(null, { status: 204 });
+    },
+  );
+
+  assert.equal(requestBody.workerPresent, true);
+  assert.equal(requestBody.workerPublic, false);
+  assert.equal(Object.hasOwn(requestBody, "origin"), false);
+
+  await assert.rejects(
+    sendManagedInstallWorkflowCallback(
+      {
+        ...callbackEnv,
+        ME3_MANAGED_STATUS: "failed",
+        ME3_MANAGED_WORKER_PRESENT: "false",
+        ME3_MANAGED_WORKER_PUBLIC: "true",
+        ME3_MANAGED_ORIGIN: "",
+      },
+      async () => new Response(null, { status: 204 }),
+    ),
+    /resource manifest is invalid/,
+  );
+  await assert.rejects(
+    sendManagedInstallWorkflowCallback(
+      {
+        ...callbackEnv,
+        ME3_MANAGED_STATUS: "failed",
+        ME3_MANAGED_WORKER_PRESENT: "true",
+        ME3_MANAGED_WORKER_PUBLIC: "true",
+        ME3_MANAGED_ORIGIN: "https://unrelated.example",
+      },
+      async () => new Response(null, { status: 204 }),
+    ),
+    /resource manifest is invalid/,
+  );
 });
 
 test("the workflow treats activation as a gate and reports only a generic follow-up failure", () => {
@@ -88,6 +153,17 @@ test("the workflow waits for a newly published managed origin to become routable
   }
   assert.match(requests[0], /\/health/);
   assert.match(requests[1], /\/api\/mobile\/config/);
+});
+
+test("the workflow recovers authoritative Worker proof before a failure callback", () => {
+  const publish = getStep("Publish the managed Worker");
+  const recovery = getStep("Recover every known resource identifier");
+  const failure = getStep("Report a safe failure");
+
+  assert.match(recovery, /if: always\(\)/);
+  assert.match(recovery, /recover-managed-provision-manifest\.mjs/);
+  assert.ok(workflow.indexOf(publish) < workflow.indexOf(recovery));
+  assert.ok(workflow.indexOf(recovery) < workflow.indexOf(failure));
 });
 
 function getStep(name) {

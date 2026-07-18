@@ -1,0 +1,750 @@
+name: Manage managed ME3 lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Lifecycle operation
+        required: true
+        type: choice
+        options: [export, decommission, cleanup_failed_provision]
+      operation_id:
+        description: Current control-plane lifecycle operation UUID
+        required: true
+        type: string
+      attempt_id:
+        description: Current control-plane workflow attempt UUID
+        required: true
+        type: string
+      installation_id:
+        description: Exact managed installation ID
+        required: true
+        type: string
+      worker_name:
+        description: Exact dedicated Worker name
+        required: true
+        type: string
+      d1_name:
+        description: Exact dedicated D1 name
+        required: true
+        type: string
+      d1_id:
+        description: Exact dedicated D1 UUID
+        required: true
+        type: string
+      r2_name:
+        description: Exact dedicated source R2 bucket
+        required: true
+        type: string
+      queue_names:
+        description: Exact JSON array of dedicated queue names
+        required: true
+        type: string
+      durable_object_namespace_id:
+        description: Exact Me3UserAgent Durable Object namespace ID
+        required: true
+        type: string
+      release_tag:
+        description: Exact release deployed to the managed install
+        required: true
+        type: string
+      callback_url:
+        description: Fixed ME3 Cloud lifecycle callback
+        required: true
+        type: string
+      export_operation_id:
+        description: Export operation UUID; equal to operation_id for export
+        required: false
+        type: string
+      export_key_version:
+        description: Exact retained managed-export key version
+        required: false
+        type: string
+      worker_ever_public:
+        description: Monotonic control-plane public-exposure proof
+        required: false
+        default: true
+        type: boolean
+      export_object_key:
+        description: Verified retained object key for decommission
+        required: false
+        type: string
+      export_sha256:
+        description: Verified retained export SHA-256 for decommission
+        required: false
+        type: string
+      export_md5:
+        description: Verified retained single-part MD5 for decommission
+        required: false
+        type: string
+      export_etag:
+        description: Verified retained single-part ETag for decommission
+        required: false
+        type: string
+      export_size_bytes:
+        description: Verified retained export size for decommission
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-install-${{ inputs.installation_id }}
+  cancel-in-progress: false
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ME3_MANAGED_CALLBACK_URL: ${{ inputs.callback_url }}
+      ME3_MANAGED_INSTALLATION_ID: ${{ inputs.installation_id }}
+      ME3_MANAGED_OPERATION_ID: ${{ inputs.operation_id }}
+      ME3_MANAGED_ATTEMPT_ID: ${{ inputs.attempt_id }}
+      ME3_MANAGED_OPERATION: ${{ inputs.operation }}
+      ME3_MANAGED_RELEASE_TAG: ${{ inputs.release_tag }}
+      ME3_MANAGED_FAILURE_STAGE: validating
+      WORKER_NAME: ${{ inputs.worker_name }}
+      D1_NAME: ${{ inputs.d1_name }}
+      D1_ID: ${{ inputs.d1_id }}
+      R2_NAME: ${{ inputs.r2_name }}
+      QUEUE_NAMES: ${{ inputs.queue_names }}
+      DO_NAMESPACE_ID: ${{ inputs.durable_object_namespace_id }}
+      WORKER_EVER_PUBLIC: ${{ inputs.worker_ever_public }}
+      EXPORT_OPERATION_ID: ${{ inputs.export_operation_id }}
+      EXPORT_KEY_VERSION: ${{ inputs.export_key_version }}
+      EVIDENCE_OBJECT_KEY: ${{ inputs.export_object_key }}
+      EVIDENCE_SHA256: ${{ inputs.export_sha256 }}
+      EVIDENCE_MD5: ${{ inputs.export_md5 }}
+      EVIDENCE_ETAG: ${{ inputs.export_etag }}
+      EVIDENCE_SIZE_BYTES: ${{ inputs.export_size_bytes }}
+      ME3_MANAGED_SOURCE_DIR: ${{ github.workspace }}/control
+
+    steps:
+      - name: Validate the complete lifecycle contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          uuid='^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          [[ "$ME3_MANAGED_INSTALLATION_ID" =~ ^mi-[0-9a-f]{16}$ ]]
+          [[ "$ME3_MANAGED_OPERATION_ID" =~ $uuid ]]
+          [[ "$ME3_MANAGED_ATTEMPT_ID" =~ $uuid ]]
+          [[ "$D1_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+          [[ "$DO_NAMESPACE_ID" =~ ^[0-9a-f]{32}$ ]]
+          test "$WORKER_NAME" = "me3-${ME3_MANAGED_INSTALLATION_ID}"
+          test "$D1_NAME" = "${WORKER_NAME}-d1"
+          test "$R2_NAME" = "${WORKER_NAME}-r2"
+          [[ "$ME3_MANAGED_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$ME3_MANAGED_CALLBACK_URL" = "https://api.me3.app/api/managed-install/lifecycle/callback"
+          WORKER_NAME="$WORKER_NAME" QUEUE_NAMES="$QUEUE_NAMES" node <<'NODE'
+          const names = JSON.parse(process.env.QUEUE_NAMES);
+          if (!Array.isArray(names) || names.length === 0 || new Set(names).size !== names.length) process.exit(1);
+          if (names.some((name) => typeof name !== "string" || !name.startsWith(`${process.env.WORKER_NAME}-`) || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(name))) process.exit(1);
+          NODE
+          expected_key="managed-exports/${ME3_MANAGED_INSTALLATION_ID}/${EXPORT_OPERATION_ID}.me3-managed-export-v1.enc"
+          if [[ "$ME3_MANAGED_OPERATION" = export ]]; then
+            [[ "$EXPORT_OPERATION_ID" =~ $uuid ]]
+            [[ "$EXPORT_KEY_VERSION" =~ ^v[1-9][0-9]{0,8}$ ]]
+            test "$EXPORT_OPERATION_ID" = "$ME3_MANAGED_OPERATION_ID"
+            test -z "$EVIDENCE_OBJECT_KEY$EVIDENCE_SHA256$EVIDENCE_MD5$EVIDENCE_ETAG$EVIDENCE_SIZE_BYTES"
+          elif [[ "$ME3_MANAGED_OPERATION" = decommission ]]; then
+            [[ "$EXPORT_OPERATION_ID" =~ $uuid ]]
+            [[ "$EXPORT_KEY_VERSION" =~ ^v[1-9][0-9]{0,8}$ ]]
+            test "$ME3_MANAGED_OPERATION" = decommission
+            test "$EXPORT_OPERATION_ID" != "$ME3_MANAGED_OPERATION_ID"
+            test "$EVIDENCE_OBJECT_KEY" = "$expected_key"
+            [[ "$EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$EVIDENCE_MD5" =~ ^[0-9a-f]{32}$ ]]
+            test "$EVIDENCE_ETAG" = "$EVIDENCE_MD5"
+            [[ "$EVIDENCE_SIZE_BYTES" =~ ^[1-9][0-9]*$ ]]
+          else
+            test "$ME3_MANAGED_OPERATION" = cleanup_failed_provision
+            test "$WORKER_EVER_PUBLIC" = false
+            test -z "$EXPORT_OPERATION_ID$EXPORT_KEY_VERSION$EVIDENCE_OBJECT_KEY$EVIDENCE_SHA256$EVIDENCE_MD5$EVIDENCE_ETAG$EVIDENCE_SIZE_BYTES"
+          fi
+
+      - name: Check out lifecycle controls
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+
+      - name: Report lifecycle validation
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: validating
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=validating\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Inspect exact decommission retry state
+        if: inputs.operation == 'decommission'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node control/scripts/inspect-managed-decommission-state.mjs \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME"
+
+      - name: Require the exact lifecycle-capable runtime
+        if: inputs.operation == 'export' || (inputs.operation == 'decommission' && env.ME3_MANAGED_RUNTIME_TERMINATED != 'true')
+        env:
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: node control/scripts/managed-runtime-control.mjs status > "$RUNNER_TEMP/managed-runtime.json"
+
+      - name: Seal trusted lifecycle controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          find control/scripts -type f -name '*.mjs' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > "$RUNNER_TEMP/managed-control.sha256"
+
+      - name: Check out the exact managed release
+        if: inputs.operation != 'cleanup_failed_provision'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+          path: source
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: control/pnpm-lock.yaml
+
+      - name: Install trusted lifecycle controls without dependency lifecycle scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir control install --frozen-lockfile --ignore-scripts
+          sha256sum --check "$RUNNER_TEMP/managed-control.sha256"
+          if [[ "$ME3_MANAGED_OPERATION" != cleanup_failed_provision ]]; then
+            test -f source/wrangler.toml
+            test ! -L source/wrangler.toml
+          fi
+
+      - name: Bind and prove the complete pinned resource manifest
+        if: inputs.operation != 'cleanup_failed_provision'
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          node control/scripts/configure-managed-install.mjs source/wrangler.toml "$WORKER_NAME" false "$ME3_MANAGED_INSTALLATION_ID" https://api.me3.app
+          node control/scripts/prepare-cloudflare-deploy.mjs \
+            --config source/wrangler.toml \
+            --db-name "$D1_NAME" \
+            --bucket "$R2_NAME" \
+            --with-r2 \
+            --skip-create
+          node control/scripts/bind-managed-resource-manifest.mjs \
+            --config source/wrangler.toml \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME" \
+            --queue-names "$QUEUE_NAMES"
+
+      - name: Clean only an authorized never-public failed provision
+        if: inputs.operation == 'cleanup_failed_provision'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          node control/scripts/cleanup-failed-managed-provision.mjs \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --operation-id "$ME3_MANAGED_OPERATION_ID" \
+            --worker-ever-public "$WORKER_EVER_PUBLIC" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME" \
+            --queue-names "$QUEUE_NAMES" \
+            --durable-object-namespace-id "$DO_NAMESPACE_ID"
+
+      - name: Complete verified failed provision cleanup
+        if: inputs.operation == 'cleanup_failed_provision'
+        env:
+          ME3_MANAGED_STATUS: succeeded
+          ME3_MANAGED_STAGE: verified_absent
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Verify live resource identities before export
+        if: inputs.operation == 'export'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node control/scripts/verify-managed-resource-identities.mjs \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --operation-id "$ME3_MANAGED_OPERATION_ID" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME" \
+            --queue-names "$QUEUE_NAMES" \
+            --durable-object-namespace-id "$DO_NAMESPACE_ID"
+
+      - name: Quiesce and drain the managed runtime
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          node control/scripts/managed-runtime-control.mjs quiesce > "$RUNNER_TEMP/managed-runtime.json"
+          for attempt in $(seq 1 90); do
+            node control/scripts/managed-runtime-control.mjs status > "$RUNNER_TEMP/managed-runtime.json"
+            if RUNTIME_PATH="$RUNNER_TEMP/managed-runtime.json" node <<'NODE'
+          const value = JSON.parse(require("node:fs").readFileSync(process.env.RUNTIME_PATH, "utf8"));
+          process.exit(["quiesced", "suspended"].includes(value.runtime?.state) && value.runtime?.activeWrites === 0 && value.runtime?.exportReady === true ? 0 : 1);
+          NODE
+            then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Report D1 capture
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: capturing_d1
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=capturing_d1\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Capture the quiesced D1 database
+        if: inputs.operation == 'export'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        run: node control/scripts/capture-managed-d1.mjs "$RUNNER_TEMP/managed-d1.sql" "$RUNNER_TEMP/managed-d1.sqlite"
+
+      - name: Report R2 capture
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: capturing_r2
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=capturing_r2\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Materialize a stable R2 snapshot
+        if: inputs.operation == 'export'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          mkdir -p "$RUNNER_TEMP/managed-r2" "$RUNNER_TEMP/managed-r2-verification"
+          node control/scripts/list-r2-s3.mjs "$endpoint" "$R2_NAME" "$RUNNER_TEMP/r2-before.json"
+          aws s3 sync --endpoint-url "$endpoint" "s3://${R2_NAME}" "$RUNNER_TEMP/managed-r2" --only-show-errors
+          aws s3 sync --endpoint-url "$endpoint" "s3://${R2_NAME}" "$RUNNER_TEMP/managed-r2-verification" --only-show-errors
+          node control/scripts/list-r2-s3.mjs "$endpoint" "$R2_NAME" "$RUNNER_TEMP/r2-after.json"
+          sha256sum --check "$RUNNER_TEMP/managed-control.sha256"
+
+      - name: Report capture verification
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: verifying_capture
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=verifying_capture\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Verify the write barrier and complete capture
+        if: inputs.operation == 'export'
+        run: |
+          node control/scripts/verify-managed-capture.mjs \
+            --db "$RUNNER_TEMP/managed-d1.sqlite" \
+            --r2-before "$RUNNER_TEMP/r2-before.json" \
+            --r2-after "$RUNNER_TEMP/r2-after.json" \
+            --r2-dir "$RUNNER_TEMP/managed-r2" \
+            --r2-verify-dir "$RUNNER_TEMP/managed-r2-verification" \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID"
+
+      - name: Report portable archive creation
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: creating_portable
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=creating_portable\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Create a login-capable portable archive from the captured copy
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_EXPORT_KEYRING: ${{ secrets.ME3_MANAGED_EXPORT_KEYRING }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          export ME3_PORTABLE_PASSPHRASE="$(INSTALLATION_ID="$ME3_MANAGED_INSTALLATION_ID" OPERATION_ID="$ME3_MANAGED_OPERATION_ID" node --input-type=module <<'NODE'
+          import { deriveManagedExportPassphrase, resolveManagedExportMasterKey } from "./control/scripts/managed-export-envelope.mjs";
+          const masterKey = resolveManagedExportMasterKey(process.env.ME3_MANAGED_EXPORT_KEYRING, process.env.EXPORT_KEY_VERSION);
+          process.stdout.write(deriveManagedExportPassphrase(masterKey, process.env.INSTALLATION_ID, process.env.OPERATION_ID));
+          NODE
+          )"
+          echo "::add-mask::$ME3_PORTABLE_PASSPHRASE"
+          unset ME3_MANAGED_EXPORT_KEYRING
+          node control/scripts/prepare-managed-portable-capture.mjs "$RUNNER_TEMP/managed-d1.sqlite"
+          node control/scripts/portable.mjs export \
+            --db "$RUNNER_TEMP/managed-d1.sqlite" \
+            --r2-dir "$RUNNER_TEMP/managed-r2" \
+            --output "$RUNNER_TEMP/managed-portable-v1" \
+            --managed-hosted
+          node control/scripts/portable.mjs verify --archive "$RUNNER_TEMP/managed-portable-v1"
+
+      - name: Report managed export encryption
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: encrypting
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=encrypting\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Encrypt and authenticate the complete portable archive
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_EXPORT_KEYRING: ${{ secrets.ME3_MANAGED_EXPORT_KEYRING }}
+        run: |
+          node control/scripts/managed-export-envelope.mjs create \
+            --archive "$RUNNER_TEMP/managed-portable-v1" \
+            --output "$RUNNER_TEMP/managed-export.enc" \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --operation-id "$ME3_MANAGED_OPERATION_ID" \
+            --key-version "$EXPORT_KEY_VERSION"
+          node control/scripts/managed-export-envelope.mjs verify \
+            --envelope "$RUNNER_TEMP/managed-export.enc" \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --operation-id "$ME3_MANAGED_OPERATION_ID" \
+            --key-version "$EXPORT_KEY_VERSION"
+
+      - name: Report retained export upload
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: retaining
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=retaining\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Conditionally retain and independently verify the export
+        if: inputs.operation == 'export'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_RETENTION_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+          RETENTION_R2_BUCKET: ${{ secrets.ME3_MANAGED_RETENTION_R2_BUCKET }}
+          ME3_MANAGED_EXPORT_KEYRING: ${{ secrets.ME3_MANAGED_EXPORT_KEYRING }}
+        run: |
+          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          key="managed-exports/${ME3_MANAGED_INSTALLATION_ID}/${ME3_MANAGED_OPERATION_ID}.me3-managed-export-v1.enc"
+          node control/scripts/managed-retained-export.mjs retain \
+            --endpoint "$endpoint" \
+            --bucket "$RETENTION_R2_BUCKET" \
+            --key "$key" \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --export-operation-id "$ME3_MANAGED_OPERATION_ID" \
+            --export-key-version "$EXPORT_KEY_VERSION" \
+            --file "$RUNNER_TEMP/managed-export.enc" \
+            --verification-file "$RUNNER_TEMP/managed-export-retained.enc" \
+            --head-output "$RUNNER_TEMP/export-head.json" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Report retention verification
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: verifying_retention
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=verifying_retention\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Re-download and re-verify retained bytes before service termination
+        if: inputs.operation == 'export'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_RETENTION_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+          RETENTION_R2_BUCKET: ${{ secrets.ME3_MANAGED_RETENTION_R2_BUCKET }}
+          ME3_MANAGED_EXPORT_KEYRING: ${{ secrets.ME3_MANAGED_EXPORT_KEYRING }}
+        run: |
+          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          node control/scripts/managed-retained-export.mjs verify \
+            --endpoint "$endpoint" \
+            --bucket "$RETENTION_R2_BUCKET" \
+            --key "$ME3_MANAGED_EXPORT_OBJECT_KEY" \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --export-operation-id "$ME3_MANAGED_OPERATION_ID" \
+            --export-key-version "$EXPORT_KEY_VERSION" \
+            --sha256 "$ME3_MANAGED_EXPORT_SHA256" \
+            --md5 "$ME3_MANAGED_EXPORT_MD5" \
+            --etag "$ME3_MANAGED_EXPORT_ETAG" \
+            --size-bytes "$ME3_MANAGED_EXPORT_SIZE_BYTES" \
+            --verification-file "$RUNNER_TEMP/managed-export-retained-second.enc" \
+            --head-output "$RUNNER_TEMP/export-head.json"
+
+      - name: Attest export retention re-verification
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: retention_reverified
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=retention_reverified\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Suspend and drain runtime access after verified retention
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          node control/scripts/managed-runtime-control.mjs suspend > "$RUNNER_TEMP/managed-runtime.json"
+          for attempt in $(seq 1 90); do
+            node control/scripts/managed-runtime-control.mjs status > "$RUNNER_TEMP/managed-runtime.json"
+            if RUNTIME_PATH="$RUNNER_TEMP/managed-runtime.json" node <<'NODE'
+          const value = JSON.parse(require("node:fs").readFileSync(process.env.RUNTIME_PATH, "utf8"));
+          process.exit(value.runtime?.state === "suspended" && value.runtime?.activeWrites === 0 ? 0 : 1);
+          NODE
+            then
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+          node control/scripts/managed-runtime-control.mjs status > "$RUNNER_TEMP/managed-runtime.json"
+          RUNTIME_PATH="$RUNNER_TEMP/managed-runtime.json" node <<'NODE'
+          const value = JSON.parse(require("node:fs").readFileSync(process.env.RUNTIME_PATH, "utf8"));
+          process.exit(value.runtime?.state === "suspended" && value.runtime?.activeWrites === 0 && !value.runtime?.credentialsRevokedAt && !value.runtime?.storagePurgedAt ? 0 : 1);
+          NODE
+
+      - name: Complete the managed export
+        if: inputs.operation == 'export'
+        env:
+          ME3_MANAGED_STATUS: succeeded
+          ME3_MANAGED_STAGE: completed
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Report retained export re-verification
+        if: inputs.operation == 'decommission'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: verifying_retention
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=verifying_retention\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Re-verify retained evidence before destructive controls
+        if: inputs.operation == 'decommission'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_RETENTION_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_RETENTION_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+          RETENTION_R2_BUCKET: ${{ secrets.ME3_MANAGED_RETENTION_R2_BUCKET }}
+          ME3_MANAGED_EXPORT_KEYRING: ${{ secrets.ME3_MANAGED_EXPORT_KEYRING }}
+        run: |
+          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          node control/scripts/managed-retained-export.mjs verify \
+            --endpoint "$endpoint" \
+            --bucket "$RETENTION_R2_BUCKET" \
+            --key "$EVIDENCE_OBJECT_KEY" \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --export-operation-id "$EXPORT_OPERATION_ID" \
+            --export-key-version "$EXPORT_KEY_VERSION" \
+            --sha256 "$EVIDENCE_SHA256" \
+            --md5 "$EVIDENCE_MD5" \
+            --etag "$EVIDENCE_ETAG" \
+            --size-bytes "$EVIDENCE_SIZE_BYTES" \
+            --verification-file "$RUNNER_TEMP/managed-export-decommission.enc" \
+            --head-output "$RUNNER_TEMP/export-head.json"
+
+      - name: Attest decommission retention re-verification
+        if: inputs.operation == 'decommission'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: retention_reverified
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=retention_reverified\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Suspend and drain the managed runtime before decommission
+        if: inputs.operation == 'decommission' && env.ME3_MANAGED_RUNTIME_TERMINATED != 'true'
+        env:
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          node control/scripts/managed-runtime-control.mjs suspend > "$RUNNER_TEMP/managed-runtime.json"
+          for attempt in $(seq 1 90); do
+            node control/scripts/managed-runtime-control.mjs status > "$RUNNER_TEMP/managed-runtime.json"
+            if RUNTIME_PATH="$RUNNER_TEMP/managed-runtime.json" node <<'NODE'
+          const value = JSON.parse(require("node:fs").readFileSync(process.env.RUNTIME_PATH, "utf8"));
+          process.exit(value.runtime?.state === "suspended" && value.runtime?.activeWrites === 0 ? 0 : 1);
+          NODE
+            then
+              break
+            fi
+            test "$attempt" -lt 90
+            sleep 2
+          done
+      - name: Attest the decommission runtime drain
+        if: inputs.operation == 'decommission'
+        env:
+          ME3_MANAGED_STATUS: running
+          ME3_MANAGED_STAGE: runtime_drained
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          printf 'ME3_MANAGED_FAILURE_STAGE=runtime_drained\n' >> "$GITHUB_ENV"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Revoke and purge the drained managed runtime
+        if: inputs.operation == 'decommission' && env.ME3_MANAGED_RUNTIME_TERMINATED != 'true'
+        env:
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          node control/scripts/managed-runtime-control.mjs revoke_credentials > "$RUNNER_TEMP/managed-runtime.json"
+          node control/scripts/managed-runtime-control.mjs purge_storage > "$RUNNER_TEMP/managed-runtime.json"
+          node control/scripts/managed-runtime-control.mjs status > "$RUNNER_TEMP/managed-runtime.json"
+          RUNTIME_PATH="$RUNNER_TEMP/managed-runtime.json" node <<'NODE'
+          const value = JSON.parse(require("node:fs").readFileSync(process.env.RUNTIME_PATH, "utf8"));
+          process.exit(value.runtime?.state === "suspended" && value.runtime?.activeWrites === 0 && value.runtime?.credentialsRevokedAt && value.runtime?.storagePurgedAt ? 0 : 1);
+          NODE
+
+      - name: Verify source R2 is empty after runtime purge
+        if: inputs.operation == 'decommission'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.ME3_MANAGED_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ME3_MANAGED_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          node control/scripts/list-r2-s3.mjs "$endpoint" "$R2_NAME" "$RUNNER_TEMP/r2-empty.json" --allow-missing
+          LIST_PATH="$RUNNER_TEMP/r2-empty.json" node <<'NODE'
+          const value = JSON.parse(require("node:fs").readFileSync(process.env.LIST_PATH, "utf8"));
+          if (value.IsTruncated === true || value.NextContinuationToken || (value.Contents || []).length) process.exit(1);
+          NODE
+
+      - name: Delete only the exact managed resource manifest
+        if: inputs.operation == 'decommission'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ME3_MANAGED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ME3_MANAGED_CLOUDFLARE_ACCOUNT_ID }}
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          node control/scripts/decommission-managed-install.mjs \
+            --installation-id "$ME3_MANAGED_INSTALLATION_ID" \
+            --operation-id "$ME3_MANAGED_OPERATION_ID" \
+            --export-operation-id "$EXPORT_OPERATION_ID" \
+            --export-key-version "$EXPORT_KEY_VERSION" \
+            --worker-name "$WORKER_NAME" \
+            --d1-name "$D1_NAME" \
+            --d1-id "$D1_ID" \
+            --r2-name "$R2_NAME" \
+            --queue-names "$QUEUE_NAMES" \
+            --durable-object-namespace-id "$DO_NAMESPACE_ID" \
+            --export-object-key "$EVIDENCE_OBJECT_KEY" \
+            --export-sha256 "$EVIDENCE_SHA256" \
+            --export-md5 "$EVIDENCE_MD5" \
+            --export-etag "$EVIDENCE_ETAG" \
+            --export-size-bytes "$EVIDENCE_SIZE_BYTES" \
+            --export-head "$RUNNER_TEMP/export-head.json" \
+            --r2-empty-listing "$RUNNER_TEMP/r2-empty.json"
+
+      - name: Complete verified decommission
+        if: inputs.operation == 'decommission'
+        env:
+          ME3_MANAGED_STATUS: succeeded
+          ME3_MANAGED_STAGE: verified_absent
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Restore renewed service or quiesce an interrupted export
+        if: failure() && inputs.operation == 'export'
+        continue-on-error: true
+        env:
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          if GITHUB_ENV= node control/scripts/managed-runtime-control.mjs resume; then
+            exit 0
+          fi
+          GITHUB_ENV= node control/scripts/managed-runtime-control.mjs quiesce
+
+      - name: Fail closed by suspending an interrupted decommission
+        if: failure() && inputs.operation == 'decommission' && env.ME3_MANAGED_RUNTIME_TERMINATED != 'true'
+        continue-on-error: true
+        env:
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: GITHUB_ENV= node control/scripts/managed-runtime-control.mjs suspend
+
+      - name: Report a safe lifecycle failure
+        if: failure()
+        env:
+          ME3_MANAGED_STATUS: failed
+          ME3_MANAGED_STAGE: ${{ env.ME3_MANAGED_FAILURE_STAGE }}
+          ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET: ${{ secrets.ME3_MANAGED_LIFECYCLE_CALLBACK_SECRET }}
+        run: |
+          export ME3_MANAGED_ERROR_CODE="${ME3_MANAGED_ERROR_CODE:-workflow_failed}"
+          node control/scripts/managed-lifecycle-workflow-callback.mjs
+
+      - name: Remove sensitive runner artifacts
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          find "$RUNNER_TEMP" -maxdepth 1 -type f -name 'managed-*' -delete
+          find "$RUNNER_TEMP" -maxdepth 1 -type f -name 'r2-*.json' -delete
+          find "$RUNNER_TEMP" -maxdepth 1 -type f -name 'export-head.json' -delete
+          find "$RUNNER_TEMP" -maxdepth 1 -type d \( -name 'managed-r2' -o -name 'managed-r2-verification' -o -name 'managed-portable-v1' \) -exec rm -rf -- {} +
