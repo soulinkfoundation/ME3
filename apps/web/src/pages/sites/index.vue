@@ -2,13 +2,15 @@
 import { computed, onMounted } from "vue";
 import { definePage } from "unplugin-vue-router/runtime";
 import { useSitesStore, type SitePage } from "../../stores/sites";
+import BrandLogo from "../../components/BrandLogo.vue";
+import Button from "../../components/Button.vue";
 import UiIcon from "../../components/UiIcon.vue";
 
 definePage({
   meta: {
     requiresAuth: true,
     title: "Sites | ME3",
-    description: "Choose a site to manage in ME3.",
+    description: "Manage your ME3 sites.",
     robots: "noindex,follow",
   },
 });
@@ -71,13 +73,18 @@ onMounted(async () => {
   <div class="sites-page">
     <main class="sites-shell">
       <header class="sites-header">
-        <div>
-          <h1>Sites</h1>
-          <p>Choose a site to manage, or start a new landing page.</p>
-        </div>
-        <span v-if="profileSite" class="sites-count">
-          {{ 1 + landingPageCards.length }} {{ 1 + landingPageCards.length === 1 ? "site" : "sites" }}
-        </span>
+        <Button
+          v-if="profileSite"
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          :to="createLandingPagePath"
+          aria-label="Create landing page"
+          title="Create landing page"
+        >
+          <UiIcon name="Plus" :size="20" aria-hidden="true" />
+        </Button>
       </header>
 
       <p v-if="sites.error" class="sites-message sites-message--error">
@@ -89,34 +96,14 @@ onMounted(async () => {
           class="site-card site-card--profile"
           :to="`/sites/${encodeURIComponent(profileSite.username)}`"
         >
-          <div class="site-card__topline">
-            <span class="site-card__kind">ME3 profile</span>
-            <span class="site-status" :class="{ 'site-status--published': profileSite.published_at }">
-              {{ statusLabel(Boolean(profileSite.published_at)) }}
-            </span>
-          </div>
-          <div class="site-card__icon site-card__icon--profile" aria-hidden="true">
-            <UiIcon name="LayoutGrid" :size="22" />
-          </div>
-          <h2>{{ profileSite.username }}</h2>
-          <p>Your main ME3 profile, site settings, posts, subscribers, and publishing tools.</p>
-          <span class="site-card__action">
-            Open profile site
-            <UiIcon name="ExternalLink" :size="16" aria-hidden="true" />
+          <BrandLogo class="site-card__logo" alt="ME3" />
+          <h2>@{{ profileSite.username }}</h2>
+          <span
+            class="site-status"
+            :class="{ 'site-status--published': profileSite.published_at }"
+          >
+            {{ statusLabel(Boolean(profileSite.published_at)) }}
           </span>
-        </RouterLink>
-
-        <RouterLink
-          v-if="profileSite"
-          class="site-card site-card--create"
-          :to="createLandingPagePath"
-        >
-          <span class="site-card__plus" aria-hidden="true">
-            <UiIcon name="Plus" :size="24" />
-          </span>
-          <h2>New landing page</h2>
-          <p>Create a focused page for an offer, event, waitlist, or launch.</p>
-          <span class="site-card__action">Add landing page</span>
         </RouterLink>
 
         <RouterLink
@@ -169,33 +156,9 @@ onMounted(async () => {
 
 .sites-header {
   display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 32px;
-}
-
-.sites-header h1 {
-  margin: 0;
-  font-size: clamp(2rem, 4vw, 3.2rem);
-  letter-spacing: -0.045em;
-}
-
-.sites-header p {
-  max-width: 520px;
-  margin: 10px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 1rem;
-}
-
-.sites-count {
-  flex: 0 0 auto;
-  padding: 7px 11px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: 999px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 0.82rem;
-  font-weight: 700;
+  justify-content: flex-end;
+  min-height: 34px;
+  margin-bottom: 28px;
 }
 
 .sites-grid {
@@ -216,6 +179,7 @@ onMounted(async () => {
   background: var(--ui-surface, var(--color-bg));
   box-shadow: var(--ui-shadow-sm, 0 1px 2px rgb(15 23 42 / 0.05));
   color: inherit;
+  cursor: pointer;
   text-decoration: none;
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
@@ -233,19 +197,16 @@ onMounted(async () => {
 }
 
 .site-card--profile {
-  border-color: var(--ui-accent, var(--color-accent));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ui-accent, #13a27d) 12%, transparent);
-}
-
-.site-card--create {
+  align-items: center;
   justify-content: center;
-  border-style: dashed;
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
+  min-height: 250px;
+  border-color: var(--ui-border, var(--color-border));
+  text-align: center;
 }
 
-.site-card--create:hover {
+.site-card--profile:hover {
   border-color: var(--ui-accent, var(--color-accent));
-  background: var(--ui-accent-soft, color-mix(in srgb, var(--ui-accent, #13a27d) 8%, transparent));
+  box-shadow: var(--ui-shadow-md, 0 12px 24px rgb(15 23 42 / 0.08));
 }
 
 .site-card__topline {
@@ -285,15 +246,9 @@ onMounted(async () => {
   place-items: center;
   width: 48px;
   height: 48px;
-  margin: 22px 0 18px;
   border-radius: 14px;
   background: var(--ui-surface-muted, var(--color-bg-subtle));
   color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.site-card__icon--profile {
-  background: var(--ui-accent, var(--color-accent));
-  color: var(--ui-accent-contrast, #fff);
 }
 
 .site-card__icon--landing,
@@ -302,10 +257,21 @@ onMounted(async () => {
   color: var(--ui-accent-strong, var(--color-accent));
 }
 
+.site-card__logo {
+  display: block;
+  width: 92px;
+  height: auto;
+  margin-bottom: 22px;
+}
+
 .site-card h2 {
   margin: 0;
   font-size: 1.35rem;
   letter-spacing: -0.025em;
+}
+
+.site-card--profile h2 {
+  font-size: 1.5rem;
 }
 
 .site-card p {
@@ -313,6 +279,10 @@ onMounted(async () => {
   margin: 8px 0 0;
   color: var(--ui-text-muted, var(--color-text-muted));
   line-height: 1.5;
+}
+
+.site-card--profile .site-status {
+  margin-top: 16px;
 }
 
 .site-card__action {
@@ -324,15 +294,6 @@ onMounted(async () => {
   color: var(--ui-text, var(--color-text));
   font-size: 0.86rem;
   font-weight: 800;
-}
-
-.site-card--create .site-card__plus {
-  margin: 0 0 18px;
-  border: 1px solid color-mix(in srgb, var(--ui-accent, #13a27d) 40%, transparent);
-}
-
-.site-card--create .site-card__action {
-  color: var(--ui-accent-strong, var(--color-accent));
 }
 
 .sites-message,
@@ -392,9 +353,7 @@ onMounted(async () => {
   }
 
   .sites-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
+    align-items: flex-end;
     margin-bottom: 22px;
   }
 
