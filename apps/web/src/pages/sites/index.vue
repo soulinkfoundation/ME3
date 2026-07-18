@@ -144,7 +144,7 @@ onMounted(async () => {
 <style scoped>
 .sites-page {
   min-height: 100vh;
-  padding: clamp(32px, 7vw, 84px) 24px 72px;
+  padding: var(--workspace-topbar-height) 24px 72px;
   background: var(--ui-bg, var(--color-bg));
   color: var(--ui-text, var(--color-text));
 }
@@ -159,6 +159,13 @@ onMounted(async () => {
   justify-content: flex-end;
   min-height: 34px;
   margin-bottom: 28px;
+}
+
+.sites-header > :deep(.me3-btn) {
+  position: fixed;
+  top: var(--workspace-topbar-padding-block);
+  right: var(--app-shell-mobile-nav-inset-inline-start);
+  z-index: 70;
 }
 
 .sites-grid {
@@ -199,7 +206,8 @@ onMounted(async () => {
 .site-card--profile {
   align-items: center;
   justify-content: center;
-  min-height: 250px;
+  min-height: 220px;
+  padding: 18px;
   border-color: var(--ui-border, var(--color-border));
   text-align: center;
 }
@@ -259,9 +267,9 @@ onMounted(async () => {
 
 .site-card__logo {
   display: block;
-  width: 92px;
+  width: 76px;
   height: auto;
-  margin-bottom: 22px;
+  margin-bottom: 16px;
 }
 
 .site-card h2 {
@@ -271,7 +279,7 @@ onMounted(async () => {
 }
 
 .site-card--profile h2 {
-  font-size: 1.5rem;
+  font-size: 1.35rem;
 }
 
 .site-card p {
@@ -282,7 +290,7 @@ onMounted(async () => {
 }
 
 .site-card--profile .site-status {
-  margin-top: 16px;
+  margin-top: 12px;
 }
 
 .site-card__action {
@@ -349,7 +357,7 @@ onMounted(async () => {
 
 @media (max-width: 680px) {
   .sites-page {
-    padding: 28px 16px 48px;
+    padding: var(--workspace-topbar-padding-block) 16px 48px;
   }
 
   .sites-header {

@@ -7,6 +7,7 @@ import { LANDING_PAGES_PLUGIN_ID } from "@me3-core/plugin-landing-pages";
 import { api } from "../../api";
 import { useWizardStore } from "../../stores/wizard";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
+import Button from "../../components/Button.vue";
 import UiIcon from "../../components/UiIcon.vue";
 import JSZip from "jszip";
 import TurndownService from "turndown";
@@ -17,10 +18,6 @@ import {
   type VibeId,
   vibeIds,
 } from "../../styles/vibes";
-import {
-  prepareSiteUploadFiles,
-  type SiteUploadFile,
-} from "../../utils/siteUpload";
 import { resolvePublicProfileUrl } from "../../utils/publicSiteUrl";
 import { useAppToast } from "../../composables/useAppToast";
 
@@ -70,18 +67,10 @@ async function syncSiteUrl() {
 }
 
 // UI State
-const showAdvancedUpload = ref(false);
 const showDeleteConfirm = ref(false);
 const isDeleting = ref(false);
 const publishBusy = ref(false);
 const publishError = ref("");
-
-const isDragging = ref(false);
-const isPreparingUpload = ref(false);
-const uploadError = ref("");
-const uploadNotice = ref("");
-const uploadSuccess = ref(false);
-const selectedFiles = ref<SiteUploadFile[]>([]);
 async function syncLandingPagesFeature() {
   try {
     const response = await api.get<{
@@ -152,11 +141,6 @@ onMounted(async () => {
     return;
   }
 
-  // Auto-expand upload section if coming from claim flow
-  if (route.query.upload === "true") {
-    showAdvancedUpload.value = true;
-  }
-
   if (typeof route.query.edit === "string") {
     await openWizardStep(route.query.edit);
   }
@@ -218,121 +202,6 @@ async function writePost() {
   await loadWizardContent();
   wizard.goToStepId("blog", { enableOptional: true });
   router.push({ path: "/create", query: { step: "blog" } });
-}
-
-// Advanced upload functions
-function handleDragOver(event: DragEvent) {
-  event.preventDefault();
-  isDragging.value = true;
-}
-
-function handleDragLeave() {
-  isDragging.value = false;
-}
-
-async function handleDrop(event: DragEvent) {
-  event.preventDefault();
-  isDragging.value = false;
-
-  const items = event.dataTransfer?.items;
-  if (!items) return;
-
-  const files: File[] = [];
-
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.kind === "file") {
-      const file = item.getAsFile();
-      if (file) {
-        files.push(file);
-      }
-    }
-  }
-
-  await handleFiles(files);
-}
-
-async function handleFileSelect(event: Event) {
-  const input = event.target as HTMLInputElement;
-  if (input.files) {
-    await handleFiles(Array.from(input.files));
-    input.value = "";
-  }
-}
-
-async function handleDirectorySelect(event: Event) {
-  const input = event.target as HTMLInputElement;
-  if (input.files) {
-    await handleFiles(Array.from(input.files));
-    input.value = "";
-  }
-}
-
-async function handleFiles(files: File[]) {
-  uploadError.value = "";
-  uploadNotice.value = "";
-  uploadSuccess.value = false;
-  isPreparingUpload.value = true;
-
-  try {
-    const prepared = await prepareSiteUploadFiles(files);
-    const validFiles = prepared.files;
-
-    if (validFiles.length === 0) {
-      uploadError.value = "No supported me3 files were found in that selection";
-      return;
-    }
-
-    const hasMe3 = validFiles.some((f) => f.name === "me.json");
-    if (validFiles.length > 0 && !hasMe3) {
-      const existingHasMe3 = selectedFiles.value.some(
-        (f) => f.name === "me.json",
-      );
-      if (!existingHasMe3) {
-        uploadError.value = "Your files must include a me.json file";
-        return;
-      }
-    }
-
-    const existingNames = new Set(selectedFiles.value.map((f) => f.name));
-    const newFiles = validFiles.filter((f) => !existingNames.has(f.name));
-    const updatedExisting = selectedFiles.value.map((existing) => {
-      const replacement = validFiles.find((f) => f.name === existing.name);
-      return replacement || existing;
-    });
-
-    selectedFiles.value = [...updatedExisting, ...newFiles];
-
-    if (prepared.ignored.length > 0) {
-      uploadNotice.value = `Ignored ${prepared.ignored.length} unsupported or hidden file${prepared.ignored.length === 1 ? "" : "s"}.`;
-    }
-  } catch (error) {
-    console.error("Failed to prepare upload files:", error);
-    uploadError.value = "Could not read that zip or folder";
-  } finally {
-    isPreparingUpload.value = false;
-  }
-}
-
-function removeFile(filename: string) {
-  selectedFiles.value = selectedFiles.value.filter((f) => f.name !== filename);
-}
-
-async function uploadFiles() {
-  if (selectedFiles.value.length === 0 || sites.loading) return;
-
-  uploadError.value = "";
-  uploadNotice.value = "";
-  uploadSuccess.value = false;
-
-  const success = await sites.uploadSite(username.value, selectedFiles.value);
-
-  if (success) {
-    uploadSuccess.value = true;
-    selectedFiles.value = [];
-  } else {
-    uploadError.value = sites.error || "Upload failed";
-  }
 }
 
 async function deleteSite() {
@@ -737,6 +606,18 @@ Note: Opening index.html directly (file://) won't work due to browser security.
             </div>
           </div>
         </div>
+        <Button
+          color="ghost"
+          shape="soft"
+          size="compact"
+          icon-only
+          to="/sites"
+          aria-label="Back to sites"
+          title="Back to sites"
+          class="site-header__close"
+        >
+          <UiIcon name="X" :size="18" aria-hidden="true" />
+        </Button>
       </div>
 
       <!-- Quick Actions -->
@@ -835,104 +716,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         <NewsletterSubscribers :username="username" />
       </section>
 
-      <!-- Advanced Upload (Collapsible) TODO not sure this is needed for now-->
-      <section v-if="isProfileSite" class="advanced-section">
-        <button
-          class="section-toggle"
-          @click="showAdvancedUpload = !showAdvancedUpload"
-        >
-          <span>Advanced: Upload site files directly</span>
-          <span class="toggle-icon">{{ showAdvancedUpload ? "−" : "+" }}</span>
-        </button>
-
-        <div v-if="showAdvancedUpload" class="advanced-content">
-          <p class="section-desc">
-            Upload your <code>me.json</code>, a full site <code>.zip</code>, or
-            an extracted site folder directly.
-          </p>
-
-          <div
-            class="drop-zone"
-            :class="{ dragging: isDragging }"
-            @dragover="handleDragOver"
-            @dragleave="handleDragLeave"
-            @drop="handleDrop"
-          >
-            <div class="drop-content">
-              <div class="drop-icon">📁</div>
-              <p>
-                Drag files here or
-                <label class="file-label">
-                  browse files
-                  <input
-                    type="file"
-                    multiple
-                    accept=".zip,.json,.md,.jpg,.jpeg,.png,.gif,.svg,.webp"
-                    @change="handleFileSelect"
-                  />
-                </label>
-              </p>
-              <p>
-                Or
-                <label class="file-label">
-                  choose a folder
-                  <input
-                    type="file"
-                    multiple
-                    webkitdirectory
-                    directory
-                    @change="handleDirectorySelect"
-                  />
-                </label>
-              </p>
-              <p class="drop-hint">
-                me3 zip, me.json, nested markdown, and images
-              </p>
-            </div>
-          </div>
-
-          <div v-if="selectedFiles.length > 0" class="selected-files">
-            <h3>Selected files ({{ selectedFiles.length }})</h3>
-            <ul class="file-list">
-              <li
-                v-for="file in selectedFiles"
-                :key="file.name"
-                class="file-item"
-              >
-                <span class="file-name">{{ file.name }}</span>
-                <button class="remove-btn" @click="removeFile(file.name)">
-                  ×
-                </button>
-              </li>
-            </ul>
-
-            <button
-              class="button"
-              :disabled="
-                isPreparingUpload ||
-                sites.loading ||
-                !selectedFiles.some((f) => f.name === 'me.json')
-              "
-              @click="uploadFiles"
-            >
-              {{
-                isPreparingUpload
-                  ? "Preparing..."
-                  : sites.loading
-                    ? "Uploading..."
-                    : "Upload & Publish"
-              }}
-            </button>
-          </div>
-
-          <p v-if="uploadError" class="error">{{ uploadError }}</p>
-          <p v-if="uploadNotice" class="section-desc">{{ uploadNotice }}</p>
-          <p v-if="uploadSuccess" class="success">
-            ✓ Site published! <a :href="siteUrl" target="_blank">View it →</a>
-          </p>
-        </div>
-      </section>
-
       <!-- Danger Zone -->
       <section class="danger-section">
         <h2>Danger zone</h2>
@@ -987,13 +770,26 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 .main {
   max-width: 600px;
   margin: 0 auto;
-  padding: 20px 40px;
+  padding: var(--workspace-topbar-padding-block) 40px 20px;
 }
 
 .site-header {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--workspace-topbar-control-size);
   margin-bottom: 32px;
+  padding-right: 44px;
+  box-sizing: border-box;
+}
+
+.site-header__close {
+  position: fixed;
+  top: var(--workspace-topbar-padding-block);
+  right: var(--app-shell-mobile-nav-inset-inline-start);
+  z-index: 70;
+  flex: 0 0 auto;
 }
 
 .analytics-section {
@@ -1005,6 +801,7 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex: 1 1 auto;
   width: 100%;
   min-width: 0;
 }
@@ -1110,6 +907,14 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 }
 
 @media (max-width: 959px) {
+  .main {
+    padding-top: var(--workspace-topbar-padding-block);
+  }
+
+  .site-header {
+    margin-bottom: 28px;
+  }
+
   .site-info-main {
     padding-left: 24px;
   }
