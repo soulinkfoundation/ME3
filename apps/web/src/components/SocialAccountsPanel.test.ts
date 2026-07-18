@@ -128,4 +128,23 @@ describe("SocialAccountsPanel X funding acknowledgement", () => {
 
     expect(wrapper.get('[role="status"]').text()).toContain(message);
   });
+
+  it("explains the ME3 Cloud boundary for hosted LinkedIn OAuth", async () => {
+    const wrapper = mount(SocialAccountsPanel, {
+      props: { siteId: "site-1" },
+      global: {
+        stubs: {
+          UiIcon: { template: "<span aria-hidden=\"true\" />" },
+        },
+      },
+    });
+    await flushPromises();
+
+    await wrapper.findAll(".social-connect-btn")[1]!.trigger("click");
+    const dialog = wrapper.get('[role="dialog"]');
+    expect(dialog.text()).toContain("Connect through ME3 Cloud");
+    expect(dialog.text()).toContain("Your social token is stored in this ME3 installation");
+    expect(dialog.text()).toContain("Requires this installation to be linked to ME3 Cloud");
+    expect(dialog.text()).toContain("Advanced: use my own app");
+  });
 });

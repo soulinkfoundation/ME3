@@ -574,6 +574,97 @@ describe("reusable social Publications", () => {
     )).toEqual({ count: 3 });
   });
 
+  it("authenticates a hosted LinkedIn refresh as the linked installation", async () => {
+    const publication = await createPublication(fixture, "version-1");
+    fixture.db.exec(
+      `CREATE TABLE install_secrets (
+         name TEXT PRIMARY KEY,
+         value TEXT NOT NULL
+       );
+       INSERT INTO install_secrets (name, value) VALUES
+         ('ME3_CLOUD_OWNER_ID', 'cloud-owner'),
+         ('ME3_CORE_INSTALL_ID', 'core-install'),
+         ('ME3_CLOUD_CORE_TOKEN', 'core-update-token');`,
+    );
+    fixture.env.ME3_SOCIAL_OAUTH_ORIGIN = "https://api.me3.app";
+    fixture.db.run(
+      `UPDATE social_accounts
+       SET status = 'active', access_token_ciphertext = ?, refresh_token_ciphertext = ?,
+           token_expires_at = '2000-01-01T00:00:00.000Z',
+           metadata_json = '{"credentialSource":"hosted_oauth"}'
+       WHERE id = 'account-1'`,
+      await encryptTestSecret("expired-access-token", TEST_TOKEN_ENCRYPTION_KEY),
+      await encryptTestSecret("current-refresh-token", TEST_TOKEN_ENCRYPTION_KEY),
+    );
+    fixture.db.run(
+      `UPDATE social_publications
+       SET asset_manifest_json_snapshot = '[]'
+       WHERE id = ?`,
+      publication.id,
+    );
+
+    const fetcher = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://api.me3.app/api/social/oauth/refresh") {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-ME3-Core-Owner-ID")).toBe("cloud-owner");
+        expect(headers.get("X-ME3-Core-Install-ID")).toBe("core-install");
+        expect(headers.get("X-ME3-Core-Update-Token")).toBe("core-update-token");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          platform: "linkedin",
+          refreshToken: "current-refresh-token",
+        });
+        return Response.json({
+          accessToken: "refreshed-access-token",
+          refreshToken: "next-refresh-token",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        });
+      }
+      if (url.endsWith("/userinfo")) {
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          "Bearer refreshed-access-token",
+        );
+        return Response.json({ sub: "urn:li:person:owner" });
+      }
+      if (url.endsWith("/rest/posts")) {
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          "Bearer refreshed-access-token",
+        );
+        return Response.json(
+          { id: "urn:li:share:refreshed-provider-result" },
+          { status: 201 },
+        );
+      }
+      throw new Error(`Unexpected LinkedIn request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    const message = socialQueueMessage(publication.id);
+    await processSocialPublishBatch(
+      { queue: SOCIAL_PUBLISH_QUEUE_NAME, messages: [message] },
+      fixture.env as never,
+    );
+
+    expect(message.ack).toHaveBeenCalledOnce();
+    expect(message.retry).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fixture.db.first<{
+      status: string;
+      platform_post_id: string;
+      token_expires_at: string;
+    }>(
+      `SELECT publication.status, publication.platform_post_id, account.token_expires_at
+       FROM social_publications publication
+       JOIN social_accounts account ON account.id = publication.target_account_id_snapshot
+       WHERE publication.id = ?`,
+      publication.id,
+    )).toEqual({
+      status: "published",
+      platform_post_id: "urn:li:share:refreshed-provider-result",
+      token_expires_at: "2099-01-01T00:00:00.000Z",
+    });
+  });
+
   it("requeues a post-claim exception before the provider write and publishes once on redelivery", async () => {
     const publication = await createPublication(fixture, "version-1");
     await enableProviderDelivery(fixture, publication.id);
@@ -1725,6 +1816,7 @@ function createFixture() {
       DB: db,
       SOCIAL_PUBLISH_QUEUE: { send },
       TOKEN_ENCRYPTION_KEY: TEST_TOKEN_ENCRYPTION_KEY,
+      ME3_SOCIAL_OAUTH_ORIGIN: undefined as string | undefined,
     },
     send,
     queueMessages,
@@ -1982,6 +2074,7 @@ const schemaSql = `
     access_token_ciphertext TEXT,
     refresh_token_ciphertext TEXT,
     token_expires_at TEXT,
+    last_verified_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );

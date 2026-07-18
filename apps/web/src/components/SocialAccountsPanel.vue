@@ -153,12 +153,12 @@ const modalSummary = computed(() => {
   }
   if (connectModalPlatform.value === "instagram") {
     return hostedOAuthAvailable.value
-      ? "Connect through ME3 without creating a developer app."
+      ? "Connect through ME3 Cloud without creating a developer app. Your social token is stored in this ME3 installation."
       : "Connect Instagram with your own Meta app credentials. Publishing requires a professional account that can use Meta content publishing.";
   }
   if (connectModalPlatform.value === "linkedin") {
     return hostedOAuthAvailable.value
-      ? "Connect through ME3 without creating a LinkedIn developer app."
+      ? "Connect through ME3 Cloud without creating a LinkedIn developer app. Your social token is stored in this ME3 installation."
       : "Connect LinkedIn with your own app credentials. The app needs Share on LinkedIn access.";
   }
   return "";
@@ -518,7 +518,7 @@ watch(
         >
           <div>
             <strong>Connect with ME3</strong>
-            <p>Recommended. No developer credentials required.</p>
+            <p>Recommended. Requires this installation to be linked to ME3 Cloud; no developer credentials required.</p>
           </div>
           <button
             type="button"

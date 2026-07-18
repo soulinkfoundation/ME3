@@ -386,6 +386,12 @@ when an active account and the Social Publishing queue are ready. X, Instagram, 
 Business currently support drafting and review only; ME3 rejects attempts to schedule or publish
 those Versions until their provider workflows work end to end.
 
+Production installations offer the ME3 Cloud LinkedIn and Instagram OAuth bridge as the recommended
+connection path. The installation must first be linked to ME3 Cloud; provider app secrets stay in the
+bridge, while the resulting owner-authorized social token is encrypted and stored in the installation.
+Owners can select the advanced bring-your-own-app path instead, and independent self-hosted installs
+can leave the bridge unset.
+
 The X adapter can prepare text and up to four validated PNG, JPEG, or WebP images, including
 optional alt text, through the current X v2 media and Post APIs. Owners must provide their own X
 developer app, fund its pay-per-use API access, and acknowledge that cost before connecting. This

@@ -3309,7 +3309,7 @@ async function buildAuthorizeUrl(
       response_type: "code",
       client_id: clientId,
       redirect_uri: redirectUri,
-      scope: ["openid", "profile", "email", "w_member_social"].join(" "),
+      scope: ["openid", "profile", "w_member_social"].join(" "),
       state,
     });
     return `https://www.linkedin.com/oauth/v2/authorization?${params.toString()}`;
@@ -3376,7 +3376,7 @@ async function exchangeOAuthCode(
       }),
     });
     const body = await readJsonResponse<{ access_token?: string; refresh_token?: string; expires_in?: number }>(response);
-    return normalizeToken(body, ["openid", "profile", "email", "w_member_social"]);
+    return normalizeToken(body, ["openid", "profile", "w_member_social"]);
   }
 
   const tokenUrl =
@@ -4027,13 +4027,19 @@ async function resolvePublishingAccessToken(
   if (!row.account_id || !row.refresh_token_ciphertext) return null;
   if (row.platform !== "linkedin" && row.platform !== "x") return null;
 
-  const setting = await getProviderSettingRow(env, row.user_id, row.platform);
   try {
     const refreshToken = await decryptSecret(row.refresh_token_ciphertext, installKey);
     const metadata = parseJsonObject(row.account_metadata_json);
-    const token = metadata.credentialSource === "hosted_oauth"
-      ? await refreshHostedProviderToken(env, row.platform, refreshToken, fetcher)
-      : setting?.enabled && setting.client_id && setting.encrypted_client_secret
+    let token: {
+      accessToken: string;
+      refreshToken: string | null;
+      expiresAt: string | null;
+    } | null;
+    if (metadata.credentialSource === "hosted_oauth") {
+      token = await refreshHostedProviderToken(env, row.platform, refreshToken, fetcher);
+    } else {
+      const setting = await getProviderSettingRow(env, row.user_id, row.platform);
+      token = setting?.enabled && setting.client_id && setting.encrypted_client_secret
         ? await refreshProviderToken(
             row.platform,
             refreshToken,
@@ -4042,6 +4048,7 @@ async function resolvePublishingAccessToken(
             fetcher,
           )
         : null;
+    }
     if (!token) return null;
     const now = new Date().toISOString();
     await env.DB.prepare(
@@ -4073,9 +4080,14 @@ async function refreshHostedProviderToken(
 ): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null } | null> {
   const origin = env.ME3_SOCIAL_OAUTH_ORIGIN?.replace(/\/$/, "");
   if (!origin) return null;
+  const installationHeaders = await getHostedOAuthInstallationHeaders(env);
+  if (!installationHeaders) return null;
   const response = await fetcher(`${origin}/api/social/oauth/refresh`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...installationHeaders,
+    },
     body: JSON.stringify({ platform, refreshToken }),
   });
   if (!response.ok) throw new Error(`Hosted token refresh failed (${response.status})`);
@@ -4089,6 +4101,34 @@ async function refreshHostedProviderToken(
     accessToken: body.accessToken,
     refreshToken: body.refreshToken || null,
     expiresAt: body.expiresAt || null,
+  };
+}
+
+async function getHostedOAuthInstallationHeaders(
+  env: SocialPublishingEnv,
+): Promise<Record<string, string> | null> {
+  const secretNames = [
+    "ME3_CLOUD_OWNER_ID",
+    "ME3_CORE_INSTALL_ID",
+    "ME3_CLOUD_CORE_TOKEN",
+  ] as const;
+  const [ownerId, installId, installToken] = await Promise.all(
+    secretNames.map(async (name) => {
+      try {
+        const row = await env.DB.prepare("SELECT value FROM install_secrets WHERE name = ?")
+          .bind(name)
+          .first<{ value: string }>();
+        return row?.value?.trim() || "";
+      } catch {
+        return "";
+      }
+    }),
+  );
+  if (!ownerId || !installId || !installToken) return null;
+  return {
+    "X-ME3-Core-Owner-ID": ownerId,
+    "X-ME3-Core-Install-ID": installId,
+    "X-ME3-Core-Update-Token": installToken,
   };
 }
 

@@ -10535,6 +10535,9 @@ describe("ME3 Core Worker auth", () => {
     expect(response.status).toBe(200);
     expect(url.origin).toBe("https://www.linkedin.com");
     expect(url.searchParams.get("client_id")).toBe("owner-linkedin-client");
+    expect(url.searchParams.get("scope")).toBe(
+      "openid profile w_member_social",
+    );
   });
 
   it("gates Social Publishing OAuth start when disabled", async () => {
