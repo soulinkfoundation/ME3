@@ -74,6 +74,22 @@ test("the workflow provisions the managed email install identity and HTTPS gatew
   }
 });
 
+test("the workflow waits for a newly published managed origin to become routable", () => {
+  const verification = getStep("Verify the real managed origin");
+  const requests = verification.match(/^\s+curl [^\n]+$/gm) || [];
+
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.match(request, /--retry 15/);
+    assert.match(request, /--retry-delay 2/);
+    assert.match(request, /--retry-max-time 60/);
+    assert.match(request, /--retry-all-errors/);
+    assert.match(request, /--connect-timeout 10/);
+  }
+  assert.match(requests[0], /\/health/);
+  assert.match(requests[1], /\/api\/mobile\/config/);
+});
+
 function getStep(name) {
   const start = workflow.indexOf(`      - name: ${name}\n`);
   assert.notEqual(start, -1, `Missing workflow step: ${name}`);

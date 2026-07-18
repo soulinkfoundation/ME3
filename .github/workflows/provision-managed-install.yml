@@ -180,8 +180,8 @@ jobs:
       - name: Verify the real managed origin
         run: |
           set -euo pipefail
-          curl --retry 5 --retry-delay 2 --retry-connrefused -fsS "$ME3_MANAGED_ORIGIN/health" > "$RUNNER_TEMP/health.json"
-          curl --retry 5 --retry-delay 2 --retry-connrefused -fsS "$ME3_MANAGED_ORIGIN/api/mobile/config" > "$RUNNER_TEMP/mobile-config.json"
+          curl --retry 15 --retry-delay 2 --retry-max-time 60 --retry-all-errors --connect-timeout 10 -fsS "$ME3_MANAGED_ORIGIN/health" > "$RUNNER_TEMP/health.json"
+          curl --retry 15 --retry-delay 2 --retry-max-time 60 --retry-all-errors --connect-timeout 10 -fsS "$ME3_MANAGED_ORIGIN/api/mobile/config" > "$RUNNER_TEMP/mobile-config.json"
           HEALTH_PATH="$RUNNER_TEMP/health.json" MOBILE_PATH="$RUNNER_TEMP/mobile-config.json" node --input-type=module <<'NODE'
           import { readFileSync } from "node:fs";
           const health = JSON.parse(readFileSync(process.env.HEALTH_PATH, "utf8"));
