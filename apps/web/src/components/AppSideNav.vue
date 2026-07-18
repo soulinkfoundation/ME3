@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { api } from "../api";
 import UiIcon from "./UiIcon.vue";
-import { useSitesStore } from "../stores/sites";
 import {
   APP_FEATURE_ICONS,
   appFeatureForPath,
@@ -11,18 +10,7 @@ import {
 } from "../utils/appFeatures";
 
 const route = useRoute();
-const sites = useSitesStore();
-
-/** ME3 profile site (single canonical site for workspace Sites). */
-const profileSite = computed(() =>
-  sites.sites.find((s) => (s.site_type || "profile") === "profile"),
-);
-
-const sitesPath = computed(() =>
-  profileSite.value?.username
-    ? `/sites/${profileSite.value.username}`
-    : "/create",
-);
+const sitesPath = "/sites";
 const navDrawerOpen = ref(false);
 const navDrawerId = "app-side-nav-drawer";
 const missionControlInstalled = ref(false);
@@ -46,9 +34,6 @@ function handleWindowKeydown(event: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  if (sites.sites.length === 0) {
-    await sites.fetchSites();
-  }
   void loadInstalledPluginNav();
   window.addEventListener("keydown", handleWindowKeydown);
   window.addEventListener(pluginChangedEvent, loadInstalledPluginNav);

@@ -3,10 +3,7 @@ import { definePage } from "unplugin-vue-router/runtime";
 import { ref, computed, onBeforeUnmount, onMounted } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 import { useSitesStore } from "../../stores/sites";
-import {
-  LANDING_PAGES_PLUGIN_ID,
-  LANDING_PAGE_TEMPLATES,
-} from "@me3-core/plugin-landing-pages";
+import { LANDING_PAGES_PLUGIN_ID } from "@me3-core/plugin-landing-pages";
 import { api } from "../../api";
 import { useWizardStore } from "../../stores/wizard";
 import NewsletterSubscribers from "../../components/NewsletterSubscribers.vue";
@@ -59,22 +56,6 @@ const siteType = computed(() => site.value?.site_type || "profile");
 const isLandingPage = computed(() => siteType.value === "landing_page");
 const isProfileSite = computed(() => siteType.value === "profile");
 const landingPagesFeatureEnabled = ref(false);
-const newLandingPageRoute = computed(
-  () => `/sites/${username.value}/landing-pages/new`,
-);
-const landingPageSites = computed(() =>
-  sites.sitePages,
-);
-const legacyLandingSites = computed(() => {
-  const migrated = new Set(sites.sitePages.map((page) => page.slug));
-  return sites.sites.filter(
-    (entry) =>
-      entry.site_type === "landing_page" && !migrated.has(entry.username),
-  );
-});
-const showLandingPageTools = computed(
-  () => isProfileSite.value && landingPagesFeatureEnabled.value,
-);
 const showLandingPageControls = computed(
   () => isLandingPage.value && landingPagesFeatureEnabled.value,
 );
@@ -233,30 +214,10 @@ function openBuilder() {
   router.push(`/sites/${username.value}/build`);
 }
 
-function landingTemplateLabel(templateId: string | null | undefined): string {
-  return (
-    LANDING_PAGE_TEMPLATES.find((template) => template.id === templateId)
-      ?.shortName || "Landing page"
-  );
-}
-
 async function writePost() {
   await loadWizardContent();
   wizard.goToStepId("blog", { enableOptional: true });
   router.push({ path: "/create", query: { step: "blog" } });
-}
-
-async function importLegacyLandingPages() {
-  publishBusy.value = true;
-  publishError.value = "";
-  const migrated = await sites.migrateLegacySitePages(username.value);
-  publishBusy.value = false;
-  if (sites.error) {
-    publishError.value = sites.error;
-    return;
-  }
-  await sites.fetchSitePages(username.value);
-  if (migrated === 0) publishError.value = "No legacy pages needed importing.";
 }
 
 // Advanced upload functions
@@ -778,14 +739,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
         </div>
       </div>
 
-      <nav v-if="showLandingPageTools" class="site-tabs" aria-label="Site tools">
-        <span class="site-tab active">ME3 site</span>
-        <a class="site-tab" href="#landing-pages">Landing pages</a>
-        <router-link class="site-tab" :to="newLandingPageRoute">
-          Add Landing Page
-        </router-link>
-      </nav>
-
       <!-- Quick Actions -->
       <section class="actions-section">
         <div class="actions-grid">
@@ -812,20 +765,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
               <p>Jump to the blog editor</p>
             </div>
           </button>
-
-          <router-link
-            v-if="showLandingPageTools"
-            class="action-card"
-            :to="newLandingPageRoute"
-          >
-            <span class="action-icon">
-              <UiIcon name="Sparkles" :size="24" />
-            </span>
-            <div class="action-content">
-              <strong>Add Landing Page</strong>
-              <p>Create a service, event, or waitlist page</p>
-            </div>
-          </router-link>
 
           <button
             v-if="showLandingPageControls"
@@ -886,59 +825,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
           </button>
         </div>
         <p v-if="publishError" class="error">{{ publishError }}</p>
-      </section>
-
-      <section
-        v-if="showLandingPageTools"
-        id="landing-pages"
-        class="landing-pages-section"
-      >
-        <div class="landing-pages-head">
-          <div>
-            <h2>Landing pages</h2>
-            <p>{{ landingPageSites.length }} page{{ landingPageSites.length === 1 ? "" : "s" }}</p>
-          </div>
-          <router-link class="button secondary" :to="newLandingPageRoute">
-            Add
-          </router-link>
-        </div>
-
-        <div v-if="legacyLandingSites.length" class="legacy-page-notice">
-          <div>
-            <strong>Older landing pages found</strong>
-            <p>Bring them into this site as editable pages. The old records remain untouched.</p>
-          </div>
-          <button class="button secondary" type="button" :disabled="publishBusy" @click="importLegacyLandingPages">
-            {{ publishBusy ? "Importing…" : `Import ${legacyLandingSites.length}` }}
-          </button>
-        </div>
-
-        <div v-if="landingPageSites.length > 0" class="landing-page-list">
-          <router-link
-            v-for="landing in landingPageSites"
-            :key="landing.id"
-            class="landing-page-row"
-            :to="`/sites/${username}/pages/${landing.id}`"
-          >
-            <span>
-              <strong>/{{ landing.slug }}</strong>
-              <small>{{ landingTemplateLabel(landing.templateId) }}</small>
-            </span>
-            <span
-              class="status"
-              :class="landing.publishedAt ? 'published' : 'draft'"
-            >
-              {{ landing.publishedAt ? "Published" : "Draft" }}
-            </span>
-          </router-link>
-        </div>
-
-        <div v-else class="landing-empty">
-          <p>No landing pages yet.</p>
-          <router-link class="button" :to="newLandingPageRoute">
-            Create one
-          </router-link>
-        </div>
       </section>
 
       <!-- Newsletter Subscribers -->
@@ -1108,32 +994,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
   display: grid;
   gap: 8px;
   margin-bottom: 32px;
-}
-
-.site-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: -12px 0 28px;
-}
-
-.site-tab {
-  min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: 999px;
-  padding: 0 12px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  text-decoration: none;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.site-tab.active {
-  background: var(--ui-accent-soft, rgba(16, 185, 129, 0.12));
-  border-color: var(--ui-accent, var(--color-accent));
-  color: var(--ui-text, var(--color-text));
 }
 
 .analytics-section {
@@ -1497,93 +1357,6 @@ Note: Opening index.html directly (file://) won't work due to browser security.
 
 .success a {
   color: #4caf50;
-}
-
-.landing-pages-section {
-  margin-bottom: 32px;
-  padding: 18px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 8px);
-  background: var(--ui-surface, var(--color-bg));
-}
-
-.landing-pages-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.landing-pages-head h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.landing-pages-head p,
-.landing-empty p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-}
-
-.legacy-page-notice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-  padding: 14px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-sm, 8px);
-  background: var(--ui-surface-muted, var(--color-bg-subtle));
-}
-
-.legacy-page-notice p {
-  margin: 4px 0 0;
-  color: var(--ui-text-muted, var(--color-text-muted));
-  font-size: 13px;
-}
-
-.landing-page-list {
-  display: grid;
-  gap: 8px;
-}
-
-.landing-page-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 8px);
-  color: inherit;
-  text-decoration: none;
-}
-
-.landing-page-row:hover {
-  border-color: var(--ui-border-strong, var(--color-text-muted));
-}
-
-.landing-page-row strong,
-.landing-page-row small {
-  display: block;
-}
-
-.landing-page-row small {
-  margin-top: 2px;
-  color: var(--ui-text-muted, var(--color-text-muted));
-}
-
-.landing-empty {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 14px;
-  border: 1px dashed var(--ui-border, var(--color-border));
-  border-radius: var(--ui-radius-md, 8px);
 }
 
 /* Site badges row */
